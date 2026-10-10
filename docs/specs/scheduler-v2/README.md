@@ -1049,7 +1049,7 @@ eligibleAt(N) = max(
   N.gate.debounceReadyAt ?? 0,    // reset on each invalidation while gated
   N.gate.throttleReadyAt ?? 0,    // lastRunAt + throttleMs
   N.gate.backoffUntil ?? 0,       // §7.7
-  N.gate.echoBackoffUntil ?? 0,   // remote-echo breaker, when enabled
+  N.gate.echoBackoffUntil ?? 0,   // remote-echo breaker
 )
 eligible(N) = now ≥ eligibleAt(N)
 ```
@@ -1065,11 +1065,11 @@ eligible(N) = now ≥ eligibleAt(N)
   adjusts `gate.debounce`.
 - **Cycle backoff** — replaces v1's cycle-aware debounce *and* cycle breaker
   with the §7.7 escalating gate.
-- **Remote-echo backoff** — under the `remoteEchoBreaker` flag, a computation
-  that keeps rewriting a document it reads, re-triggered each time by another
-  writer's change to that same document, is deferred with its own escalating
-  gate (`echoBackoffUntil`). Each run there still commits, so neither §7.7 nor
-  the commit retry paths see the loop; the policy and its reset rules are in
+- **Remote-echo backoff** — a computation that keeps rewriting a document it
+  reads, re-triggered each time by another writer's change to that same
+  document, is deferred with its own escalating gate (`echoBackoffUntil`).
+  Each run there still commits, so neither §7.7 nor the commit retry paths
+  see the loop; the policy and its reset rules are in
   [`../../plans/scheduler-remote-echo-breaker.md`](../../plans/scheduler-remote-echo-breaker.md).
   Like a throttle window, an echo-deferred re-run of an already-ran
   computation does not hold `idle()` open.

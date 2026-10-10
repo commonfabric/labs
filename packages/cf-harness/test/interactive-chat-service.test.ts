@@ -6,7 +6,6 @@ import {
 } from "@std/assert";
 import { expect } from "@std/expect";
 import { unattachedTurnContext } from "./support/session-store-fixtures.ts";
-import { join } from "@std/path";
 import {
   createPatternSkillsFixture,
   PATTERN_SKILL_FIXTURE_RESOURCE_PATH,
@@ -62,6 +61,7 @@ import {
   recordingStore,
   toolCall,
 } from "./support/chat-fault-fixture.ts";
+import { INERT_ENFORCING_RUNSC, INERT_RUNSC } from "./support/inert-runsc.ts";
 
 const nextIsoNow = () => {
   let counter = 0;
@@ -1176,6 +1176,7 @@ Deno.test("interactive service releases a late runtime after a closed turn unwin
   } as unknown as HarnessFabricSession;
   const service = new HarnessInteractiveChatService({
     basePromptLoopOptions: {
+      ...INERT_RUNSC,
       fabricSessionFactory: async () => {
         constructing.resolve();
         await constructed.promise;
@@ -1239,6 +1240,7 @@ Deno.test("interactive service releases runtimes when closed-event delivery fail
   } as unknown as HarnessFabricSession;
   const service = new HarnessInteractiveChatService({
     basePromptLoopOptions: {
+      ...INERT_RUNSC,
       fabricSessionFactory: () => Promise.resolve(fabric),
     },
     createPromptLoop: (options) => {
@@ -2231,23 +2233,6 @@ Deno.test("a normalization whose write fails leaves the record on the stored his
   );
 });
 
-/**
- * The two sidecar directories a runsc sandbox exchanges CFC invocation
- * contexts and CFC results through. A run that mediates observations refuses
- * to start unless both are named.
- */
-const makeCfcTransportDirs = async (): Promise<{
-  cfcInvocationContextDir: string;
-  cfcResultDir: string;
-}> => {
-  const root = await Deno.makeTempDir();
-  const cfcInvocationContextDir = join(root, "cfc-invocation-context");
-  const cfcResultDir = join(root, "cfc-result");
-  await Deno.mkdir(cfcInvocationContextDir);
-  await Deno.mkdir(cfcResultDir);
-  return { cfcInvocationContextDir, cfcResultDir };
-};
-
 /** The console binds a person's typed prompt as the turn's direct command. */
 const directPromptSlotBinding: PromptSlotBinding = {
   type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
@@ -2262,7 +2247,6 @@ const directPromptSlotBinding: PromptSlotBinding = {
 Deno.test("an interactive turn scans its configured skills root into the run and a pattern-author child inherits it", async () => {
   await using fixture = await createPatternSkillsFixture();
   const skillsRoot = fixture.skillsRoot;
-  const cfcTransport = await makeCfcTransportDirs();
   const loopOptions: CreateHarnessPromptLoopOptions[] = [];
   const requestBodies: unknown[] = [];
   const service = new HarnessInteractiveChatService({
@@ -2270,7 +2254,7 @@ Deno.test("an interactive turn scans its configured skills root into the run and
       apiKey: "test-key",
       skillsRoot,
       runId: "run-interactive-skills",
-      ...cfcTransport,
+      ...INERT_ENFORCING_RUNSC,
       fetchFn: (_input, init) => {
         const body = JSON.parse(String(init?.body));
         requestBodies.push(body);
@@ -2419,7 +2403,7 @@ Deno.test("an interactive turn scans its configured skills root into the run and
 class StubSandboxRuntime implements SandboxRuntime {
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: "/workspace",
       cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
     };

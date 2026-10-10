@@ -410,7 +410,6 @@ Deno.test("harnessSessionEngineOptions carries every runsc setting to the engine
     },
   });
   expect(engine.sandbox.describe().kind).toBe("runsc-cfc");
-  expect(engine.ownedSandboxConfig).toBeUndefined();
   expect(engine.ownedRunscSandboxConfig).toMatchObject({
     rootfs: "/images/custom-rootfs",
     cfcPolicyPath: "/opt/cfc/policy.json",

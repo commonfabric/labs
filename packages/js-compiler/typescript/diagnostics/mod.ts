@@ -1,5 +1,8 @@
 export { Checker, isNonFatalDiagnosticCode } from "./checker.ts";
 export {
+  authoredLocation,
+  type AuthoredSource,
+  type AuthoredSourceLookup,
   CompilationError,
   type CompilationErrorType,
   CompilerError,

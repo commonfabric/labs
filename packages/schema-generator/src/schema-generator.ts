@@ -24,7 +24,8 @@ import {
   CommonFabricFormatter,
   lowersFromReferenceArguments,
   resolveScopeWrapperNode,
-  scopeOfAliasChain,
+  scopeOfScopeWrapper,
+  scopeOfWrittenScopedUnion,
   scopesCellHandle,
 } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
@@ -1337,6 +1338,7 @@ export class SchemaGenerator {
       }),
       ...(typeRegistry && { typeRegistry }),
       ...(options?.widenLiterals && { widenLiterals: true }),
+      ...(options?.declaresNoScope && { declaresNoScope: true }),
       ...(options?.writerIdentityForSourceFile && {
         writerIdentityForSourceFile: options.writerIdentityForSourceFile,
       }),
@@ -1531,9 +1533,12 @@ export class SchemaGenerator {
     // Read for its labels alone, a type no CFC wrapper holds is a payload, and
     // is not formatted. A union or an intersection is formatted from its
     // members, which can attach their labels to it: an expanded `Default`
-    // holds its value as a member.
+    // holds its value as a member. `null` and `undefined` are formatted, as
+    // what tells a value that may be missing apart from its value member
+    // (`labeledValueMember()`).
     if (
       context.labelsOnly && !readType.isUnionOrIntersection() &&
+      (readType.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) === 0 &&
       !this.#commonFabricFormatter.supportsType(readType, childContext)
     ) {
       return {};
@@ -1919,15 +1924,14 @@ export class SchemaGenerator {
     type: ts.Type,
     context: GenerationContext,
   ): MutableJSONSchema {
-    const checker = context.typeChecker;
-    const aliasScope = scopeOfAliasChain(type, checker);
+    const aliasScope = scopeOfScopeWrapper(type, context.typeChecker);
     const key =
       (aliasScope === undefined
         ? this.#namedReadingKey(type, context)
         : undefined) ?? this.#ensureSyntheticName(type, context);
     context.inProgressNames.add(key);
     context.emittedRefs.add(key);
-    return aliasScope === undefined
+    return aliasScope === undefined || context.declaresNoScope
       ? { "$ref": `#/$defs/${key}` }
       : { "$ref": `#/$defs/${key}`, scope: aliasScope };
   }
@@ -2568,7 +2572,7 @@ export class SchemaGenerator {
     // schema, the only place the write path reads it. A recursive one is
     // written once under `$defs` without its scope, and each reference to it
     // carries the scope instead.
-    const aliasScope = scopeOfAliasChain(type, context.typeChecker);
+    const aliasScope = scopeOfScopeWrapper(type, context.typeChecker);
     const isScopeWrapperAlias = aliasScope !== undefined;
     // One around a cell caps the handle and is itself a wrapper: it is not a
     // cycle's entry, so a cycle through it is found at the cell's value and
@@ -2624,13 +2628,18 @@ export class SchemaGenerator {
     const stackKey = bindingKey === undefined
       ? type
       : `${this.#bindingId(bindingType)}|${bindingKey}`;
-    // `never` holds no type, so it is never met inside itself and is not a
-    // cycle's entry. A wrapper the checker reduces to it, as it reduces
-    // `PerUser<never>` (`never & brand` is `never`), has `never` both for its
-    // own type and for its payload's, and the payload read inside it is the
-    // value it wraps, not its recursion.
-    const tracksCycle = !scopesHandle && !isWrapperContext &&
-      (type.flags & ts.TypeFlags.Never) === 0;
+    // `never`, `null` and `undefined` hold no type, and `unknown` and `any`
+    // hold any, so none is met inside itself, and none is a cycle's entry. A
+    // wrapper the checker reduces to one, as it reduces `PerUser<never>`
+    // (`never & brand` is `never`) and `PerUser<null>` (`Scoped` keeps `null`
+    // outside its brand), has it both for its own type and for its payload's,
+    // and the payload read inside it is the value it wraps, not its recursion.
+    // So does a scope wrapper read from its node alone, which is read at
+    // `unknown` (`#analyzeTypeNodeStructure()`), around `unknown`.
+    const holdsNoType = (type.flags &
+      (ts.TypeFlags.Never | ts.TypeFlags.Null | ts.TypeFlags.Undefined |
+        ts.TypeFlags.Unknown | ts.TypeFlags.Any)) !== 0;
+    const tracksCycle = !scopesHandle && !isWrapperContext && !holdsNoType;
     // The same type read inside itself with the same arguments written for
     // it, each read under deeper bindings, is either a nesting its author
     // wrote out, `Pair<Pair<string>>`, or a recursion that instantiates it
@@ -2674,7 +2683,7 @@ export class SchemaGenerator {
       const syntheticKey = this.#ensureSyntheticName(type, context);
       context.inProgressNames.add(syntheticKey);
       context.emittedRefs.add(syntheticKey);
-      return aliasScope === undefined
+      return aliasScope === undefined || context.declaresNoScope
         ? { "$ref": `#/$defs/${syntheticKey}` }
         : { "$ref": `#/$defs/${syntheticKey}`, scope: aliasScope };
     }
@@ -2780,7 +2789,15 @@ export class SchemaGenerator {
       if (!definitions[namedKey]) {
         definitions[namedKey] = schema;
       }
-      base = { $ref: `#/$defs/${namedKey}` };
+      // A recursive scope wrapper's definition is stored without its scope,
+      // which each reference to it carries instead (`#formatType()`), the
+      // root's among them.
+      const scope = isObjectOrArray(schema) ? schema.scope : undefined;
+      const definition = definitions[namedKey];
+      base = scope !== undefined && isObjectOrArray(definition) &&
+          definition.scope === undefined
+        ? { $ref: `#/$defs/${namedKey}`, scope }
+        : { $ref: `#/$defs/${namedKey}` };
     } else {
       base = schema;
     }
@@ -2901,7 +2918,7 @@ export class SchemaGenerator {
     }) &&
       detectWrapperViaNode(node, context.typeChecker) === undefined &&
       resolveScopeWrapperNode(node) === undefined &&
-      scopeOfAliasChain(type, context.typeChecker) === undefined;
+      scopeOfScopeWrapper(type, context.typeChecker) === undefined;
   }
 
   /**
@@ -2995,6 +3012,21 @@ export class SchemaGenerator {
           checker.getTypeFromTypeNode(typeNode) === values[0]
         ? typeNode
         : memberNode(values[0]!);
+      // A node no member is paired through, as a reference to a generic alias
+      // whose body is the union, is read whole, and the value has the labels
+      // formatting attaches to its member. A cell's are its value's, read at
+      // the value's node, as above.
+      if (
+        !valueNode && typeNode &&
+        getCellWrapperInfo(values[0]!, checker) === undefined
+      ) {
+        const whole = this.formatChildType(type, context, typeNode);
+        const labels = declaredIfcLabels(
+          labeledValueMember(whole, context.definitions) ?? whole,
+          context.definitions,
+        );
+        if (labels) return labels;
+      }
       return this.#labelsOf(values[0]!, valueNode, context, reading);
     }
     const whole = this.formatChildType(type, context, typeNode);
@@ -3400,6 +3432,20 @@ export class SchemaGenerator {
     // explicitly. Keyword types (string, number, boolean, undefined, null) are
     // resolved directly by the switch below, so they never cause widening.
     if (ts.isUnionTypeNode(typeNode)) {
+      // One scope's wrappers beside `null` or `undefined`, `PerUser<A> | null`,
+      // are the wrapper around their payloads, `PerUser<A | null>`, which the
+      // scope wrapper formatter reads from the union's type, at the payloads
+      // written in it.
+      const scoped = scopeOfWrittenScopedUnion(typeNode, checker) !== undefined
+        ? typeRegistry?.get(typeNode) ?? checker.getTypeFromTypeNode(typeNode)
+        : undefined;
+      const scopedContext = { ...context, typeNode };
+      if (
+        scoped &&
+        this.#commonFabricFormatter.supportsType(scoped, scopedContext)
+      ) {
+        return this.#commonFabricFormatter.formatType(scoped, scopedContext);
+      }
       const defaultUnion = this.#unionFormatter.formatDefaultUnion(
         typeNode,
         context,

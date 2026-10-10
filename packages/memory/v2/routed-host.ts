@@ -92,9 +92,10 @@ export interface RoutedHostLimits {
   /** Principals authenticated in one context at once, as the router's own. */
   principalsPerContext: number;
   /**
-   * Principals one context remembers until their statements expire,
-   * released ones included; creating a space proves its key here, so this
-   * bounds the spaces one connection creates per statement lifetime.
+   * Principals one context remembers. Unreleased principals remain for the
+   * context's lifetime; released principals remain until their statements
+   * expire. Creating a space proves its key here, so this also bounds the
+   * creation keys awaiting release or expiry on one connection.
    */
   principalHistoryPerContext: number;
   /**

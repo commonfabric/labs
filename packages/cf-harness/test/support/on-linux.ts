@@ -10,9 +10,9 @@
  * same wherever it runs and never reads the store of the machine it runs on.
  * The Linux default is then the native runtime from that store. The Loom
  * local host takes no platform default, and neither does a console launched
- * for a Loom instance, so their exports name Docker instead, unless the
- * case's environment names a runtime. A case about the default, or about a
- * host given no runtime, calls the source module.
+ * for a Loom instance, so their exports name `runsc` over that store instead,
+ * unless the case's environment names a runtime. A case about the default, or
+ * about a host given no runtime, calls the source module.
  */
 
 import { join } from "@std/path";
@@ -96,11 +96,51 @@ const cliHome = (
 };
 
 /**
- * Environment for a case that spawns an entrypoint as a process of its own.
- * Such a child runs on the platform the suite runs on, which nothing here can
- * set, so it names Docker, the runtime the exports here default to.
+ * Environment that names `runsc`, with the binary, rootfs and CFC policy of
+ * the store under `LINUX_HOME`, so a selection made from it looks at nothing
+ * else: for a case that spawns an entrypoint as a process of its own, which
+ * runs on the platform the suite runs on and that nothing here can set, and
+ * for a host that takes no platform default.
  */
-export const NAMES_DOCKER = { CF_HARNESS_SANDBOX_RUNTIME: "docker" } as const;
+export const NAMES_RUNSC = {
+  CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+  CF_HARNESS_RUNSC_BINARY: join(
+    LINUX_HOME,
+    ".local",
+    "share",
+    "runsc-cfc",
+    "bin",
+    "runsc",
+  ),
+  CF_HARNESS_SANDBOX_ROOTFS: join(
+    LINUX_HOME,
+    ".local",
+    "share",
+    "runsc-cfc",
+    "images",
+    "kitchensink",
+  ),
+  CF_HARNESS_RUNSC_CFC_POLICY: join(
+    LINUX_HOME,
+    ".local",
+    "share",
+    "runsc-cfc",
+    "cfc-policy.json",
+  ),
+} as const;
+
+/**
+ * Returns `env` naming `runsc` over the store under `LINUX_HOME` where it
+ * names no sandbox runtime, each setting it names of its own kept, and as it
+ * is where it names one: a case that names a runtime is given nothing of
+ * that store's.
+ */
+const namingRunsc = (
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> =>
+  (env.CF_HARNESS_SANDBOX_RUNTIME ?? "").trim() === ""
+    ? { ...NAMES_RUNSC, ...env, CF_HARNESS_SANDBOX_RUNTIME: "runsc" }
+    : env;
 
 /** Like `parseCfHarnessCliArgs()` of `src/cli.ts`, except on Linux. */
 export const parseCfHarnessCliArgs: typeof parseCfHarnessCliArgsOnHost = (
@@ -145,14 +185,15 @@ export const runHarnessInteractiveChatStdioCli:
 
 /**
  * Like `createLoomLocalCfHarnessHost()`, except that its environment names
- * Docker where it names no sandbox runtime, as a Loom that runs on Docker
- * does. The environment is the process's own where the case gives none.
+ * `runsc` over the store under `LINUX_HOME` where it names no sandbox
+ * runtime, as Loom names its runtime. The environment is the process's own
+ * where the case gives none.
  */
 export const createLoomLocalCfHarnessHost:
   typeof createLoomLocalCfHarnessHostOnHost = (options) =>
     createLoomLocalCfHarnessHostOnHost({
       ...options,
-      env: { ...NAMES_DOCKER, ...(options.env ?? Deno.env.toObject()) },
+      env: namingRunsc(options.env ?? Deno.env.toObject()),
     });
 
 /** Like `resolveConsoleConfig()` of `console/server.ts`, except on Linux. */
@@ -183,21 +224,21 @@ export const startConsoleServer: typeof startConsoleServerOnHost = (
   });
 
 /**
- * Returns `env` for a launch with `args`: naming Docker ahead of whatever it
- * names where the launch is for a Loom instance, as a Loom that runs on
- * Docker launches one, and as it is otherwise.
+ * Returns `env` for a launch with `args`: naming `runsc` where the launch is
+ * for a Loom instance and `env` names no runtime, as Loom launches one, and
+ * as it is otherwise.
  */
 const launchEnvironment = (
   args: readonly string[],
   env: Record<string, string | undefined>,
 ): Record<string, string | undefined> =>
   args.some((arg) => arg === "--instance" || arg.startsWith("--instance="))
-    ? { ...NAMES_DOCKER, ...env }
+    ? namingRunsc(env)
     : env;
 
 /**
  * Like `prepareConsoleLaunch()` of `console/launch.ts`, except on Linux, and
- * with Docker named for a launch for a Loom instance.
+ * with `runsc` named for a launch for a Loom instance.
  */
 export const prepareConsoleLaunch: typeof prepareConsoleLaunchOnHost = (
   args,
@@ -213,7 +254,7 @@ export const prepareConsoleLaunch: typeof prepareConsoleLaunchOnHost = (
 
 /**
  * Like `launchConsole()` of `console/launch.ts`, except on Linux, and with
- * Docker named for a launch for a Loom instance. The environment is the
+ * `runsc` named for a launch for a Loom instance. The environment is the
  * process's own where the case gives none.
  */
 export const launchConsole: typeof launchConsoleOnHost = (

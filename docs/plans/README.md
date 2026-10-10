@@ -136,10 +136,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   that same document re-triggers it, and it writes again without end because
   another session is doing the same from the other side. Detection keyed per
   `(action, document)` on the self-referential, foreign-triggered, value-changing
-  write; capped exponential backoff on the re-run; a counted loud line and a
-  scheduler stat; and a two-session harness that trips the loop on purpose. The
+  write; capped exponential backoff on the re-run; a counted loud line, a
+  scheduler stat, and trips and clears reported over the memory session to the
+  health route beside the commit rates; and a two-session harness that trips
+  the loop on purpose. The
   backoff Topic 911 waits for, and the first of Topic 913's three guardrails.
-  Ships behind an experimental flag.
+  Always on, in every runtime.
 - [Memory `apply-op`](memory-apply-op.md) sequences the editor-neutral
   collaborative-field substrate, the first CodeMirror codec and editor
   integration, and the checkpoints and review gates required before a future
@@ -206,8 +208,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   one space's revision history after a write storm: materialize a `set` at
   every selected head under one `system` compaction commit, keep every head's
   address but the ACL document's, which records the compaction, drop the
-  rows behind it, hollow the payloads of commits nothing
-  references outside a retained window while keeping every commit's identity,
+  rows behind it, hollow every commit payload outside a retained window
+  except the genesis receipt's while keeping every commit's identity,
   and write the result out with `VACUUM INTO`. Options for what compaction
   means and what each breaks, the flags, the safety and rollback recipe for
   Estuary, and the server change that goes first because it keeps a future

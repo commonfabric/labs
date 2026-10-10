@@ -469,3 +469,86 @@ const fn = (input: Cell<{ items: Record<string, { n: number }> }>, k: string) =>
   // which must fail closed on either flag.
   assertEquals(input!.wildcard, true);
 });
+
+Deno.test(
+  "a value leaving for a callee with no summary ends identity use beneath it",
+  () => {
+    // `record` has no body to summarize, so it may read the whole list it is
+    // handed, elements included. The elements compared with `equals()` are
+    // then not compared alone; `flag`, compared and never handed on, still is.
+    const input = getPaths(
+      analyze(`${CELL}
+        interface ReadonlyArray<T> { some(p: (v: T) => boolean): boolean; }
+        declare function record(value: unknown): void;
+        const fn = (
+          input: { list: readonly Cell<number>[]; flag: Cell<number> },
+          other: Cell<number>,
+        ) => {
+          if (input.flag.equals(other)) return;
+          if (input.list.some((item) => item.equals(other))) return;
+          record(input.list);
+        };`),
+      "input",
+    );
+
+    assertEquals(input.identityPaths, ["flag"]);
+  },
+);
+
+Deno.test(
+  "a callee's escape ends the caller's identity use beneath it",
+  () => {
+    // `pass` hands `holder.list` to a callee with no summary. Its summary says
+    // so, and the caller, which compares the list's elements and passes the
+    // holder to `pass`, no longer uses those elements for identity alone.
+    const input = getPaths(
+      analyze(`${CELL}
+        interface ReadonlyArray<T> { some(p: (v: T) => boolean): boolean; }
+        declare function record(value: unknown): void;
+        const pass = (holder: { list: readonly Cell<number>[] }) => {
+          record(holder.list);
+        };
+        const fn = (
+          input: { list: readonly Cell<number>[] },
+          other: Cell<number>,
+        ) => {
+          if (input.list.some((item) => item.equals(other))) return;
+          pass(input);
+        };`),
+      "input",
+    );
+
+    assertEquals(input.identityPaths, []);
+  },
+);
+
+for (
+  const [form, call] of [
+    ["the fallback of a member", "record(input.list ?? []);"],
+    ["the fallback of the root", "record(input ?? spare);"],
+  ]
+) {
+  Deno.test(
+    `${form} leaving for a callee with no summary ends identity use beneath it`,
+    () => {
+      // Each form hands `record` a value it may read the whole of, the
+      // compared elements included, without naming `input.list` directly.
+      const input = getPaths(
+        analyze(`${CELL}
+          interface ReadonlyArray<T> { some(p: (v: T) => boolean): boolean; }
+          declare function record(value: unknown): void;
+          const fn = (
+            input: { list: readonly Cell<number>[] },
+            other: Cell<number>,
+            spare: { list: readonly Cell<number>[] },
+          ) => {
+            if (input.list.some((item) => item.equals(other))) return;
+            ${call}
+          };`),
+        "input",
+      );
+
+      assertEquals(input.identityPaths, []);
+    },
+  );
+}

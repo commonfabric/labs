@@ -42,7 +42,6 @@ import type { HarnessDocsCorpusRecord } from "./contracts/docs-corpus.ts";
 import { resolveHarnessDocsCorpus } from "./docs-corpus/corpus.ts";
 import type { HarnessForeignSpaces } from "./foreign-spaces.ts";
 import { resolveHarnessSkillsRoot } from "./skills/root.ts";
-import type { DockerRunscSandboxConfig } from "./sandbox/types.ts";
 
 export const DEFAULT_GATEWAY_BASE_URL = "https://llm.stage.commontools.dev/";
 
@@ -272,7 +271,6 @@ interface HarnessCommonConfig {
 
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
-  sandbox?: DockerRunscSandboxConfig;
   runManifest?: HarnessRunManifest;
   runManifestPath?: string;
 }
@@ -354,7 +352,6 @@ export interface ResolveHarnessConfigOptions {
 
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
-  sandbox?: DockerRunscSandboxConfig;
   runManifest?: HarnessRunManifest;
   runManifestPath?: string;
 }
@@ -809,7 +806,6 @@ export const resolveHarnessConfig = (
     ...(options.artifactRoot !== undefined
       ? { artifactRoot: options.artifactRoot }
       : {}),
-    ...(options.sandbox !== undefined ? { sandbox: options.sandbox } : {}),
     ...(options.runManifest !== undefined
       ? { runManifest: options.runManifest }
       : {}),

@@ -71,10 +71,17 @@ triggered the run and that the run read. Such a document `D` satisfies:
 2. `D` is in the run's read set, deep or shallow (`A` read `D` — the
    self-referential shape; the diff-base read satisfies this).
 
-The run is an **echo step** for `D` when it also changed `D`: a write detail
-under `D` holds a value that differs from the value `D` held before the run
-(`!valueEqual(previousValue, value)`). In the loop that previous value is the
-other session's: `A` read it as its diff base and wrote its own over it.
+The run is an **echo step** for `D` when it also changed `D` where `D`
+triggered it: a write detail under `D` holds a value that differs from the
+value it replaced, and reaches the path whose change triggered the run. A write
+at or below that path reaches it when it changes anything; a write above it,
+when its value differs at that path; a write beside it, to another field of
+`D`, never does. In the loop the replaced value is the other session's: `A`
+read it as its diff base and wrote its own over it. A derivation that reads
+one field of `D` and writes another is re-triggered by `D` but overwrites
+nothing the other writer wrote, so it is not an echo, however often the field
+it reads changes. A run triggered at the whole of `D` cannot be told apart that
+way, and any changing write to `D` counts for it.
 
 Otherwise the run is a **convergence step** for `D`. Storage drops a write of
 an equal value before it reaches the transaction's write details, so a run that
@@ -90,8 +97,15 @@ so they resolve through the same identity. Matching on less would let the same
 id in two spaces, or two session instances of one document, pass for one
 document.
 
-The step is computed at commit kickoff, while the transaction's write details
-are still staged, and handed to the breaker once the commit has succeeded. A
+Which triggers the run changed is read at commit kickoff, while the
+transaction's write details are still staged. The steps are formed once the
+commit has succeeded, against the pairs the breaker holds then, since another
+run of the action may have opened one while this run committed. An action the
+breaker holds no pair of can only begin counting, which takes an echo step, so
+for it only the changed triggers are classified, and a run that changed none
+yields no step at all; for a tracked action every trigger the run read is
+classified, since one it did not change is the convergence step that clears a
+pair. A
 counter of echo steps is kept per pair `(action id, document identity)`: the
 storm wrote one shared space-scoped document, so the pair that oscillates is a
 single key, while two demanded instances of one node write distinct documents
@@ -251,12 +265,23 @@ rising order of plumbing:
    counts deadlines rather than tripped pairs, so a loop that ended without a
    convergence step stops counting once its last backoff runs out. The
    prototype ships this.
-3. **The health route** — a per-space field on `/api/health/stats` so a tripped
-   breaker on a serving instance is a dashboard fact. This composes with the
-   per-space commit-rate signal Topic 913 scopes, and is best built alongside
-   it rather than in this prototype; the design records the field
-   (`servingLoop.echoBreaker: { active, trips }`, OFF-arm-absent like the rest
-   of the `servingLoop` block) and defers its wiring.
+3. **The memory server's health route** — every trip, and every clear of a
+   tripped pair, is reported on the space's own memory session
+   (`session.report`, memory protocol §4.14) to the server holding the space,
+   which lists it on `/api/health/stats` under `sessionReports`, beside the same
+   sessions' `commitRates`, and counts it as `ct.memory.echo_breaker`. A
+   browser, the `cf` CLI, and a serving runtime all report this way, since each
+   already holds an authenticated session routed to that server. A report names
+   the document's scope instance, so a serving runtime's reports for different
+   demanding sessions stay apart, and a clear says how the loop ended
+   (`convergence`, `quiet`, `retired`, or `evicted`) with its renewals and how
+   long it was held. The reports are what judge the breaker in production: a
+   trip followed by the session's commit rate falling to one per backoff is a
+   loop held, a long hold ending in convergence is a loop that settled, and a
+   short one is a candidate false trip. Reporting is best-effort: a server
+   without `sessionReportV1` gets none, and a report lost to a dropped
+   connection is not resent, so a missing report is not evidence that no loop
+   formed.
 
 ## 4. Interaction with the existing bounds and with server execution
 
@@ -293,23 +318,28 @@ mixed-version case), which is why Topic 913's server-side commit cap is a
 separate, complementary guardrail that bounds a writer the runtime cannot
 reach.
 
-## 5. The experimental flag
+## 5. Always on
 
-The breaker ships behind `remoteEchoBreaker`, registered in
-[`../development/EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md):
+The breaker has no switch. It runs in every runtime — a browser tab, the `cf`
+CLI, and a serving runtime alike — because the loops it bounds run wherever a
+derivation runs, and a setting that has to reach each of those surfaces is
+configuration the runtime does not need. Two things make that safe to do
+without a staged rollout:
 
-- **Toggle:** `EXPERIMENTAL_REMOTE_ECHO_BREAKER` env, or
-  `RuntimeOptions.experimental.remoteEchoBreaker`.
-- **Default:** off. A new in-progress feature that changes write cadence under a
-  loop; it ships dormant and is enabled deliberately for dogfooding on a
-  dev space before any default-on decision.
-- **Authority:** server. Under server execution the server runs the
-  derivations, so a client and server that disagreed on whether to rate-limit
-  would diverge on write cadence for a shared document; the safe direction is
-  that the deployment decides.
-- **End state:** fold into base scheduler semantics and delete the flag once
-  the thresholds have been tuned against live rate data and the behavior has
-  soaked.
+- **It costs almost nothing where there is no loop.** The classifier runs
+  after every successful reactive commit, but for an action the breaker holds
+  no pair of it looks only at the run's writes against its triggers — both
+  small — and stops there unless the run overwrote what re-triggered it. The
+  scan of the run's reads happens only for an action the breaker is already
+  tracking, or for an untracked one whose run overwrote a trigger, and the
+  convergence check only for a tracked one.
+- **What it does is visible where reporting reaches.** Trips and clears are
+  reported, best-effort, to the health route beside the same sessions' commit
+  rates (§3), so a false trip shows up as a short hold ending in convergence,
+  and the thresholds can be tuned against what the reports and the rates show.
+  A server without the capability, or a report lost to a dropped connection,
+  leaves a gap, so the reports bound the breaker's behavior from below rather
+  than counting it exactly.
 
 ## 6. Tests
 
@@ -318,11 +348,14 @@ levels. Waits are on scheduler drains and the fake clock's `settle` and `tick`,
 never a sleep or a poll, per
 [`../development/waiting-in-tests.md`](../development/waiting-in-tests.md).
 
-- **The classifier and the breaker.** `computeEchoSteps()` against a stand-in
-  transaction: an echo step for a changed self-read trigger, a convergence step
-  when nothing was written, no echo step for an output that was not the
-  trigger, no match across spaces for one id, and distinct keys for two session
-  instances. The breaker fed synthetic steps at chosen instants: the threshold
+- **The classifier and the breaker.** `captureEchoRun()` and
+  `computeEchoSteps()` against a stand-in transaction: an echo step for a
+  changed self-read trigger, a convergence step when nothing was written, no
+  echo step for an output that was not the trigger, no match across spaces for
+  one id, distinct keys for two session instances, no change for a write
+  beside the field that triggered the run or above it but equal there, and a
+  convergence step for a tracked action only when the run is classified as
+  tracked. The breaker fed synthetic steps at chosen instants: the threshold
   trips, every later echo renews one step longer up to the cap, a lapsed window
   resets only an untripped pair, a quiet stretch starts a tripped pair afresh, a
   convergence step lifts the backoff unless another document of the action is
@@ -337,13 +370,13 @@ never a sleep or a poll, per
   at most once per cycle while the disagreement continues. Once the two agree,
   the session that reads the agreed value writes it again, storage drops the
   write, and that convergence step clears its pair; commits stop and nothing is
-  active. With the flag off the same loop keeps committing and never trips. A
-  derivation re-run past the threshold by another session's edits to its input
-  does not trip. A re-subscribed action does not inherit the retired
-  registration's backoff.
+  active. A derivation re-run past the threshold by another session's edits to
+  its input does not trip, whether its output is a separate document or another
+  field of the input's document. A re-subscribed action does not inherit the
+  retired registration's backoff.
 
-Each of the renewal, convergence, identity, and unsubscribe behaviors has been
-checked to fail its test when reverted.
+Each of the renewal, convergence, identity, field-path, and unsubscribe
+behaviors has been checked to fail its test when reverted.
 
 `packages/runner/test/scheduler-remote-echo-breaker-traces.test.ts` replays
 the Topics space's own history through the detector: two minutes of each of
@@ -355,20 +388,23 @@ space- or user-scoped document does.
 
 `packages/runner/test/scoped-output-convergence.test.ts` runs the October
 storm's own pattern shape, a derivation over a per-session input in two
-sessions, with the breaker on as well as off: with the placement fix in, the
-sessions converge, the commit sequence stops moving on each arm, and on the
-breaker's arm it counts no cycle.
+sessions: with the placement fix in, the sessions converge, the commit
+sequence stops moving, and the breaker counts no cycle.
 
 ## Stages
 
-1. [x] **The breaker and the flag.** The `RemoteEchoBreaker` module, the
+1. [x] **The breaker.** The `RemoteEchoBreaker` module, the
    `echoBackoffUntil` gate field and its `eligibleAt` fold, the `run.ts`
-   finalize hook that computes the steps and applies the backoff, the flag, and
-   the unit tests. Flag off, no behavior change.
+   finalize hook that computes the steps and applies the backoff, and the unit
+   tests.
 2. [x] **The two-session tests** manufacturing the loop and proving the trip,
    the sustained rate bound, the convergence reset, and the no-trip on
    legitimate re-derivation.
-3. [ ] **The health-route field**, built with Topic 913's per-space rate signal.
-4. [ ] **Tuning and graduation:** set the thresholds from live rate data, soak,
-   then fold in and delete the flag. Revisiting the sticky placement (Topic
-   911) unblocks once stage 1 is on.
+3. [x] **The health-route reports.** Trips and clears reported over the
+   memory session and listed beside the per-session commit rates on
+   `/api/health/stats`.
+4. [x] **Always on.** The flag removed and the classifier's untracked path
+   made cheap, so the breaker runs in every runtime (§5). Revisiting the
+   sticky placement (Topic 911) is unblocked.
+5. [ ] **Tuning:** set the thresholds from the health route's trip reports
+   and the commit rates beside them.

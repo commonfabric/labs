@@ -431,8 +431,11 @@ export interface HarnessChatSessionStatus {
    * on, or, for a session stored before hosts recorded one, of the host that
    * ran its first turn since. A session goes on only on that runtime, which
    * keeps what its turns labelled. Absent until then for such a session.
+   * Stored sessions may record `docker`, written by an older cf-harness that
+   * had the Docker driver; this build reads them and refuses to go on with
+   * them.
    */
-  sandboxRuntime?: SandboxRuntimeKind;
+  sandboxRuntime?: SandboxRuntimeKind | "docker";
 
   capabilities: HarnessChatCapabilities;
   policy: HarnessChatPolicy;
@@ -651,6 +654,7 @@ export interface CreateHarnessChatSessionStatusOptions {
   model?: string;
   loomLocalHostBinding?: LoomLocalHostBinding;
   artifactRoot?: string;
+  /** A session is created on a runtime this build runs, never on `docker`. */
   sandboxRuntime?: SandboxRuntimeKind;
   capabilities?: Partial<HarnessChatCapabilities>;
   policy?: HarnessChatPolicy;

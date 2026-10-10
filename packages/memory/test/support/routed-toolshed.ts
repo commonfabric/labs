@@ -153,7 +153,12 @@ if (import.meta.main) {
         service.host.revokeRouter(command.revoke);
       }
       if (command.fence === true) service.host.fenceOwnership();
-      console.log(JSON.stringify({ acknowledged: true }));
+      console.log(JSON.stringify({
+        acknowledged: true,
+        ...(command.sessionReports === true
+          ? { sessionReports: service.server.sessionReports() }
+          : {}),
+      }));
     }
   }
   await service.close();

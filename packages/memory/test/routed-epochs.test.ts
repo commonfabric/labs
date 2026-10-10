@@ -1,7 +1,10 @@
 /** Durable link epochs and revocations: a router cannot revive client authority. */
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { Identity } from "@commonfabric/identity";
+import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
+
+import { Identity } from "@commonfabric/identity";
+
 import { RoutedEpochStore } from "../v2/routed-epochs.ts";
 import { ROUTED_PROOF_HORIZON_SECONDS } from "../v2/routed-wire.ts";
 const MIB = 1024 * 1024;
@@ -271,6 +274,9 @@ Deno.test("an epoch left live by a crash is retired once and keeps that time", a
   const directory = Deno.makeTempDirSync(), path = `${directory}/ledger`;
   const router = (await Identity.fromRaw(new Uint8Array(32).fill(94))).did();
   const epoch = "ab".repeat(16);
+  const retiredAt = Date.UTC(2026, 9, 1) / 1000;
+  let now = (retiredAt - 60) * 1000;
+  using _clock = stub(Date, "now", () => now);
   let store = new RoutedEpochStore(path);
   try {
     store.consume(router, epoch);
@@ -278,13 +284,25 @@ Deno.test("an epoch left live by a crash is retired once and keeps that time", a
     const retires = () =>
       Deno.readTextFileSync(path).split("\n").filter((line) =>
         line.startsWith('["retire"')
-      );
-    for (let i = 0; i < 3; i++) {
+      ).map((line) => JSON.parse(line));
+    // Every restart has a different clock value, but only the first one
+    // retires the epoch that the crashed link left live.
+    for (const elapsed of [0, 60, 120]) {
+      now = (retiredAt + elapsed) * 1000;
       store = new RoutedEpochStore(path);
       store.close();
-      assertEquals(retires().length, 1);
+      expect(retires()).toEqual([["retire", router, epoch, retiredAt]]);
     }
+    // Reuse is fenced through the last second of the original retention
+    // period, and admitted at its boundary despite the intervening restarts.
+    now = (retiredAt + RETENTION - 1) * 1000;
     store = new RoutedEpochStore(path);
+    expect(() => store.consume(router, epoch)).toThrow();
+    store.close();
+    now += 1000;
+    store = new RoutedEpochStore(path);
+    expect(retires()).toEqual([]);
+    expect(() => store.consume(router, epoch)).not.toThrow();
   } finally {
     store.close();
     Deno.removeSync(directory, { recursive: true });

@@ -1080,9 +1080,25 @@ export type AsCellEntry =
   };
 
 export declare const SCOPE_BRAND: unique symbol;
-export type Scoped<T, Scope extends SchemaScope> = T & {
-  readonly [SCOPE_BRAND]?: Scope;
-};
+/**
+ * The brand `Scoped` intersects `T` with: the scope, beside the `null` and
+ * `undefined` `T` holds, which an intersection with the brand alone would
+ * reduce to `never`. It distributes over `T`'s members, so the intersection
+ * keeps them, and while `T` holds a type parameter it stays one deferred type,
+ * which leaves `Scoped<T, Scope>` one intersection rather than a union of them.
+ */
+type ScopeTag<T, Scope extends SchemaScope> = T extends unknown
+  ? { readonly [SCOPE_BRAND]?: Scope } | Extract<T, null | undefined>
+  : never;
+/**
+ * `T` in the scope `Scope`: `T` branded with the scope, except for `null` and
+ * `undefined`, which it holds as they are. So `PerUser<string | null>` is
+ * `(string & brand) | null`, and `PerUser<string>` is `string & brand`. The
+ * type keeps the alias it is reached by, `PerUser<…>` or an author's own
+ * `type Box<T> = PerUser<…>`, which is how a reader of a type finds the
+ * declaration it came from.
+ */
+export type Scoped<T, Scope extends SchemaScope> = T & ScopeTag<T, Scope>;
 export type PerSpace<T> = Scoped<T, "space">;
 export type PerUser<T> = Scoped<T, "user">;
 export type PerSession<T> = Scoped<T, "session">;

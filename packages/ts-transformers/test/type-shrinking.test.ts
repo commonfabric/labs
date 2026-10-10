@@ -1031,6 +1031,7 @@ Deno.test("applyShrinkAndWrap descends identity paths through named interface re
 
   const result = applyShrinkAndWrap(
     createParamSummary({
+      readPaths: [["inner", "drop"], ["other"]],
       identityPaths: [["inner", "keep"]],
       identityCellPaths: [["inner", "keep"]],
     }),
@@ -1045,7 +1046,7 @@ Deno.test("applyShrinkAndWrap descends identity paths through named interface re
   const { props: members } = shrunkProps(result, sourceFile);
   // The reference resolves to declared members, recurses into `inner`, and
   // wraps the `keep` leaf. Identity-path application transforms the targeted
-  // leaf in place and leaves the surrounding structure intact.
+  // leaf in place and leaves the members the summary reads intact.
   assertEquals(members.get("keep")?.type, "__cfHelpers.OpaqueCell<unknown>");
   assertEquals(members.get("drop")?.type, "number");
   assertEquals(members.get("other")?.type, "string");
@@ -1066,6 +1067,7 @@ Deno.test("applyShrinkAndWrap rebuilds inline literals when a nested identity le
 
   const result = applyShrinkAndWrap(
     createParamSummary({
+      readPaths: [["inner", "drop"], ["other"]],
       identityPaths: [["inner", "keep"]],
       identityCellPaths: [["inner", "keep"]],
     }),
@@ -1095,6 +1097,7 @@ Deno.test("applyShrinkAndWrap returns an inline literal unchanged when a nested 
 
   const result = applyShrinkAndWrap(
     createParamSummary({
+      readPaths: [["a", "x"], ["b"]],
       identityPaths: [["a", "missing"]],
     }),
     alias.type,
@@ -1110,6 +1113,40 @@ Deno.test("applyShrinkAndWrap returns an inline literal unchanged when a nested 
   assertEquals(members.get("x")?.type, "string");
   assertEquals(members.get("b")?.type, "string");
   assertEquals(hasQualifiedRef(node, "__cfHelpers", "OpaqueCell"), false);
+});
+
+Deno.test("applyShrinkAndWrap prunes members no path reaches when every path is an identity path", () => {
+  const { sourceFile, checker } = createProgram(`
+    declare namespace __cfHelpers {
+      export type OpaqueCell<T> = { readonly opaque?: T };
+    }
+    type Input = {
+      inner: { keep: string; drop: number };
+      other: string;
+    };
+  `);
+  const alias = findTypeAlias(sourceFile, "Input");
+  const baseType = checker.getTypeAtLocation(alias.type);
+
+  const result = applyShrinkAndWrap(
+    createParamSummary({
+      identityPaths: [["inner", "keep"]],
+      identityCellPaths: [["inner", "keep"]],
+    }),
+    alias.type,
+    baseType,
+    false,
+    checker,
+    sourceFile,
+    ts.factory,
+  );
+
+  const { props: members } = shrunkProps(result, sourceFile);
+  // Only `inner.keep` is used, and only for its identity: it is narrowed, and
+  // the members no path reaches are pruned as any shrink prunes them.
+  assertEquals(members.get("keep")?.type, "__cfHelpers.OpaqueCell<unknown>");
+  assertEquals(members.has("drop"), false);
+  assertEquals(members.has("other"), false);
 });
 
 Deno.test("applyShrinkAndWrap leaves array elements untouched when an identity item path does not resolve", () => {
@@ -1152,6 +1189,7 @@ Deno.test("applyShrinkAndWrap descends identity item paths through readonly arra
 
   const result = applyShrinkAndWrap(
     createParamSummary({
+      readPaths: [["0", "drop"]],
       identityPaths: [["0", "keep"]],
       identityCellPaths: [["0", "keep"]],
     }),

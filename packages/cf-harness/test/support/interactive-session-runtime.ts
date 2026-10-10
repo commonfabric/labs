@@ -73,7 +73,7 @@ export default pattern<{ db: SqliteDb; tick: number }>(({ db, tick }) => {
 type Result = { count: number; pending: boolean; error?: unknown };
 const sandbox: SandboxRuntime = {
   describe: () => ({
-    kind: "docker-runsc-cfc",
+    kind: "runsc-cfc",
     defaultWorkingDirectory: "/workspace",
     cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
   }),

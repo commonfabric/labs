@@ -58,42 +58,32 @@ first run does without.
    `Warning Ignored build scripts for packages: npm:fuse-native@2.2.6` box on
    stderr. It is noise; the command's output is on stdout.
 
-2. **Docker with the `runsc-cfc` runtime.** This walkthrough runs every
-   sandboxed tool in a container under that runtime, and names it with
-   `CF_HARNESS_SANDBOX_RUNTIME=docker` wherever it starts something. Naming it
-   matters on macOS and Linux. On an Apple-silicon Mac, an entrypoint that takes
-   a default, which is the batch CLI, the interactive stdio entrypoint, the
-   console and its launcher run with no `--instance`, invokes `runsc` directly,
-   with no Docker, from the native cfc-vm store where no runtime is named, and
-   refuses to start where that store is not set up; on Linux they do the same
-   from the store gVisor's Linux installer writes, rootless for a user that is
-   not root, with `pasta` for the network; on every other platform those
-   entrypoints default to Docker. On Linux the default network also needs
-   passt's `pasta` and util-linux's `setpriv` on `PATH`, and `unshare` too for
-   root; a refusal names what to install, and
+2. **The native `runsc` runtime.** Every sandboxed tool runs under gVisor's
+   `runsc`, which the harness invokes directly, with no Docker. On macOS (Apple
+   silicon) the console takes it from the cfc-vm store that gVisor's macOS
+   installer writes; on Linux, from the store gVisor's Linux installer writes
+   under `~/.local/share/runsc-cfc`, rootless for a user that is not root, with
+   `pasta` (passt) for the network. Install the store for your platform from the
+   gVisor release. On Linux, install passt as well (`sudo apt install passt`),
+   and util-linux, whose `setpriv` ties what `pasta` runs to `pasta`, and whose
+   `unshare` a root console's `pasta` runs under; the store's installer provides
+   neither; a refusal names what to install, and
    `CF_HARNESS_DOCKER_NETWORK_MODE=none` or `host` needs none of the three. A
-   user that is not root also needs a host that allows unprivileged user
+   console that is not root also needs a host that allows unprivileged user
    namespaces, for the store's `runsc`, which runs rootless whatever the
-   network, and for pasta's network even with a named `runsc`; where
+   network, and for pasta's network even with a named `runsc`: where
    `user.max_user_namespaces` is 0, `kernel.unprivileged_userns_clone` is 0 or
-   `kernel.apparmor_restrict_unprivileged_userns` is 1, the default is refused,
-   naming the `sudo sysctl -w` that allows them, or running as root. Two
-   entrypoints take no default on any platform and refuse to start unless a
-   runtime is named: the Loom local host, and `console:launch` given
-   `--instance`. The package README's
-   [Sandbox runtimes](README.md#sandbox-runtimes) covers the direct driver and
-   the default. On macOS, follow the gVisor
-   [Docker Desktop CFC setup guide](https://github.com/commonfabric/gvisor/blob/cfc_v2/g3doc/user_guide/quick_start/docker_desktop_cfc.md);
-   it owns installation and registration. Confirm the result:
-
-   ```sh
-   docker info --format '{{json .Runtimes}}'
-   ```
-
-   Success is a `runsc-cfc` entry whose `runtimeArgs` name both
-   `--cfc-result-dir` and `--cfc-invocation-context-dir`. Keep those two paths;
-   section 3 needs them. On Docker Desktop they read `/host_mnt/Users/...`; the
-   host-side path is the same with `/host_mnt` removed.
+   `kernel.apparmor_restrict_unprivileged_userns` is 1 (Ubuntu 23.10 and later),
+   it is refused, naming the `sudo sysctl -w` that allows them, or running as
+   root. With no CFC policy named, a Mac takes the home's default policy,
+   `~/.local/share/runsc-cfc/cfc-policy.json`, where it is there, and the cfc-vm
+   store's own otherwise; on Linux that file is the store's own policy, which is
+   looked for once. Every other platform has no default, and needs
+   `CF_HARNESS_SANDBOX_RUNTIME=runsc` with the runtime's settings named. The
+   package README's [Sandbox runtimes](README.md#sandbox-runtimes) lists what
+   the store holds and what each refusal means. The console refuses to start
+   where the store is not set up, naming what it lacks, so its startup is the
+   check.
 
 3. **An identity keyfile.** One PKCS#8 key signs the Fabric session, the
    pattern-index requests, and the browser login in section 5. To mint one:
@@ -200,19 +190,16 @@ the toolshed's CFC posture to match what this checkout documents.
 
 ### Start the console
 
-| Variable                                      | Value                                                                                          |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `CF_HARNESS_CONSOLE_PORT`                     | Any free local port; the default is `8100`.                                                    |
-| `CF_HARNESS_CONSOLE_DIR`                      | Any absolute directory unique to this console. It holds sessions, runs, and the workspace.     |
-| `CF_HARNESS_FABRIC_API_URL`                   | The toolshed API URL from above.                                                               |
-| `CF_HARNESS_FABRIC_IDENTITY`                  | The absolute path to the keyfile from prerequisite 3.                                          |
-| `CF_HARNESS_FABRIC_SPACE`                     | A space name. A new name is fine; a `did:key` is refused.                                      |
-| `CF_HARNESS_SANDBOX_RUNTIME`                  | `docker`, the driver this walkthrough follows; neither macOS nor Linux defaults to it.         |
-| `CF_HARNESS_RUNSC_CFC_RESULT_DIR`             | The host side of `--cfc-result-dir` from prerequisite 2.                                       |
-| `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` | The host side of `--cfc-invocation-context-dir` from prerequisite 2.                           |
-| `MEMORY_DIR`                                  | The toolshed's store directory from above, as a plain path.                                    |
-| `CF_HARNESS_PATTERN_INDEX_URL`                | Optional: `https://us-central1-pattern-index.cloudfunctions.net`, once prerequisite 5 is done. |
-| `CF_HARNESS_SKILLS_REGISTRY_URL`              | Optional: `https://skills.sh`, which adds a metadata-only `search_skills` tool.                |
+| Variable                         | Value                                                                                          |
+| -------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `CF_HARNESS_CONSOLE_PORT`        | Any free local port; the default is `8100`.                                                    |
+| `CF_HARNESS_CONSOLE_DIR`         | Any absolute directory unique to this console. It holds sessions, runs, and the workspace.     |
+| `CF_HARNESS_FABRIC_API_URL`      | The toolshed API URL from above.                                                               |
+| `CF_HARNESS_FABRIC_IDENTITY`     | The absolute path to the keyfile from prerequisite 3.                                          |
+| `CF_HARNESS_FABRIC_SPACE`        | A space name. A new name is fine; a `did:key` is refused.                                      |
+| `MEMORY_DIR`                     | The toolshed's store directory from above, as a plain path.                                    |
+| `CF_HARNESS_PATTERN_INDEX_URL`   | Optional: `https://us-central1-pattern-index.cloudfunctions.net`, once prerequisite 5 is done. |
+| `CF_HARNESS_SKILLS_REGISTRY_URL` | Optional: `https://skills.sh`, which adds a metadata-only `search_skills` tool.                |
 
 ```sh
 cd <labs>/packages/cf-harness
@@ -224,9 +211,6 @@ export CF_HARNESS_FABRIC_SPACE=<space-name>
 export CF_HARNESS_FABRIC_CFC_POSTURE=max-enforcement
 export CF_HARNESS_FABRIC_CFC_FLOW_LABELS=persist
 export CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE=enforce-strict
-export CF_HARNESS_SANDBOX_RUNTIME=docker
-export CF_HARNESS_RUNSC_CFC_RESULT_DIR=<absolute-host-result-directory>
-export CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR=<absolute-host-invocation-context-directory>
 export MEMORY_DIR=<absolute-toolshed-cache-directory>
 deno task console
 ```
@@ -235,9 +219,9 @@ The three CFC exports are the console's defaults, written out so the posture a
 run ran under is never a guess. Success is a startup summary naming the space,
 the toolshed, `(not configured)` or a URL for the index and skills,
 `cfc:
-max-enforcement, flow labels persist, enforce-strict`, the sandbox as
-`docker` named by `CF_HARNESS_SANDBOX_RUNTIME`, and the two sidecar directories;
-then HTTP `200` here:
+max-enforcement, flow labels persist, enforce-strict`, and the sandbox as
+`runsc` by default on your platform, with the native store it runs from; then
+HTTP `200` here:
 
 ```sh
 curl -sS http://127.0.0.1:<free-console-port>/api/health | jq
@@ -277,9 +261,9 @@ interleave each other's records.
   its own run beside its parent as `<runId>.subagent.<n>`.
 - The **posture** is the CFC configuration the run's patterns deploy into; the
   three dials are printed at startup and recorded on every run.
-- A **sidecar** is the process beside the sandbox that records what each tool
-  call was allowed to observe; its two directories are the ones from
-  prerequisite 2.
+- A **CFC result** is what `runsc` reports of each tool call it ran under the
+  CFC policy: what the call was allowed to observe. The harness hands it the
+  call's context and reads the result back over descriptors of its own.
 
 ### Type a task
 
@@ -625,15 +609,11 @@ is a real problem.
 
 The batch CLI and the console resolve the same session configuration, and the
 same sandbox runtime selection: the CLI from `--sandbox-runtime` or
-`CF_HARNESS_SANDBOX_RUNTIME`, the console from the variable alone. On the Docker
-driver, which the first export names, the CLI refuses an enforcing run unless
-both runsc-cfc transports are named:
+`CF_HARNESS_SANDBOX_RUNTIME`, the console from the variable alone. With neither
+set, both take the native runtime of the platform, as in section 3:
 
 ```sh
 cd <labs>/packages/cf-harness
-export CF_HARNESS_SANDBOX_RUNTIME=docker
-export CF_HARNESS_RUNSC_CFC_RESULT_DIR=<absolute-host-result-directory>
-export CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR=<absolute-host-invocation-context-directory>
 
 deno task run -- \
   --output-mode batch \
@@ -736,16 +716,14 @@ defines both forms.
 **Provider overload.** Inspect `run-report.json.modelAttempts`. A failed attempt
 preserves the provider's `providerError.type`, `code`, and `message`; errors
 such as `server_is_overloaded` are provider capacity signals, not a Fabric or
-Docker diagnosis.
+sandbox diagnosis.
 [Model attempts and transport retry](README.md#model-attempts-and-transport-retry)
 defines the bounded retry contract.
 
 **Sandbox refusal under an enforcing mode.** Check the startup banner,
-`policy-trace.json`, full `tool-outputs/`, and Docker's registered runtime args.
-The harness-side directories must be the host side of runsc-cfc's
-`--cfc-result-dir` and `--cfc-invocation-context-dir`; on Docker Desktop the
-runtime sees their `/host_mnt/...` projections. A refusal is evidence to read,
-not a reason to silently drop to `observe`.
+`policy-trace.json`, and full `tool-outputs/`. An enforcing run needs a CFC
+policy: the banner's `cfc policy` row names the one in force, or says there is
+none. A refusal is evidence to read, not a reason to silently drop to `observe`.
 
 **Concurrent consoles.** Never point two console processes at one
 `CF_HARNESS_CONSOLE_DIR`. Give each process an absolute, unique directory.

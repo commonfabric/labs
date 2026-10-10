@@ -4,8 +4,6 @@
  * changes shape is a type error in the page rather than a blank pane.
  */
 
-import type { HarnessChatEventEnvelope } from "../../src/contracts/interactive-chat.ts";
-import { consolePath, pageMount } from "./mount.ts";
 import type {
   PatternIndexEvent,
   PatternIndexListEventsRequest,
@@ -14,7 +12,9 @@ import type {
   PatternIndexPattern,
   PatternIndexSearchRequest,
   PatternIndexSearchResponse,
-} from "../../src/pattern-index/client.ts";
+} from "@commonfabric/pattern-index/client";
+import type { HarnessChatEventEnvelope } from "../../src/contracts/interactive-chat.ts";
+import { consolePath, pageMount } from "./mount.ts";
 import type {
   ConsoleListedRun,
   ConsoleRunDetail,

@@ -156,6 +156,61 @@ describe("v2 document reconstruction", () => {
     });
   });
 
+  it("searches for a base no further back than the newest snapshot", async () => {
+    // A base older than the snapshot never wins the choice between them, so
+    // the lookup is bounded by the snapshot's seq: a document patched for a
+    // long time since its last `set` costs the rows since its snapshot, not
+    // the rows since that `set`. The bound is the `floor` the statement is
+    // asked for, observed here on the statement itself.
+    await withEngine((engine) => {
+      installThenPatch(engine);
+      evictDocumentCacheEntries(engine, Number.MAX_SAFE_INTEGER);
+      const floors: unknown[] = [];
+      const statement = engine.statements.selectLatestBase as unknown as {
+        get: (params: { floor?: unknown }) => unknown;
+      };
+      const get = statement.get.bind(statement);
+      statement.get = (params) => {
+        floors.push(params.floor);
+        return get(params);
+      };
+      const newestSnapshot = SNAPSHOT_SEQS[SNAPSHOT_SEQS.length - 1];
+
+      const patched = read(engine, { id: ENTITY });
+      expect(patched?.value).toEqual({
+        rows: ["a", "b", "c"],
+        n: PATCH_COMMITS,
+        m: 0,
+      });
+      expect(floors).toEqual([newestSnapshot]);
+
+      // A `set` newer than the snapshot is found above the floor: the read
+      // resolves to it directly, and the next patch's rebuild starts from it
+      // rather than from the snapshot.
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: commit(PATCH_COMMITS + 2, [{
+          op: "set",
+          id: ENTITY,
+          value: { value: { rows: [], n: -1, m: 0 } },
+        }]),
+      } as never);
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: commit(PATCH_COMMITS + 3, [{
+          op: "patch",
+          id: ENTITY,
+          patches: [{ op: "replace", path: "/value/m", value: 1 }],
+        }]),
+      } as never);
+      evictDocumentCacheEntries(engine, Number.MAX_SAFE_INTEGER);
+      floors.length = 0;
+      const rebased = read(engine, { id: ENTITY });
+      expect(rebased?.value).toEqual({ rows: [], n: -1, m: 1 });
+      expect(floors).toEqual([newestSnapshot]);
+    });
+  });
+
   it("materializes a snapshot every `snapshotInterval` patch commits", async () => {
     await withEngine((engine) => {
       installThenPatch(engine);

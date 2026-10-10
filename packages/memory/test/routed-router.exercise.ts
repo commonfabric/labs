@@ -2,6 +2,7 @@
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 // @ts-types="@types/ws"
 import WebSocket from "ws";
@@ -15,7 +16,11 @@ import {
 } from "../../runner/src/storage/v2-remote-session.ts";
 import { aclDocId } from "../acl.ts";
 import type { MemorySpace } from "../interface.ts";
-import { getMemoryProtocolFlags, toDocumentPath } from "../v2.ts";
+import {
+  getMemoryProtocolFlags,
+  type SessionReport,
+  toDocumentPath,
+} from "../v2.ts";
 import { BASE58_ALPHABET } from "../v2/routed-directory.ts";
 import { decodeRoutedFrame } from "../v2/routed-parser.ts";
 import {
@@ -377,7 +382,9 @@ class Toolshed {
     await this.#writer!.write(
       new TextEncoder().encode(`${JSON.stringify(command)}\n`),
     );
-    await this.#line((line) => line.includes('"acknowledged":true'));
+    return JSON.parse(
+      await this.#line((line) => line.includes('"acknowledged":true')),
+    );
   }
   signal(signal: Deno.Signal) {
     this.child!.kill(signal);
@@ -1607,6 +1614,46 @@ finally:
       `${router.did()} local-mode-a`,
       `${router.did()} local-mode-a`,
     ]);
+    expect(sdk.serverFlags?.sessionReportV1).toBe(true);
+    for (
+      const [i, session, signer] of [[0, sa, alice], [1, sb, bob]] as const
+    ) {
+      const trip: SessionReport = {
+        kind: "echo-breaker",
+        event: "trip",
+        document: { id: "of:fixture-data", scopeKey: "space" },
+        action: `cf:router-report-${i}`,
+      };
+      const clear: SessionReport = {
+        ...trip,
+        event: "clear",
+        reason: "convergence",
+        renewals: 2,
+        trippedMs: 1500,
+      };
+      await session.sendReport(trip);
+      await session.sendReport(clear);
+      // `sendReport()` swallows refusals, so completion alone proves nothing.
+      const { sessionReports } = await toolsheds[i].command({
+        sessionReports: true,
+      });
+      expect(sessionReports).toEqual({
+        echoBreaker: {
+          trips: 1,
+          clears: { convergence: 1, quiet: 0, retired: 0, evicted: 0 },
+        },
+        recent: [trip, clear].map((report) => ({
+          ...report,
+          at: expect.any(Number),
+          space: spaces[i],
+          session: session.sessionId,
+          principal: signer.did(),
+        })),
+      });
+    }
+    pass(
+      "session.report round trips through the router to each owning toolshed with session and principal attribution",
+    );
     await sa.close();
     await sb.close();
     pass(

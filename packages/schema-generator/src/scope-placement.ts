@@ -74,12 +74,49 @@ const topLevelScope = (schema: MutableJSONSchema): string | undefined => {
 export const scopeInsideUnionError = (scope: string): Error =>
   new Error(
     `A scope wrapper cannot be a member of a union. ` +
-      `\`PerUser<T> | undefined\` puts \`scope: "${scope}"\` inside an ` +
+      `\`PerUser<T> | number\` puts \`scope: "${scope}"\` inside an ` +
       `\`anyOf\` branch, where the write path does not look for it, so the ` +
       `slot stores one shared space-scoped value instead of one per ` +
       `principal. Put the union inside the wrapper ` +
-      `(\`PerUser<T | undefined>\`) or make the property optional ` +
-      `(\`prop?: PerUser<T>\`).`,
+      `(\`PerUser<T | number>\`). Beside \`null\` or \`undefined\` alone, ` +
+      `a wrapper scopes the whole slot.`,
+  );
+
+/**
+ * The error raised when a scope wrapper holds a cell beside anything, `null`
+ * and `undefined` included, written inside the wrapper or beside it. The cell
+ * is then an `anyOf` branch, and the one scope would have to be the slot's
+ * scope at the top and the cap on the cell's handle in the branch both.
+ */
+export const scopeAroundCellUnionError = (scope: string): Error =>
+  new Error(
+    `A scope wrapper around a cell cannot hold anything beside the cell, ` +
+      `\`null\` and \`undefined\` included, as ` +
+      `\`PerUser<Writable<T> | null>\`, \`PerUser<Writable<T>> | null\` ` +
+      `and \`PerUser<Cell<T> | string>\` do (\`scope: "${scope}"\`). Put ` +
+      `what the cell may hold inside it (\`PerUser<Writable<T | null>>\`), ` +
+      `make a property that may be absent optional ` +
+      `(\`handle?: PerUser<Writable<T>>\`), and put two cells' values in ` +
+      `one cell (\`PerUser<Cell<T | U>>\`).`,
+  );
+
+/**
+ * The error raised for a union of one scope's wrappers beside `null` or
+ * `undefined` whose members are not written where they can be read: one is a
+ * type parameter or a generic alias, as `T` is in `type Maybe<T> = T | null`.
+ * Read from its type alone, the payload would lose what only its syntax
+ * names, such as the binding a `PolicyOf<typeof rules>` names.
+ */
+export const scopeUnionUnreadError = (scope: string): Error =>
+  new Error(
+    `A scope wrapper beside \`null\` or \`undefined\` is read from the ` +
+      `union written around it, each member of which names the wrapper or ` +
+      `is \`null\` or \`undefined\`, directly or through aliases without ` +
+      `type parameters (\`scope: "${scope}"\`). A member written as a type ` +
+      `parameter or a generic alias cannot be read there, as in ` +
+      `\`Maybe<PerUser<T>>\` with \`type Maybe<T> = T | null\`. Write the ` +
+      `union out (\`PerUser<T> | null\`), or put \`null\` inside the ` +
+      `wrapper (\`PerUser<T | null>\`).`,
   );
 
 const walkSlot = (schema: MutableJSONSchema): void => {

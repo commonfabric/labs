@@ -174,7 +174,7 @@ const __cfLift_2 = __cfHelpers.lift<{
                 },
                 selectedIndex: {
                     type: "number",
-                    asCell: ["cell"]
+                    asCell: ["readonly"]
                 }
             },
             required: ["items", "selectedIndex"]
@@ -210,7 +210,7 @@ const __cfLift_3 = __cfHelpers.lift<{
                 },
                 selectedIndex: {
                     type: "number",
-                    asCell: ["cell"]
+                    asCell: ["readonly"]
                 },
                 discount: {
                     type: "number"

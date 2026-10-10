@@ -21,7 +21,7 @@ import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
 /** The usage fixture reads a file without launching a sandbox process. */
 const sandbox: SandboxRuntime = {
   describe: () => ({
-    kind: "docker-runsc-cfc",
+    kind: "runsc-cfc",
     defaultWorkingDirectory: "/workspace",
     cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
   }),

@@ -1,4 +1,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
+
 import { Identity } from "@commonfabric/identity";
 import { BASE58_ALPHABET } from "@commonfabric/memory/v2/routed-directory";
 import { identity } from "@/lib/identity.ts";
@@ -34,23 +37,42 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
     const write = (value: unknown) =>
       Deno.writeTextFileSync(path, JSON.stringify(value));
     write(config);
-    const policy = new MemoryRouterPolicy(path);
-    assertEquals(policy.ownership(space.did()), 1);
-    assertEquals(policy.ownership(router.did()), undefined);
-    const stamp = Deno.statSync(directory).mtime!;
-    const moved = JSON.parse(Deno.readTextFileSync(directory));
-    moved.spaces[space.did()].epoch = 2;
-    Deno.writeTextFileSync(directory, JSON.stringify(moved));
-    Deno.utimeSync(directory, stamp, stamp);
-    assertEquals(policy.ownership(space.did()), 2);
-    // Another same-size rewrite in that tick, with no lookup until the file
-    // has settled: a stamp recorded before settling could hide it.
-    moved.spaces[space.did()].epoch = 3;
-    Deno.writeTextFileSync(directory, JSON.stringify(moved));
-    Deno.utimeSync(directory, stamp, stamp);
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    assertEquals(policy.ownership(space.did()), 3);
-    assertEquals(policy.ownership(space.did()), 3);
+    let policy: MemoryRouterPolicy;
+    {
+      const timestamp = new Date(Date.UTC(2026, 9, 1));
+      let now = timestamp.getTime() + 100;
+      using _clock = stub(Date, "now", () => now);
+      const stat = Deno.statSync;
+      const coarse = { ...stat(directory), mtime: timestamp, ctime: timestamp };
+      // Keep the entire stamp identical across writes in this tick. Read
+      // the real file's size so the same-size precondition is checked too.
+      using _stat = stub(Deno, "statSync", (file) => {
+        const current = stat(file);
+        return file === directory ? { ...coarse, size: current.size } : current;
+      });
+      policy = new MemoryRouterPolicy(path);
+      expect(policy.ownership(space.did())).toBe(1);
+      expect(policy.ownership(router.did())).toBeUndefined();
+      const generation = policy.generation;
+      const moved = JSON.parse(Deno.readTextFileSync(directory));
+      now = timestamp.getTime() + 500;
+      moved.spaces[space.did()].epoch = 2;
+      Deno.writeTextFileSync(directory, JSON.stringify(moved));
+      expect(Deno.statSync(directory)).toEqual(coarse);
+      expect(policy.ownership(space.did())).toBe(2);
+      expect(policy.generation).toBe(generation + 1);
+      // The next write shares that stamp, with no lookup until the tick
+      // has settled. It must still update ownership and trigger fencing.
+      now = timestamp.getTime() + 750;
+      moved.spaces[space.did()].epoch = 3;
+      Deno.writeTextFileSync(directory, JSON.stringify(moved));
+      expect(Deno.statSync(directory)).toEqual(coarse);
+      now = timestamp.getTime() + 1750;
+      expect(policy.ownership(space.did())).toBe(3);
+      expect(policy.generation).toBe(generation + 2);
+      expect(policy.ownership(space.did())).toBe(3);
+      expect(policy.generation).toBe(generation + 2);
+    }
     for (
       const hostname of [
         "0.0.0.0",

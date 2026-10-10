@@ -6,10 +6,7 @@
  * first-party scheme. Public health and enrollment observations use GET;
  * enrollment names the same principal.
  *
- * Everything here runs on the trusted host side. A pattern's source reaches
- * this module, the `run_pattern` compile path, and the private research loop.
- * Research retains exact reads in its artifact and exposes only its admitted
- * implementation kit to the calling model.
+ * Callers supply the signer and may substitute the HTTP transport.
  */
 
 import type { JSONSchema } from "@commonfabric/api";
@@ -18,12 +15,7 @@ import {
   signFirstPartyHttpRequest,
 } from "@commonfabric/runner/toolshed-http-auth";
 import { isObjectOrArray } from "@commonfabric/utils/types";
-import type { HarnessPatternIndexConfig } from "../config.ts";
-import { loadHarnessIdentity } from "../identity-key.ts";
-import {
-  defaultHarnessFetch,
-  type HarnessFetch,
-} from "../contracts/http-fetch.ts";
+import type { PatternIndexFetch } from "./http-fetch.ts";
 import { resolvePatternIndexSuccessors } from "./successors.ts";
 
 /** Own and publication-bounded inherited evidence computed by the index. */
@@ -313,7 +305,7 @@ export class PatternIndexError extends Error {
 
 export interface PatternIndexClientOptions {
   baseUrl: string;
-  fetchFn?: HarnessFetch;
+  fetchFn?: PatternIndexFetch;
   signer: FirstPartyHttpSigner;
 }
 
@@ -328,7 +320,7 @@ const functionUrl = (baseUrl: string, fn: string): URL =>
 
 export class PatternIndexClient {
   readonly #baseUrl: string;
-  readonly #fetchFn: HarnessFetch;
+  readonly #fetchFn: PatternIndexFetch;
   readonly #signer: FirstPartyHttpSigner;
   readonly #discoveryRecords = new Map<string, Promise<PatternIndexPattern>>();
 
@@ -348,7 +340,7 @@ export class PatternIndexClient {
     // see, and appending to the raw string would put the function after the
     // delimiter.
     this.#baseUrl = base.origin + base.pathname;
-    this.#fetchFn = options.fetchFn ?? defaultHarnessFetch;
+    this.#fetchFn = options.fetchFn ?? ((input, init) => fetch(input, init));
     this.#signer = options.signer;
   }
 
@@ -565,60 +557,3 @@ export class PatternIndexClient {
     });
   }
 }
-
-/**
- * Builds the run's pattern-index client. The engine caches a healthy result
- * so a factory is called at most once per run; a construction failure
- * surfaces as an ordinary tool-output error, and the next tool call invokes
- * the factory again.
- */
-export type HarnessPatternIndexClientFactory = () => Promise<
-  PatternIndexClient
->;
-
-/**
- * Default factory over `config`. Requests are signed with the run's Fabric
- * identity — the index authorizes the same principal the run writes to its
- * space as — so the keyfile path comes from the fabric session config, which
- * is why a pattern index without one is a configuration error.
- */
-export const createHarnessPatternIndexClientFactory = (
-  config: HarnessPatternIndexConfig,
-  identityKeyPath: string,
-  fetchFn?: HarnessFetch,
-): HarnessPatternIndexClientFactory =>
-async () => {
-  const identity = await loadHarnessIdentity(identityKeyPath);
-  return new PatternIndexClient({
-    baseUrl: config.baseUrl,
-    signer: identity,
-    ...(fetchFn !== undefined ? { fetchFn } : {}),
-  });
-};
-
-/**
- * Wraps `factory` so a healthy client is built once and shared by every
- * invocation in the run. An in-flight construction is shared too, but a
- * REJECTED construction clears the cache: the failure still reaches every
- * caller awaiting it, and the next tool call invokes the factory again rather
- * than replaying a terminal failure for the rest of the run.
- */
-export const cacheHarnessPatternIndexClientFactory = (
-  factory: HarnessPatternIndexClientFactory,
-): HarnessPatternIndexClientFactory => {
-  let client: Promise<PatternIndexClient> | undefined;
-  return () => {
-    if (client === undefined) {
-      const attempt: Promise<PatternIndexClient> = Promise.resolve()
-        .then(factory)
-        .catch((error) => {
-          if (client === attempt) {
-            client = undefined;
-          }
-          throw error;
-        });
-      client = attempt;
-    }
-    return client;
-  };
-};

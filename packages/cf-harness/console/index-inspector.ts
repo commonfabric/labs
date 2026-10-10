@@ -9,7 +9,7 @@ import type {
   PatternIndexEvent,
   PatternIndexListedPattern,
   PatternIndexSearchResult,
-} from "../src/pattern-index/client.ts";
+} from "@commonfabric/pattern-index/client";
 
 /** One event type counted against a pattern, attributed where known. */
 export interface PatternEventBadge {

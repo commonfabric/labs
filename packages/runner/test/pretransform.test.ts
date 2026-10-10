@@ -182,17 +182,27 @@ Deno.test("helperInjectionLineOffset matches what the injector actually shifts",
   const MARKER = "const marker = 1;";
 
   // Every shape that reaches the mapper, and what the injector does with it.
-  const cases: { label: string; source: string }[] = [
-    { label: "plain authored source", source: `const top = 0;\n${MARKER}\n` },
+  const cases: { label: string; name: string; source: string }[] = [
+    {
+      label: "plain authored source",
+      name: "/main.tsx",
+      source: `const top = 0;\n${MARKER}\n`,
+    },
     {
       label: "stored legacy envelope (passes through untouched)",
+      name: "/main.tsx",
       source: injectCfHelpers(`const top = 0;\n${MARKER}\n`),
+    },
+    {
+      label: "declaration file (passes through untouched)",
+      name: "/types.d.ts",
+      source: `declare const top: number;\n${MARKER}\n`,
     },
   ];
 
-  for (const { label, source } of cases) {
+  for (const { label, name, source } of cases) {
     const injected = transformInjectHelperModule(
-      { main: "/main.tsx", files: [{ name: "/main.tsx", contents: source }] },
+      { main: name, files: [{ name, contents: source }] },
       // Mounts and the stored-source recompile both tolerate the legacy
       // envelope; this is the path whose offsets the mapper has to predict.
       { tolerateStoredLegacyEnvelope: true },
@@ -207,7 +217,7 @@ Deno.test("helperInjectionLineOffset matches what the injector actually shifts",
     // A span is measured over the injected text; adding the offset must land on
     // the authored line.
     assertEquals(
-      injectedLine + helperInjectionLineOffset(source),
+      injectedLine + helperInjectionLineOffset({ name, contents: source }),
       authoredLine,
       `${label}: offset does not recover the authored line`,
     );
@@ -226,6 +236,9 @@ Deno.test("helperInjectionLineOffset leaves a blank file alone", async () => {
       { tolerateStoredLegacyEnvelope: true },
     ).files[0].contents;
     assertEquals(injected, source, "the injector touched a blank file");
-    assertEquals(helperInjectionLineOffset(source), 0);
+    assertEquals(
+      helperInjectionLineOffset({ name: "/main.tsx", contents: source }),
+      0,
+    );
   }
 });

@@ -1,14 +1,18 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { StaticCache } from "@commonfabric/static";
 import { transformCfDirective } from "@commonfabric/ts-transformers";
 
 import {
+  type AuthoredSourceLookup,
   CompilerError,
   getTypeScriptEnvironmentTypes,
   InMemoryProgram,
   type SourceMap,
+  type TransformerDiagnosticInfo,
+  TransformerError,
   TypeScriptCompiler,
   TypeScriptCompilerOptions,
 } from "../mod.ts";
@@ -351,6 +355,95 @@ export function render() {
     expect(collected.modules.get("/main.ts")?.policyManifests).toEqual([
       manifest,
     ]);
+  });
+
+  describe("a transformer diagnostic with an authored-source lookup", () => {
+    // The compiler input carries one line its caller added above the authored
+    // text, as the runtime engine's helper import does. The transformer
+    // reports `other`, on the compiler input's third line.
+
+    const authored = "export const value = 1;\nexport const other = 2;\n";
+    const compilerInput = `// added\n${authored}`;
+    const authoredSource: AuthoredSourceLookup = (fileName) =>
+      fileName === "/main.ts"
+        ? { contents: authored, lineOffset: -1 }
+        : undefined;
+
+    /** A pipeline that transforms nothing and reports `other` once. */
+    function reporting(
+      severity: TransformerDiagnosticInfo["severity"],
+    ): TypeScriptCompilerOptions["beforeTransformers"] {
+      return () => ({
+        factories: [],
+        getDiagnostics: () => [{
+          severity,
+          type: "test",
+          message: `a transformer ${severity}`,
+          fileName: "/main.ts",
+          line: 3,
+          column: 14,
+          start: compilerInput.indexOf("other"),
+          length: "other".length,
+        }],
+      });
+    }
+
+    async function resolveInput() {
+      const compiler = new TypeScriptCompiler(types);
+      const resolved = await compiler.resolveProgram(
+        new InMemoryProgram("/main.ts", { "/main.ts": compilerInput }),
+      );
+      return { compiler, resolved };
+    }
+
+    it("throws a TransformerError whose message names and quotes the authored line", async () => {
+      const { compiler, resolved } = await resolveInput();
+      let thrown: unknown;
+      try {
+        compiler.compileToModules(resolved, {
+          authoredSource,
+          beforeTransformers: reporting("error"),
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(TransformerError);
+      const { message, diagnostics } = thrown as TransformerError;
+      expect(message).toContain("/main.ts:2:14 - error: a transformer error");
+      expect(message).toContain("2 | export const other = 2;");
+      expect(message).not.toContain("// added");
+      expect(diagnostics.map((d) => d.line)).toEqual([3]);
+    });
+
+    it("logs a transformer warning at the authored line", async () => {
+      const { compiler, resolved } = await resolveInput();
+      using warned = stub(console, "warn");
+
+      compiler.compileToModules(resolved, {
+        authoredSource,
+        beforeTransformers: reporting("warning"),
+      });
+
+      const logged = warned.calls.flatMap((call) => call.args).join("\n");
+      expect(logged).toContain(
+        "/main.ts:2:14 - warning: a transformer warning",
+      );
+      expect(logged).toContain("2 | export const other = 2;");
+    });
+
+    it("collects a transformer error under the authored line", async () => {
+      const { compiler, resolved } = await resolveInput();
+
+      const collected = compiler.compileToModulesCollecting(resolved, {
+        authoredSource,
+        beforeTransformers: reporting("error"),
+      });
+
+      expect(collected.diagnostics).toEqual([
+        { file: "/main.ts", message: "2: a transformer error" },
+      ]);
+    });
   });
 
   it("compileToModulesCollecting reports stale directives AND real errors", async () => {

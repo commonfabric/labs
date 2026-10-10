@@ -29,6 +29,7 @@ import {
   seedSpaceDb,
   SPACE_DB_DID,
 } from "./support/space-db.ts";
+import { INERT_RUNSC } from "./support/inert-runsc.ts";
 
 /** A reference into the labelled cell, of the shape an input cell carries. */
 const LABELED_REF = `/${LABELED_CELL_ID}/value/secret`;
@@ -63,6 +64,7 @@ const engineHolding = async (
   options: Partial<CreateHarnessEngineOptions> = {},
 ): Promise<CfHarnessEngine> => {
   const engine = new CfHarnessEngine({
+    ...INERT_RUNSC,
     artifactRoot: join(directory, "runs"),
     runId,
     workspaceHostPath: join(directory, "workspace"),
@@ -165,6 +167,7 @@ describe("run-end cell labels", () => {
       await withDirectory(async (directory) => {
         const runId = "run-no-space";
         const engine = new CfHarnessEngine({
+          ...INERT_RUNSC,
           artifactRoot: join(directory, "runs"),
           runId,
           workspaceHostPath: join(directory, "workspace"),
@@ -194,6 +197,7 @@ describe("run-end cell labels", () => {
       await withDirectory(async (directory) => {
         const runId = "run-no-cells";
         const engine = new CfHarnessEngine({
+          ...INERT_RUNSC,
           artifactRoot: join(directory, "runs"),
           runId,
           workspaceHostPath: join(directory, "workspace"),

@@ -18,6 +18,7 @@ import { OpenAICompatibleGatewayClient } from "../../src/gateway/openai-client.t
 import { CfHarnessPromptLoop } from "../../src/prompt-loop.ts";
 import { SkillsShAcquisitionClient } from "../../src/skills-sh/acquisition.ts";
 import type { ProcessRunner } from "../../src/sandbox/process-runner.ts";
+import { INERT_RUNSC } from "../support/inert-runsc.ts";
 import {
   chatViewOfRequest,
   responsesBodyFromChatFixture,
@@ -71,10 +72,10 @@ const githubFetch: typeof fetch = (input) => {
 
 // The sandbox configuration is real so that the parent owns one and a child
 // can be built from it, and this is what keeps the run off a container while
-// that stays true: every `docker` invocation answers, so the sandbox behaves
+// that stays true: every `runsc` invocation answers, so the sandbox behaves
 // as configured without one existing. It is the configuration under test, not
 // the container.
-const scriptedDockerRunner: ProcessRunner = {
+const scriptedRunner: ProcessRunner = {
   run() {
     return Promise.resolve({
       stdout: "cf-harness-test-container\n",
@@ -137,18 +138,9 @@ describe("delegating an acquired skill to a child", () => {
         artifactRoot,
         model: "gpt-5.4",
         cfcEnforcementMode: "disabled",
-        processRunner: scriptedDockerRunner,
-        sandbox: {
-          dockerBinary: "docker",
-          runtimeName: "runsc-cfc",
-          image: "cf-harness:test",
-          workspaceHostPath: workspace,
-          workspaceMountPath: "/workspace",
-          shellPath: "/bin/bash",
-          dockerNetworkMode: "none",
-          additionalMounts: [],
-          extraDockerArgs: [],
-        },
+        processRunner: scriptedRunner,
+        workspaceHostPath: workspace,
+        ...INERT_RUNSC,
         // Two entries, one for this pin and one for a skill this run never
         // acquired. A child that received both would be holding a decision
         // the operator made about something else.

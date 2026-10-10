@@ -28,7 +28,7 @@ import { responsesBodyFromChatFixture } from "../support/responses-fixture.ts";
 /** Sandbox fixture whose operations have no process or network effects. */
 const sandbox: SandboxRuntime = {
   describe: () => ({
-    kind: "docker-runsc-cfc",
+    kind: "runsc-cfc",
     defaultWorkingDirectory: "/workspace",
     cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
   }),

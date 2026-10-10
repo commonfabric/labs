@@ -6,6 +6,8 @@ export type {
   SourceMap,
 } from "./interface.ts";
 export {
+  type AuthoredSource,
+  type AuthoredSourceLookup,
   type BeforeTransformersResult,
   CompilationError,
   type CompilationErrorType,

@@ -176,6 +176,7 @@ const flags = new Set([
   "viewScopedReplicationV1",
   "sessionReadCeiling",
   "presenceV1",
+  "sessionReportV1",
   "sessionClose",
   "connectionAuth",
   "admissionNotice",

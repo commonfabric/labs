@@ -3241,7 +3241,7 @@ export class CfHarnessPromptLoop {
       // it — the acquiring parent, or a child sharing a handed-in runtime —
       // has nothing to run and is not backed.
       acquiredSkillsAvailable: acquiredSkillScriptBacking(
-        this.engine.ownedSandboxConfig ?? this.engine.ownedRunscSandboxConfig,
+        this.engine.ownedRunscSandboxConfig,
         this.engine.getRunState().acquiredSkills?.skills,
       ),
       docsCorpusAvailable: this.engine.docsCorpusAvailable,
@@ -5894,14 +5894,12 @@ export class CfHarnessPromptLoop {
       runId: childRunId,
       lineage: childLineage,
       // What sandbox a child gets depends on how this run's was made: see
-      // `childSandboxOptions`. Under the direct runsc driver every child builds
-      // a runtime of its own; under Docker a child shares this run's unless it
-      // mounts an acquired skill.
+      // `childSandboxOptions`. Where this engine built its runtime, every
+      // child builds a runtime of its own; where it was handed one, the
+      // child shares it.
       ...childSandboxOptions({
         sandbox: this.engine.sandbox,
-        ownedSandboxConfig: this.engine.ownedSandboxConfig,
         ownedRunscSandboxConfig: this.engine.ownedRunscSandboxConfig,
-        configuredSandbox: this.engine.config.sandbox,
       }, childAcquiredSkill),
       // Whichever of those it is, the child runs on the runtime this run's
       // entrypoint selected, and records that it was selected the same way.

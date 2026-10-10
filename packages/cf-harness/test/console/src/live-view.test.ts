@@ -1682,7 +1682,7 @@ describe("console/src/live-view", () => {
           model: "gpt-test",
           sandboxRuntime: {
             describe: () => ({
-              kind: "docker-runsc-cfc",
+              kind: "runsc-cfc",
               defaultWorkingDirectory: "/workspace",
               cfc: {
                 runtimeRequested: true,

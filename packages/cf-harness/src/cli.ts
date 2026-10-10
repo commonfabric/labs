@@ -86,23 +86,15 @@ import {
   type HarnessSessionConfig,
   harnessSessionEngineOptions,
 } from "./session-assembly.ts";
-import {
-  CFC_INVOCATION_CONTEXT_DIR_ENV,
-  CFC_RESULT_DIR_ENV,
-  DEFAULT_DOCKER_RUNSC_IMAGE,
-  DEFAULT_FABRIC_MOUNT_PATH,
-} from "./sandbox/docker-runsc.ts";
+import { DEFAULT_RUNSC_FABRIC_MOUNT_PATH } from "./sandbox/runsc.ts";
 import {
   describeSandboxRuntimeChoice,
-  DOCKER_DRIVER_SETTINGS,
   type ExplicitSandboxRuntimeSelection,
   processSandboxSelectionEnv,
   recordedSandboxRuntime,
   resolveSandboxRuntimeSelection,
   type SandboxProcess,
   sandboxProcessOf,
-  sandboxRuntimeOfOptions,
-  sandboxRuntimeResumeRefusal,
   type SandboxRuntimeSelection,
 } from "./sandbox/runtime-selection.ts";
 import type { SandboxPlatform, SandboxRuntimeChoice } from "./sandbox/types.ts";
@@ -228,10 +220,6 @@ const CLI_STRING_FLAGS = [
   "structured-result-schema-file",
   "run-manifest",
   "cfc-enforcement-mode",
-  "cfc-result-dir",
-  "cfc-invocation-context-dir",
-  "sandbox-image",
-  "sandbox-docker-runtime",
   "sandbox-runtime",
   "sandbox-rootfs",
   "sandbox-cfc-policy",
@@ -638,14 +626,10 @@ Options:
   --handle-value-origin <origin> Origin a handle's value may be sent to (repeatable; none by default)
   --input-cell <name>=<link>       Explicitly attach a cell in the fabric space to this run by reference, announced as a handle under <name>; its shape and labels live on the cell's declared schema (repeatable; requires --fabric-space)
   --cfc-enforcement-mode <mode> disabled | observe | enforce-explicit | enforce-strict
-  --cfc-result-dir <path>       Host dir where runsc writes the CFC result sidecar (docker runtime only; required for enforce-* modes)
-  --cfc-invocation-context-dir <path> Host dir where the harness writes the CFC invocation-context sidecar (docker runtime only; required for enforce-* modes)
-  --sandbox-image <image>       Docker driver only: the image for its runsc-cfc sandbox (default: ${DEFAULT_DOCKER_RUNSC_IMAGE})
-  --sandbox-docker-runtime <n>  Docker driver only: its Docker runtime (default: runsc-cfc)
-  --sandbox-runtime <kind>      docker or runsc: run runsc directly with no Docker; the
-                                same on Linux and on macOS through the darwin runsc. Tool
-                                calls may then name a sandbox session, except under pasta's
-                                network (the Linux default's). With no runtime
+  --sandbox-runtime <kind>      runsc: run runsc directly; the same on Linux and on
+                                macOS through the darwin runsc. Tool calls may name a
+                                sandbox session, except under pasta's network (the
+                                Linux default's). With no runtime
                                 named, macOS (Apple silicon only) runs runsc from the
                                 native cfc-vm store (CFC_VM_HOME, or ~/Library/Application
                                 Support/cfc-vm), Linux runs it from the store under
@@ -659,7 +643,7 @@ Options:
                                 the network, for the rootless store runsc (and for pasta
                                 with a named runsc), and a refusal names the sysctl -w to
                                 run. Each refuses to start where its store is not set up;
-                                every other platform runs docker
+                                every other platform refuses
   --sandbox-rootfs <path>       runsc runtime only: the rootfs a bundle names (a directory
                                 on Linux, default images/kitchensink in the Linux store;
                                 on macOS the cfc-vm image marker, default
@@ -722,11 +706,11 @@ Environment:
   CF_HARNESS_PROMPT_CACHE_MODE  Default value for --prompt-cache-mode
   CF_HARNESS_HOME               Local cf-harness credential/config directory
   CF_HARNESS_SKILLS_REGISTRY_URL Default value for --skills-registry-url
-  CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host (default: bridge, which on the
-                                runsc runtime is reported as sandbox: on macOS the VM's
-                                network; on Linux under the default pasta's, with egress
-                                and the host as host.docker.internal; on Linux with no
-                                pasta configured, loopback alone)
+  CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host, in Docker's words (default:
+                                bridge, which runsc reports as sandbox: on macOS the
+                                VM's network; on Linux under the default pasta's, with
+                                egress and the host as host.docker.internal; on Linux
+                                with no pasta configured, loopback alone)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
   CF_HARNESS_LOOM_COMMANDS_CONFIG Default host command broker configuration file
@@ -742,9 +726,7 @@ Environment:
   CF_HARNESS_PATTERN_INDEX_PUBLISH 0 applies --no-pattern-index-publish
   CF_HARNESS_PATTERN_INDEX_PUBLISH_DISCOVERABLE 1 offers successful authored
                                 patterns to search immediately (default: recorded only)
-  CF_HARNESS_SANDBOX_IMAGE      Docker driver only: default value for --sandbox-image
-  CF_HARNESS_SANDBOX_DOCKER_RUNTIME Docker driver only: default value for --sandbox-docker-runtime
-  CF_HARNESS_SANDBOX_RUNTIME    Default value for --sandbox-runtime (docker | runsc)
+  CF_HARNESS_SANDBOX_RUNTIME    Default value for --sandbox-runtime (runsc)
   CF_HARNESS_SANDBOX_ROOTFS     Default value for --sandbox-rootfs
   CF_HARNESS_RUNSC_CFC_POLICY   Default value for --sandbox-cfc-policy
   CF_HARNESS_RUNSC_BINARY       runsc binary for the runsc runtime (default: runsc on PATH;
@@ -754,28 +736,7 @@ Environment:
                                 macOS default (default: ~/Library/Application Support/cfc-vm)
   CF_HARNESS_CFC_ENFORCEMENT_MODE Default value for --cfc-enforcement-mode (ignored on --resume-run)
   CF_CFC_MODE                   Fallback for CF_HARNESS_CFC_ENFORCEMENT_MODE
-  ${CFC_RESULT_DIR_ENV} Fallback for --cfc-result-dir
-  ${CFC_INVOCATION_CONTEXT_DIR_ENV} Fallback for --cfc-invocation-context-dir
 `;
-
-// CFC sidecar transport dirs may be supplied by flag (resolved against cwd so
-// relative paths work) or env-var fallback (already an absolute host path by
-// convention). The docker-runsc layer re-validates that the result is absolute.
-const resolveOptionalCfcDir = (
-  flagValue: unknown,
-  envValue: string | undefined,
-  cwd: string,
-  flagName: string,
-): string | undefined => {
-  if (typeof flagValue === "string") {
-    const trimmed = flagValue.trim();
-    if (trimmed === "") {
-      throw new Error(`${flagName} requires a non-empty path`);
-    }
-    return resolve(cwd, trimmed);
-  }
-  return envValue;
-};
 
 const parsePositiveInteger = (
   input: string | undefined,
@@ -1908,25 +1869,6 @@ export const parseCfHarnessCliArgs = async (
       });
     }),
   );
-  const rawSandboxImage = typeof args["sandbox-image"] === "string"
-    ? args["sandbox-image"].trim()
-    : undefined;
-  if (rawSandboxImage !== undefined && rawSandboxImage === "") {
-    throw new Error("--sandbox-image requires a non-empty image reference");
-  }
-  const sandboxImage = rawSandboxImage ??
-    nonEmptyEnvValue(env.CF_HARNESS_SANDBOX_IMAGE);
-  const rawSandboxDockerRuntime =
-    typeof args["sandbox-docker-runtime"] === "string"
-      ? args["sandbox-docker-runtime"].trim()
-      : undefined;
-  if (rawSandboxDockerRuntime !== undefined && rawSandboxDockerRuntime === "") {
-    throw new Error(
-      "--sandbox-docker-runtime requires a non-empty runtime name",
-    );
-  }
-  const sandboxDockerRuntime = rawSandboxDockerRuntime ??
-    nonEmptyEnvValue(env.CF_HARNESS_SANDBOX_DOCKER_RUNTIME);
   // One derivation shared with the interactive entrypoints; flags win over
   // the environment, and a default policy is looked up through
   // `deps.pathExists`.
@@ -1953,10 +1895,6 @@ export const parseCfHarnessCliArgs = async (
       ...(typeof args["sandbox-cfc-policy"] === "string"
         ? { sandboxCfcPolicy: args["sandbox-cfc-policy"] }
         : {}),
-      // By name only: a flag given a value the Docker driver would refuse is
-      // still one someone gave.
-      dockerDriverFlags: DOCKER_DRIVER_SETTINGS.map((setting) => setting.flag)
-        .filter((flag) => args[flag.slice(2)] !== undefined),
     },
     cwd,
     deps,
@@ -1984,18 +1922,6 @@ export const parseCfHarnessCliArgs = async (
       "cfc enforcement mode must be one of disabled, observe, enforce-explicit, enforce-strict",
     );
   }
-  const cfcResultDir = resolveOptionalCfcDir(
-    args["cfc-result-dir"],
-    nonEmptyEnvValue(env[CFC_RESULT_DIR_ENV]),
-    cwd,
-    "--cfc-result-dir",
-  );
-  const cfcInvocationContextDir = resolveOptionalCfcDir(
-    args["cfc-invocation-context-dir"],
-    nonEmptyEnvValue(env[CFC_INVOCATION_CONTEXT_DIR_ENV]),
-    cwd,
-    "--cfc-invocation-context-dir",
-  );
   const rawFabricMount = typeof args["fabric-mount"] === "string"
     ? args["fabric-mount"].trim()
     : undefined;
@@ -2184,10 +2110,6 @@ export const parseCfHarnessCliArgs = async (
     ...(cfcEnforcementModeOverride !== undefined
       ? { cfcEnforcementModeOverride }
       : {}),
-    ...(cfcResultDir !== undefined ? { cfcResultDir } : {}),
-    ...(cfcInvocationContextDir !== undefined
-      ? { cfcInvocationContextDir }
-      : {}),
     ...(browserAccess !== undefined ? { browserAccess } : {}),
     handleValueOrigins,
     inputCells,
@@ -2208,8 +2130,6 @@ export const parseCfHarnessCliArgs = async (
     printTranscript: Boolean(args["print-transcript"]),
     ...(apiKey !== undefined ? { apiKey } : {}),
     ...(apiKeySource !== undefined ? { apiKeySource } : {}),
-    ...(sandboxImage !== undefined ? { sandboxImage } : {}),
-    ...(sandboxDockerRuntime !== undefined ? { sandboxDockerRuntime } : {}),
     ...(sandboxRuntimeKind !== undefined ? { sandboxRuntimeKind } : {}),
     ...(sandboxRootfs !== undefined ? { sandboxRootfs } : {}),
     ...(sandboxCfcPolicy !== undefined ? { sandboxCfcPolicy } : {}),
@@ -3654,19 +3574,10 @@ export const runCfHarnessCli = async (
           `Cannot resume subagent run ${artifacts.runState.runId} as a top-level run; resume root run ${artifacts.runState.lineage.rootRunId} instead.`,
         );
       }
-      // The engine refuses this too. It is refused here first, where the
-      // flag that names the recorded runtime can be said.
-      const recordedRuntime = recordedSandboxRuntime(artifacts.runState);
-      if (
-        recordedRuntime !== undefined &&
-        recordedRuntime !== sandboxRuntimeOfOptions(parsed)
-      ) {
-        throw sandboxRuntimeResumeRefusal(
-          recordedRuntime,
-          parsed.sandboxRuntimeChoice ?? sandboxRuntimeOfOptions(parsed),
-          deps.sandboxSelectionFlags ?? true,
-        );
-      }
+      // The engine refuses this too: a run recorded on the Docker driver, or
+      // on a runtime this build does not know. It is refused here first,
+      // before anything of the resume is read.
+      recordedSandboxRuntime(artifacts.runState);
       if (
         effectiveStructuredResult === undefined &&
         artifacts.runState.structuredResult !== undefined
@@ -3985,7 +3896,7 @@ export const runCfHarnessCli = async (
         systemPrompt: resolveCfHarnessCliSystemPrompt({
           ...parsed,
           fabricMountPath: parsed.fabricMount !== undefined
-            ? DEFAULT_FABRIC_MOUNT_PATH
+            ? DEFAULT_RUNSC_FABRIC_MOUNT_PATH
             : undefined,
         }),
         contextMessages,

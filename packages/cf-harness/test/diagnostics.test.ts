@@ -12,15 +12,6 @@ import {
   selectPrimaryHarnessFailure,
 } from "../src/diagnostics.ts";
 import { createHarnessPolicyEvent } from "../src/contracts/policy.ts";
-import {
-  DockerRunscSandboxRuntime,
-  resolveDockerRunscSandboxConfig,
-} from "../src/sandbox/docker-runsc.ts";
-import type {
-  ProcessRunner,
-  ProcessRunRequest,
-  ProcessRunResult,
-} from "../src/sandbox/process-runner.ts";
 import { ProcessTimeoutError } from "../src/sandbox/process-runner.ts";
 import type {
   SandboxCommandRequest,
@@ -33,7 +24,7 @@ import type {
 class FakeSandboxRuntime implements SandboxRuntime {
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: this.defaultWorkingDirectory(),
       cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
     };
@@ -106,11 +97,10 @@ class FakeFabricSandboxRuntime extends FakeSandboxRuntime {
 
   override describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: "/workspace",
       cfc: {
         runtimeRequested: true,
-        runtimeName: "runsc-cfc",
         workspaceMountPath: "/workspace",
         mounts: [
           { kind: "workspace", sandboxPath: "/workspace", readOnly: false },
@@ -137,7 +127,7 @@ Deno.test("collectHarnessCapabilitySnapshot captures fixed sandbox capabilities"
       substrateStatus: "not-attested",
       runManifest: { present: false },
       sandbox: {
-        kind: "docker-runsc-cfc",
+        kind: "runsc-cfc",
         defaultWorkingDirectory: "/workspace",
         cfc: {
           runtimeRequested: true,
@@ -232,11 +222,10 @@ Deno.test("collectHarnessCapabilitySnapshot reports configured Fabric mounts", a
 class FakeHostBindSandboxRuntime extends FakeSandboxRuntime {
   override describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: "/workspace",
       cfc: {
         runtimeRequested: true,
-        runtimeName: "runsc-cfc",
         workspaceMountPath: "/workspace",
         mounts: [
           {
@@ -593,7 +582,7 @@ Deno.test("classifyBuiltinToolFailure handles delegate_task outputs defensively"
 Deno.test("classifyHarnessRunError maps timeouts and path escapes deterministically", () => {
   assertEquals(
     classifyHarnessRunError(
-      new ProcessTimeoutError("docker run ...", 5000),
+      new ProcessTimeoutError("runsc run ...", 5000),
       {
         at: "2026-04-22T23:30:00.000Z",
         toolId: "bash",
@@ -673,78 +662,4 @@ Deno.test("selectPrimaryHarnessFailure prefers the highest-signal failure kind",
   ]);
 
   assertEquals(primary?.kind, "tool_not_allowed");
-});
-
-//
-// The capability snapshot is persisted into the CFC policy snapshot, so a
-// transport reading taken after it is captured cannot repair the claim it
-// already made.
-//
-
-const CAPABILITY_PROBE_STDOUT = [
-  "bash\tpresent\t/bin/bash\tGNU bash, version 5.2.26(1)-release",
-  "sh\tpresent\t/bin/sh\tBusyBox v1.36.1",
-  "node\tmissing\t\t",
-  "deno\tpresent\t/usr/local/bin/deno\tdeno 2.2.0",
-  "python\tmissing\t\t",
-  "python3\tpresent\t/usr/bin/python3\tPython 3.11.9",
-  "git\tpresent\t/usr/bin/git\tgit version 2.45.1",
-].join("\n");
-
-Deno.test("collectHarnessCapabilitySnapshot reads the CFC transport before capturing the sandbox description", async () => {
-  const requests: ProcessRunRequest[] = [];
-  const results: ProcessRunResult[] = [
-    {
-      // A runtime registered with CFC enabled and neither sidecar directory.
-      stdout: JSON.stringify({ "runsc-cfc": { runtimeArgs: ["--cfc"] } }),
-      stderr: "",
-      exitCode: 0,
-    },
-    { stdout: "container-123\n", stderr: "", exitCode: 0 },
-    { stdout: CAPABILITY_PROBE_STDOUT, stderr: "", exitCode: 0 },
-    { stdout: "0\n", stderr: "", exitCode: 0 },
-    { stdout: "", stderr: "", exitCode: 0 },
-  ];
-  const runner: ProcessRunner = {
-    run(request) {
-      requests.push(request);
-      const result = results.shift();
-      if (result === undefined) {
-        throw new Error(`unexpected process request: ${request.args[0]}`);
-      }
-      return Promise.resolve(result);
-    },
-  };
-  const sandbox = new DockerRunscSandboxRuntime(
-    resolveDockerRunscSandboxConfig({
-      workspaceHostPath: "/host/project",
-      cfcInvocationContextDir: "/host/invocations",
-    }),
-    runner,
-  );
-
-  const snapshot = await collectHarnessCapabilitySnapshot(
-    sandbox,
-    "/workspace",
-    "2026-04-30T00:00:00.000Z",
-  );
-
-  // What this test pins: the reading is taken BEFORE the description is
-  // captured, so the persisted snapshot carries it instead of the
-  // `unverified` it would hold if nothing had probed.
-  assertEquals(requests[0]?.args[0], "info");
-  assertEquals(
-    snapshot.cfc.sandbox.cfc?.invocationContextTransportReadiness,
-    "unregistered",
-  );
-
-  // What it deliberately does NOT pin: that the capability container is
-  // allowed to start on that reading. It does start — this probe calls
-  // `runShell` without a `cfcInvocationContext`, so it bypasses the
-  // per-invocation refusal, and `engine.ts` claims the readiness check
-  // precedes any sandbox execution under enforcement while it does not.
-  // Asserting the full `info,create,start,wait,rm` order here would make a
-  // test out of that defect and turn it into expected behavior. Whether an
-  // enforcing run should abort at this point is the run-start fail-closed
-  // decision tracked on CT-2122.
 });

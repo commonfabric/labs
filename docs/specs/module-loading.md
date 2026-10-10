@@ -735,7 +735,10 @@ subset is the runtime freezer (`freezeVerifiedPlainData`,
 [SES_SANDBOXING_SPEC.md](sandboxing/SES_SANDBOXING_SPEC.md) §4.2.3, §4.2.6).
 
 Write-once module exports neutralize side effects smuggled into an accepted
-wrapper argument, and the transformer emits at most one trailing `__cfReg({ … })`
+wrapper argument. They are sealed once the module body returns, so a function
+the module exported cannot assign an export later, not even one the body left
+`undefined`; otherwise such an export would carry its first caller's value to
+every later caller. The transformer emits at most one trailing `__cfReg({ … })`
 registration call per module — a second is a tampering signal the classifier
 rejects, and only a module whose registration was accepted is granted the real
 registrar.

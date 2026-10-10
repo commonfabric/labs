@@ -46,7 +46,7 @@ class FakeSandboxRuntime implements SandboxRuntime {
 
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: this.defaultWorkingDirectory(),
       cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
     };
@@ -240,7 +240,7 @@ Deno.test({
         createdAt: "2026-04-15T21:00:00.000Z",
         updatedAt: "2026-04-15T21:00:05.000Z",
         cfcEnforcementMode: "observe",
-        sandboxRuntime: "docker",
+        sandboxRuntime: "runsc",
         modelProvider: "openai-compatible-gateway",
         modelAuthSource: "api-key",
         cfcInvocationContexts: [{
@@ -285,7 +285,7 @@ Deno.test({
             substrateStatus: "not-attested",
             runManifest: { present: false },
             sandbox: {
-              kind: "docker-runsc-cfc",
+              kind: "runsc-cfc",
               defaultWorkingDirectory: "/workspace",
               cfc: {
                 runtimeRequested: true,
@@ -591,7 +591,7 @@ Deno.test({
       );
       assertEquals(
         persistedPolicySnapshot.substrate?.sandbox?.kind,
-        "docker-runsc-cfc",
+        "runsc-cfc",
       );
       assertEquals(persistedPolicyTrace.type, "cf-harness.policy-trace");
       assertEquals(persistedPolicyTrace.version, 1);

@@ -1,0 +1,2 @@
+{"date":"2026-10-07","from":{"k":"unit","s":"cf-harness","n":"cfcResultFromRunscSidecar observes nothing main withheld, on either driver"},"to":{"k":"unit","s":"cf-harness","n":"cfcResultFromRunscSidecar observes nothing main withheld"}}
+{"date":"2026-10-07","from":{"k":"unit","s":"cf-harness","n":"cfcResultFromRunscSidecar names the container id the way the driver does"},"to":{"k":"unit","s":"cf-harness","n":"cfcResultFromRunscSidecar names the container id in a mismatch"}}

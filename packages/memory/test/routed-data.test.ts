@@ -2,7 +2,9 @@
 // @ts-types="@types/ws"
 import WebSocket from "ws";
 import { assert, assertEquals, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
+import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
@@ -11,6 +13,7 @@ import type { MemorySpace } from "../interface.ts";
 import {
   getMemoryProtocolFlags,
   resetServerExecutionConfig,
+  type SessionReport,
   setServerExecutionConfig,
 } from "../v2.ts";
 import { connect, type Transport } from "../v2/client.ts";
@@ -476,6 +479,64 @@ Deno.test("redeemed Mode A tickets are single use; control renews and releases a
   } finally {
     await f.close();
   }
+});
+
+describe("routed session reports", () => {
+  it("records reports under the admitted principal and refuses them after ACL revocation", async () => {
+    const f = await fixture("session-reports");
+    try {
+      const session = await f.open();
+      const report: SessionReport = {
+        kind: "echo-breaker",
+        event: "trip",
+        document: { id: "of:reported-document", scopeKey: "space" },
+        action: "cf:routed-report",
+      };
+      const request = {
+        type: "session.report",
+        space: f.space.did(),
+        sessionId: session.sessionId,
+        report,
+      };
+      expect(f.greeted.flags).toMatchObject({ sessionReportV1: true });
+      expect(await f.request(request)).toMatchObject({
+        type: "response",
+        ok: {},
+      });
+      const recorded = f.server.sessionReports();
+      expect(recorded.echoBreaker.trips).toBe(1);
+      expect(recorded.recent).toEqual([{
+        ...report,
+        at: expect.any(Number),
+        space: f.space.did(),
+        session: session.sessionId,
+        principal: f.principal.did(),
+      }]);
+      const committed = await f.request({
+        type: "transact",
+        space: f.space.did(),
+        sessionId: session.sessionId,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: `of:${f.space.did()}`,
+            value: { value: { [f.outsider.did()]: "OWNER" } },
+          }],
+        },
+      });
+      expect(committed.ok).toBeDefined();
+      expect(await f.request(request)).toMatchObject({
+        type: "response",
+        error: { message: "Routed memory request denied" },
+      });
+      expect(f.server.sessionReports()).toEqual(recorded);
+      expect(f.socket.readyState).toBe(1);
+    } finally {
+      await f.close();
+    }
+  });
 });
 
 Deno.test("routed host limits are config over defaults, and must nest", () => {

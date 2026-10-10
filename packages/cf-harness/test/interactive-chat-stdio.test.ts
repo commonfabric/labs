@@ -19,7 +19,7 @@ import { HarnessControlError } from "../src/control-errors.ts";
 import { parseHostMountSpecs } from "../src/host-mounts.ts";
 import {
   LINUX_HOME,
-  NAMES_DOCKER,
+  NAMES_RUNSC,
   resolveInteractiveProvisioning,
   runHarnessInteractiveChatStdioCli,
 } from "./support/on-linux.ts";
@@ -107,7 +107,7 @@ const runStdioCli = async (
       fromFileUrl(new URL("../src/interactive-chat-stdio.ts", import.meta.url)),
       ...args,
     ],
-    env: NAMES_DOCKER,
+    env: NAMES_RUNSC,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -1862,7 +1862,7 @@ Deno.test("interactive stdio refuses a session database another live process hol
   ];
   const first = new Deno.Command(Deno.execPath(), {
     args,
-    env: NAMES_DOCKER,
+    env: NAMES_RUNSC,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -1893,7 +1893,7 @@ Deno.test("interactive stdio refuses a session database another live process hol
     reader.releaseLock();
     second = await new Deno.Command(Deno.execPath(), {
       args,
-      env: NAMES_DOCKER,
+      env: NAMES_RUNSC,
       stdin: "null",
       stdout: "piped",
       stderr: "piped",

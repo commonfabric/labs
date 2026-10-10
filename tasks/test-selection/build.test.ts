@@ -17,6 +17,7 @@ import {
   departed,
   emptyAggregate,
   executionsFor,
+  firstDay,
   Fold,
   foldReports,
   lastRun,
@@ -36,6 +37,7 @@ import {
 import type { Suite } from "../test-topology/suite.ts";
 import { excusedMeasurementName } from "../lane-measurement.ts";
 import {
+  CATCH_RULE,
   COST_RULE,
   costSeconds,
   daysBetween,
@@ -986,6 +988,57 @@ describe("build", () => {
       const fold = new Fold(aggregate, NO_ALIASES, "2026-08-20");
       expect(fold.knows(CI_NAME)).toBe(true);
       expect(fold.knows(`${CI_NAME}2`)).toBe(false);
+    });
+  });
+
+  describe("firstDay()", () => {
+    it("is the earliest day folded from an object or from a rollup", () => {
+      const aggregate = emptyAggregate("2026-08-20");
+      aggregate.folded.push(
+        "labs/test-records/submissions/ci/v1/2026/08/19/run-2-a.ndjson",
+        "labs/test-records/submissions/local/someone/v1/2026/08/18/x.ndjson",
+      );
+      aggregate.compacted.push(`${CI_SOURCE}\t2026/08/17`);
+      expect(firstDay(aggregate)).toBe("2026-08-17");
+      aggregate.compacted.length = 0;
+      expect(firstDay(aggregate)).toBe("2026-08-18");
+    });
+
+    it("is absent for an aggregate that has folded nothing", () => {
+      expect(firstDay(emptyAggregate("2026-08-20"))).toBeUndefined();
+    });
+  });
+
+  describe("the rules an aggregate's catches were credited under", () => {
+    it("are the ones in force for a fresh aggregate", () => {
+      expect(emptyAggregate("2026-08-20").catchRule).toBe(CATCH_RULE);
+    });
+
+    it("are carried through a fold and a stored copy", () => {
+      const stamped = new Fold(
+        emptyAggregate("2026-08-19"),
+        NO_ALIASES,
+        "2026-08-20",
+      ).finish().aggregate;
+      expect(parseAggregate(JSON.stringify(stamped))?.catchRule).toBe(
+        CATCH_RULE,
+      );
+    });
+
+    it("are none for an aggregate written before the stamps began", () => {
+      // A fold onto it adds catches under the rules in force to ones
+      // credited under others, which is still not a stamp's worth.
+      const older = { ...emptyAggregate("2026-08-19") } as Record<
+        string,
+        unknown
+      >;
+      delete older.catchRule;
+      const parsed = parseAggregate(JSON.stringify(older))!;
+      expect(parsed.catchRule).toBeUndefined();
+      expect(
+        new Fold(parsed, NO_ALIASES, "2026-08-20").finish().aggregate
+          .catchRule,
+      ).toBeUndefined();
     });
   });
 

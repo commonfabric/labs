@@ -26,6 +26,7 @@ import type {
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
 import { establishHarnessSessionContext } from "../src/session-assembly.ts";
+import { INERT_RUNSC } from "./support/inert-runsc.ts";
 
 const SPACE_DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const FOREIGN_REF = `/@did:key:z6MkforeignSpaceForRunLifecycleTest/of:fid1:${
@@ -58,7 +59,7 @@ const mediated = (stdout: string): CfcSandboxResult => ({
 class FakeSandboxRuntime implements SandboxRuntime {
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: this.defaultWorkingDirectory(),
       cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
     };
@@ -531,6 +532,7 @@ describe("run-lifecycle", () => {
       ref: string,
     ): CfHarnessEngine =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         artifactRoot,
         runId,
         workspaceHostPath: "/host/project",

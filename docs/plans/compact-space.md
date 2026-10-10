@@ -41,14 +41,14 @@ from the pre-compaction archive rather than the live store. The tool is `cf spac
 `packages/memory/v2` beside `dump.ts`, rehearsed on a clone first, and run on
 Estuary against a copy while the instance that owns the space is stopped.
 
-The server-side change that matters most is not a cadence change and goes
-first: the replay chain is already bounded at ten patches, but the engine's
-search for a document's last `set` is not bounded by its newest snapshot, so
-a document with a long patch-only history pays a scan over that whole history
-on every cold read and on every commit that touches it. Bounding that search
-is a code-only change that preserves history and helps the uncompacted store
-on the day it ships, which is why it is [stage 1](#stages) and the compaction
-tool comes after it.
+The server-side change that matters most is not a cadence change, and it
+went first: the replay chain was already bounded at ten patches, but the
+engine's search for a document's last `set` was not bounded by its newest
+snapshot, so a document with a long patch-only history paid a scan over that
+whole history on every cold read and on every commit that touched it.
+Bounding that search is a code-only change that preserves history and helps
+the uncompacted store from the deploy that carries it; it is [stage 1](#stages),
+done, and the compaction tool comes after it.
 
 ## What exists (verified)
 
@@ -57,7 +57,7 @@ tool comes after it.
 | A space is one SQLite file. `commit` is the write log (`seq` primary key; `session_id` + `local_seq` unique; `original` holds the whole client commit, operations and reads; `resolution`; `class`). `revision` holds one row per operation on one document instance, keyed `(branch, id, scope_key, seq, op_index)`, with `op` in `set`, `patch`, `delete` and a foreign key to `commit`. `head` points at each instance's newest revision. `snapshot` holds a materialized document at a seq. `op_submission`, `op_integrated` and `op_checkpoint` hold collaborative operation fields with foreign keys to `commit`; `op_field_epoch` keeps a `commit_seq` column without one. `branch`, `execution_lease`, `scheduler_basis`, `execution_outbox`, `blob_store`, `invocation`, `authorization` complete the schema; patterns add their own tables through the SQLite builtin. | `packages/memory/v2/engine.ts`, the `INIT` statement |
 | A read resolves the head row by joining `head` to `revision`, so a head whose revision row is missing reads as absent. A `set` decodes directly; a `patch` reconstructs from the newer of the last `set`/`delete` and the newest snapshot, replaying the patches after it. | `readStateForScopeKey`, `reconstructPatchedDocument` |
 | The engine writes a snapshot when a document has accumulated `snapshotInterval` (10) patches since its base or newest snapshot, and keeps the newest `snapshotRetention` (2) per instance. So a replay chain is at most ten rows. | `maybeMaterializeSnapshot`, `DEFAULT_SNAPSHOT_INTERVAL` |
-| Finding the base runs `selectLatestBase`, which walks the instance's revision index backward from the head until it finds a `set` or `delete`. The index does not cover `op`, and the query is not bounded below by the newest snapshot, so the walk visits every patch row since the last `set`. Both reconstruction and the commit-time snapshot check run it. | `SELECT_LATEST_BASE`, `latestMaterializationSeq` |
+| Finding the base runs `selectLatestBase`, which walks the instance's revision index backward from the head until it finds a `set` or `delete`, no further back than the newest snapshot's seq. The index does not cover `op`, so each row the walk visits costs a table fetch; the bound keeps the walk within one snapshot interval of patches. Reconstruction, the commit-time snapshot check and the schema-reference probe run it through `latestBaseAndSnapshot`. | `SELECT_LATEST_BASE`, `latestBaseAndSnapshot` |
 | A confirmed read is validated by scanning for a `set`/`delete` after its basis seq, then for an overlapping patch. A pending read whose basis the engine cannot reconstruct keeps the staleness refusal it arrived with. A pending read names the own-session layers its view included, and the conflict scan excludes rows whose commit carries that session and one of those `local_seq`s. A resubmitted commit is recognized by `(session_id, local_seq)` alone, answered from its stored result when its bytes match the stored `original`, refused as a replay mismatch when they do not, and applied as a fresh commit when no row is found. An `origin-committed` precondition looks up the origin commit by the same key. A revision's `commit_seq` is joined to `commit.seq` everywhere it is used; nothing requires it to equal the revision's own `seq`. | `findConflictSeq`, the pending-read `basisOf`, `selectExistingCommit`, `selectPendingResolution` |
 | A resumed session's catch-up is a full watch evaluation diffed against the holdings the client sent, not a replay of commits since a seq. The serving loop's commit feed reads from the seq its index scan ran against, in-process. | `packages/memory/v2/server.ts` (`forceFullResync`), `selectCommitsSince` |
 | The decoded-document cache keys an entry by the revision's address plus its `op` and data length, on the premise that the engine only appends revisions. The per-space bound is 128 MB and 65,536 entries; the Server bounds the total. | `documentCacheKey`, `DEFAULT_DOCUMENT_CACHE_*` |
@@ -93,11 +93,13 @@ the commit's read set. On the September copy the split is:
 | `invocation`, `authorization` | empty; every commit's refs are null in this store |
 
 Of the revision rows, 1,550,949 of 2,223,022 sit behind a head and carry
-770 MB; of the commits, 1,307,316 of 1,494,536 own no head row, and their
-payloads are what hollowing gives up. The history's weight is the commit log,
-not the revision table, and dropping revision rows while leaving every commit
-payload in place would reclaim under a tenth of the file. That is why the
-design hollows unreferenced commits, and why the dry-run report prices them.
+770 MB; of the commits, 1,307,316 of 1,494,536 own no head row. The
+history's weight is the commit log, not the revision table, and dropping
+revision rows while leaving every commit payload in place would reclaim
+under a tenth of the file. That is why the design hollows every commit's
+payload outside the retained window — seq 1 and `op_*`-referenced commits
+excepted, a surviving revision exempting nothing — and why the dry-run
+report prices them.
 
 **The storm's shape is not new, and it is concentrated.** The August copy
 already holds 43 instances with over 100 revisions carrying 299,165 of its
@@ -113,6 +115,41 @@ commit is `authored`. The `op_*`, `scheduler_basis`, `execution_outbox` and
 `blob_store` tables are empty, and the `branch` table holds only the default
 branch.
 
+**The production file on 2026-10-09**, snapshotted after the storm and
+after the runtime fix (22.7 GB, `PRAGMA integrity_check` ok, one default
+branch, the `op_*`, `scheduler_basis`, `execution_outbox` and `blob_store`
+tables empty, every commit `authored`):
+
+| | Count or bytes |
+| --- | ---: |
+| commits | 2,482,226 |
+| commits owning a head (the rest are hollowing candidates) | 377,607 |
+| `commit.original` bytes, all commits | 13.58 GB |
+| `commit.original` bytes, commits owning no head | 4.12 GB |
+| revision rows | 3,741,969 (2,546,095 patches, 1,195,874 sets) |
+| `revision.data` bytes | 5.00 GB (3.98 GB in sets) |
+| revision rows behind a head, and their bytes | 2,546,309, 1.22 GB |
+| head rows | 1,195,660 (869,893 `session:`, 34,639 `user:`) |
+| `computed:` revisions, instances | 2,449,536 across 157,808 |
+| instances over 100 revisions, and the rows they carry | 783, 2,072,241 |
+| patch tails over 1,000 rows | 527 (longest 184,390) |
+| snapshots | 4,300 |
+
+So on the file the tool will actually run against, the 2.1 million commits
+that own no head hold 4.12 GB of payload between them, about 2 KB each; the
+other 9.46 GB of payload sits in the 377,607 commits that still own a head,
+25 KB each on average, and the `computed:` prefix holds two thirds of the
+revisions. Two different mechanisms reclaim two different pools: truncation
+removes the 1.22 GB of revision rows behind heads, and hollowing frees only
+eligible payloads, so the 4.12 GB on commits that own no head is an upper
+bound on what hollowing of those commits reaches, less whatever the retained
+window and the `op_*` references keep. Of the 13.58 GB of payload overall,
+7.27 GB is read sets and 6.16 GB is operations; the head-owning commits
+carry 4.21 GB of reads and 5.23 GB of operations, the headless ones 3.06 GB
+and 0.92 GB. That split is why I6 hollows head-owning commits' payloads
+outside the window as well: nothing reads them, and they are the larger
+pool.
+
 **Most heads are session instances.** Of the 672,073 head rows in
 September, 451,721 are `session:` scope keys and 17,813 are `user:`; the
 space-scoped heads number 202,539. The storm's writers followed per-session
@@ -120,9 +157,9 @@ instances of the content redirect, and nothing sweeps a session's instances
 when it ends. Compaction treats each instance alike; collecting dead
 sessions' instances is [left open](#what-is-deliberately-left-open).
 
-**What a long tail costs a reader.** On the August copy, against its
-longest-tailed document (head at seq 233251, a snapshot at the head seq, so
-zero patches to replay):
+**What a long tail cost a reader before stage 1.** On the August copy,
+against its longest-tailed document (head at seq 233251, a snapshot at the
+head seq, so zero patches to replay), with the base search still unbounded:
 
 | Query, as the engine issues it | Shell-timed, cold file |
 | --- | ---: |
@@ -134,19 +171,67 @@ zero patches to replay):
 | the same from a recent basis | 60 ms |
 
 Laptop numbers over a 3.5 GB file, noisy and not the server's cache state; the
-finding they support is structural rather than numeric. Every cold read of a
-patch-headed document, and every commit that touches it, walks that document's
-whole patch history to find a `set` the snapshot has already made irrelevant,
-and the walk fetches a table row per index entry because `op` is not in the
-index. A document rewritten ten thousand times costs ten thousand row fetches
-per read until something writes a `set` to it. Compaction writes that `set`;
-[§5](#5-what-the-server-should-do-afterward) stops the walk at the snapshot
-so the next storm never reaches this state.
+finding they supported was structural rather than numeric. Every cold read of
+a patch-headed document, and every commit that touched it, walked that
+document's whole patch history to find a `set` the snapshot had already made
+irrelevant, fetching a table row per index entry because `op` is not in the
+index. Stage 1 bounded the walk by the snapshot. Measured through the engine
+on the same copy, a cold read of each of the twelve longest-tailed documents
+(10,042 to 48,751 rows each), after the first run had paid migrations and
+warmed the file:
 
-The storm investigation's 180 ms per `transact` with no lock wait is
+| Engine | Twelve cold reads | The 48,751-row document |
+| --- | ---: | ---: |
+| before stage 1 | 107.6 ms | 21.3 ms |
+| after stage 1 | 10.2 ms | 1.6 ms |
+
+The same twelve reads replayed 32 patch rows on both sides, which is the
+reconstruction doing identical work past the lookup. On a snapshot of the
+production file taken 2026-10-09 (22.7 GB, after the storm), whose three
+worst documents are the storm's `computed:` instances at 184,391, 183,899
+and 183,857 rows each, the same measurement:
+
+| Engine | Twelve cold reads | The 184,391-row document |
+| --- | ---: | ---: |
+| before stage 1 | 1,493 ms (2,737 ms first run) | 246 ms (1,121 ms first run) |
+| after stage 1 | 66 ms (14 ms first run) | 5.6 ms (1.5 ms first run) |
+
+Both sides replayed 47 patch rows there. That is the engine's share of what
+a cold read of a storm document cost.
+
+**Through a served clone of the same snapshot** (a local toolshed on each
+engine, the same reads and writes through `cf`, the store reset between):
+
+| | main | stage 1 |
+| --- | ---: | ---: |
+| cold read of the board (934 topics), wall clock | 21.9 s | 20.2 s |
+| the board's root walk (`session.watch.add`, server) | 11.4 s, 20,489 reads | 11.2 s, 20,489 reads |
+| patch rows replayed by that load | 44,931 | 44,928 |
+| five topic reads, each | 0.6 to 0.9 s | 0.7 to 1.4 s |
+| `addTopic` through the board, server `transact` frames | 111 to 369 ms | 116 to 302 ms |
+| one patch commit on a 184,000-row storm document, engine-direct, warm | 132 to 141 ms (977 ms first) | 1 to 5 ms |
+
+The board load does not move: it is a traversal over 21,901 documents with
+234,908 schema traversals in one root walk, and its replay count is the same
+on both engines, so neither stage 1 nor compaction is the lever for it.
+What moves is the per-document history penalty, which is the storm's own
+shape: a commit that touches a storm document cost the base engine about
+135 ms per document warm, which is the 180 ms `transact` the investigation
+recorded, and costs the bounded engine single milliseconds. The `addTopic`
+verb does not touch those documents, so its frames are the same on both
+sides. Stage 1 is therefore the fix for what a storm does to the space it
+hits; what remains for compaction is disk, and the board's own load time is
+a traversal problem outside this plan. Compaction still writes
+the `set` that makes the history itself small; what stage 1 removed is the
+reason a long history degraded every read and every commit of the document
+that carried it.
+
+The storm investigation's 180 ms per `transact` with no lock wait was
 consistent with this walk running at commit time for each of the four or five
-confirmed reads, on top of the conflict scans from old bases. The rehearsal in
-[stage 1](#stages) measures it on the real file rather than inferring it.
+confirmed reads, on top of the conflict scans from old bases. The remainder
+of [stage 1](#stages) measures what is left of it on a clone of the current
+file rather than inferring it, and [stage 6](#stages) repeats the same
+measurement after compaction.
 
 ## 1. What compaction means
 
@@ -213,10 +298,13 @@ Each is something a reader relies on today, with the code that relies on it.
   of a later one — Astra's review reproduced the second with a week-old row
   swept by an age window). No age window makes this safe, so no commit row is
   deleted. Outside the retained window the row's `original` is replaced by a
-  marker carrying a hash of what it held; a resubmission then mismatches the
-  stored bytes and is refused as a replay mismatch, which the client surfaces
-  as a terminal error for a write that in fact landed, and never mutates
-  state. `origin-committed` preconditions, `commitClassOfSeq` and the commit
+  marker carrying a hash of what it held, whether or not a surviving row
+  still points at the commit: nothing reads a payload beyond replay
+  detection and the pending-read layer replay, which the window serves, and
+  the genesis receipt, which is exempt below. A resubmission then mismatches
+  the stored bytes and is refused as a replay mismatch, which the client
+  surfaces as a terminal error for a write that in fact landed, and never
+  mutates state. `origin-committed` preconditions, `commitClassOfSeq` and the commit
   feed read the columns that stay. [§5](#5-what-the-server-should-do-afterward)
   turns the refusal into a faithful `replayed` answer.
 
@@ -227,9 +315,13 @@ Each is something a reader relies on today, with the code that relies on it.
   foreign key naming it; session opening and root initialization depend on
   both (Astra's review reproduced `Invalid genesis receipt` after hollowing
   it). Commit 1 is therefore never hollowed. The eligibility rule is a list,
-  not a predicate: a payload is hollowed only when no surviving `revision` or
-  `op_*` row references the commit, its seq is not 1, and it is outside the
-  retained window. The audit behind the list is every `FROM "commit"` outside
+  not a predicate: a payload is hollowed when the commit is outside the
+  retained window, its seq is not 1, and no `op_*` row references it (those
+  tables read `original` through their own paths). A surviving revision
+  pointing at the commit is not a reason to keep its payload: the revision
+  carries the document, and the payload would only duplicate it. On the
+  2026-10-09 production file that is the difference between 4.1 GB and most
+  of 13.6 GB (see [what the history costs](#what-the-history-costs-today-measured-on-copies)). The audit behind the list is every `FROM "commit"` outside
   the engine: `genesis-root.ts` is the one live reader of `original`; the
   state inspector's readers (`conflicts.ts`, `timetravel.ts`, `churn.ts`,
   `scopes.ts`, `grouping.ts`, `queries.ts`, `clone.ts`, `discover.ts`) are
@@ -309,8 +401,9 @@ row at or below it (the boundary is now the base), and leave every row above
 the boundary untouched — a head above a bounded cut stays a `patch` over the
 new base, under its original commit, exactly as it was. Nothing but the
 boundary is ever rewritten or re-attributed. Then hollow the
-`original` of every commit row that no surviving revision or `op_*` row
-references and that falls outside the retained window (I6). The compaction
+`original` of every commit row outside the retained window except seq 1
+and the commits an `op_*` row references, whether or not a surviving
+revision still points at the commit (I6). The compaction
 commit is inserted first, at `max(seq) + 1`, with the run's report as its
 `original`, and `branch.head_seq` advances to it so the head read keeps using
 the head statement. Keeps I1 through I8.
@@ -382,7 +475,7 @@ cf space compact <store.sqlite> [selection] [cut] [--dry-run] [--json]
 | `--before-seq <n>` | Rows with `seq < n` are candidates; the first row at or above `n` becomes the base. | the head: everything behind it |
 | `--before <timestamp>` | The same, with `n` taken as the newest commit created before the timestamp (`commit.created_at`, UTC). | — |
 | `--keep-last <n>` | Keep the newest `n` revisions per instance, the oldest of them rewritten as the base. | 0 |
-| `--keep-payloads <duration>` | Commit rows created within this window of the newest commit keep their `original` even when nothing references them; older unreferenced rows are hollowed (I6). The window bounds how far back a resubmission is answered faithfully rather than refused; it bounds no safety property. | `24h` |
+| `--keep-payloads <duration>` | Commit rows created within this window of the newest commit keep their `original`; every older row's payload is hollowed except seq 1's and those an `op_*` row references, whether or not a surviving revision points at the commit (I6). The window bounds how far back a resubmission is answered faithfully rather than refused; it bounds no safety property. | `24h` |
 | `--dry-run` | Compute and report; write nothing. | off |
 | `--json` | The report as JSON, per the `cf` JSON contract. | off |
 
@@ -397,8 +490,9 @@ The dry-run report, printed before any write and by `--dry-run` alone:
   boundaries are heads (the head's op changes);
 - rows to delete from `revision` and `snapshot`, and their byte totals as
   stored (`length(data)`, `length(value)`);
-- commit rows that become unreferenced, how many fall inside the retained
-  window and keep their payload, and the bytes of `original` the rest give up;
+- commit rows outside the retained window, how many of them an `op_*` row
+  or the genesis exemption keeps, and the bytes of `original` the rest give
+  up, split into commits that still own a head and commits that do not;
 - invocation and authorization rows that become unreferenced (empty in the
   Topics store, where every commit's refs are null);
 - the ten instances contributing the most rows, with their head seq and op;
@@ -753,19 +847,17 @@ live snapshot standing in for the post-stop one.
 
 ## 5. What the server should do afterward
 
-**Bound the base search by the newest snapshot (recommended, code only).**
-`reconstructPatchedDocument` and `latestMaterializationSeq` each query the
-newest snapshot and the latest base independently and take the newer. Query
-the snapshot first and pass its seq as a lower bound to `selectLatestBase`
-(`AND seq >= :floor`), and the walk stops at the snapshot instead of at the
-last `set`. The patch count check already runs from that newer seq. This is
-the change that makes a future storm cost the engine ten rows per read
-instead of its whole history, and it is independent of compaction: it helps
-the uncompacted Topics file on the day it ships. A partial index on
-`revision (branch, id, scope_key, seq) WHERE op IN ('set', 'delete')` would
-do the same at the index level and needs a migration; the query bound needs
-none, so it goes first, and the index is the follow-up if measurement on the
-clone says the bound is not enough.
+**Bound the base search by the newest snapshot (stage 1, done).**
+`latestBaseAndSnapshot` queries the snapshot first and passes its seq as the
+lower bound of `selectLatestBase` (`AND seq >= :floor`), so the walk stops at
+the snapshot instead of at the last `set`; reconstruction, the commit-time
+snapshot check and the schema-reference probe all go through it. This is what
+makes a future storm cost the engine ten rows per read instead of its whole
+history, and it is independent of compaction: it helps the uncompacted Topics
+file from the deploy that carries it. A partial index on `revision (branch,
+id, scope_key, seq) WHERE op IN ('set', 'delete')` would do the same at the
+index level and needs a migration; the query bound needed none, and the index
+is the follow-up only if the rehearsal says the bound is not enough.
 
 **Answer a hollowed commit's resubmission faithfully (stage 8).** After
 compaction a resubmitted commit whose payload was hollowed is refused as a
@@ -780,14 +872,14 @@ the tool inserts is the compaction log, with the run's report as its
 was compacted on <date>; the archive is <file>" rather than showing a
 document that appears from nowhere.
 
-**Distinguish a compacted basis from absence (stage 2, prerequisite).** I9
-is the engine change that has to exist before any store is compacted: a
-confirmed or pending read whose basis is older than an instance's oldest
-surviving row, when that row points at a compaction commit, is `known:
-false` to the identity proof. It is small — one lookup of the oldest row's
-commit class, consulted only on the path that already found a conflict — and
-it is the difference between a compacted store that refuses a stale write
-and one that accepts it with every operation elided.
+**Distinguish a compacted basis from absence (stage 2, done).** I9 is the
+engine change that has to exist before any store is compacted, and it does:
+`historyCompactedBelow` reads an instance's oldest surviving row with the
+commit it points at, and a confirmed or pending read whose basis is older
+than that row is `known: false` to the identity proof when the commit is
+`system`-class under `COMPACTION_SESSION_PREFIX`. One indexed lookup,
+consulted only on the path that already found a conflict; the prefix is the
+engine's export, and the tool stamps its commit with it.
 
 **Refuse a historical read below the cut explicitly (stage 8).** A
 `read({seq})` below the cut returns absent today; it should name the
@@ -859,24 +951,31 @@ operator took.
 
 ## Stages
 
-Each stage is a pull request; none has started. Two engine changes come
-first: the base search, because it preserves history, helps the uncompacted
-store on the day it ships, and is the measurement the compaction decision
-should be made against; and the basis guard, because no store may be
-compacted until the engine can tell compacted history from absence.
+Each stage is a pull request. Stages 1 and 2 have landed; stage 3 onward is
+open. Two engine changes come
+first, and both have landed: the base search, because it preserves history,
+helps the uncompacted store from the deploy that carries it, and is the
+measurement the compaction decision was made against; and the basis guard,
+because no store may be compacted until the engine can tell compacted
+history from absence.
 
-1. **The snapshot-bounded base search**, measured on a clone of the current
-   Topics file: cold board load and `transact` round trips before and after,
-   on the uncompacted store. This is where the 180 ms claim is tested rather
-   than inferred, and where the question "is compaction still needed for
-   latency, or only for disk?" gets its answer.
-2. **The basis guard (I9).** `known: false` for a confirmed or pending read
-   whose basis predates an instance's oldest surviving row when that row
-   points at a compaction commit. Tests: the last two protocol cases of §3
-   in all three variants — patch-headed, `set`-headed, bounded cut — against
-   stores transformed by hand the way the tool will transform them, red
-   before and green after; an uncompacted instance's genuine absence still
-   proves identity as today.
+1. **The snapshot-bounded base search** — done ([labs#8628](https://github.com/commonfabric/labs/pull/8628)), measured on
+   the August copy, on the 2026-10-09 production snapshot, and through a
+   served clone of it, as the tables above show. The measurement answered
+   the stage's question: a storm's per-document penalty is gone, the board
+   load is traversal-bound and unchanged, and compaction's remaining case is
+   disk. That is
+   where the 180 ms claim is tested rather than inferred, and where the
+   question "is compaction still needed for latency, or only for disk?" gets
+   its answer; it needs a fresh snapshot from the host.
+2. **The basis guard (I9)** — done ([labs#8643](https://github.com/commonfabric/labs/pull/8643)). `known: false` for a
+   confirmed or pending read whose basis predates an instance's oldest
+   surviving row when that row points at a compaction commit. Tests: the
+   last two protocol cases of §3 in all three variants — patch-headed,
+   `set`-headed, bounded cut — against stores transformed by hand the way
+   the tool will transform them, red on the engine before and green after;
+   an uncompacted instance's genuine absence still proves identity as
+   today, and so does a basis at the boundary itself.
 3. **Dry run and report.** `packages/memory/v2/compact.ts` with the
    selection, the cut, and the report, read-only; `cf space compact --dry-run`
    over it. Exercised against the September Topics copy, whose numbers replace
@@ -912,7 +1011,8 @@ compacted until the engine can tell compacted history from absence.
 6. **Rehearsal on a clone of the current Topics file**, with the same
    timings as stage 1 taken after compaction.
 7. **The production run**, by the operator, from the rehearsed flag set, with
-   the owner's agreement, only if stage 1's measurement leaves a reason
-   beyond disk, or disk is the reason.
+   the owner's agreement. Stage 1's measurement left disk as the reason:
+   22.7 GB, of which 13.6 GB is commit payloads that I6 reaches outside the
+   window, and 1.2 GB revision rows that truncation removes.
 8. **Faithful replay of hollowed commits and explicit refusal of reads
    below the cut**, the two engine changes of §5.

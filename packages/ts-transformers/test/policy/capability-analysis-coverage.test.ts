@@ -316,13 +316,14 @@ Deno.test(
 );
 
 Deno.test(
-  "dynamic element access marks the receiver root as wildcard",
+  "dynamic element access reads the static prefix above the key",
   () => {
     const input = getPaths(
-      analyzeNoChecker(`const fn = (input, k) => input[k];`),
+      analyzeNoChecker(`const fn = (input, k) => input.offers[k].space;`),
       "input",
     );
-    assertEquals(input.wildcard, true);
+    assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths, ["offers"]);
   },
 );
 
@@ -800,15 +801,16 @@ Deno.test(
 );
 
 Deno.test(
-  "for-of over a dynamic member widens the iterable root to wildcard",
+  "for-of over a dynamic member reads the static prefix above the key",
   () => {
     const input = getPaths(
       analyzeNoChecker(
-        `const fn = (input, k) => { for (const x of input[k]) { x; } };`,
+        `const fn = (input, k) => { for (const x of input.lists[k]) { x; } };`,
       ),
       "input",
     );
-    assertEquals(input.wildcard, true);
+    assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths, ["lists"]);
   },
 );
 
@@ -1345,16 +1347,18 @@ Deno.test(
 );
 
 Deno.test(
-  "equals() over a dynamic member widens the receiver root to wildcard",
+  "equals() over a dynamic member reads the static prefix above the key",
   () => {
-    // markIdentityUseRef short-circuits to wildcard for a dynamic ref.
+    // markIdentityUseRef takes a dynamic ref for a read of its whole prefix,
+    // since no identity path names the member the key picks.
     const input = getPaths(
       analyzeNoChecker(
         `const fn = (input, k, other) => input.cells[k].equals(other);`,
       ),
       "input",
     );
-    assertEquals(input.wildcard, true);
+    assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths, ["cells"]);
   },
 );
 
@@ -1414,10 +1418,11 @@ Deno.test(
 );
 
 Deno.test(
-  "equals() over an aliased dynamic path records identity without a read",
+  "equals() over an aliased dynamic path reads the static prefix above the key",
   () => {
     // An aliased dynamic member passed to equals() is an identity-only argument;
-    // the dynamic ref widens the root rather than recording a structural read.
+    // no identity path names the member the key picks, so the use is a read of
+    // the whole prefix above the key.
     const input = getPaths(
       analyzeNoChecker(
         `const fn = (input, other, k) => {
@@ -1427,7 +1432,8 @@ Deno.test(
       ),
       "input",
     );
-    assertEquals(input.wildcard, true);
+    assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths, ["cells"]);
   },
 );
 

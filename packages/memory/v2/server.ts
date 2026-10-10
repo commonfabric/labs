@@ -85,6 +85,7 @@ import {
   type SessionOpenRequest,
   type SessionOpenResult,
   type SessionReadCeiling,
+  type SessionReportRequest,
   type SessionRevokedMessage,
   type SessionSync,
   type SessionViewHandle,
@@ -122,6 +123,11 @@ import {
   commitStormThresholds,
 } from "./commit-rates.ts";
 import { classifyCommitTelemetry } from "./commit-telemetry.ts";
+import {
+  parseSessionReport,
+  SessionReportLog,
+  type SessionReportsReport,
+} from "./session-reports.ts";
 import * as Engine from "./engine.ts";
 import {
   executeInvite,
@@ -265,6 +271,14 @@ const commitCount = operationMeter.createCounter(
     description:
       "Commits decided on every path, by space, by outcome, and by whether " +
       "the space was in a write storm at the time.",
+  },
+);
+const echoBreakerReportCount = operationMeter.createCounter(
+  "ct.memory.echo_breaker",
+  {
+    description:
+      "Remote-echo breaker trips and clears clients reported, by space, by " +
+      "event, and for a clear by how the trip ended.",
   },
 );
 
@@ -590,6 +604,16 @@ const commitRatesProviders: (() => CommitRatesReport)[] = [];
  * most recently constructed server still open; undefined when none is. */
 export const getCommitRates = (): CommitRatesReport | undefined =>
   commitRatesProviders.at(-1)?.();
+
+/** Live servers' session-report providers in construction order; a server
+ * removes its own on close(), so the newest LIVE server is always the one
+ * reported. */
+const sessionReportsProviders: (() => SessionReportsReport)[] = [];
+
+/** The co-hosted memory server's session reports for the health route — the
+ * most recently constructed server still open; undefined when none is. */
+export const getSessionReports = (): SessionReportsReport | undefined =>
+  sessionReportsProviders.at(-1)?.();
 
 const randomHex = (bytes: number): string => {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
@@ -1438,15 +1462,16 @@ class Connection {
 
   async receive(payload: string): Promise<void> {
     const parsed = parseClientMessage(payload);
-    // A presence message is handled as it is handed over, not behind the
-    // frames already queued here: it carries no seq and settles nothing.
-    // Whether it can overtake a frame ahead of it on the socket is the
-    // host's business — one that hands frames over one at a time keeps it
-    // behind them (04-protocol.md §4.13.4). Everything else keeps the
-    // connection's order.
-    if (parsed !== null && isPresenceClientMessage(parsed)) {
+    // A presence message or a session report is handled as it is handed
+    // over, not behind the frames already queued here: it carries no seq and
+    // settles nothing, and the space a report describes is often the one
+    // whose frames are queued deepest (04-protocol.md §4.14). Whether it can
+    // overtake a frame ahead of it on the socket is the host's business — one
+    // that hands frames over one at a time keeps it behind them
+    // (04-protocol.md §4.13.4). Everything else keeps the connection's order.
+    if (parsed !== null && isImmediateClientMessage(parsed)) {
       try {
-        this.#receivePresence(parsed);
+        this.#receiveImmediate(parsed);
       } catch (error) {
         if (!this.#answerFailedRequest(parsed, error)) throw error;
       }
@@ -1681,12 +1706,7 @@ class Connection {
     this.#server.detachSession(space, sessionId, this.id);
   }
 
-  #receivePresence(
-    message:
-      | PresenceJoinRequest
-      | PresencePublishRequest
-      | PresenceLeaveRequest,
-  ): void {
+  #receiveImmediate(message: ImmediateClientMessage): void {
     if (this.#closed) return;
     if (!this.#ready) {
       this.#send({
@@ -1701,7 +1721,11 @@ class Connection {
     ) {
       return;
     }
-    this.#send(this.#server.receivePresence(message, this));
+    this.#send(
+      message.type === "session.report"
+        ? this.#server.receiveSessionReport(message, this)
+        : this.#server.receivePresence(message, this),
+    );
   }
 
   async #receiveOrdered(
@@ -2255,6 +2279,21 @@ const isPresenceClientMessage = (
   message.type === "presence.leave";
 
 /**
+ * A request a connection handles as it is handed over rather than in frame
+ * order: presence, and a session report.
+ */
+type ImmediateClientMessage =
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest
+  | SessionReportRequest;
+
+const isImmediateClientMessage = (
+  message: ClientMessage | OversizedClientMessage,
+): message is ImmediateClientMessage =>
+  isPresenceClientMessage(message) || message.type === "session.report";
+
+/**
  * The engine opener a test supplies in place of `Server`'s own step, which
  * opens the engine for a space or hands back the one already open. It
  * receives that step as `open`, so it can pause before it or fail in its
@@ -2305,6 +2344,7 @@ export class Server {
    * keeps their recency; every engine this server opens reports to it. */
   #documentCacheCoordinator: Engine.DocumentCacheCoordinator;
   #commitRates = new CommitRateTracker({ storm: COMMIT_STORM_THRESHOLDS });
+  #sessionReports = new SessionReportLog();
 
   /**
    * Synthesized session id for direct out-of-band document writes, such as
@@ -2522,8 +2562,8 @@ export class Server {
       };
 
       /**
-       * Space access control. `off` (default) preserves the historical
-       * any-authenticated-session-may-do-anything behavior. `observe`
+       * Space access control. `off` (default) permits any operation by an
+       * authenticated session. `observe`
        * evaluates ordinary capability decisions, counts and logs
        * would-denies, but allows those decisions. Invalid ACL state,
        * fresh-space genesis violations, and OWNER shortfalls remain hard
@@ -2534,10 +2574,14 @@ export class Server {
        * (entity id == the space DID, as managed by the runner's
        * `ACLManager` / `cf acl`) grants per-DID or `"*"` capabilities. A
        * missing ACL on a populated legacy space grants every authenticated
-       * principal READ and WRITE (never OWNER). A fresh space grants
-       * authenticated READ only, and the space DID OWNER: its first write
-       * must be a valid ACL initialized by the space identity or a service
-       * DID. Past that genesis the space DID holds what the ACL grants it.
+       * principal READ and WRITE (never OWNER) unless `requireExplicitAcl`
+       * is set. Without that option, a fresh space grants authenticated READ
+       * and the space DID OWNER; its first write must be a valid ACL
+       * initialized by the space identity or a service DID. With
+       * `requireExplicitAcl` (Mode A), only the space's own DID may open a
+       * fresh space and initialize its ACL. A service DID may repair or add
+       * an ACL only once the space has history. Past genesis the space DID
+       * holds what the ACL grants it.
        *
        * Requirements: session.open, queries, and watches need READ;
        * transact needs WRITE; ACL-document writes and disk-source
@@ -2600,6 +2644,7 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     commitRatesProviders.push(this.#commitRatesProvider);
+    sessionReportsProviders.push(this.#sessionReportsProvider);
   }
 
   /**
@@ -2648,6 +2693,7 @@ export class Server {
   #pushPriorityStatsProvider = () => this.pushPriorityStats();
   #documentCachesDiagnosticsProvider = () => this.documentCachesDiagnostics();
   #commitRatesProvider = () => this.commitRates();
+  #sessionReportsProvider = () => this.sessionReports();
 
   /** Every open engine's document-cache counters, keyed by space. A peek:
    * nothing is opened by asking. */
@@ -2671,6 +2717,12 @@ export class Server {
    * gone quiet. */
   commitRates(): CommitRatesReport {
     return this.#commitRates.report();
+  }
+
+  /** The diagnostics clients have reported about their sessions: running
+   * totals and the most recent reports in full (04-protocol.md §4.14). */
+  sessionReports(): SessionReportsReport {
+    return this.#sessionReports.report();
   }
 
   /** Helper for the engines' commit observer and for `transact()`'s own
@@ -3473,26 +3525,8 @@ export class Server {
     connection: Connection,
   ): ResponseMessage<PresenceJoinResult | Record<PropertyKey, never>> {
     const { requestId, space, sessionId, room } = message;
-    if (!this.isSessionAttached(space, sessionId, connection.id)) {
-      return respondTypedError(
-        requestId,
-        toError("SessionRevokedError", "Session is not attached"),
-      );
-    }
-    if (connection.routed) {
-      const engine = this.#resolvedEngines.get(space);
-      const session = this.#sessions.get(space, sessionId);
-      const deny = engine === undefined || session === null
-        ? toError("SessionRevokedError", "Routed memory authority ended")
-        : this.#authorizeCurrentSessionWithEngine(
-          engine,
-          space,
-          sessionId,
-          session,
-          "READ",
-        );
-      if (deny) return respondTypedError(requestId, deny);
-    }
+    const refusal = this.#refuseImmediateRequest(space, sessionId, connection);
+    if (refusal !== null) return respondTypedError(requestId, refusal);
     if (!isPresenceRoom(room)) {
       return respondTypedError(
         requestId,
@@ -3540,6 +3574,81 @@ export class Server {
     }
   }
 
+  /**
+   * Records one session report on behalf of `connection`, which has already
+   * established that the request's session is open on it, and returns the
+   * response to send (04-protocol.md §4.14). The report is counted, kept in
+   * the log the health route reads, and written to the server's log as one
+   * line; a session the connection no longer owns gets a
+   * `SessionRevokedError`.
+   */
+  receiveSessionReport(
+    message: SessionReportRequest,
+    connection: Connection,
+  ): ResponseMessage<Record<PropertyKey, never>> {
+    const { requestId, space, sessionId, report } = message;
+    const refusal = this.#refuseImmediateRequest(space, sessionId, connection);
+    if (refusal !== null) return respondTypedError(requestId, refusal);
+    const principal = this.#sessions.get(space, sessionId)?.principal;
+    this.#sessionReports.record({
+      space,
+      session: sessionId,
+      ...(principal === undefined || principal === ANYONE_USER
+        ? {}
+        : { principal }),
+      report,
+    });
+    const document = `${report.document.scopeKey} ${report.document.id}`;
+    if (report.event === "trip") {
+      echoBreakerReportCount.add(1, { "space.did": space, event: "trip" });
+      console.warn(
+        `[memory-echo-breaker] session ${sessionId} on ${space} is ` +
+          `backing off action ${report.action}: it kept rewriting ` +
+          `${document} against another writer`,
+      );
+    } else {
+      echoBreakerReportCount.add(1, {
+        "space.did": space,
+        event: "clear",
+        reason: report.reason,
+      });
+      console.info(
+        `[memory-echo-breaker] session ${sessionId} on ${space} cleared ` +
+          `action ${report.action} on ${document} (${report.reason}) after ` +
+          `${report.trippedMs}ms and ${report.renewals} renewals`,
+      );
+    }
+    return { type: "response", requestId, ok: {} };
+  }
+
+  /**
+   * The error refusing a presence request or session report `connection`
+   * makes on `sessionId`, or `null` to handle it: the session must still be
+   * attached to the connection, and on a routed connection its routed
+   * authority must still hold `READ` on the space.
+   */
+  #refuseImmediateRequest(
+    space: string,
+    sessionId: string,
+    connection: Connection,
+  ): V2Error | null {
+    if (!this.isSessionAttached(space, sessionId, connection.id)) {
+      return toError("SessionRevokedError", "Session is not attached");
+    }
+    if (!connection.routed) return null;
+    const engine = this.#resolvedEngines.get(space);
+    const session = this.#sessions.get(space, sessionId);
+    return engine === undefined || session === null
+      ? toError("SessionRevokedError", "Routed memory authority ended")
+      : this.#authorizeCurrentSessionWithEngine(
+        engine,
+        space,
+        sessionId,
+        session,
+        "READ",
+      );
+  }
+
   /** Ends every presence membership the connection holds. */
   endPresenceForConnection(connectionId: string): void {
     this.#presence.leaveConnection(connectionId);
@@ -3584,6 +3693,7 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     withdrawProvider(commitRatesProviders, this.#commitRatesProvider);
+    withdrawProvider(sessionReportsProviders, this.#sessionReportsProvider);
     this.#cancelScheduledRefresh();
     for (const connection of [...this.#connections.values()]) {
       connection.close();
@@ -10133,6 +10243,23 @@ export const parseClientMessage = (
       revision: parsed.revision,
       name: parsed.name,
       facets,
+    };
+  }
+
+  if (
+    parsed.type === "session.report" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string"
+  ) {
+    const report = parseSessionReport(parsed.report);
+    if (report === null) return null;
+    return {
+      type: "session.report",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      report,
     };
   }
 

@@ -517,10 +517,6 @@ export const collectHarnessCapabilitySnapshot = async (
   at = new Date().toISOString(),
   options: CollectHarnessCapabilitySnapshotOptions = {},
 ): Promise<HarnessCapabilitySnapshot> => {
-  // The description is captured once and persisted into the CFC policy
-  // snapshot, so a reading taken later cannot repair it. Take the reading
-  // first, and let the description carry it.
-  await sandbox.probeCfcTransportReadiness?.();
   const cfc = createCfcCapabilitySnapshot(sandbox, options);
   const result = await sandbox.runShell({
     command: CAPABILITY_PROBE_SCRIPT,
