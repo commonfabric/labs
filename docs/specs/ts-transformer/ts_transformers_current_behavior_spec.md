@@ -2387,14 +2387,18 @@ each operand of a fallback, wherever on the member spine it sits, a call on
   rebuilt alone, as schema generation reads it. A scoped cell beside `null` or
   `undefined` is rebuilt with them inside the wrapper,
   `PerSession<ReadonlyCell<boolean> | null>`, which schema generation refuses,
-  as it refuses the union its author wrote
-  (`test/scope-wrapper-alias-schema.test.ts`). A cell in a scope that the
-  narrowing of cells cannot take it apart from keeps the type it was declared
-  with: rebuilt from its value, it would lose the scope, and the cap on its
-  handle, that only the wrapper names. Schema generation reads the scope from the
-  wrapper's name and the cell from the node inside it. Capability narrowing does not reach a scoped
-  cell through the printed union of an optional member, so that cell keeps its
-  authored capability and value shape. Node-driven shrinking keeps the print of
+  as it refuses the union its author wrote. The print of an optional member's
+  type holds the `undefined` its `?` adds, which the rebuilt wrapper leaves
+  out, as the member is written without it: `handle?: PerSession<Writable<A>>`
+  read as `input.handle?.get()` is captured as
+  `handle?: PerSession<ReadonlyCell<A>>`, and an optional `PerUser<Stream<T>>`
+  a `.map` callback binds by shorthand keeps its scope and stream cap
+  (`scopedCellParts`; `test/scope-wrapper-alias-schema.test.ts`). A cell in a
+  scope that the narrowing of cells cannot take it apart from keeps the type it
+  was declared with: rebuilt from its value, it would lose the scope, and the
+  cap on its handle, that only the wrapper names. Schema generation reads the
+  scope from the wrapper's name and the cell from the node inside it.
+  Node-driven shrinking keeps the print of
   a scoped cell whole. Two rules keep what a print says through the unfolding: a
   narrowed wrapper around a nullable cell's value alternatives is not registered
   with the union's type, which schema generation would read in the wrapper's
