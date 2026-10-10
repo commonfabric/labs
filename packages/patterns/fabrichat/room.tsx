@@ -1089,10 +1089,10 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         startDirect: managerWish.result?.openDirect,
       },
     );
-
-    return {
-      [NAME]: room[NAME],
-      [VIEWS]: room[VIEWS],
+    // Destructured so that each key is read by itself, and the room's name
+    // does not depend on its rendering.
+    const { [NAME]: roomName, [UI]: roomUI } = room;
+    const view = {
       about: room.about,
       recentActivity: room.recentActivity,
       recentActivityExpiredThrough: room.recentActivityExpiredThrough,
@@ -1110,6 +1110,12 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       addMember: room.addMember,
       canAdd: room.canAdd,
       addRequests: room.addRequests,
+    };
+
+    return {
+      [NAME]: roomName,
+      [VIEWS]: { room: view },
+      ...view,
       [UI]: (
         <cf-screen>
           <AddToChats
@@ -1117,7 +1123,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
             catalog={managerWish.result?.sharedSpaceCatalog}
             accept={managerWish.result?.accept}
           />
-          {room[UI]}
+          {roomUI}
           <div
             id="fabrichat-profile-setup"
             hidden
