@@ -573,6 +573,24 @@ describe("local-jobs/lane", () => {
       });
     });
 
+    it("ends a job whose result was refused with the reason its run gave", async () => {
+      const { store, lane, nextRun, enqueue } = laneWith();
+      lane.start();
+      const id = enqueue("a");
+
+      const run = await nextRun(0);
+      run.settle({
+        outcome: "failed",
+        errorCode: "INVALID_RESULT",
+        errorDetail: "no structured result was submitted",
+      });
+
+      expect(await reached(store, id, "failed")).toMatchObject({
+        errorCode: "INVALID_RESULT",
+        errorDetail: "no structured result was submitted",
+      });
+    });
+
     it("records the steps and commands its run reports", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
       lane.start();

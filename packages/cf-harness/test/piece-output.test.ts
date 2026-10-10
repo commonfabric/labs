@@ -592,16 +592,11 @@ describe("piece-output", () => {
                 transcript: [...request.transcript],
               });
               return Promise.resolve({
-                assistant: requests.length === 1
-                  ? toolCall(
-                    "submit_result",
-                    { result: { total: 12 } },
-                    "result",
-                  )
-                  : {
-                    role: "assistant" as const,
-                    content: "Result submitted.",
-                  },
+                assistant: toolCall(
+                  "submit_result",
+                  { result: { total: 12 } },
+                  "result",
+                ),
               });
             },
           },
@@ -618,7 +613,8 @@ describe("piece-output", () => {
         expect(JSON.parse(await Deno.readTextFile(path))).toEqual({
           total: 12,
         });
-        expect(requests).toHaveLength(2);
+        // The accepted submission ends the run.
+        expect(requests).toHaveLength(1);
         expect(result.runState.assignedPieces).toBeUndefined();
         expect(
           requests[0].transcript.some((message) =>
