@@ -21,14 +21,19 @@ are.
 
 Four things multiply, and each is a stage below.
 
-**Every start plans its whole subtree.** `#collectResumeOwnedCells` recurses
-every pattern node to the leaves, and `#syncResumeInstanceNodes` plans and
-syncs every nested instance it found, level by level. That is right for the
-root. But a mapped child reaches `runner.run()` on its own once its parent's
-coordinator runs, and `#nameFamilyBeforeRun` plans the child's subtree again:
-a node at depth _d_ is planned by every ancestor's start and then by its own.
-On the wire, 31% of the roots one load asked for had been asked for earlier
-in the same load.
+**Every child start names its family again, for a document no store holds.**
+The root's start plans and syncs every nested instance, level by level, and
+that is right. Each child then reaches `runner.run()` on its own once its
+parent's coordinator runs, and `#patternToNameBeforeRun` decides whether to
+name the child's family — a full pre-sync of its subtree — by probing
+whether anything its run reads is absent from the replica. A derived cell
+the parent hands down as an argument and nothing has computed, a per-session
+display flag say, has no document anywhere; the root's waves asked the store
+for it and were told so. The probe reads value presence alone, so the
+document counts as absent, the child holds, and its name-sync delivers
+nothing. Instrumented on the room: 79 holds, every one at that stage, none
+for the probe budget, every absent document a `computed:` cell, the same
+few recurring across the rows that received them.
 
 **A plan's inputs cell inlines every schema.** `#bindNodeIO` hands the bound
 inputs to `getImmutableCell()`, which rewrites each link's content-addressed
@@ -61,103 +66,132 @@ stage 0 is what every later stage reports against.
 
 ### Stage 0. Count the plans
 
-- [ ] A runner unit test that resumes a piece whose pattern maps a list of
-      sub-patterns each holding a nested sub-pattern, with the storage layer
-      stubbed so no network is involved, and counts `#nodePlan` calls against
-      the set of `(instance, node)` pairs the tree holds. Today the ratio is
-      above one; the test pins the number as it stands and stage 2 turns it
-      into one. The count reaches the test through an
-      `accessForTestingOnly` getter, as `DEVELOPMENT.md` § Classes requires.
+- [x] A runner unit test that resumes a three-level tree — a list of rows
+      each holding a nested badge — against an in-process memory server,
+      demands every row, and counts the pre-sync's node plans against the
+      `(instance, node)` pairs the tree holds
+      (`resume-presync-plan-count.test.ts`). The count reaches the test
+      through `Runner.accessForTestingOnly.presyncPlanRecorder`. The ratio
+      is one: the root's waves plan each pair once, and a child whose family
+      is whole does not name it again. What the field load pays is the
+      next stage's hold, which this shape does not provoke because the
+      root's own run computes the derived argument before the rows start.
 - [ ] A benchmark in `packages/runner/test/` that resumes the same shape at
       sizes 10, 20, and 40 rows and reports wall time, `#nodePlan` calls,
       and watch roots requested, with the fixture outside the timed window
       (`BENCHMARKS.md`, "Time only the operation the name promises").
-- [ ] The field check: `cf piece render` of the Estuary room, under
+- [x] The field check: `cf piece render` of the Estuary room, under
       `CF_MEMORY_FRAME_LOG`, read with
       `skills/perf-investigation/scripts/summarize-frame-log.ts`. The
-      numbers to carry are CPU seconds, watch frames, roots requested, and
-      bytes out; the record above has the baseline.
+      numbers to carry are CPU seconds, `start/syncCellsForRunningPattern`
+      count, watch frames, roots requested, and bytes out; the record above
+      has the baseline (80 name-syncs, 49 CPU seconds).
 
 Exit: a number per stage that a pull request can quote.
 
-### Stage 1. A `data:` document carries references
+### Stage 1. A `data:` document's inline schemas come from a memo
 
-- [ ] `getImmutableCell()` and `dataUriFromValueWithResolvedLinks()` stop
-      calling `inlineExternalSchemaRefsInValue()`; the function and its
-      test go. The comments at both sites that give the self-containment
-      reason go with it.
-- [ ] Test, red first: a `data:` cell built from inputs whose links carry
-      `cid:` schema references keeps the references in its id, and a read
-      through it under a schema resolves the link's schema from the registry.
-- [ ] Test: a value holding a link to such a `data:` cell, written to a
-      stored document, is flattened on write and the write installs the
-      closure of every reference the flattened value holds.
-- [ ] Settle the one residual: the schema registry's retention lease can
-      clear between a plan's construction and its read. Either show that a
-      plan's lifetime is inside one lease epoch, or have the plan hold the
-      interned closure it was built with. Record which in the pull request.
+- [x] `inlineExternalSchemaRefsInValue()` keeps the inline form each
+      reference recomposed to, by reference, for the registry epoch
+      (`inlinedSchemaByRef`, cleared with the registry). Recomposition
+      built a fresh closure per link per plan, so every call deep-froze and
+      hashed the same few schemas again; a reference names one content, so
+      the form it recomposed to once is the form it has.
+- [x] Tried and reverted: not inlining at all. The traversal admits a
+      reference-form link schema only where its closure is persisted in
+      the space (`schemaForSpaceCrossing`), and a `data:` document has no
+      carrying write to persist one, so a reference inside it selects
+      nothing where the inline form selected its schema. The traverse
+      replay goldens moved under it, and the self-containment comment at
+      both sites, which says exactly this, stays with its reason sharpened.
+- [x] Tests: the inline form is the same object on a second call for the
+      same reference (`link-utils.test.ts`); a `data:` cell carries each
+      link's schema inline and a read through it resolves the linked value
+      (`runtime.test.ts`, `data-uri-inlining.test.ts`).
 
-Exit: no call in the runner rewrites a schema reference for a `data:` id.
+Exit: a schema is recomposed once per reference per registry epoch.
 
-### Stage 2. A child's start skips what its parent named
+### Stage 2. The gate probes what a name-sync could deliver
 
-- [ ] When `#syncResumeInstanceNodes` has planned and synced a nested
-      instance's nodes, the runner records that instance in `#namedFamilies`
-      as landed for its pattern, the entry `#familyToName` consults, so the
-      child's own `run()` through `#nameFamilyBeforeRun` finds it named and
-      skips the pre-sync. The record carries `defaultsPrepared: false`,
-      since the parent's pre-sync seeds no defaults: a child start that
-      initializes defaults still seeds them, through the path that today
-      handles `seedInRun`.
-- [ ] A nested instance the parent left unplanned — its result document
-      never arrived, or its argument link was unreadable in every round — is
-      not recorded, so its own start names what it needs, as today.
-- [ ] Stage 0's count test goes green at a ratio of one.
-- [ ] Test: a child whose pattern pointer moved between the parent's
-      pre-sync and its own start is planned again under the new pattern,
-      which the `landed` identity check already provides.
+- [x] `#familyAbsent`'s argument walks probe the documents the argument
+      links to and continue only through a redirect's hop, as its contract
+      says, rather than into the content of every linked document four
+      deep. The content of a value document is what the piece's nodes read
+      through it under their plans' schemas, and the pre-sync names it that
+      way; a link inside it is not one the argument holds, and the hold's
+      name-sync names nothing for it. The field holds were all of this
+      shape — 79 of 79, one to three hops below the row's argument, never
+      delivered, never requested as a root: the room's derived cells first,
+      then its handler streams, then fields of profiles in other spaces,
+      each surfacing as the previous one was excluded.
+- [x] Two direct links the walk still reaches are excluded by kind: a
+      derived cell (`computed:` scheme), whose document its computation
+      produces and whose absence the store's walk cannot report, and a
+      stream, whose document holds no value and whose sends are events; a
+      piece's own streams are still probed with its owned cells.
+- [x] Tried and dropped: counting a document the replica had asked the
+      store for and found absent as present. An owned per-user cell a
+      visitor has never written is exactly such a document, and its hold is
+      what seeds that actor's defaults (`scoped-internal-cell-seed.test.ts`
+      pins it); on the room the rule changed one hold in eighty.
+- [x] Tests, red first, in `piece-named-before-start.test.ts`: a piece
+      whose family is local runs without holding when its caller's argument
+      links to a derived cell nothing has computed, to another piece's
+      stream, or to a local document whose content links to an absent one.
+- [x] Tried and dropped: naming each nested instance's argument link
+      targets root-only in the parent's rounds. On the room it issued no
+      request the plans had not already made — the frame counts were
+      identical — and cost 43 waves.
+- [x] The field check: `start/syncCellsForRunningPattern` on the room from
+      80 to 32, `resumeCellSync` spans from 4,877 to 502, the rendering
+      unchanged.
+- [ ] The 31 holds left are all on per-user instances (`scope: user`) of
+      documents the replica holds as space instances — the viewer's
+      per-user cells the chips receive — which no store holds for a viewer
+      who has not written one, and which nothing in the pre-sync requests.
+      They are the same defect in a fourth shape, and the general fix is
+      the one `presync-from-node-plans.md` stage 5 owes: the gate asks the
+      plans what a name-sync would deliver and probes that, instead of
+      walking the argument.
 
-Exit: one node plan per `(instance, node)` pair per load.
+Exit: a child's start names its family only when something a name-sync
+could deliver is missing.
 
-### Stage 3. The cross-space pass walks links
+### Stage 3. The cross-space pass reads a plan again only when it must
 
-- [ ] Before the pass reads anything, it checks each plan's bound inputs
-      for a link whose space differs from the piece's, following links
-      through documents already local. A plan with none is skipped. This is
-      a walk over links under the plan's read schema, with no
-      `validateAndTransform`, no freeze, and no hash.
-- [ ] A plan that does reach another space keeps today's read, which is
-      what kicks the load and awaits it by document.
-- [ ] The pass runs once per family, after the last instance round, rather
-      than once per round: a round's new plans are the only ones it has to
-      walk, so each round contributes its plans to one set the final pass
-      reads.
-- [ ] Decide, with stage 0's benchmark, whether the walk is enough or the
-      server should report the links its walk stopped at in the sync
-      response. The server evaluates selectors with the runner's own
-      traversal over a one-space `EngineObjectManager` (`memory/v2/query.ts`),
-      so the stop is observable there. Take the server route only if the
-      client walk still shows in the profile.
-- [ ] Test, red first: a resumed pattern with ten plans of which one links
-      into a second space reads the far document local before its first
-      run, and `validateAndTransform` is reached by that one plan only,
-      observed through the timing statistics.
+- [x] Each plan reads in a transaction of its own, so the loads a read
+      kicks are attributable to that plan; a round reads again only the
+      plans whose previous read left a load pending, and a plan whose read
+      completed is done. The pass had read every plan in every round, so a
+      family with one crossing plan among _n_ paid 2*n* reads where it
+      needs *n*+1. Each read is a `start/resumeCrossSpaceRead` span.
+- [x] Test, red first: four lifts of which one reads through a link into a
+      second space cost five reads (`resume-node-plan-presync.test.ts`).
+- [ ] The first round still materializes every plan under its read schema
+      to find the crossings: on the room, 2,586 `resumeCrossSpaceRead`
+      spans over 32 families and 28 settles, nearly all of them the first
+      round, and `validateAndTransform` under `#syncCrossSpaceReads` is
+      still about a quarter of the profile. A walk over links under the
+      schema, with no `validateAndTransform`, no freeze and no hash, would
+      replace that read for the plans that cross nothing; the server could
+      also report the links its walk stopped at. Either is the next step
+      here.
 
 Exit: the cross-space pass costs in proportion to the links that cross.
 
 ### Stage 4. Planning yields to the socket
 
-- [ ] The instance rounds in `#syncResumeInstanceNodes`, the list-children
-      pass, and the per-family planning in `#syncCellsForRunningPatternInner`
-      yield one macrotask turn between instances once a slice of continuous
-      planning has run longer than the serving yield's slice, through
-      `CooperativeYield` constructed for the resume path on every posture,
-      not only the serving one. A yield point is never inside a loop that
-      holds a transaction open.
-- [ ] Test, red first: a resume with many instances against a storage
-      manager stub that answers every watch on a macrotask receives its
-      first answer before it has sent its last request, observed as the
-      order of the stub's send and receive events.
+- [x] The root wave and the instance waves issue their syncs through
+      `#kickResumeWave`, which yields one macrotask turn between cells once
+      a slice of continuous issuing is spent (`CooperativeYield`, held by
+      the runner on every posture). Issuing a sync is where the synchronous
+      work sits — each walks its data-URI links before sending — and no
+      transaction is open there: a wave is kicked only after its planning
+      transaction is aborted. The list-children pass kicks inside its
+      planning transaction and keeps its shape.
+- [x] Test, red first: with a zero slice, a timer due before the resume
+      starts fires before the wave's last sync is issued
+      (`resume-presync-plan-count.test.ts`).
 - [ ] The frame log on the field check shows no receive silence longer than
       the longest server operation.
 
@@ -165,12 +199,12 @@ Exit: a load's watch responses are read as they arrive.
 
 ### Stage 5. Documents
 
-- [ ] `docs/development/debugging/profiling.md` names the
-      `runner/start/*` rows; add the plan count and the yield count, and
-      drop any row a stage retires.
-- [ ] `presync-from-node-plans.md` describes the cross-space pass as a read
-      of each plan's inputs; restate it as the walk, and point here.
-- [ ] `docs/specs/memory-v2/04-protocol.md` says nothing about `data:`
+- [x] `docs/development/debugging/profiling.md` names the
+      `runner/start/*` rows; it now says what `resumeCrossSpaceRead` and
+      `syncCellsForRunningPattern` count.
+- [x] `presync-from-node-plans.md` describes the cross-space pass; it now
+      says a round reads only the plans whose reads left a load pending.
+- [x] `docs/specs/memory-v2/04-protocol.md` says nothing about `data:`
       documents carrying schemas inline, and stays silent; the comment at
       `link-utils.ts` that did is gone with stage 1.
 

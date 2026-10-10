@@ -105,7 +105,7 @@ const ITEMS_SCHEMA = {
   items: { type: "object", properties: { seed: { type: "string" } } },
 } as const;
 // One card per case, each cold on the replica that runs it.
-const CARD_COUNT = 11;
+const CARD_COUNT = 14;
 
 type EventCommitMarker = {
   type: "scheduler.event.commit";
@@ -507,6 +507,114 @@ describe("piece-named-before-start", () => {
       held = true;
     });
     await runCard(cardB, itemB);
+    await quiesce(b);
+    expect(held).toBe(false);
+    expect(await bump(cardB)).toBe(1);
+    expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
+  });
+
+  it("runs a piece without holding it when its argument links to a derived cell nothing has computed", async () => {
+    const { cardB, itemB, argumentId, key } = locateCard(11);
+    await nameLinkChain(argumentId, 4);
+    await itemB.sync();
+    for (const descriptor of cardPattern.derivedInternalCells ?? []) {
+      await getDerivedInternalCell(cardB, descriptor).sync();
+    }
+    await quiesce(b);
+    // A derived cell whose producer has not run, handed down as part of the
+    // argument, the way a parent's computed value reaches a child it
+    // instantiates before its own computations run. Nothing asks the store
+    // for it: its producer materializes it, here or elsewhere.
+    const derived = b.getCellFromEntityId<string>(
+      space,
+      "computed:piece-named-before-start-derived",
+    );
+    expect(replicaB.getDocument(derived.getAsNormalizedFullLink().id))
+      .toBeUndefined();
+    let held = false;
+    waitForDeferredStart(b, "runner.deferred-start.pending", key).then(() => {
+      held = true;
+    });
+    const runTx = b.edit();
+    b.runner.run(runTx, cardPattern, { item: itemB, hint: derived }, cardB);
+    b.prepareTxForCommit(runTx);
+    expect((await runTx.commit().settled).error).toBeUndefined();
+    await quiesce(b);
+    expect(held).toBe(false);
+    expect(await bump(cardB)).toBe(1);
+    expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
+  });
+
+  it("runs a piece without holding it when its argument links to a stream of another piece", async () => {
+    const { cardB, itemB, argumentId, key } = locateCard(12);
+    await nameLinkChain(argumentId, 4);
+    await itemB.sync();
+    for (const descriptor of cardPattern.derivedInternalCells ?? []) {
+      await getDerivedInternalCell(cardB, descriptor).sync();
+    }
+    await quiesce(b);
+    // A stream some other piece owns, handed down for this one to send to.
+    // Its document holds no value a run reads, and a send to it is an event
+    // the store appends; nothing asks the store for its record.
+    const stream = b.getCellFromEntityId<unknown>(
+      space,
+      "of:piece-named-before-start-foreign-stream",
+      [],
+      { type: "object", asCell: ["stream"] },
+    );
+    expect(replicaB.getDocument(stream.getAsNormalizedFullLink().id))
+      .toBeUndefined();
+    let held = false;
+    waitForDeferredStart(b, "runner.deferred-start.pending", key).then(() => {
+      held = true;
+    });
+    const runTx = b.edit();
+    b.runner.run(runTx, cardPattern, { item: itemB, hint: stream }, cardB);
+    b.prepareTxForCommit(runTx);
+    expect((await runTx.commit().settled).error).toBeUndefined();
+    await quiesce(b);
+    expect(held).toBe(false);
+    expect(await bump(cardB)).toBe(1);
+    expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
+  });
+
+  it("runs a piece without holding it when a document its argument links to holds a link to an absent one", async () => {
+    const { cardB, itemB, argumentId, key } = locateCard(13);
+    await nameLinkChain(argumentId, 4);
+    await itemB.sync();
+    for (const descriptor of cardPattern.derivedInternalCells ?? []) {
+      await getDerivedInternalCell(cardB, descriptor).sync();
+    }
+    // A local document, handed down in the argument, whose content links to
+    // a document nothing has written. The run reads through the link
+    // reactively if its body reaches it; the gate probes the documents the
+    // argument links to and the redirect chains they form, not the contents
+    // of every document on the way.
+    const inner = b.getCellFromEntityId<{ n: number }>(
+      space,
+      "of:piece-named-before-start-inner",
+    );
+    const holder = b.getCellFromEntityId<{ inner: unknown }>(
+      space,
+      "of:piece-named-before-start-holder",
+    );
+    const holderTx = b.edit();
+    holder.withTx(holderTx).set({ inner });
+    b.prepareTxForCommit(holderTx);
+    expect((await holderTx.commit().settled).error).toBeUndefined();
+    await quiesce(b);
+    expect(replicaB.getDocument(holder.getAsNormalizedFullLink().id))
+      .toBeDefined();
+    expect(replicaB.getDocument(inner.getAsNormalizedFullLink().id))
+      .toBeUndefined();
+    let held = false;
+    waitForDeferredStart(b, "runner.deferred-start.pending", key).then(() => {
+      held = true;
+    });
+    const runTx = b.edit();
+    b.runner.run(runTx, cardPattern, { item: itemB, hint: holder }, cardB);
+    b.prepareTxForCommit(runTx);
+    expect((await runTx.commit().settled).error).toBeUndefined();
     await quiesce(b);
     expect(held).toBe(false);
     expect(await bump(cardB)).toBe(1);
