@@ -82,13 +82,16 @@ command's `--lock` flag.
   exits. A signal sent during that exit loses a profile or truncates one, and
   one truncated profile makes `deno coverage` refuse every profile in the job.
   "Tests that start Deno" in `docs/development/TESTING.md` has the detail.
-- A child that compiles repository files under a configuration of its own — a
-  fixture directory with its own `deno.json`, with a repository module given as
-  `--preload` — writes profiles whose emitted files the repository's
-  configuration cannot find, so the lane's report loses those files and the lane
-  fails. Give such a child a `DENO_COVERAGE_DIR` inside its fixture, so its
-  profiles leave with the fixture, as `runFixture` in
-  `packages/test-support/test/records/preload.test.ts` does.
+- Deno keeps one emit per module per set of transpile options. A child that
+  compiles a repository module under a configuration of its own — a fixture
+  directory with its own `deno.json`, with a repository module given as
+  `--preload` — replaces that module's emit, and every coverage profile taken
+  under the repository's options then names an emit the report cannot find: the
+  lane's report loses the file and the lane fails, whichever batch took the
+  profile. Give such a fixture the repository's transpile options (its `jsx`
+  settings, read from the root `deno.jsonc`), as `FIXTURE_CONFIG` in
+  `packages/test-support/test/records/preload.test.ts` does, and a
+  `DENO_COVERAGE_DIR` inside the fixture so its own profiles leave with it.
 
 ## Common Tells
 

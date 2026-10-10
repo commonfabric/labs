@@ -8,7 +8,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
-import { dirname, join } from "@std/path";
+import { parse as parseJsonc } from "@std/jsonc";
+import { dirname, fromFileUrl, join } from "@std/path";
 import {
   dropContainerCases,
   ingestJUnit,
@@ -23,7 +24,31 @@ import {
 } from "../../src/records/mod.ts";
 
 /**
- * The imports a fixture tree needs to resolve the preload's own modules.
+ * The compiler options the repository transpiles its modules under, read
+ * from the root configuration: the JSX settings, which are what decide the
+ * emitted form of a module. A fixture compiles the repository's preload and
+ * `bdd.ts` as its own modules, and Deno keeps one emit per module per set
+ * of transpile options, so a fixture transpiling them under other options
+ * replaces the emit every profile taken under the repository's names, and
+ * the coverage report of a run that collected one then loses those files.
+ * The type-checking options stay out: `types` and `lib` name paths and
+ * libraries the fixture does not hold, and none of them shape an emit.
+ */
+async function repositoryTranspileOptions(): Promise<Record<string, unknown>> {
+  const root = fromFileUrl(new URL("../../../../deno.jsonc", import.meta.url));
+  const config = parseJsonc(await Deno.readTextFile(root)) as {
+    compilerOptions?: Record<string, unknown>;
+  };
+  const options: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config.compilerOptions ?? {})) {
+    if (key.startsWith("jsx")) options[key] = value;
+  }
+  return options;
+}
+
+/**
+ * The imports a fixture tree needs to resolve the preload's own modules,
+ * and the compiler options that keep its emits the repository's.
  * `@std/testing/bdd` points at this repository's re-export exactly as the
  * root import map does, so a fixture exercises the wrapper a real test
  * file goes through rather than the module underneath it.
@@ -37,6 +62,7 @@ const FIXTURE_CONFIG = {
     "@std/testing/bdd/real": "jsr:@std/testing@^1.0.19/bdd",
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
   },
+  compilerOptions: await repositoryTranspileOptions(),
 };
 
 interface Fixture {
@@ -159,14 +185,12 @@ async function runFixture(
     env: {
       [RECORDS_DIR_VARIABLE]: fixture.spool,
       [SKIP_LIST_VARIABLE]: skipList ?? "",
-      // The fixture's own `deno.json` is the configuration the child
-      // compiles the repository's preload under, so the emitted file a
-      // coverage profile of it names is one the repository's configuration
-      // cannot find. A child inherits the directory a run under
-      // `--coverage` collects into; given one inside the fixture instead,
-      // its profiles leave with the fixture rather than failing the run's
-      // report. A run collecting nothing hands the child nothing, since
-      // the variable alone turns collection on.
+      // A child inherits the directory a run under `--coverage` collects
+      // into, and what it would write there is profiles of the fixture's
+      // own files, which no report tracks. Given a directory inside the
+      // fixture instead, they leave with it. A run collecting nothing
+      // hands the child nothing, since the variable alone turns
+      // collection on.
       ...(Deno.env.get("DENO_COVERAGE_DIR") === undefined
         ? {}
         : { DENO_COVERAGE_DIR: join(fixture.dir, "coverage") }),
