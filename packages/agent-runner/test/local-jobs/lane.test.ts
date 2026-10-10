@@ -967,9 +967,14 @@ describe("local-jobs/lane", () => {
       });
 
       it("closes the host even when reporting a failed run throws", async () => {
-        // The throw escapes the run; the lane leaves it unhandled.
-        const swallow = (event: PromiseRejectionEvent) =>
+        // The throw escapes the run; the lane leaves it unhandled. The
+        // listener stays until that rejection is reported, which the event
+        // loop does only after running any timer already due.
+        const escaped = Promise.withResolvers<unknown>();
+        const swallow = (event: PromiseRejectionEvent) => {
           event.preventDefault();
+          escaped.resolve(event.reason);
+        };
         globalThis.addEventListener("unhandledrejection", swallow);
         try {
           const { lane, nextRun, enqueue } = laneWith({
@@ -983,7 +988,9 @@ describe("local-jobs/lane", () => {
           const run = await nextRun(0);
           const host = lane.browserHost(id)!;
           run.fail(new Error("the harness could not start"));
-          await new Promise((resolve) => setTimeout(resolve, 0));
+          const reason = await escaped.promise;
+          expect(reason).toBeInstanceOf(Error);
+          expect((reason as Error).message).toBe("the operator's log is gone");
           expect(host.view().state).toBe("closed");
         } finally {
           globalThis.removeEventListener("unhandledrejection", swallow);
