@@ -90,8 +90,9 @@ command's `--lock` flag.
   lane's report loses the file and the lane fails, whichever batch took the
   profile. Give such a fixture the repository's transpile options (its `jsx`
   settings, read from the root `deno.jsonc`), as `FIXTURE_CONFIG` in
-  `packages/test-support/test/records/preload.test.ts` does, and a
-  `DENO_COVERAGE_DIR` inside the fixture so its own profiles leave with it.
+  `packages/test-support/test/records/preload.test.ts` does; its profiles then
+  convert like any other, and the fixture's own files they name are warned about
+  as untracked, which costs nothing.
 
 ## Common Tells
 

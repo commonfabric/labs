@@ -48,7 +48,11 @@ async function repositoryTranspileOptions(): Promise<Record<string, unknown>> {
 
 /**
  * The imports a fixture tree needs to resolve the preload's own modules,
- * and the compiler options that keep its emits the repository's.
+ * and the compiler options that keep its emits the repository's. A child
+ * inherits the directory a run under `--coverage` collects into, and what
+ * it writes there is the coverage of the preload's own code, which runs
+ * nowhere else; the fixture's own files it names beside them are ones no
+ * report tracks.
  * `@std/testing/bdd` points at this repository's re-export exactly as the
  * root import map does, so a fixture exercises the wrapper a real test
  * file goes through rather than the module underneath it.
@@ -185,15 +189,6 @@ async function runFixture(
     env: {
       [RECORDS_DIR_VARIABLE]: fixture.spool,
       [SKIP_LIST_VARIABLE]: skipList ?? "",
-      // A child inherits the directory a run under `--coverage` collects
-      // into, and what it would write there is profiles of the fixture's
-      // own files, which no report tracks. Given a directory inside the
-      // fixture instead, they leave with it. A run collecting nothing
-      // hands the child nothing, since the variable alone turns
-      // collection on.
-      ...(Deno.env.get("DENO_COVERAGE_DIR") === undefined
-        ? {}
-        : { DENO_COVERAGE_DIR: join(fixture.dir, "coverage") }),
     },
     stdout: "piped",
     stderr: "piped",
