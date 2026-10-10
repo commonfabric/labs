@@ -295,15 +295,19 @@ Home between two inboxes its profiles advertise.
 
 While the record holds a refusal, Home shows a notice above its tabs, whichever
 tab is open, saying that what others share may not arrive. It shows the code,
-with a sentence saying what the code means when it is one of the host's codes
-that Home knows, and `refusedAt`, in the viewer's local time. It reads the
-record's `reason` and `refusedAt` and nothing else, so it never reads through
-the record's link to the refused inbox, and nothing the refused inbox's owner
-labels reaches Home's rendering. A code Home doesn't know is shown as given. The
-notice carries a "Use a new inbox" button, as "Replacing a refused inbox" says,
-and says that a loom daemon running as another identity than the owner's stops
-receiving loom shares once the owner uses it. The notice goes when the record
-is cleared. `packages/patterns/system/home.test.tsx` tests it.
+with a sentence saying what the code means when it is one of the host's codes,
+`INBOX_ADOPTION_REFUSALS` in `packages/piece/src/ops/private-inbox.ts`, and
+`refusedAt`, in the viewer's local time. Home's sentences are in
+`packages/patterns/system/private-inbox-refusal-text.ts`, and
+`private-inbox-refusal-text.test.ts` beside it fails while one of the host's
+codes has none. It reads the record's `reason` and `refusedAt` and nothing else,
+so it never reads through the record's link to the refused inbox, and nothing
+the refused inbox's owner labels reaches Home's rendering. A code Home doesn't
+know is shown as given. The notice carries a "Use a new inbox" button, as
+"Replacing a refused inbox" says, and says that a loom daemon running as another
+identity than the owner's stops receiving loom shares once the owner uses it.
+The notice goes when the record is cleared.
+`packages/patterns/system/home.test.tsx` tests it.
 
 A Home of a vintage whose ensure takes no refusal is sent the same event. Event
 schemas are open, so its handler is delivered the fields it declares, `adopt`
