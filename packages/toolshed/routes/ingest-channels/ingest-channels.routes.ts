@@ -3,8 +3,8 @@ import * as HttpStatusCodes from "stoker/http-status-codes";
 import { z } from "zod";
 import { MAX_TTL_DAYS } from "./ingest-channels.utils.ts";
 
-// The CONTROL plane for ingest channels: mint, list, rotate, revoke, and the
-// Gmail binding verbs.
+// The CONTROL plane for ingest channels: mint, list, rotate, and revoke. A
+// mint may carry a proof of a Gmail mailbox, which binds the channel to it.
 //
 // A verb that acts on one space carries that space in its path, under
 // `/api/spaces/:space/`, so that whatever dispatches requests by space can
@@ -51,13 +51,26 @@ const requestIdField = z.string().describe(
     "returns 409, and changes nothing and returns no secret.",
 );
 
+const cellTarget = z.object({
+  space: z.string(),
+  id: z.string(),
+  path: z.array(z.string()),
+}).describe("The parts of the link to the cell a gmail channel writes.");
+
 const channelSummary = z.object({
   id: z.string(),
   name: z.string(),
   space: z.string(),
-  causePrefix: z.string(),
+  causePrefix: z.string().optional().describe(
+    "A device channel's cause prefix.",
+  ),
+  target: cellTarget.optional(),
   installId: z.string(),
-  sink: z.enum(["journal", "latest"]),
+  kind: z.enum(["device", "gmail"]).describe(
+    "`device`: a device POSTs records with the token into journal cells " +
+      "under the cause prefix. `gmail`: toolshed writes each Gmail push " +
+      "notification for the bound mailbox into the target cell.",
+  ),
   createdAt: z.string(),
   enabled: z.boolean(),
   owner: z.string().optional(),
@@ -119,21 +132,47 @@ const commonResponses = {
 
 /**
  * The token is returned ONCE, here and on rotate, and never stored in clear.
- * A `latest` channel, which no device POSTs to, carries no URL and no token.
+ * A gmail channel, which no device POSTs to, carries no URL and no token.
  */
 const mintResult = z.object({
   id: z.string(),
   url: z.string().optional().describe(
-    "Where a device POSTs records. Absent for a `latest` channel.",
+    "Where a device POSTs records. Absent for a gmail channel.",
   ),
   space: z.string(),
-  causePrefix: z.string(),
+  causePrefix: z.string().optional().describe(
+    "A device channel's cause prefix.",
+  ),
+  target: cellTarget.optional(),
   installId: z.string(),
   expiresAt: z.string().optional(),
   token: z.string().optional().describe(
-    "Shown once. Hand it to the device. Absent for a `latest` channel.",
+    "Shown once. Hand it to the device. Absent for a gmail channel.",
+  ),
+  emailAddress: z.string().optional().describe(
+    "The mailbox the channel is bound to, when the mint carried a proof.",
   ),
 });
+
+const gmailProof = z.union([
+  z.object({
+    accessToken: z.string().min(1).max(4096).describe(
+      "A Google access token that reads the mailbox. Used for one profile " +
+        "lookup and not stored.",
+    ),
+  }).strict(),
+  z.object({
+    idToken: z.string().min(1).max(4096).describe(
+      "A Google ID token naming the mailbox, for one of the OAuth client " +
+        "ids this deployment accepts. Grants nothing, and is the proof to " +
+        "prefer.",
+    ),
+  }).strict(),
+]).describe(
+  "Binds the channel to the Gmail mailbox the proof is for, in this mint: " +
+    "one of the two tokens, never both. Comes with `target`, the cell the " +
+    "notifications are written to.",
+);
 
 export const mint = createRoute({
   path: `${SPACE_BASE}/mint`,
@@ -149,15 +188,20 @@ export const mint = createRoute({
               "Stable per-device id. Also the cross-repo join key and the " +
                 "provenance mark's audience.",
             ),
-            causePrefix: z.string().optional(),
+            causePrefix: z.string().optional().describe(
+              "A device channel's cell-cause prefix, `location` unless " +
+                "named. Not for a gmail channel, which names a `target`.",
+            ),
             name: z.string().optional(),
             ttlDays: z.number().int().positive().max(MAX_TTL_DAYS).optional(),
-            sink: z.enum(["journal", "latest"]).optional().describe(
-              "What the channel's writes land in: a `journal` of records in " +
-                "per-day partition cells, which devices POST to, or one " +
-                "`latest` cell holding the newest Gmail push notification. " +
-                "A journal unless named.",
+            target: z.string().optional().describe(
+              "The cell a gmail channel writes, as a serialized cell link " +
+                '(`fcl1:{"id":"of:…","space":"did:key:…",' +
+                '"path":[…]}`) into the space the mint is addressed to. ' +
+                "Comes with `gmail`; the two make the channel a gmail " +
+                "channel, and without them it is a device channel.",
             ),
+            gmail: gmailProof.optional(),
             requestId: requestIdField,
           }),
         },
@@ -167,9 +211,30 @@ export const mint = createRoute({
   responses: {
     [HttpStatusCodes.OK]: {
       content: { "application/json": { schema: mintResult } },
-      description: "Channel minted (or its token rotated in place)",
+      description:
+        "Channel minted (or its token rotated in place), and bound to the " +
+        "mailbox when a proof was given",
     },
     ...commonResponses,
+    [HttpStatusCodes.BAD_REQUEST]: {
+      ...jsonError,
+      description:
+        "Invalid input, a mailbox proof without a target cell or on a " +
+        "device channel, a proof Google did not accept, or one this " +
+        "deployment does not accept",
+    },
+    [HttpStatusCodes.CONFLICT]: {
+      ...jsonError,
+      description:
+        "Replayed requestId, a channel registered to another owner or " +
+        "writing another cause prefix or target cell, this deployment " +
+        "cannot write to the space, or the channel was minted but the " +
+        "mailbox is at its channel limit",
+    },
+    [HttpStatusCodes.BAD_GATEWAY]: {
+      ...jsonError,
+      description: "Storage failure, or Google could not be reached",
+    },
   },
 });
 
@@ -304,94 +369,8 @@ export const revoke = createRoute({
   },
 });
 
-export const gmailBind = createRoute({
-  path: `${SPACE_BASE}/gmail-bind`,
-  method: "post",
-  tags,
-  request: {
-    params: spaceParams,
-    body: {
-      content: {
-        "application/json": {
-          schema: z.object({
-            id: z.string(),
-            accessToken: z.string().min(1).max(4096).describe(
-              "A Google access token that can read the mailbox's Gmail " +
-                "profile. Used for one lookup and not stored.",
-            ),
-            requestId: requestIdField,
-          }),
-        },
-      },
-    },
-  },
-  responses: {
-    [HttpStatusCodes.OK]: {
-      content: {
-        "application/json": {
-          schema: z.object({ id: z.string(), emailAddress: z.string() }),
-        },
-      },
-      description:
-        "Gmail push notifications for this mailbox now reach the channel",
-    },
-    ...commonResponses,
-    [HttpStatusCodes.BAD_REQUEST]: {
-      ...jsonError,
-      description: "Invalid input, or Gmail did not accept the access token",
-    },
-    [HttpStatusCodes.CONFLICT]: {
-      ...jsonError,
-      description:
-        "Replayed requestId, the channel is revoked or expired, the mailbox " +
-        "is at its channel limit, the binding changed concurrently, or this " +
-        "deployment cannot write to the space",
-    },
-    [HttpStatusCodes.BAD_GATEWAY]: {
-      ...jsonError,
-      description: "Storage failure, or the Gmail profile lookup failed",
-    },
-  },
-});
-
-export const gmailUnbind = createRoute({
-  path: `${SPACE_BASE}/gmail-unbind`,
-  method: "post",
-  tags,
-  request: {
-    params: spaceParams,
-    body: {
-      content: {
-        "application/json": {
-          schema: z.object({ id: z.string(), requestId: requestIdField }),
-        },
-      },
-    },
-  },
-  responses: {
-    [HttpStatusCodes.OK]: {
-      content: {
-        "application/json": {
-          schema: z.object({ id: z.string(), unbound: z.boolean() }),
-        },
-      },
-      description:
-        "The channel is bound to no mailbox; `unbound` says whether it was",
-    },
-    ...commonResponses,
-    [HttpStatusCodes.CONFLICT]: {
-      ...jsonError,
-      description:
-        "Replayed requestId, the binding changed concurrently, or this " +
-        "deployment cannot write to the space",
-    },
-  },
-});
-
 export type MintRoute = typeof mint;
 export type ListRoute = typeof list;
 export type ListOwnRoute = typeof listOwn;
 export type RotateRoute = typeof rotate;
 export type RevokeRoute = typeof revoke;
-export type GmailBindRoute = typeof gmailBind;
-export type GmailUnbindRoute = typeof gmailUnbind;

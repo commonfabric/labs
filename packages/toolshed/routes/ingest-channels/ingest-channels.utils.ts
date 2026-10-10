@@ -25,6 +25,8 @@ import {
   type SpaceAuthority,
 } from "@/lib/space-authority.ts";
 import {
+  type CellTarget,
+  cellTargetOf,
   channelId,
   ClaimStoreFullError,
   generateIngestSecret,
@@ -33,20 +35,28 @@ import {
   getRegistration,
   getSpaceLifetimeChannelCount,
   getSpaceRegistrationIndex,
+  type IngestChannelKind,
   type IngestRegistration,
-  type IngestSink,
   ingestUrl,
   isValidRequestId,
   isValidSegment,
   LifetimeChannelCapError,
   LiveChannelCapError,
   MAX_REVOCATION_HISTORY,
+  parseWireCellLink,
   peekMintRequest,
   RegistrationConflictError,
   RequestAlreadyClaimedError,
   saveRegistration,
   SpaceLifetimeChannelCapError,
 } from "@/routes/ingest/ingest.utils.ts";
+import {
+  MailboxBindingFullError,
+  mailboxKey,
+  mailboxListUpdate,
+  type MailboxLookup,
+  MAX_CHANNELS_PER_MAILBOX,
+} from "@/routes/ingest-push/gmail-push.utils.ts";
 
 const DEFAULT_CAUSE_PREFIX = "location";
 
@@ -119,11 +129,37 @@ export interface ControlDeps {
   maxLifetimeChannelsPerOwner?: number;
   maxLifetimeChannelsPerSpace?: number;
   apiUrl: string;
+
+  /**
+   * How a mint proves the mailbox it binds. Absent where Gmail push is not
+   * configured, and a mint carrying a proof is then refused.
+   */
+  gmail?: GmailProofDeps;
   logger?: {
     warn: (obj: unknown, msg: string) => void;
     info: (obj: unknown, msg: string) => void;
     error: (obj: unknown, msg: string) => void;
   };
+}
+
+/** What a mint asks of Google to learn which mailbox a token is for. */
+interface GmailProofDeps {
+  /** Asks Gmail which mailbox an access token reads. */
+  fetchMailbox: (accessToken: string) => Promise<MailboxLookup>;
+
+  /** Verifies a Google ID token and reads the mailbox it names. */
+  verifyIdToken: (idToken: string) => Promise<MailboxLookup>;
+}
+
+/**
+ * Proof that the caller holds a Gmail mailbox, carried on a mint to bind the
+ * channel to that mailbox: a Google access token that reads it, used for one
+ * profile lookup and kept nowhere, or a Google ID token naming it, which
+ * grants nothing and is the proof to prefer. Exactly one of the two.
+ */
+export interface GmailProof {
+  accessToken?: string;
+  idToken?: string;
 }
 
 /** The one-time mint/rotate view. `token` is shown here and nowhere else. */
@@ -132,24 +168,33 @@ export interface MintedChannel {
 
   /**
    * Where a device POSTs records, with `token` as its bearer secret. A
-   * `journal` channel has both; a `latest` channel, which nothing POSTs to,
-   * has neither.
+   * device channel has both; a gmail channel, which nothing POSTs to, has
+   * neither.
    */
   url?: string;
   space: string;
-  causePrefix: string;
+
+  /** A device channel's cause prefix; absent on a `gmail` channel. */
+  causePrefix?: string;
+
+  /** A `gmail` channel's cell; absent on a device channel. */
+  target?: CellTarget;
   installId: string;
   expiresAt?: string;
   token?: string;
+
+  /** The mailbox the channel was bound to, when the mint carried a proof. */
+  emailAddress?: string;
 }
 
 export interface ChannelView {
   id: string;
   name: string;
   space: string;
-  causePrefix: string;
+  causePrefix?: string;
+  target?: CellTarget;
   installId: string;
-  sink: IngestSink;
+  kind: IngestChannelKind;
   createdAt: string;
   enabled: boolean;
   owner?: string;
@@ -246,9 +291,10 @@ export const channelSummary = (
   id: r.id,
   name: r.name,
   space: r.space,
-  causePrefix: r.causePrefix,
+  ...(r.causePrefix !== undefined ? { causePrefix: r.causePrefix } : {}),
+  ...(r.target !== undefined ? { target: r.target } : {}),
   installId: r.installId,
-  sink: r.sink,
+  kind: r.kind,
   createdAt: r.createdAt,
   enabled: r.enabled,
   ...(r.owner !== undefined ? { owner: r.owner } : {}),
@@ -261,16 +307,31 @@ export const channelSummary = (
   revision: r.revision ?? 0,
 });
 
-/** Mint a fresh secret, persist, and build the ONE-TIME response. */
+/**
+ * Mint a fresh secret for a device channel, persist, and build the ONE-TIME
+ * response. A gmail channel gets no secret: nothing POSTs to it.
+ */
 const persist = async (
   deps: ControlDeps,
   params: {
     id: string;
     name: string;
     space: string;
-    causePrefix: string;
     installId: string;
-    sink: IngestSink;
+
+    /** A device channel with its cause prefix, or a gmail channel with its cell. */
+    writes: { kind: "device"; causePrefix: string } | {
+      kind: "gmail";
+      target: CellTarget;
+    };
+
+    /**
+     * The key of the mailbox a gmail channel is bound to by this write: the
+     * one its proof named, or the one it was bound to already. The channel's
+     * place in that mailbox's list is written in the same transaction as the
+     * registration, and a mailbox at its cap refuses the whole mint.
+     */
+    mailboxKey?: string;
     existing: IngestRegistration | null;
     callerDid: string;
     ttlDays?: number;
@@ -282,7 +343,9 @@ const persist = async (
     requestId: string;
   },
 ): Promise<ControlResult<MintedChannel>> => {
-  const { secret, secretHash } = generateIngestSecret();
+  const minted = params.writes.kind === "device"
+    ? generateIngestSecret()
+    : undefined;
   const now = new Date();
   // Bounded before arithmetic: `new Date(huge).toISOString()` throws RangeError,
   // and this runs outside the try below, so an unbounded ttl escapes the handler
@@ -327,10 +390,15 @@ const persist = async (
     id: params.id,
     name: params.name,
     space: params.space,
-    causePrefix: params.causePrefix,
+    ...(params.writes.kind === "device"
+      ? { causePrefix: params.writes.causePrefix }
+      : { target: params.writes.target }),
+    ...(params.mailboxKey !== undefined
+      ? { mailboxKey: params.mailboxKey }
+      : {}),
     installId: params.installId,
-    sink: params.sink,
-    secretHash,
+    kind: params.writes.kind,
+    ...(minted !== undefined ? { secretHash: minted.secretHash } : {}),
     createdBy: deps.operatorDid,
     createdAt: params.existing?.createdAt ?? now.toISOString(),
     enabled: true,
@@ -370,12 +438,26 @@ const persist = async (
         spaceLifetime: deps.maxLifetimeChannelsPerSpace ??
           MAX_LIFETIME_CHANNELS_PER_SPACE,
       },
+      params.mailboxKey === undefined ? undefined : mailboxListUpdate(
+        deps.runtime,
+        deps.serviceSpace,
+        params.id,
+        { next: params.mailboxKey, previous: params.existing?.mailboxKey },
+        now.getTime(),
+      ),
     );
   } catch (error) {
     if (error instanceof RequestAlreadyClaimedError) {
       return conflict(
         `requestId already used for channel ${error.channel}. A replay never ` +
           `returns a token; retry with a fresh requestId.`,
+      );
+    }
+    if (error instanceof MailboxBindingFullError) {
+      return conflict(
+        `The mailbox already has ${MAX_CHANNELS_PER_MAILBOX} bound ` +
+          `channels, so channel ${params.id} was not minted. Revoke one, ` +
+          `then mint again.`,
       );
     }
     if (error instanceof LiveChannelCapError) {
@@ -423,14 +505,13 @@ const persist = async (
     return { status: 502, body: { error: "Storage failure" } };
   }
 
-  // The data plane refuses a `latest` channel, so its URL and secret would
-  // only mislead whoever reads the response. The secret is still minted and
-  // its hash stored: a registration has one whatever its sink.
-  const devicePath = registration.sink === "journal"
+  // The data plane refuses a gmail channel, so it has no URL and no token to
+  // show.
+  const devicePath = minted !== undefined
     ? {
       url: ingestUrl(deps.apiUrl, registration.space, registration.id),
       // Shown once, here only. Only the hash is ever stored.
-      token: secret,
+      token: minted.secret,
     }
     : {};
   return {
@@ -438,7 +519,12 @@ const persist = async (
     body: {
       id: registration.id,
       space: registration.space,
-      causePrefix: registration.causePrefix,
+      ...(registration.causePrefix !== undefined
+        ? { causePrefix: registration.causePrefix }
+        : {}),
+      ...(registration.target !== undefined
+        ? { target: registration.target }
+        : {}),
       installId: registration.installId,
       ...(expiresAt !== undefined ? { expiresAt } : {}),
       ...devicePath,
@@ -449,12 +535,28 @@ const persist = async (
 export interface MintInput {
   space: string;
   installId: string;
+
+  /** A device channel's cause prefix, `location` unless named. Not for a gmail channel. */
   causePrefix?: string;
   name?: string;
   ttlDays?: number;
 
-  /** What the channel's writes land in; a journal unless named. */
-  sink?: IngestSink;
+  /**
+   * The cell a gmail channel writes, as a cell link in its `fcl1:` wire form,
+   * in the space the mint is addressed to. Comes with `gmail`, and the two
+   * together make a new channel a gmail channel; a new mint without them
+   * makes a device channel. A re-mint keeps the channel's kind whatever it
+   * carries, and one carrying neither keeps a gmail channel's binding and
+   * target too.
+   */
+  target?: string;
+
+  /**
+   * Binds the channel to the Gmail mailbox the proof is for, in the same
+   * mint. Minting again with a proof for another mailbox moves the channel;
+   * minting again without one leaves the binding as it is.
+   */
+  gmail?: GmailProof;
   requestId: string;
 }
 
@@ -463,7 +565,47 @@ export async function processMint(
   callerDid: string,
   input: MintInput,
 ): Promise<ControlResult<MintedChannel>> {
-  const causePrefix = input.causePrefix ?? DEFAULT_CAUSE_PREFIX;
+  // A proof and a target come together: the proof says which mailbox wakes
+  // the channel, the target says which cell it wakes. Neither alone means
+  // anything, and together they make the channel a gmail channel. A mint with
+  // neither is a device channel, or a re-mint of whatever the channel is.
+  if ((input.gmail === undefined) !== (input.target === undefined)) {
+    return bad(
+      input.gmail === undefined
+        ? "A target cell is minted with a mailbox proof"
+        : "A mailbox proof needs a target cell to write to",
+    );
+  }
+  let target: CellTarget | undefined;
+  if (input.gmail !== undefined && input.target !== undefined) {
+    const proofs = [input.gmail.accessToken, input.gmail.idToken]
+      .filter((proof) => proof !== undefined);
+    if (proofs.length !== 1) {
+      return bad("A mailbox proof is one access token or one ID token");
+    }
+    if (input.causePrefix !== undefined) {
+      return bad("A gmail channel has a target cell, not a cause prefix");
+    }
+    let link;
+    try {
+      link = parseWireCellLink(input.target);
+    } catch (error) {
+      return bad(
+        `The target is not a cell link: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    target = cellTargetOf(link);
+    // The mint is addressed to one space and authorized against it, so a cell
+    // elsewhere is refused outright rather than written under another
+    // space's grant.
+    if (target.space !== input.space) {
+      return bad(
+        "The target cell is in another space than the one minted into",
+      );
+    }
+  }
 
   // A malformed space DID shares the ownership denial rather than getting its
   // own 400: a distinguishable shape error is a free probe.
@@ -473,7 +615,9 @@ export async function processMint(
   // impersonating the token-less integration audiences
   // (`did:web:commonfabric.org#oauth2`, `#plaid`), which contain `:` and `#`.
   if (!isValidSegment(input.installId)) return bad("Invalid installId");
-  if (!isValidSegment(causePrefix)) return bad("Invalid causePrefix");
+  if (input.causePrefix !== undefined && !isValidSegment(input.causePrefix)) {
+    return bad("Invalid causePrefix");
+  }
   if (!isValidRequestId(input.requestId)) return bad("Invalid requestId");
 
   const authority = await authorize(deps, input.space, callerDid);
@@ -488,6 +632,11 @@ export async function processMint(
     deps.logger?.error({ error, id }, "ingest-channels: lookup failed");
     return { status: 502, body: { error: "Storage failure" } };
   }
+
+  // A device channel's cause prefix is `location` unless named; a gmail
+  // channel has none, and a re-mint of one that names no prefix keeps it so.
+  const causePrefix = target !== undefined ? undefined : input.causePrefix ??
+    (existing?.kind === "gmail" ? undefined : DEFAULT_CAUSE_PREFIX);
 
   if (existing) {
     // Re-minting is how an owner re-pairs their own device, but the id derives
@@ -520,11 +669,25 @@ export async function processMint(
           `you intend to take it over (the revocation is recorded).`,
       );
     }
-    // Immutable for the life of the (space, installId) pair: changing it would
-    // move where data lands and orphan the existing read path. Revoking does
-    // NOT free it — the registration is retained deliberately — so the only
-    // honest remedy is a different installId.
-    if (existing.causePrefix !== causePrefix) {
+    // Where a channel writes is immutable for the life of the (space,
+    // installId) pair: changing it would move where data lands and orphan the
+    // existing read path. Revoking does NOT free it — the registration is
+    // retained deliberately — so the only honest remedy is a different
+    // installId. A device channel's cause prefix and a gmail channel's
+    // target cell are each held to that, and so is the kind itself.
+    if (input.gmail !== undefined && existing.kind !== "gmail") {
+      return bad(
+        `Channel ${id} is a device channel, and a mailbox binds to a gmail ` +
+          `channel. Use a different --install-id.`,
+      );
+    }
+    if (input.causePrefix !== undefined && existing.kind === "gmail") {
+      return conflict(
+        `Channel ${id} is a gmail channel, which has a target cell and no ` +
+          `cause prefix. Use a different --install-id for a device channel.`,
+      );
+    }
+    if (causePrefix !== undefined && existing.causePrefix !== causePrefix) {
       return conflict(
         `Channel ${id} is registered with cause-prefix ` +
           `'${existing.causePrefix}', and a channel's cause-prefix cannot ` +
@@ -532,13 +695,15 @@ export async function processMint(
           `--install-id to get a channel with cause-prefix '${causePrefix}'.`,
       );
     }
-    // The sink is immutable for the same reason: it decides which cells the
-    // reader watches. A re-mint that names none keeps the channel's own.
-    if (input.sink !== undefined && existing.sink !== input.sink) {
+    if (
+      target !== undefined && existing.target !== undefined &&
+      !sameTarget(existing.target, target)
+    ) {
       return conflict(
-        `Channel ${id} is registered with sink '${existing.sink}', and a ` +
-          `channel's sink cannot change. Use a different --install-id to ` +
-          `get a channel with sink '${input.sink}'.`,
+        `Channel ${id} writes the cell ${existing.target.id}, and a ` +
+          `channel's target cell cannot change (it would orphan the existing ` +
+          `reader). Use a different --install-id for a channel writing ` +
+          `${target.id}.`,
       );
     }
   }
@@ -555,14 +720,37 @@ export async function processMint(
   const replay = await peekReplay(deps, callerDid, input.requestId);
   if (replay) return replay;
 
-  return await persist(deps, {
+  // After the replay check, so that a replay costs no request to Google, and
+  // before the mint, so that a refused proof mints nothing.
+  let mailbox: string | undefined;
+  if (input.gmail !== undefined) {
+    const proven = await proveMailbox(deps, input.gmail);
+    if (!proven.ok) return proven.result;
+    mailbox = proven.emailAddress;
+  }
+
+  // A gmail channel is bound to the mailbox its proof names, or stays bound
+  // to the one it has. One bound to none, which a registration written before
+  // the key was stored with it may be, has nothing to deliver to, so minting
+  // it again without a proof would re-enable a channel no push reaches.
+  const boundKey = mailbox !== undefined
+    ? mailboxKey(mailbox)
+    : existing?.mailboxKey;
+  if (existing?.kind === "gmail" && boundKey === undefined) {
+    return bad(
+      `Channel ${id} is a gmail channel bound to no mailbox. Mint it with a ` +
+        `mailbox proof to bind one.`,
+    );
+  }
+
+  const minted = await persist(deps, {
     id,
     requestId: input.requestId,
     name: input.name ?? `ingest-${input.installId}`,
     space: input.space,
-    causePrefix,
     installId: input.installId,
-    sink: input.sink ?? existing?.sink ?? "journal",
+    writes: writesOf({ causePrefix, target }, existing),
+    ...(boundKey !== undefined ? { mailboxKey: boundKey } : {}),
     existing,
     callerDid,
     ttlDays: input.ttlDays,
@@ -572,6 +760,99 @@ export async function processMint(
     // remove, on the single most likely path to reach it.
     ...(existing ? { rotatedFrom: existing.secretHash } : {}),
   });
+  if (minted.status !== 200 || mailbox === undefined) return minted;
+  deps.logger?.info({ id }, "ingest-channels: bound a mailbox");
+  return {
+    status: 200,
+    body: { ...minted.body, emailAddress: mailbox },
+  };
+}
+
+/** Returns whether two cell targets name the same cell. */
+function sameTarget(a: CellTarget, b: CellTarget): boolean {
+  return a.space === b.space && a.id === b.id &&
+    a.path.length === b.path.length &&
+    a.path.every((segment, i) => segment === b.path[i]);
+}
+
+/**
+ * Helper for `processMint()` and `processRotate()`, which returns what the
+ * registration will say it writes: the target the mint named, or the cause
+ * prefix it named, or else what the existing registration already carries.
+ * Throws for an existing registration carrying neither, which no mint writes.
+ */
+function writesOf(
+  named: { causePrefix?: string; target?: CellTarget },
+  existing: IngestRegistration | null,
+): { kind: "device"; causePrefix: string } | {
+  kind: "gmail";
+  target: CellTarget;
+} {
+  if (named.target !== undefined) {
+    return { kind: "gmail", target: named.target };
+  }
+  if (named.causePrefix !== undefined) {
+    return { kind: "device", causePrefix: named.causePrefix };
+  }
+  if (existing?.kind === "gmail" && existing.target !== undefined) {
+    return { kind: "gmail", target: existing.target };
+  }
+  if (existing?.causePrefix !== undefined) {
+    return { kind: "device", causePrefix: existing.causePrefix };
+  }
+  throw new Error(
+    `channel ${existing?.id} carries neither a cause prefix nor a target`,
+  );
+}
+
+/**
+ * Helper for `processMint()`, which learns the mailbox a proof is for, or the
+ * refusal to answer with: 400 for a proof Google rejects or a kind this
+ * deployment does not accept, 502 for Google being unreachable.
+ */
+async function proveMailbox(
+  deps: ControlDeps,
+  proof: GmailProof,
+): Promise<
+  | { ok: true; emailAddress: string }
+  | { ok: false; result: ControlResult<never> }
+> {
+  if (deps.gmail === undefined) {
+    return {
+      ok: false,
+      result: bad("Gmail push is not configured on this deployment"),
+    };
+  }
+  let lookup: MailboxLookup;
+  try {
+    lookup = proof.idToken !== undefined
+      ? await deps.gmail.verifyIdToken(proof.idToken)
+      : await deps.gmail.fetchMailbox(proof.accessToken ?? "");
+  } catch (error) {
+    deps.logger?.error({ error }, "ingest-channels: mailbox proof failed");
+    return {
+      ok: false,
+      result: { status: 502, body: { error: "Google could not be reached" } },
+    };
+  }
+  if (lookup.ok) return lookup;
+  switch (lookup.reason) {
+    case "rejected":
+      return { ok: false, result: bad("Google did not accept the token") };
+    case "unsupported":
+      return {
+        ok: false,
+        result: bad(
+          "This deployment accepts no ID tokens; prove the mailbox with an " +
+            "access token",
+        ),
+      };
+    case "unavailable":
+      return {
+        ok: false,
+        result: { status: 502, body: { error: "Google could not be reached" } },
+      };
+  }
 }
 
 /**
@@ -616,6 +897,15 @@ export async function processRotate(
 
   const existing = await loadOwned(deps, callerDid, input.id, input.space);
   if (!existing.ok) return existing.result;
+  // A gmail channel has no token anything uses, so there is nothing to
+  // rotate; what a rotate would incidentally do, re-enable the channel or
+  // extend it, a mint does on purpose and with the mailbox proof.
+  if (existing.registration.kind === "gmail") {
+    return bad(
+      `Channel ${input.id} is a gmail channel, which has no token to ` +
+        `rotate. Mint it again to re-enable or extend it.`,
+    );
+  }
 
   // The SAME takeover protocol mint enforces. `loadOwned` only proves the
   // caller owns the target space, so without this a co-owner could rotate a
@@ -641,9 +931,8 @@ export async function processRotate(
     requestId: input.requestId,
     name: existing.registration.name,
     space: existing.registration.space,
-    causePrefix: existing.registration.causePrefix,
     installId: existing.registration.installId,
-    sink: existing.registration.sink,
+    writes: writesOf({}, existing.registration),
     existing: existing.registration,
     callerDid,
     ttlDays: input.ttlDays,
@@ -739,6 +1028,15 @@ const writeRevocation = async (
       input.expectedRevision,
       opts.claim
         ? { owner: callerDid, requestId: input.requestId, channel: input.id }
+        : undefined,
+      undefined,
+      // A revoked gmail channel leaves its mailbox's list in the same write,
+      // so that it holds no place at the mailbox's cap; minting it again
+      // puts it back.
+      registration.kind === "gmail" && registration.mailboxKey !== undefined
+        ? mailboxListUpdate(deps.runtime, deps.serviceSpace, input.id, {
+          previous: registration.mailboxKey,
+        })
         : undefined,
     );
   } catch (error) {

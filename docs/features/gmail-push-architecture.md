@@ -36,8 +36,8 @@ flowchart TB
         syncer["Syncer"]
     end
 
-    syncer -. "a: mint, gmail-bind" .-> control
-    control -. "b: profile lookup at bind" .-> gmail
+    syncer -. "a: mint, with a proof of the mailbox" .-> control
+    control -. "b: profile lookup, for an access token" .-> gmail
     control -. "writes binding" .-> service
     syncer -. "c: users.watch, renewed daily" .-> gmail
 
@@ -75,9 +75,13 @@ needs one topic for each client's project.
 
 ## Setting up
 
-Minting and binding happen once for each channel, and a mailbox can have up
-to eight channels bound to it, one for each install of a syncer. A mailbox
-that should wake more than one deployment has a channel bound on each, and
+A gmail channel is minted once, in one call that names the cell the
+notifications go to and binds the mailbox. The cell is in the user's space,
+and the syncer chooses it and watches it; the mint is addressed to that
+space, which is the one the user has to own and the toolshed's identity has
+to be able to write. A mailbox can have up to eight channels bound to it,
+one for each install of a syncer. A mailbox that should wake more than one
+deployment has a channel bound on each, and
 each deployment has a subscription of its own on the topic;
 [the setup document](gmail-push-setup.md#several-deployments) has the
 commands. The watch is
@@ -90,21 +94,26 @@ sequenceDiagram
     participant T as Toolshed
     participant G as Gmail API
 
-    S->>T: mint a latest channel (signed request)
-    T-->>S: channel id and cause prefix
-    S->>T: gmail-bind with a Google access token (signed request)
-    T->>G: users/me/profile with that token
-    G-->>T: the mailbox's address
-    T-->>S: bound
+    S->>T: mint, naming the target cell, with a mailbox proof (signed request)
+    alt the proof is an access token
+        T->>G: users/me/profile with that token
+        G-->>T: the mailbox's address
+    else the proof is an ID token
+        T->>T: verify it against Google's keys for an accepted client id
+    end
+    T-->>S: channel id, target, and the bound address
     loop daily
         S->>G: users.watch, naming the Pub/Sub topic
     end
 ```
 
-A `latest` channel has no device token and no device URL. A journal channel
-is written by a device presenting its token to
-`POST /api/spaces/:space/ingest/:id`; here toolshed is the writer, and what
-authorizes each write is the push token and the binding.
+The two kinds of channel are written by different parties. A device
+channel is written by a device presenting the channel's bearer token to
+`POST /api/spaces/:space/ingest/:id`, into journal cells under its cause
+prefix, and that token is what mint returns for it. A gmail channel has no
+device token and no device URL, since nothing POSTs to it: toolshed itself
+writes the one cell its mint named on each Gmail delivery, and what
+authorizes that write is the push token and the binding.
 
 ## What each request is addressed to
 
@@ -114,11 +123,11 @@ holding that space.
 
 | Request | The space in its path |
 | --- | --- |
-| Mint, `gmail-bind`, `gmail-unbind` | The user's space, which the channel writes into. |
+| Mint, carrying the mailbox proof | The user's space, which the channel writes into. |
 | The push from Pub/Sub | The service space, which holds the bindings. Pub/Sub knows a mailbox and no user's space. |
 
 The push is the one request that cannot name the user's space, and a binding
-is written wherever its `gmail-bind` was handled. So the push subscription's
+is written wherever its mint was handled. So the push subscription's
 endpoint names the service space of the deployment that holds the user's
 space, and one topic serving several deployments has one subscription for
 each.
@@ -184,20 +193,17 @@ sequenceDiagram
     B-->>L: access and refresh tokens
     L->>S: ensure space, grant WRITE to the toolshed's DID
     S->>T: create_space, acl set (signed as the user)
-    L->>S: mint
-    S->>T: POST /api/spaces/:space/ingest-channels/mint {sink: "latest"}
-    T-->>S: channel id, cause prefix (no device URL, no token)
-    L->>S: gmail-bind with the access token
-    S->>T: POST /api/spaces/:space/ingest-channels/gmail-bind
+    L->>S: mint, naming the notification cell, with the access token (or an ID token) as the mailbox proof
+    S->>T: POST /api/spaces/:space/ingest-channels/mint {target, gmail: {accessToken}}
     T->>G: GET users/me/profile (one lookup, token not kept)
-    T-->>S: bound address
-    S-->>T: subscribe to the channel's cell, named by its cause prefix (memory connection)
+    T-->>S: channel id, target, bound address (no device URL, no token)
+    S-->>T: subscribe to the target cell (memory connection)
     L->>G: users.watch naming the topic, renewed daily
 
     Note over G,T: Every time mail arrives
     G->>P: publish {emailAddress, historyId}
     P->>T: POST the push route under the registry's DID (OIDC token)
-    T->>T: verify the token, then find the mailbox's latest channels
+    T->>T: verify the token, then find the mailbox's gmail channels
     T->>T: replace the cell's record if the history id is newer
     T-->>P: 200 {delivered}
     T-->>S: the cell changed (memory connection)
@@ -207,22 +213,24 @@ sequenceDiagram
 
 Three facts decide the shape.
 
-- **Who signs what.** Mint, bind, and the space calls are signed with the
-  user's own identity key, which the share sidecar is launched with, and the
-  toolshed authorizes each against an OWNER grant read from a space's access
-  list at the time of the call. Which space differs: mint checks the space
-  the caller names, while bind and unbind look the channel up by id and
-  check the space its stored registration writes into, never one the caller
-  names. So they are the user's calls, made from the user's machine, and
-  need only the reach that machine already has to its toolshed: a private
-  network is fine.
+- **Who signs what.** Mint and the space calls are signed with the user's
+  own identity key, which the share sidecar is launched with, and the
+  toolshed authorizes each against an OWNER grant read from the named
+  space's access list at the time of the call. So they are the user's
+  calls, made from the user's machine, and need only the reach that machine
+  already has to its toolshed: a private network is fine.
   The push is Google's call, signed by a service account the toolshed was
   configured to accept, so where a deployment faces the internet at all, the
-  push route is the one path that needs to. A deployment on a private
+  push route is the one path Gmail push needs to. The route a device channel's
+  holder posts records to, `POST /api/ingest/:id` and its space-qualified
+  spelling, which the location beacon uses from a phone, is a separate
+  question that
+  [the setup document](gmail-push-setup.md#several-deployments) states. A
+  deployment on a private
   network faces it nowhere, and a relay inside the network makes the same
   call with the same token instead.
 - **Where the binding lives.** It lives in the registry of the toolshed that
-  handled the bind, and a push is delivered against the bindings of the
+  handled the mint, and a push is delivered against the bindings of the
   toolshed that received it. A mailbox that should wake two deployments has a
   channel bound on each, and each deployment has its own subscription on the
   topic. Nothing forwards a push between deployments.
@@ -262,15 +270,17 @@ Three facts decide the shape.
 | Toolshed is down, or storage fails | Toolshed returns a non-2xx status or nothing, and Pub/Sub redelivers with backoff. |
 | Pub/Sub delivers a message twice | The second delivery carries no newer history id, so the cell does not change and the syncer is not woken. |
 | The watch expires | The syncer's daily renewal. A watch lasts seven days. |
-| The channel is revoked or expired | Delivery skips it. The syncer rotates the channel or mints a new one, then binds again. |
+| The channel is revoked or expired | Delivery skips it. The syncer mints the channel again, with or without the mailbox proof, which re-enables it and keeps its binding. Rotate is refused for a gmail channel. |
 | The syncer was offline | The cell holds the newest history id, and the syncer catches up from its own cursor when it returns. |
 | The sync falls out of Gmail's history window | The syncer's own recovery, which is a bounded full sync. |
 
 ## Where the code is
 
 - [`packages/toolshed/routes/ingest-push/`](../../packages/toolshed/routes/ingest-push/)
-  holds the push endpoint, token verification, and the binding store.
+  holds the push endpoint, token verification, and the mailbox lists a push
+  is delivered through.
 - [`packages/toolshed/routes/ingest-channels/`](../../packages/toolshed/routes/ingest-channels/)
-  holds the control plane, with the binding verbs in `gmail-binding.utils.ts`.
+  holds the control plane, whose mint takes the mailbox proof.
 - [`packages/toolshed/routes/ingest/`](../../packages/toolshed/routes/ingest/)
-  holds the channel registry, and the vouched writes behind both sinks.
+  holds the channel registry, and the vouched writes behind both kinds of
+  channel.

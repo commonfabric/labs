@@ -61,8 +61,10 @@ export const gmail = createRoute({
     [HttpStatusCodes.NOT_FOUND]: {
       ...jsonError,
       description:
-        "Gmail push is not configured here, or the path names a space other " +
-        "than the one this deployment keeps its ingest registry in",
+        "The path names a space other than the one this deployment keeps " +
+        "its ingest registry in. Where Gmail push is not configured at all, " +
+        "a gate ahead of the route answers every request with the server's " +
+        "plain 404 rather than this body",
     },
     [HttpStatusCodes.REQUEST_TOO_LONG]: {
       ...jsonError,

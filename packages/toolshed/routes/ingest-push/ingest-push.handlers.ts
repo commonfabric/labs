@@ -4,21 +4,16 @@
  * runtime.
  */
 
-import { createRemoteJWKSet } from "@panva/jose";
-
 import type { AppRouteHandler } from "@/lib/types.ts";
 import { runtime } from "@/index.ts";
 import { ingestServiceSpace } from "@/routes/ingest/service-space.ts";
-import { GOOGLE_OIDC_JWKS_URL, processGmailPush } from "./gmail-push.utils.ts";
+import { processGmailPush } from "./gmail-push.utils.ts";
 import {
   gmailPushAudience,
   gmailPushServiceAccounts,
+  googleSigningKeys,
 } from "./gmail-push.config.ts";
 import type { GmailPushRoute } from "./ingest-push.routes.ts";
-
-// Google's signing keys, fetched on first use and cached; `jose` refetches
-// when a token names a key id the cache does not hold.
-const googleKeys = createRemoteJWKSet(new URL(GOOGLE_OIDC_JWKS_URL));
 
 /** Handles one Gmail notification delivered by a Pub/Sub push subscription. */
 export const gmail: AppRouteHandler<GmailPushRoute> = async (c) => {
@@ -32,7 +27,7 @@ export const gmail: AppRouteHandler<GmailPushRoute> = async (c) => {
     {
       runtime,
       serviceSpace: ingestServiceSpace,
-      keys: googleKeys,
+      keys: googleSigningKeys,
       audience: gmailPushAudience,
       serviceAccounts: gmailPushServiceAccounts,
       logger: c.get("logger"),
