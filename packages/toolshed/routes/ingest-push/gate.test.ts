@@ -2,39 +2,37 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createRouter } from "@/lib/create-app.ts";
 import { ingestGate } from "./gate.ts";
-import { SPACE_BASE } from "./ingest-channels.routes.ts";
+import { BASE as PUSH_BASE } from "./ingest-push.routes.ts";
 
-describe("self-serve gate", () => {
-  // The gate's ROUTING consequence, which env.test.ts does not cover — that
-  // pins the flag's default value, not what the router does with it.
+describe("gate", () => {
+  // The gate's ROUTING consequence: what the router does with the flag.
   //
-  // This mounts the REAL `ingestGate` — the same function
-  // `ingest-channels.index.ts` mounts first — with the flag passed in, because
-  // `.env.test` enables the feature so the other suites can reach the handlers.
-  // Only the flag is a stub; the middleware under test is production code.
+  // This mounts the REAL `ingestGate`, the same function the Gmail push route
+  // mounts first, with the flag passed in. Only the flag is a stub; the
+  // middleware under test is production code.
 
   const build = (enabled: boolean) => {
     const seen: string[] = [];
     const router = createRouter();
-    router.use(`${SPACE_BASE}/*`, ingestGate(enabled));
-    router.use(`${SPACE_BASE}/*`, async (_c, next) => {
+    router.use(`${PUSH_BASE}/*`, ingestGate(enabled));
+    router.use(`${PUSH_BASE}/*`, async (_c, next) => {
       seen.push("downstream");
       await next();
     });
-    router.post(`${SPACE_BASE}/mint`, (c) => c.json({ ok: true }));
+    router.post(`${PUSH_BASE}/gmail`, (c) => c.json({ ok: true }));
     return { router, seen };
   };
 
-  const BASE = SPACE_BASE.replace(
+  const BASE = PUSH_BASE.replace(
     ":space",
     "did:key:z6MkaaaabbbbccccddddeeeeffffgggghhhhAAAA",
   );
 
   const spellings = [
-    `${BASE}/mint`,
-    `${BASE}/./mint`,
-    `${BASE}/x/../mint`,
-    `${BASE}/%6Dint`,
+    `${BASE}/gmail`,
+    `${BASE}/./gmail`,
+    `${BASE}/x/../gmail`,
+    `${BASE}/%67mail`,
     `${BASE}/`,
     BASE,
   ];
@@ -48,13 +46,13 @@ describe("self-serve gate", () => {
       expect(res.status).toBe(404);
     }
     // Nothing downstream of the gate runs — not the body limit, not the rate
-    // limiter, not signature verification.
+    // limiter, not token verification.
     expect(seen).toEqual([]);
   });
 
   it("passes through to the handler when enabled", async () => {
     const { router, seen } = build(true);
-    const res = await router.request(`http://localhost${BASE}/mint`, {
+    const res = await router.request(`http://localhost${BASE}/gmail`, {
       method: "POST",
     });
     expect(res.status).toBe(200);

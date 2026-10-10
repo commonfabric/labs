@@ -186,7 +186,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-separator` | Visual divider line between content sections | |
 | `cf-share-snapshot` | Native confirmation of an exact JSON snapshot and runtime-verified audience (see [snapshot sharing](#cf-share-snapshot)) | `$source`, `$recipient`, `$result` |
 | `cf-skeleton` | Animated loading placeholder | |
-| `cf-slider` | Range input slider | |
+| `cf-slider` | Range input slider | `$value` |
 | `cf-space-create` | Label field + create button that creates a new space owned by the signed-in identity, with a random DID, and adds it to that identity's Home space list; fires `cf-space-created` with `{ did, label }`; the label is the entry's name | |
 | `cf-space-link` | Renders a space as a clickable navigation pill; opens the space by `spaceDid` when given, else by the legacy `spaceName` | |
 | `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | |

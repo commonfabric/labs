@@ -11463,7 +11463,7 @@ describe("CfHarnessPromptLoop turn budget warning", () => {
       await loop.runPrompt({ prompt: "Collect the evidence." });
 
       expect(requests[0]?.transcript.at(-1)?.content).toContain(
-        "Call submit_result on the next turn",
+        "Call submit_result on the next turn; an accepted result ends the run.",
       );
     } finally {
       await Deno.remove(root, { recursive: true });

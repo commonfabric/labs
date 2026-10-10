@@ -821,19 +821,30 @@ window — and the wait itself idles the loop, which is what fires the timer. A
 fetches nothing, so what it returns after another replica's write is what the
 fan-out has delivered so far.
 
-One file stays on the real clock, listed with its reason in the runner preload's
-`realClockFiles` list. It is a resume test that holds the per-element documents
-in its transport so the coordinator reconciles while they are absent, which is
-the state it exists to observe. A commit carrying a read of a withheld document
-is rejected as stale, and the catch-up the rejection waits on cannot arrive
-while the hold is on, so the retry cycle repeats until the test releases it.
-Real time paces that cycle; auto-advance fires each round's timer as soon as it
-is armed, and the loop allocates until the process runs out of heap. A hold that
-spans a reconcile therefore needs the real clock; a shorter one, that no retry
-outlives, does not. The test itself waits on transport edges, never on a delay.
+The files that stay on the real clock are listed, each with its reason, in the
+runner preload's `realClockFiles` list. One is a resume test that holds the
+per-element documents in its transport so the coordinator reconciles while they
+are absent, which is the state it exists to observe. A commit carrying a read of
+a withheld document is rejected as stale, and the catch-up the rejection waits
+on cannot arrive while the hold is on, so the retry cycle repeats until the test
+releases it. Real time paces that cycle; auto-advance fires each round's timer
+as soon as it is armed, and the loop allocates until the process runs out of
+heap. A hold that spans a reconcile therefore needs the real clock; a shorter
+one, that no retry outlives, does not. The test itself waits on transport edges,
+never on a delay.
 [The rationale
 document](waiting-in-tests-rationale.md#the-runner-clock-retired-exemptions-and-converted-waits)
 works that retry loop through in full.
+
+A suite whose round trips cross a real socket, such as a standalone memory
+server reached over a websocket, belongs on that list too. The pump cannot see
+I/O in flight, so a wait on a reply reads as an idle loop, and logical time
+jumps to the earliest pending production timer. Over an authenticated
+connection that timer is the memory client's lease renewal, 58 minutes out.
+The server reads the same clock and gives a challenge five minutes, so a
+`connection.auth` in flight across the jump answers a challenge that has
+expired. The shared-connection cases of the storage admission-notice suite are
+that shape.
 
 Other entries have been retired from that list as the deadlines and test
 designs behind them were fixed. [The rationale

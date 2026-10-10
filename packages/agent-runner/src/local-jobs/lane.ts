@@ -281,8 +281,8 @@ export class LocalJobLane {
   start(): void {
     const recovered = this.#options.store.recover();
     if (recovered.length > 0) {
-      this.#options.report?.(
-        `agent runner: ${recovered.length} local job(s) were cut off and end interrupted (${RUNNER_RESTARTED})`,
+      this.#report(() =>
+        `agent runner: ${recovered.length} local job(s) were cut off and end interrupted (${RUNNER_RESTARTED})`
       );
     }
     this.kick();
@@ -395,90 +395,84 @@ export class LocalJobLane {
       if (active !== undefined) reportStep(active);
     };
     let result: HarnessJobResult;
-    // The host closes however the run ends, a report that throws included.
     try {
-      try {
-        result = await (this.#options.runJob ?? runHarnessJob)(
-          localJobSpecOf(job, narrowed.profile, this.#options),
-          {
-            runRoot: join(this.#options.workRoot, job.id),
-            signal,
-            ...(browserHost !== undefined ? { browserHost } : {}),
-            onEvent: (event) => {
-              const { message } = event;
-              const loop = event.subagent?.parentToolCallId;
-              if (
-                loop === undefined &&
-                message.role === "tool" &&
-                message.toolName === LOCAL_JOB_DELEGATE_TOOL
-              ) {
-                childSteps.delete(message.toolCallId);
-              }
-              for (const { kind, body } of localJobEventsOf(event)) {
-                if (kind === "command") {
-                  if (event.subagent !== undefined) {
-                    const id = event.subagent.parentToolCallId;
-                    const step = childSteps.get(id);
-                    if (
-                      step !== undefined &&
-                      step !== [...childSteps.values()].at(-1)
-                    ) {
-                      childSteps.delete(id);
-                      childSteps.set(id, step);
-                      // Publish the promoted tool before its landed receipt.
-                      reportStep(step);
-                    }
-                  }
-                  lastStep = undefined;
-                  store.report(job.id, kind, body);
-                } else if (event.subagent !== undefined) {
-                  // Children have depth 1; among siblings, latest activity wins.
+      result = await (this.#options.runJob ?? runHarnessJob)(
+        localJobSpecOf(job, narrowed.profile, this.#options),
+        {
+          runRoot: join(this.#options.workRoot, job.id),
+          signal,
+          ...(browserHost !== undefined ? { browserHost } : {}),
+          onEvent: (event) => {
+            const { message } = event;
+            const loop = event.subagent?.parentToolCallId;
+            if (
+              loop === undefined &&
+              message.role === "tool" &&
+              message.toolName === LOCAL_JOB_DELEGATE_TOOL
+            ) {
+              childSteps.delete(message.toolCallId);
+            }
+            for (const { kind, body } of localJobEventsOf(event)) {
+              if (kind === "command") {
+                if (event.subagent !== undefined) {
                   const id = event.subagent.parentToolCallId;
-                  childSteps.delete(id);
-                  childSteps.set(id, body);
-                  reportStep(body);
-                } else {
-                  parentStep = body;
-                  if (childSteps.size === 0) reportStep(parentStep);
+                  const step = childSteps.get(id);
+                  if (
+                    step !== undefined &&
+                    step !== [...childSteps.values()].at(-1)
+                  ) {
+                    childSteps.delete(id);
+                    childSteps.set(id, step);
+                    // Publish the promoted tool before its landed receipt.
+                    reportStep(step);
+                  }
                 }
+                lastStep = undefined;
+                store.report(job.id, kind, body);
+              } else if (event.subagent !== undefined) {
+                // Children have depth 1; among siblings, latest activity wins.
+                const id = event.subagent.parentToolCallId;
+                childSteps.delete(id);
+                childSteps.set(id, body);
+                reportStep(body);
+              } else {
+                parentStep = body;
+                if (childSteps.size === 0) reportStep(parentStep);
               }
-              // The harness reports a turn's tool results once every call of
-              // the turn has returned, so a result hands the loop's model the
-              // turn: the loop's step stays, marked returned, and a child's
-              // return is its latest activity.
-              if (message.role !== "tool") return;
-              const step = loop === undefined
-                ? parentStep
-                : childSteps.get(loop);
-              if (step !== undefined) {
-                const waiting = { ...step, returned: true };
-                if (loop === undefined) parentStep = waiting;
-                else {
-                  childSteps.delete(loop);
-                  childSteps.set(loop, waiting);
-                }
+            }
+            // The harness reports a turn's tool results once every call of
+            // the turn has returned, so a result hands the loop's model the
+            // turn: the loop's step stays, marked returned, and a child's
+            // return is its latest activity.
+            if (message.role !== "tool") return;
+            const step = loop === undefined ? parentStep : childSteps.get(loop);
+            if (step !== undefined) {
+              const waiting = { ...step, returned: true };
+              if (loop === undefined) parentStep = waiting;
+              else {
+                childSteps.delete(loop);
+                childSteps.set(loop, waiting);
               }
-              reportActive();
-            },
-            ...(this.#options.harnessDeps !== undefined
-              ? { harnessDeps: this.#options.harnessDeps }
-              : {}),
-            ...(this.#options.report !== undefined
-              ? { report: this.#options.report }
-              : {}),
+            }
+            reportActive();
           },
-        );
-      } catch (error) {
-        this.#options.report?.(
-          `agent runner: local job ${job.id} failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        result = { outcome: "failed", errorCode: "PROVIDER_FAILURE" };
-      }
-    } finally {
-      this.#closeHost(job.id);
+          ...(this.#options.harnessDeps !== undefined
+            ? { harnessDeps: this.#options.harnessDeps }
+            : {}),
+          ...(this.#options.report !== undefined
+            ? { report: this.#options.report }
+            : {}),
+        },
+      );
+    } catch (error) {
+      this.#report(() =>
+        `agent runner: local job ${job.id} failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      result = { outcome: "failed", errorCode: "PROVIDER_FAILURE" };
     }
+    this.#closeHost(job.id);
     // A run the lane's own stop aborted stays `running`, to be ended
     // `interrupted` when the runner next starts.
     if (this.#stopping && signal.aborted) return;
@@ -487,11 +481,33 @@ export class LocalJobLane {
       ...(result.outcome === "completed"
         ? { result: result.structuredResult }
         : {}),
-      ...(result.outcome === "failed" ? { errorCode: result.errorCode } : {}),
+      ...(result.outcome === "failed"
+        ? {
+          errorCode: result.errorCode,
+          ...(result.errorDetail !== undefined
+            ? { errorDetail: result.errorDetail }
+            : {}),
+        }
+        : {}),
       ...(result.report !== undefined
         ? { report: { ...result.report } as Record<string, unknown> }
         : {}),
     });
+  }
+
+  /**
+   * Helper that writes the operator-facing line `line` builds, building it only
+   * when there is a log. A run is a detached promise, so a throw from building
+   * or writing the line would reach no caller and would only leave its job
+   * unfinished in the store; the throw goes no further.
+   */
+  #report(line: () => string): void {
+    try {
+      const { report } = this.#options;
+      if (report !== undefined) report(line());
+    } catch {
+      // The operator's log is the only place this could be reported.
+    }
   }
 
   /** Helper for a job's end, which closes and drops its browser host. */

@@ -307,6 +307,46 @@ describe("piece-output", () => {
     expect(loop.engine.getRunState().terminalReason).toBe("max_model_turns");
   });
 
+  it("does not end a run that still owes its piece on an accepted structured result", async () => {
+    // A caller that asks for a piece and a structured result both gets both:
+    // the accepted submission leaves the run open until the piece is named.
+    const directory = await Deno.makeTempDir();
+    const requests: HarnessModelTurnRequest[] = [];
+    try {
+      const loop = new CfHarnessPromptLoop({
+        engine: new CfHarnessEngine({
+          sandboxRuntime: sandbox,
+          model: "test-model",
+          structuredResult: {
+            path: join(directory, "result.json"),
+            schema: { type: "object" },
+          },
+        }),
+        requirePieceOutput: true,
+        allowedToolIds: ["submit_result"],
+        modelClient: {
+          providerId: "test-provider",
+          complete: (request) => {
+            requests.push({ ...request, transcript: [...request.transcript] });
+            return Promise.resolve({
+              assistant: requests.length === 1
+                ? toolCall("submit_result", { result: {} }, "result")
+                : { role: "assistant" as const, content: "Done." },
+            });
+          },
+        },
+      });
+
+      await expect(loop.runPrompt({
+        prompt: "Make a page and return its summary.",
+        maxModelTurns: 2,
+      })).rejects.toThrow("exceeded max model turns (2)");
+      expect(requests).toHaveLength(2);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
   // Every shape of tool list a Fabric run holds without `assign_slug`: one
   // unrelated tool, `finish_task` alone (it ends a run but names nothing), and
   // the interactive chat's default parent tools, which hold `finish_task` too.
@@ -592,16 +632,11 @@ describe("piece-output", () => {
                 transcript: [...request.transcript],
               });
               return Promise.resolve({
-                assistant: requests.length === 1
-                  ? toolCall(
-                    "submit_result",
-                    { result: { total: 12 } },
-                    "result",
-                  )
-                  : {
-                    role: "assistant" as const,
-                    content: "Result submitted.",
-                  },
+                assistant: toolCall(
+                  "submit_result",
+                  { result: { total: 12 } },
+                  "result",
+                ),
               });
             },
           },
@@ -618,7 +653,8 @@ describe("piece-output", () => {
         expect(JSON.parse(await Deno.readTextFile(path))).toEqual({
           total: 12,
         });
-        expect(requests).toHaveLength(2);
+        // The accepted submission ends the run.
+        expect(requests).toHaveLength(1);
         expect(result.runState.assignedPieces).toBeUndefined();
         expect(
           requests[0].transcript.some((message) =>

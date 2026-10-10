@@ -1640,6 +1640,14 @@ every operation still unanswered and every withdrawal still unacknowledged
 first, and a repeated answer reads as a duplicate. `GET /jobs/<id>` shows the
 host as `browser {state, attached, outstanding, withdrawn}`.
 
+A job ends `completed` with its result as soon as the harness accepts the
+model's `submit_result`; nothing the model does after an accepted result can
+fail it, since the run asks the model for nothing further. A job that ends
+`failed` carries `errorCode`, and `errorDetail` where the run said why: for
+`INVALID_RESULT`, that no structured result was submitted, or the field the
+schema refused and the reason. Both appear in the job snapshot and in its final
+`state` event.
+
 A job the runner was running when it stopped or crashed ends `interrupted`
 (`RUNNER_RESTARTED`) when it next starts, and is never run again: it may already
 have changed things.
