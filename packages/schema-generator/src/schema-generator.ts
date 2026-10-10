@@ -4113,61 +4113,103 @@ export class SchemaGenerator {
    */
   #holdsWriterQuery(node: ts.TypeNode, context: GenerationContext): boolean {
     const checker = context.typeChecker;
-    const active = new Set<ts.Node>();
+    // The nodes on the walk's current path, each with its depth. A node on
+    // the path is not read again inside itself.
+    const active = new Map<ts.Node, number>();
+    // The least depth among the nodes on the path that the read in progress
+    // stopped at. A read that stopped at a node above its own has not covered
+    // everything its node reaches.
+    let stoppedAt = Infinity;
+    // Nodes found to reach no writer query, by a read under no bindings that
+    // stopped at no node above its own. The result of such a read depends on
+    // the node alone, so the walk reads each of these nodes once, however many
+    // paths reach it. The number of paths to a declaration grows exponentially
+    // with the depth of the references that lead to it. A read inside a
+    // writer's argument looks for a query that a read outside one passes over,
+    // so each has its own set.
+    const clearedOutsideWriter = new Set<ts.Node>();
+    const clearedInWriter = new Set<ts.Node>();
+    const read = (
+      node: ts.Node,
+      at: GenerationContext,
+      writer: boolean,
+    ): boolean => {
+      if (writer && ts.isTypeQueryNode(node)) return true;
+      if (ts.isTypeReferenceNode(node)) {
+        const parameter = typeParameterOfReference(node, checker);
+        const argument = parameter &&
+          at.boundTypeParameters?.arguments.get(parameter);
+        if (argument?.node) {
+          const { boundTypeParameters: _, ...unbound } = at;
+          return visit(argument.node, {
+            ...unbound,
+            ...(argument.bound && { boundTypeParameters: argument.bound }),
+          }, writer);
+        }
+        const name = ts.isIdentifier(node.typeName)
+          ? node.typeName
+          : node.typeName.right;
+        const symbol = this.#resolveTypeName(node, name, checker, at);
+        if (symbol?.name === "WriteAuthorizedBy") {
+          const binding = node.typeArguments?.[1];
+          if (binding && visit(binding, at, true)) return true;
+        }
+        const bound = this.#referenceBindings(node, at);
+        for (const declaration of symbol?.declarations ?? []) {
+          if (isDefaultLibrarySourceFile(declaration.getSourceFile(), at)) {
+            continue;
+          }
+          if (
+            ts.isTypeAliasDeclaration(declaration) ||
+            ts.isInterfaceDeclaration(declaration) ||
+            ts.isClassDeclaration(declaration)
+          ) {
+            if (
+              visit(
+                declaration,
+                { ...at, boundTypeParameters: bound },
+                writer,
+              )
+            ) return true;
+          }
+        }
+      }
+      return ts.forEachChild(
+        node,
+        (child) => visit(child, at, writer) || undefined,
+      ) ?? false;
+    };
     const visit = (
       node: ts.Node,
       at: GenerationContext,
       writer = false,
     ): boolean => {
-      if (active.has(node)) return false;
-      active.add(node);
+      const onPath = active.get(node);
+      if (onPath !== undefined) {
+        stoppedAt = Math.min(stoppedAt, onPath);
+        return false;
+      }
+      const underNoBindings = !at.boundTypeParameters?.arguments.size;
+      const cleared = writer ? clearedInWriter : clearedOutsideWriter;
+      if (underNoBindings && cleared.has(node)) return false;
+      const depth = active.size;
+      const stoppedOutside = stoppedAt;
+      stoppedAt = Infinity;
+      active.set(node, depth);
       try {
-        if (writer && ts.isTypeQueryNode(node)) return true;
-        if (ts.isTypeReferenceNode(node)) {
-          const parameter = typeParameterOfReference(node, checker);
-          const argument = parameter &&
-            at.boundTypeParameters?.arguments.get(parameter);
-          if (argument?.node) {
-            const { boundTypeParameters: _, ...unbound } = at;
-            return visit(argument.node, {
-              ...unbound,
-              ...(argument.bound && { boundTypeParameters: argument.bound }),
-            }, writer);
-          }
-          const name = ts.isIdentifier(node.typeName)
-            ? node.typeName
-            : node.typeName.right;
-          const symbol = this.#resolveTypeName(node, name, checker, at);
-          if (symbol?.name === "WriteAuthorizedBy") {
-            const binding = node.typeArguments?.[1];
-            if (binding && visit(binding, at, true)) return true;
-          }
-          const bound = this.#referenceBindings(node, at);
-          for (const declaration of symbol?.declarations ?? []) {
-            if (isDefaultLibrarySourceFile(declaration.getSourceFile(), at)) {
-              continue;
-            }
-            if (
-              ts.isTypeAliasDeclaration(declaration) ||
-              ts.isInterfaceDeclaration(declaration) ||
-              ts.isClassDeclaration(declaration)
-            ) {
-              if (
-                visit(
-                  declaration,
-                  { ...at, boundTypeParameters: bound },
-                  writer,
-                )
-              ) return true;
-            }
-          }
+        const found = read(node, at, writer);
+        if (!found && underNoBindings && stoppedAt >= depth) {
+          cleared.add(node);
         }
-        return ts.forEachChild(
-          node,
-          (child) => visit(child, at, writer) || undefined,
-        ) ?? false;
+        return found;
       } finally {
         active.delete(node);
+        // A stop at this node or below it closes a cycle inside this read,
+        // which leaves the reads around it complete.
+        stoppedAt = Math.min(
+          stoppedOutside,
+          stoppedAt < depth ? stoppedAt : Infinity,
+        );
       }
     };
     return visit(node, context);

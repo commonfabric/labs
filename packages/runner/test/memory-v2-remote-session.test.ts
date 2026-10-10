@@ -9,6 +9,9 @@ import {
   MEMORY_PROTOCOL,
 } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
+import { DEFAULT_ROUTED_HOST_LIMITS } from "@commonfabric/memory/v2/routed-host";
+import { decodeRoutedFrame } from "@commonfabric/memory/v2/routed-parser";
+import { routedFrameOf } from "../../memory/test/support/routed-slots.ts";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import {
   decodeCompressedMemoryMessage,
@@ -22,6 +25,7 @@ import {
   createStorageAddressResolver,
   MEMORY_STORAGE_PATH,
   RemoteSessionFactory,
+  ROUTED_FRAME_SLOTS,
   storageAddressForHost,
   toSpaceWebSocketAddress,
   toWebSocketAddress,
@@ -712,12 +716,12 @@ describe("WebSocketTransport failure signaling", () => {
     };
   };
 
-  /** Answers the client's `hello`, which is the whole of connecting. */
+  /** Answers `hello` as a server using signed session-open authentication. */
   const answerHello = (socket: DrivableWebSocket): void => {
     socket.receive(encodeMemoryBoundary({
       type: "hello.ok",
       protocol: MEMORY_PROTOCOL,
-      flags: getMemoryProtocolFlags(),
+      flags: { ...getMemoryProtocolFlags(), connectionAuth: false },
       sessionOpen: TEST_HELLO_SESSION_OPEN,
     }));
   };
@@ -944,6 +948,117 @@ describe("WebSocketTransport failure signaling", () => {
       await Promise.all([first, second]);
       expect(activeSocket.sent).toEqual(["first", "second"]);
       expect(DrivableWebSocket.instances).toHaveLength(1);
+    });
+  });
+
+  it("sends and accepts a routed frame of ROUTED_FRAME_SLOTS values and refuses one more", async () => {
+    // The constant matches the toolshed's default `limits.frameSlots`; a
+    // deployment that lowers either must lower both.
+    expect(ROUTED_FRAME_SLOTS).toBe(DEFAULT_ROUTED_HOST_LIMITS.frameSlots);
+    await withTransport(async (transport, socket) => {
+      const received: string[] = [];
+      const delivered = Promise.withResolvers<void>();
+      const closed = Promise.withResolvers<Error | undefined>();
+      transport.setReceiver((payload) => {
+        received.push(payload);
+        delivered.resolve();
+      });
+      transport.setCloseReceiver((error) => closed.resolve(error));
+      const exact = routedFrameOf(ROUTED_FRAME_SLOTS);
+      const over = routedFrameOf(ROUTED_FRAME_SLOTS + 1);
+      try {
+        // Opening resets the codec, so the routed hello selects it afterwards.
+        const hello = transport.send("hello");
+        const activeSocket = socket();
+        activeSocket.openConnection();
+        await hello;
+        transport.setRoutedMessagesEnabled(true);
+        transport.setMessageCompressionEnabled(true);
+        await transport.send(exact);
+        expect(activeSocket.sent).toHaveLength(2);
+        const sent = activeSocket.sent[1];
+        expect(sent).toBeInstanceOf(Uint8Array);
+        expect(
+          decodeRoutedFrame(sent as Uint8Array, true, ROUTED_FRAME_SLOTS)
+            .payload,
+        ).toBe(exact);
+        // One value more is refused before it is sent.
+        await expect(transport.send(over)).rejects.toThrow();
+        expect(activeSocket.sent).toHaveLength(2);
+
+        activeSocket.receive(exact);
+        await delivered.promise;
+        expect(received).toEqual([exact]);
+        // One value more received closes the socket and reports the failure.
+        activeSocket.receive(over);
+        expect(await closed.promise).toBeInstanceOf(Error);
+        expect(activeSocket.readyState).toBe(DrivableWebSocket.CLOSED);
+        expect(received).toHaveLength(1);
+      } finally {
+        await transport.close();
+      }
+    });
+  });
+
+  it("sends a routed frame naming more watches than a session may hold", async () => {
+    // The router and the toolshed answer a watch mutation past a session's
+    // bound, so the transport does not refuse it for them: a frame's
+    // watches have no count bound of their own, only the slot cap.
+    const frame = `fvj1:${
+      JSON.stringify({
+        type: "session.watch.add",
+        requestId: "r1",
+        sessionId: "s1",
+        watches: Array.from(
+          { length: DEFAULT_ROUTED_HOST_LIMITS.watchesPerSession + 1 },
+          (_, i) => ({ id: `w${i}` }),
+        ),
+      })
+    }`;
+    await withTransport(async (transport, socket) => {
+      try {
+        const hello = transport.send("hello");
+        const activeSocket = socket();
+        activeSocket.openConnection();
+        await hello;
+        transport.setRoutedMessagesEnabled(true);
+        // As text, and as a compressed envelope.
+        await transport.send(frame);
+        transport.setMessageCompressionEnabled(true);
+        await transport.send(frame);
+        expect(activeSocket.sent).toHaveLength(3);
+        expect(activeSocket.sent[1]).toBe(frame);
+        expect(
+          decodeRoutedFrame(
+            activeSocket.sent[2] as Uint8Array,
+            true,
+            ROUTED_FRAME_SLOTS,
+          ).payload,
+        ).toBe(frame);
+      } finally {
+        await transport.close();
+      }
+    });
+  });
+
+  it("applies ROUTED_FRAME_SLOTS to a raw routed frame when compression is off", async () => {
+    await withTransport(async (transport, socket) => {
+      const exact = routedFrameOf(ROUTED_FRAME_SLOTS);
+      try {
+        const hello = transport.send("hello");
+        const activeSocket = socket();
+        activeSocket.openConnection();
+        await hello;
+        transport.setRoutedMessagesEnabled(true);
+        transport.setMessageCompressionEnabled(false);
+        await transport.send(exact);
+        expect(activeSocket.sent).toEqual(["hello", exact]);
+        await expect(transport.send(routedFrameOf(ROUTED_FRAME_SLOTS + 1)))
+          .rejects.toThrow();
+        expect(activeSocket.sent).toHaveLength(2);
+      } finally {
+        await transport.close();
+      }
     });
   });
 
@@ -1594,7 +1709,7 @@ describe("WebSocketTransport failure signaling", () => {
       activeSocket.receive(encodeMemoryBoundary({
         type: "hello.ok",
         protocol: MEMORY_PROTOCOL,
-        flags: getMemoryProtocolFlags(),
+        flags: { ...getMemoryProtocolFlags(), connectionAuth: false },
         sessionOpen: TEST_HELLO_SESSION_OPEN,
       }));
       await signingStarted.promise;
@@ -1652,7 +1767,7 @@ describe("WebSocketTransport failure signaling", () => {
         initialSocket.receive(encodeMemoryBoundary({
           type: "hello.ok",
           protocol: MEMORY_PROTOCOL,
-          flags: getMemoryProtocolFlags(),
+          flags: { ...getMemoryProtocolFlags(), connectionAuth: false },
           sessionOpen: TEST_HELLO_SESSION_OPEN,
         }));
         await initialSocket.whenSent(2);
@@ -1679,7 +1794,7 @@ describe("WebSocketTransport failure signaling", () => {
         reconnectSocket.receive(encodeMemoryBoundary({
           type: "hello.ok",
           protocol: MEMORY_PROTOCOL,
-          flags: getMemoryProtocolFlags(),
+          flags: { ...getMemoryProtocolFlags(), connectionAuth: false },
           sessionOpen: TEST_HELLO_SESSION_OPEN,
         }));
         await reconnectSigningStarted.promise;

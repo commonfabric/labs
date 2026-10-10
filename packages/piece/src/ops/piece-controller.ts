@@ -3202,6 +3202,7 @@ class PiecePropIo implements PieceCellIo {
   ): Promise<{ wrote: boolean }> {
     const pieces = this.#cc.pieces();
     let committedTargetCell: Cell<unknown> | undefined;
+    let sentEvent = false;
     // Under server execution a stream send appends outside this transaction,
     // so an aborted attempt can leave its event durable. Reusing one caller
     // identity makes both guards converge on that event: admission rejects a
@@ -3384,11 +3385,12 @@ class PiecePropIo implements PieceCellIo {
           pieces.runtime.getCellFromLink(rawTarget, undefined, tx)
             .setRawUntyped(undefined);
         } else {
+          sentEvent = isStream(txCell);
           setCell(
             txCell,
             nextValue,
             undefined,
-            isStream(txCell) &&
+            sentEvent &&
               pieces.runtime.experimental.serverExecution === true
               ? streamSendOptions ??= {
                 eventId: crypto.randomUUID(),
@@ -3766,8 +3768,23 @@ class PiecePropIo implements PieceCellIo {
 
     const targetCell = committedTargetCell ?? await this.#getTargetCell();
 
+    // What a caller is owed when this returns is what the write made current.
+    // An input write pulls the result root, so the results derived from the
+    // new input are materialized. A result write pulls the root it wrote. A
+    // stream send stores nothing: its event is consumed by a handler, so what
+    // it owes is this runtime's run of that handler having finished, which
+    // reactive quiescence covers, and the event's own commit having settled,
+    // which `synced()` below covers. Under server execution that run is the
+    // client's speculative echo: the serving runtime's authoritative run
+    // reaches this replica as a frame of its own, which no read of the stream
+    // cell waits for, so a caller that needs the consequence reads it back.
+    // Pulling the result root for a send would demand every derivation of
+    // the result on every send, a read as wide as the whole result for a
+    // write that touched none of it.
     if (this.#type === "input") {
       await pieces.getResult(this.#cc.getCell()).pull();
+    } else if (sentEvent) {
+      await pieces.runtime.idle();
     } else {
       await targetCell.pull();
     }

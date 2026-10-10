@@ -7,7 +7,10 @@ import {
 } from "@commonfabric/runner";
 import { publishCfcPosture } from "@/lib/cfc-posture.ts";
 import { publishExperimentalPosture } from "@/lib/experimental-posture.ts";
+import { selfDirectedFetch } from "@/lib/internal-api-origin.ts";
 import type { env as ToolshedEnv } from "@/env.ts";
+
+type UrlEnv = Pick<ToolshedEnv, "MEMORY_URL" | "API_URL" | "API_INTERNAL_URL">;
 
 /**
  * Assemble this toolshed's `RuntimeOptions` (CT-1814), extracted pure from
@@ -15,17 +18,21 @@ import type { env as ToolshedEnv } from "@/env.ts";
  * `apiUrl` is the storage/memory base (MEMORY_URL), while patterns fetch
  * against the public API base (API_URL) — the builder/env.ts fallback is a
  * hardcoded `localhost:<ports.toolshed>`, wrong for any non-default port.
- * EXPERIMENTAL_* flags come from the injected env reader via the canonical
- * mapping.
+ * With API_INTERNAL_URL set, the runtime's fetch sends requests addressed to
+ * API_URL to that origin instead (`selfDirectedFetch`); the URLs themselves
+ * are unchanged. EXPERIMENTAL_* flags come from the injected env reader via
+ * the canonical mapping.
  */
 export function toolshedRuntimeOptions(
-  config: Pick<ToolshedEnv, "MEMORY_URL" | "API_URL">,
+  config: UrlEnv,
   storageManager: RuntimeOptions["storageManager"],
   envGet: EnvReader = Deno.env.get,
 ): RuntimeOptions {
+  const fetch = selfDirectedFetch(config);
   return runtimePresets.productionServer({
     apiUrl: new URL(config.MEMORY_URL),
     patternApiUrl: new URL(config.API_URL),
+    ...(fetch !== undefined ? { fetch } : {}),
     storageManager,
     experimental: experimentalOptionsFromEnv(envGet),
   });
@@ -46,16 +53,34 @@ type OtelEnv = Pick<ToolshedEnv, "OTEL_ENABLED" | "OTEL_SERVICE_NAME" | "ENV">;
  * are logged, never fatal.
  */
 export function createToolshedRuntime(
-  config: Pick<ToolshedEnv, "MEMORY_URL" | "API_URL"> & OtelEnv,
+  config: UrlEnv & OtelEnv,
   storageManager: RuntimeOptions["storageManager"],
   envGet: EnvReader = Deno.env.get,
 ): Runtime {
   const runtime = new Runtime(
     toolshedRuntimeOptions(config, storageManager, envGet),
   );
+  // The Runtime just declared the deployment's `sharedMemoryConnection` on
+  // this storage manager. This process's own sessions do not follow it.
+  // Under routed Mode A, MEMORY_URL names a route that picks the toolshed by
+  // the space in the address (a loopback proxy keyed on `?space=<DID>`), and
+  // a shared connection names no space: it lands on one toolshed, which
+  // refuses every space it does not own. A dedicated connection names its
+  // space and reaches the owner; where MEMORY_URL is this toolshed itself,
+  // the default, either choice reaches it. Only this manager is affected: the
+  // posture published below still carries the deployment's flag, which
+  // clients adopt for the connections they open on the router. The cost is
+  // one socket and one authentication per space this process opens, the same
+  // as with the flag off. Declared here, before any session opens, because
+  // the manager refuses to change the choice once one has; a manager without
+  // the method (the emulated one in tests) has no connections to share. The
+  // override goes once MEMORY_URL names the router (infra#244), which serves
+  // either topology.
+  storageManager.setSharedMemoryConnection?.(false);
   // What `/api/meta` reports, taken from the Runtime that resolved it rather
   // than re-read from the environment, so a client adopting this deployment's
-  // posture gets the flags actually in effect here.
+  // posture gets the flags the Runtime resolved; the connection choice above
+  // is this process's own and is not part of the posture.
   publishExperimentalPosture(runtime.experimental);
   publishCfcPosture(runtime);
   // Fire-and-forget; the attach itself is exported and unit-tested.

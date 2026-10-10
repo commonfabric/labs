@@ -325,9 +325,9 @@ describe("resolvePieceOriginSource", () => {
     const runtime = {
       mappedHostFor: () => undefined,
       hostForSpace: () => new URL("https://toolshed.test"),
-      registerSpaceHost: (...args: unknown[]) => {
+      resolveSpaceHost: (...args: unknown[]) => {
         registrations.push(args);
-        return true;
+        return Promise.resolve({ accepted: true });
       },
     } as unknown as Runtime;
 
@@ -349,9 +349,9 @@ describe("resolvePieceOriginSource", () => {
     const runtime = {
       mappedHostFor: () => undefined,
       hostForSpace: () => new URL("https://toolshed.test"),
-      registerSpaceHost: (...args: unknown[]) => {
+      resolveSpaceHost: (...args: unknown[]) => {
         registrations.push(args);
-        return true;
+        return Promise.resolve({ accepted: true });
       },
     } as unknown as Runtime;
 
@@ -435,9 +435,9 @@ describe("resolvePieceOriginSource", () => {
     const runtime = {
       hostForSpace: () => new URL("https://toolshed.test/api/"),
       mappedHostFor: () => undefined,
-      registerSpaceHost: (_space: MemorySpace, host: string) => {
+      resolveSpaceHost: (_space: MemorySpace, host: string) => {
         registrations.push(host);
-        return true;
+        return Promise.resolve({ accepted: true });
       },
       patternManager: {
         getPatternSourceProgramByIdentity: () =>
@@ -461,9 +461,9 @@ describe("resolvePieceOriginSource", () => {
     const runtime = {
       hostForSpace: () => new URL("file:///tmp/toolshed"),
       mappedHostFor: () => undefined,
-      registerSpaceHost: (_space: MemorySpace, host: string) => {
+      resolveSpaceHost: (_space: MemorySpace, host: string) => {
         registrations.push(host);
-        return true;
+        return Promise.resolve({ accepted: true });
       },
       patternManager: {
         getPatternSourceProgramByIdentity: () =>
@@ -487,9 +487,9 @@ describe("resolvePieceOriginSource", () => {
     const runtime = {
       hostForSpace: () => new URL("http://toolshed.test"),
       mappedHostFor: () => undefined,
-      registerSpaceHost: (_space: MemorySpace, host: string) => {
+      resolveSpaceHost: (_space: MemorySpace, host: string) => {
         registrations.push(host);
-        return true;
+        return Promise.resolve({ accepted: true });
       },
       patternManager: {
         getPatternSourceProgramByIdentity: () =>
@@ -520,9 +520,9 @@ describe("resolvePieceOriginSource", () => {
     const runtime = {
       hostForSpace: () => new URL("https://toolshed.test"),
       mappedHostFor: () => undefined,
-      registerSpaceHost: (_space: MemorySpace, host: string) => {
+      resolveSpaceHost: (_space: MemorySpace, host: string) => {
         registrations.push(host);
-        return true;
+        return Promise.resolve({ accepted: true });
       },
       patternManager: {
         getPatternSourceProgramByIdentity: () =>
@@ -543,7 +543,8 @@ describe("resolvePieceOriginSource", () => {
     const runtime = {
       hostForSpace: () => new URL("https://toolshed.test"),
       mappedHostFor: () => undefined,
-      registerSpaceHost: () => false,
+      resolveSpaceHost: () =>
+        Promise.resolve({ accepted: false, reason: "foreign-host-unread" }),
     } as unknown as Runtime;
 
     await expect(

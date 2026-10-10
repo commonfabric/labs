@@ -8,6 +8,7 @@ import {
   isWildcardTraversalCall,
   type NormalizedDataFlow,
   preserveSourceMapRange,
+  setParentPointers,
   visitEachChildWithJsx,
 } from "../ast/mod.ts";
 import { TransformationContext } from "../core/mod.ts";
@@ -15,6 +16,7 @@ import { unwrapExpression } from "../utils/expression.ts";
 import {
   cloneKeyExpression,
   getCommonFabricKeyName,
+  isStaticElementKey,
 } from "../utils/reactive-keys.ts";
 import {
   collectDestructureBindings,
@@ -401,20 +403,10 @@ function rewriteTrackedOpaquePatternBody(
     expression: ts.Expression,
   ): expression is ts.ElementAccessExpression => {
     if (!ts.isElementAccessExpression(expression)) return false;
-    const arg = expression.argumentExpression;
-    if (
-      ts.isLiteralExpression(arg) ||
-      ts.isNoSubstitutionTemplateLiteral(arg)
-    ) return false;
-    // Well-known CF computed keys (UI, NAME, SELF, FS) are statically known
-    // even though they appear as identifier references rather than literals.
-    // The late lowering substitutes the canonical `__cfHelpers.<NAME>`
-    // expression for them, so treating them as dynamic would force an
-    // unnecessary reactive wrapper around `obj[UI]` etc.
-    if (getCommonFabricKeyName(arg, context.checker) !== undefined) {
-      return false;
-    }
-    return true;
+    // A static key names one fixed member, and the lowering reads it in
+    // place, so wrapping `obj[UI]` or `obj["name"]` as a dynamic access would
+    // put a reactive wrapper around what is already a reactive read.
+    return !isStaticElementKey(expression.argumentExpression, context);
   };
 
   const hasJsxExpressionAncestor = (node: ts.Node): boolean => {
@@ -835,8 +827,8 @@ function rewriteTrackedOpaquePatternBody(
       // Tracked-opaque static-key access takes precedence over the JSX
       // dynamic-wrap heuristic: when the root is a known opaque binding and
       // the access argument resolves to a static path segment (including
-      // well-known CF computed keys like UI/NAME/SELF/FS), the canonical
-      // form is an in-place read, regardless of whether the expression lives
+      // well-known CF computed keys like UI/NAME/SELF/FS/VIEWS), the
+      // canonical form is an in-place read, whether or not the expression lives
       // inside a JSX slot: `root.key(...)`, or `root[SELF]` and then
       // `root[SELF].key(...)` for a path that starts with `SELF` (see
       // `createPathRead()`). Falling into
@@ -1108,6 +1100,12 @@ function rewriteNestedLiftAppliedCallbackBodies(
         callbackArg.type,
         processedBody as ts.Block,
       );
+    // Capability analysis reads a node's parent to tell the root of a member
+    // access from a read of the whole value, and an argument from a callee.
+    // The rewrites above build nodes that have none, and a lift whose body
+    // holds one would declare all of a captured value rather than the paths
+    // the body reads.
+    setParentPointers(newCallback);
 
     if (innerCall) {
       const newInnerArgs = [...innerCall.arguments];
