@@ -7,8 +7,9 @@
  * link, the pointer joins no confidentiality. Every reader, the host vetting
  * the inbox a profile advertises, Home's ensure step, the profiles' pointers,
  * the inbox the host names for it to adopt, the inbox Home holds, the ones it
- * retains and the one its refusal record names, Home's pointing step, the seed
- * step that points a profile once it is created, and a sender reading through
+ * retains, the one its refusal record names and the one its replacement
+ * record names, Home's pointing and re-pointing steps, the seed step that
+ * points a profile once it is created, and a sender reading through
  * `profile-home.tsx`'s own types, as FabriChat's manager does offering a room,
  * therefore reads it as a typed link.
  *
@@ -40,6 +41,7 @@ import type {
   PrivateInboxHolder,
   PrivateInboxOutput,
   PrivateInboxRefusalHolder,
+  PrivateInboxReplacementRecord,
   RetainedPrivateInboxes,
 } from "./private-inbox.tsx";
 import type { SeedProfileTarget } from "./profile-create.tsx";
@@ -93,6 +95,16 @@ const recordedRefusalReachesOnlyTheName: ReachesOnlyTheName<
   >
 > = true;
 
+const replacedInboxReachesOnlyTheName: ReachesOnlyTheName<
+  PointeeOf<
+    {
+      piece?: NonNullable<
+        PrivateInboxReplacementRecord["replacement"]
+      >["inbox"];
+    }
+  >
+> = true;
+
 /** The pointee the host reads an advertised inbox's link as. */
 type HostPointee = Schema<typeof inboxPieceLinkSchema> extends Cell<infer T> ? T
   : Schema<typeof inboxPieceLinkSchema>;
@@ -134,6 +146,10 @@ describe("private-inbox pointer type", () => {
 
   it("types the inbox Home's refusal record names as a link naming only the inbox's name", () => {
     expect(recordedRefusalReachesOnlyTheName).toBe(true);
+  });
+
+  it("types the inbox Home's replacement record names as a link naming only the inbox's name", () => {
+    expect(replacedInboxReachesOnlyTheName).toBe(true);
   });
 
   it("types the inbox Home holds as a link naming only the inbox's name", () => {
