@@ -206,6 +206,14 @@ export const runDenoWebTest = async (
   const manifestPath = path.join(tmpProjectPath, "deno.jsonc");
   const manifest = parseJsonc(await Deno.readTextFile(manifestPath)) as {
     tasks: { test: string };
+    imports?: Record<string, string>;
+  };
+  // The copy sits outside the workspace, so a project reaches the module its
+  // tests import from this package through an explicit mapping.
+  manifest.imports = {
+    ...manifest.imports,
+    "@commonfabric/deno-web-test/commands":
+      path.toFileUrl(path.join(dirname, "..", "commands.ts")).href,
   };
   manifest.tasks.test =
     `deno run --allow-env --allow-read --allow-write --allow-run --allow-net ${CLI_PATH} *.test.ts`;

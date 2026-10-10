@@ -5,6 +5,11 @@ import {
 } from "@commonfabric/integration/browser-process";
 import { sleep } from "@commonfabric/utils/sleep";
 
+import {
+  DRIVER_BINDING,
+  parseCommand,
+  SETTLE_GLOBAL,
+} from "./commands-protocol.ts";
 import { DEFAULT_TEST_TIMEOUT_MS, extractAstralConfig } from "./config.ts";
 import { TestResult } from "./interface.ts";
 import { Manifest } from "./manifest.ts";
@@ -73,6 +78,7 @@ export class BrowserController extends EventTarget {
         extractAstralConfig(config, this.#manifest.profileDir),
       );
       this.#page = await this.#process.newPage(testUrl);
+      await this.#serveCommands(this.#page);
       this.#page.addEventListener("console", (e) => {
         // Not sure why this event needs reconstructed in order
         // to re-fire, rather than just passing it into `dispatchEvent`.
@@ -107,6 +113,57 @@ export class BrowserController extends EventTarget {
     return (await this.#page.evaluate((at: number) =>
       // @ts-ignore This is defined in the JS harness
       globalThis.__denoWebTest.runAt(at), { args: [index] })).ok;
+  }
+
+  /**
+   * Helper for `load`, which carries out the commands tests in `page` send
+   * through `commands.ts`. The binding holds for every document the page
+   * loads, so it is installed once, with the page.
+   */
+  async #serveCommands(page: Page) {
+    const celestial = page.unsafelyGetCelestialBindings();
+    celestial.addEventListener("Runtime.bindingCalled", (event) => {
+      if (event.detail.name !== DRIVER_BINDING) {
+        return;
+      }
+      void this.#runCommand(page, event.detail.payload);
+    });
+    await celestial.Runtime.addBinding({ name: DRIVER_BINDING });
+  }
+
+  /**
+   * Helper for `#serveCommands`, which runs one command and settles it in the
+   * page. A command that cannot be parsed or carried out fails the test that
+   * sent it; one that cannot be settled, because its page is gone, is
+   * reported on the console.
+   */
+  async #runCommand(page: Page, payload: string) {
+    let id: number | undefined;
+    let error: string | null = null;
+    try {
+      const command = parseCommand(payload);
+      id = command.id;
+      await page.keyboard.press(command.press);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+    if (id === undefined) {
+      this.#reportCommandFailure(`A test sent a malformed command: ${error}`);
+      return;
+    }
+    try {
+      await page.evaluate(
+        (name: string, settled: number, failure: string | null) =>
+          Reflect.get(globalThis, name)(settled, failure),
+        { args: [SETTLE_GLOBAL, id, error] },
+      );
+    } catch (e) {
+      this.#reportCommandFailure(`Command ${id} could not be settled: ${e}`);
+    }
+  }
+
+  #reportCommandFailure(text: string) {
+    this.dispatchEvent(new ConsoleEvent({ type: "error", text }));
   }
 
   async #waitUntilReady() {

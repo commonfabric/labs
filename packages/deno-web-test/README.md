@@ -46,6 +46,27 @@ A project with no config file runs on the defaults. A config file that is there
 but cannot be imported ends the run before the browser starts, with a message
 naming the file and the error importing it produced.
 
+## Pressing keys
+
+A `KeyboardEvent` a test dispatches is untrusted: listeners see it, but the
+browser takes no default action, so a dispatched Tab moves no focus and a
+dispatched Space checks no checkbox. `pressKey` asks the driver to press the key
+instead, and the browser handles it as the person's own:
+
+```ts
+import { pressKey } from "@commonfabric/deno-web-test/commands";
+
+Deno.test("Tab reaches the switch", async () => {
+  // ... a focused element before the switch ...
+  await pressKey("Tab");
+  // document.activeElement is now the switch
+});
+```
+
+The promise resolves once the browser has handled the press. The keys a test may
+press are listed in `PRESSABLE_KEYS` in `commands-protocol.ts`; any other key
+throws, and a key a test needs is added there.
+
 ## Stuck tests
 
 A test that waits on something which never arrives would otherwise hang until
