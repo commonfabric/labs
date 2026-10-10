@@ -4368,15 +4368,15 @@ describe("memory-v2-stacked-commit", () => {
         expect(pendingDocument).toEqual({ value: valueFor("pending") });
 
         // A remote write lands beneath the pending layer: the confirmed
-        // version moves, and the layer is materialized over it afresh.
+        // version moves, and the layer is materialized over it afresh. The
+        // frame is delivered on its own turn, which `clock.settle()` drains;
+        // its integration is invisible by design, so it notifies nothing.
         const remoteSeq = currentSeq(harness, DOCS.A) + 1;
         harness.pushSync({
           upserts: [{ id: DOCS.A, seq: remoteSeq, value: valueFor("remote") }],
         });
-        await waitForCondition(
-          () => currentSeq(harness, DOCS.A) === remoteSeq,
-          "the remote frame to apply",
-        );
+        await clock.settle();
+        expect(currentSeq(harness, DOCS.A)).toBe(remoteSeq);
         expect(settled).toBe(false);
         expect(harness.provider.get(DOCS.A)).toBe(pendingDocument);
 
