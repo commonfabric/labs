@@ -220,10 +220,29 @@ describe("generateWordSearch", () => {
       options({ words: similar, rows: 30, cols: 30, seed: 3 }),
     );
     expect(ws.placements.length + ws.skipped.length).toBe(200);
+    // Each word is accounted for once: placed, or skipped with one reason.
+    const labels = ws.skipped.map((w) => w.label);
+    expect(new Set(labels).size).toBe(labels.length);
     for (const p of ws.placements) {
       expect({ word: p.word, copies: copies(ws, p.word, all) })
         .toEqual({ word: p.word, copies: 1 });
     }
+  });
+
+  it("lists a word skipped for want of room once, not again during fill", () => {
+    // Crowded enough that the fill drops words; a word already skipped is
+    // not hidden, so the fill must not drop it a second time.
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const similar = Array.from(
+      { length: 300 },
+      (_, i) => `W${alphabet[i % 26]}${alphabet[Math.floor(i / 26) % 26]}Q`,
+    );
+    const ws = generateWordSearch(
+      options({ words: similar, rows: 12, cols: 12, seed: 3 }),
+    );
+    const labels = ws.skipped.map((w) => w.label);
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(ws.placements.length + labels.length).toBe(300);
   });
 
   it("finds a word spelled inside a longer one there, not twice", () => {

@@ -33,13 +33,141 @@ const MAX_CELL = 30;
 const MIN_CELL = 14;
 
 /**
+ * Glyph widths of the standard 14 fonts, in thousandths of an em, from
+ * Adobe's metrics: Helvetica for the word list (upper case only, as the list
+ * prints) and Helvetica-Bold for the title (any case). A character missing
+ * from a table is taken as wide as a capital M, so a measure never runs short.
+ */
+const HELVETICA: Readonly<Record<string, number>> = {
+  " ": 278,
+  "0": 556,
+  "1": 556,
+  "2": 556,
+  "3": 556,
+  "4": 556,
+  "5": 556,
+  "6": 556,
+  "7": 556,
+  "8": 556,
+  "9": 556,
+  A: 667,
+  B: 667,
+  C: 722,
+  D: 722,
+  E: 667,
+  F: 611,
+  G: 778,
+  H: 722,
+  I: 278,
+  J: 500,
+  K: 667,
+  L: 556,
+  M: 833,
+  N: 722,
+  O: 778,
+  P: 667,
+  Q: 778,
+  R: 722,
+  S: 667,
+  T: 611,
+  U: 722,
+  V: 667,
+  W: 944,
+  X: 667,
+  Y: 667,
+  Z: 611,
+};
+const HELVETICA_BOLD: Readonly<Record<string, number>> = {
+  " ": 278,
+  "0": 556,
+  "1": 556,
+  "2": 556,
+  "3": 556,
+  "4": 556,
+  "5": 556,
+  "6": 556,
+  "7": 556,
+  "8": 556,
+  "9": 556,
+  A: 722,
+  B: 722,
+  C: 722,
+  D: 722,
+  E: 667,
+  F: 611,
+  G: 778,
+  H: 722,
+  I: 278,
+  J: 556,
+  K: 722,
+  L: 611,
+  M: 833,
+  N: 722,
+  O: 778,
+  P: 667,
+  Q: 778,
+  R: 722,
+  S: 667,
+  T: 611,
+  U: 722,
+  V: 667,
+  W: 944,
+  X: 667,
+  Y: 667,
+  Z: 611,
+  a: 556,
+  b: 611,
+  c: 556,
+  d: 611,
+  e: 556,
+  f: 333,
+  g: 611,
+  h: 611,
+  i: 278,
+  j: 278,
+  k: 556,
+  l: 278,
+  m: 889,
+  n: 611,
+  o: 611,
+  p: 611,
+  q: 611,
+  r: 389,
+  s: 556,
+  t: 333,
+  u: 611,
+  v: 556,
+  w: 778,
+  x: 556,
+  y: 556,
+  z: 500,
+};
+const WIDEST = 833;
+
+/** What the standard fonts can print of `text`: ASCII, accents dropped. */
+const printable = (text: string): string =>
+  stripAccents(text).replace(/[^\x20-\x7e]/g, "");
+
+/** How wide `text` prints in `font` at `size` points. */
+export const textWidth = (
+  text: string,
+  font: "Helvetica" | "Helvetica-Bold",
+  size: number,
+): number => {
+  const widths = font === "Helvetica" ? HELVETICA : HELVETICA_BOLD;
+  return [...printable(text)].reduce(
+    (sum, c) => sum + (widths[c] ?? WIDEST),
+    0,
+  ) * size / 1000;
+};
+
+/**
  * Text as a PDF string literal. The standard fonts here carry no glyphs past
  * ASCII, so accents are dropped and anything else unprintable is removed.
  */
 const pdfString = (text: string): string =>
   "(" +
-  stripAccents(text).replace(/[^\x20-\x7e]/g, "")
-    .replace(/[\\()]/g, (c) => `\\${c}`) +
+  printable(text).replace(/[\\()]/g, (c) => `\\${c}`) +
   ")";
 
 const num = (n: number): string => n.toFixed(2);
@@ -71,9 +199,12 @@ interface List {
 }
 
 const listFor = (labels: readonly string[], grid?: Grid, cols = 0): List => {
-  const longest = labels.reduce((most, w) => Math.max(most, w.length), 1);
-  // Helvetica capitals average about 0.7 em, plus a gutter between columns.
-  const needed = longest * LIST_SIZE * 0.7 + 18;
+  const widest = labels.reduce(
+    (most, label) => Math.max(most, textWidth(label, "Helvetica", LIST_SIZE)),
+    0,
+  );
+  // The widest label, plus a gutter between columns.
+  const needed = widest + 18;
   const columns = Math.max(1, Math.min(4, Math.floor(CONTENT_WIDTH / needed)));
   // The list sits under the grid when its columns fit there, and otherwise
   // spans the margins.
@@ -95,14 +226,32 @@ const cellCenter = (grid: Grid, row: number, col: number) => ({
 
 /** The title at the size that fits the line, cut short only past the floor. */
 const titleOps = (title: string): string => {
-  // Helvetica-Bold averages about 0.6 em across mixed case.
+  const shown = printable(title);
+  const atOnePoint = textWidth(shown, "Helvetica-Bold", 1);
   const size = Math.max(
     MIN_TITLE_SIZE,
-    Math.min(TITLE_SIZE, CONTENT_WIDTH / (title.length * 0.6)),
+    Math.min(TITLE_SIZE, CONTENT_WIDTH / Math.max(atOnePoint, 1e-9)),
   );
-  const fits = Math.floor(CONTENT_WIDTH / (size * 0.6));
-  const shown = title.length <= fits ? title : `${title.slice(0, fits - 3)}...`;
-  return text("F1", size, MARGIN, PAGE_HEIGHT - MARGIN - TITLE_SIZE, shown);
+  return text(
+    "F1",
+    size,
+    MARGIN,
+    PAGE_HEIGHT - MARGIN - TITLE_SIZE,
+    fitted(shown, size),
+  );
+};
+
+/** `title` as it fits the line at `size`: whole, or cut short with "...". */
+const fitted = (title: string, size: number): string => {
+  if (textWidth(title, "Helvetica-Bold", size) <= CONTENT_WIDTH) return title;
+  const room = CONTENT_WIDTH - textWidth("...", "Helvetica-Bold", size);
+  let end = title.length;
+  while (
+    end > 0 && textWidth(title.slice(0, end), "Helvetica-Bold", size) > room
+  ) {
+    end--;
+  }
+  return `${title.slice(0, end)}...`;
 };
 
 /** The frame and one line of text per row, spaced to the cell width. */

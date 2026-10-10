@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { generateWordSearch, type WordSearchOptions } from "./generator.ts";
-import { wordSearchPdf } from "./pdf.ts";
+import { textWidth, wordSearchPdf } from "./pdf.ts";
 
 const puzzle = (overrides: Partial<WordSearchOptions> = {}) =>
   generateWordSearch({
@@ -119,6 +119,43 @@ describe("wordSearchPdf with many words", () => {
   });
 });
 
+/** Each `Tj` a page draws in `font`, with its x position and size. */
+const placed = (content: string, font: string) =>
+  [...content.matchAll(
+    new RegExp(
+      `/${font} ([\\d.]+) Tf [-\\d.]+ Tc ([\\d.]+) [\\d.]+ Td \\(((?:\\\\.|[^\\\\)])*)\\) Tj`,
+      "g",
+    ),
+  )].map((m) => ({ size: Number(m[1]), x: Number(m[2]), text: m[3] }));
+
+describe("wordSearchPdf measures text by its glyphs", () => {
+  it("fits a title of wide letters on the line", () => {
+    const [page] = streams(wordSearchPdf(puzzle(), "W".repeat(40)));
+    const [title] = placed(page, "F1");
+    expect(title.x + textWidth(title.text, "Helvetica-Bold", title.size))
+      .toBeLessThanOrEqual(54 + 504);
+  });
+
+  it("keeps wide words in the list from running into the next column", () => {
+    // 14 letters of M and W print wider than an average-width estimate.
+    const words = Array.from(
+      { length: 6 },
+      (_, i) => "MW".repeat(6) + "M" + "ABCDEF"[i],
+    );
+    const ws = puzzle({ words, rows: 15, cols: 15, seed: 1 });
+    expect(ws.placements.length).toBeGreaterThan(4);
+    const [page] = streams(wordSearchPdf(ws, "Wide"));
+    const labels = placed(page, "F3");
+    const columns = [...new Set(labels.map((l) => l.x))].sort((a, b) => a - b);
+    for (const label of labels) {
+      const next = columns.find((x) => x > label.x);
+      if (next === undefined) continue;
+      expect(label.x + textWidth(label.text, "Helvetica", label.size))
+        .toBeLessThan(next);
+    }
+  });
+});
+
 describe("wordSearchPdf titles", () => {
   it("shrinks a long title to fit, and cuts one past the smallest size", () => {
     const ws = puzzle();
@@ -130,6 +167,7 @@ describe("wordSearchPdf titles", () => {
     const [cut] = streams(wordSearchPdf(ws, "B".repeat(200)));
     expect(fontSizes(cut)[0]).toBe(12);
     expect(drawnText(cut)[0]).toMatch(/^B+\.\.\.$/);
-    expect(drawnText(cut)[0].length * 12 * 0.6).toBeLessThanOrEqual(504);
+    expect(textWidth(drawnText(cut)[0], "Helvetica-Bold", 12))
+      .toBeLessThanOrEqual(504);
   });
 });

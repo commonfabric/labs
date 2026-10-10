@@ -156,7 +156,7 @@
         "$ref": "https://commonfabric.org/schemas/vnode.json"
       },
       "pdf": {
-        "description": "The two-page PDF (puzzle, then answer key) as an ASCII string.",
+        "description": "The PDF as an ASCII string: the puzzle, then the word list on pages of its\nown when it is too long to share the puzzle's page, then the answer key.",
         "type": "string"
       },
       "puzzle": {

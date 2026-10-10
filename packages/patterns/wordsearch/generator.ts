@@ -164,11 +164,10 @@ const runCells = (
 ): number[] | null => {
   const endRow = row + d.dRow * (word.length - 1);
   const endCol = col + d.dCol * (word.length - 1);
-  if (
-    endRow < 0 || endRow >= board.rows || endCol < 0 || endCol >= board.cols
-  ) {
-    return null;
-  }
+  // Both ends on the grid: a start off it would wrap into another row.
+  const onGrid = (r: number, c: number) =>
+    r >= 0 && r < board.rows && c >= 0 && c < board.cols;
+  if (!onGrid(row, col) || !onGrid(endRow, endCol)) return null;
   return Array.from(
     { length: word.length },
     (_, i) => (row + d.dRow * i) * board.cols + col + d.dCol * i,
@@ -305,6 +304,13 @@ export const generateWordSearch = (options: WordSearchOptions): WordSearch => {
     } else {
       skipped.push({ label, reason: "no-room" });
     }
+  }
+
+  // From here only the placed words are protected: a word skipped for want
+  // of room is not hidden, so spelling it by chance repeats nothing.
+  const placed = new Set(placements.map((p) => p.word));
+  for (let i = words.length - 1; i >= 0; i--) {
+    if (!placed.has(words[i])) words.splice(i, 1);
   }
 
   // Each empty cell takes the first letter, in a seeded order, that completes

@@ -753,7 +753,9 @@ and the directions words may run, beside the puzzle it makes. Composes
 ```ts
 interface WordSearchMakerInput {
   title?: Writable<string | Default<"Word Search">>;
-  wordText?: Writable<string | Default<"apple\nbanana\n…">>;
+  wordText?: Writable<
+    string | Default<"apple\nbanana\ncherry\ngrape\nlemon\nmango\npeach">
+  >;
   rows?: Writable<number | Default<12>>;
   cols?: Writable<number | Default<12>>;
   diagonals?: Writable<boolean | Default<false>>;

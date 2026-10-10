@@ -69,7 +69,10 @@ export interface WordSearchOutput {
   [NAME]: string;
   [UI]: VNode;
   puzzle: Puzzle;
-  /** The two-page PDF (puzzle, then answer key) as an ASCII string. */
+  /**
+   * The PDF as an ASCII string: the puzzle, then the word list on pages of its
+   * own when it is too long to share the puzzle's page, then the answer key.
+   */
   pdf: string;
   shuffle: Stream<void>;
 }
