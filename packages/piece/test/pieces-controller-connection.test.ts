@@ -78,6 +78,12 @@ describe("pieces-controller", () => {
           const warn = console.warn;
           const warnings: unknown[][] = [];
           console.warn = (...args: unknown[]) => warnings.push(args);
+          // Resolved ahead of the fake clock below: a legacy name is turned
+          // into its DID by a key derivation that completes on the real event
+          // loop, which the clock's ticks would race. Given the DID, nothing
+          // real-asynchronous precedes the first read, and each tick lands on
+          // the wait it is meant for.
+          const space = await legacySpaceDid("unhealthy-space");
           try {
             // The waits between attempts pass on a fake clock: a quarter of a
             // second, then a second.
@@ -85,7 +91,7 @@ describe("pieces-controller", () => {
             const refused = expect(PiecesController.initialize({
               apiUrl,
               identity,
-              space: "unhealthy-space",
+              space,
             })).rejects.toThrow(
               'Could not connect to "http://toolshed.test/".',
             );
