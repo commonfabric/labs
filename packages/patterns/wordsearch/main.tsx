@@ -47,18 +47,15 @@ const setSize = handler<
   (event, { size }) => size.set(event.detail.value),
 );
 
-interface WordSearchMakerOutput {
+export interface WordSearchMakerOutput {
   [NAME]: string;
   [UI]: VNode;
   puzzle: Puzzle;
-  pdf: string;
 }
 
 export default pattern<WordSearchMakerInput, WordSearchMakerOutput>(
   ({ title, wordText, rows, cols, diagonals, backwards, seed }) => {
     const words = computed(() => parseWordList(wordText.get()));
-    const rowsLabel = computed(() => `Rows: ${rows.get()}`);
-    const colsLabel = computed(() => `Columns: ${cols.get()}`);
     const puzzle = WordSearch({
       title,
       words,
@@ -68,6 +65,9 @@ export default pattern<WordSearchMakerInput, WordSearchMakerOutput>(
       backwards,
       seed,
     });
+    // The size the grid has, which a typed-in value may have been brought to.
+    const rowsLabel = computed(() => `Rows: ${puzzle.puzzle.rows}`);
+    const colsLabel = computed(() => `Columns: ${puzzle.puzzle.cols}`);
 
     return {
       [NAME]: computed(() => title.get() || "Word Search"),
@@ -111,7 +111,6 @@ export default pattern<WordSearchMakerInput, WordSearchMakerOutput>(
         </cf-screen>
       ),
       puzzle: puzzle.puzzle,
-      pdf: puzzle.pdf,
     };
   },
 );

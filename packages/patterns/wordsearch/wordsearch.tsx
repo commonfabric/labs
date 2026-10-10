@@ -15,6 +15,7 @@ import {
   Default,
   NAME,
   pattern,
+  type PerSession,
   Stream,
   UI,
   type VNode,
@@ -26,29 +27,42 @@ import {
   MAX_SIZE,
   MIN_SIZE,
   placementCells,
+  stripAccents,
   type WordSearch as Puzzle,
 } from "./generator.ts";
 import { wordSearchPdf } from "./pdf.ts";
 
 export interface WordSearchInput {
   /** Heading on screen and in the PDF. */
-  title?: Writable<string | Default<"Word Search">>;
+  title?: string | Default<"Word Search">;
 
-  /** Words to hide. Accents, spaces and punctuation are dropped. */
-  words?: Writable<string[] | Default<[]>>;
+  /**
+   * Words to hide, as they should be listed. In the grid, accents, spaces and
+   * punctuation are dropped.
+   */
+  words?: string[] | Default<[]>;
 
   /** Grid size; values outside 4–30 are brought to the nearest end. */
-  rows?: Writable<number | Default<12>>;
-  cols?: Writable<number | Default<12>>;
+  rows?: number | Default<12>;
+  cols?: number | Default<12>;
 
   /** Also run words along the two left-to-right diagonals. */
-  diagonals?: Writable<boolean | Default<false>>;
+  diagonals?: boolean | Default<false>;
 
   /** Also run every allowed direction in reverse. */
-  backwards?: Writable<boolean | Default<false>>;
+  backwards?: boolean | Default<false>;
 
-  /** Chooses the arrangement; the same seed gives the same puzzle. */
+  /**
+   * Chooses the arrangement; the same seed gives the same puzzle. The one
+   * input written here: `shuffle` sets a new one.
+   */
   seed?: Writable<number | Default<1>>;
+
+  /**
+   * Whether the hidden words are marked. Each viewer's own, for this sitting:
+   * one person checking the answers does not reveal them to another.
+   */
+  showAnswers?: PerSession<Writable<boolean | Default<false>>>;
 }
 
 export interface WordSearchOutput {
@@ -67,28 +81,25 @@ const gridSize = (value: number): number =>
 /** A file name from the title: lower case, dashes, never empty. */
 const fileName = (title: string): string =>
   `${
-    title.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+    stripAccents(title).toLowerCase()
       .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "word-search"
   }.pdf`;
 
 export const WordSearch = pattern<WordSearchInput, WordSearchOutput>(
-  ({ title, words, rows, cols, diagonals, backwards, seed }) => {
-    // Whether the answers show is this viewer's own, for this sitting.
-    const showAnswers = Writable.perSession.of<boolean>(false);
-
+  ({ title, words, rows, cols, diagonals, backwards, seed, showAnswers }) => {
     const puzzle = computed(() =>
       generateWordSearch({
-        words: words.get(),
-        rows: gridSize(rows.get()),
-        cols: gridSize(cols.get()),
-        diagonals: diagonals.get(),
-        backwards: backwards.get(),
+        words,
+        rows: gridSize(rows),
+        cols: gridSize(cols),
+        diagonals,
+        backwards,
         seed: seed.get(),
       })
     );
 
-    const pdf = computed(() => wordSearchPdf(puzzle, title.get()));
-    const pdfName = computed(() => fileName(title.get()));
+    const pdf = computed(() => wordSearchPdf(puzzle, title));
+    const pdfName = computed(() => fileName(title));
 
     const shuffle = action(() => {
       seed.set(Math.floor(Math.random() * 0x100000000));
@@ -120,18 +131,25 @@ export const WordSearch = pattern<WordSearchInput, WordSearchOutput>(
       }));
     });
 
-    const foundWords = computed(() =>
-      puzzle.placements.map((p) => p.word).sort()
+    const listed = computed(() =>
+      [...puzzle.placements]
+        .sort((a, b) => (a.word < b.word ? -1 : a.word > b.word ? 1 : 0))
+        .map((p) => p.label)
     );
-    const hasUnplaced = computed(() => puzzle.unplaced.length > 0);
-    const unplacedNote = computed(() =>
-      `Didn't fit: ${puzzle.unplaced.join(", ")}. ` +
-      `Try a bigger grid or more directions.`
+    const hasSkipped = computed(() => puzzle.skipped.length > 0);
+    const skippedNote = computed(() =>
+      `Left out: ${
+        puzzle.skipped.map((s) =>
+          `${s.label} (${
+            s.reason === "too-short" ? "needs 2+ letters" : "no room"
+          })`
+        ).join(", ")
+      }.`
     );
     const isEmpty = computed(() => puzzle.placements.length === 0);
 
     return {
-      [NAME]: computed(() => title.get() || "Word Search"),
+      [NAME]: computed(() => title || "Word Search"),
       [UI]: (
         <cf-vstack gap="3">
           <cf-hstack gap="2" align="center" justify="between" wrap>
@@ -164,13 +182,11 @@ export const WordSearch = pattern<WordSearchInput, WordSearchOutput>(
             ? <cf-text tone="muted">Add some words to hide.</cf-text>
             : (
               <div style="display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; font-weight: 600; letter-spacing: 0.05em;">
-                {foundWords.map((word) => <span>{word}</span>)}
+                {listed.map((label) => <span>{label}</span>)}
               </div>
             )}
 
-          {hasUnplaced
-            ? <cf-text tone="warning">{unplacedNote}</cf-text>
-            : null}
+          {hasSkipped ? <cf-text tone="warning">{skippedNote}</cf-text> : null}
         </cf-vstack>
       ),
       puzzle,
