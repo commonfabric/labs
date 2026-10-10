@@ -63,6 +63,7 @@ import {
   buildCfcPolicySnapshot,
   buildCfcReadCeiling,
   buildCfcTrustConfig,
+  type CfcArgumentInputRequirementsMode,
   type CfcConfClause,
   type CfcContentAddressedLabels,
   type CfcDeclaredMonotonicityMode,
@@ -780,6 +781,18 @@ export interface RuntimeOptions {
   cfcDeclaredMonotonicity?: CfcDeclaredMonotonicityMode;
 
   /**
+   * The input requirements a lift's code declares on its arguments (CFC
+   * §8.10.3; docs/plans/cfc-argument-input-requirements.md). Defaults to
+   * `observe`: before a lift's body runs, every value it can reach through an
+   * argument that declares `requiredIntegrity` is checked against the
+   * declaration, public values and values written in the wiring included,
+   * and each failure is a diagnostic; the attempt is otherwise unchanged.
+   * `enforce` records each failure as a prepare reason, which rejects the
+   * commit under the enforcing enforcement modes. `off` checks nothing.
+   */
+  cfcArgumentInputRequirements?: CfcArgumentInputRequirementsMode;
+
+  /**
    * Per-prepare D4 write-prefix precision counters (value-level provenance
    * Stage 0 — docs/specs/cfc-value-level-provenance.md §6, SC-24). Defaults
    * to `false`: the prepare gate then skips all measurement, paying a single
@@ -1293,6 +1306,7 @@ export class Runtime {
   readonly cfcPolicyEvaluation: CfcPolicyEvaluationMode;
   readonly cfcLabelMetadataProtection: CfcLabelMetadataProtectionMode;
   readonly cfcDeclaredMonotonicity: CfcDeclaredMonotonicityMode;
+  readonly cfcArgumentInputRequirements: CfcArgumentInputRequirementsMode;
   readonly cfcPrefixProvenanceStats: boolean;
   readonly cfcSinkMaxConfidentiality: SinkMaxConfidentiality;
 
@@ -2055,6 +2069,7 @@ export class Runtime {
       this.cfcPolicyEvaluation = dials.cfcPolicyEvaluation;
       this.cfcLabelMetadataProtection = dials.cfcLabelMetadataProtection;
       this.cfcDeclaredMonotonicity = dials.cfcDeclaredMonotonicity;
+      this.cfcArgumentInputRequirements = dials.cfcArgumentInputRequirements;
       this.cfcPrefixProvenanceStats = options.cfcPrefixProvenanceStats ?? false;
       this.#cfcInstrumentation = this.#buildCfcInstrumentation();
       // Deep-freeze: the ceiling is CFC enforcement config, so a caller must not

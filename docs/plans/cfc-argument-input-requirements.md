@@ -248,10 +248,25 @@ keeps a fixed threshold:
   - A comment on specs#51 proposing that §8.7.2 admit an identity guard over
     requirements the identity binds.
 - [ ] **Spike.**
-  - Choose the attribution mechanism.
-  - Bind the argument schema to the resolved artifact.
+  - [x] Choose the attribution mechanism. Neither of the two above: the check
+        follows the lift's binding to what the code can reach at each declared
+        path, before the body runs (`cfc/argument-input-requirements.ts`). It
+        reads no log and no memo, so lazy materialization and memoized hops
+        cannot hide a read, and a `Cell`-typed argument is covered by what it
+        reaches. References on the declared path are followed; a reference
+        inside the value reached is checked where it is held (§8.2.4 puts the
+        reference's integrity in the dereference's), and every unlabeled leaf
+        of a reached value counts as a public observation.
+  - [x] Bind the argument schema to the resolved artifact. The requirements
+        are those of the artifact a `$implRef` resolves to, together with the
+        graph's own, so a graph can add a requirement and cannot remove one.
   - Find out how trigger reads and handler state bindings attribute.
-- [ ] **The check**, under a `SPEC-PENDING` marker at `observe`.
+- [ ] **The check**, under a `SPEC-PENDING` marker at `observe`. Landed for
+      lifts behind `cfcArgumentInputRequirements`; handlers are not checked
+      yet. Deliberately unlike the list below, the binding's own object
+      structure and a document of references at a declared path are plumbing
+      the check passes through rather than refuses outright; the specs ruling
+      lists the stricter reading as an option.
   - Unit tests, each refused except the first:
     - an honest pair passes;
     - a stand-in at either argument;

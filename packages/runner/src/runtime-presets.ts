@@ -77,6 +77,8 @@
  * | cfcLabelMetadataProtection | core-pinned `"enforce"` (inv-12 Stage 1)         |
  * | cfcDeclaredMonotonicity    | core-pinned `"observe"` (WP5 §8.12.1; `enforce`  |
  * |                            | once per-principal mints move to `derived`)      |
+ * | cfcArgumentInputRequirements | core-pinned `"observe"` (§8.10.3, pending its  |
+ * |                            | specs ruling; `enforce` once ruled)              |
  * | cfcPolicyRecords           | core-default (none declared) — flip in           |
  * |                            | coreOptions when a first-party rollout begins    |
  * | cfcPrefixProvenanceStats   | core-default (off) — measurement opt-in, per     |
@@ -214,6 +216,7 @@ export const RUNTIME_OPTION_KEYS = [
   "cfcPolicyEvaluation",
   "cfcLabelMetadataProtection",
   "cfcDeclaredMonotonicity",
+  "cfcArgumentInputRequirements",
   "cfcPolicyRecords",
   "cfcPrefixProvenanceStats",
   "cfcTrustConfig",
@@ -355,6 +358,8 @@ export const MAX_ENFORCEMENT_SINK_CEILINGS: SinkMaxConfidentiality =
  * - `cfcTrustConfig` — deployment-specific declarations; nothing generic to
  *   bundle.
  * - `cfcPrefixProvenanceStats` — measurement, not enforcement.
+ * - `cfcArgumentInputRequirements` — its rule awaits a specification ruling,
+ *   and enforcing ahead of it is not an experiment this bundle runs.
  */
 export const MAX_ENFORCEMENT_CFC_OPTIONS = Object.freeze(
   {
@@ -402,6 +407,7 @@ export const presetCfcOptions = (
   cfcPolicyEvaluation: "enforce",
   cfcLabelMetadataProtection: "enforce",
   cfcDeclaredMonotonicity: "observe",
+  cfcArgumentInputRequirements: "observe",
   ...(params.cfcPosture === "max-enforcement"
     ? MAX_ENFORCEMENT_CFC_OPTIONS
     : {}),

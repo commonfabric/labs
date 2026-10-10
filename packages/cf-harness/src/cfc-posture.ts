@@ -80,6 +80,7 @@ export const renderCfcPostureReport = (
     dialLine("policy evaluation", record.policyEvaluation),
     dialLine("label metadata", record.labelMetadataProtection),
     dialLine("declared monotonicity", record.declaredMonotonicity),
+    dialLine("argument requirements", record.argumentInputRequirements),
     `    ${"trigger read gating".padEnd(24)}${record.triggerReadGating}`,
     `    ${"decomposed envelopes".padEnd(24)}${record.decomposedEnvelopes}`,
     `    ${

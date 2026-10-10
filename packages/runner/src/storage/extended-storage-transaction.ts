@@ -33,6 +33,7 @@ import {
   CFC_ENFORCING_STRICTNESS,
   CFC_GRANT_ID_PREFIX,
   type CfcAddress,
+  type CfcArgumentInputRefusal,
   type CfcContentAddressedLabels,
   type CfcDeclaredMonotonicityMode,
   type CfcDeclaredWideningExemption,
@@ -595,6 +596,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     outbox: [],
     diagnostics: [],
     unprivilegedSystemWrites: [],
+    argumentInputRefusals: [],
     consultedGrants: [],
     consultedPolicyManifests: [],
     labelMetadataObservations: [],
@@ -1283,6 +1285,17 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       if (spaceSnapshot.size > 0) snapshot.set(space, spaceSnapshot);
     }
     this.#cfcState.moduleDelegations = snapshot;
+  }
+
+  recordCfcArgumentInputRefusal(refusal: CfcArgumentInputRefusal): void {
+    this.#noteCfcActivity();
+    // A refusal recorded after a preparation is one that preparation never
+    // saw, so the preparation no longer stands.
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("argument input refusal recorded after prepare");
+    }
+    this.#cfcState.argumentInputRefusals.push(Object.freeze({ ...refusal }));
+    this.markCfcRelevant("argument-input-requirements");
   }
 
   markCfcRelevant(reason?: string): void {
@@ -4239,6 +4252,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
   clearSchemaRefusal(refusal: unknown): void {
     clearSchemaRefusalTx(this, refusal);
     this.#wrapped.clearSchemaRefusal(refusal);
+  }
+
+  recordCfcArgumentInputRefusal(refusal: CfcArgumentInputRefusal): void {
+    this.#wrapped.recordCfcArgumentInputRefusal(refusal);
   }
 
   markCfcRelevant(reason?: string): void {

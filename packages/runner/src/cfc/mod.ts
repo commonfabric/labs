@@ -57,6 +57,8 @@ export { cfcLabelViewFromSchema } from "./schema-label-view.ts";
 export type {
   AttemptedWrite,
   CfcAddress,
+  CfcArgumentInputRefusal,
+  CfcArgumentInputRequirementsMode,
   CfcContentAddressedLabels,
   CfcDeclaredMonotonicityMode,
   CfcDeclaredWideningExemption,

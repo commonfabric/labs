@@ -86,6 +86,7 @@ import {
   areLinksSame,
   isPrimitiveCellLink,
   isWriteRedirectLink,
+  type NormalizedFullLink,
   type NormalizedLink,
   parseLink,
 } from "../link-utils.ts";
@@ -6781,7 +6782,7 @@ const isProvenanceOnlyConsumedLabel = (label: IFCLabel): boolean => {
 // accepts any concrete atom above the concept in THIS user's closure; plain
 // (concrete/pattern) floors ignore it (inv-11: concrete integrity portable,
 // concept satisfaction acting-principal scoped).
-const cfcFloorTrustContext = (
+export const cfcFloorTrustContext = (
   tx: IExtendedStorageTransaction,
 ): CfcFloorTrustContext => {
   const state = tx.getCfcState();
@@ -6789,6 +6790,51 @@ const cfcFloorTrustContext = (
     trustResolver: createTrustResolver(state.trustConfig),
     actingPrincipal: state.trustSnapshot?.actingPrincipal,
   };
+};
+
+/**
+ * The integrity at each location a whole read of the value at `address`
+ * consumes: one list per labeled location, as the read-side gate below takes
+ * a read in the transaction's log, and an empty one for each of `leaves` —
+ * the value's leaf positions, relative to `address.path` — that no stored
+ * label reaches, since a public location is consumed too (§8.10.3).
+ * `address.path` is a payload path, as a link's is.
+ *
+ * For the argument input requirements of a lift (§8.10.3), whose
+ * observations are made by following the lift's binding rather than read
+ * from the log.
+ */
+export const consumedIntegrityAt = (
+  tx: IExtendedStorageTransaction,
+  address: NormalizedFullLink,
+  leaves: readonly (readonly string[])[],
+): (readonly CfcAtom[])[] => {
+  const scope = normalizeCellScope(address.scope);
+  const metadata = storedMetadataFor(
+    tx,
+    address.space,
+    address.id,
+    scope,
+    "application/json",
+  );
+  if (metadata === undefined) return [[]];
+  const path = canonicalizeLogicalPath(address.path);
+  const entries = consumedEntriesForRead(metadata, path, {
+    nonRecursive: false,
+    consumes: "all",
+  });
+  const observations: (readonly CfcAtom[])[] = consumedLocations(
+    stringTupleKey([address.space, address.id, scope]),
+    entries,
+    path,
+    false,
+  ).map((location) => location.integrity);
+  for (const leaf of leaves) {
+    if (labelForEntriesAtPath(entries, [...path, ...leaf]) === undefined) {
+      observations.push([]);
+    }
+  }
+  return observations.length > 0 ? observations : [[]];
 };
 
 const verifyInputRequirements = (
@@ -10722,6 +10768,13 @@ export function* prepareBoundaryCommitSteps(
       verdictReason(
         `unprivileged write to protected runtime surface ${target}`,
       ),
+    );
+  }
+  // The argument input requirements a lift's code declares, checked by the
+  // runner before the body ran (§8.10.3; `cfc/argument-input-requirements.ts`).
+  for (const refusal of state.argumentInputRefusals) {
+    reasons.push(
+      refusal.verdict ? verdictReason(refusal.reason) : refusal.reason,
     );
   }
   const identityForInput = (

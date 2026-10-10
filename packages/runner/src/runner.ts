@@ -81,6 +81,11 @@ import {
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
 import {
+  argumentInputRefusals,
+  argumentIntegrityRequirements,
+  type ArgumentRequirement,
+} from "./cfc/argument-input-requirements.ts";
+import {
   recordNewDocumentProtectedDefaults,
   recordNewProtectedDefaults,
 } from "./cfc/default-initialization.ts";
@@ -198,10 +203,12 @@ import {
   type URI,
 } from "./storage/interface.ts";
 import {
+  ignoreReadForCommit,
   isDurableReadTx,
   machineryRead,
   markDurableReadTx,
   schedulerDependencyRead,
+  stableInternalVerifierRead,
 } from "./storage/reactivity-log.ts";
 import {
   isCfcEnforcementRejection,
@@ -293,6 +300,17 @@ const triggerFlowLogger = getLogger("runner.trigger-flow", {
  * above any plausible number of simultaneously live pieces, so the bound is
  * reached only by a pattern churning through results it will not revisit.
  */
+/**
+ * The read metadata of an observe-mode argument input requirement check: the
+ * verifier's own reads (§8.10.1), which no scheduling dependency, consumed
+ * input set or commit precondition takes up, so that observing changes
+ * nothing the attempt does.
+ */
+const OBSERVE_ARGUMENT_READ_META = Object.freeze({
+  ...stableInternalVerifierRead,
+  ...ignoreReadForCommit,
+});
+
 const RESULT_SHORTCUT_LIMIT = 4096;
 
 /**
@@ -10656,6 +10674,92 @@ export class Runner {
     });
   }
 
+  /**
+   * The integrity requirements a lift's code declares on its arguments
+   * (§8.10.3): those of the argument schema its own module declares — the
+   * registered artifact a content-addressed `$implRef` names — and those of
+   * the schema the graph carries for the node. A graph built as data that
+   * names the code under a weaker schema of its own therefore cannot remove
+   * a requirement the code declares.
+   */
+  #argumentRequirements(module: Module): ArgumentRequirement[] {
+    const ref = this.#contentAddressedImplRef(module);
+    const artifact = ref === undefined
+      ? undefined
+      : this.#runtime.patternManager.artifactFromIdentitySync(
+        ref.identity,
+        ref.symbol,
+      );
+    const artifactSchema =
+      (typeof artifact === "function" || isObjectOrArray(artifact)) &&
+        "argumentSchema" in artifact
+        ? (artifact as { argumentSchema?: JSONSchema }).argumentSchema
+        : undefined;
+    return argumentIntegrityRequirements([
+      artifactSchema,
+      module.argumentSchema,
+    ]);
+  }
+
+  /**
+   * Checks a lift's argument input requirements before its body runs, under
+   * the runtime's `cfcArgumentInputRequirements` dial. `observe` changes
+   * nothing the attempt does: its reads carry no commit precondition, it
+   * reads nothing under a local-read policy (where an unavailable read would
+   * poison the attempt), and a failure, or an error, is only a diagnostic.
+   */
+  #checkArgumentInputRequirements(
+    tx: IExtendedStorageTransaction,
+    binding: unknown,
+    inputsCell: Cell<any>,
+    requirements: readonly ArgumentRequirement[],
+  ): void {
+    const mode = this.#runtime.cfcArgumentInputRequirements;
+    if (mode === "off" || requirements.length === 0) return;
+    const base = inputsCell.getAsNormalizedFullLink();
+    if (mode === "enforce") {
+      for (
+        const refusal of argumentInputRefusals(
+          tx,
+          binding,
+          base,
+          requirements,
+          stableInternalVerifierRead,
+        )
+      ) {
+        tx.recordCfcArgumentInputRefusal(refusal);
+      }
+      return;
+    }
+    if (usesLocalReads(tx)) {
+      tx.noteCfcDiagnostic(
+        "argument-input-requirements(observe): not checked under local reads",
+      );
+      return;
+    }
+    try {
+      for (
+        const refusal of argumentInputRefusals(
+          tx,
+          binding,
+          base,
+          requirements,
+          OBSERVE_ARGUMENT_READ_META,
+        )
+      ) {
+        tx.noteCfcDiagnostic(
+          `argument-input-requirements(observe): ${refusal.reason}`,
+        );
+      }
+    } catch (error) {
+      tx.noteCfcDiagnostic(
+        `argument-input-requirements(observe): not checked: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
   #readJavaScriptArgument(
     module: Module,
     inputsCell: Cell<any>,
@@ -11755,6 +11859,9 @@ export class Runner {
       byScope: new Map(),
     };
     let previouslyInvalidArgument = false;
+    // Fixed for the node: the code and the graph's schema do not change
+    // between runs.
+    const argumentRequirements = this.#argumentRequirements(module);
     const fnSource = fn.toString();
     // See the handler's counterpart above: what names the node, reduced once
     // here rather than on every action invocation.
@@ -11835,6 +11942,14 @@ export class Runner {
       try {
         logger.timeStart("action", "readInputs");
         tx.resetNarrowestReadScope();
+        // Before the body, while the transaction has written nothing, so the
+        // stored labels the check reads are the ones the arguments carry.
+        this.#checkArgumentInputRequirements(
+          tx,
+          inputs,
+          inputsCell,
+          argumentRequirements,
+        );
         // A lift reads its argument, and reads through it while it runs. Both
         // go lazily: the body materializes the paths it touches and nothing
         // else. Turned off again before the result is written, so diffing and

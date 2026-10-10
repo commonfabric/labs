@@ -1036,6 +1036,26 @@ export const DEFAULT_CFC_DECLARED_MONOTONICITY_MODE:
   CfcDeclaredMonotonicityMode = "off";
 
 /**
+ * The input requirements a lift's code declares on its arguments (spec
+ * §8.10.3, `docs/plans/cfc-argument-input-requirements.md`): `off` = not
+ * checked; `observe` = checked before the body runs, each failure a
+ * diagnostic, and nothing the attempt does changes; `enforce` = each failure
+ * is a prepare reason, which rejects the commit under the enforcing modes.
+ */
+export type CfcArgumentInputRequirementsMode = "off" | "observe" | "enforce";
+
+/** A failed argument input requirement, recorded for the boundary pass. */
+export type CfcArgumentInputRefusal = {
+  readonly reason: string;
+  /**
+   * Whether the failure is a verdict on the data (see `verdict-reason.ts`).
+   * A reference that reached no value may only not have synced yet, so that
+   * failure stays retryable.
+   */
+  readonly verdict: boolean;
+};
+
+/**
  * Per-transaction privileged marker exempting exactly ONE (doc, path,
  * clauseDigest) triple from the declared-monotonicity gate (the seam for the
  * §8.12.7 route 2b declassification event; docs/specs/
@@ -1178,6 +1198,11 @@ export type CfcTxState = {
   // reserved `grant:cfc:` documents outside the trusted policy-writer path
   // (`writeCfcGrant`) are recorded here too — same S18 class, same reasons.
   unprivilegedSystemWrites: string[];
+  // Argument input requirements a lift's code declares that this attempt's
+  // arguments failed (§8.10.3), recorded by the runner before the body runs
+  // under `cfcArgumentInputRequirements: "enforce"`. prepareBoundaryCommit
+  // turns each into a reason.
+  argumentInputRefusals: CfcArgumentInputRefusal[];
   // Grant documents consulted by policyState-guarded boundary evaluation in
   // this transaction (§8.12.7 route 2a), recorded by the runner-side grant
   // resolver, deduplicated by address. Folded into PreparedDigestInput.
