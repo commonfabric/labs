@@ -660,7 +660,7 @@ export class CellController<T> implements ReactiveController {
  * partitioned storage, so a same-id ref with a different scope is a
  * different cell.
  */
-function sameCellDoc(a: CellRef, b: CellRef): boolean {
+export function sameCellDoc(a: CellRef, b: CellRef): boolean {
   return a.id === b.id && a.space === b.space && a.scope === b.scope &&
     a.path.length === b.path.length &&
     a.path.every((segment, index) => segment === b.path[index]);
