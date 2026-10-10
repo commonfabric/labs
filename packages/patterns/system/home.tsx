@@ -396,8 +396,11 @@ const Home = pattern(
     // deciding profile points at.
     const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({})
       .for("privateInboxRefusal");
-    // The notice reads the refusal's code and time, and never its `inbox`: the
-    // stored link carries the label the refused inbox's owner gives its offers.
+    // The refusal notice reads the refusal's code and time, and never its
+    // `inbox`: the stored link carries the label the refused inbox's owner
+    // gives its offers. The notice renders after everything else, for the
+    // reason the chats panel does, and the screen's header slot shows it
+    // above the tabs.
     const refusalReason = privateInboxRefusal.key("refusal").key("reason");
     const refusedAt = privateInboxRefusal.key("refusal").key("refusedAt");
     // Untrusted-write regression surface: this stream is exported so tests can
@@ -449,33 +452,6 @@ const Home = pattern(
           <h1>
             home<strong>space</strong>
           </h1>
-
-          {computed(() => {
-            const at = refusedAt.get();
-            if (typeof at !== "number") return null;
-            const stored = refusalReason.get();
-            const reason = typeof stored === "string" ? stored : "";
-            const explanation = refusalReasonText(reason) ?? "";
-            const code = reason || "none given";
-            const noticed = new Date(at).toLocaleString();
-            return (
-              <div id="home-private-inbox-refusal">
-                <cf-alert status="warning">
-                  <h4 slot="title">Shares may not reach you</h4>
-                  <cf-vstack slot="description" gap="1">
-                    <span>
-                      One of your profiles points others at an inbox Home can't
-                      use, so what they share with you may not arrive.{" "}
-                      {explanation}
-                    </span>
-                    <span style={{ fontSize: "12px", color: "#666" }}>
-                      Reason: <code>{code}</code>. First noticed {noticed}.
-                    </span>
-                  </cf-vstack>
-                </cf-alert>
-              </div>
-            );
-          })}
 
           <cf-tabs $value={activeTab}>
             <cf-tab-list>
@@ -588,6 +564,36 @@ const Home = pattern(
               {chatManager}
             </cf-tab-panel>
           </cf-tabs>
+
+          <div slot="header">
+            {computed(() => {
+              const at = refusedAt.get();
+              if (typeof at !== "number") return null;
+              const stored = refusalReason.get();
+              const reason = typeof stored === "string" ? stored : "";
+              const explanation = refusalReasonText(reason) ?? "";
+              const code = reason || "none given";
+              const noticed = new Date(at).toLocaleString();
+              return (
+                <div id="home-private-inbox-refusal">
+                  <cf-alert status="warning">
+                    <h4 slot="title">Shares may not reach you</h4>
+                    <cf-vstack slot="description" gap="1">
+                      <span>
+                        One of your profiles points others at an inbox Home
+                        can't use, so what they share with you may not arrive.
+                        {" "}
+                        {explanation}
+                      </span>
+                      <span style={{ fontSize: "12px", color: "#666" }}>
+                        Reason: <code>{code}</code>. First noticed {noticed}.
+                      </span>
+                    </cf-vstack>
+                  </cf-alert>
+                </div>
+              );
+            })}
+          </div>
         </cf-screen>
       ) as VNode,
 
