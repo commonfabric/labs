@@ -158,6 +158,51 @@ describe("sync crossings", () => {
     expect(replaced.crossings).toEqual([farLeaf]);
   });
 
+  it("delivers a document a same-space link named once it is written, retiring the miss", async () => {
+    // The same walk that reports a crossing records a same-space dead-end as
+    // a miss attributed to the referrer; the document's arrival retires it
+    // and the pushed frame carries the document.
+    await writer.transact({
+      localSeq: 2,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set",
+        id: "of:missing-top",
+        value: { value: { next: link(space, "of:missing-leaf") } },
+      }],
+    });
+    await server.flushSessions();
+    const first = await reader.watchAddSync([followingWatch("of:missing-top")]);
+    expect(first.sync.upserts.map((upsert) => upsert.id)).toEqual([
+      "of:missing-top",
+    ]);
+    const frames = first.view.subscribeSync();
+    const pushed = (async (): Promise<SessionSync> => {
+      for (;;) {
+        const { done, value } = await frames.next();
+        if (done) throw new Error("the view closed before the leaf arrived");
+        if (value.upserts.some((upsert) => upsert.id === "of:missing-leaf")) {
+          return value;
+        }
+      }
+    })();
+    await writer.transact({
+      localSeq: 3,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set",
+        id: "of:missing-leaf",
+        value: { value: { name: "born" } },
+      }],
+    });
+    await server.flushSessions();
+    const arrived = await pushed;
+    expect(arrived.upserts.map((upsert) => upsert.id)).toEqual([
+      "of:missing-leaf",
+    ]);
+    expect(arrived.crossings).toBeUndefined();
+  });
+
   it("carries a crossing a later write creates, as a pushed frame", async () => {
     await writer.transact({
       localSeq: 2,

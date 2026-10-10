@@ -459,6 +459,19 @@ describe("parseMemoryProtocolFlags", () => {
     );
   });
 
+  it("accepts the syncCrossingsV1 capability key", () => {
+    assertEquals(parseMemoryProtocolFlags({})?.syncCrossingsV1, false);
+    assertEquals(
+      parseMemoryProtocolFlags({ syncCrossingsV1: true })?.syncCrossingsV1,
+      true,
+    );
+    assertEquals(parseMemoryProtocolFlags({ syncCrossingsV1: "true" }), null);
+    assertEquals(
+      wireMemoryProtocolFlags(getMemoryProtocolFlags()).syncCrossingsV1,
+      true,
+    );
+  });
+
   it("accepts the canonical syncSchemaTableV2 key", () => {
     assertEquals(
       parseMemoryProtocolFlags({

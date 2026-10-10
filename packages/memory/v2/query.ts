@@ -1616,7 +1616,6 @@ export const syncCrossingsOf = (
       const wireKey = `${key}\0${JSON.stringify(path)}\0${
         schema === undefined ? "" : internSchemaAsTaggedHashString(schema)
       }`;
-      if (crossings.has(wireKey)) continue;
       crossings.set(wireKey, {
         space,
         id,

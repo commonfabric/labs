@@ -1512,3 +1512,34 @@ Deno.test("sync schema table interns a crossing's schema and expands it again", 
   );
   assertEquals(expandSessionSyncSchemas(compressed), sync);
 });
+
+Deno.test("sync schema table refuses a crossing's table reference with no table to resolve it", () => {
+  const sync: SessionSync = {
+    type: "sync",
+    fromSeq: 0,
+    toSeq: 1,
+    upserts: [],
+    removes: [],
+    crossings: [{
+      space: "did:key:z6Mk-far",
+      id: "of:far",
+      path: [],
+      schema: "schema-ref@2:fid1:missing" as unknown as JSONSchema,
+    }],
+  };
+  assertThrows(
+    () => expandSessionSyncSchemas(sync),
+    Error,
+    "Invalid sync schema table reference",
+  );
+  const inline: SessionSync = {
+    ...sync,
+    crossings: [{
+      space: "did:key:z6Mk-far",
+      id: "of:far",
+      path: [],
+      schema: { type: "object" },
+    }],
+  };
+  assertEquals(expandSessionSyncSchemas(inline), inline);
+});
