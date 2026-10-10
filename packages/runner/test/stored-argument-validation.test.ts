@@ -19,6 +19,7 @@ import {
   mergeSchemaDefaults,
 } from "../src/runner-utils.ts";
 import { Runtime } from "../src/runtime.ts";
+import { isLinkResolutionProbe } from "../src/storage/reactivity-log.ts";
 import {
   acceptsOpaqueCellOrUnresolvedLink,
   overlayUnreadableLinkPlaceholders,
@@ -566,5 +567,160 @@ describe("stored-argument-validation", () => {
     } finally {
       tx.abort();
     }
+  });
+
+  describe("asCell positions", () => {
+    // An `asCell` position holds a reference. Validation checks that it is one
+    // and leaves the target to whoever reads through the handle, so the
+    // target's contents neither refuse the argument nor join the read set.
+
+    const portraitSchema = (asCell: boolean): JSONSchema => ({
+      type: "object",
+      properties: {
+        mediaType: { type: "string" },
+        width: { type: "number" },
+      },
+      required: ["mediaType"],
+      ...(asCell ? { asCell: ["cell"] } : {}),
+    });
+
+    const peopleSchema = (asCell: boolean): JSONSchema => ({
+      type: "object",
+      properties: {
+        people: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              portrait: portraitSchema(asCell),
+            },
+            required: ["name"],
+          },
+        },
+      },
+      required: ["people"],
+    });
+
+    /** Stages people whose portraits link to separate, malformed documents. */
+    const stagePeople = (tx: ReturnType<Runtime["edit"]>) => {
+      const portraitIds = new Set<string>();
+      const people: Record<string, unknown> = {};
+      for (const key of ["ada", "grace"]) {
+        const portrait = runtime.getCell(
+          space,
+          `portrait-${key}`,
+          undefined,
+          tx,
+        );
+        portrait.set({ mediaType: 42, width: 10 });
+        portraitIds.add(portrait.getAsNormalizedFullLink().id);
+        const person = runtime.getCell(space, `person-${key}`, undefined, tx);
+        person.set({ name: key, portrait });
+        people[key] = person;
+      }
+      const argument = runtime.getCell(space, "argument", undefined, tx);
+      argument.set({ people });
+      return { argument, portraitIds };
+    };
+
+    it("returns no issue for a malformed document behind an asCell link", () => {
+      const tx = runtime.edit();
+      try {
+        const { argument } = stagePeople(tx);
+        expect(
+          storedArgumentValidationIssue(
+            argument,
+            peopleSchema(true),
+            undefined,
+            tx,
+          ),
+        ).toBeUndefined();
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("reads no contents of the document behind an asCell link", () => {
+      const tx = runtime.edit();
+      try {
+        const { argument, portraitIds } = stagePeople(tx);
+        using reads = spy(tx, "read");
+        storedArgumentValidationIssue(
+          argument,
+          peopleSchema(true),
+          undefined,
+          tx,
+        );
+        // Resolving the link probes whether the target is itself a link,
+        // which observes the reference and not the target's contents.
+        const contentReads = reads.calls.filter((call) =>
+          portraitIds.has(call.args[0].id) &&
+          !isLinkResolutionProbe(call.args[1]?.meta)
+        );
+        expect(contentReads).toEqual([]);
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns the mismatch for a malformed document behind a by-value link", () => {
+      const tx = runtime.edit();
+      try {
+        const { argument } = stagePeople(tx);
+        expect(
+          storedArgumentValidationIssue(
+            argument,
+            peopleSchema(false),
+            undefined,
+            tx,
+          ),
+        ).toContain("mediaType: value does not match type string");
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns no issue for an inline value at an asCell position", () => {
+      // The reader holds an inline value at a handle position as a handle
+      // too, and judges it when read through the handle, so its contents are
+      // left to that read whether stored inline or behind a link.
+      const tx = runtime.edit();
+      try {
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({
+          people: { ada: { name: "ada", portrait: { mediaType: 42 } } },
+        });
+        expect(
+          storedArgumentValidationIssue(
+            argument,
+            peopleSchema(true),
+            undefined,
+            tx,
+          ),
+        ).toBeUndefined();
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns the mismatch for a by-value field of the referring document", () => {
+      const tx = runtime.edit();
+      try {
+        const { argument } = stagePeople(tx);
+        const person = runtime.getCell(space, "person-ada", undefined, tx);
+        person.key("name").set(7 as never);
+        expect(
+          storedArgumentValidationIssue(
+            argument,
+            peopleSchema(true),
+            undefined,
+            tx,
+          ),
+        ).toContain("name: value does not match type string");
+      } finally {
+        tx.abort();
+      }
+    });
   });
 });
