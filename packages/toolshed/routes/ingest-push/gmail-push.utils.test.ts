@@ -152,7 +152,6 @@ describe("gmail-push.utils", () => {
       },
       installId,
       kind: "gmail",
-      secretHash: "unused",
       createdBy: space,
       createdAt: "2026-09-01T00:00:00.000Z",
       enabled: true,

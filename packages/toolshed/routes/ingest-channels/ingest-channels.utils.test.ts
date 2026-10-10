@@ -296,6 +296,7 @@ describe("ingest-channels control plane", () => {
       const stored = await getRegistration(runtime, operator.did(), ok(res).id);
       expect(stored?.kind).toBe("gmail");
       expect(stored?.target).toEqual(targetParts("gmail-1"));
+      expect(stored?.secretHash).toBeUndefined();
       expect(stored?.causePrefix).toBeUndefined();
     });
 
@@ -396,7 +397,6 @@ describe("ingest-channels control plane", () => {
         target: targetParts("gmail-1"),
         installId: "gmail-1",
         kind: "gmail",
-        secretHash: "unused",
         createdBy: operator.did(),
         createdAt: "2026-09-01T00:00:00.000Z",
         enabled: true,

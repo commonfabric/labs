@@ -143,7 +143,7 @@ export interface ControlDeps {
 }
 
 /** What a mint asks of Google to learn which mailbox a token is for. */
-export interface GmailProofDeps {
+interface GmailProofDeps {
   /** Asks Gmail which mailbox an access token reads. */
   fetchMailbox: (accessToken: string) => Promise<MailboxLookup>;
 
@@ -307,7 +307,10 @@ export const channelSummary = (
   revision: r.revision ?? 0,
 });
 
-/** Mint a fresh secret, persist, and build the ONE-TIME response. */
+/**
+ * Mint a fresh secret for a device channel, persist, and build the ONE-TIME
+ * response. A gmail channel gets no secret: nothing POSTs to it.
+ */
 const persist = async (
   deps: ControlDeps,
   params: {
@@ -340,7 +343,9 @@ const persist = async (
     requestId: string;
   },
 ): Promise<ControlResult<MintedChannel>> => {
-  const { secret, secretHash } = generateIngestSecret();
+  const minted = params.writes.kind === "device"
+    ? generateIngestSecret()
+    : undefined;
   const now = new Date();
   // Bounded before arithmetic: `new Date(huge).toISOString()` throws RangeError,
   // and this runs outside the try below, so an unbounded ttl escapes the handler
@@ -393,7 +398,7 @@ const persist = async (
       : {}),
     installId: params.installId,
     kind: params.writes.kind,
-    secretHash,
+    ...(minted !== undefined ? { secretHash: minted.secretHash } : {}),
     createdBy: deps.operatorDid,
     createdAt: params.existing?.createdAt ?? now.toISOString(),
     enabled: true,
@@ -500,14 +505,13 @@ const persist = async (
     return { status: 502, body: { error: "Storage failure" } };
   }
 
-  // The data plane refuses a gmail channel, so its URL and secret would only
-  // mislead whoever reads the response. The secret is still minted and its
-  // hash stored: a registration has one whatever its kind.
-  const devicePath = registration.kind === "device"
+  // The data plane refuses a gmail channel, so it has no URL and no token to
+  // show.
+  const devicePath = minted !== undefined
     ? {
       url: ingestUrl(deps.apiUrl, registration.space, registration.id),
       // Shown once, here only. Only the hash is ever stored.
-      token: secret,
+      token: minted.secret,
     }
     : {};
   return {

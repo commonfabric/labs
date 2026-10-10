@@ -152,7 +152,7 @@ export function cellTargetOf(link: NormalizedLink): CellTarget {
 }
 
 /** Returns the link a `CellTarget` holds the parts of. */
-export function linkOfCellTarget(target: CellTarget): NormalizedLink {
+function linkOfCellTarget(target: CellTarget): NormalizedLink {
   const link = parseLink(
     linkRefFrom({ id: target.id, space: target.space, path: target.path }),
   );
@@ -240,7 +240,13 @@ export interface IngestRegistration {
    */
   kind: IngestChannelKind;
 
-  secretHash: string;
+  /**
+   * The hash of the bearer token a `device` channel's POSTs carry; the token
+   * itself is shown once, at mint, and never stored. Absent on a `gmail`
+   * channel, which has no token because nothing POSTs to it, and the data
+   * plane refuses a token for one as it refuses an unknown channel.
+   */
+  secretHash?: string;
 
   /**
    * The hash of the token this channel most recently rotated AWAY from.
@@ -381,8 +387,6 @@ const RegistrationSchema = {
     mailboxKey: { type: "string" },
     installId: { type: "string" },
     kind: { type: "string" },
-    // What a registration carried before `kind`; read only to classify one.
-    sink: { type: "string" },
     secretHash: { type: "string" },
     createdBy: { type: "string" },
     createdAt: { type: "string" },
@@ -410,7 +414,6 @@ const RegistrationSchema = {
     "name",
     "space",
     "installId",
-    "secretHash",
     "createdBy",
     "createdAt",
     "enabled",
@@ -845,30 +848,11 @@ export async function getRegistration(
   await cell.sync();
   await runtime.storageManager.synced();
   const stored = cell.get() as
-    | (Omit<IngestRegistration, "kind"> & {
-      kind?: IngestChannelKind;
-      sink?: string;
-    })
+    | (Omit<IngestRegistration, "kind"> & { kind?: IngestChannelKind })
     | undefined;
   if (stored === undefined) return null;
-  if (stored.kind !== undefined) return { ...stored, kind: stored.kind };
-  // A registration written before kinds existed carried a `sink` instead. A
-  // `latest` one is a gmail channel whose cell was the cause its prefix
-  // named; everything else is a device channel.
-  if (stored.sink === "latest" && stored.causePrefix !== undefined) {
-    const { causePrefix, ...rest } = stored;
-    return {
-      ...rest,
-      kind: "gmail",
-      target: {
-        space: stored.space,
-        id: runtime.getCell(stored.space as MemorySpace, causePrefix)
-          .getAsNormalizedFullLink().id,
-        path: [],
-      },
-    };
-  }
-  return { ...stored, kind: "device" };
+  // A registration written before kinds existed is a device channel.
+  return { ...stored, kind: stored.kind ?? "device" };
 }
 
 /**
@@ -1455,7 +1439,12 @@ export async function processIngest(
     verifyIngestSecret(token, DUMMY_HASH);
     return { status: 401, body: { error: "Invalid request" } };
   }
-  const matchesCurrent = verifyIngestSecret(token, registration.secretHash);
+  // Both compares run whatever the registration holds. A channel with no hash
+  // of its own, which a gmail channel is, compares against the dummy, and the
+  // guard below keeps that compare from ever counting as a match.
+  const matchesCurrent =
+    verifyIngestSecret(token, registration.secretHash ?? DUMMY_HASH) &&
+    registration.secretHash !== undefined;
   const matchesPrevious =
     verifyIngestSecret(token, registration.previousSecretHash ?? DUMMY_HASH) &&
     // The compare above always RUNS (constant time), but its result only counts
