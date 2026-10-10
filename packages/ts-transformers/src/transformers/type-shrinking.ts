@@ -1511,8 +1511,7 @@ function scopedCellNode(
  * does, or, for a print of one, its cell printed afresh from its type. The
  * print of an `optional` property's type holds the `undefined` its
  * optionality adds, which the parts leave out, as the property is written
- * without it; their type is then the wrapper's own, where the print holds no
- * other alternative.
+ * without it.
  */
 function scopedCellParts(
   node: ts.TypeNode,
@@ -1533,19 +1532,16 @@ function scopedCellParts(
       { checker, factory, sourceFile, state },
       typeRegistry,
     );
-  const isUndefined = (type: ts.Type) =>
-    (type.flags & ts.TypeFlags.Undefined) !== 0;
   const nullish = optional
-    ? scoped.nullish.filter((type) => !isUndefined(type))
+    ? scoped.nullish.filter((type) =>
+      (type.flags & ts.TypeFlags.Undefined) === 0
+    )
     : scoped.nullish;
-  const [wrapper, ...others] = optional && printedType.isUnion()
-    ? printedType.types.filter((type) => !isUndefined(type))
-    : [];
   return {
     name: scoped.name,
     cell: print(scoped.cell),
     nullish: nullish.map(print),
-    type: wrapper && others.length === 0 ? wrapper : printedType,
+    type: printedType,
   };
 }
 
