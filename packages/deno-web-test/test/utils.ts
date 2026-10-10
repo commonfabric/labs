@@ -206,18 +206,24 @@ export const runDenoWebTest = async (
   const manifestPath = path.join(tmpProjectPath, "deno.jsonc");
   const manifest = parseJsonc(await Deno.readTextFile(manifestPath)) as {
     tasks: { test: string };
-    imports?: Record<string, string>;
   };
-  // The copy sits outside the workspace, so a project reaches the module its
-  // tests import from this package through an explicit mapping.
-  manifest.imports = {
-    ...manifest.imports,
+  const declared = "imports" in manifest ? manifest.imports : {};
+  if (typeof declared !== "object" || declared === null) {
+    throw new Error(`${projectDir}'s imports must be an object`);
+  }
+  manifest.tasks.test =
+    `deno run --allow-env --allow-read --allow-write --allow-run --allow-net ${CLI_PATH} *.test.ts`;
+  // The copy sits outside the workspace, so the module a project's tests
+  // import from this package is mapped to it explicitly.
+  const imports = {
+    ...declared,
     "@commonfabric/deno-web-test/commands":
       path.toFileUrl(path.join(dirname, "..", "commands.ts")).href,
   };
-  manifest.tasks.test =
-    `deno run --allow-env --allow-read --allow-write --allow-run --allow-net ${CLI_PATH} *.test.ts`;
-  await Deno.writeTextFile(manifestPath, JSON.stringify(manifest));
+  await Deno.writeTextFile(
+    manifestPath,
+    JSON.stringify({ ...manifest, imports }),
+  );
 
   // Populate the cache for the harness and each test entrypoint before the task.
   const testEntrypoints = [...Deno.readDirSync(tmpProjectPath)]

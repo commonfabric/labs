@@ -5,9 +5,9 @@ Deno.test("a test presses keys the browser treats as the person's", async functi
 
   for (
     const name of [
-      "a pressed Tab moves focus",
+      "a pressed Tab moves focus, and Shift\\+Tab moves it back",
       "a dispatched Tab moves nothing",
-      "a pressed key reaches listeners as trusted",
+      "a press settles once the browser has handled all of it",
     ]
   ) {
     run.assert(
@@ -20,8 +20,16 @@ Deno.test("a test presses keys the browser treats as the person's", async functi
     "an unknown key fails its test",
   );
   run.assert(
-    /pressKey cannot press "Space"/.test(run.stdoutText),
+    /an unknown modifier is refused \.\.\. .*FAILED/.test(run.stdoutText),
+    "an unknown modifier fails its test",
+  );
+  run.assert(
+    /`Space` is not a key a test may press/.test(run.stdoutText),
     "the failure names the key",
   );
-  run.assert(/3 passed \| 1 failed/.test(run.stdoutText), "summary");
+  run.assert(
+    /`Hyper` is not a key a test may hold down/.test(run.stdoutText),
+    "the failure names the modifier",
+  );
+  run.assert(/3 passed \| 2 failed/.test(run.stdoutText), "summary");
 });

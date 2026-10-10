@@ -63,9 +63,12 @@ Deno.test("Tab reaches the switch", async () => {
 });
 ```
 
-The promise resolves once the browser has handled the press. The keys a test may
-press are listed in `PRESSABLE_KEYS` in `commands-protocol.ts`; any other key
-throws, and a key a test needs is added there.
+`pressKey("Tab", { modifiers: ["Shift"] })` holds Shift down around the Tab. The
+promise resolves once the browser has handled the whole press, keyup included,
+and presses run one at a time in the order they were asked for. The keys a test
+may press and hold down are `PRESSABLE_KEYS` and `MODIFIER_KEYS` in
+`commands-protocol.ts`; the driver refuses any other, which rejects the promise,
+and a key a test needs is added there.
 
 ## Stuck tests
 

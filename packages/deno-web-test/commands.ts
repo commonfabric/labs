@@ -8,12 +8,12 @@
 import {
   type Command,
   DRIVER_BINDING,
-  PRESSABLE_KEYS,
+  type ModifierKey,
   type PressableKey,
   SETTLE_GLOBAL,
 } from "./commands-protocol.ts";
 
-export type { PressableKey } from "./commands-protocol.ts";
+export type { ModifierKey, PressableKey } from "./commands-protocol.ts";
 
 /** The commands sent and not yet settled, by id. */
 const pending = new Map<
@@ -40,23 +40,46 @@ function settle(id: number, error: string | null): void {
 }
 
 /**
- * Presses `key` as the person at the keyboard would, and resolves once the
- * browser has handled the press: focus a Tab moves has moved, and listeners
- * for the key's events have run. Throws outside the deno-web-test driver, and
- * on a key not in `PRESSABLE_KEYS`, which a test bundled unchecked can pass.
+ * Helper for `pressKey`, which returns the driver's binding after making
+ * `settle` the page's settler. Throws outside the deno-web-test driver, and
+ * where another copy of this module already settles commands in the page,
+ * since each copy would then settle the other's.
  */
-export function pressKey(key: PressableKey): Promise<void> {
-  if (!PRESSABLE_KEYS.some((known) => known === key)) {
-    throw new Error(`pressKey cannot press ${JSON.stringify(key)}`);
-  }
+function connect(): (payload: string) => void {
   const send: unknown = Reflect.get(globalThis, DRIVER_BINDING);
   if (typeof send !== "function") {
     throw new Error(
       "pressKey needs the deno-web-test driver, which runs this page",
     );
   }
-  Reflect.set(globalThis, SETTLE_GLOBAL, settle);
-  const command: Command = { id: nextId++, press: key };
+  const settler: unknown = Reflect.get(globalThis, SETTLE_GLOBAL);
+  if (settler === undefined) {
+    Reflect.set(globalThis, SETTLE_GLOBAL, settle);
+  } else if (settler !== settle) {
+    throw new Error(
+      "Two copies of deno-web-test's commands module are loaded in this page",
+    );
+  }
+  return (payload) => send(payload);
+}
+
+/**
+ * Presses `key` as the person at the keyboard would, holding `modifiers` down
+ * around it, and resolves once the browser has handled the press: focus a
+ * Tab moves has moved, and listeners for the key's events have run. Presses
+ * run one at a time, in the order they were asked for. Rejects when the
+ * driver refuses the press, as it does a key it does not know.
+ */
+export function pressKey(
+  key: PressableKey,
+  options: { modifiers?: readonly ModifierKey[] } = {},
+): Promise<void> {
+  const send = connect();
+  const command: Command = {
+    id: nextId++,
+    press: key,
+    modifiers: options.modifiers ?? [],
+  };
   return new Promise((resolve, reject) => {
     pending.set(command.id, { resolve, reject });
     send(JSON.stringify(command));

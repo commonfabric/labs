@@ -3,11 +3,14 @@ import {
   BOOT_FAILURE_MESSAGE,
   BrowserProcess,
 } from "@commonfabric/integration/browser-process";
+import { backtickQuote } from "@commonfabric/utils/markdown";
 import { sleep } from "@commonfabric/utils/sleep";
 
 import {
+  commandId,
   DRIVER_BINDING,
-  parseCommand,
+  pressOn,
+  readKeyPress,
   SETTLE_GLOBAL,
 } from "./commands-protocol.ts";
 import { DEFAULT_TEST_TIMEOUT_MS, extractAstralConfig } from "./config.ts";
@@ -117,51 +120,77 @@ export class BrowserController extends EventTarget {
 
   /**
    * Helper for `load`, which carries out the commands tests in `page` send
-   * through `commands.ts`. The binding holds for every document the page
-   * loads, so it is installed once, with the page.
+   * through `commands.ts`, one at a time in the order they arrive. The binding
+   * holds for every document the page loads, so it is installed once, with
+   * the page.
    */
   async #serveCommands(page: Page) {
     const celestial = page.unsafelyGetCelestialBindings();
+    let queue = Promise.resolve();
     celestial.addEventListener("Runtime.bindingCalled", (event) => {
-      if (event.detail.name !== DRIVER_BINDING) {
+      const { name, payload, executionContextId } = event.detail;
+      if (name !== DRIVER_BINDING) {
         return;
       }
-      void this.#runCommand(page, event.detail.payload);
+      queue = queue.then(() =>
+        this.#runCommand(page, payload, executionContextId)
+      );
     });
     await celestial.Runtime.addBinding({ name: DRIVER_BINDING });
   }
 
   /**
    * Helper for `#serveCommands`, which runs one command and settles it in the
-   * page. A command that cannot be parsed or carried out fails the test that
-   * sent it; one that cannot be settled, because its page is gone, is
-   * reported on the console.
+   * document that sent it, `contextId`: a command that is refused or fails
+   * rejects there, and so fails the test that sent it. A command with no id
+   * cannot be settled, and one whose document is gone has no test left to
+   * fail; either is reported on the console. A test that leaves its file
+   * without awaiting a press can have that key land in the next file's
+   * document.
    */
-  async #runCommand(page: Page, payload: string) {
-    let id: number | undefined;
+  async #runCommand(page: Page, payload: string, contextId: number) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(payload);
+    } catch {
+      // `commandId` reports the payload below.
+    }
+    const id = commandId(parsed);
+    if (id === undefined || typeof parsed !== "object" || parsed === null) {
+      this.#reportCommandFailure(
+        `A test sent a command with no id: ${backtickQuote(payload)}`,
+      );
+      return;
+    }
     let error: string | null = null;
     try {
-      const command = parseCommand(payload);
-      id = command.id;
-      await page.keyboard.press(command.press);
+      await pressOn(page.keyboard, readKeyPress(parsed));
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
-    if (id === undefined) {
-      this.#reportCommandFailure(`A test sent a malformed command: ${error}`);
-      return;
-    }
-    try {
-      await page.evaluate(
-        (name: string, settled: number, failure: string | null) =>
-          Reflect.get(globalThis, name)(settled, failure),
-        { args: [SETTLE_GLOBAL, id, error] },
+    const settled = await page.unsafelyGetCelestialBindings().Runtime
+      .callFunctionOn({
+        functionDeclaration: `function (name, id, error) {
+          globalThis[name](id, error);
+        }`,
+        executionContextId: contextId,
+        arguments: [{ value: SETTLE_GLOBAL }, { value: id }, { value: error }],
+      });
+    // Celestial resolves a CDP error response, here a document that is gone,
+    // as `undefined` rather than rejecting.
+    if (settled === undefined) {
+      this.#reportCommandFailure(
+        `Command ${id} could not be settled: the document that sent it is gone`,
       );
-    } catch (e) {
-      this.#reportCommandFailure(`Command ${id} could not be settled: ${e}`);
+    } else if (settled.exceptionDetails) {
+      const { exception, text } = settled.exceptionDetails;
+      this.#reportCommandFailure(
+        `Command ${id} could not be settled: ${exception?.description ?? text}`,
+      );
     }
   }
 
+  /** Helper for `#runCommand`, which reports `text` on the console. */
   #reportCommandFailure(text: string) {
     this.dispatchEvent(new ConsoleEvent({ type: "error", text }));
   }
