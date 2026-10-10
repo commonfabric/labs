@@ -5,9 +5,10 @@ other principals deliver offers to the identity, such as a chat room to join.
 Its offers are labeled readable by the owner alone. Anyone can append to it,
 through its `receive` stream, which keeps an offer only when the offer names the
 principal sending it as its sender. This document says where the inbox lives,
-how Home comes to hold it, what Home records when the host refuses one, what
-access its space grants, what `receive` accepts, how the host admits what it
-receives, and the limits on what it keeps private.
+how Home comes to hold it, what Home records when the host refuses one, how the
+owner replaces a refused one, what access its space grants, what `receive`
+accepts, how the host admits what it receives, and the limits on what it keeps
+private.
 
 The pattern is `packages/patterns/system/private-inbox.tsx`.
 
@@ -23,7 +24,9 @@ The pattern is `packages/patterns/system/private-inbox.tsx`.
   inboxes Home held before, if any, are in its `retainedPrivateInboxes` list,
   as "Creating or adopting it" says, and the host's refusal of an inbox a
   profile advertises, if there is one to report, is in its
-  `privateInboxRefusal`, as "When the host refuses an inbox" says.
+  `privateInboxRefusal`, as "When the host refuses an inbox" says. The last
+  refusal the owner had Home replace, if any, is in its
+  `privateInboxReplacement`, as "Replacing a refused inbox" says.
 - **Each of the owner's profiles** points at an inbox through its `inbox`
   field, which `profile-home.tsx` describes. A profile space is readable by
   anyone, so the pointer is how a sender finds the inbox.
@@ -145,7 +148,7 @@ failing to come up, is logged, and the next time that worker brings up Home it
 sends the event again; a failure inside the handler is not seen, and the event
 is not sent again until another worker brings Home up.
 
-A profile is pointed in one of two ways:
+A profile is pointed in one of three ways:
 
 - **When Home ensures the inbox**, as above: every profile in Home's list that
   points at no inbox.
@@ -159,6 +162,8 @@ A profile is pointed in one of two ways:
   demanding user's own Home, beside its `profiles`
   (`packages/runner/src/builtins/wish.ts`). An embedder that hands no inbox
   leaves the profile to the next ensure.
+- **When the owner replaces a refused inbox**, as "Replacing a refused inbox"
+  says: every profile in Home's list that points at the refused inbox.
 
 So a profile created before Home holds an inbox is pointed by the next ensure
 after the inbox exists, and a profile created after Home adopted an inbox is
@@ -179,11 +184,12 @@ the list as a value too, for the same reason. A profile of any vintage with a
 `setInbox` is pointed this way; one predating `setInbox` drops the event, and
 the runtime logs a warning that no handler took it.
 
-The host, the handler, the pointing step and the seed step read each profile's
-pointer, and the handler reads the inbox the event names to adopt, the inbox
-Home holds, the ones it retains and the one its refusal record names, as a typed
-link, `Cell<ShareInboxPiece>`; the host reads it through `inboxPieceLinkSchema`
-in `packages/piece/src/ops/private-inbox.ts`, the same type as a schema. A link
+The host, the handler, the pointing and re-pointing steps and the seed step read
+each profile's pointer, and the handlers read the inbox the event names to
+adopt, the inbox Home holds, the ones it retains, the one its refusal record
+names and the one its replacement record names, as a typed link,
+`Cell<ShareInboxPiece>`; the host reads it through `inboxPieceLinkSchema` in
+`packages/piece/src/ops/private-inbox.ts`, the same type as a schema. A link
 that names the inbox's own result document, as `setInbox` and an adoption write
 it, carries the label of what it reaches, and the inbox labels its offers
 confidential to its owner; a profile's pointer, and Home's holder once Home has
@@ -209,10 +215,10 @@ says, reads the record's `reason` and `refusedAt` and never its `inbox`.
 
 `private-inbox.pointer-type.test.ts` fails to compile if any reader's pointer
 type, the host's, the ensure's and the pointing step's, the seed step's, the
-profile's own, the event's refused inbox or Home's holder, retained list and
-refusal record, becomes unconstrained, or names a member of the inbox's result
-other than its name. For the event's refused inbox, the second of those is the
-one the measurement above bears out.
+profile's own, the event's refused inbox or Home's holder, retained list,
+refusal record and replacement record, becomes unconstrained, or names a member
+of the inbox's result other than its name. For the event's refused inbox, the
+second of those is the one the measurement above bears out.
 
 The read and the `setInbox` it leads to are two transactions, in Home's space
 and then in the profile's, so a pointer that something else sets between them
@@ -294,13 +300,10 @@ that Home knows, and `refusedAt`, in the viewer's local time. It reads the
 record's `reason` and `refusedAt` and nothing else, so it never reads through
 the record's link to the refused inbox, and nothing the refused inbox's owner
 labels reaches Home's rendering. A code Home doesn't know is shown as given. The
-notice goes when the record is cleared. `packages/patterns/system/home.test.tsx`
-tests it.
-
-A notice alone can only say that shares may not reach the owner. The record is
-shaped so that a remedy can sit beside it in Home's result as an owner-only
-action of its own: one that creates Home's own inbox and points at it the
-profiles that point at the refused one, which the record's `inbox` names.
+notice carries a "Use a new inbox" button, as "Replacing a refused inbox" says,
+and says that a loom daemon running as another identity than the owner's stops
+receiving loom shares once the owner uses it. The notice goes when the record
+is cleared. `packages/patterns/system/home.test.tsx` tests it.
 
 A Home of a vintage whose ensure takes no refusal is sent the same event. Event
 schemas are open, so its handler is delivered the fields it declares, `adopt`
@@ -309,6 +312,67 @@ holds, as for an event naming nothing. A host of a vintage that names no
 refusal sends a newer Home an event naming nothing, so Home records nothing,
 and clears a record only when it adopts or creates an inbox, or when no profile
 points at the refused inbox.
+
+## Replacing a refused inbox
+
+The owner can have Home replace the refused inbox, from the button on the
+notice. Home's `replaceRefusedPrivateInbox` stream, which the button sends,
+does nothing while the record holds no refusal. Otherwise it:
+
+1. keeps the inbox Home holds, or, when Home holds none, creates Home's own, as
+   the ensure creates one, in the space named `private-inbox` in Home's space;
+2. clears the refusal record;
+3. records the refusal it acted on in `privateInboxReplacement`, under
+   `replacement`: the refused inbox, as a typed link; the refusal's `reason`
+   and `refusedAt`; and `replacedAt`, when the owner acted, by the handler's
+   clock;
+4. queues a second event, as the ensure queues its pointing, because a created
+   inbox's result document exists only once the first event's transaction has
+   committed. That event has every profile in Home's list that points at the
+   refused inbox, by the comparison the ensure uses, point at Home's inbox,
+   through the profile's own `setInbox`, with the inbox's own result document.
+   It reads the refused inbox from `privateInboxReplacement` rather than from
+   its event.
+
+A profile pointing at any other inbox, or at none, is left as it is, for the
+ensure to decide. The refused inbox does not go into `retainedPrivateInboxes`:
+Home never held it, and its offers carry the label its own owner gives them.
+Once the deciding profile points at the inbox Home holds, the next ensure keeps
+it, as "Creating or adopting it" says.
+
+`privateInboxReplacement` is a trusted-action write. Only the replacement
+handler may write it, and only for an event the renderer marks as a click on
+the trusted surface the notice declares, `PrivateInboxRefusalSurface`, with the
+action `ReplaceRefusedPrivateInbox`. So a send of the stream that no such click
+marks is refused, together with everything else its run writes and sends: no
+inbox is created, the refusal stays recorded, and no profile is re-pointed. The
+mark certifies that the event came from Home's rendered button, not that a
+person meant it. It keeps any pattern's code from replacing the inbox, but not a
+principal holding the owner's key, which can mark an event itself, as
+"Policy record: trusted-mark threat model" in
+[`host-embedding.md`](host-embedding.md) says. The second event can be sent
+without a click, but it only re-points profiles from the inbox the owner chose
+to replace.
+
+A loom daemon reads its profile's pointer again at intervals, and when the
+pointer names another inbox it adopts that inbox if the inbox's space grants
+the daemon's own identity `OWNER` and every principal `WRITE`, keeping the inbox
+it had among those it reads. A daemon running as the owner's identity therefore
+adopts Home's inbox at its next reading and goes on reading the refused one. A
+daemon running as another identity refuses Home's inbox, which grants that
+identity no `OWNER`, and leaves the pointer as it is. Senders then deliver to
+Home's inbox, where the share intake skips loom offers, as "The share intake"
+says, so that daemon stops receiving loom shares. The daemon never re-points a
+profile that already points at an inbox, so the two don't contend for the
+pointer.
+
+The replacement never clears a profile's pointer, only replaces one, so it
+doesn't depend on how a cleared pointer reads.
+
+Replacing, refusing a send no click marks, and re-pointing only the profiles
+that pointed at the refused inbox are tested by
+`packages/patterns/integration/private-inbox-multi-runtime.test.ts`, with server
+execution on and off, and by `packages/patterns/system/private-inbox.test.tsx`.
 
 ## The access its space grants
 
