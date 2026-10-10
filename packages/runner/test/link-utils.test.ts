@@ -783,6 +783,33 @@ describe("link-utils", () => {
       const value = { entry: sigil };
       expect(inlineExternalSchemaRefsInValue(value)).toEqual(value);
     });
+
+    it("returns the same inline form for a reference it has inlined before", () => {
+      setContentAddressedSchemasConfig(true);
+      const document: JSONSchema = {
+        type: "object",
+        properties: { name: { type: "string" } },
+      };
+      const hash = internSchemaAsTaggedHashString(document);
+      registerSchemaDocument(hash, document);
+      const link = () => ({
+        "/": {
+          [LINK_V1_TAG]: {
+            id: "of:memoized-schema-target",
+            path: [],
+            schema: { $ref: `cid:${hash}` },
+          },
+        },
+      });
+      const first = linkRefPayload(
+        inlineExternalSchemaRefsInValue({ entry: link() }).entry,
+      ).schema;
+      const second = linkRefPayload(
+        inlineExternalSchemaRefsInValue({ entry: link() }).entry,
+      ).schema;
+      expect(first).toEqual(document);
+      expect(second).toBe(first);
+    });
   });
 
   describe("sanitizeSchemaForLinks through references", () => {

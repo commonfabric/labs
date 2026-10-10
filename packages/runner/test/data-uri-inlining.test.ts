@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
+import { valueFromDataUri } from "@commonfabric/data-model/codec-data-uri";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
@@ -16,8 +17,9 @@ import {
   dataUriFromValueWithResolvedLinks,
   findAndInlineDataUriLinks,
 } from "../src/data-uri.ts";
+import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
-import { externalRefTo } from "./schema-ref-helpers.ts";
+import { externalRefTo, resolvedSchema } from "./schema-ref-helpers.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
@@ -873,6 +875,27 @@ describe("data URI inlining", () => {
           },
         },
       });
+    });
+  });
+
+  describe("dataUriFromValueWithResolvedLinks", () => {
+    it("carries a link's schema inline in the id", () => {
+      const target = runtime.getCell(space, "ref-target", {
+        type: "object",
+        properties: { name: { type: "string" } },
+      }, tx);
+      target.set({ name: "x" });
+      const link = target.getAsLink({ includeSchema: true });
+      const carried = parseLink(link)!.schema;
+      expect(carried).toEqual(externalRefTo({
+        type: "object",
+        properties: { name: { type: "string" } },
+      }));
+
+      const stored = valueFromDataUri(
+        dataUriFromValueWithResolvedLinks({ ref: link }),
+      );
+      expect(parseLink(stored.ref)!.schema).toEqual(resolvedSchema(carried));
     });
   });
 });
