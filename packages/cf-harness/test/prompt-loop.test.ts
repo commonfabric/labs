@@ -11426,8 +11426,8 @@ describe("CfHarnessPromptLoop turn budget warning", () => {
     });
 
     expect(budgetMessages).toHaveLength(1);
-    expect(budgetMessages[0]).toContain("two root turns remain");
-    expect(budgetMessages[0]).toContain("submit_result");
+    expect(budgetMessages[0]).toContain("two model turns remain");
+    expect(budgetMessages[0]).not.toContain("submit_result");
     expect(requests).toHaveLength(5);
     expect(requests[2]?.transcript.at(-1)?.content).toBe(budgetMessages[0]);
     expect(requests[1]?.transcript.at(-1)?.content).not.toBe(
@@ -11441,6 +11441,33 @@ describe("CfHarnessPromptLoop turn budget warning", () => {
         message.content.startsWith("Host turn budget:")
       ),
     ).toBe(false);
+  });
+
+  it("tells a strict run returning a structured result to call `submit_result` before its last turn", async () => {
+    const requests: HarnessModelTurnRequest[] = [];
+    const root = await Deno.makeTempDir();
+    try {
+      const loop = new CfHarnessPromptLoop({
+        engine: new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          model: "gpt-test",
+          structuredResult: {
+            schema: { type: "object" },
+            path: join(root, "result.json"),
+          },
+        }),
+        maxModelTurns: 3,
+        modelClient: bashTurnsThenAnswer(3, requests),
+      });
+
+      await loop.runPrompt({ prompt: "Collect the evidence." });
+
+      expect(requests[0]?.transcript.at(-1)?.content).toContain(
+        "Call submit_result on the next turn",
+      );
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
   });
 
   it("still fails a strict run that ends without a final response after the warning", async () => {

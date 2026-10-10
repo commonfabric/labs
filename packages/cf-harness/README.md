@@ -2160,10 +2160,11 @@ Unpaired work, including a tool call still running when the cancel lands, and
 process interruptions do not advance the checkpoint; their evidence remains in
 the audit trail.
 
-Every run gets 32 root model turns unless its host names another budget, and two
-turns before the last the host tells the model how many remain, so it can finish
-rather than be cut off: a run returning a structured result is told to call
-`submit_result` on the next turn and answer on the last. `finalizeOnTurnLimit`
+Every run gets 32 root model turns unless its host names another budget. With a
+budget of three turns or more, two turns before the last the host tells the
+model how many remain, so it can finish rather than be cut off; a subagent's run
+is told the same against its own budget. A run that has `submit_result` is told
+to call it on the next turn and answer on the last. `finalizeOnTurnLimit`
 instead reserves the last root model turn for a partial answer with harness and
 native tools disabled, warning in those terms, and records `budget_finalized`
 with a `gave-up` task outcome. Provider failures, blank answers, and attempted

@@ -267,13 +267,13 @@ caller.
 
 The `pattern-author` profile combines `run_pattern`, `read_file`, `bash`,
 `read_skill_resource`, and `research` without workspace writes. It preloads the
-available `pattern-dev` and `pattern-schema` skills, receives a 24-turn budget
-for compile-and-repair loops, and defaults to a discriminated success/failure
-return contract whose success arm carries the result reference. An inherited
-research kit is starting context; only unresolved items trigger another focused
-research call. Sandboxed children inherit the parent's working directory within
-their host-backed mounts; host-command children begin at the engine workspace
-rather than inheriting a parent directory they cannot resolve.
+available `pattern-dev` and `pattern-schema` skills, runs on the default 32-turn
+subagent budget for compile-and-repair loops, and defaults to a discriminated
+success/failure return contract whose success arm carries the result reference.
+An inherited research kit is starting context; only unresolved items trigger
+another focused research call. Sandboxed children inherit the parent's working
+directory within their host-backed mounts; host-command children begin at the
+engine workspace rather than inheriting a parent directory they cannot resolve.
 
 ## Lifecycle and evidence
 

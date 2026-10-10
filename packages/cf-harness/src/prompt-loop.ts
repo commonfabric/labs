@@ -3989,7 +3989,12 @@ export class CfHarnessPromptLoop {
               ? "Host turn budget: provide your final response now. Tools are unavailable. Report what you established and how, name what remains unchecked or uncertain, and do not claim the task is complete if it is not. This notice applies only to this user turn; subsequent user requests have a fresh budget."
               : this.#finalizeOnTurnLimit
               ? "Host turn budget: two root turns remain after this call, with the last reserved for your final response. Spend the next on what matters most, and prepare what you established and what remains open. This notice applies only to this user turn; subsequent user requests have a fresh budget."
-              : "Host turn budget: two root turns remain after this call, and the run fails if they end without your final response. Stop gathering and finish. If the task returns a result through a tool such as submit_result, call it on the next turn and give your final response on the last. This notice applies only to this user turn; subsequent user requests have a fresh budget.",
+              : `Host turn budget: two model turns remain after this call, and the run fails if they end without your final response. Stop gathering and finish.${
+                // `submit_result` alone does not end a run, so a run that
+                // returns through it needs the last turn for its answer.
+                this.#allowedToolIds.has("submit_result")
+                  ? " Call submit_result on the next turn and give your final response on the last."
+                  : ""} This notice applies only to this user turn; subsequent user requests have a fresh budget.`,
           };
           turnNotices.add(budgetMessage);
           transcript.push(budgetMessage);

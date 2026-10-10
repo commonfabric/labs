@@ -175,7 +175,7 @@ describe("piece-output", () => {
         "no successful assign_slug receipt",
       );
       expect(requests[4].transcript.at(-1)?.content).toContain(
-        "two root turns remain",
+        "two model turns remain",
       );
       expect(result.taskOutcome).toEqual({ outcome: "completed" });
       expect(result.runState.assignedPieces?.map((piece) => piece.slug))
