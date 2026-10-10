@@ -17,14 +17,13 @@ import {
   normalizeBindingName,
   reserveIdentifier,
 } from "../../utils/identifiers.ts";
-import { createPathRead } from "../../transformers/destructuring-lowering.ts";
+import {
+  createPathRead,
+  type PathSegment,
+} from "../../transformers/destructuring-lowering.ts";
 import { createReactiveWrapperForExpression } from "../../transformers/expression-rewrite/rewrite-helpers.ts";
 import { unwrapExpression } from "../../utils/expression.ts";
-import {
-  cloneKeyExpression,
-  getKnownComputedKeyExpression,
-  isCommonFabricKeyIdentifier,
-} from "../../utils/reactive-keys.ts";
+import { getStaticKeySegment } from "../../utils/reactive-keys.ts";
 import { CaptureCollector } from "../capture-collector.ts";
 import { buildCaptureParamsObject } from "../utils/capture-scaffold.ts";
 import { expandCapturedObjectSpreads } from "../utils/captured-object-spread.ts";
@@ -43,51 +42,31 @@ export interface ArrayMethodCallbackTransformOptions {
   ) => ts.ConciseBody;
 }
 
-function isKnownComputedKey(
-  expression: ts.Expression,
-  context: TransformationContext,
-): expression is ts.Identifier {
-  return isCommonFabricKeyIdentifier(expression, context, "NAME") ||
-    isCommonFabricKeyIdentifier(expression, context, "UI") ||
-    isCommonFabricKeyIdentifier(expression, context, "SELF") ||
-    isCommonFabricKeyIdentifier(expression, context, "FS");
-}
-
 function lowerMapReceiverMemberAccess(
   expression: ts.Expression,
   context: TransformationContext,
 ): ts.Expression {
-  const segments: ts.Expression[] = [];
+  const segments: PathSegment[] = [];
   let current = unwrapExpression(expression);
 
   while (true) {
     if (ts.isPropertyAccessExpression(current)) {
-      segments.unshift(context.factory.createStringLiteral(current.name.text));
+      segments.unshift(current.name.text);
       current = unwrapExpression(current.expression);
       continue;
     }
 
     if (ts.isElementAccessExpression(current)) {
-      const arg = current.argumentExpression;
-      if (
-        arg &&
-        (ts.isStringLiteral(arg) ||
-          ts.isNumericLiteral(arg) ||
-          ts.isNoSubstitutionTemplateLiteral(arg))
-      ) {
-        segments.unshift(context.factory.createStringLiteral(arg.text));
-        current = unwrapExpression(current.expression);
-        continue;
+      const segment = getStaticKeySegment(
+        current.argumentExpression,
+        context,
+      );
+      if (segment === undefined) {
+        return expression;
       }
-      if (arg && isKnownComputedKey(arg, context)) {
-        segments.unshift(
-          getKnownComputedKeyExpression(arg, context) ??
-            cloneKeyExpression(arg, context.factory),
-        );
-        current = unwrapExpression(current.expression);
-        continue;
-      }
-      return expression;
+      segments.unshift(segment);
+      current = unwrapExpression(current.expression);
+      continue;
     }
 
     break;

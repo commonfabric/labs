@@ -335,8 +335,8 @@ describe("pattern-input-self", () => {
 
     describe("a well-known key read through `input[SELF]`", () => {
       for (const key of ["NAME", "UI", "FS"]) {
-        it(`reports \`pattern-context:self-access\` for \`input[SELF][${key}]\``, async () => {
-          const { diagnostics } = await compile(`
+        it(`reads \`input[SELF][${key}]\` in place, keyed off the self reference`, async () => {
+          const { diagnostics, output } = await compile(`
             import { FS } from "commonfabric";
 
             export default pattern<Input, Output>((input) => ({
@@ -347,13 +347,18 @@ describe("pattern-input-self", () => {
             }));
           `);
 
+          expect(diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+          const root = parseModule(output);
+          expect(callsNamed(root, "lift")).toEqual([]);
           expect(
-            diagnostics
-              .filter((d) => d.severity === "error")
-              .map((
-                d,
-              ) => [d.type, d.message.includes("`const me = input[SELF];`")]),
-          ).toEqual([["pattern-context:self-access", true]]);
+            callsNamed(root, "key")
+              .filter((call) =>
+                ts.isPropertyAccessExpression(call.expression) &&
+                ts.isElementAccessExpression(call.expression.expression) &&
+                isHelperSelf(call.expression.expression.argumentExpression)
+              )
+              .map((call) => call.arguments.map((arg) => arg.getText(root))),
+          ).toEqual([[`__cfHelpers.${key}`]]);
         });
 
         it(`reports no error for \`me[${key}]\` off \`const me = input[SELF]\``, async () => {
