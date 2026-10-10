@@ -14,9 +14,10 @@ type Gesture = "drag" | "key";
  *
  * @element cf-slider
  *
- * @attr {number|CellHandle<number>} value - Current slider value. Bound to a
+ * @prop {number|CellHandle<number>} value - Current slider value. Bound to a
  *   cell (`$value` in a pattern), a move writes the cell and the slider follows
- *   the cell; a plain number is the slider's own state.
+ *   the cell; a plain number (or the `value` attribute) is the slider's own
+ *   state.
  * @attr {number} min - Minimum allowed value (default: 0)
  * @attr {number} max - Maximum allowed value (default: 100)
  * @attr {number} step - Value increment/decrement step (default: 1)
@@ -271,19 +272,21 @@ export class CFSlider extends BaseElement {
   `,
   ];
 
-  declare value: CellHandle<number> | number;
+  declare value: CellHandle<number | undefined> | number | undefined;
   declare min: number;
   declare max: number;
   declare step: number;
   declare disabled: boolean;
   declare orientation: SliderOrientation;
 
-  // Immediate, so a move's announcement and its write happen together: a
-  // write held back by a timer can be cancelled (by a rebind, a refusal or a
-  // disconnect) after its move was announced.
-  private _valueCellController = createCellController<number>(this, {
-    timing: { strategy: "immediate" },
-  });
+  // Immediate: a move is announced only once its write is made.
+  // `undefined` is a cell holding nothing, which a move may leave so.
+  private _valueCellController = createCellController<number | undefined>(
+    this,
+    {
+      timing: { strategy: "immediate" },
+    },
+  );
 
   private _trackElement: HTMLElement | null = null;
   private _thumbElement: HTMLElement | null = null;
@@ -396,77 +399,112 @@ export class CFSlider extends BaseElement {
   }
 
   /**
-   * The value shown: what the bound cell holds, or the plain property. The
-   * plain property is read directly, so a move made in this tick is seen by
-   * the next one rather than after Lit's update rebinds the controller.
+   * What the slider holds: the bound cell's value, or the plain property,
+   * read directly so a move made in this tick is seen by the next one. It may
+   * lie out of bounds; `undefined` is a cell holding nothing.
    */
+  private get _held(): number | undefined {
+    const value = this._valueCellController.hasCell()
+      ? this._valueCellController.getValue()
+      : this.value;
+    return typeof value === "number" && Number.isFinite(value)
+      ? value
+      : undefined;
+  }
+
+  /** The value shown. */
   private get _current(): number {
-    return this._shown(
-      this._valueCellController.hasCell()
-        ? this._valueCellController.getValue()
-        : this.value,
-    );
+    return this._shown(this._held);
+  }
+
+  /** Whether `_held` is known: a plain value, or a cell the worker has read. */
+  private get _known(): boolean {
+    const cell = this._valueCellController.getCell();
+    return cell === null || !("unread" in cell.lastRead());
   }
 
   /**
-   * Move to `value`, whatever the slider holds now: a drag, Home or End, or
-   * `setValue`. It needs no read of a bound cell, so it is written at once
-   * and moves land in the order they were made. A move that leaves the shown
-   * value alone writes nothing.
+   * Moves run in the order they were made. A step on a cell not yet read
+   * waits for the worker; while one waits, later moves queue behind it.
    */
-  private _moveTo(value: number, gesture: Gesture | undefined): void {
-    const oldValue = this._current;
-    const next = this._clampValue(this._snapToStep(value));
-    if (next === oldValue) return;
-    if (this._valueCellController.hasCell()) {
-      if (this._valueCellController.refusal !== undefined) return;
-      this._valueCellController.setValue(next);
-    } else {
-      this.value = next;
-    }
-    if (gesture) this._announce(next, oldValue, gesture);
+  private _queue: Promise<void> | undefined;
+
+  private _inOrder(move: () => Promise<void> | void): void {
+    const run = this._queue ? this._queue.then(move) : move();
+    if (run === undefined) return;
+    const queued: Promise<void> = run.then(() => {
+      if (this._queue === queued) this._queue = undefined;
+    });
+    this._queue = queued;
   }
 
   /**
-   * Move by what `step` makes of the current value: an arrow or page key, or
-   * `increment`/`decrement`. Bound to a cell, the controller computes it from
-   * what the cell holds, asking the worker first where the cell has not been
-   * read, so a step is never taken from the minimum shown in the meantime.
-   * Every write is announced, once it is made; a refused read writes nothing.
+   * Move to `value`: a drag, Home or End, or `setValue`. A move to where the
+   * slider already holds writes nothing; on a cell not yet read that is not
+   * known, so the move is written.
+   */
+  private _moveTo(
+    value: number,
+    gesture: Gesture | undefined,
+    snap = true,
+  ): void {
+    this._inOrder(() => {
+      const held = this._held;
+      const next = this._clampValue(snap ? this._snapToStep(value) : value);
+      if (this._known && next === (held ?? this._shown(held))) return;
+      if (this._valueCellController.hasCell()) {
+        if (this._valueCellController.refusal !== undefined) return;
+        this._valueCellController.setValue(next);
+      } else {
+        this.value = next;
+      }
+      if (gesture) this._announce(next, held ?? this._shown(held), gesture);
+    });
+  }
+
+  /**
+   * Move by what `step` makes of the shown value: an arrow or page key, or
+   * `increment`/`decrement`. On a cell not yet read the controller asks the
+   * worker first, so a step is never taken from the minimum shown meanwhile.
+   * A step that leaves the value where it is writes nothing.
    */
   private _moveBy(
     step: (current: number) => number,
     gesture: Gesture | undefined,
   ): void {
-    if (!this._valueCellController.hasCell()) {
-      const oldValue = this._current;
-      const next = step(oldValue);
-      if (next === oldValue) return;
-      this.value = next;
-      if (gesture) this._announce(next, oldValue, gesture);
-      return;
-    }
-    let written: { value: number; oldValue: number } | undefined;
-    const announce = () => {
-      if (written && gesture) {
-        this._announce(written.value, written.oldValue, gesture);
+    this._inOrder(() => {
+      if (!this._valueCellController.hasCell()) {
+        const held = this._held;
+        const next = step(this._shown(held));
+        if (next === (held ?? this._shown(held))) return;
+        this.value = next;
+        if (gesture) this._announce(next, held ?? this._shown(held), gesture);
+        return;
       }
-    };
-    const settled = this._valueCellController.updateValue((held) => {
-      const oldValue = this._shown(held);
-      const value = step(oldValue);
-      // Unchanged: a cell holding a value keeps it, even one out of bounds.
-      if (value === oldValue && typeof held === "number") return held;
-      written = { value, oldValue };
-      return value;
+      let written: { value: number; oldValue: number } | undefined;
+      const announce = () => {
+        if (written && gesture) {
+          this._announce(written.value, written.oldValue, gesture);
+        }
+      };
+      const settled = this._valueCellController.updateValue((held) => {
+        const value = step(this._shown(held));
+        // Unchanged, empty cell included: nothing is written.
+        if (value === (held ?? this._shown(held))) return held;
+        written = { value, oldValue: held ?? this._shown(held) };
+        return value;
+      });
+      // A cell already read is written now, and announced now; one the
+      // worker is still answering for is announced once its write is made.
+      if (written) {
+        announce();
+        return;
+      }
+      return settled.then(announce);
     });
-    // A cell already read is written now, and announced now; one the worker
-    // is still answering for is announced when its write is made.
-    if (written) announce();
-    else void settled.then(announce);
   }
 
-  /** `cf-input` for a move made while dragging, and `cf-change` for every move. */
+  /** `cf-input` for a move made while dragging, and `cf-change` for any gesture. */
   private _announce(value: number, oldValue: number, gesture: Gesture): void {
     if (gesture === "drag") this.emit("cf-input", { value, oldValue });
     this.emit("cf-change", { value, oldValue });
@@ -661,7 +699,8 @@ export class CFSlider extends BaseElement {
 
     if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
-      this._moveTo(event.key === "Home" ? this.min : this.max, "key");
+      // To the very end, as the ARIA slider pattern has it, even off the step.
+      this._moveTo(event.key === "Home" ? this.min : this.max, "key", false);
       return;
     }
     const bigStep = this.step * 10;

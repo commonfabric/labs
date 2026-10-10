@@ -221,13 +221,14 @@ await input.pressSequentially("user@example.com");
 
 **Purpose**: Range input slider **Tag**: `<cf-slider>` **Attributes**:
 
-- `value` - number
+- `value` - number; in a pattern, bind a cell with `$value`
 - `min` - number (default: 0)
 - `max` - number (default: 100)
 - `step` - number (default: 1)
 - `disabled` - boolean
-- `name` - string **Events**:
-- `cf-change` - Fired on value change with detail: `{ value }` **Example**:
+- `orientation` - `"horizontal"` | `"vertical"` **Events**:
+- `cf-change` - Fired when a person moves it, with detail: `{ value, oldValue }`
+- `cf-input` - Fired with `cf-change` while dragging **Example**:
 
 ```html
 <cf-slider min="0" max="100" value="50" step="5"></cf-slider>

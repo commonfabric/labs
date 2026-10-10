@@ -1,12 +1,3 @@
-/**
- * What a slider bound to a cell does: it shows the cell's value, takes a key
- * step from what the cell holds (asking the worker first where it has read
- * nothing), writes moves in the order they were made, announces each move a
- * person makes once its write is made, and never rewrites or unbinds a cell
- * it is only showing. A slider given a plain number keeps that number as its
- * own state.
- */
-
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
@@ -155,16 +146,74 @@ describe("CFSlider bound to a cell", () => {
     press(full, "ArrowRight");
     press(full, "End");
 
-    const empty = createMockCellHandle<number>(undefined);
+    // A cell the worker has read and found empty shows the minimum.
+    const empty = createMockCellHandle<number>();
+    const answer = holdReads(empty);
     const blank = sliderWith(empty);
+    // A step that has the worker read the cell, and leaves it empty.
+    blank.decrement();
+    answer({ value: undefined });
+    await settle();
     const blankAnnounced = announcements(blank);
     press(blank, "Home");
+    press(blank, "ArrowLeft");
+    blank.decrement();
     await settle();
 
     expect(written(atMax)).toEqual([]);
     expect(fullAnnounced).toEqual([]);
     expect(written(empty)).toEqual([]);
     expect(blankAnnounced).toEqual([]);
+  });
+
+  it("writes a move to the minimum on a cell it has not read", async () => {
+    // The minimum is only what it shows meanwhile; the cell may hold 50.
+    const value = createMockCellHandle<number>();
+    holdReads(value);
+    const element = sliderWith(value);
+
+    press(element, "Home");
+    await settle();
+
+    expect(written(value)).toEqual([0]);
+  });
+
+  it("lands a step and a later move in the order they were made", async () => {
+    const value = createMockCellHandle<number>();
+    const answer = holdReads(value);
+    const element = sliderWith(value);
+
+    press(element, "ArrowRight");
+    element.setValue(30);
+    answer({ value: 50 });
+    await settle();
+
+    expect(written(value)).toEqual([51, 30]);
+  });
+
+  it("announces a step on a read cell at once", () => {
+    const element = sliderWith(createMockCellHandle(30));
+    const announced = announcements(element);
+
+    press(element, "ArrowRight");
+
+    expect(announced.map((a) => a.detail)).toEqual([
+      { value: 31, oldValue: 30 },
+    ]);
+  });
+
+  it("takes keys to the very end, and steps them without snapping", async () => {
+    const value = createMockCellHandle(6);
+    const element = sliderWith(value);
+    element.max = 10;
+    element.step = 3;
+
+    press(element, "End");
+    await settle();
+    press(element, "ArrowLeft");
+    await settle();
+
+    expect(written(value)).toEqual([10, 7]);
   });
 
   it("announces nothing for a call from code", async () => {
@@ -216,6 +265,29 @@ describe("CFSlider given a plain number", () => {
     expect(announced).toEqual([
       { detail: { value: 29, oldValue: 30 }, shown: 29 },
     ]);
+  });
+
+  it("moves a value set out of bounds, and names it as it was", () => {
+    const element = sliderWith(30);
+    const announced = announcements(element);
+    element.value = 200;
+
+    press(element, "End");
+
+    expect(element.value).toBe(100);
+    expect(announced.map((a) => a.detail)).toEqual([
+      { value: 100, oldValue: 200 },
+    ]);
+  });
+
+  it("takes End to the maximum off the step", () => {
+    const element = sliderWith(6);
+    element.max = 10;
+    element.step = 3;
+
+    press(element, "End");
+
+    expect(element.value).toBe(10);
   });
 
   it("sees a move made in the same tick", () => {
