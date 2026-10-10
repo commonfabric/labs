@@ -19,6 +19,8 @@ import type {
   InspectConfLabelResult,
   PatternToolFunction,
   PatternToolResult,
+  PolicySecretHashesFunction,
+  PolicySecretHashFunction,
   SqliteDatabaseFunction,
   SqliteQueryFunction,
   UIVariantKind,
@@ -188,6 +190,21 @@ export const cellFromUrl = createNodeFactory({
   type: "ref",
   implementation: "cellFromUrl",
 }) as CellFromUrlFunction;
+
+// The result declares no confidentiality: the hash carries whatever the
+// builtin's flow carries, its policy's clause and its input's labels.
+export const policySecretHash = createNodeFactory({
+  type: "ref",
+  implementation: "policySecretHash",
+  resultSchema: { type: "string" },
+}) as PolicySecretHashFunction;
+
+// The same builtin over a list: one hash per input string, in order.
+export const policySecretHashes = createNodeFactory({
+  type: "ref",
+  implementation: "policySecretHash",
+  resultSchema: { type: "array", items: { type: "string" } },
+}) as PolicySecretHashesFunction;
 
 export const fetchJsonUnchecked = createNodeFactory({
   type: "ref",

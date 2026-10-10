@@ -90,6 +90,7 @@ entries; a new gap is filed as a specs pull request.
 - [Observation classes](cfc-observation-classes.md)
 - [Persisted declassification](cfc-persisted-declassification.md)
 - [Sealed custody](cfc-custody-seal.md)
+- [Policy secrets](cfc-policy-secret.md)
 - [Range-scoped integrity](cfc-range-scoped-integrity.md)
 - [Render-boundary composition](cfc-render-boundary-composition.md)
 - [Runner future work](cfc-runner-future-work.md)

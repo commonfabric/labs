@@ -264,9 +264,11 @@ list — is the authoritative source. As of this writing it recognizes:
   (which additionally gets dedicated type-argument schema injection, §10.5),
   `fetchJsonUnchecked`, `fetchText`, `fetchBinary` — `fetchProgram`,
   `streamData`, `cellFromUrl`,
-  `compileAndRun`, `navigateTo`, and the SQLite builtins `sqliteDatabase` /
-  `sqliteQuery` (`sqliteQuery<Row>` additionally gets dedicated type-argument
-  schema injection)
+  `compileAndRun`, `navigateTo`, `policySecretHash` and its list form
+  `policySecretHashes` (which, like `fetchJson`, get type-argument schema
+  injection, §10.5), and the SQLite builtins
+  `sqliteDatabase` / `sqliteQuery` (`sqliteQuery<Row>` additionally gets
+  dedicated type-argument schema injection)
 - `patternTool` — recognized, but explicitly **not** a reactive origin
   (`reactiveOrigin: false`)
 
@@ -2103,6 +2105,12 @@ Injected behaviors:
     authors to add a type argument or use `fetchJsonUnchecked` for JSON whose
     shape is not declared as a type. `fetchText` / `fetchBinary` /
     `fetchJsonUnchecked` receive no dedicated injection.
+- `policySecretHash<T>(...)` and its list form `policySecretHashes<T>(...)`
+  are lowered the same way: the `T` type argument, the type of each hash,
+  becomes an injected `schema` property, which names the module policy whose
+  key the hashes are computed under, and an untyped call of either is a hard
+  **Error** `policy-secret-hash:missing-type-argument`. These calls and
+  `fetchJson` share one table of typed-schema calls in `schema-injection.ts`.
 
 ### 10.6 Conditional helpers
 

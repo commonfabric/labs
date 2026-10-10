@@ -3868,6 +3868,48 @@ export type FetchJsonUncheckedFunction = (
 ) => Reactive<{ pending: boolean; result: any; error?: any }>;
 
 /**
+ * A keyed hash of the string `input` under the key of the module policy `T`
+ * names: the lowercase hex of HMAC-SHA-256 over the input, the same for every
+ * runtime of the space and every run given the same input.
+ *
+ * `T` is required, and must be a string confidential to exactly one module
+ * policy, `Confidential<string, readonly [PolicyOf<typeof rules>]>`; the
+ * compiler derives a schema from it and injects it as the `schema` parameter,
+ * which is how the runtime learns the policy. The runtime mints the key once
+ * per space and policy, and no code reads it. The result carries the policy's
+ * clause and the input's labels, so only the exchange rules of the policies
+ * those name release anything computed from it. It is `undefined` until the
+ * key is available. On a runtime that does not enforce CFC or does not persist
+ * flow labels it stays `undefined`, and every run reports an error.
+ * docs/specs/cfc-policy-secret.md says what this protects and what it does
+ * not.
+ */
+export type PolicySecretHashFunction = <T extends string>(
+  params: FactoryInput<{
+    input: string;
+    schema?: JSONSchema;
+    result?: T;
+  }>,
+) => Reactive<T | undefined>;
+
+/**
+ * Like {@link PolicySecretHashFunction}, except that `input` is a list of
+ * strings and the result is the list of their keyed hashes, one per input in
+ * the same order. The builtin writes the whole list itself, so an exchange
+ * rule can require it as the input witness of a function that decides over
+ * the list. `T` names the type of each hash, as it does for
+ * `policySecretHash`. The result is `undefined` until the key is available,
+ * and while the input is unset.
+ */
+export type PolicySecretHashesFunction = <T extends string>(
+  params: FactoryInput<{
+    input: string[];
+    schema?: JSONSchema;
+    result?: T[];
+  }>,
+) => Reactive<T[] | undefined>;
+
+/**
  * The cell a URL names, if it names one.
  *
  * Resolves with no `cell` when the URL addresses no cell — most URLs are web
@@ -4817,6 +4859,8 @@ export declare const cfLink: SqliteCfLinkFunction;
 export declare const cfSqlite: CfSqliteHelpers;
 export declare const navigateTo: NavigateToFunction;
 export declare const inspectConfLabel: InspectConfLabelFunction;
+export declare const policySecretHash: PolicySecretHashFunction;
+export declare const policySecretHashes: PolicySecretHashesFunction;
 export declare const wish: WishFunction;
 
 /**

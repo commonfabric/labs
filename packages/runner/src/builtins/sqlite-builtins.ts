@@ -39,7 +39,11 @@ import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { setResultCell } from "../result-utils.ts";
-import { readRuntimeSecret, runtimeSecretLink } from "../runtime-secret.ts";
+import {
+  readRuntimeSecret,
+  runtimeSecretLink,
+  unusableRuntimeSecret,
+} from "../runtime-secret.ts";
 import { schemaHasIfc } from "../schema-ifc.ts";
 import { isCellScope, narrowestScope } from "../scope.ts";
 import { computeInputHashFromValue } from "./fetch-utils.ts";
@@ -1814,13 +1818,13 @@ export function sqliteQuery(
                 // document per row per run.
                 wtx.ensureRuntimeSecret(
                   base.space,
-                  SQLITE_ROW_SALT,
+                  unusableRuntimeSecret(SQLITE_ROW_SALT),
                   runtimeWritePolicyAuthorization,
                 );
                 const salt = readRuntimeSecret(
                   wtx,
                   base.space,
-                  SQLITE_ROW_SALT,
+                  unusableRuntimeSecret(SQLITE_ROW_SALT),
                 );
                 if (salt === undefined) {
                   throw new Error("sqlite: the space's row salt is unreadable");

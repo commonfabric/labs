@@ -12,6 +12,7 @@ import {
   readRuntimeSecret,
   runtimeSecretLink,
   RuntimeSecretUnresolvedError,
+  unusableRuntimeSecret,
 } from "../src/runtime-secret.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
@@ -24,7 +25,7 @@ import { internalVerifierRead } from "../src/storage/reactivity-log.ts";
 const signer = await Identity.fromPassphrase("runner-runtime-secret");
 const space = signer.did();
 
-const NAME = "test-salt";
+const NAME = "policy:test-digest";
 const link = runtimeSecretLink(space, NAME);
 
 describe("runtime-secret", () => {
@@ -58,7 +59,11 @@ describe("runtime-secret", () => {
   /** Mints the secret in a transaction of its own. */
   const mint = () =>
     commit((tx) =>
-      tx.ensureRuntimeSecret(space, NAME, runtimeWritePolicyAuthorization)
+      tx.ensureRuntimeSecret(
+        space,
+        unusableRuntimeSecret(NAME),
+        runtimeWritePolicyAuthorization,
+      )
     );
 
   /** The value stored for the secret, read as the runtime reads it. */
@@ -80,6 +85,29 @@ describe("runtime-secret", () => {
 
       await mint();
       expect(stored()).toBe(first);
+    });
+
+    it("trusts no value stored under another confidentiality, and writes none over it", async () => {
+      // The claim vouches for the value only over the confidentiality the
+      // secret is stored under. A stored label never weakens, so the mint
+      // cannot rewrite the value under the other one either.
+
+      await mint();
+      const minted = stored();
+      const other = { name: NAME, confidentiality: ["another-clause"] };
+      const tx = runtime.edit();
+      try {
+        expect(readRuntimeSecret(tx, space, other)).toBeUndefined();
+      } finally {
+        tx.abort("other read");
+      }
+
+      const mintTx = runtime.edit();
+      mintTx.ensureRuntimeSecret(space, other, runtimeWritePolicyAuthorization);
+      expect((await mintTx.commit().settled).error?.message).toMatch(
+        /cannot be weakened/,
+      );
+      expect(stored()).toBe(minted);
     });
 
     it("replaces a value stored with no writer claim", async () => {
@@ -107,7 +135,9 @@ describe("runtime-secret", () => {
 
       const tx = runtime.edit();
       try {
-        expect(readRuntimeSecret(tx, space, NAME)).toBe(stored());
+        expect(readRuntimeSecret(tx, space, unusableRuntimeSecret(NAME))).toBe(
+          stored(),
+        );
       } finally {
         tx.abort("runtime read");
       }
@@ -172,7 +202,13 @@ describe("runtime-secret", () => {
 
       const tx = runtime.edit();
       try {
-        expect(() => readRuntimeSecret(unresolvableReplica(tx), space, NAME))
+        expect(() =>
+          readRuntimeSecret(
+            unresolvableReplica(tx),
+            space,
+            unusableRuntimeSecret(NAME),
+          )
+        )
           .toThrow(RuntimeSecretUnresolvedError);
       } finally {
         tx.abort("unresolvable schema");
@@ -187,7 +223,11 @@ describe("runtime-secret", () => {
       const tx = runtime.edit();
       try {
         expect(() =>
-          readRuntimeSecret(unresolvableReplica(tx, 42), space, NAME)
+          readRuntimeSecret(
+            unresolvableReplica(tx, 42),
+            space,
+            unusableRuntimeSecret(NAME),
+          )
         ).toThrow(RuntimeSecretUnresolvedError);
       } finally {
         tx.abort("unresolvable schema over a number");

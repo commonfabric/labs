@@ -899,7 +899,9 @@ in the replica nor in the schema registry is neither trusted nor untrusted,
 and the settle fails rather than replace it, since replacing a trusted salt
 would re-key every row document. The salt is labeled with the read-failed
 atom, which no ceiling admits; the builtin reads it as a verifier-internal
-read, which joins nothing to the settle's label. Without
+read, which joins nothing to the settle's label. A module policy's key is a
+runtime secret of the same kind, stored under that policy's clause instead
+([policy secrets](../cfc-policy-secret.md)). Without
 the salt the id would be a value computable from the row, and the reference
 at each slot would have to carry the row's label so that a reader could not
 confirm a guess at a row by recomputing its id (§8.17.6 rule 4). With it the

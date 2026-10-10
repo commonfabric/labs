@@ -119,9 +119,10 @@ import {
   isRuntimeSecretOwnRead,
   readRuntimeSecret,
   readsRuntimeSecretValue,
-  RUNTIME_SECRET_SCHEMA,
   RUNTIME_SECRET_WRITER,
+  type RuntimeSecret,
   runtimeSecretLink,
+  runtimeSecretSchema,
 } from "../runtime-secret.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
 import { CooperativeYield } from "../scheduler/cooperative-yield.ts";
@@ -2803,7 +2804,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   ensureRuntimeSecret(
     space: MemorySpace,
-    name: string,
+    secret: RuntimeSecret,
     authorization: RuntimeWritePolicyAuthorization,
   ): void {
     if (!runtimeWritePolicyAuthorized(authorization)) {
@@ -2812,8 +2813,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       );
     }
     this.#assertWritable("ensureRuntimeSecret()");
-    if (readRuntimeSecret(this, space, name) !== undefined) return;
-    const link = runtimeSecretLink(space, name);
+    if (readRuntimeSecret(this, space, secret) !== undefined) return;
+    const link = runtimeSecretLink(space, secret.name);
     this.#runPrivilegedSystemWrite(() => {
       this.writeValueOrThrow(
         link,
@@ -2835,7 +2836,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       this.recordCfcWritePolicyInput({
         kind: "schema",
         target: { space, id: link.id, scope: link.scope, path: [] },
-        schema: RUNTIME_SECRET_SCHEMA,
+        schema: runtimeSecretSchema(secret),
       });
     } finally {
       assignCfcImplementationIdentity(this, identity);
@@ -4160,10 +4161,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   ensureRuntimeSecret(
     space: MemorySpace,
-    name: string,
+    secret: RuntimeSecret,
     authorization: RuntimeWritePolicyAuthorization,
   ): void {
-    this.#wrapped.ensureRuntimeSecret(space, name, authorization);
+    this.#wrapped.ensureRuntimeSecret(space, secret, authorization);
   }
 
   setCfcPolicyEvaluationMode(mode: CfcPolicyEvaluationMode): void {
