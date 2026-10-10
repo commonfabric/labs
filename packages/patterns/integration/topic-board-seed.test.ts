@@ -65,13 +65,17 @@ describe("topic board seed", () => {
           topics.push(topic);
         }
         for (const [index, topic] of topics.entries()) {
-          const mentions = (await topic.result.getCell()).key("mentions");
-          await mentions.pull();
+          // The references the `mention` verb stored. The topic's `mentions`
+          // result is derived from them by a running topic, and nothing here
+          // runs one.
+          const mentioned = await topic.input.getCell(["mentioned"]);
+          await mentioned.pull();
           const targets = crossrefTargets(index, shape);
-          expect(mentions.get()).toHaveLength(targets.length);
+          // A topic that mentioned nothing holds no list at all.
+          expect(mentioned.get() ?? []).toHaveLength(targets.length);
           for (const [position, target] of targets.entries()) {
             expect(
-              mentions.key(position).resolveAsCell()
+              mentioned.key(position).resolveAsCell()
                 .equals(topics[target].getCell()),
             ).toBe(true);
           }

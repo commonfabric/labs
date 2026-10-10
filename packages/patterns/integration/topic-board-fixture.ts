@@ -17,6 +17,8 @@
 import type { JSONSchema } from "@commonfabric/api";
 import { type DID, Identity } from "@commonfabric/identity";
 import { createTestSpace } from "@commonfabric/integration/test-space";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import type { Cell } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { join } from "@std/path";
@@ -95,17 +97,25 @@ export function demandTopicBoard(
   board: PieceController,
   demand: TopicBoardDemand = "index",
 ): () => void {
+  if (demand === "full") {
+    return board.pieces().getResult(board.getCell()).sink(() => {});
+  }
+  return topicBoardIndex(board).sink(() => {});
+}
+
+/**
+ * The board's `index` under its durable result schema: one bounded row per
+ * topic, whose address is the topic's own. The schema has to be applied at the
+ * result root, where it describes the value, for `key()` to select the row
+ * schema under it.
+ */
+function topicBoardIndex(board: PieceController): Cell<unknown> {
   const result = board.pieces().getResult(board.getCell());
-  if (demand === "full") return result.sink(() => {});
   const schema = result.getMetaRaw("schema") as JSONSchema | undefined;
   if (schema === undefined) {
-    throw new Error(
-      "Topic board result has no durable schema for index demand.",
-    );
+    throw new Error("Topic board result has no durable schema.");
   }
-  // The durable schema describes the result root. key() needs it on that root
-  // to select the index row schema for the subscription.
-  return result.asSchema(schema).key("index").sink(() => {});
+  return result.asSchema(schema).key("index");
 }
 
 /**
@@ -233,20 +243,26 @@ function topicBody(
 /**
  * The topic piece at `index` in the board's list.
  *
- * Only the `topics` key is pulled. The board's result also carries `crossrefs`,
- * whose rows are piece-valued and expand through each topic's view of every
- * sibling; pulling the whole result grows without bound as the board fills.
+ * What is read is the board's index row at `index`, whose schema bounds the
+ * read to that row's scalars. Reading the `topics` key with no schema, or the
+ * result as a whole, walks every topic the board holds through its links, so
+ * each call costs the whole board and the seed that calls it per topic grows
+ * quadratically. The read waits for the row to be present: under server
+ * execution the verb that files a topic can return before its consequence
+ * lands in this replica.
  */
 export async function topicAt(
   board: PieceController,
   index: number,
 ): Promise<PieceController> {
-  const topics = (await board.result.getCell()).key("topics");
-  await topics.pull();
-  return new PieceController(
-    board.pieces(),
-    topics.key(index).resolveAsCell(),
+  const row = topicBoardIndex(board).key(index);
+  await waitForCellValue(
+    board.pieces().runtime,
+    row,
+    (value: { title?: string } | undefined) => value?.title !== undefined,
+    { stuckLabel: `the board's index row for topic ${index}` },
   );
+  return new PieceController(board.pieces(), row.resolveAsCell());
 }
 
 /**
