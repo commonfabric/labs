@@ -1,5 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { type Stub, stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, Runtime } from "@commonfabric/runner";
@@ -7,6 +8,26 @@ import { loadPieces } from "../lib/piece.ts";
 import { withEnv } from "./utils.ts";
 
 describe("CLI runtime creation", () => {
+  // loadPieces reads the deployment's meta document before it builds a
+  // runtime. Say there is none, so no test reaches the network for it.
+  let fetchMeta: Stub<typeof globalThis, Parameters<typeof fetch>> | undefined;
+  beforeEach(() => {
+    const realFetch = globalThis.fetch;
+    fetchMeta = stub(
+      globalThis,
+      "fetch",
+      (input: RequestInfo | URL, init?: RequestInit) =>
+        new URL(input instanceof Request ? input.url : String(input))
+            .pathname === "/api/meta"
+          ? Promise.resolve(new Response(null, { status: 404 }))
+          : realFetch(input, init),
+    );
+  });
+  afterEach(() => {
+    fetchMeta?.restore();
+    fetchMeta = undefined;
+  });
+
   it("applies deployed-client options to the piece-manager runtime", async () => {
     const identity = await Identity.fromPassphrase(
       "piece runtime creation test",

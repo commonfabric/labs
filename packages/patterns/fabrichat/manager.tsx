@@ -8,7 +8,9 @@
  * keeps as saved: each room is its space's root, and the catalog lists the
  * space. The manager registers there each room it creates, and each room a
  * manager created that it accepts, and the host that vets an offer of a room
- * registers that room there. Forgetting a room archives its entry.
+ * registers that room there, and then has the manager accept it on the user's
+ * behalf, leaving an entry archived since archived. Forgetting a room archives
+ * its entry.
  *
  * It creates each room with `inSpace()` as the root of a space of its own,
  * which declares itself a `fabrichat-room`. The space grants the room's
@@ -22,8 +24,9 @@
  *
  * A new room is offered to each other member whose profile the request names,
  * through the share inbox the profile points at, in the envelope a share inbox
- * takes. A notice is queued for every other member all the same, since
- * nothing tells the sender an offer arrived.
+ * takes, and each member it is offered to is added to the room's participants.
+ * A notice is queued for each other member offered nothing: one the request
+ * names only by principal, or whose profile points at no inbox.
  */
 import {
   type Cell,
@@ -167,6 +170,12 @@ export interface ManagerStreamEvent {
   /** A room to accept or forget. */
   room?: Cell<ChatRoomLink>;
 
+  /**
+   * Whether accepting a room leaves its entry archived, when it is; absent,
+   * accepting the room restores it.
+   */
+  keepArchived?: boolean;
+
   /** The id of a notice delivered. */
   id?: string;
 
@@ -300,14 +309,18 @@ const hostOrigin = (): string => new URL(getPatternEnvironment().apiUrl).origin;
 
 /**
  * Lists the room in `space` in the user's catalog: registers the space, or
- * restores its entry when the entry is archived. An entry in any other state
- * stays as it is. A group room's title, cut to the length an offer's may run
- * to, is registered with it.
+ * restores its entry when the entry is archived, unless `restore` is false.
+ * An entry in any other state stays as it is. A group room's title, cut to the
+ * length an offer's may run to, is registered with it.
  */
 const listRoom = (
   catalog: CatalogCell,
   space: DID,
-  { title, since }: { title?: string; since?: number } = {},
+  { title, since, restore = true }: {
+    title?: string;
+    since?: number;
+    restore?: boolean;
+  } = {},
 ): void => {
   const entry = readSharedSpaceCatalog(catalog).entries[space];
   if (entry === undefined) {
@@ -326,7 +339,7 @@ const listRoom = (
         : { title: title.slice(0, OFFER_TITLE_MAX_LENGTH) }),
       ...(since === undefined ? {} : { since }),
     });
-  } else if (entry.state === "archived") {
+  } else if (entry.state === "archived" && restore) {
     // The restore names the revision this run just read, since no list was
     // shown to observe one: the request, to start a chat or to accept a room,
     // is the person's choice to have the room listed whatever its archive
@@ -355,6 +368,29 @@ function inboxOf(pointer: Cell<ShareInboxPiece>): unknown {
   return pointer;
 }
 
+/**
+ * The notice telling `recipient` of `room`, which the request `requestId`
+ * created, keyed so that each request has at most one per recipient.
+ */
+const noticeFor = (
+  recipient: string,
+  requestId: string,
+  room: Cell<ChatRoomLink>,
+): ChatManagerNotice => ({
+  id: JSON.stringify([recipient, requestId]),
+  room,
+  recipient,
+});
+
+/** A member a new room is offered to. */
+export interface OfferedMember {
+  /** The member's DID. */
+  recipient: string;
+
+  /** The member's profile, through whose share inbox the room is offered. */
+  profile: Cell<ChatManagerProfile>;
+}
+
 /** What offering a new room asks: the room, and whom to offer it to. */
 export interface OfferRoomEvent {
   /** The room offered. */
@@ -369,24 +405,34 @@ export interface OfferRoomEvent {
   /** A group room's title, or empty for a direct room. */
   title: string;
 
-  /** The profiles of the members to offer it to. */
-  profiles: Cell<ChatManagerProfile>[];
+  /** The members to offer it to. */
+  members: OfferedMember[];
+}
+
+/** What `offerRooms` is bound to. */
+interface OfferRoomsState {
+  /** Notices waiting for a client to deliver them. */
+  outgoingNotices: NoticesCell;
+
+  /** Adds a profile to a room's participants. */
+  joinRooms: Stream<JoinRoomsEvent>;
 }
 
 /**
- * Offers a room to each person in the event's `profiles`, through the share
- * inbox each profile points at, in the envelope a share inbox takes; a
- * profile pointing at no inbox is offered nothing. The offer names the room's
- * space and the host serving it, this pattern's own, and the principal
- * sending it as its sender.
+ * Offers a room to each of the event's `members`, through the share inbox
+ * their profile points at, in the envelope a share inbox takes, and adds to
+ * the room's participants each member it offers the room to. A member whose
+ * profile points at no inbox is offered nothing, and a notice for them is
+ * queued instead. The offer names the room's space and the host serving it,
+ * this pattern's own, and the principal sending it as its sender.
  *
  * It runs as an event of its own, queued by the one that creates the room, so
  * that it reads the room's space once the room's creation has committed, and
  * the members' profiles are read apart from that creation. While the space is
  * not known, nothing is sent.
  */
-const offerRooms = handler<OfferRoomEvent, Record<PropertyKey, never>>(
-  (event) => {
+const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
+  (event, { outgoingNotices, joinRooms }) => {
     const space = spaceOf(event?.room);
     const from = currentPrincipal();
     if (!isWellFormedDID(space) || from === undefined) return;
@@ -401,12 +447,16 @@ const offerRooms = handler<OfferRoomEvent, Record<PropertyKey, never>>(
       from,
       sharedAt: Date.now(),
     };
-    for (const profile of event.profiles ?? []) {
+    for (const { recipient, profile } of event.members ?? []) {
       // The pointer is read through its parent: a link-typed field read on
       // its own is a cell whether or not anything is stored there.
       const pointer = profile?.key("inbox").get()?.piece;
-      if (pointer === undefined) continue;
+      if (pointer === undefined) {
+        outgoingNotices.push(noticeFor(recipient, event.id, event.room));
+        continue;
+      }
       inboxOf(pointer.resolveAsCell()).key("receive").send(offer);
+      joinRooms.send({ room: event.room, profile });
     }
   },
 );
@@ -434,18 +484,18 @@ function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
 /**
  * Adds the event's profile to the room's participants, through the room's own
  * `addParticipant`, the one writer its roster admits, so that whoever creates
- * or accepts a room is listed in it without a step of their own. It runs as an
- * event of its own, queued by the one that creates or accepts the room, so
- * that the room's streams exist when it sends. A profile that hasn't resolved
- * is added to nothing.
+ * or accepts a room, and each member it is offered to, is listed in it without
+ * a step of their own. It runs as an event of its own, queued by the one that
+ * creates, accepts, or offers the room, so that the room's streams exist when
+ * it sends. A profile that hasn't resolved is added to nothing.
  */
 const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
   (event) => {
-    // TODO(danfuzz): A stop-gap. A member whose manager neither created nor
-    // accepted the room is never sent here, so isn't on the room's roster,
-    // and is shown among its participants only as an author, once they write.
-    // Add each member once their manager lists the room without a step of
-    // their own.
+    // TODO(danfuzz): A stop-gap. A member offered nothing, whose manager
+    // neither created nor accepted the room, is never sent here, so isn't on
+    // the room's roster, and is shown among its participants only as an
+    // author, once they write. Add each member once their manager lists the
+    // room without a step of their own.
     const profile = event?.profile?.resolveAsCell();
     if (profile === undefined || profile.get() === undefined) return;
     joinStreamOf(event.room).key("addParticipant").send({ profile });
@@ -485,18 +535,18 @@ interface RoomOptions {
    */
   joinableByLink?: boolean;
 
-  /** The profiles of the other members to offer the room to. */
-  offerTo?: readonly Cell<ChatManagerProfile>[];
+  /** The other members to offer the room to. */
+  offerTo?: readonly OfferedMember[];
 }
 
 /**
  * Creates a room in a space of its own, as the space's root, and its notices,
  * records its entry, and registers its space in the user's catalog, all in one
  * transaction: the space's grants and its declared kind are part of creating
- * it, so nothing has to commit apart. A notice for each other member is
- * queued for a client to deliver, and adding this user to the room's
- * participants, and offering the room to each profile in `offerTo`, are queued
- * to follow.
+ * it, so nothing has to commit apart. A notice for each other member not in
+ * `offerTo` is queued for a client to deliver, and adding this user to the
+ * room's participants, and offering the room to each member in `offerTo`, are
+ * queued to follow.
  *
  * The space's name is pending on the first run, which the runtime discards and
  * runs again with the name resolved. Nothing is registered or sent until the
@@ -532,13 +582,14 @@ const createRoom = (
       },
     }),
   );
-  members.forEach((recipient) => {
-    state.outgoingNotices.push({
-      id: JSON.stringify([recipient, requestId]),
-      room,
-      recipient,
-    });
-  });
+  // A member offered the room has a notice only if the offer can't be sent,
+  // which `offerRooms` decides, since that reads their profile.
+  const offered = offerTo.map(({ recipient }) => recipient);
+  members.filter((member) => !offered.includes(member)).forEach(
+    (recipient) => {
+      state.outgoingNotices.push(noticeFor(recipient, requestId, room));
+    },
+  );
   const space = spaceOf(room);
   if (isWellFormedDID(space)) {
     listRoom(state.catalog, space, { title, since: now });
@@ -550,7 +601,7 @@ const createRoom = (
         room,
         id: requestId,
         title: title ?? "",
-        profiles: [...offerTo],
+        members: [...offerTo],
       });
     }
   }
@@ -592,16 +643,6 @@ const performManagerAct = (
     });
     return;
   }
-  // So is accepting one, whose acceptance adds this user's profile to the
-  // room's participants.
-  if (act === "accept" && state.myProfile?.get() === undefined) {
-    recordOutcome(state, requestId, {
-      status: "refused",
-      reason: "Accepting a chat needs a profile.",
-    });
-    return;
-  }
-
   if (act === "delivered") {
     const id = event?.id ?? state.id;
     // An event's type doesn't refuse an event that lacks a field it requires,
@@ -696,7 +737,10 @@ const performManagerAct = (
     }
     const entry = createRoom(state, requestId, "direct", [counterpart], {
       counterpart,
-      offerTo: profile === undefined ? [] : [profile],
+      offerTo: profile === undefined ? [] : [{
+        recipient: counterpart,
+        profile,
+      }],
     });
     direct.key(counterpart).set(entry);
     recordOutcome(state, requestId, { status: "done", entry });
@@ -865,10 +909,16 @@ const performManagerAct = (
   };
   // Registers the room, or restores an archived entry at the revision just
   // read, as `listRoom` says: accepting the room is the choice to have it
-  // listed.
+  // listed. An acceptance made on the person's behalf, which `keepArchived`
+  // marks, is no such choice, and leaves an archived entry as it is.
   listRoom(catalog, space, {
     title: kind === "group" ? room.key("about").get()?.title : undefined,
+    restore: event?.keepArchived !== true,
   });
+  // A user whose profile hasn't resolved is listed without joining the
+  // room's participants, which `joinRooms` leaves as they are: an acceptance
+  // the host makes on their behalf can come before the profile resolves, and
+  // the room's sender has joined them to it already.
   if (state.myProfile !== undefined) {
     state.joinRooms.send({ room, profile: state.myProfile });
   }
@@ -895,7 +945,8 @@ export const commitStart = handler<ManagerStreamEvent, ManagerActState>(
  * Performs one of the manager's other acts: accepting a room, forgetting one,
  * or reporting a notice delivered. None of them needs a gesture, since each
  * changes only this user's own manager, except that accepting a room also
- * adds this user to its participants, which anyone in its space may do.
+ * adds this user to its participants, when their profile has resolved, which
+ * anyone in its space may do.
  */
 export const commitManager = handler<ManagerStreamEvent, ManagerActState>(
   (event, state) => performManagerAct(event, state),
@@ -911,7 +962,7 @@ export interface FabriChatManagerInput {
 
   /**
    * The direct room shared with each counterpart, for the rooms this manager
-   * created or accepted.
+   * created or accepted, the ones its user's host accepted for them included.
    */
   direct?: DirectCell;
 
@@ -1009,9 +1060,9 @@ const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(({ space }) => {
 
 /**
  * The other member of the direct room in `space`: the counterpart `direct`
- * holds the room under, for a room this manager created or accepted, or else
- * the room's creator, as its `about.record` is labeled, unless that is `self`.
- * Absent when neither names one, as when the label can't be read.
+ * holds the room under, for a room `direct` holds, or else the room's
+ * creator, as its `about.record` is labeled, unless that is `self`. Absent
+ * when neither names one, as when the label can't be read.
  */
 const counterpartOf = (
   direct: Record<string, ChatIndexEntry>,
@@ -1093,14 +1144,15 @@ export const FabriChatManagerCore = pattern<
           : 0
       );
     });
+    const joining = joinRooms({});
     const records = {
       myProfile,
       catalog: sharedSpaceCatalog,
       direct,
       requests,
       outgoingNotices,
-      offerRooms: offerRooms({}),
-      joinRooms: joinRooms({}),
+      offerRooms: offerRooms({ outgoingNotices, joinRooms: joining }),
+      joinRooms: joining,
       draft,
       startRefusal,
     };

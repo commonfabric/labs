@@ -26,19 +26,10 @@ export const WEB_SEARCH_SUBAGENT_PROFILE = "web_search" as const;
 export const PATTERN_AUTHOR_SUBAGENT_PROFILE = "pattern-author" as const;
 export const WEB_SEARCH_SUBAGENT_MODEL = "gemini-3.5-flash" as const;
 
-export const DEFAULT_SUBAGENT_MAX_MODEL_TURNS = 8;
+export const DEFAULT_SUBAGENT_MAX_MODEL_TURNS = 32;
 export const MAX_SUBAGENT_MAX_MODEL_TURNS = 64;
 export const MAX_DELEGATE_PATTERN_REFS = 8;
 export const MAX_DELEGATE_PATTERN_REF_NOTE_LENGTH = 500;
-
-/**
- * Turn budget of the `pattern-author` profile. Authoring is a write,
- * compile-error, fix loop, and each iteration costs a turn; at the default
- * budget the loop runs out before a non-trivial pattern compiles, and a child
- * that ran out of turns has nothing to return. The budget is the profile's
- * own rather than the run's, so raising it does not loosen any other child.
- */
-export const PATTERN_AUTHOR_SUBAGENT_MAX_MODEL_TURNS = 24;
 
 export const DEFAULT_SUBAGENT_RETURN_CHANNEL =
   "summary-and-sanitized-state" as const;
@@ -471,7 +462,7 @@ export const PATTERN_AUTHOR_SUBAGENT_PROFILE_CONFIG:
     allowedToolIds: PATTERN_AUTHOR_SUBAGENT_ALLOWED_TOOL_IDS,
     hostToolIds: NO_HOST_TOOL_IDS,
     skillNames: PATTERN_AUTHOR_SUBAGENT_SKILL_NAMES,
-    maxModelTurns: PATTERN_AUTHOR_SUBAGENT_MAX_MODEL_TURNS,
+    maxModelTurns: DEFAULT_SUBAGENT_MAX_MODEL_TURNS,
     returnSchema: PATTERN_AUTHOR_RETURN_SCHEMA,
     returnContractAuthority: "profile",
     returnPolicy: DEFAULT_SUBAGENT_RETURN_POLICY,

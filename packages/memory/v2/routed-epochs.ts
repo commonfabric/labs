@@ -1,31 +1,32 @@
-/** Durable router epochs and client-proof replay bindings. */
+/** Durable router epochs and router-key revocations. */
 import { dirname } from "@std/path";
 import { isCanonicalEd25519DID } from "@commonfabric/identity";
-import { parseRoutedJson } from "./routed-parser.ts";
-import { requireRouted } from "./routed-wire.ts";
+import { parseRoutedJson, ROUTED_DEFAULT_SLOT_LIMIT } from "./routed-parser.ts";
+import { requireRouted, ROUTED_PROOF_HORIZON_SECONDS } from "./routed-wire.ts";
 
-type Claim = {
-  router: string;
-  deployment: string;
-  principal: string;
-  challenge: string;
-  digest: string;
-  epoch: string;
-  context: string;
-  exp: number;
-  released: boolean;
-};
 const MAX_BYTES = 32 * 1024 * 1024;
-const MAX_CLAIMS = 8192;
+const MAX_EPOCHS = 1024;
+/**
+ * How long a closed link's epoch stays recorded. Every proof bound to the
+ * epoch has expired by then, so forgetting it cannot revive one, and a router
+ * that relinks after toolshed restarts never exhausts its bound.
+ */
+const EPOCH_RETENTION_SECONDS = ROUTED_PROOF_HORIZON_SECONDS;
 
-/** Exclusive toolshed-local ledger; every authority change is fsynced first. */
+/**
+ * Exclusive toolshed-local ledger of what must outlive a restart: link epochs,
+ * which a router may not reuse while proofs bound to them can be presented,
+ * and permanent router-key revocations. Every change is fsynced first. Client
+ * proofs are not recorded here: the host holds them with their context and
+ * drops them when it closes, and a restart closes every context.
+ */
 export class RoutedEpochStore {
   #file!: Deno.FsFile;
   #lock: Deno.FsFile;
   #path: string;
-  #epochs = new Map<string, Set<string>>();
+  /** Router -> epoch -> when its link closed; undefined while it is live. */
+  #epochs = new Map<string, Map<string, number | undefined>>();
   #revoked = new Set<string>();
-  #claims = new Map<string, Claim>();
   #closed = false;
   #healthy = true;
 
@@ -46,8 +47,10 @@ export class RoutedEpochStore {
       const text = Deno.readTextFileSync(path);
       requireRouted(text === "" || text.endsWith("\n"));
       for (const line of text.split("\n")) {
-        if (line === "") continue;
-        const record = parseRoutedJson(line);
+        // An earlier toolshed's client proofs bind nothing once it restarts,
+        // and the rewrite below drops them, so they are not decoded.
+        if (line === "" || line.startsWith('["claim",')) continue;
+        const record = parseRoutedJson(line, ROUTED_DEFAULT_SLOT_LIMIT);
         requireRouted(
           Array.isArray(record) && isCanonicalEd25519DID(record[1]),
         );
@@ -56,61 +59,40 @@ export class RoutedEpochStore {
             record.length === 3 && typeof record[2] === "string" &&
               /^[0-9a-f]{32}$/.test(record[2]),
           );
-          this.#remember(record[1], record[2]);
+          // The bound applies after loading, once retired epochs are dropped.
+          // A repeated line is an epoch consumed again after it was forgotten;
+          // compaction has not yet removed its earlier lines.
+          const known = this.#epochs.get(record[1]);
+          if (known?.has(record[2])) known.set(record[2], undefined);
+          else this.#remember(record[1], record[2], false);
+        } else if (record[0] === "retire") {
+          requireRouted(
+            record.length === 4 && typeof record[2] === "string" &&
+              Number.isSafeInteger(record[3]) && record[3] > 0 &&
+              this.#epochs.get(record[1])?.has(record[2]),
+          );
+          this.#epochs.get(record[1])!.set(record[2], record[3]);
         } else if (record[0] === "revoke") {
           requireRouted(record.length === 3 && record[2] === "permanent");
           this.#revoked.add(record[1]);
-        } else {
-          requireRouted(record[0] === "claim" && record.length === 10);
-          const [
-            ,
-            router,
-            deployment,
-            principal,
-            challenge,
-            digest,
-            epoch,
-            context,
-            exp,
-            released,
-          ] = record;
-          requireRouted(
-            typeof deployment === "string" &&
-              /^[\x21-\x7e]{1,256}$/.test(deployment) &&
-              isCanonicalEd25519DID(principal),
-          );
-          requireRouted(
-            [challenge, digest].every((s) =>
-              typeof s === "string" && /^[0-9a-f]{64}$/.test(s)
-            ) && [epoch, context].every((s) =>
-              typeof s === "string" && /^[0-9a-f]{32}$/.test(s)
-            ),
-          );
-          requireRouted(
-            Number.isSafeInteger(exp) && exp > 0 &&
-              typeof released === "boolean" &&
-              this.#epochs.get(router)?.has(epoch),
-          );
-          const claim: Claim = {
-            router,
-            deployment,
-            principal,
-            challenge,
-            digest,
-            epoch,
-            context,
-            exp,
-            released,
-          };
-          const key = this.#key(claim), prior = this.#claims.get(key);
-          requireRouted(
-            prior === undefined ||
-              this.#same(prior, claim) && (!prior.released || released),
-          );
-          if (exp > Math.floor(Date.now() / 1000)) this.#claims.set(key, claim);
+        } else requireRouted(false);
+      }
+      // No link survives a restart: every epoch still marked live closed now.
+      // The retirement is written down, so repeated restarts cannot keep
+      // resetting its retention period and hold the epoch forever. The file
+      // is rewritten to what memory holds, so a restart also leaves it well
+      // under half its bound, where appends next compact it.
+      const loaded = Math.floor(Date.now() / 1000);
+      for (const epochs of this.#epochs.values()) {
+        for (const [epoch, closed] of epochs) {
+          if (closed === undefined) epochs.set(epoch, loaded);
         }
       }
-      requireRouted(this.#claims.size <= MAX_CLAIMS);
+      this.#compact(loaded);
+      requireRouted(
+        this.#epochs.size <= 16 &&
+          [...this.#epochs.values()].every((e) => e.size <= MAX_EPOCHS),
+      );
     } catch (error) {
       this.#file?.close();
       this.#lock.close();
@@ -134,40 +116,31 @@ export class RoutedEpochStore {
       parent.close();
     }
   }
-  #key(c: Claim): string {
-    return `${c.router} ${c.deployment} ${c.principal} ${c.challenge}`;
-  }
-  #same(a: Claim, b: Claim): boolean {
-    return a.digest === b.digest && a.epoch === b.epoch &&
-      a.context === b.context && a.exp === b.exp;
-  }
-  #record(c: Claim): unknown[] {
-    return [
-      "claim",
-      c.router,
-      c.deployment,
-      c.principal,
-      c.challenge,
-      c.digest,
-      c.epoch,
-      c.context,
-      c.exp,
-      c.released,
-    ];
-  }
-  #remember(router: string, epoch: string): void {
+  #remember(router: string, epoch: string, bounded = true): void {
     let epochs = this.#epochs.get(router);
     if (epochs === undefined) {
-      requireRouted(this.#epochs.size < 16);
-      epochs = new Set();
+      requireRouted(!bounded || this.#epochs.size < 16);
+      epochs = new Map();
       this.#epochs.set(router, epochs);
     }
-    requireRouted(!epochs.has(epoch) && epochs.size < 1024);
-    epochs.add(epoch);
+    requireRouted(!epochs.has(epoch) && (!bounded || epochs.size < MAX_EPOCHS));
+    epochs.set(epoch, undefined);
   }
-  #write(file: Deno.FsFile, record: unknown[]): void {
-    const bytes = new TextEncoder().encode(`${JSON.stringify(record)}\n`);
-    requireRouted(file.statSync().size + bytes.length <= MAX_BYTES);
+  /**
+   * Drops epochs whose link closed more than the retention period ago. The
+   * file keeps them until compaction.
+   */
+  #forget(now: number): void {
+    for (const [router, epochs] of this.#epochs) {
+      for (const [epoch, retired] of epochs) {
+        if (retired !== undefined && retired + EPOCH_RETENTION_SECONDS <= now) {
+          epochs.delete(epoch);
+        }
+      }
+      if (epochs.size === 0) this.#epochs.delete(router);
+    }
+  }
+  #writeBytes(file: Deno.FsFile, bytes: Uint8Array): void {
     let at = 0;
     while (at < bytes.length) {
       const count = file.writeSync(bytes.subarray(at));
@@ -175,10 +148,25 @@ export class RoutedEpochStore {
       at += count;
     }
   }
+  /** Rewrites the file to what memory holds, in one write. */
   #compact(now: number): void {
-    for (const [key, claim] of this.#claims) {
-      if (claim.exp <= now) this.#claims.delete(key);
+    this.#forget(now);
+    const lines: string[] = [];
+    for (const [router, epochs] of this.#epochs) {
+      for (const [epoch, retired] of epochs) {
+        lines.push(JSON.stringify(["epoch", router, epoch]));
+        if (retired !== undefined) {
+          lines.push(JSON.stringify(["retire", router, epoch, retired]));
+        }
+      }
     }
+    for (const router of this.#revoked) {
+      lines.push(JSON.stringify(["revoke", router, "permanent"]));
+    }
+    const bytes = new TextEncoder().encode(
+      lines.length === 0 ? "" : `${lines.join("\n")}\n`,
+    );
+    requireRouted(bytes.length <= MAX_BYTES);
     const path = `${this.#path}.next`,
       file = Deno.openSync(path, {
         create: true,
@@ -187,17 +175,7 @@ export class RoutedEpochStore {
         mode: 0o600,
       });
     try {
-      for (const [router, epochs] of this.#epochs) {
-        for (const epoch of epochs) {
-          this.#write(file, ["epoch", router, epoch]);
-        }
-      }
-      for (const router of this.#revoked) {
-        this.#write(file, ["revoke", router, "permanent"]);
-      }
-      for (const claim of this.#claims.values()) {
-        this.#write(file, this.#record(claim));
-      }
+      this.#writeBytes(file, bytes);
       file.syncDataSync();
       Deno.renameSync(path, this.#path);
       this.#syncDirectory();
@@ -207,70 +185,57 @@ export class RoutedEpochStore {
       file.close();
     }
   }
+  /**
+   * Appends one record and fsyncs it. A file past half its bound is
+   * compacted first. What it then holds is at most 16 routers' 1,024 epochs,
+   * about 4 MiB, and the routers an operator revoked, so compaction always
+   * leaves room.
+   */
   #append(record: unknown[], now = Math.floor(Date.now() / 1000)): void {
     requireRouted(!this.#closed && this.#healthy);
     try {
-      if (this.#file.statSync().size > MAX_BYTES / 2) this.#compact(now);
-      this.#write(this.#file, record);
+      let size = this.#file.statSync().size;
+      if (size > MAX_BYTES / 2) {
+        this.#compact(now);
+        size = this.#file.statSync().size;
+      }
+      const bytes = new TextEncoder().encode(`${JSON.stringify(record)}\n`);
+      requireRouted(size + bytes.length <= MAX_BYTES);
+      this.#writeBytes(this.#file, bytes);
       this.#file.syncDataSync();
     } catch (error) {
       this.#healthy = false;
       throw error;
     }
   }
-  /** Permanently consumes each link epoch before acknowledging its handshake. */
-  consume(router: string, epoch: string): void {
+  /**
+   * Consumes a link epoch before acknowledging its handshake. It cannot be
+   * reused while recorded: while its link lives, then for the retention
+   * period after `retire`.
+   */
+  consume(
+    router: string,
+    epoch: string,
+    now = Math.floor(Date.now() / 1000),
+  ): void {
     requireRouted(!this.revoked(router));
+    this.#forget(now);
     const held = this.#epochs.get(router);
     requireRouted(
-      !held?.has(epoch) && (held?.size ?? 0) < 1024 &&
+      !held?.has(epoch) && (held?.size ?? 0) < MAX_EPOCHS &&
         (held !== undefined || this.#epochs.size < 16),
     );
     // Compaction must see only previously persisted epochs. A pending epoch
     // enters memory after its append/fsync, so it is serialized exactly once.
-    this.#append(["epoch", router, epoch]);
+    this.#append(["epoch", router, epoch], now);
     this.#remember(router, epoch);
   }
-  /** Claims exact client bytes for one context; re-attestation cannot move them. */
-  claim(input: Omit<Claim, "released">, now: number): void {
-    requireRouted(
-      !this.#closed && this.#healthy && !this.revoked(input.router) &&
-        input.exp > now && this.#epochs.get(input.router)?.has(input.epoch),
-    );
-    const key = this.#key({ ...input, released: false }),
-      prior = this.#claims.get(key);
-    if (prior !== undefined) {
-      requireRouted(
-        !prior.released && this.#same(prior, { ...input, released: false }),
-      );
-      return;
-    }
-    if (this.#claims.size >= MAX_CLAIMS) this.#compact(now);
-    requireRouted(this.#claims.size < MAX_CLAIMS);
-    const claim = { ...input, released: false };
-    this.#append(this.#record(claim), now);
-    this.#claims.set(key, claim);
-  }
-  /** Release tombstones every accepted challenge for this principal/context. */
-  release(
-    router: string,
-    deployment: string,
-    epoch: string,
-    context: string,
-    principal: string,
-    now: number,
-  ): void {
-    for (const claim of this.#claims.values()) {
-      if (
-        claim.router === router && claim.deployment === deployment &&
-        claim.epoch === epoch &&
-        claim.context === context && claim.principal === principal &&
-        !claim.released && claim.exp > now
-      ) {
-        claim.released = true;
-        this.#append(this.#record(claim), now);
-      }
-    }
+  /** Records that an epoch's link closed; its retention period starts now. */
+  retire(router: string, epoch: string, now: number): void {
+    const epochs = this.#epochs.get(router);
+    if (epochs?.has(epoch) !== true || epochs.get(epoch) !== undefined) return;
+    this.#append(["retire", router, epoch, now], now);
+    epochs.set(epoch, now);
   }
   /** Permanent router-key revocation; key rotation requires a new DID. */
   revoke(router: string): void {
@@ -279,9 +244,12 @@ export class RoutedEpochStore {
       this.#append(["revoke", router, "permanent"]);
     }
   }
-  /** Disk failures stop every subsequent admission until an operator repairs the ledger. */
+  /**
+   * Whether the ledger can still record: a disk failure, or closing it,
+   * stops every later admission until an operator repairs it.
+   */
   get healthy(): boolean {
-    return this.#healthy;
+    return this.#healthy && !this.#closed;
   }
   /** Whether the router key is permanently revoked. */
   revoked(router: string): boolean {

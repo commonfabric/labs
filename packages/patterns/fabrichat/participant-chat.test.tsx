@@ -2,8 +2,9 @@
  * Starting a direct chat from a FabriChat room's participants. A participant
  * other than the viewer, whose profile attests a principal, offers a chat, and
  * starting one asks the viewer's manager for a direct room with that
- * principal. Each person writes their own profile here, so its label names
- * them, as a Fabric profile's does.
+ * principal. A participant whose profile points at no inbox is offered
+ * nothing, so a notice is queued for them. Each person writes their own
+ * profile here, so its label names them, as a Fabric profile's does.
  */
 import {
   action,
@@ -217,12 +218,13 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const action_note_principal = action(() =>
     bobDid.set(currentPrincipal() ?? "")
   );
+  const notices = Writable.of<ChatManagerNotice[]>([]);
   const manager = FabriChatManagerCore({
     myProfile: profile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
-    outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+    outgoingNotices: notices,
   } as ManagerArg);
   const chipFor = {
     myProfile: profile,
@@ -291,6 +293,14 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           manager.rooms.length === 1 && manager.rooms[0]?.kind === "direct" &&
           manager.rooms[0]?.counterpart === setup.aliceDid.get() &&
           setup.aliceDid.get() !== ""
+        ),
+      },
+      // Her profile points at no inbox, so the room isn't offered to her,
+      // and a notice is queued for her instead.
+      {
+        assertion: assert(() =>
+          notices.get().length === 1 &&
+          notices.get()[0]?.recipient === setup.aliceDid.get()
         ),
       },
       // A chip an older room rendered names her by principal instead, and

@@ -8,7 +8,11 @@
 
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
-import { type ExperimentalOptions, Runtime } from "../runtime.ts";
+import {
+  type ExperimentalOptions,
+  Runtime,
+  type RuntimeFetch,
+} from "../runtime.ts";
 import type { ExecutorHostOptions } from "./host.ts";
 import { LoopbackStorageManager } from "./loopback-storage.ts";
 
@@ -32,6 +36,16 @@ export type ServingRuntimeFactoryOptions = {
 
   /** The patterns and compile base, the serving runtimes' `apiUrl`. */
   apiUrl: URL;
+
+  /**
+   * The outbound `fetch` each serving runtime uses for its source loads and
+   * network builtins. Toolshed passes one that sends requests addressed to
+   * `apiUrl`, its public origin, to its own listener (`API_INTERNAL_URL`);
+   * `apiUrl` itself stays the public origin, since it is also what the
+   * runtime records as a space's host and compares origins against. Unset,
+   * the platform fetch.
+   */
+  fetch?: RuntimeFetch;
 
   /**
    * Experimental flags for the serving runtimes, with
@@ -75,6 +89,7 @@ export function servingRuntimeFactory(
     const release = options.prepareStorageManager?.(storageManager, space);
     const runtime = new Runtime({
       apiUrl: options.apiUrl,
+      ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
       storageManager,
       // The SpaceServer's own runtime (serving-loop.md §3): never the
       // speculation-overlay default. Its factory-time loads commit through

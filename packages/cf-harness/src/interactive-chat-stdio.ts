@@ -138,7 +138,7 @@ Options:
   --chat-max-in-memory-events <count>  Retain at most count events in memory
   --host-mount <spec>                  Extra host bind mount, same grammar as the batch CLI
                                        (repeatable: name=<id>,source=<host>,target=<sandbox>,mode=readonly|writable)
-  --max-model-turns <count>            Model turns allowed per user message (default 8)
+  --max-model-turns <count>            Model turns allowed per user message (default 32)
   --loom-authoring-config <path>       Absolute host-owned JSON file backing Loom tools
   --fabric-api-url <url>              Fabric API URL for held Pattern Instance handles
   --fabric-identity <path>            Host PKCS#8 identity keyfile, relative to the caller's cwd

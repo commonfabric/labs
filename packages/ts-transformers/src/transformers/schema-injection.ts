@@ -1531,6 +1531,17 @@ function resolveDualSchemaBuilderTypes(
   const resultTypeNode = options?.explicitResultTypeNode ??
     inferred?.result ??
     createUnknownSchemaTypeNode(factory);
+  // A result type its author wrote, as a lift's second type argument or its
+  // callback's return type, is source syntax, or a node rewritten from it; one
+  // a pass printed from the callback's inferred return type is not. The
+  // runtime stores the result at the narrowest scope the callback reads, so a
+  // printed type declares no scope (`SchemaHint.declaresNoScope`).
+  const authoredResult = options?.explicitResultTypeNode
+    ? !isSyntheticNode(ts.getOriginalNode(options.explicitResultTypeNode))
+    : callback?.type !== undefined && !isSyntheticNode(callback.type);
+  if (!authoredResult) {
+    context.state.recordSchemaHint(resultTypeNode, { declaresNoScope: true });
+  }
   const resultTypeValue = options?.explicitResultTypeValue ??
     (options?.explicitResultTypeNode
       ? getTypeFromTypeNodeWithFallback(

@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import type { Identity } from "@commonfabric/identity";
-import { experimentalOptionsForDeployedClient } from "@commonfabric/runner";
+import { settingsForDeployedClient } from "@commonfabric/runner";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
   type TempIdentity,
@@ -132,10 +132,10 @@ async function waitForServedValue(
 
 describe("cf cell get (integration)", { ignore: !API_URL }, () => {
   beforeAll(async () => {
-    serverExecutionOn = (await experimentalOptionsForDeployedClient({
+    serverExecutionOn = (await settingsForDeployedClient({
       apiUrl: new URL(API_URL!),
       env: Deno.env.get,
-    })).serverExecution === true;
+    })).experimental.serverExecution === true;
     tempIdentity = await writeTempIdentity();
     const { identity, path } = tempIdentity;
     identityPath = path;

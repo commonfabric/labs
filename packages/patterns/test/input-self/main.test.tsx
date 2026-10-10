@@ -9,6 +9,7 @@ import {
   Indexed,
   IndexedTitle,
   NamedThroughAlias,
+  NamedThroughSelf,
   OverOwnList,
 } from "./subjects.tsx";
 
@@ -21,6 +22,7 @@ export default pattern(() => {
   const handlerBound = HandlerBound({ title: "hello", seen: "" });
   const overOwnList = OverOwnList({ items: ["a", "b"] });
   const namedThroughAlias = NamedThroughAlias({ title: "hello" });
+  const namedThroughSelf = NamedThroughSelf({ title: "hello" });
   const destructuredInBody = DestructuredInBody({ title: "hello" });
   const capturedAlias = CapturedAlias({ title: "hello", items: ["a", "b"] });
 
@@ -60,6 +62,9 @@ export default pattern(() => {
   const assert_name_read_off_alias = assert(() =>
     namedThroughAlias.myName === "hello"
   );
+  const assert_name_read_through_self = assert(() =>
+    namedThroughSelf.myName === "hello"
+  );
   const assert_handler_has_not_run = assert(() => handlerBound.seen === "");
   const action_copy_title = action(() => {
     handlerBound.copy.send();
@@ -82,6 +87,7 @@ export default pattern(() => {
       { assertion: assert_alias_captured_in_computed },
       { assertion: assert_alias_captured_in_map },
       { assertion: assert_name_read_off_alias },
+      { assertion: assert_name_read_through_self },
       { assertion: assert_handler_has_not_run },
       { action: action_copy_title },
       { assertion: assert_handler_read_the_result },
@@ -96,5 +102,6 @@ export default pattern(() => {
     destructuredInBody,
     capturedAlias,
     namedThroughAlias,
+    namedThroughSelf,
   };
 });

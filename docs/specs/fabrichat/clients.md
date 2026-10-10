@@ -24,7 +24,11 @@ a room to anyone its space doesn't admit.
   way. It is what keeps one person's conversation from splitting.
 - **The conversations a container shows** are the adapters the container holds,
   each linking to a placement of one room, plus the container's own chat when it
-  is a social space that has one.
+  is a social space that has one. A client that wants a `loom` root's own chat
+  sends the root's `ensureChatRoom`, which creates the room unless the root
+  names one, and reads it from `chatRoom`. A client MUST NOT create that room
+  itself: a piece created at the top level of the space is registered through
+  the root's `addPiece`, which shows it as a panel.
 - **The people a client offers** when starting a conversation from a social
   space are that space's participants, as claims, until it offers a member set
   (see [social spaces](README.md#social-spaces)).
@@ -38,6 +42,12 @@ a room to anyone its space doesn't admit.
   created the room from the same label. Whether to add the room to their list is
   the person's decision, so a client SHOULD accept only after showing them who
   created the room, and what it is.
+- **An offer** of a room needs nothing from a client. The person's host vets
+  it, registers the room in their Home's catalog, and accepts it on their
+  behalf, with `keepArchived`, so the room is in their `rooms`, and a direct
+  room is in their `direct` unless that already holds a room with its creator.
+  Either way their later `openDirect` with the creator finds the room `direct`
+  holds (see [`ChatManagerOutput`](ChatManagerOutput.md#offers)).
 
 ## Showing a room
 

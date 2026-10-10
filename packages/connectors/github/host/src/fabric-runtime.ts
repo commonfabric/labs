@@ -6,10 +6,11 @@ import {
   legacySpaceDid,
 } from "@commonfabric/identity";
 import {
-  experimentalOptionsForDeployedClient,
+  memoryHostNote,
   type MemorySpace,
   Runtime,
   runtimePresets,
+  settingsForDeployedClient,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -47,18 +48,20 @@ export async function openGithubFabricRuntime(options: {
   // toolshed it talks to (docs/development/EXPERIMENTAL_OPTIONS.md), so an
   // unset flag must adopt what the server runs rather than fall to this
   // build's own default — the same resolution the agents host and the pieces
-  // controller perform. Resolved before anything is allocated; this startup
-  // carries no cancellation signal to thread.
-  const experimental = await experimentalOptionsForDeployedClient({
+  // controller perform. The same document names the memory URL Memory opens
+  // on, where the deployment has one. Resolved before anything is allocated;
+  // this startup carries no cancellation signal to thread.
+  const { experimental, memoryHost } = await settingsForDeployedClient({
     apiUrl,
     env: (key) => Deno.env.get(key),
   });
   const storageManager = StorageManager.open({
     as: session.as,
-    memoryHost: apiUrl,
+    memoryHost,
   });
   const runtime = new Runtime(runtimePresets.remoteClient({
     apiUrl,
+    memoryHost,
     storageManager,
     experimental,
     trustSnapshotProvider: () => ({
@@ -68,7 +71,10 @@ export async function openGithubFabricRuntime(options: {
   }));
   try {
     if (!(await runtime.healthCheck())) {
-      throw new Error(`could not connect to ${apiUrl.origin}`);
+      throw new Error(
+        `could not connect to ${apiUrl.origin}` +
+          memoryHostNote(memoryHost, apiUrl),
+      );
     }
     const target = await GithubFabricTarget.open(
       { runtime, spaceDid: session.space },
