@@ -49,7 +49,8 @@ refuses `listen`.
   Packages that bind to Deno-only machinery map to this directory's replacements
   (`@db/sqlite`, `@denosaurs/plug`, `@deno/esbuild-plugin`).
 - `lib/hooks.mjs`: the loader hooks. Resolution goes through `resolver.mjs`;
-  TypeScript and JSX compile with esbuild under the root's JSX settings; Deno's
+  TypeScript and JSX compile with esbuild under the root's JSX settings, cached
+  under `.cache/compiled/` by a hash of the source and options; Deno's
   `with { type: "text" }` and `{ type: "bytes" }` imports become modules
   exporting the text or a `Uint8Array`.
 - `lib/deno-global.mjs`: the `Deno` global. `@deno/shim-deno` supplies most of

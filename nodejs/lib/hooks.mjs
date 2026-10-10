@@ -10,7 +10,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { transformSync } from "esbuild";
+import { createHash } from "node:crypto";
+import { threadId } from "node:worker_threads";
+import { transformSync, version as ESBUILD_VERSION } from "esbuild";
 import {
   isBareSubpath,
   mapSpecifier,
@@ -111,7 +113,23 @@ export function load(url, context, nextLoad) {
   if (!loader) return nextLoad(url, context);
 
   const source = fs.readFileSync(file, "utf8");
-  const { code } = transformSync(source, {
+  return {
+    format: "module",
+    source: compile(file, source, loader),
+    shortCircuit: true,
+  };
+}
+
+/**
+ * Where compiled modules are cached, by a hash of what determines the output:
+ * the source, its path (the source map names it), the loader, and the
+ * compile options. Deno keeps an emit cache for the same reason: compiling
+ * every module on every start costs most of a short command's run time.
+ */
+const CACHE_DIR = path.join(NODEJS_DIR, ".cache", "compiled");
+
+function transformOptions(file, loader) {
+  return {
     loader,
     format: "esm",
     sourcefile: file,
@@ -128,8 +146,31 @@ export function load(url, context, nextLoad) {
         verbatimModuleSyntax: false,
       },
     },
-  });
-  return { format: "module", source: code, shortCircuit: true };
+  };
+}
+
+/** Compiles `source` (the file at `file`) to JavaScript, through the cache. */
+function compile(file, source, loader) {
+  const options = transformOptions(file, loader);
+  const key = createHash("sha256")
+    .update(JSON.stringify([ESBUILD_VERSION, options]))
+    .update("\0")
+    .update(source)
+    .digest("hex");
+  const cached = path.join(CACHE_DIR, key.slice(0, 2), key);
+  try {
+    return fs.readFileSync(cached, "utf8");
+  } catch {
+    // Not cached yet.
+  }
+  const { code } = transformSync(source, options);
+  // Written to a temporary name and renamed, so that a concurrent reader sees
+  // either no entry or a whole one.
+  fs.mkdirSync(path.dirname(cached), { recursive: true });
+  const temp = `${cached}.${process.pid}.${threadId}.tmp`;
+  fs.writeFileSync(temp, code);
+  fs.renameSync(temp, cached);
+  return code;
 }
 
 /** Loads a file as a module whose default export is its text or bytes. */
