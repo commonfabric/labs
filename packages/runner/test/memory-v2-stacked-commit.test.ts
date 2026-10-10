@@ -4342,6 +4342,52 @@ describe("memory-v2-stacked-commit", () => {
       }
     });
 
+    it("hands a pending set's document back by identity after a frame moves the confirmed version beneath it", async () => {
+      const harness = await createHarness();
+      const responseGate = Promise.withResolvers<void>();
+      try {
+        await seedAccepted(harness, DOCS.A, valueFor("base"));
+        // Watched, so that the frame below reaches the record.
+        expect(
+          await harness.replica.pull([[
+            { id: DOCS.A, type: DOCUMENT_MIME },
+            undefined,
+          ]]),
+        ).toEqual({ ok: {} });
+
+        let settled = false;
+        harness.model.setOutcome(2, {
+          kind: "accept",
+          responseGate: responseGate.promise,
+        });
+        const pending = beginSet(harness, DOCS.A, valueFor("pending")).promise
+          .finally(() => {
+            settled = true;
+          });
+        const pendingDocument = harness.provider.get(DOCS.A);
+        expect(pendingDocument).toEqual({ value: valueFor("pending") });
+
+        // A remote write lands beneath the pending layer: the confirmed
+        // version moves, and the layer is materialized over it afresh.
+        const remoteSeq = currentSeq(harness, DOCS.A) + 1;
+        harness.pushSync({
+          upserts: [{ id: DOCS.A, seq: remoteSeq, value: valueFor("remote") }],
+        });
+        await waitForCondition(
+          () => currentSeq(harness, DOCS.A) === remoteSeq,
+          "the remote frame to apply",
+        );
+        expect(settled).toBe(false);
+        expect(harness.provider.get(DOCS.A)).toBe(pendingDocument);
+
+        responseGate.resolve();
+        await expectResultOk(pending);
+      } finally {
+        responseGate.resolve();
+        await harness.close();
+      }
+    });
+
     it("keeps the earlier pending overlay when a later same-doc patch is confirmed", async () => {
       const harness = await createHarness();
       const leftResponseGate = Promise.withResolvers<void>();

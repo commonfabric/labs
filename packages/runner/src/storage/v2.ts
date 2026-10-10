@@ -718,6 +718,8 @@ const applyPendingVersion = (
     case "delete":
       return undefined;
     case "set":
+      // Deep-frozen at `#applyPending`, so this is an identity pass; the
+      // call stands for a layer minted anywhere else.
       return cloneIfNecessary(pending.value) as EntityDocument;
     case "patch": {
       // Replay the layer's OPS over the base — never combine values. The
@@ -9017,7 +9019,22 @@ export class SpaceReplica
     const { id, scope, ...pending } = operation;
     const record = this.#record(id, scope, identity);
     record.pending.push(
-      pendingVersion(localSeq, pending, record.confirmed.seq),
+      pendingVersion(
+        localSeq,
+        // A `set` layer's value is the transaction's working root, mutable
+        // where the transaction thawed it. The layer is materialized every
+        // time the document's confirmed version moves beneath it, and each
+        // materialization of a mutable value is a clone of the whole
+        // document; frozen once here, the value is handed back by identity
+        // for as long as the layer stands.
+        pending.op === "set"
+          ? {
+            ...pending,
+            value: cloneIfNecessary(pending.value) as EntityDocument,
+          }
+          : pending,
+        record.confirmed.seq,
+      ),
     );
   }
 
