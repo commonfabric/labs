@@ -17,8 +17,6 @@
 import type { JSONSchema } from "@commonfabric/api";
 import { type DID, Identity } from "@commonfabric/identity";
 import { createTestSpace } from "@commonfabric/integration/test-space";
-import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import type { Cell } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { join } from "@std/path";
@@ -97,37 +95,17 @@ export function demandTopicBoard(
   board: PieceController,
   demand: TopicBoardDemand = "index",
 ): () => void {
-  if (demand === "full") {
-    return board.pieces().getResult(board.getCell()).sink(() => {});
-  }
-  return topicBoardIndex(board).sink(() => {});
-}
-
-/**
- * Each board's durable result schema, read once. The schema does not change
- * while a board is seeded, and the stored metadata it is read from is not
- * always at hand: under server execution a frame can leave the replica
- * between the result document and the schema document it names.
- */
-const durableSchemas = new WeakMap<PieceController, JSONSchema>();
-
-/**
- * The board's `index` under its durable result schema: one bounded row per
- * topic, whose address is the topic's own. The schema has to be applied at the
- * result root, where it describes the value, for `key()` to select the row
- * schema under it.
- */
-function topicBoardIndex(board: PieceController): Cell<unknown> {
   const result = board.pieces().getResult(board.getCell());
-  let schema = durableSchemas.get(board);
+  if (demand === "full") return result.sink(() => {});
+  const schema = result.getMetaRaw("schema") as JSONSchema | undefined;
   if (schema === undefined) {
-    schema = result.getMetaRaw("schema") as JSONSchema | undefined;
-    if (schema === undefined) {
-      throw new Error("Topic board result has no durable schema.");
-    }
-    durableSchemas.set(board, schema);
+    throw new Error(
+      "Topic board result has no durable schema for index demand.",
+    );
   }
-  return result.asSchema(schema).key("index");
+  // The durable schema describes the result root. key() needs it on that root
+  // to select the index row schema for the subscription.
+  return result.asSchema(schema).key("index").sink(() => {});
 }
 
 /**
@@ -255,26 +233,20 @@ function topicBody(
 /**
  * The topic piece at `index` in the board's list.
  *
- * What is read is the board's index row at `index`, whose schema bounds the
- * read to that row's scalars. Reading the `topics` key with no schema, or the
- * result as a whole, walks every topic the board holds through its links, so
- * each call costs the whole board and the seed that calls it per topic grows
- * quadratically. The read waits for the row to be present: under server
- * execution the verb that files a topic can return before its consequence
- * lands in this replica.
+ * Only the `topics` key is pulled. The board's result also carries `crossrefs`,
+ * whose rows are piece-valued and expand through each topic's view of every
+ * sibling; pulling the whole result grows without bound as the board fills.
  */
 export async function topicAt(
   board: PieceController,
   index: number,
 ): Promise<PieceController> {
-  const row = topicBoardIndex(board).key(index);
-  await waitForCellValue(
-    board.pieces().runtime,
-    row,
-    (value: { title?: string } | undefined) => value?.title !== undefined,
-    { stuckLabel: `the board's index row for topic ${index}` },
+  const topics = (await board.result.getCell()).key("topics");
+  await topics.pull();
+  return new PieceController(
+    board.pieces(),
+    topics.key(index).resolveAsCell(),
   );
-  return new PieceController(board.pieces(), row.resolveAsCell());
 }
 
 /**
@@ -333,16 +305,11 @@ export async function seedTopicBoard(
       // reads prose for addresses now, so a seeded board built that way would
       // carry the sentences and none of the graph — and every benchmark over it
       // would quietly measure a board with no crossrefs at all.
-      const targets = crossrefTargets(index, shape);
-      for (const target of targets) {
+      for (const target of crossrefTargets(index, shape)) {
         await created.result.set({ topic: pieces[target].getCell() }, [
           "mention",
         ]);
       }
-      // What the topic publishes from those references is derived by a
-      // running topic, and the seed's runtime is the one running it: a board
-      // opened elsewhere joins its pivot over the published list.
-      if (targets.length > 0) await created.result.get(["mentions"]);
       pieces.push(created);
       topics.push({ fid: created.id, title });
       options.onTopic?.(index);
