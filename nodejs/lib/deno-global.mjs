@@ -9,6 +9,7 @@ import * as nodeTest from "node:test";
 import { fileURLToPath } from "node:url";
 import * as util from "node:util";
 import { Deno as shim } from "@deno/shim-deno";
+import { serveUpgrades, upgradeWebSocket } from "./websocket-upgrade.mjs";
 
 // ---------------------------------------------------------------------------
 // Deno.test
@@ -275,6 +276,12 @@ function serve(...args) {
     }
   });
 
+  serveUpgrades(
+    server,
+    (req) => toRequest(req, new AbortController()),
+    handler,
+  );
+
   let resolveFinished;
   const finished = new Promise((resolve) => (resolveFinished = resolve));
   server.on("close", () => resolveFinished());
@@ -439,6 +446,7 @@ Object.assign(Deno, {
   refTimer,
   // Deno's `args` are the script's arguments only.
   args: process.argv.slice(2),
+  upgradeWebSocket,
   // Code that spawns `Deno.execPath()` gets the port's `deno` stand-in,
   // which runs `deno run`/`eval`/`task` on Node.
   execPath: () => fileURLToPath(new URL("../bin/deno", import.meta.url)),
