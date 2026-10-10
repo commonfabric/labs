@@ -321,11 +321,16 @@ export async function seedTopicBoard(
       // reads prose for addresses now, so a seeded board built that way would
       // carry the sentences and none of the graph — and every benchmark over it
       // would quietly measure a board with no crossrefs at all.
-      for (const target of crossrefTargets(index, shape)) {
+      const targets = crossrefTargets(index, shape);
+      for (const target of targets) {
         await created.result.set({ topic: pieces[target].getCell() }, [
           "mention",
         ]);
       }
+      // What the topic publishes from those references is derived by a
+      // running topic, and the seed's runtime is the one running it: a board
+      // opened elsewhere joins its pivot over the published list.
+      if (targets.length > 0) await created.result.get(["mentions"]);
       pieces.push(created);
       topics.push({ fid: created.id, title });
       options.onTopic?.(index);
