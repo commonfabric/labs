@@ -43,6 +43,7 @@ import {
   resolveHarnessRunPaths,
 } from "./artifacts.ts";
 import { httpOriginOf } from "./tools/handle-values.ts";
+import { errorMessage } from "./error-message.ts";
 import {
   createCliPromptSlotBinding,
   type PromptSlotRole,
@@ -2417,7 +2418,7 @@ const appendStructuredResultInstructions = (
     allowedToolIds === undefined || allowedToolIds.includes("submit_result")
   ) {
     lines.push(
-      "- Before finishing, call submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct.",
+      "- Finish by calling submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct; an accepted result ends the run.",
     );
   }
   lines.push(
@@ -2595,13 +2596,17 @@ export const validateCfHarnessStructuredResult = async (
   let text: string;
   try {
     text = await options.readTextFile(options.config.path);
-  } catch {
+  } catch (error) {
+    // `submit_result` writes the file only for a value it accepted, so an
+    // absent file is a run that returned no result.
     return {
       type: "cf-harness.structured-result-validation",
       status: "invalid",
       schema_digest: schemaDigest,
       result_path: options.config.path,
-      validation_error: "structured result file could not be read",
+      validation_error: error instanceof Deno.errors.NotFound
+        ? "no structured result was submitted"
+        : "structured result file could not be read",
     };
   }
   let value: unknown;
@@ -2626,13 +2631,15 @@ export const validateCfHarnessStructuredResult = async (
       schema: options.config.schema,
       value,
     });
-  } catch {
+  } catch (error) {
     return {
       type: "cf-harness.structured-result-validation",
       status: "invalid",
       schema_digest: schemaDigest,
       result_path: options.config.path,
-      validation_error: "structured result did not match the schema",
+      validation_error: `structured result did not match the schema: ${
+        errorMessage(error)
+      }`,
     };
   }
   return {

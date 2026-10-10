@@ -487,7 +487,14 @@ export class LocalJobLane {
       ...(result.outcome === "completed"
         ? { result: result.structuredResult }
         : {}),
-      ...(result.outcome === "failed" ? { errorCode: result.errorCode } : {}),
+      ...(result.outcome === "failed"
+        ? {
+          errorCode: result.errorCode,
+          ...(result.errorDetail !== undefined
+            ? { errorDetail: result.errorDetail }
+            : {}),
+        }
+        : {}),
       ...(result.report !== undefined
         ? { report: { ...result.report } as Record<string, unknown> }
         : {}),

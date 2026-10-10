@@ -150,7 +150,16 @@ export type HarnessJobResult =
       /** The handles the job held, for resolving those the result names. */
       handleTable: ReturnType<typeof createHarnessHandleTable>;
     }
-    | { outcome: "failed"; errorCode: AgentRunErrorCode }
+    | {
+      outcome: "failed";
+      errorCode: AgentRunErrorCode;
+
+      /**
+       * Why, where the harness said: for `INVALID_RESULT`, that no result
+       * was submitted, or the field the schema refused and the reason.
+       */
+      errorDetail?: string;
+    }
     | { outcome: "cancelled" }
   );
 
@@ -261,8 +270,9 @@ export const selectHarnessJobSandboxRuntime = (
 /**
  * Runs one job. It ends `completed` with the value the model submitted and
  * the handles the job held; `cancelled` when its signal aborted; `failed` as
- * `LIMIT_REACHED` when the model-turn limit ended it, as `INVALID_RESULT`
- * when the loop completed without a result satisfying its schema, and as
+ * `LIMIT_REACHED` when the model-turn limit ended it, as `INVALID_RESULT`,
+ * with the validator's reason, when the loop completed without a result
+ * satisfying its schema, and as
  * `PROVIDER_FAILURE` when the model or a tool failed, or when a validated
  * result could not be read back.
  */
@@ -350,13 +360,16 @@ export const runHarnessJob = async (
   }
   const report = reportOf(loopResult);
   if (exitCode !== 0) {
-    return {
-      outcome: "failed",
-      errorCode: resultValidation?.status === "invalid"
-        ? INVALID_RESULT
-        : PROVIDER_FAILURE,
-      report,
-    };
+    return resultValidation?.status === "invalid"
+      ? {
+        outcome: "failed",
+        errorCode: INVALID_RESULT,
+        ...(resultValidation.validation_error !== undefined
+          ? { errorDetail: resultValidation.validation_error }
+          : {}),
+        report,
+      }
+      : { outcome: "failed", errorCode: PROVIDER_FAILURE, report };
   }
 
   let structuredResult: unknown;
