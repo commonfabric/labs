@@ -35,16 +35,15 @@ nothing. Instrumented on the room: 79 holds, every one at that stage, none
 for the probe budget, every absent document a `computed:` cell, the same
 few recurring across the rows that received them.
 
-**A plan's inputs cell inlines every schema.** `#bindNodeIO` hands the bound
-inputs to `getImmutableCell()`, which rewrites each link's content-addressed
-schema reference into its recomposed form before minting the `data:` id.
-Recomposition builds a fresh object graph per call, so the interned-schema
-cache never hits and every call deep-freezes and hashes the closure again.
-The rewrite exists so that a `data:` document is self-contained, and nothing
-needs that: a `data:` document never leaves the process, the process resolves
-a reference through the same registry the rewrite reads, and a `data:` link
-is flattened into its value before any write carries it
-(`normalizeAndDiff`).
+**A plan's inputs cell recomposes every schema.** `#bindNodeIO` hands the
+bound inputs to `getImmutableCell()`, which rewrites each link's
+content-addressed schema reference into its recomposed form before minting
+the `data:` id. The rewrite stays: a traversal accepts a reference-form
+schema only where the space it is reading persists that schema's closure,
+and nothing writes a `data:` document, so a link inside one carries its
+schema inline (`packages/runner/src/link-utils.ts`). What costs is that
+recomposition built a fresh object graph per call, so the interned-schema
+cache never hit and every call deep-froze and hashed the same closure again.
 
 **The cross-space pass materializes to discover.** `#syncCrossSpaceReads`
 does a full schema-validated `get()` of every plan's inputs, in every round,
