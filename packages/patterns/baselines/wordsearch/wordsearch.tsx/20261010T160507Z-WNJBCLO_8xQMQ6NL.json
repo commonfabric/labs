@@ -1,0 +1,181 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "backwards": {
+        "default": false,
+        "description": "Also run every allowed direction in reverse.",
+        "type": "boolean"
+      },
+      "cols": {
+        "default": 12,
+        "type": "number"
+      },
+      "diagonals": {
+        "default": false,
+        "description": "Also run words along the two left-to-right diagonals.",
+        "type": "boolean"
+      },
+      "rows": {
+        "default": 12,
+        "description": "Grid size; values outside 4–30 are brought to the nearest end.",
+        "type": "number"
+      },
+      "seed": {
+        "asCell": [
+          "cell"
+        ],
+        "default": 1,
+        "description": "Chooses the arrangement; the same seed gives the same puzzle. The one\ninput written here: `shuffle` sets a new one.",
+        "type": "number"
+      },
+      "showAnswers": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "session"
+          }
+        ],
+        "default": false,
+        "description": "Whether the hidden words are marked. Each viewer's own, for this sitting:\none person checking the answers does not reveal them to another.",
+        "type": "boolean"
+      },
+      "title": {
+        "default": "Word Search",
+        "description": "Heading on screen and in the PDF.",
+        "type": "string"
+      },
+      "words": {
+        "default": [],
+        "description": "Words to hide, as they should be listed. In the grid, accents, spaces and\npunctuation are dropped.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "wordsearch/wordsearch.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Placement": {
+        "properties": {
+          "col": {
+            "type": "number"
+          },
+          "dCol": {
+            "type": "number"
+          },
+          "dRow": {
+            "type": "number"
+          },
+          "label": {
+            "description": "The word as it was written, for the list a solver reads.",
+            "type": "string"
+          },
+          "row": {
+            "type": "number"
+          },
+          "word": {
+            "description": "The letters in the grid, from `normalizeWord`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "word",
+          "label",
+          "row",
+          "col",
+          "dRow",
+          "dCol"
+        ],
+        "type": "object"
+      },
+      "Skipped": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "`too-short`: fewer than `MIN_WORD_LENGTH` letters A–Z after normalizing.\n`no-room`: no run of the grid could take it without repeating a word.",
+            "enum": [
+              "too-short",
+              "no-room"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WordSearch": {
+        "properties": {
+          "cols": {
+            "type": "number"
+          },
+          "grid": {
+            "description": "One string of `cols` letters per row.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "placements": {
+            "items": {
+              "$ref": "#/$defs/Placement"
+            },
+            "type": "array"
+          },
+          "rows": {
+            "type": "number"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/Skipped"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows",
+          "cols",
+          "grid",
+          "placements",
+          "skipped"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "pdf": {
+        "description": "The two-page PDF (puzzle, then answer key) as an ASCII string.",
+        "type": "string"
+      },
+      "puzzle": {
+        "$ref": "#/$defs/WordSearch"
+      },
+      "shuffle": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      }
+    },
+    "required": [
+      "puzzle",
+      "pdf",
+      "shuffle",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
