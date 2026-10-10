@@ -3799,7 +3799,11 @@ class PiecePropIo implements PieceCellIo {
     // wide as the whole result for a write that touched none of it.
     if (this.#type === "input") {
       await pieces.getResult(this.#cc.getCell()).pull();
-    } else if (sentEvent) {
+    } else if (!sentEvent) {
+      await targetCell.pull();
+    }
+    // A stream reached through either the input or the result owes the same.
+    if (sentEvent) {
       await pieces.runtime.idle();
       if (streamSendOptions !== undefined && sentStreamLink !== undefined) {
         await pieces.runtime.speculationOverlay?.waitForIntentConsequence(
@@ -3811,8 +3815,6 @@ class PiecePropIo implements PieceCellIo {
           ),
         );
       }
-    } else {
-      await targetCell.pull();
     }
     await pieces.synced();
     return { wrote: true };
