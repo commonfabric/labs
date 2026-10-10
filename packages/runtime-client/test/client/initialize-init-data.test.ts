@@ -105,6 +105,7 @@ describe("initialize-init-data", () => {
       const transport = new CapturingTransport();
       const options = {
         apiUrl: new URL("http://toolshed.test"),
+        memoryUrl: new URL("https://router.test"),
         spaceHostMap: { "did:key:zSpace": "https://shard.test" },
         identity,
         spaceDid: identity.did(),
@@ -144,16 +145,42 @@ describe("initialize-init-data", () => {
       const {
         identity: _identity,
         apiUrl: _apiUrl,
+        memoryUrl: _memoryUrl,
         iframeOuterFrameUrl: pageSetting,
         ...expected
       } = options;
       expect(carried).toEqual({
         ...expected,
         apiUrl: options.apiUrl.toString(),
+        memoryUrl: options.memoryUrl.toString(),
       });
       expect(sent).toEqual(identity.keyPair);
       expect("iframeOuterFrameUrl" in data).toBe(false);
       expect(client.iframeOuterFrameUrl()).toBe(pageSetting);
+    });
+  });
+
+  describe("RuntimeClient.initialize without a memory URL", () => {
+    it("sends no `memoryUrl`, so the worker opens Memory on `apiUrl`", async () => {
+      const identity = await Identity.fromPassphrase("init-data no memory");
+      const transport = new CapturingTransport();
+      const client = await RuntimeClient.initialize(transport, {
+        apiUrl: new URL("http://toolshed.test"),
+        identity,
+        spaceDid: identity.did(),
+      });
+      try {
+        const init = transport.sent.find(
+          (m): m is IPCClientMessage =>
+            "msgId" in m && m.data?.type === RequestType.Initialize,
+        );
+        const data = (init as { data: { data: InitializationData } }).data
+          .data;
+        expect(data.apiUrl).toBe("http://toolshed.test/");
+        expect(data.memoryUrl).toBeUndefined();
+      } finally {
+        await client.dispose();
+      }
     });
   });
 

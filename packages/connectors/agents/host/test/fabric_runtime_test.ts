@@ -24,6 +24,22 @@ describe("fabric-runtime", () => {
     let ownerDid: string;
     let realFetch: typeof globalThis.fetch;
 
+    /**
+     * A deployment without a meta route, which says so with a 404 and is
+     * asked once, whose other paths return `status`.
+     */
+    const withoutMeta =
+      (status: (path: string) => number) => (input: string | URL | Request) => {
+        const path =
+          new URL(input instanceof Request ? input.url : String(input))
+            .pathname;
+        return Promise.resolve(
+          new Response(null, {
+            status: path === "/api/meta" ? 404 : status(path),
+          }),
+        );
+      };
+
     beforeEach(async () => {
       identityPath = await Deno.makeTempFile({ suffix: ".key" });
       const identityBytes = await Identity.generatePkcs8();
@@ -44,9 +60,9 @@ describe("fabric-runtime", () => {
       // own shutdown asked it to stop, and with nothing yet allocated able to
       // notice.
       const controller = new AbortController();
-      let sawSignal = false;
+      let passed: AbortSignal | undefined;
       globalThis.fetch = (_input, init) => {
-        sawSignal = init?.signal === controller.signal;
+        passed = init?.signal ?? undefined;
         return new Promise((_resolve, reject) => {
           init?.signal?.addEventListener(
             "abort",
@@ -64,7 +80,10 @@ describe("fabric-runtime", () => {
         space: "a-space-of-its-own",
         signal: controller.signal,
       })).rejects.toThrow("shutting down");
-      expect(sawSignal).toBe(true);
+      // The request carries the startup signal, joined with the read's own
+      // timeout, so the startup's cancellation reached it.
+      expect(passed?.aborted).toBe(true);
+      expect(passed?.reason).toEqual(new Error("shutting down"));
     });
 
     it("refuses an identity file it cannot read, before any request", async () => {
@@ -84,8 +103,7 @@ describe("fabric-runtime", () => {
     });
 
     it("disposes the runtime when its health check fails", async () => {
-      globalThis.fetch = () =>
-        Promise.resolve(new Response(null, { status: 503 }));
+      globalThis.fetch = withoutMeta(() => 503);
 
       await expect(openAgentFabricRuntime({
         apiUrl: "https://deployment.example",
@@ -93,6 +111,43 @@ describe("fabric-runtime", () => {
         ownerDid,
         space: "a-space-of-its-own",
       })).rejects.toThrow("could not connect to https://deployment.example");
+    });
+
+    it("opens Memory on the memory URL the deployment publishes", async () => {
+      globalThis.fetch = (input) =>
+        Promise.resolve(
+          new URL(String(input)).pathname === "/api/meta"
+            ? Response.json({ memoryUrl: "https://router.example" })
+            : new Response(null, { status: 503 }),
+        );
+      const memoryHosts: string[] = [];
+      using _open = stub(StorageManager, "open", (options) => {
+        memoryHosts.push(options.memoryHost.href);
+        return StorageManager.emulate({ as: options.as });
+      });
+      const runtimeMemoryUrls: (string | undefined)[] = [];
+      using _health = stub(Runtime.prototype, "healthCheck", function () {
+        runtimeMemoryUrls.push(this.memoryUrl?.href);
+        return Promise.resolve(false);
+      });
+
+      await expect(openAgentFabricRuntime({
+        apiUrl: "https://deployment.example",
+        identityPath,
+        ownerDid,
+        space: "a-space-of-its-own",
+      })).rejects.toThrow(
+        "could not connect to https://deployment.example Memory opens on " +
+          '"https://router.example/"',
+      );
+      // Both of the host's runtimes.
+      expect(memoryHosts).toEqual([
+        "https://router.example/",
+        "https://router.example/",
+      ]);
+      // The health check runs on the first, which holds the memory URL too,
+      // so that no host hint moves Memory off it.
+      expect(runtimeMemoryUrls).toEqual(["https://router.example/"]);
     });
 
     for (const deferStorageClaim of [false, true]) {
@@ -104,14 +159,9 @@ describe("fabric-runtime", () => {
             "open",
             (options) => EmulatedStorageManager.connectTo(server, options),
           );
-          globalThis.fetch = (input) =>
-            Promise.resolve(
-              new Response(null, {
-                status: new URL(String(input)).pathname === "/_health"
-                  ? 200
-                  : 503,
-              }),
-            );
+          globalThis.fetch = withoutMeta((path) =>
+            path === "/_health" ? 200 : 503
+          );
           const fabric = await openAgentFabricRuntime({
             apiUrl: "https://deployment.example",
             identityPath,
@@ -182,8 +232,7 @@ describe("fabric-runtime", () => {
     for (const cancel of [false, true]) {
       for (const cleanupFails of [false, true]) {
         it(`disposes both runtimes after ${cancel ? "cancellation" : "failure"} when cleanup fails ${cleanupFails}`, async () => {
-          globalThis.fetch = () =>
-            Promise.resolve(new Response(null, { status: 503 }));
+          globalThis.fetch = withoutMeta(() => 503);
           const controller = new AbortController();
           const reason = new Error("health check interrupted");
           using healthCheck = stub(Runtime.prototype, "healthCheck", () => {

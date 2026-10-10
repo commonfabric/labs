@@ -14,6 +14,7 @@ import {
   type CfcTrustConfigInput,
 } from "@commonfabric/runner/cfc/trust";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import { namesApiOrigin } from "@commonfabric/runner/space-host";
 
 import type { RuntimeSecurityContext } from "@/protocol/mod.ts";
 
@@ -59,6 +60,31 @@ export function normalizeSpaceHostMap(
 }
 
 /**
+ * The default storage host, spelled one way, or `undefined` where it is the
+ * backend. An absent memory URL, an empty one, and one naming `apiUrl`'s own
+ * origin all leave Memory at the backend, and all three read as `undefined`
+ * here, so those spellings of "Memory at the backend" do not refuse each
+ * other. "Its own origin" is the rule routing uses (`namesApiOrigin`), so a
+ * path on `apiUrl` does not make its host another one here either. A value no
+ * `URL` can parse is left as it stands, as {@link normalizeOrigin} leaves it.
+ */
+export function normalizeMemoryUrl(
+  memoryUrl: string | undefined,
+  apiUrl: string,
+): string | undefined {
+  if (memoryUrl === undefined || memoryUrl === "") return undefined;
+  let memory: URL;
+  let api: URL;
+  try {
+    memory = new URL(memoryUrl);
+    api = new URL(apiUrl);
+  } catch {
+    return normalizeOrigin(memoryUrl);
+  }
+  return namesApiOrigin(memory, api) ? undefined : memory.toString();
+}
+
+/**
  * Every field a {@link RuntimeSecurityContext} carries, as a record so that a
  * field added to that type and not to this one is a type error. What an attach
  * is checked against has to be the whole context: a field nobody compares is a
@@ -76,6 +102,7 @@ const SECURITY_CONTEXT_FIELDS: Record<
   cfcTrustConfig: true,
   experimental: true,
   identity: true,
+  memoryUrl: true,
   renderConfidentialityCeiling: true,
   renderDeclassificationPolicy: true,
   spaceDid: true,

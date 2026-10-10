@@ -123,6 +123,17 @@ records its own DID:
 - **A user's Home site table.** Each entry maps a space DID to the origin
   serving it. This table already exists.
 
+  A runtime learns where that origin serves Memory from the origin itself,
+  not from its own deployment. A runtime whose deployment publishes a memory
+  URL (a memory router) reads `/api/meta` on an entry's origin when the origin
+  is neither its API host nor its memory URL, once per origin for the runtime's
+  lifetime and for at most 64 origins, and opens the space's Memory on the
+  `memoryUrl` the origin publishes, or on the origin itself when it publishes
+  none; the space's HTTP work goes to the origin. An origin whose memory host
+  cannot be read leaves its spaces on no route, since the runtime's own router
+  is not where another deployment keeps its spaces. A runtime whose deployment
+  publishes no memory URL opens Memory on the entry's origin, as before.
+
 The allocation record is what makes repeated resolution converge. A handler that
 runs more than once for one logical event reads the record its first run wrote
 and reaches the same space. Concurrent resolvers contend on one document in one

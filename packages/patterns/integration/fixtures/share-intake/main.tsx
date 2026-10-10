@@ -4,8 +4,12 @@
  * handlers, and gives a sender handlers of its own that create a space and
  * offer it to the owner through the inbox the owner's profile points at. It
  * also holds a FabriChat manager, with a profile of its own, from which a
- * sender creates a real room to offer.
- * Fixture for `share-intake-multi-runtime.test.ts`.
+ * sender creates a real room to offer, or starts a direct chat with the owner
+ * that the manager offers through the owner's inbox itself. Its
+ * `chatManager`, as Home's is, is a second FabriChat manager, whose profile is
+ * the owner's first, listing the rooms the intake registers, which the intake
+ * has it accept, and from which the owner starts a chat. Fixture for
+ * `share-intake-multi-runtime.test.ts`.
  */
 
 import {
@@ -29,11 +33,15 @@ import {
 import {
   FabriChatManagerCore,
   type FabriChatManagerInput,
+  type FabriChatManagerOutput,
   type ManagerStreamEvent,
 } from "../../../fabrichat/manager.tsx";
 import {
+  type ChatIndexEntry,
+  type ChatManagerNotice,
   type ChatProfile,
   type ChatRequestOutcome,
+  type ManagerProfileCell,
 } from "../../../fabrichat/schemas.tsx";
 import ProfileHome, {
   type ProfileHomeOutput,
@@ -134,6 +142,14 @@ export interface OfferRoomEvent {
 function roomLinkOf(room: unknown): Cell<RoomOutput>;
 function roomLinkOf(room: unknown): unknown {
   return room;
+}
+
+/** The owner's first profile, as the profile a FabriChat manager reads. */
+function firstProfileOf(
+  profiles: Writable<ProfileHomeOutput[]>,
+): ManagerProfileCell;
+function firstProfileOf(profiles: Writable<ProfileHomeOutput[]>): unknown {
+  return profiles.key(0);
 }
 
 /** An inbox a link reaches, as the cell its result is. */
@@ -293,6 +309,27 @@ export interface MainOutput {
 
   /** The outcome of each of the FabriChat manager's requests. */
   chatRequests: Record<string, ChatRequestOutcome>;
+
+  /**
+   * Starts a direct chat from the stand-in's FabriChat manager, which offers
+   * it through the inbox of the profile the event names.
+   */
+  openChatDirect: Stream<ManagerStreamEvent>;
+
+  /** The FabriChat manager's notices. */
+  chatNotices: ChatManagerNotice[];
+
+  /**
+   * Starts a direct chat from the FabriChat manager listing the rooms the
+   * intake registers, as the owner's own manager does.
+   */
+  openOwnerChat: Stream<ManagerStreamEvent>;
+
+  /** The outcome of each of the owner's FabriChat manager's requests. */
+  ownerChatRequests: Record<string, ChatRequestOutcome>;
+
+  /** The owner's FabriChat manager, where Home keeps its own. */
+  chatManager: FabriChatManagerOutput;
 }
 
 export default pattern<MainInput, MainOutput>((
@@ -326,6 +363,19 @@ export default pattern<MainInput, MainOutput>((
     entries: {},
     offers: {},
   }).for("sharedSpaceCatalog");
+  const ownerChats = FabriChatManagerCore({
+    myProfile: firstProfileOf(profiles),
+    sharedSpaceCatalog: catalog,
+    direct: new Writable<Record<string, ChatIndexEntry>>({}).for(
+      "ownerChatDirect",
+    ),
+    requests: new Writable<Record<string, ChatRequestOutcome>>({}).for(
+      "ownerChatRequests",
+    ),
+    outgoingNotices: new Writable<ChatManagerNotice[]>([]).for(
+      "ownerChatNotices",
+    ),
+  });
   return {
     [NAME]: "Share intake fixture",
     [UI]: <div>share intake fixture</div>,
@@ -356,5 +406,10 @@ export default pattern<MainInput, MainOutput>((
     offerAgain: offerAgain({ profiles }),
     createChatGroup: chats.createGroup,
     chatRequests: chats.requests,
+    openChatDirect: chats.openDirect,
+    chatNotices: chats.outgoingNotices,
+    openOwnerChat: ownerChats.openDirect,
+    ownerChatRequests: ownerChats.requests,
+    chatManager: ownerChats,
   };
 });

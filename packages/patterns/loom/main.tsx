@@ -12,6 +12,7 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import FabriChatRoom from "../fabrichat/room.tsx";
 import {
   admitPanel,
   assertRemovable,
@@ -213,11 +214,12 @@ const setPresentation = handler<Presentation, State>(
 
 /**
  * Names `room` as the Loom's chat room, or clears it when the event names
- * none; no other handler of the root changes it. The room must live in the
- * Loom's own space, so that its members, the principals its space's access
- * list admits, are the Loom's. The designation is independent of the panels:
- * it persists while no panel shows the room, and a reader that needs to know
- * whether one does looks for the room among the piece panels.
+ * none; of the root's other handlers, only `ensureChatRoom` changes it, and
+ * only while it names none. The room must live in the Loom's own space, so
+ * that its members, the principals its space's access list admits, are the
+ * Loom's. The designation is independent of the panels: it persists while no
+ * panel shows the room, and a reader that needs to know whether one does looks
+ * for the room among the piece panels.
  *
  * @throws When `room` lives in another space.
  */
@@ -229,6 +231,21 @@ const setChatRoom = handler<ChatRoomChoice, { chatRoom: ChatRoomCell }>(
       throw new Error("The chat room must be in this Loom's space");
     }
     chatRoom.set(room === undefined ? {} : { room });
+  },
+);
+
+/**
+ * Names a new FabriChat room as the Loom's chat room, unless the Loom names
+ * one already, in which case it changes nothing. The room is the Loom's
+ * space's own chat: it lives in that space, is not its root, and has no
+ * `about`, so its participants are the ones this root lists. It is not added
+ * as a panel, nor to the piece registry, so it never appears as one. Whatever
+ * may call `setChatRoom` may call this.
+ */
+const ensureChatRoom = handler<void, { chatRoom: ChatRoomCell }>(
+  (_, { chatRoom }) => {
+    if (chatRoom.get().room !== undefined) return;
+    chatRoom.set({ room: FabriChatRoom({}) });
   },
 );
 
@@ -720,6 +737,7 @@ export default pattern<LoomInput, LoomOutput>(
       addParticipant: addParticipant({ roster: participants }),
       chatRoom: room,
       setChatRoom: setChatRoom({ chatRoom }),
+      ensureChatRoom: ensureChatRoom({ chatRoom }),
       retitleLoom: retitleLoom({ title }),
       retitlePanel: retitlePanel({ panels }),
       retargetPanel: retargetPanel({ panels }),
