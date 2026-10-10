@@ -2160,17 +2160,21 @@ Unpaired work, including a tool call still running when the cancel lands, and
 process interruptions do not advance the checkpoint; their evidence remains in
 the audit trail.
 
-`finalizeOnTurnLimit` reserves the last root model turn for a partial answer
-with harness and native tools disabled. It warns two turns beforehand and
-records `budget_finalized` with a `gave-up` task outcome. Provider failures,
-blank answers, and attempted final tool calls remain failures. Root budgets
-include this final call; provider retries and child budgets are separate.
-Generated budget notices remain in events and durable run artifacts, but are
-excluded from returned transcripts and interactive checkpoints so subsequent
-user turns receive a fresh budget. They also state their turn-local scope for
-explicit artifact resume and opaque provider context that may retain them.
-`CF_HARNESS_CHAT_ARTIFACT_ROOT` supplies the Loom host's default durable run
-root, including for restored sessions without their own artifact root.
+Every run gets 32 root model turns unless its host names another budget, and two
+turns before the last the host tells the model how many remain, so it can finish
+rather than be cut off: a run returning a structured result is told to call
+`submit_result` on the next turn and answer on the last. `finalizeOnTurnLimit`
+instead reserves the last root model turn for a partial answer with harness and
+native tools disabled, warning in those terms, and records `budget_finalized`
+with a `gave-up` task outcome. Provider failures, blank answers, and attempted
+final tool calls remain failures. Root budgets include this final call; provider
+retries and child budgets are separate. Generated budget notices remain in
+events and durable run artifacts, but are excluded from returned transcripts and
+interactive checkpoints so subsequent user turns receive a fresh budget. They
+also state their turn-local scope for explicit artifact resume and opaque
+provider context that may retain them. `CF_HARNESS_CHAT_ARTIFACT_ROOT` supplies
+the Loom host's default durable run root, including for restored sessions
+without their own artifact root.
 
 Successful `assign_slug` calls also retain host-owned naming receipts: a slug
 and the piece's complete reference, including its space. A completed turn that
@@ -3196,12 +3200,10 @@ search hit is a component to wire, not a specification to rebuild: importing it
 costs the import line, and rewriting it from its description publishes a second
 pattern doing the same job under a different id.
 
-The profile carries its own turn budget of 24, in place of the default subagent
-cap of 8. Authoring is a write, compile-error, fix loop and each iteration costs
-a turn; at the default the loop runs out before a non-trivial pattern compiles,
-and a child that ran out of turns has nothing to return. A delegation may still
-name its own `maxModelTurns`, bounded by the same maximum of 64 every profile
-is.
+The profile runs on the default subagent budget of 32 turns. Authoring is a
+write, compile-error, fix loop and each iteration costs a turn, so a delegation
+expecting a long loop may name its own `maxModelTurns`, bounded by the same
+maximum of 64 every profile is.
 
 The profile also carries a return contract, and it is the profile's rather than
 a default: a `pattern-author` delegation that declares a `returnSchema` of its

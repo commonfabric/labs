@@ -263,7 +263,8 @@ import {
   type WebFetchToolOutput,
 } from "./tools/web-fetch.ts";
 
-const DEFAULT_MAX_MODEL_TURNS = 8;
+/** Root model turns a run gets when its host names no budget. */
+export const DEFAULT_MAX_MODEL_TURNS = 32;
 const BASH_CWD_MARKER_PREFIX = "__CF_HARNESS_CWD__";
 
 export interface CreateHarnessPromptLoopOptions
@@ -3978,15 +3979,17 @@ export class CfHarnessPromptLoop {
         modelTurns += 1;
         const finalizing = this.#finalizeOnTurnLimit &&
           modelTurns === maxModelTurns;
-        if (
-          finalizing ||
-          (this.#finalizeOnTurnLimit && modelTurns === maxModelTurns - 2)
-        ) {
+        // Every run is warned two turns out, so a model can wrap up rather
+        // than be cut off; only a finalizing run also gets the last turn's
+        // notice, since only it holds that turn back for the answer.
+        if (finalizing || modelTurns === maxModelTurns - 2) {
           const budgetMessage: HarnessTranscriptMessage = {
             role: "user",
             content: finalizing
-              ? "Host turn budget: provide your final response now. Tools are unavailable. Summarize verified findings with source citations, explicitly identify unread material and uncertainty, and do not claim exhaustive coverage. This notice applies only to this user turn; subsequent user requests have a fresh budget."
-              : "Host turn budget: two root turns remain after this call, with the last reserved for your final response. Prioritize essential source reads and prepare verified findings and remaining gaps. This notice applies only to this user turn; subsequent user requests have a fresh budget.",
+              ? "Host turn budget: provide your final response now. Tools are unavailable. Report what you established and how, name what remains unchecked or uncertain, and do not claim the task is complete if it is not. This notice applies only to this user turn; subsequent user requests have a fresh budget."
+              : this.#finalizeOnTurnLimit
+              ? "Host turn budget: two root turns remain after this call, with the last reserved for your final response. Spend the next on what matters most, and prepare what you established and what remains open. This notice applies only to this user turn; subsequent user requests have a fresh budget."
+              : "Host turn budget: two root turns remain after this call, and the run fails if they end without your final response. Stop gathering and finish. If the task returns a result through a tool such as submit_result, call it on the next turn and give your final response on the last. This notice applies only to this user turn; subsequent user requests have a fresh budget.",
           };
           turnNotices.add(budgetMessage);
           transcript.push(budgetMessage);

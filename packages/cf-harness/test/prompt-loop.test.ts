@@ -11373,3 +11373,113 @@ describe("CfHarnessPromptLoop budget finalization", () => {
     ).toHaveLength(0);
   });
 });
+
+describe("CfHarnessPromptLoop turn budget warning", () => {
+  const bashTurnsThenAnswer = (
+    answerOnTurn: number,
+    requests: HarnessModelTurnRequest[],
+  ): HarnessModelClient => ({
+    providerId: "openai-compatible-gateway",
+    complete: (request) => {
+      requests.push(structuredClone({ ...request, onAttempt: undefined }));
+      return Promise.resolve({
+        assistant: requests.length === answerOnTurn
+          ? { role: "assistant", content: "Done." }
+          : {
+            role: "assistant",
+            content: "",
+            toolCalls: [{
+              id: `call-${requests.length}`,
+              type: "function",
+              function: {
+                name: "bash",
+                arguments: JSON.stringify({ command: "echo evidence" }),
+              },
+            }],
+          },
+      });
+    },
+  });
+
+  it("warns a strict run once, two turns before its last, and keeps its tools", async () => {
+    const requests: HarnessModelTurnRequest[] = [];
+    const budgetMessages: string[] = [];
+    const loop = new CfHarnessPromptLoop({
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        model: "gpt-test",
+      }),
+      maxModelTurns: 5,
+      modelClient: bashTurnsThenAnswer(5, requests),
+    });
+
+    const result = await loop.runPrompt({
+      prompt: "Collect the evidence.",
+      onTranscriptEvent: ({ message }) => {
+        if (
+          message.role === "user" &&
+          message.content.startsWith("Host turn budget:")
+        ) {
+          budgetMessages.push(message.content);
+        }
+      },
+    });
+
+    expect(budgetMessages).toHaveLength(1);
+    expect(budgetMessages[0]).toContain("two root turns remain");
+    expect(budgetMessages[0]).toContain("submit_result");
+    expect(requests).toHaveLength(5);
+    expect(requests[2]?.transcript.at(-1)?.content).toBe(budgetMessages[0]);
+    expect(requests[1]?.transcript.at(-1)?.content).not.toBe(
+      budgetMessages[0],
+    );
+    expect(requests.at(-1)?.tools.length).toBeGreaterThan(0);
+    expect(result.finalAssistantText).toBe("Done.");
+    expect(result.runState.terminalReason).toBe("assistant_completed");
+    expect(
+      result.transcript.some((message) =>
+        message.content.startsWith("Host turn budget:")
+      ),
+    ).toBe(false);
+  });
+
+  it("still fails a strict run that ends without a final response after the warning", async () => {
+    const requests: HarnessModelTurnRequest[] = [];
+    const loop = new CfHarnessPromptLoop({
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        model: "gpt-test",
+      }),
+      maxModelTurns: 4,
+      modelClient: bashTurnsThenAnswer(Number.POSITIVE_INFINITY, requests),
+    });
+
+    await expect(loop.runPrompt({ prompt: "Collect the evidence." }))
+      .rejects.toThrow("exceeded max model turns (4)");
+    expect(
+      requests[1]?.transcript.at(-1)?.content.startsWith("Host turn budget:"),
+    ).toBe(true);
+  });
+
+  for (const cap of [1, 2]) {
+    it(`sends no warning to a strict run of ${cap} turns`, async () => {
+      const requests: HarnessModelTurnRequest[] = [];
+      const loop = new CfHarnessPromptLoop({
+        engine: new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          model: "gpt-test",
+        }),
+        maxModelTurns: cap,
+        modelClient: bashTurnsThenAnswer(cap, requests),
+      });
+
+      await loop.runPrompt({ prompt: "Collect the evidence." });
+
+      expect(
+        requests.flatMap((request) => request.transcript).some((message) =>
+          message.content.startsWith("Host turn budget:")
+        ),
+      ).toBe(false);
+    });
+  }
+});
