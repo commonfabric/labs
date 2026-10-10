@@ -1,0 +1,139 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "meeting-rooms/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AllocateMeeting": {
+        "properties": {
+          "allocation": {
+            "$ref": "#/$defs/MeetingAllocation",
+            "description": "Space and root cause to retain together."
+          },
+          "attempt": {
+            "description": "Opaque identifier persisted by the caller before reservation.",
+            "type": "string"
+          },
+          "meeting": {
+            "description": "Lowercase SHA-256 of the normalized calendar occurrence identity.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "allocation",
+          "meeting",
+          "attempt"
+        ],
+        "type": "object"
+      },
+      "MeetingAllocation": {
+        "properties": {
+          "publicationSeed": {
+            "description": "Stable public cause for idempotent Loom root provisioning.",
+            "type": "string"
+          },
+          "space": {
+            "description": "Random space DID owned by the claim's creator.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "space",
+          "publicationSeed"
+        ],
+        "type": "object"
+      },
+      "MeetingAttempt": {
+        "properties": {
+          "attempt": {
+            "description": "Opaque identifier persisted by the caller before reservation.",
+            "type": "string"
+          },
+          "meeting": {
+            "description": "Lowercase SHA-256 of the normalized calendar occurrence identity.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "meeting",
+          "attempt"
+        ],
+        "type": "object"
+      },
+      "MeetingClaim": {
+        "properties": {
+          "allocation": {
+            "$ref": "#/$defs/MeetingAllocation",
+            "description": "The only space the creator may prepare for this occurrence."
+          },
+          "attempt": {
+            "description": "Original attempt, retained across retries and creator devices.",
+            "type": "string"
+          },
+          "creator": {
+            "description": "Authenticated actor of the first committed reservation.",
+            "type": "string"
+          },
+          "state": {
+            "description": "Lifecycle state; unfamiliar future values are retained and refused.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "creator",
+          "attempt",
+          "state"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Observable shared decisions and their transactional mutation handlers.",
+    "properties": {
+      "$NAME": {
+        "description": "Human-readable piece name.",
+        "type": "string"
+      },
+      "allocate": {
+        "$ref": "#/$defs/AllocateMeeting",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Retains the first empty-space allocation submitted by that creator."
+      },
+      "claims": {
+        "additionalProperties": {
+          "$ref": "#/$defs/MeetingClaim"
+        },
+        "description": "Retained decisions, containing only coordination metadata.",
+        "properties": {},
+        "scope": "space",
+        "type": "object"
+      },
+      "publish": {
+        "$ref": "#/$defs/MeetingAttempt",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Records the creator's readiness after preparation in the retained space."
+      },
+      "reserve": {
+        "$ref": "#/$defs/MeetingAttempt",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Retains the first authenticated creator and attempt for an occurrence."
+      }
+    },
+    "required": [
+      "claims",
+      "reserve",
+      "allocate",
+      "publish",
+      "$NAME"
+    ],
+    "type": "object"
+  }
+}
