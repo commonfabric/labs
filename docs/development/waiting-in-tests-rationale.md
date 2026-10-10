@@ -150,7 +150,7 @@ exactly as it does before any runtime exists.
 The runner preload's `realClockFiles` list names each file that stays on the
 real clock and its reason; [the main
 document](waiting-in-tests.md#the-runner-suite-advancing-the-runtimes-own-timers)
-describes the one current entry. The histories below record entries and
+describes why an entry belongs there. The histories below record entries and
 wall-clock waits that were retired rather than justified. Read them before
 adding a new entry: each of these looked timing- or transport-bound from the
 failure, and was not.
