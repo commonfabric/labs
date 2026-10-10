@@ -46,6 +46,35 @@ const TREE_PROGRAM: RuntimeProgram = {
   }],
 };
 
+// The same tree, its root handed the rows' `hint` by its caller rather than
+// deriving it: the argument of every row links to whatever the caller
+// supplied.
+const HANDED_TREE_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern } from 'commonfabric';",
+      "type Item = { n: number };",
+      "export const badge = pattern<{ item: Item }, { label: string }>(",
+      "  ({ item }) => ({ label: computed(() => `b:${item.n}`) }),",
+      ");",
+      "export const row = pattern<{ item: Item; hint?: string }, {",
+      "  value: number;",
+      "  badge: { label: string };",
+      "}>(({ item }) => ({",
+      "  value: computed(() => item.n * 2),",
+      "  badge: badge({ item }),",
+      "}));",
+      "export default pattern<{ items: Item[]; hint?: string }, {",
+      "  rows: { value: number; badge: { label: string } }[];",
+      "}>(({ items, hint }) => ({",
+      "  rows: items.map((item) => row({ item, hint })),",
+      "}));",
+    ].join("\n"),
+  }],
+};
+
 const ITEMS = [{ n: 1 }, { n: 2 }, { n: 3 }];
 
 /** The pattern a node instantiates, or undefined for any other node. */
@@ -189,6 +218,70 @@ describe("resume-presync-plan-count", () => {
     }
     expect(pairs).toBe(expectedPairs);
     expect(calls).toBe(pairs);
+    expect(nameSyncs).toBe(1);
+  });
+
+  it("names a nested instance's family once when its argument links to a document nothing has written", async () => {
+    const cellId = "resume-presync-plan-count-handed-root";
+
+    const author = replica();
+    const compiled = await author.patternManager.compilePattern(
+      HANDED_TREE_PROGRAM,
+      { space },
+    );
+    // A document no one writes, handed down to every row: a viewer's
+    // per-user cell before the viewer has written one has this shape. The
+    // store holds nothing for it, so no name-sync can deliver it.
+    const unwritten = author.getCell<string>(
+      space,
+      "resume-presync-plan-count-unwritten",
+      { type: "string" },
+    );
+    const tx = author.edit();
+    const authored = author.getCell<{ rows: { value: number }[] }>(
+      space,
+      cellId,
+      compiled.resultSchema,
+      tx,
+    );
+    author.run(tx, compiled, { items: ITEMS, hint: unwritten }, authored);
+    await tx.commit().settled;
+    await authored.pull();
+    await author.settled();
+    await author.patternManager.flushCompileCacheWrites();
+    await author.storageManager.synced();
+    await author.dispose({ closeStorage: false });
+    runtimes.splice(runtimes.indexOf(author), 1);
+
+    const resumer = replica();
+    await resumer.patternManager.compilePattern(HANDED_TREE_PROGRAM, { space });
+    let nameSyncs = 0;
+    resumer.runner.accessForTestingOnly.dependencySyncer = (
+      resultCell,
+      pattern,
+      inputs,
+      sync,
+    ) => {
+      nameSyncs += 1;
+      return sync(resultCell, pattern, inputs);
+    };
+    const resumed = resumer.getCell<{ rows: { value: number }[] }>(
+      space,
+      cellId,
+      compiled.resultSchema,
+    );
+    expect(await resumer.runner.start(resumed)).toBe(true);
+    await resumed.pull();
+    await resumer.settled();
+    await resumer.storageManager.synced();
+    expect(
+      (resumed.key("rows").getAsQueryResult() as {
+        value: number;
+        badge: { label: string };
+      }[]).map((item) => [item.value, item.badge.label]),
+    ).toEqual([[2, "b:1"], [4, "b:2"], [6, "b:3"]]);
+    // The root's own name-sync planned every row and named what its nodes
+    // read; a row's start finds nothing a name-sync of its own could add.
     expect(nameSyncs).toBe(1);
   });
 

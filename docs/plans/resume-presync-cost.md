@@ -131,14 +131,23 @@ Exit: a schema is recomposed once per reference per registry epoch.
 - [x] The field check: `start/syncCellsForRunningPattern` on the room from
       80 to 32, `resumeCellSync` spans from 4,877 to 502, the rendering
       unchanged.
-- [ ] The 31 holds left are all on per-user instances (`scope: user`) of
-      documents the replica holds as space instances — the viewer's
-      per-user cells the chips receive — which no store holds for a viewer
-      who has not written one, and which nothing in the pre-sync requests.
-      They are the same defect in a fourth shape, and the general fix is
-      the one `docs/plans/presync-from-node-plans.md` stage 5 owes: the gate
-      asks the plans what a name-sync would deliver and probes that, instead
-      of walking the argument.
+- [x] The holds left after that were on per-user instances (`scope: user`)
+      of documents — a viewer's per-user cells the chips receive — which no
+      store holds for a viewer who has not written one, and which a
+      name-sync could not deliver. The gate no longer walks the argument of
+      an instance the resume pre-sync planned under the same pattern
+      (`Runner.#presyncNamedInstances`, the first part of
+      `docs/plans/presync-from-node-plans.md` stage 5): the pre-sync's
+      plans are the plans a name-sync would build. A tree whose rows
+      receive a link to a document nothing has written resumes with one
+      name-sync (`packages/runner/test/resume-presync-plan-count.test.ts`).
+- [x] The field check again: `start/syncCellsForRunningPattern` on the
+      room from 32 to 2, `resumeCellSync` spans from 502 to 204,
+      `resumeCrossSpaceRead` spans from 2,586 to 101, and the render's user
+      CPU from 37–45 s to 17 s on the same machine at the same load, the
+      rendering unchanged. The pre-sync no longer appears among the
+      profile's top inclusive frames; pattern compilation and the render's
+      sinks do.
 
 Exit: a child's start names its family only when something a name-sync
 could deliver is missing.

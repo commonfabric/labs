@@ -2238,6 +2238,21 @@ export class Runner {
   >(RESULT_SHORTCUT_LIMIT);
 
   /**
+   * The nested instances a resume pre-sync of this runner has planned and
+   * named, by family key, each with the identity key of the pattern it was
+   * planned under. A pre-sync plans each nested instance's nodes against
+   * its stored argument and names what they read, so a name-sync of that
+   * instance under the same pattern would make the same requests and
+   * deliver nothing more; the gate before such an instance's own start
+   * probes its owned cells, which a seed may still be owed, and skips the
+   * argument walk. Bounded like `#locallyPreparedResults`: a missing entry
+   * costs a walk, never a wrong verdict.
+   */
+  readonly #presyncNamedInstances = new BoundedKeyMap<string, string>(
+    RESULT_SHORTCUT_LIMIT,
+  );
+
+  /**
    * Observer of every node plan the resume pre-sync builds, by the piece
    * planned and the node, for a test counting plans against the tree's
    * `(instance, node)` pairs; `node` is the plan of one of the pattern's
@@ -6451,6 +6466,7 @@ export class Runner {
     return this.#familyAbsent(
         resolved.pattern,
         entryKey,
+        key,
         argument,
         argumentLink,
         resultCell,
@@ -6532,11 +6548,16 @@ export class Runner {
    * or of a sub-piece it instantiates. The store delivers none of these with
    * the result document; a run that reads one absent commits against a
    * document the store holds and is refused, so a caller that finds one
-   * absent names the family before it runs.
+   * absent names the family before it runs. For the family `familyKey`
+   * names, when a pre-sync of this runner planned it under this pattern
+   * (`#presyncNamedInstances`), the argument's links are not walked: that
+   * pre-sync named what the nodes read through them, and a name-sync here
+   * would ask for the same documents again.
    */
   #familyAbsent(
     pattern: Pattern,
     entryKey: string,
+    familyKey: string,
     argument: unknown,
     argumentLink: NormalizedFullLink,
     resultCell: Cell<any>,
@@ -6584,14 +6605,57 @@ export class Runner {
       return true;
     };
     if (!present(argumentLink)) return hold("the argument document");
-    // What the run reads through the argument: every document the caller's
-    // argument and the stored argument link to, followed through the
-    // targets those links resolve into — a coordinator's element link is a
-    // chain of redirects, and setup reads each hop. Bounded by depth, by a
-    // document being probed once, and by the probe budget.
-    // Presence is a fact about a document, probed once; what a link reaches
-    // depends on its path, so two links into one document at different
-    // paths are each walked.
+    if (this.#presyncNamedInstances.get(familyKey) !== entryKey) {
+      if (
+        this.#argumentLinksAbsent(
+          argument,
+          argumentLink,
+          resultCell,
+          readTx,
+          present,
+        )
+      ) {
+        return hold("a document the argument links to");
+      }
+    }
+    // The owned cells the run reads: the pattern's derived internal cells
+    // and, through each nested sub-pattern's result spot, those of the
+    // sub-pieces the run instantiates — the same walk the resume pre-sync
+    // syncs by name.
+    const owned: Cell<any>[] = [];
+    this.#collectResumeOwnedCells(
+      pattern,
+      cell,
+      owned,
+      new Set(),
+      readTx,
+    );
+    for (const ownedCell of owned) {
+      if (!present(ownedCell.getAsNormalizedFullLink())) {
+        return hold("an owned cell");
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether a document the run reads through its argument is absent from
+   * this replica: every document the caller's `argument` and the stored
+   * argument at `argumentLink` link to, followed through the targets those
+   * links resolve into — a coordinator's element link is a chain of
+   * redirects, and setup reads each hop — each probed through `present`.
+   * Bounded by depth, by a document being probed once, and by the probe
+   * budget `present` enforces. Presence is a fact about a document, probed
+   * once; what a link reaches depends on its path, so two links into one
+   * document at different paths are each walked.
+   */
+  #argumentLinksAbsent(
+    argument: unknown,
+    argumentLink: NormalizedFullLink,
+    resultCell: Cell<any>,
+    readTx: IExtendedStorageTransaction,
+    present: (link: NormalizedFullLink) => boolean,
+  ): boolean {
     const probed = new Set<string>();
     const walked = new Set<string>();
     const linksAbsent = (value: unknown, depth: number): boolean => {
@@ -6648,44 +6712,20 @@ export class Runner {
       }
       return false;
     };
-    if (linksAbsent(argument, 4)) {
-      return hold("a document the caller's argument links to");
-    }
-    if (
-      linksAbsent(
-        readTx.readOrThrow(
-          {
-            space: argumentLink.space,
-            id: argumentLink.id,
-            path: ["value"],
-            ...(argumentLink.scope !== undefined &&
-              { scope: argumentLink.scope }),
-          },
-          { meta: ignoreReadForScheduling },
-        ),
-        4,
-      )
-    ) {
-      return hold("a document the stored argument links to");
-    }
-    // The owned cells the run reads: the pattern's derived internal cells
-    // and, through each nested sub-pattern's result spot, those of the
-    // sub-pieces the run instantiates — the same walk the resume pre-sync
-    // syncs by name.
-    const owned: Cell<any>[] = [];
-    this.#collectResumeOwnedCells(
-      pattern,
-      cell,
-      owned,
-      new Set(),
-      readTx,
+    if (linksAbsent(argument, 4)) return true;
+    return linksAbsent(
+      readTx.readOrThrow(
+        {
+          space: argumentLink.space,
+          id: argumentLink.id,
+          path: ["value"],
+          ...(argumentLink.scope !== undefined &&
+            { scope: argumentLink.scope }),
+        },
+        { meta: ignoreReadForScheduling },
+      ),
+      4,
     );
-    for (const ownedCell of owned) {
-      if (!present(ownedCell.getAsNormalizedFullLink())) {
-        return hold("an owned cell");
-      }
-    }
-    return false;
   }
 
   /**
@@ -9002,6 +9042,10 @@ export class Runner {
     while (pending.size > 0) {
       const cells: Cell<any>[] = [];
       const plans: NodePlan[] = [];
+      // The instances with a stored setup this round plans, by family key
+      // and the pattern planned under, recorded once what the round names
+      // has landed.
+      const planned: [familyKey: string, entryKey: string][] = [];
       const planTx = this.#runtime.edit();
       if (identity !== undefined) planTx.tx.scopeKeyIdentity = identity;
       try {
@@ -9015,14 +9059,26 @@ export class Runner {
             );
           if (argumentLink === undefined) continue;
           pending.delete(key);
-          const planned = this.#cellsPatternNodes(
+          const nodes = this.#cellsPatternNodes(
             planTx,
             pattern,
             resultCell,
             argumentLink,
           );
-          for (const cell of planned.cells) cells.push(cell);
-          for (const plan of planned.plans) plans.push(plan);
+          for (const cell of nodes.cells) cells.push(cell);
+          for (const plan of nodes.plans) plans.push(plan);
+          // The policy manifests the instance's pattern names, as the root
+          // wave names the root pattern's.
+          for (const digest of modulePolicyDigestsOf(pattern)) {
+            cells.push(
+              this.#runtime.getCellFromEntityId(
+                resultCell.space,
+                cfcPolicyManifestDocId(digest),
+                [],
+                CFC_POLICY_MANIFEST_DOC_SCHEMA,
+              ),
+            );
+          }
           if (argumentMetaLink !== undefined) {
             cells.push(
               this.#runtime.getCellFromLink({
@@ -9030,6 +9086,10 @@ export class Runner {
                 schema: undefined,
               }),
             );
+            planned.push([
+              this.#getFamilyKey(resultCell, identity),
+              patternIdentityKey(this.#entryRefForPattern(pattern)),
+            ]);
           }
         }
       } finally {
@@ -9049,6 +9109,9 @@ export class Runner {
       );
       logger.time(waveStart, "start", "resumeInstanceNodeSyncWave");
       await this.#syncCrossSpaceReads(plans, identity);
+      for (const [familyKey, entryKey] of planned) {
+        this.#presyncNamedInstances.set(familyKey, entryKey);
+      }
     }
   }
 
@@ -9829,6 +9892,7 @@ export class Runner {
     // canceled
     this.#resultPatternCache.clear();
     this.#locallyPreparedResults.clear();
+    this.#presyncNamedInstances.clear();
     this.#locallyStoppedResults.clear();
     this.#locallyCommittedHandlerResultStarts.clear();
     this.#startGenerationByDoc.clear();

@@ -398,13 +398,26 @@ Exit: no resumed action's first run is released by a timer.
 
 ### Stage 5. The gates ask the plans
 
-- [ ] Replace the raw four-hop scan in `#familyAbsent` with a coverage
-      check of each node plan's selector against the storage manager's
-      sync-request index, and `#swapReadsAbsent` likewise. The probe budget
-      goes with the scan.
-- [ ] Test: the existing `piece-named-before-start.test.ts` cases pass
-      unchanged, and a case where the raw scan over-held (a link in the
-      argument no body reads) no longer holds.
+- [x] A nested instance the resume pre-sync planned under a pattern is
+      recorded by family key (`Runner.#presyncNamedInstances`), once the
+      wave that named what its plans read has landed. The gate before that
+      instance's own start, asked under the same pattern, skips the
+      argument walk: the pre-sync's plans are the plans a name-sync would
+      build, so a name-sync could request nothing the pre-sync did not. The
+      owned cells are still probed, since an absent one is owed a seed. The
+      instance wave also names the policy manifests each nested pattern
+      declares, as the root wave names the root's.
+- [x] Test: a tree whose rows receive, through the root's argument, a link
+      to a document nothing has written resumes with one name-sync
+      (`packages/runner/test/resume-presync-plan-count.test.ts`); the
+      `packages/runner/test/piece-named-before-start.test.ts` cases pass
+      unchanged.
+- [ ] A start no pre-sync planned — a caller's `run()` over a piece set up
+      elsewhere — still walks the argument's redirect chains under the probe
+      budget (`#argumentLinksAbsent`). Replace that walk with a coverage
+      check of the start's own node plans against the storage manager's
+      sync-request index, and `#swapReadsAbsent` likewise; the budget goes
+      with the walk.
 
 Exit: `NAMING_PROBE_BUDGET` is either gone or justified by a measurement in
 the pull request.
