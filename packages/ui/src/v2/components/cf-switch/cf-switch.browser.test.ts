@@ -39,7 +39,9 @@ Deno.test("the focused switch shows a focus ring", async () => {
   if (!track) throw new Error("the switch did not render");
   expect(getComputedStyle(track).boxShadow).toBe("none");
   await pressKey("Tab");
-  expect(getComputedStyle(track).boxShadow).not.toBe("none");
+  // Finishing the fade-in reads the ring itself, not its first frame.
+  for (const animation of track.getAnimations()) animation.finish();
+  expect(getComputedStyle(track).boxShadow).toContain("0px 0px 0px 4px");
 });
 
 Deno.test("Space and Enter toggle the focused switch", async () => {

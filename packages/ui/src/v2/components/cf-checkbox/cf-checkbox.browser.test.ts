@@ -120,7 +120,9 @@ Deno.test("the focused checkbox shows a focus ring", async () => {
   if (!box) throw new Error("the checkbox did not render");
   expect(getComputedStyle(box).boxShadow).toBe("none");
   await pressKey("Tab");
-  expect(getComputedStyle(box).boxShadow).not.toBe("none");
+  // Finishing the fade-in reads the ring itself, not its first frame.
+  for (const animation of box.getAnimations()) animation.finish();
+  expect(getComputedStyle(box).boxShadow).toContain("0px 0px 0px 4px");
 });
 
 Deno.test("Space toggles the focused checkbox, and Enter does not", async () => {

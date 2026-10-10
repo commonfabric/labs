@@ -44,7 +44,9 @@ Deno.test("the focused radio shows a focus ring", async () => {
   if (!circle) throw new Error("the radio did not render");
   expect(getComputedStyle(circle).boxShadow).toBe("none");
   await pressKey("Tab");
-  expect(getComputedStyle(circle).boxShadow).not.toBe("none");
+  // Finishing the fade-in reads the ring itself, not its first frame.
+  for (const animation of circle.getAnimations()) animation.finish();
+  expect(getComputedStyle(circle).boxShadow).toContain("0px 0px 0px 4px");
 });
 
 Deno.test("Space selects the focused radio, and Enter does not", async () => {

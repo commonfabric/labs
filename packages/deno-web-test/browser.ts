@@ -127,9 +127,17 @@ export class BrowserController extends EventTarget {
       if (name !== DRIVER_BINDING) {
         return;
       }
-      queue = queue.then(() =>
-        this.#runCommand(page, payload, executionContextId)
-      );
+      // A command that throws reports and lets the next one run: a rejected
+      // queue would leave every later press unsettled.
+      queue = queue
+        .then(() => this.#runCommand(page, payload, executionContextId))
+        .catch((e) =>
+          this.#reportCommandFailure(
+            `Command could not be run: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          )
+        );
     });
     await celestial.Runtime.addBinding({ name: DRIVER_BINDING });
   }
