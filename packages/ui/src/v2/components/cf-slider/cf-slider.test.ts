@@ -31,6 +31,9 @@ type SliderInternals = {
   increment(): void;
   decrement(): void;
   _handleKeyDown(event: { key: string; preventDefault(): void }): void;
+  _beginDrag(): void;
+  _moveTo(value: number, gesture: "drag"): void;
+  _commitDrag(): void;
 };
 
 /** A slider over 0–100 holding `value`, as a change of `value` binds it. */
@@ -45,9 +48,9 @@ const press = (element: SliderInternals, key: string) =>
   element._handleKeyDown({ key, preventDefault: () => {} });
 
 /** What each `cf-change` carried, and where the slider stood as it fired. */
-const announcements = (element: SliderInternals) => {
+const announcements = (element: SliderInternals, type = "cf-change") => {
   const seen: { detail: unknown; shown: number }[] = [];
-  element.addEventListener("cf-change", (event) => {
+  element.addEventListener(type, (event) => {
     if (event instanceof CustomEvent) {
       // Over 0–100 the percentage is the value, up to float noise.
       const shown = Math.round(element.getPercentageValue() * 1e6) / 1e6;
@@ -155,7 +158,6 @@ describe("CFSlider bound to a cell", () => {
     answer({ value: undefined });
     await settle();
     const blankAnnounced = announcements(blank);
-    press(blank, "Home");
     press(blank, "ArrowLeft");
     blank.decrement();
     await settle();
@@ -164,6 +166,11 @@ describe("CFSlider bound to a cell", () => {
     expect(fullAnnounced).toEqual([]);
     expect(written(empty)).toEqual([]);
     expect(blankAnnounced).toEqual([]);
+
+    // Home chooses the minimum, which the empty cell then holds.
+    press(blank, "Home");
+    await settle();
+    expect(written(empty)).toEqual([0]);
   });
 
   it("writes a move to the minimum on a cell it has not read", async () => {
@@ -242,18 +249,74 @@ describe("CFSlider bound to a cell", () => {
     ]);
   });
 
-  it("takes keys to the very end, and steps them without snapping", async () => {
-    const value = createMockCellHandle(6);
+  it("moves keys between stops: min, each step, and max", async () => {
+    // Over 0–10 at step 3 the stops are 0, 3, 6, 9 and 10.
+    const value = createMockCellHandle(7);
     const element = sliderWith(value);
     element.max = 10;
     element.step = 3;
 
+    for (const key of ["ArrowRight", "ArrowRight", "ArrowLeft", "PageDown"]) {
+      press(element, key);
+      await settle();
+    }
     press(element, "End");
     await settle();
-    press(element, "ArrowLeft");
+
+    expect(written(value)).toEqual([9, 10, 9, 0, 10]);
+  });
+
+  it("puts a place on its nearest stop, max included", async () => {
+    const value = createMockCellHandle(0);
+    const element = sliderWith(value);
+    element.max = 10;
+    element.step = 3;
+
+    element.setValue(9.8);
+    await settle();
+    element.setValue(9.4);
+    await settle();
+    element.setValue(4.4);
     await settle();
 
-    expect(written(value)).toEqual([10, 7]);
+    expect(written(value)).toEqual([10, 9, 3]);
+  });
+
+  it("reports a drag as it moves, and commits it once on release", async () => {
+    const value = createMockCellHandle(20);
+    const element = sliderWith(value);
+    const inputs = announcements(element, "cf-input");
+    const changes = announcements(element, "cf-change");
+
+    element._beginDrag();
+    element._moveTo(30, "drag");
+    element._moveTo(40, "drag");
+    element._commitDrag();
+    await settle();
+
+    expect(written(value)).toEqual([30, 40]);
+    expect(inputs.map((a) => a.detail)).toEqual([
+      { value: 30, oldValue: 20 },
+      { value: 40, oldValue: 30 },
+    ]);
+    expect(changes).toEqual([
+      { detail: { value: 40, oldValue: 20 }, shown: 40 },
+    ]);
+  });
+
+  it("commits nothing for a drag released where it began", async () => {
+    const value = createMockCellHandle(20);
+    const element = sliderWith(value);
+    const changes = announcements(element, "cf-change");
+
+    element._beginDrag();
+    element._moveTo(30, "drag");
+    element._moveTo(20, "drag");
+    element._commitDrag();
+    await settle();
+
+    expect(written(value)).toEqual([30, 20]);
+    expect(changes).toEqual([]);
   });
 
   it("announces nothing for a call from code", async () => {

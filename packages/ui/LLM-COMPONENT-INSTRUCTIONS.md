@@ -227,8 +227,12 @@ await input.pressSequentially("user@example.com");
 - `step` - number (default: 1)
 - `disabled` - boolean
 - `orientation` - `"horizontal"` | `"vertical"` **Events**:
-- `cf-change` - Fired when a person moves it, with detail: `{ value, oldValue }`
-- `cf-input` - Fired with `cf-change` while dragging **Example**:
+- `cf-input` - Fired for every move a person makes (each drag step, each key),
+  with detail: `{ value, oldValue }`
+- `cf-change` - Fired when a person commits a move: a key press at once, a drag
+  on release, with detail: `{ value, oldValue }` (`oldValue` from before the
+  drag). Setting the value from code fires neither. Values land on stops: `min`,
+  each `step` above it, and `max` **Example**:
 
 ```html
 <cf-slider min="0" max="100" value="50" step="5"></cf-slider>
