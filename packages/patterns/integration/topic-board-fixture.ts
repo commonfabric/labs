@@ -339,10 +339,13 @@ export async function seedTopicBoard(
           "mention",
         ]);
       }
-      // What the topic publishes from those references is derived by a
-      // running topic, and the seed's runtime is the one running it: a board
-      // opened elsewhere joins its pivot over the published list.
-      if (targets.length > 0) await created.result.get(["mentions"]);
+      // What a topic publishes — its summary, and the mentions the board's
+      // pivot joins over — is derived by a running topic, and the seed's
+      // runtime is the one running it: a reader that opens another topic
+      // reads this one's published result and runs nothing of it. One read
+      // of the topic's result derives all of it; the result is the topic's
+      // own, not the board's, so this costs the same at any board size.
+      await created.result.get();
       pieces.push(created);
       topics.push({ fid: created.id, title });
       options.onTopic?.(index);
