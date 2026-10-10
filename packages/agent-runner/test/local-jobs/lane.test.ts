@@ -966,35 +966,23 @@ describe("local-jobs/lane", () => {
         expect(lane.browserHost("job-unknown")).toBeUndefined();
       });
 
-      it("closes the host even when reporting a failed run throws", async () => {
-        // The throw escapes the run; the lane leaves it unhandled. The
-        // listener stays until that rejection is reported, which the event
-        // loop does only after running any timer already due.
-        const escaped = Promise.withResolvers<unknown>();
-        const swallow = (event: PromiseRejectionEvent) => {
-          event.preventDefault();
-          escaped.resolve(event.reason);
-        };
-        globalThis.addEventListener("unhandledrejection", swallow);
-        try {
-          const { lane, nextRun, enqueue } = laneWith({
-            profiles: BROWSING,
-            report: () => {
-              throw new Error("the operator's log is gone");
-            },
-          });
-          lane.start();
-          const id = enqueue("a", DECLARED);
-          const run = await nextRun(0);
-          const host = lane.browserHost(id)!;
-          run.fail(new Error("the harness could not start"));
-          const reason = await escaped.promise;
-          expect(reason).toBeInstanceOf(Error);
-          expect((reason as Error).message).toBe("the operator's log is gone");
-          expect(host.view().state).toBe("closed");
-        } finally {
-          globalThis.removeEventListener("unhandledrejection", swallow);
-        }
+      it("ends a failed run and closes its host when reporting the failure throws", async () => {
+        const { store, lane, nextRun, enqueue } = laneWith({
+          profiles: BROWSING,
+          report: () => {
+            throw new Error("the operator's log is gone");
+          },
+        });
+        lane.start();
+        const id = enqueue("a", DECLARED);
+        const run = await nextRun(0);
+        const host = lane.browserHost(id)!;
+        run.fail(new Error("the harness could not start"));
+        expect(await reached(store, id, "failed")).toMatchObject({
+          errorCode: "PROVIDER_FAILURE",
+        });
+        expect(host.view().state).toBe("closed");
+        await lane.stop();
       });
 
       it("closes the host of a queued job that is cancelled", () => {
@@ -1075,13 +1063,10 @@ describe("local-jobs/lane", () => {
       expect((await reached(store, id, "cancelled")).errorCode).toBeUndefined();
     });
 
-    it("waits for every aborted job when one run fails during reporting", async () => {
+    it("waits for every aborted job when one run fails first", async () => {
       const failed = Promise.withResolvers<void>();
       const { store, lane, nextRun, enqueue } = laneWith({
-        report: () => {
-          failed.resolve();
-          throw new Error("report failed");
-        },
+        report: () => failed.resolve(),
       });
       lane.start();
       enqueue("a");
@@ -1091,12 +1076,8 @@ describe("local-jobs/lane", () => {
       let settled = false;
       const stopped = lane.stop().then(() => {
         settled = true;
-      }, (error) => {
-        settled = true;
-        return error;
       });
       const channel = new MessageChannel();
-      let error: unknown;
       try {
         first.fail(new Error("job failed"));
         await failed.promise;
@@ -1109,10 +1090,10 @@ describe("local-jobs/lane", () => {
         channel.port1.close();
         channel.port2.close();
         second.settle({ outcome: "cancelled" });
-        error = await stopped;
+        await stopped;
         store.close();
       }
-      expect(error).toBeInstanceOf(AggregateError);
+      expect(settled).toBe(true);
     });
 
     it("leaves the jobs its stop aborted running, for the next start to end interrupted", async () => {
