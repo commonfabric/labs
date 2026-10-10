@@ -59,7 +59,7 @@ interface Layout {
 }
 
 const layoutFor = (ws: WordSearch, words: readonly string[]): Layout => {
-  const longest = Math.max(1, ...words.map((w) => w.length));
+  const longest = words.reduce((most, w) => Math.max(most, w.length), 1);
   // Helvetica capitals average about 0.7 em, plus a gutter between columns.
   const columnWidth = longest * LIST_SIZE * 0.7 + 18;
   const listColumns = Math.max(

@@ -27,7 +27,7 @@ describe("wordSearchPdf", () => {
   const pdf = wordSearchPdf(ws, "Fruit (Café) \\ Search ✓");
 
   it("is ASCII, so string offsets are byte offsets", () => {
-    expect(pdf).toMatch(/^[\x00-\x7f]*$/);
+    expect([...pdf].every((c) => c.charCodeAt(0) < 128)).toBe(true);
   });
 
   it("has an xref table whose every offset lands on its object", () => {
