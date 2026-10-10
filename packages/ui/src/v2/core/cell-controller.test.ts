@@ -1467,3 +1467,192 @@ describe("CellController — custom options", () => {
     expect(updateCount).toBe(0);
   });
 });
+
+describe("CellController — writes land in the order they were made", () => {
+  // An update computed from the cell waits on the worker where the handle has
+  // read nothing; a write made meanwhile waits behind it, as a person made
+  // them: first the step, then the click.
+  const values = <V>(cell: CellHandle<V>) =>
+    writesSent(cell).map((write) => write.value);
+  const immediate = () =>
+    new CellController<number>(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+
+  it("makes a value set while an update waits on the worker after that update", async () => {
+    const ctrl = immediate();
+    const cell = createMockCellHandle<number>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+
+    const stepped = ctrl.updateValue((held) => (held ?? 0) + 1);
+    ctrl.setValue(30);
+    answer({ value: 50 });
+    await stepped;
+    await settleWrites();
+
+    expect(values(cell)).toEqual([51, 30]);
+    expect(ctrl.getValue()).toBe(30);
+  });
+
+  it("computes an update from the writes queued before it", async () => {
+    const ctrl = immediate();
+    const cell = createMockCellHandle<number>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+
+    void ctrl.updateValue((held) => (held ?? 0) + 1);
+    ctrl.setValue(30);
+    const second = ctrl.updateValue((held) => (held ?? 0) + 1);
+    answer({ value: 50 });
+    await second;
+    await settleWrites();
+
+    expect(values(cell)).toEqual([51, 30, 31]);
+  });
+
+  it("removes, then adds back, an item in that order", async () => {
+    const ctrl = new ArrayCellController<string>(createMockHost());
+    const cell = createMockCellHandle<string[]>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+
+    void ctrl.removeItem("x");
+    ctrl.addItem("x");
+    answer({ value: ["x"] });
+    await settleWrites();
+
+    expect(writesSent(cell).map((write) => write.type)).toEqual([
+      "cell:set",
+      "cell:push",
+    ]);
+    expect(cell.get()).toEqual(["x"]);
+  });
+
+  it("makes the writes asked for on one cell there, and shows none of them once another is bound", async () => {
+    const changes: unknown[] = [];
+    const ctrl = new CellController<number>(createMockHost(), {
+      timing: { strategy: "immediate" },
+      onChange: (value) => changes.push(value),
+    });
+    const first = createMockCellHandle<number>();
+    const answer = holdReads(first);
+    ctrl.bind(first);
+    void ctrl.updateValue((held) => (held ?? 0) + 1);
+    ctrl.setValue(30);
+
+    const other = createMockCellHandle<number>(5, { id: "of:another-cell" });
+    ctrl.bind(other);
+    changes.length = 0;
+    answer({ value: 50 });
+    await settleWrites();
+
+    expect(values(first)).toEqual([51, 30]);
+    expect(values(other)).toEqual([]);
+    expect(ctrl.getValue()).toBe(5);
+    expect(changes).toEqual([]);
+  });
+
+  it("writes at once on another cell, whatever the old cell's read waits on", async () => {
+    const ctrl = immediate();
+    const stuck = createMockCellHandle<number>();
+    holdReads(stuck);
+    ctrl.bind(stuck);
+    void ctrl.updateValue((held) => (held ?? 0) + 1);
+
+    const other = createMockCellHandle<number>(5, { id: "of:another-cell" });
+    ctrl.bind(other);
+    ctrl.setValue(7);
+    await ctrl.updateValue((held) => (held ?? 0) + 1);
+    await settleWrites();
+
+    expect(values(other)).toEqual([7, 8]);
+  });
+
+  it("writes nothing for an update whose read is refused, and still sets a value asked for after it", async () => {
+    const ctrl = immediate();
+    const cell = createMockCellHandle<number>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+    const stepped = ctrl.updateValue((held) => (held ?? 0) + 1);
+    // A value set is not computed from the read, so its refusal does not
+    // stand against it.
+    ctrl.setValue(30);
+
+    answer({ refused: { refusedBy: "display-ceiling" } });
+    await stepped;
+    await settleWrites();
+
+    expect(values(cell)).toEqual([30]);
+  });
+
+  it("keeps showing a toggle over a stale delivery while its write is in flight", () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle(false);
+    ctrl.bind(cell);
+
+    void ctrl.toggle();
+    // A delivery from before the write, arriving while it is in flight.
+    pushUpdate(cell, false);
+
+    expect(ctrl.getValue()).toBe(true);
+  });
+
+  it("makes a write waiting on its timing before an update computed after it", async () => {
+    const time = new FakeTime();
+    try {
+      const ctrl = new StringCellController(createMockHost(), {
+        timing: { strategy: "debounce", delay: 300 },
+      });
+      const cell = createMockCellHandle("a");
+      ctrl.bind(cell);
+
+      ctrl.setValue("ab");
+      const updated = ctrl.updateValue((held) => `${held}!`);
+      await time.runMicrotasks();
+      await updated;
+      time.tick(300);
+
+      expect(values(cell)).toEqual(["ab", "ab!"]);
+    } finally {
+      time.restore();
+    }
+  });
+
+  it("goes on with the writes queued behind an update whose read fails", async () => {
+    const ctrl = immediate();
+    const cell = createMockCellHandle<number>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+    void ctrl.updateValue((held) => (held ?? 0) + 1);
+    ctrl.setValue(30);
+
+    const logged = console.error;
+    console.error = () => {};
+    try {
+      answer(new Error("the worker went away"));
+      await settleWrites();
+    } finally {
+      console.error = logged;
+    }
+
+    expect(values(cell)).toEqual([30]);
+  });
+
+  it("goes on with the writes queued behind an update whose computation throws", async () => {
+    const ctrl = immediate();
+    const cell = createMockCellHandle<number>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+    const failed = ctrl.updateValue(() => {
+      throw new Error("no step from here");
+    });
+    ctrl.setValue(30);
+
+    answer({ value: 50 });
+    await expect(failed).rejects.toThrow("no step from here");
+    await settleWrites();
+
+    expect(values(cell)).toEqual([30]);
+  });
+});
