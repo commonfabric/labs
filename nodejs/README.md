@@ -32,6 +32,20 @@ not enforced, since Deno does not enforce them.
   `node --test`, from the member's directory and with `ENV=test`, as its Deno
   task does. A `--preload` in the member's `deno-test` task is passed as an
   `--import`.
+- `bin/cf [args...]` is the `cf` CLI, the counterpart of `deno task cf`.
+- `bin/deno` stands in for the `deno` executable: `Deno.execPath()` names it,
+  and `new Deno.Command("deno", ...)` runs it, so code that re-invokes the
+  running Deno gets Node. It runs `deno task` itself (announcing the task on
+  stderr, as Deno does, with `bin/` first on `PATH`), and hands `run`, `test`,
+  and `eval` to `bin/deno-as-node`, which translates the command line to a
+  `cfnode` one (permission, lock, and type-check flags dropped; `--v8-flags`
+  passed as Node flags; `--preload` as `--import`). With it, a member's own
+  `deno task test` runs on Node:
+  `cd packages/leb128 && ../../nodejs/bin/deno
+  task test`.
+- `tools/summary-reporter.mjs` is a `node --test` reporter writing one JSON line
+  per test, and `tools/tally.mjs <file.jsonl>...` totals them and groups
+  failures by message, for working through a large suite.
 - `felt` bundles unchanged:
   `cd packages/shell && ../../nodejs/bin/cfnode
   ../felt/cli.ts build .`.
@@ -54,14 +68,23 @@ refuses `listen`.
   `with { type: "text" }` and `{ type: "bytes" }` imports become modules
   exporting the text or a `Uint8Array`.
 - `lib/deno-global.mjs`: the `Deno` global. `@deno/shim-deno` supplies most of
-  it; `test` (over `node:test`), `bench` (a no-op), `Command`, `serve`, and
-  `unrefTimer` are this directory's. File functions accept `file:` URLs and
-  throw `Deno.errors` classes, and `Symbol.for("Deno.customInspect")` methods
-  are honored by `util.inspect()`.
+  it; `test` (over `node:test`), `bench` (a no-op), `Command`, `serve`,
+  `upgradeWebSocket`, `execPath`, and `unrefTimer` are this directory's. File
+  functions accept `file:` URLs and throw `Deno.errors` classes, and
+  `Symbol.for("Deno.customInspect")` methods are honored by `util.inspect()`.
 - `lib/web-globals.mjs`: `self`; a Web `Worker` over `worker_threads`, with the
   in-worker global scope; `indexedDB` from `fake-indexeddb`.
 - `lib/global-events.mjs`: the main thread's global scope as an `EventTarget`,
-  with the `unhandledrejection`, `error`, and `unload` events.
+  with the `unhandledrejection`, `error`, and `unload` events (dispatched ahead
+  of every Node listener, `node:test`'s included); `reportError()`,
+  `ErrorEvent`, and `PromiseRejectionEvent`.
+- `lib/websocket-upgrade.mjs`: `Deno.upgradeWebSocket()` for `Deno.serve()`,
+  over the `ws` package.
+- `lib/tcp-bind.mjs`: binds a listening socket before `Deno.serve()` returns, as
+  Deno does, so `addr.port` is known at once.
+- `lib/internal-timers.mjs`: Node builtins (undici's `fetch()` and `WebSocket`)
+  keep the real timer functions when code, such as a test's fake clock, replaces
+  the globals; Deno's equivalents are native and never see the replacement.
 - `lib/fs-file.mjs`: `Deno.FsFile` locking and syncing.
 - `lib/sqlite.mjs`: the `@db/sqlite` API this repository uses, over
   `node:sqlite`.
@@ -80,5 +103,14 @@ refuses `listen`.
   lock name with `ifAvailable` when a worker exits.
 - Test sanitizers (ops, resources, exits) are not applied, and `Deno.bench`
   benchmarks do not run.
+- Test output is `node:test`'s, so a test asserting on Deno's test-runner output
+  (such as its `Caused by:` line) does not match.
 - A browser bundle resolves packages under esbuild's browser conditions, which
   selects some packages' browser builds where Deno's plugin does not.
+- `Deno.FsFile` locks exclude only other files open in the same process: Node
+  has no `flock()`.
+- SQLite text that SQLite marks as JSON reads as text: `node:sqlite` does not
+  expose a value's subtype, so `@db/sqlite`'s `parseJson` is not emulated. The
+  SQLite `node:sqlite` bundles also formats a REAL as text differently.
+- Binding before `Deno.serve()` returns relies on `process.binding("tcp_wrap")`,
+  an undocumented Node interface.
