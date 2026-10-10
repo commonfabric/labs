@@ -50,6 +50,13 @@ import { cellRefToIdentityKey } from "./shared/utils.ts";
 // Enable via: globalThis.commonfabric.logger["cell-handle"].disabled = false
 const logger = getLogger("cell-handle", { enabled: false });
 
+/** A read's answer, and whether no update to the cell overtook it. */
+interface ReadAnswer<T> {
+  read: CellAnswer<T>;
+  response: CellValueResponse;
+  authoritative: boolean;
+}
+
 interface CellOperationQueue {
   tail: Promise<void> | undefined;
   hasValue: boolean;
@@ -349,6 +356,96 @@ export class CellHandle<T = unknown> {
       if (refusedSince !== undefined) {
         console.error("[CellHandle] Write failed:", refusedSince);
         return;
+      }
+      const updateGeneration = this.#updateGeneration;
+      const authoritativeGeneration = queue.authoritativeGeneration;
+      await this.#sendWrite(serialized);
+      if (
+        updateGeneration === this.#updateGeneration &&
+        authoritativeGeneration === queue.authoritativeGeneration
+      ) {
+        queue.value = snapshot;
+        queue.hasValue = true;
+      }
+    });
+  }
+
+  /**
+   * Writes the value `updater` makes of the cell's current one, in this
+   * cell's operation order, which every handle on the cell shares: `updater`
+   * runs once the reads and writes asked for before this call have run, and
+   * the writes asked for after it wait for its write. It is handed the value
+   * those left the cell holding, read from the worker where this order holds
+   * none, and `undefined` where the cell holds nothing. It runs synchronously,
+   * at once when nothing waits.
+   *
+   * What it returns is written as {@link set} writes: shown at once, unless a
+   * later write through this handle shows its own, and sent as a blind
+   * last-write-wins overwrite. A value equal to the current one is not
+   * written. It is not an atomic read-modify-write: a writer elsewhere can
+   * change the cell between the read and the write, and the write replaces
+   * that change. Appending to a list is {@link push}, which the worker
+   * merges.
+   *
+   * Not the pattern API's `Cell.update()`, which merges a partial value.
+   *
+   * Settles once the write is sent, or passed over. Rejects, writing
+   * nothing, while this handle's read is refused ({@link refusal}), when the
+   * read it makes is refused, and when `updater` throws or returns a promise.
+   */
+  update(updater: (current: Readonly<T> | undefined) => T): Promise<void> {
+    this.#requireSchema("update");
+    const refused = this.#writeRefusal();
+    if (refused !== undefined) return Promise.reject(refused);
+    // Taken now, as a write's, so that neither an older read's answer nor this
+    // update's own shows over a write made after this call.
+    const writeGeneration = this.#writeGeneration = ++writeClock;
+    return this.#enqueueOperation(async (queue) => {
+      // A refusal that arrived while the update waited its turn stands.
+      const refusedSince = this.#writeRefusal();
+      if (refusedSince !== undefined) throw refusedSince;
+      let current: unknown;
+      if (queue.hasValue) {
+        current = queue.value;
+      } else if (
+        !this.#unread && writeGeneration === this.#writeGeneration
+      ) {
+        // What this handle holds, which nothing written since has replaced.
+        current = this.#value;
+      } else {
+        const request: CellPullRequest = {
+          type: RequestType.CellPull,
+          cell: this.ref(),
+          awaitDurability: false,
+        };
+        const updateGeneration = this.#updateGeneration;
+        const startedAt = writeClock;
+        const answer = await this.#ask(queue, request, updateGeneration);
+        const found = this.#takeAnswer(
+          request,
+          answer,
+          writeGeneration,
+          updateGeneration,
+          startedAt,
+        );
+        // An update that overtook the read is newer than what it found.
+        current = queue.hasValue ? queue.value : found;
+      }
+      const next = updater(current as Readonly<T> | undefined);
+      if (isPromiseLike(next)) {
+        throw new TypeError(
+          "CellHandle.update(): `updater` returns the value to write, not a promise",
+        );
+      }
+      if (valuesOrCellsEqual(next, current)) return;
+      const serialized = this.#serializeWrite(next);
+      const snapshot = applyValue(
+        CellHandle.#serialize(next as ClientCellValue, "sigil"),
+        next,
+        this,
+      ) as T;
+      if (writeGeneration === this.#writeGeneration) {
+        this.#publishWrite(snapshot);
       }
       const updateGeneration = this.#updateGeneration;
       const authoritativeGeneration = queue.authoritativeGeneration;
@@ -1035,19 +1132,51 @@ export class CellHandle<T = unknown> {
     const writeGeneration = this.#writeGeneration;
     const updateGeneration = this.#updateGeneration;
     const startedAt = writeClock;
-    const { read, response, authoritative } = await this.#enqueueOperation(
-      async (queue) => {
-        const authoritativeGeneration = queue.authoritativeGeneration;
-        const response = await this.#conn.request<
-          RequestType.CellGet | RequestType.CellPull
-        >(request);
-        const read = this.#readOf(response);
-        const authoritative = updateGeneration === this.#updateGeneration &&
-          authoritativeGeneration === queue.authoritativeGeneration;
-        if (authoritative) this.#recordInQueue(queue, read);
-        return { read, response, authoritative };
-      },
+    const answer = await this.#enqueueOperation((queue) =>
+      this.#ask(queue, request, updateGeneration)
     );
+    return this.#takeAnswer(
+      request,
+      answer,
+      writeGeneration,
+      updateGeneration,
+      startedAt,
+    );
+  }
+
+  /**
+   * Helper for {@link #read} and {@link update}, which asks the worker with
+   * `request` in the turn `queue` gives it, and records an answer no update
+   * has overtaken as the base the queue's later operations start from.
+   */
+  async #ask(
+    queue: CellOperationQueue,
+    request: CellGetRequest | CellPullRequest,
+    updateGeneration: number,
+  ): Promise<ReadAnswer<T>> {
+    const authoritativeGeneration = queue.authoritativeGeneration;
+    const response = await this.#conn.request<
+      RequestType.CellGet | RequestType.CellPull
+    >(request);
+    const read = this.#readOf(response);
+    const authoritative = updateGeneration === this.#updateGeneration &&
+      authoritativeGeneration === queue.authoritativeGeneration;
+    if (authoritative) this.#recordInQueue(queue, read);
+    return { read, response, authoritative };
+  }
+
+  /**
+   * Helper for {@link #read} and {@link update}, which takes `answer`, the
+   * worker's answer to `request`, as {@link #read} describes: what it finds
+   * reaches subscribers where nothing newer has, and a refusal rejects.
+   */
+  #takeAnswer(
+    request: CellGetRequest | CellPullRequest,
+    { read, response, authoritative }: ReadAnswer<T>,
+    writeGeneration: number,
+    updateGeneration: number,
+    startedAt: number,
+  ): Readonly<T> | undefined {
     const latest = writeGeneration === this.#writeGeneration &&
       updateGeneration === this.#updateGeneration &&
       authoritative;
@@ -1643,6 +1772,12 @@ function cellRefsEqual(a: CellRef, b: CellRef): boolean {
  * cell it names rather than by what that cell holds, so two handles on one
  * cell are equal and a handle is equal to nothing else.
  */
+/** Whether `value` is a promise, or anything else `await` would wait on. */
+function isPromiseLike(value: unknown): boolean {
+  return (typeof value === "object" || typeof value === "function") &&
+    value !== null && typeof (value as { then?: unknown }).then === "function";
+}
+
 function valuesOrCellsEqual(a: unknown, b: unknown): boolean {
   // `Object.is`, not `===`: an unchanged `NaN` leaf must compare equal (else
   // every delivery of a NaN-bearing value re-notifies all subscribers), and a

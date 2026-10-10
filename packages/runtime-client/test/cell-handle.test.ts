@@ -3376,4 +3376,187 @@ describe("cell-handle", () => {
       expect(peer.cell.get()).toStrictEqual(["updated"]);
     });
   });
+
+  describe("CellHandle update", () => {
+    // `update()` computes a write from the cell's value in the cell's own
+    // operation order, so a write asked for after it lands after it, whether
+    // it waits on a read or not, and through whichever handle on the cell.
+    const ref: CellRef = {
+      id: "of:update-cell" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+      schema: { type: "number" },
+    };
+    const refusal = { refusedBy: "display-ceiling" } as const;
+
+    /**
+     * A worker holding `stored`, which records each request, answers reads
+     * once `answerReads` is called (at once when `held` is false), and stores
+     * each write.
+     */
+    const worker = (stored: number | undefined, held = true) => {
+      const requests: { type: RequestType; value?: unknown }[] = [];
+      const reads = Promise.withResolvers<
+        { value: number | undefined } | { refused: typeof refusal }
+      >();
+      if (!held) reads.resolve({ value: stored });
+      const connection = {
+        request: (request: { type: RequestType; value?: unknown }) => {
+          requests.push(request);
+          if (request.type === RequestType.CellSet) {
+            stored = request.value as number;
+            return Promise.resolve({});
+          }
+          return reads.promise.then((answer) =>
+            "refused" in answer ? answer : { value: answer.value }
+          );
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      };
+      return {
+        runtime: { [$conn]: () => connection } as unknown as RuntimeClient,
+        requests,
+        answerReads: reads.resolve,
+        written: () =>
+          requests.filter((request) => request.type === RequestType.CellSet)
+            .map((request) => request.value),
+      };
+    };
+
+    it("writes from the value the handle holds at once, with no read, when nothing waits", () => {
+      const fake = worker(5);
+      const cell = new CellHandle<number>(fake.runtime, ref, { value: 5 });
+
+      void cell.update((n) => (n ?? 0) + 1);
+
+      expect(fake.written()).toEqual([6]);
+      expect(cell.get()).toBe(6);
+    });
+
+    it("reads a cell the handle has not read, and computes from the answer", async () => {
+      const fake = worker(50);
+      const cell = new CellHandle<number>(fake.runtime, ref);
+
+      const updating = cell.update((n) => (n ?? 0) + 1);
+      expect(fake.written()).toEqual([]);
+      fake.answerReads({ value: 50 });
+      await updating;
+
+      expect(fake.requests.map((request) => request.type)).toEqual([
+        RequestType.CellPull,
+        RequestType.CellSet,
+      ]);
+      expect(fake.written()).toEqual([51]);
+      expect(cell.get()).toBe(51);
+    });
+
+    it("lands a write asked for while it reads after it, and keeps showing that write", async () => {
+      const fake = worker(50);
+      const cell = new CellHandle<number>(fake.runtime, ref);
+
+      const updating = cell.update((n) => (n ?? 0) + 1);
+      const setting = cell.set(30);
+      expect(cell.get()).toBe(30);
+      fake.answerReads({ value: 50 });
+      await Promise.all([updating, setting]);
+
+      expect(fake.written()).toEqual([51, 30]);
+      expect(cell.get()).toBe(30);
+    });
+
+    it("orders a write another handle on the cell asks for after it", async () => {
+      const fake = worker(50);
+      const stepping = new CellHandle<number>(fake.runtime, ref);
+      const clicking = new CellHandle<number>(fake.runtime, {
+        ...ref,
+        schema: { type: "number", minimum: 0 },
+      }, { value: 50 });
+
+      const updating = stepping.update((n) => (n ?? 0) + 1);
+      const setting = clicking.set(30);
+      fake.answerReads({ value: 50 });
+      await Promise.all([updating, setting]);
+
+      expect(fake.written()).toEqual([51, 30]);
+    });
+
+    it("computes from the write asked for before it, with no read", async () => {
+      const fake = worker(50, false);
+      const cell = new CellHandle<number>(fake.runtime, ref);
+
+      const setting = cell.set(10);
+      const updating = cell.update((n) => (n ?? 0) + 1);
+      await Promise.all([setting, updating]);
+
+      expect(fake.requests.map((request) => request.type)).toEqual([
+        RequestType.CellSet,
+        RequestType.CellSet,
+      ]);
+      expect(fake.written()).toEqual([10, 11]);
+    });
+
+    it("writes nothing for a value equal to the current one", async () => {
+      const fake = worker(5);
+      const cell = new CellHandle<number>(fake.runtime, ref, { value: 5 });
+
+      await cell.update((n) => n ?? 0);
+
+      expect(fake.requests).toEqual([]);
+    });
+
+    it("writes nothing when the read it makes is refused, and the writes after it go on", async () => {
+      const fake = worker(50);
+      const cell = new CellHandle<number>(fake.runtime, ref);
+
+      const updating = cell.update((n) => (n ?? 0) + 1);
+      const later = new CellHandle<number>(fake.runtime, ref, { value: 50 });
+      const setting = later.set(30);
+      fake.answerReads({ refused: refusal });
+
+      await expect(updating).rejects.toThrow(CellReadRefusedError);
+      await setting;
+      expect(fake.written()).toEqual([30]);
+      expect(cell.lastRead()).toEqual({ refused: refusal });
+    });
+
+    it("writes nothing through a handle whose read is refused", async () => {
+      const fake = worker(5);
+      const cell = new CellHandle<number>(fake.runtime, ref, {
+        refused: refusal,
+      });
+      let computed = false;
+
+      await expect(cell.update((n) => {
+        computed = true;
+        return (n ?? 0) + 1;
+      })).rejects.toThrow(CellReadRefusedError);
+
+      expect(computed).toBe(false);
+      expect(fake.requests).toEqual([]);
+    });
+
+    it("rejects an updater that throws, or returns a promise, and the writes after it go on", async () => {
+      // The later set shows its value at once, so an update behind it reads
+      // the cell rather than compute from that.
+      const fake = worker(5, false);
+      const cell = new CellHandle<number>(fake.runtime, ref, { value: 5 });
+
+      const throwing = cell.update(() => {
+        throw new Error("no value from here");
+      });
+      const promising = cell.update(() =>
+        Promise.resolve(6) as unknown as number
+      );
+      const setting = cell.set(7);
+
+      await expect(throwing).rejects.toThrow("no value from here");
+      await expect(promising).rejects.toThrow(TypeError);
+      await setting;
+      expect(fake.written()).toEqual([7]);
+    });
+  });
 });
