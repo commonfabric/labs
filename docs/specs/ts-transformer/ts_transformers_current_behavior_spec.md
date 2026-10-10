@@ -2212,6 +2212,17 @@ each operand of a fallback, wherever on the member spine it sits, a call on
 - array-like roots whose observed paths only touch non-item properties
   (`length`, `get`, `set`, `key`, `update`) keep array shape but shrink their
   item type to `unknown`
+- a primitive reached as an array item or as an object member, whether a plain
+  primitive, an optional one, or a union of literals, is kept whole whatever
+  its paths read: `rows[0].length` over a `string[]` keeps `rows: string[]`. A
+  string has a numeric index and `length` through its apparent type, so a
+  shrink would describe it as an array (`unknown[]`) or as an object holding
+  `length`, which the stored string is not. A property chain captured at its
+  member, as `obj.name.length` is, hands the lift an object holding `length`,
+  and its schema describes that object (`isPrimitiveValuedType` in
+  `transformers/type-shrinking.ts`; fixtures
+  `closures/computed-primitive-array-item`, `closures/computed-array-length`;
+  `packages/patterns/regression/primitive-array-item-read.test.tsx`)
 - reads inside an inline array-method callback count as reads of the enclosing
   builder's parameter: the element parameter is bound to the receiver's item
   path, so `table.find((row) => equals(self, row.topic))` records

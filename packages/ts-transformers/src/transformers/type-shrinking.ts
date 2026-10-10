@@ -402,6 +402,19 @@ function isPrimitiveScalarLikeType(type: ts.Type): boolean {
   ));
 }
 
+/**
+ * Returns `true` for a type every non-nullish constituent of which is a
+ * primitive scalar, such as `string` or `string | undefined`.
+ */
+function isPrimitiveValuedType(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): boolean {
+  const nonNullable = checker.getNonNullableType(type);
+  const members = nonNullable.isUnion() ? nonNullable.types : [nonNullable];
+  return members.length > 0 && members.every(isPrimitiveScalarLikeType);
+}
+
 function getSymbolTypeAtSource(
   symbol: ts.Symbol,
   checker: ts.TypeChecker,
@@ -1071,17 +1084,23 @@ function shrinkTypeToNode(
     if (itemPaths.length > 0 && isHomogeneousArrayType(type, checker)) {
       const elementType = getArrayElementType(type, checker);
       if (elementType) {
-        const elementNode = buildShrunkTypeNodeFromType(
-          elementType,
-          itemPaths,
-          checker,
-          sourceFile,
-          factory,
-          typeRegistry,
-          state,
-          fullShapeItemPaths,
-          guarded,
-        ) ??
+        // An item that is a primitive is stored as one, and a path such as
+        // `length` reads the primitive. A string has a numeric index and
+        // `length` through its apparent type, so a shrink would describe it
+        // as an array or as an object holding `length`, which it is not.
+        const elementNode = (isPrimitiveValuedType(elementType, checker)
+          ? undefined
+          : buildShrunkTypeNodeFromType(
+            elementType,
+            itemPaths,
+            checker,
+            sourceFile,
+            factory,
+            typeRegistry,
+            state,
+            fullShapeItemPaths,
+            guarded,
+          )) ??
           typeToTypeNodeWithRegistry(
             elementType,
             { checker, factory, sourceFile, state },
@@ -1223,7 +1242,7 @@ function shrinkTypeToNode(
     // authored callback contract. Keep the primitive property type intact here;
     // root-level primitive projections (e.g. `summary.length`) are still
     // handled by the recursive shrink above.
-    if (!hasDirectAccess && isPrimitiveScalarLikeType(propType)) {
+    if (!hasDirectAccess && isPrimitiveValuedType(propType, checker)) {
       const propTypeNode = typeToTypeNodeWithRegistry(
         propType,
         { checker, factory, sourceFile, state },
