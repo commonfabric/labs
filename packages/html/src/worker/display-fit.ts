@@ -31,6 +31,8 @@ import {
   type CfcLabelViewSource,
   cfcLabelViewSourceForCell,
   clauseAlternatives,
+  exchangeEachObservation,
+  type ExchangeRuleKind,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
   readConsumesEntry,
@@ -138,21 +140,79 @@ export function readRefusal(
   const spaces = reads.flatMap((read) =>
     [...(read?.modulePolicySpaces.values() ?? [])].flatMap((set) => [...set])
   );
-  const admitted = confidentiality.length === 0
-    ? confidentialityLabelsFromCellSchema(cell).every((atom) =>
-      atomRenderableUnderPolicy(atom, policy)
-    )
-    : canRenderLabelUnderPolicy(
-      confidentiality,
-      integrity,
+  if (confidentiality.length === 0) {
+    return confidentialityLabelsFromCellSchema(cell).every((atom) =>
+        atomRenderableUnderPolicy(atom, policy)
+      )
+      ? cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch)
+      : { labelSource: "consumed", confidentiality, integrity };
+  }
+  // The reads behind one rendered value are one access. Its clauses are
+  // watched as read, since the exchange at each location may consult a
+  // membership or a manifest for a clause the fit below no longer sees.
+  if (watch !== undefined) {
+    watchLabelSources(confidentiality, spaces, watch, sources);
+  }
+  const access = exchangedAccessLabel(
+    confidentiality,
+    integrity,
+    reads,
+    () => spaces,
+    policy,
+    sources,
+  );
+  return canRenderLabelUnderPolicy(
+      access.confidentiality,
+      access.integrity,
       () => spaces,
       policy,
       sources,
       watch,
-    );
-  return admitted
+      "not-value-intrinsic",
+    )
     ? cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch)
-    : { labelSource: "consumed", confidentiality, integrity };
+    : { labelSource: "consumed", confidentiality, integrity: access.integrity };
+}
+
+/**
+ * The label the reads behind one rendered value consumed, as a release
+ * boundary evaluates it (spec §5.3, §4.6.3): the value-intrinsic rules run at
+ * each location the reads consumed, on that location's own evidence, through
+ * the resolver among `sources` (`exchangeEachObservation()`), and the result
+ * carries the class-aware join of the locations' integrity (§3.1.6.2), over
+ * which the other rules then run. With no resolver or no ceiling the label is
+ * fitted atom by atom, which reads no integrity, and with none of it consumed
+ * no rule could fire; either way the label is the one the reads consumed.
+ */
+function exchangedAccessLabel(
+  confidentiality: readonly CfcConfClause[],
+  integrity: readonly CfcAtom[],
+  reads: readonly (SinkConsumedLabel | undefined)[],
+  spaces: () => readonly string[],
+  policy: RenderPolicy,
+  sources: DisplayFitSources,
+): {
+  confidentiality: readonly CfcConfClause[];
+  integrity: readonly CfcAtom[];
+} {
+  const resolve = sources.resolveConfidentiality;
+  if (
+    resolve === undefined || policy.maxConfidentiality === undefined ||
+    integrity.length === 0
+  ) {
+    return { confidentiality, integrity };
+  }
+  return exchangeEachObservation(
+    confidentiality,
+    reads.flatMap((read) => read?.locations() ?? []),
+    (clauses, evidence) =>
+      resolve({
+        confidentiality: clauses,
+        integrity: evidence,
+        spaces,
+        rules: "value-intrinsic",
+      }),
+  );
 }
 
 /** Whether `policy` admits `cell`'s labels, as {@link cellLabelRefusal} decides. */
@@ -201,6 +261,10 @@ export function cellLabelRefusal(
         integrity: [],
       };
   }
+  // A stored label is fitted on the integrity at its root. A label view
+  // carries no origin, folds an ancestor's entry in beside a narrower cell's
+  // own, and merges a linked target's view into the slot's, so it cannot be
+  // resolved location by location as the reads behind a value are.
   for (const { view, spaces } of labelSources) {
     if (view === undefined) continue;
     const confidentiality = confidentialityLabels(view);
@@ -251,7 +315,8 @@ export function cellLabelSources(
  * ceiling is in force, and fitted atom by atom otherwise. `spaces` names where
  * a module policy the label selects has its manifest. Watches, through
  * `watch` when given, the membership and the manifests the label names, so
- * that the decision is made again when one changes.
+ * that the decision is made again when one changes. `rules`, when given, is
+ * the one kind of rule the resolver evaluates.
  */
 export function canRenderLabelUnderPolicy(
   confidentiality: readonly CfcConfClause[],
@@ -260,6 +325,7 @@ export function canRenderLabelUnderPolicy(
   policy: RenderPolicy,
   sources: DisplayFitSources,
   watch?: FitWatch,
+  rules?: ExchangeRuleKind,
 ): boolean {
   if (watch !== undefined) {
     watchLabelSources(confidentiality, spaces(), watch, sources);
@@ -273,7 +339,12 @@ export function canRenderLabelUnderPolicy(
     policy.maxConfidentiality !== undefined
   ) {
     return resolvedConfidentialityRenderable(
-      sources.resolveConfidentiality({ confidentiality, integrity, spaces }),
+      sources.resolveConfidentiality({
+        confidentiality,
+        integrity,
+        spaces,
+        ...(rules === undefined ? {} : { rules }),
+      }),
       policy,
     );
   }

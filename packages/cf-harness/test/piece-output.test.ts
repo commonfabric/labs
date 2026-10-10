@@ -171,8 +171,11 @@ describe("piece-output", () => {
       expect(requests[3].transcript.at(-1)?.content).toContain(
         "cannot confirm a UI",
       );
-      expect(requests[4].transcript.at(-1)?.content).toContain(
+      expect(requests[4].transcript.at(-2)?.content).toContain(
         "no successful assign_slug receipt",
+      );
+      expect(requests[4].transcript.at(-1)?.content).toContain(
+        "two model turns remain",
       );
       expect(result.taskOutcome).toEqual({ outcome: "completed" });
       expect(result.runState.assignedPieces?.map((piece) => piece.slug))

@@ -28,6 +28,18 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
   subtrees, graph-aware policy queries, and a reader-first stored-format migration
   to bound the cost of staged reference diamonds.
+- [Release gates without an integrity union](cfc-release-gate-integrity.md)
+  keeps one consumed value's evidence from releasing another value's clause:
+  the write, sink and display gates run value-intrinsic rules at each location
+  an access consumed and the other rules over the join (§5.3, §4.6.3). What
+  remains is a specs ruling on the join within one location and the display's
+  fit of a cell's stored label.
+- [Input requirements on an endorsed computation's arguments](cfc-argument-input-requirements.md)
+  refuses a stand-in fed to code a rule endorses, by checking the integrity
+  each argument declares against the reads made through it. The declaration is
+  taken from the code's own module, not the graph's data, so a rule that guards
+  on the identity rests on it. It needs a narrow specs ruling first, and it
+  parks a per-item threshold drawn from a policy key.
 
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
   the piece the shuffle does not yet have: a shuffle inside this repository's
@@ -126,6 +138,11 @@ a record: archive it to `docs/history/plans/` following the procedure in
   link schema and the module wrapper, and triggers the cold-start repairs on a
   structural mismatch instead of the missing marker. It names putting the
   owner into a stream's address as the follow-up it is written toward.
+- [Cutting the resume pre-sync's cost](resume-presync-cost.md) removes what
+  the pre-sync repeats or does not need: a child start re-planning the
+  subtree its parent named, every plan's inputs cell re-inlining its
+  schemas, a cross-space pass that materializes every plan to find a link,
+  and a planning loop that never yields to read the answers it asked for.
 - [Pre-syncing from node plans](presync-from-node-plans.md) makes one
   derivation per pattern node serve both instantiation and the pre-sync, so a
   resume and a fresh start name exactly what each lift, handler, builtin, and

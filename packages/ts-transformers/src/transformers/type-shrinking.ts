@@ -1508,10 +1508,14 @@ function scopedCellNode(
 /**
  * Helper for `applyCellCapabilityPathsToTypeNode()`, which returns the parts
  * of a scope wrapper around a cell that `node` holds, as `scopedCellNode()`
- * does, or, for a print of one, its cell printed afresh from its type.
+ * does, or, for a print of one, its cell printed afresh from its type. The
+ * print of an `optional` property's type holds the `undefined` its
+ * optionality adds, which the parts leave out, as the property is written
+ * without it.
  */
 function scopedCellParts(
   node: ts.TypeNode,
+  optional: boolean,
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
@@ -1528,10 +1532,15 @@ function scopedCellParts(
       { checker, factory, sourceFile, state },
       typeRegistry,
     );
+  const nullish = optional
+    ? scoped.nullish.filter((type) =>
+      (type.flags & ts.TypeFlags.Undefined) === 0
+    )
+    : scoped.nullish;
   return {
     name: scoped.name,
     cell: print(scoped.cell),
-    nullish: scoped.nullish.map(print),
+    nullish: nullish.map(print),
     type: printedType,
   };
 }
@@ -3644,6 +3653,7 @@ function applyCellCapabilityPathsToTypeNode(
     let updated = member.type;
     const scopedCell = scopedCellParts(
       updated,
+      member.questionToken !== undefined,
       checker,
       sourceFile,
       factory,

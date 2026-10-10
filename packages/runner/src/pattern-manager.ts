@@ -2062,8 +2062,7 @@ export class PatternManager {
           // type-check, CF transform, emit). Trust by provenance: bytes this
           // process compiled were SES-verified then; bytes a test seeded from a
           // CI disk file are trusted via the workflow cache key, which
-          // fingerprints every compile input. Nothing in production installs a
-          // byte cache.
+          // fingerprints every compile input.
           const processBodies = byteCache?.getCompleteSet(
             cacheOpts.runtimeVersion,
             identities,
