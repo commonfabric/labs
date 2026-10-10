@@ -163,33 +163,37 @@ describe("generate-commonfabric-types", () => {
     // Relating two instantiations of an interface needs the interface's
     // variance. Where the interface declares none, the checker measures it by
     // comparing two instantiations of the whole interface member by member,
-    // which for `Cell` is about 80,000 type instantiations, made once in every
+    // which for a cell is about 80,000 type instantiations, made once in every
     // compile that passes a cell where a cell of another type is expected. A
     // declared variance is read instead.
 
-    const relating = (from: string, to: string) => `
-      import type { Cell } from "./commonfabric.d.ts";
-      type Narrow = { id: string; label: string };
-      type Wide = { id: string };
-      declare const held: Cell<${from}>;
-      export const passed: Cell<${to}> = held;
-    `;
+    for (const cell of ["Cell", "OpaqueCell"]) {
+      const relating = (from: string, to: string) => `
+        import type { ${cell} } from "./commonfabric.d.ts";
+        type Narrow = { id: string; label: string };
+        type Wide = { id: string };
+        declare const held: ${cell}<${from}>;
+        export const passed: ${cell}<${to}> = held;
+      `;
 
-    it("relates `Cell<Narrow>` to `Cell<Wide>` in under 1,000 type instantiations", () => {
-      const { messages, instantiations } = checkAgainstTypeModule(
-        relating("Narrow", "Wide"),
-      );
-      expect(messages).toEqual([]);
-      expect(instantiations).toBeLessThan(1000);
-    });
+      it(`relates \`${cell}<Narrow>\` to \`${cell}<Wide>\` in under 1,000 type instantiations`, () => {
+        const { messages, instantiations } = checkAgainstTypeModule(
+          relating("Narrow", "Wide"),
+        );
+        expect(messages).toEqual([]);
+        expect(instantiations).toBeLessThan(1000);
+      });
 
-    it("reports `Cell<Wide>` assigned to `Cell<Narrow>`", () => {
-      const { messages } = checkAgainstTypeModule(relating("Wide", "Narrow"));
-      expect(messages).toHaveLength(1);
-      expect(messages[0]).toContain(
-        "Type 'Cell<Wide>' is not assignable to type 'Cell<Narrow>'",
-      );
-    });
+      it(`reports \`${cell}<Wide>\` assigned to \`${cell}<Narrow>\``, () => {
+        const { messages } = checkAgainstTypeModule(
+          relating("Wide", "Narrow"),
+        );
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toContain(
+          `Type '${cell}<Wide>' is not assignable to type '${cell}<Narrow>'`,
+        );
+      });
+    }
   });
 
   describe("moduleSpecifierOf()", () => {
