@@ -92,6 +92,14 @@ if (typeof globalThis.Worker === "undefined") {
 }
 
 /**
+ * Gives the main thread's global scope `self`, as Deno's has. Its
+ * `EventTarget` methods come from `global-events.mjs`.
+ */
+function installWindowScope() {
+  globalThis.self = globalThis;
+}
+
+/**
  * Makes the global scope of a shim-started worker look like a web worker's.
  * The port's listener attaches on the first `message` handler: Node queues
  * messages on a port until then, which matches a web worker receiving the
@@ -150,4 +158,6 @@ if (
   workerThreads.workerData?.[WEB_WORKER_MARK] === true
 ) {
   installWorkerScope();
+} else {
+  installWindowScope();
 }
