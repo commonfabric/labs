@@ -443,6 +443,7 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 - [noattrcache-mount-option-evaluation.md](packages/fuse/noattrcache-mount-option-evaluation.md) — the two-stage evaluation and live-stack measurements behind defaulting FUSE-T mounts to a one-second attribute-cache timeout, July 2026.
 - [stable-inode-mtime-verification.md](packages/fuse/stable-inode-mtime-verification.md) — the on-hardware FUSE-T check of stable inodes and a moving mtime, including the measurement showing same-size staleness is bounded rather than unbounded, July 2026.
 - [dropping-json-serialization.md](spikes/dropping-json-serialization.md) — what a research branch found when `toJSON()` and load-bearing `JSON.stringify` were removed from the runtime; the breakage is the deliverable, not a design, August 2026.
+- [2026-10-fabrichat-room-load.md](development/performance/2026-10-fabrichat-room-load.md) — where the time goes when a browser opens a fabrichat room on Estuary with twenty messages and thirteen participants, October 2026: 49 CPU seconds on the client against at most 14 on the server, over half of it in the resume pre-sync planning every nested instance once per ancestor and once more for itself, the inputs cell of every plan re-inlining and re-hashing its schemas, the cross-space pass materializing every plan to find a link, and receive silences of minutes while the planning loop never yielded to read the answers the server had given within a second.
 
 ## The retired tutorial site
 
