@@ -24,6 +24,12 @@ deno task check
 deno task test
 ```
 
+On macOS the root `deno task test` and `deno task integration` start their
+test processes under `taskpolicy -c utility`, below interactive work, so a
+machine running several suites stays responsive. Dev servers that integration
+starts are not clamped. `CF_TEST_QOS=0` runs the tests at full priority; CI is
+unaffected.
+
 A package with a `check` task of its own runs the same check over its own
 files, which is useful while working inside one package and is not a
 substitute: the root check is the one continuous integration runs, and it

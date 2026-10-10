@@ -20,6 +20,7 @@ import { walk } from "@std/fs/walk";
 import * as path from "@std/path";
 import ports from "@commonfabric/ports" with { type: "json" };
 import { CF_PERMISSION_FLAGS } from "../packages/cli/lib/cf-permissions.ts";
+import { batchQosArgv } from "./batch-qos.ts";
 import {
   FragmentWriter,
   preloadArgument,
@@ -85,12 +86,16 @@ async function runCommand(
     cwd?: string;
     env?: Record<string, string>;
     inheritStdio?: boolean;
+    // A test run, started at batch QoS (./batch-qos.ts). Servers a person
+    // may keep using after the run are not.
+    batch?: boolean;
   } = {},
 ): Promise<
   { success: boolean; code: number; stdout?: string; stderr?: string }
 > {
-  const command = new Deno.Command(cmd[0], {
-    args: cmd.slice(1),
+  const [program, ...args] = options.batch ? batchQosArgv(cmd) : cmd;
+  const command = new Deno.Command(program, {
+    args,
     cwd: options.cwd,
     env: { ...Deno.env.toObject(), ...options.env },
     stdout: options.inheritStdio ? "inherit" : "piped",
@@ -480,6 +485,7 @@ async function runPatternTests(
                 // This harness owns its emulated store and has no serving host.
                 EXPERIMENTAL_SERVER_EXECUTION: "false",
               },
+              batch: true,
             },
           );
         } catch (error) {
@@ -730,6 +736,7 @@ export async function runFilteredIntegration(
     cwd: packageDir,
     env,
     inheritStdio: true,
+    batch: true,
   });
 }
 
@@ -810,7 +817,7 @@ export async function runPackageIntegration(
     env.CF_CLI_INTEGRATION_USE_LOCAL = "1";
     result = await runCommand(
       ["bash", "./integration/integration.sh"],
-      { cwd: packageDir, env, inheritStdio: true },
+      { cwd: packageDir, env, inheritStdio: true, batch: true },
     );
   } else if (pkg === "cli-fuse") {
     // Mirror the dedicated GitHub Actions FUSE suite, but keep it opt-in
@@ -819,13 +826,14 @@ export async function runPackageIntegration(
     env.FUSE_DEEP_ENTITY_PROBE = Deno.env.get("FUSE_DEEP_ENTITY_PROBE") ?? "0";
     result = await runCommand(
       ["bash", "./integration/fuse-exec.sh"],
-      { cwd: packageDir, env, inheritStdio: true },
+      { cwd: packageDir, env, inheritStdio: true, batch: true },
     );
   } else if (pkg === "patterns-reload") {
     result = await runCommand(["deno", "task", "integration:reload"], {
       cwd: packageDir,
       env,
       inheritStdio: true,
+      batch: true,
     });
   } else if (filter) {
     result = await runFilteredIntegration(
@@ -841,6 +849,7 @@ export async function runPackageIntegration(
       cwd: packageDir,
       env,
       inheritStdio: true,
+      batch: true,
     });
   }
 
