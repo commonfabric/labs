@@ -252,4 +252,38 @@ describe("resume-presync-plan-count", () => {
     expect(issuedWhenTimerFired).toBeGreaterThan(0);
     expect(issuedWhenTimerFired).toBeLessThan(issued);
   });
+
+  it("reports a sync's rejection through the wave, never as unhandled", async () => {
+    const runtime = replica();
+    runtime.runner.accessForTestingOnly.resumeYield = new CooperativeYield(0);
+    const unhandled: unknown[] = [];
+    const record = (event: PromiseRejectionEvent) => {
+      unhandled.push(event.reason);
+      event.preventDefault();
+    };
+    globalThis.addEventListener("unhandledrejection", record);
+    try {
+      const cells = [
+        runtime.getCell(space, "wave-rejects-first"),
+        runtime.getCell(space, "wave-rejects-second"),
+      ];
+      // The first sync rejects at once, while the wave is still awaiting
+      // the turn it takes before issuing the second.
+      const failure = new Error("sync refused");
+      const wave = runtime.runner.accessForTestingOnly.kickResumeWave(
+        cells,
+        (cell) =>
+          cell === cells[0]
+            ? Promise.reject(failure)
+            : Promise.resolve(undefined),
+      );
+      await expect(wave).rejects.toBe(failure);
+      // A rejection reaches the host as unhandled on a later macrotask
+      // turn, so one more turn passes before the listener is asked.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      globalThis.removeEventListener("unhandledrejection", record);
+    }
+  });
 });

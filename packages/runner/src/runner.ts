@@ -2346,8 +2346,8 @@ export class Runner {
    * syncer and deferred-start committer a test may supply, the setup,
    * storage-subscription, commit-gated run, ownership, key, sync, walk, and
    * retry steps, the implementation invoker, the node planner, which a
-   * test drives directly, and the pre-sync plan recorder and resume yield a
-   * test installs.
+   * test drives directly, the wave kick, and the pre-sync plan recorder and
+   * resume yield a test installs.
    */
   get accessForTestingOnly(): {
     scopedProgramCounts(): Array<{ piece: string; variants: number }>;
@@ -2425,6 +2425,10 @@ export class Runner {
       | ((piece: string, node: Node, site: "node" | "owned") => void)
       | undefined;
     resumeYield: CooperativeYield;
+    kickResumeWave(
+      cells: readonly Cell<any>[],
+      kick: (cell: Cell<any>) => Promise<unknown>,
+    ): Promise<void>;
   } {
     // deno-lint-ignore no-this-alias
     const outerThis = this;
@@ -2541,6 +2545,7 @@ export class Runner {
       set resumeYield(value) {
         outerThis.#resumeYield = value;
       },
+      kickResumeWave: (cells, kick) => this.#kickResumeWave(cells, kick),
     };
   }
 
@@ -9061,7 +9066,13 @@ export class Runner {
   ): Promise<void> {
     const landed: Promise<unknown>[] = [];
     for (const cell of cells) {
-      landed.push(kick(cell));
+      const sync = kick(cell);
+      // A sync that rejects while the loop is still issuing, or awaiting a
+      // turn, has no handler yet: the `Promise.all` below attaches its own
+      // only once the loop ends. This one keeps the rejection from reaching
+      // the host as unhandled; the `Promise.all` still reports it.
+      sync.catch(() => {});
+      landed.push(sync);
       const turn = this.#resumeYield.maybeYield();
       if (turn !== undefined) await turn;
     }

@@ -228,9 +228,10 @@ their percentiles cannot be subtracted to recover any of these components.
 `watchRefresh/total` brackets the whole refresh, including replica application.
 The `runner/start/*Wave` rows bracket each resume pre-sync wave around the
 per-cell `runner/start/resume*` spans. `runner/start/resumeCrossSpaceRead` is
-one read of one plan's inputs by the cross-space pass, so its count against
-the plans a family holds says how many rounds the pass took and for how many
-plans; `runner/start/syncCellsForRunningPattern` counts the name-syncs a load
+one read of one plan's inputs by the cross-space pass; its count is the reads
+the pass made in all, so what it holds beyond the plans a family has is the
+plans read again after a load they kicked landed, without saying which plans
+or in how many rounds; `runner/start/syncCellsForRunningPattern` counts the name-syncs a load
 paid, one per family named, which a cold resume of a nested tree pays once for
 the root and once more for each child start that found something absent.
 
