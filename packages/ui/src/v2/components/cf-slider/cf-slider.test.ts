@@ -348,6 +348,32 @@ describe("CFSlider bound to a cell", () => {
     expect(changes).toEqual([]);
   });
 
+  it("stops a drag when another cell is bound", () => {
+    // The drag's listeners live on the document, which Deno lacks.
+    const removed: string[] = [];
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: {
+        removeEventListener: (type: string) => removed.push(type),
+      },
+    });
+    try {
+      const element = sliderWith(createMockCellHandle(30));
+      Object.defineProperty(element, "classList", {
+        value: { remove: () => {} },
+      });
+      element._isDragging = true;
+
+      element.value = createMockCellHandle(80, { path: ["other"] });
+      element.willUpdate(new Map([["value", undefined]]));
+
+      expect(element._isDragging).toBe(false);
+      expect(removed).toContain("mousemove");
+    } finally {
+      Reflect.deleteProperty(globalThis, "document");
+    }
+  });
+
   it("commits a drag on a cell not yet read, even to the minimum", async () => {
     const value = createMockCellHandle<number>();
     holdReads(value);
@@ -511,19 +537,23 @@ describe("CFSlider given a plain number", () => {
     ]);
   });
 
-  it("ends a drag when its value is set from outside", () => {
+  it("keeps a drag through its owner echoing values back", () => {
+    // A controlled slider: the owner writes each value back, a beat late.
     const element = sliderWith(30);
     const changes = announcements(element, "cf-change");
 
     element._beginDrag();
     element._moveTo(40, "drag");
     element.willUpdate(new Map([["value", 30]]));
-    element.value = 70;
+    element._moveTo(50, "drag");
     element.willUpdate(new Map([["value", 40]]));
+    element.value = 40;
+    element.willUpdate(new Map([["value", 50]]));
     element._commitDrag();
 
-    expect(changes).toEqual([]);
-    expect(element.value).toBe(70);
+    expect(changes.map((a) => a.detail)).toEqual([
+      { value: 50, oldValue: 30 },
+    ]);
   });
 
   it("sees a move made in the same tick", () => {

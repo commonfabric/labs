@@ -349,7 +349,7 @@ export class CFSlider extends BaseElement {
     // A plain value is the slider's own, so it is brought within bounds here.
     // A cell's value belongs to the cell: it is shown clamped, never rewritten.
     if (!this._valueCellController.hasCell()) {
-      this._writeOwn(this._snapToStep(this._current));
+      this.value = this._snapToStep(this._current);
     }
     this._updateAriaAttributes();
 
@@ -385,26 +385,18 @@ export class CFSlider extends BaseElement {
     }
   }
 
-  /** The value the slider last wrote to its own plain property. */
-  private _ownWrite: number | undefined;
-
-  /** Write the plain property, as the slider's own move rather than a new value. */
-  private _writeOwn(value: number): void {
-    this._ownWrite = value;
-    this.value = value;
-  }
-
   /**
    * Whether `next` continues the binding `old` was: a fresh handle for the
-   * same persistent cell, which the controller also keeps, or the slider's
-   * own write to its plain value. Anything else is a new binding.
+   * same persistent cell, which the controller also keeps, or a plain value
+   * followed by another, whether the slider's own move or its owner's (a
+   * controlled slider echoing its moves back). Switching between a cell and
+   * a plain value, or to another cell, is a new binding.
    */
   private _sameBinding(old: unknown, next: unknown): boolean {
     if (isCellHandle(old) && isCellHandle(next)) {
       return sameCellDoc(old.ref(), next.ref());
     }
-    return !isCellHandle(old) && !isCellHandle(next) &&
-      next === this._ownWrite;
+    return !isCellHandle(old) && !isCellHandle(next);
   }
 
   override updated(
@@ -420,7 +412,7 @@ export class CFSlider extends BaseElement {
       // Re-clamp and snap the value when constraints change
       const clampedValue = this._snapToStep(this._current);
       if (clampedValue !== this.value) {
-        this._writeOwn(clampedValue);
+        this.value = clampedValue;
       }
     }
 
@@ -511,7 +503,7 @@ export class CFSlider extends BaseElement {
         if (this._valueCellController.refusal !== undefined) return;
         this._valueCellController.setValue(next);
       } else {
-        this._writeOwn(next);
+        this.value = next;
       }
       this._moved(next, held ?? this._shown(held), gesture);
     });
@@ -532,7 +524,7 @@ export class CFSlider extends BaseElement {
         const held = this._held;
         const next = step(this._shown(held));
         if (next === (held ?? this._shown(held))) return;
-        this._writeOwn(next);
+        this.value = next;
         this._moved(next, held ?? this._shown(held), gesture);
         return;
       }
