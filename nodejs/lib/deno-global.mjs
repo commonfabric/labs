@@ -373,8 +373,52 @@ function acceptingUrls(fn) {
         args[i] = fileURLToPath(a);
       }
     }
-    return fn.apply(this, args);
+    let result;
+    try {
+      result = fn.apply(this, args);
+    } catch (e) {
+      throw denoError(e);
+    }
+    return result instanceof Promise
+      ? result.catch((e) => {
+        throw denoError(e);
+      })
+      : result;
   };
+}
+
+/** Node error codes and the `Deno.errors` class each corresponds to. */
+const ERROR_CLASSES = {
+  ENOENT: "NotFound",
+  EEXIST: "AlreadyExists",
+  EACCES: "PermissionDenied",
+  EPERM: "PermissionDenied",
+  ECONNREFUSED: "ConnectionRefused",
+  ECONNRESET: "ConnectionReset",
+  ECONNABORTED: "ConnectionAborted",
+  EADDRINUSE: "AddrInUse",
+  EADDRNOTAVAIL: "AddrNotAvailable",
+  EPIPE: "BrokenPipe",
+  ETIMEDOUT: "TimedOut",
+  EBUSY: "Busy",
+  EINTR: "Interrupted",
+  ENOTCONN: "NotConnected",
+};
+
+/**
+ * Converts a Node system error to the `Deno.errors` class Deno would throw.
+ * The shim maps only some of its functions' errors (`realPathSync`, for one,
+ * throws Node's own). An error already converted, or with no counterpart,
+ * passes through.
+ */
+function denoError(e) {
+  const name = ERROR_CLASSES[e?.code];
+  const DenoClass = name && shim.errors[name];
+  if (!DenoClass || e instanceof DenoClass) return e;
+  const converted = new DenoClass(e.message, { cause: e });
+  converted.code = e.code;
+  converted.stack = e.stack;
+  return converted;
 }
 
 const Deno = Object.create(null);
