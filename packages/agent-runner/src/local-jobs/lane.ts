@@ -281,8 +281,8 @@ export class LocalJobLane {
   start(): void {
     const recovered = this.#options.store.recover();
     if (recovered.length > 0) {
-      this.#report(
-        `agent runner: ${recovered.length} local job(s) were cut off and end interrupted (${RUNNER_RESTARTED})`,
+      this.#report(() =>
+        `agent runner: ${recovered.length} local job(s) were cut off and end interrupted (${RUNNER_RESTARTED})`
       );
     }
     this.kick();
@@ -465,10 +465,10 @@ export class LocalJobLane {
         },
       );
     } catch (error) {
-      this.#report(
+      this.#report(() =>
         `agent runner: local job ${job.id} failed: ${
           error instanceof Error ? error.message : String(error)
-        }`,
+        }`
       );
       result = { outcome: "failed", errorCode: "PROVIDER_FAILURE" };
     }
@@ -489,13 +489,15 @@ export class LocalJobLane {
   }
 
   /**
-   * Helper that writes an operator-facing line. A run is a detached promise,
-   * so a throw from the log would reach no caller and would only leave its job
+   * Helper that writes the operator-facing line `line` builds, building it only
+   * when there is a log. A run is a detached promise, so a throw from building
+   * or writing the line would reach no caller and would only leave its job
    * unfinished in the store; the throw goes no further.
    */
-  #report(message: string): void {
+  #report(line: () => string): void {
     try {
-      this.#options.report?.(message);
+      const { report } = this.#options;
+      if (report !== undefined) report(line());
     } catch {
       // The operator's log is the only place this could be reported.
     }

@@ -966,6 +966,23 @@ describe("local-jobs/lane", () => {
         expect(lane.browserHost("job-unknown")).toBeUndefined();
       });
 
+      it("ends a failed run and closes its host when its rejection cannot be read as text", async () => {
+        const { store, lane, nextRun, enqueue } = laneWith({
+          profiles: BROWSING,
+          report: () => {},
+        });
+        lane.start();
+        const id = enqueue("a", DECLARED);
+        const run = await nextRun(0);
+        const host = lane.browserHost(id)!;
+        run.fail(Object.create(null));
+        expect(await reached(store, id, "failed")).toMatchObject({
+          errorCode: "PROVIDER_FAILURE",
+        });
+        expect(host.view().state).toBe("closed");
+        await lane.stop();
+      });
+
       it("fails its stop with a run that could not close its host", async () => {
         const { store, lane, nextRun, enqueue } = laneWith({
           profiles: BROWSING,
