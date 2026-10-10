@@ -71,10 +71,10 @@ stage 0 is what every later stage reports against.
       demands every row, and counts the pre-sync's node plans against the
       `(instance, node)` pairs the tree holds
       (`packages/runner/test/resume-presync-plan-count.test.ts`). The count
-      reaches the test
-      through `Runner.accessForTestingOnly.presyncPlanRecorder`. The ratio
-      is one: the root's waves plan each pair once, and a child whose family
-      is whole does not name it again. What the field load pays is the
+      reaches the test through `Runner.accessForTestingOnly.presyncPlanRecorder`.
+      The ratio is one: the root's waves plan each pair once, and a child
+      whose family is whole does not name it again. What the field load pays
+      is the
       next stage's hold, which this shape does not provoke because the
       root's own run computes the derived argument before the rows start.
 - [ ] A benchmark in `packages/runner/test/` that resumes the same shape at
@@ -98,18 +98,10 @@ Exit: a number per stage that a pull request can quote.
       built a fresh closure per link per plan, so every call deep-froze and
       hashed the same few schemas again; a reference names one content, so
       the form it recomposed to once is the form it has.
-- [x] Tried and reverted: not inlining at all. The traversal admits a
-      reference-form link schema only where its closure is persisted in
-      the space (`schemaForSpaceCrossing`), and a `data:` document has no
-      carrying write to persist one, so a reference inside it selects
-      nothing where the inline form selected its schema. The traverse
-      replay goldens moved under it, and the self-containment comment at
-      both sites, which says exactly this, stays with its reason sharpened.
 - [x] Tests: the inline form is the same object on a second call for the
       same reference (`packages/runner/test/link-utils.test.ts`); a `data:`
-      cell carries each
-      link's schema inline and a read through it resolves the linked value
-      (`packages/runner/test/runtime.test.ts`,
+      cell carries each link's schema inline and a read through it resolves
+      the linked value (`packages/runner/test/runtime.test.ts`,
       `packages/runner/test/data-uri-inlining.test.ts`).
 
 Exit: a schema is recomposed once per reference per registry epoch.
@@ -132,21 +124,11 @@ Exit: a schema is recomposed once per reference per registry epoch.
       produces and whose absence the store's walk cannot report, and a
       stream, whose document holds no value and whose sends are events; a
       piece's own streams are still probed with its owned cells.
-- [x] Tried and dropped: counting a document the replica had asked the
-      store for and found absent as present. An owned per-user cell a
-      visitor has never written is exactly such a document, and its hold is
-      what seeds that actor's defaults
-      (`packages/runner/test/scoped-internal-cell-seed.test.ts`
-      pins it); on the room the rule changed one hold in eighty.
 - [x] Tests, red first, in
       `packages/runner/test/piece-named-before-start.test.ts`: a piece
       whose family is local runs without holding when its caller's argument
       links to a derived cell nothing has computed, to another piece's
       stream, or to a local document whose content links to an absent one.
-- [x] Tried and dropped: naming each nested instance's argument link
-      targets root-only in the parent's rounds. On the room it issued no
-      request the plans had not already made — the frame counts were
-      identical — and cost 43 waves.
 - [x] The field check: `start/syncCellsForRunningPattern` on the room from
       80 to 32, `resumeCellSync` spans from 4,877 to 502, the rendering
       unchanged.
@@ -156,9 +138,8 @@ Exit: a schema is recomposed once per reference per registry epoch.
       who has not written one, and which nothing in the pre-sync requests.
       They are the same defect in a fourth shape, and the general fix is
       the one `docs/plans/presync-from-node-plans.md` stage 5 owes: the gate
-      asks the
-      plans what a name-sync would deliver and probes that, instead of
-      walking the argument.
+      asks the plans what a name-sync would deliver and probes that, instead
+      of walking the argument.
 
 Exit: a child's start names its family only when something a name-sync
 could deliver is missing.

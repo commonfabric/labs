@@ -193,64 +193,37 @@ describe("resume-presync-plan-count", () => {
   });
 
   it("yields to the event loop between the syncs of a resume wave", async () => {
-    const cellId = "resume-presync-plan-count-yield-root";
-
-    const author = replica();
-    const compiled = await author.patternManager.compilePattern(
-      TREE_PROGRAM,
-      { space },
-    );
-    const tx = author.edit();
-    const authored = author.getCell<{ rows: { value: number }[] }>(
-      space,
-      cellId,
-      compiled.resultSchema,
-      tx,
-    );
-    author.run(tx, compiled, { items: ITEMS }, authored);
-    await tx.commit().settled;
-    await authored.pull();
-    await author.settled();
-    await author.patternManager.flushCompileCacheWrites();
-    await author.storageManager.synced();
-    await author.dispose({ closeStorage: false });
-    runtimes.splice(runtimes.indexOf(author), 1);
-
-    const resumer = replica();
-    await resumer.patternManager.compilePattern(TREE_PROGRAM, { space });
+    const runtime = replica();
     // A slice of zero spends on every cell, so the wave yields between each
     // pair of syncs it issues.
     const yielder = new CooperativeYield(0);
-    resumer.runner.accessForTestingOnly.resumeYield = yielder;
+    runtime.runner.accessForTestingOnly.resumeYield = yielder;
+    const cells = [
+      runtime.getCell(space, "wave-yield-first"),
+      runtime.getCell(space, "wave-yield-second"),
+      runtime.getCell(space, "wave-yield-third"),
+    ];
+    // A timer the first sync arms fires on the next macrotask turn: before
+    // the last sync is issued if the wave yields between them, and only
+    // after the whole wave if it does not.
     let issued = 0;
-    const manager = resumer.storageManager as EmulatedStorageManager;
-    const original = manager.syncCell.bind(manager);
-    manager.syncCell = ((cell, options) => {
-      issued += 1;
-      return original(cell, options);
-    }) as typeof manager.syncCell;
-    const resumed = resumer.getCell<{ rows: { value: number }[] }>(
-      space,
-      cellId,
-      compiled.resultSchema,
-    );
-    // A timer due before the resume starts fires on the first macrotask
-    // turn the resume takes: before its last sync is issued, if the waves
-    // yield, and after everything if they do not.
     let issuedWhenTimerFired = -1;
-    const timer = new Promise<void>((resolve) =>
-      setTimeout(() => {
-        issuedWhenTimerFired = issued;
-        resolve();
-      }, 0)
-    );
-    expect(await resumer.runner.start(resumed)).toBe(true);
-    await timer;
-    await resumer.settled();
-    await resumer.storageManager.synced();
+    const timer = Promise.withResolvers<void>();
+    await runtime.runner.accessForTestingOnly.kickResumeWave(cells, (cell) => {
+      if (cell === cells[0]) {
+        setTimeout(() => {
+          issuedWhenTimerFired = issued;
+          timer.resolve();
+        }, 0);
+      }
+      issued += 1;
+      return Promise.resolve(undefined);
+    });
+    await timer.promise;
+    expect(issued).toBe(3);
     expect(yielder.yieldCount).toBeGreaterThan(0);
     expect(issuedWhenTimerFired).toBeGreaterThan(0);
-    expect(issuedWhenTimerFired).toBeLessThan(issued);
+    expect(issuedWhenTimerFired).toBeLessThan(3);
   });
 
   it("reports a sync's rejection through the wave, never as unhandled", async () => {

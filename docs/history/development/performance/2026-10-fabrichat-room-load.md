@@ -111,6 +111,23 @@ came in, 4.6 MB of it one content-addressed schema document.
 - The server. Above.
 - The link. Estuary answered each frame within a second of receiving it.
 
+Three things tried on the way, each dropped for a measured reason:
+
+- Not inlining a link's reference-form schema into a `data:` id at all, on
+  the reasoning that a `data:` document never leaves the process. The
+  traversal admits a reference-form link schema only where its closure is
+  persisted in the space, and a `data:` document has no carrying write to
+  persist one, so a reference inside it selected nothing where the inline
+  form selected its schema; the traverse replay goldens moved. A memo per
+  reference keeps the inline form and the win.
+- Counting a document the replica had asked the store for and found absent
+  as present in the named-run gate. An owned per-user cell a visitor has
+  never written is exactly such a document, and its hold is what seeds that
+  actor's defaults; on the room the rule changed one hold in eighty.
+- Naming each nested instance's argument link targets root-only in the
+  parent's resume rounds. On the room it issued no request the plans had
+  not already made, with identical frame counts, and cost 43 waves.
+
 ## Numbers that decide the fix
 
 - 80 starts of `syncCellsForRunningPattern`; 4,877 `resumeCellSync` spans
