@@ -90,7 +90,13 @@ function translateFlags(args) {
     } else if (arg.startsWith("--filter=") || arg === "--filter") {
       const pattern = arg === "--filter" ? args[++i] : arg.slice(9);
       nodeFlags.push(`--test-name-pattern=${pattern}`);
-    } else if (arg.startsWith("--inspect") || arg.startsWith("--env-file")) {
+    } else if (arg === "--cf-env-file" || arg.startsWith("--cf-env-file=")) {
+      // Deno's `--env-file`, renamed by `bin/deno` so that Node does not act
+      // on it first. Deno goes on without a missing env file, and its bare
+      // flag means `.env`; Node's `--env-file` stops at a missing one.
+      const file = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : ".env";
+      nodeFlags.push(`--env-file-if-exists=${file}`);
+    } else if (arg.startsWith("--inspect")) {
       nodeFlags.push(arg);
     } else {
       usage(`unsupported flag: ${arg}`);
