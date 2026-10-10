@@ -54,7 +54,14 @@ so they pass through admission again; document contents do not need migration.
 The [protocol specification](../../docs/specs/memory-v2/04-protocol.md)
 describes the terminal refusal and its reconnect behavior.
 
-## Client queries during reconnect
+## Client authentication and reconnect
+
+On direct connections, a mount joining its principal's lease renewal waits for
+the complete renewal, including retriable refusals and backoff. Mounts arriving
+during backoff join that same renewal. Its retries request fresh challenges and
+are shared regardless of the number of waiting mounts. Permanent refusal,
+connection loss, client closure or failure, and the mount's abort signal end the
+wait. Canceling one mount leaves the renewal and other mounts running.
 
 `Client.restoreConnection()` waits for the transport handshake and restoration
 of existing space sessions. A connected transport can still be restoring its

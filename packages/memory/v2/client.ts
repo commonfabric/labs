@@ -91,6 +91,9 @@ const RESTORE_WATCH_SET: unique symbol = Symbol("restore watch set");
  */
 const STALE: unique symbol = Symbol("stale connection");
 
+/** A mount's removable subscription to a direct renewal's complete outcome. */
+type RenewalWaiter = (result: string | typeof STALE | Error) => void;
+
 /** Thrown inside the shared authentication to settle it as `STALE`. */
 const STALE_AUTHENTICATION: unique symbol = Symbol("stale authentication");
 
@@ -553,6 +556,9 @@ export class Client {
    */
   #heldMounts = new Set<(error: Error) => void>();
 
+  /** Direct renewals, shared with mounts through every retriable refusal. */
+  #renewing = new Map<string, Set<RenewalWaiter>>();
+
   /**
    * Settles once every signed `session.open` issued so far has been
    * responded to. Each one uses the connection's single current challenge
@@ -676,6 +682,7 @@ export class Client {
     this.#noteStateChange();
     this.#cancelReconnectDelay?.();
     this.#cancelRenewals();
+    this.#endRenewals(new Error("memory client closed"));
     this.#endHeldMounts(new Error("memory client closed"));
     this.#rejectPending(new Error("memory client closed"));
     await Promise.all([...this.#spaces].map((space) => space.close()));
@@ -855,6 +862,8 @@ export class Client {
    */
   async release(did: string): Promise<void> {
     this.#cancelRenewal(did);
+    const renewal = this.#renewing.get(did);
+    if (renewal !== undefined) this.#finishRenewal(did, renewal, STALE);
     this.#routedSigners.delete(did);
     this.#refusedStatements.delete(did);
     if (!this.#authenticated.delete(did)) return;
@@ -871,6 +880,7 @@ export class Client {
    * `connectionAuth`, and otherwise signed for this one session. A reopen
    * that a session's restore makes sets `options.restoring`, and is then
    * rejected with a `ConnectionError` if the connection drops under it. A
+   * direct mount joining a renewal waits through that renewal's retries. A
    * mount that a router refuses for now is tried again on the same
    * connection until it is admitted or refused for good, the client closes
    * or fails for good, or `options.signal` aborts. A connection that drops
@@ -951,7 +961,14 @@ export class Client {
         typeof auth === "object" && this.serverFlags?.connectionAuth === true
       ) {
         try {
-          const principal = await this.#authenticate(auth, whileConnected);
+          // Direct mounts share the renewal's outcome, including its
+          // backoff, rather than one authentication attempt's response.
+          const renewal = whileConnected
+            ? undefined
+            : this.#renewing.get(auth.did);
+          const principal = await (renewal === undefined
+            ? this.#authenticate(auth, whileConnected)
+            : this.#waitForRenewal(renewal, options.signal));
           if (principal !== STALE) {
             requireUncancelled();
             return await this.request<SessionOpenResult>({
@@ -979,7 +996,7 @@ export class Client {
           // be sent again. If the connection drops while the mount waits,
           // the next round waits for the reconnect and starts over; a drop
           // under a request the mount has sent fails it, as it does any
-          // mount. A direct server's denial goes to the caller as before.
+          // mount. A direct server's denial goes to the caller.
           if (
             whileConnected || !isRetriableAuthorizationError(error) ||
             this.#sessionOpenAuthContext?.deployment === undefined
@@ -1206,6 +1223,7 @@ export class Client {
     }
     const epoch = this.#connectionEpoch;
     const held = this.sessionOpenAuthContext();
+    const renewal = this.#renewing.get(principal.did);
     // The server refuses a challenge that has expired, and one this key has
     // already signed, so either case takes a challenge of its own. The
     // expiry is read by this clock, which may lag the server's: a direct
@@ -1337,6 +1355,12 @@ export class Client {
         }, { whileConnected });
         this.#refusedStatements.delete(principal.did);
         this.#scheduleRenewal(principal, epoch, result.expiresAt);
+        // A restore can authenticate during renewal backoff. Its success
+        // replaces the retry timer, so it must also release the mounts
+        // waiting for that renewal's outcome.
+        if (renewal !== undefined && !this.#staleSince(epoch)) {
+          this.#finishRenewal(principal.did, renewal, result.principal);
+        }
         return result.principal;
       } catch (error) {
         if (
@@ -1362,6 +1386,14 @@ export class Client {
         this.#authenticated.delete(principal.did);
       }
       if (error === STALE_AUTHENTICATION) return STALE;
+      if (
+        renewal !== undefined &&
+        this.#renewing.get(principal.did) === renewal &&
+        !this.#staleSince(epoch) &&
+        error instanceof Error && isPermanentAuthorizationError(error)
+      ) {
+        this.#finishRenewal(principal.did, renewal, error);
+      }
       // A router's refusal for now, of the statement or of a challenge for
       // it, passes over seconds: a held restore waits a second or more after
       // it, as a renewal does; see `#holdRestore`.
@@ -1476,7 +1508,18 @@ export class Client {
         // beside the copy that is unanswered.
         this.#refusedStatements.delete(principal.did);
       }
-      void this.#authenticate(principal, false, true).catch((error) => {
+      if (
+        this.#sessionOpenAuthContext?.deployment === undefined &&
+        !this.#renewing.has(principal.did)
+      ) {
+        this.#renewing.set(principal.did, new Set());
+      }
+      const renewal = this.#renewing.get(principal.did);
+      const finish = (result: string | typeof STALE | Error): void => {
+        if (renewal === undefined) return;
+        this.#finishRenewal(principal.did, renewal, result);
+      };
+      void this.#authenticate(principal, false, true).then(finish, (error) => {
         // A renewal refused for now is tried again after a backoff, so the
         // grant does not lapse and leave the principal's opens to a final
         // denial.
@@ -1484,7 +1527,10 @@ export class Client {
           this.#retryRenewal(principal, epoch, attempt + 1);
           return;
         }
-        if (!isPermanentAuthorizationError(error)) return;
+        finish(error instanceof Error ? error : new Error(String(error)));
+        if (renewal !== undefined || !isPermanentAuthorizationError(error)) {
+          return;
+        }
         for (const session of [...this.#spaces]) {
           if (session.principal === principal.did) {
             session.handleConnectionFailure(error);
@@ -1506,6 +1552,54 @@ export class Client {
   #cancelRenewals(): void {
     for (const timer of this.#renewals.values()) clearTimeout(timer);
     this.#renewals.clear();
+  }
+
+  /** Waits for a direct renewal, removing the mount's waiter on cancellation. */
+  #waitForRenewal(
+    renewal: Set<RenewalWaiter>,
+    signal?: AbortSignal,
+  ): Promise<string | typeof STALE> {
+    if (signal?.aborted) return Promise.reject(mountCancelled(signal));
+    return new Promise((resolve, reject) => {
+      const settle: RenewalWaiter = (result) => {
+        renewal.delete(settle);
+        signal?.removeEventListener("abort", abort);
+        if (result instanceof Error) reject(result);
+        else resolve(result);
+      };
+      const abort = () => settle(mountCancelled(signal!));
+      renewal.add(settle);
+      signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+
+  /** Delivers one renewal's outcome without removing a replacement renewal. */
+  #finishRenewal(
+    did: string,
+    renewal: Set<RenewalWaiter>,
+    result: string | typeof STALE | Error,
+  ): void {
+    if (this.#renewing.get(did) === renewal) {
+      this.#renewing.delete(did);
+      // The refusal applies to the key's lease even when a restore, rather
+      // than the renewal timer, made the authentication attempt.
+      if (result instanceof Error && isPermanentAuthorizationError(result)) {
+        this.#cancelRenewal(did);
+        for (const session of [...this.#spaces]) {
+          if (session.principal === did) {
+            session.handleConnectionFailure(result);
+          }
+        }
+      }
+    }
+    for (const settle of renewal) settle(result);
+  }
+
+  /** Settles direct renewal waiters when their connection ends or is replaced. */
+  #endRenewals(error?: Error): void {
+    for (const [did, renewal] of this.#renewing) {
+      this.#finishRenewal(did, renewal, error ?? STALE);
+    }
   }
 
   /**
@@ -1547,6 +1641,7 @@ export class Client {
   }
 
   async #hello(): Promise<void> {
+    this.#endRenewals();
     this.#transport.setMessageCompressionEnabled?.(false);
     this.#connectionEpoch += 1;
     this.#authenticated.clear();
@@ -1837,6 +1932,7 @@ export class Client {
       return;
     }
     this.#connected = false;
+    this.#endRenewals(toConnectionError(error));
     this.#noteStateChange();
     // A drop while a session is held counts as a restart: a peer that denies
     // a reopen and then drops the connection would otherwise be reconnected
@@ -1921,6 +2017,7 @@ export class Client {
    */
   #discardConnection(err: Error): boolean {
     this.#connected = false;
+    this.#endRenewals(toConnectionError(err));
     this.#noteStateChange();
     if (
       isPermanentConnectionFailure(err) || this.#transport.reset === undefined
