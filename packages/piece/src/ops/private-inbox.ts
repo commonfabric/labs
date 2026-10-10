@@ -25,14 +25,18 @@ import { accessRefused } from "./space-access.ts";
 
 const logger = getLogger("piece.private-inbox");
 
+/** Every code for why an advertised inbox is not adopted. */
+export const INBOX_ADOPTION_REFUSALS = [
+  "inbox-home-space",
+  "inbox-profile-space",
+  "inbox-access-refused",
+  "inbox-adoption-acl-mismatch",
+  "inbox-offers-invalid",
+  "inbox-receive-missing",
+] as const;
+
 /** Why an advertised inbox is not adopted. */
-export type InboxAdoptionRefusal =
-  | "inbox-home-space"
-  | "inbox-profile-space"
-  | "inbox-access-refused"
-  | "inbox-adoption-acl-mismatch"
-  | "inbox-offers-invalid"
-  | "inbox-receive-missing";
+export type InboxAdoptionRefusal = typeof INBOX_ADOPTION_REFUSALS[number];
 
 /**
  * What {@link ensurePrivateInboxOf} found, and so what it sent: `held` when

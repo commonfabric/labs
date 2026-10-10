@@ -45,6 +45,7 @@ import {
   type TrustedProfileMru,
 } from "./profile-create.tsx";
 import ProfilePicker from "./profile-picker.tsx";
+import { refusalReasonText } from "./private-inbox-refusal-text.ts";
 import type { BackwardsCompatibleProfile } from "./profile-home.tsx";
 import {
   ensurePrivateInbox,
@@ -329,32 +330,6 @@ const renameSpaceHandler = handler<
   entry.set({ name: name ?? "", did });
   spaces.addUnique(entry);
 });
-
-/**
- * What the host's refusal code `reason` says about the refused inbox, as a
- * sentence for the person whose inbox it is, or `undefined` for a code it does
- * not know. The codes are `InboxAdoptionRefusal`'s, from
- * `packages/piece/src/ops/private-inbox.ts`.
- */
-function refusalReasonText(reason: string): string | undefined {
-  switch (reason) {
-    case "inbox-home-space":
-      return "It is in your Home space, where nobody else may deliver.";
-    case "inbox-profile-space":
-      return "It is in the profile's own space, where nobody else may deliver.";
-    case "inbox-access-refused":
-      return "Home was refused access to it.";
-    case "inbox-adoption-acl-mismatch":
-      return "Its space does not make you its owner, or does not let others " +
-        "deliver to it.";
-    case "inbox-offers-invalid":
-      return "It holds no list of offers.";
-    case "inbox-receive-missing":
-      return "It has no way to receive offers.";
-    default:
-      return undefined;
-  }
-}
 
 const homeArgumentSchema = toSchema<Record<string, never>>();
 const homeResultSchema = __cf_data(

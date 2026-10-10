@@ -79,6 +79,7 @@ export {
 export { PiecesController } from "./pieces-controller.ts";
 export {
   ensurePrivateInboxOf,
+  INBOX_ADOPTION_REFUSALS,
   type InboxAdoptionRefusal,
   inboxPieceLinkSchema,
   type PrivateInboxEnsure,
