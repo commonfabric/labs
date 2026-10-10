@@ -172,13 +172,13 @@ import {
 } from "./scheduler.ts";
 import { deriveEventKey } from "./scheduler/event-identity.ts";
 import { entityKey } from "./scheduler/keys.ts";
+import { CooperativeYield } from "./scheduler/cooperative-yield.ts";
 import {
   InSpaceTargetUnresolved,
   RetryImmediately,
 } from "./scheduler/retry-immediately.ts";
 import { isSchemaMismatchError } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
-import { CooperativeYield } from "./scheduler/cooperative-yield.ts";
 import { combineOptionalSchema } from "./traverse.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
 import {
@@ -2346,7 +2346,8 @@ export class Runner {
    * syncer and deferred-start committer a test may supply, the setup,
    * storage-subscription, commit-gated run, ownership, key, sync, walk, and
    * retry steps, the implementation invoker, the node planner, which a
-   * test drives directly, and the pre-sync plan recorder a test installs.
+   * test drives directly, and the pre-sync plan recorder and resume yield a
+   * test installs.
    */
   get accessForTestingOnly(): {
     scopedProgramCounts(): Array<{ piece: string; variants: number }>;
@@ -8892,22 +8893,28 @@ export class Runner {
     if (!manager.loadsSettled || !manager.pendingLoadAddresses) return;
     const awaited = new Set<string>();
     const readIdentity = identity ?? this.#runtime.scopeKeyIdentity;
-    type ReadablePlan = Exclude<NodePlan, { kind: "pattern" }>;
-    let remaining = plans.filter((plan): plan is ReadablePlan =>
-      plan.kind !== "pattern" && this.#planReadSchema(plan) !== undefined
-    );
+    type PlanRead = {
+      plan: Exclude<NodePlan, { kind: "pattern" }>;
+      schema: JSONSchema;
+    };
+    let remaining: PlanRead[] = [];
+    for (const plan of plans) {
+      if (plan.kind === "pattern") continue;
+      const schema = this.#planReadSchema(plan);
+      if (schema !== undefined) remaining.push({ plan, schema });
+    }
     for (;;) {
       // Each plan reads in a transaction of its own, so the loads its read
       // kicked are its own: a plan whose read left none pending is done,
       // and the next round reads only the plans whose reads did.
-      const next: ReadablePlan[] = [];
+      const next: PlanRead[] = [];
       const keys = new Set<string>();
-      for (const plan of remaining) {
+      for (const read of remaining) {
+        const { plan, schema } = read;
         const readTx = this.#familyReadTx(identity);
         const readStart = performance.now();
         try {
-          plan.inputsCell.asSchema(this.#planReadSchema(plan)!).withTx(readTx)
-            .get();
+          plan.inputsCell.asSchema(schema).withTx(readTx).get();
         } catch (error) {
           // A read a cold document cannot satisfy kicks its load all the
           // same; the next round reads it warm.
@@ -8933,7 +8940,7 @@ export class Runner {
           .filter((key) => readKeys.has(key) && !awaited.has(key));
         if (planKeys.length === 0) continue;
         for (const key of planKeys) keys.add(key);
-        next.push(plan);
+        next.push(read);
       }
       if (keys.size === 0) return;
       for (const key of keys) awaited.add(key);

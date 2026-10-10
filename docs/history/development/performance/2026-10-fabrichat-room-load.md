@@ -88,9 +88,12 @@ Inside the hot window, two chains account for about half:
 
 Both are multiplied. `#collectResumeOwnedCells` recurses the whole
 sub-pattern tree and `#syncResumeInstanceNodes` plans every nested instance
-at every level, so the root's start plans the whole tree; each mapped child
-then reaches `runner.run()` on its own, and `#nameFamilyBeforeRun` plans the
-child's subtree again. The wire shows it: 3,932 watch roots over 110
+at every level, so the root's start plans the whole tree; each nested
+instance then reaches `runner.run()` on its own, and the named-run gate,
+probing the content of every document its argument links to four deep, finds
+a document no name-sync names — a derived cell of the room, a handler
+stream, a profile field in another space — and `#nameFamilyBeforeRun` plans
+the child's subtree again. The wire shows it: 3,932 watch roots over 110
 `session.watch.add` frames, 31% of them already requested earlier in the same
 load under a different selector; one 3.2 MB frame of 1,794 roots that
 returned 66 documents; the same shapes ("1,793 roots, 66 documents") in the
