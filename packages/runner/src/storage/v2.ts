@@ -67,6 +67,7 @@ import {
   type SqliteQueryReader,
   type SqliteQueryResult,
   type SqliteRegisterDiskSourceResult,
+  type SyncCrossing,
   toDocumentPath,
   type ViewInterest,
   type ViewPlan,
@@ -1266,6 +1267,10 @@ export class StorageManager implements IStorageManager {
    * a replacement replica both see it. */
   readonly #storeReadThroughs = new Map<MemorySpace, StoreReadThrough>();
 
+  /** The crossing loads kicked, by target and selector (see
+   * `#loadCrossings`): one kick per manager, in flight or landed. */
+  readonly #crossingKicks = new Set<string>();
+
   /**
    * Schema-registry retention lease: held for the manager's open lifetime,
    * released on close (idempotent), re-acquired when a closed manager is reused
@@ -1924,6 +1929,7 @@ export class StorageManager implements IStorageManager {
         // providers refuse (see Options.servingHomeSpace).
         refuseForeignScopedReads: this.#refusesForeignScopedReadsIn(space),
         storeReadThrough: () => this.#storeReadThroughs.get(space),
+        loadCrossings: (crossings) => this.#loadCrossings(crossings),
         routeState,
         createSession: this.#sessionFactory.supportsAclBootstrap === true
           ? (routeGeneration, routeSignal) =>
@@ -2729,6 +2735,61 @@ export class StorageManager implements IStorageManager {
     }
   }
 
+  /** @inheritDoc */
+  followsCrossings(space: MemorySpace): boolean {
+    return this.open(space).replica.crossingsReported?.() === true;
+  }
+
+  /**
+   * Loads what a frame's crossings name (ProviderOptions.loadCrossings):
+   * each target from its own space, under the path and schema the server's
+   * walk needed there, registered as a pending load like `syncCell`'s so
+   * the preflight park and `loadsSettled()` see it. Each (target, selector)
+   * is kicked once per manager: a crossing's own frame can report a
+   * crossing back, and a kick already in flight or landed is what ends
+   * that chain. A load that fails is logged and the target left absent;
+   * the frame that carried the crossing is unaffected.
+   */
+  #loadCrossings(crossings: readonly SyncCrossing[]): Promise<void> {
+    const loads: Promise<void>[] = [];
+    for (const crossing of crossings) {
+      const space = crossing.space as MemorySpace;
+      const id = crossing.id as URI;
+      const scope = normalizeCellScope(crossing.scope);
+      const key = `${space}\0${scope}\0${id}\0${
+        JSON.stringify(crossing.path)
+      }\0${crossing.schema === undefined ? "" : hashStringOf(crossing.schema)}`;
+      if (this.#crossingKicks.has(key)) continue;
+      this.#crossingKicks.add(key);
+      const releaseLoad = this.#registerPendingLoad({ space, scope, id });
+      const load = (async () => {
+        let loadFailure: unknown;
+        try {
+          const result = await this.open(space).sync(
+            id,
+            { path: crossing.path, schema: crossing.schema ?? false },
+            crossing.scope,
+          );
+          loadFailure = result.error;
+          if (loadFailure !== undefined) {
+            this.#logSyncLoadFailure(space, id, loadFailure);
+          }
+        } catch (error) {
+          loadFailure = error;
+          // A kick that failed hands back its reservation, so a later frame
+          // carrying the crossing kicks again.
+          this.#crossingKicks.delete(key);
+          this.#logSyncLoadFailure(space, id, error);
+        } finally {
+          releaseLoad(loadFailure);
+        }
+      })();
+      this.trackUntilSettled(load);
+      loads.push(load);
+    }
+    return Promise.all(loads).then(() => {});
+  }
+
   /**
    * The explicit-instance load by address (IStorageManager.syncInstance —
    * server-execution v2 stage A): the transaction layer's kick for a
@@ -3198,6 +3259,16 @@ type ProviderOptions = {
    * (see IStorageManager.installStoreReadThrough). Absent or resolving
    * to `undefined`: every load goes over the session. */
   storeReadThrough?: () => StoreReadThrough | undefined;
+
+  /**
+   * Loads what a frame's crossings name (`SessionSync.crossings`): the
+   * documents in other spaces the server's walk followed links to, each
+   * under the selector the read needed. Resolves once those loads have
+   * landed, failures included, so a sync whose frame carried crossings
+   * can resolve with the documents a read through it reaches local.
+   * Absent: a frame's crossings are not acted on.
+   */
+  loadCrossings?: (crossings: readonly SyncCrossing[]) => Promise<void>;
 };
 
 type SpaceReplicaOptions = Omit<ProviderOptions, "createSession"> & {
@@ -4057,6 +4128,11 @@ export class SpaceReplica
    * ProviderOptions.storeReadThrough). */
   readonly #storeReadThrough: () => StoreReadThrough | undefined;
 
+  /** See ProviderOptions.loadCrossings. */
+  readonly #loadCrossings:
+    | ((crossings: readonly SyncCrossing[]) => Promise<void>)
+    | undefined;
+
   /**
    * Depth of frame integrations in progress (`#applySessionSync()`). A
    * read made while a frame integrates — the differential checkout's
@@ -4302,6 +4378,7 @@ export class SpaceReplica
     this.#eventAppendPacing = options.eventAppendPacing;
     this.#refuseForeignScopedReads = options.refuseForeignScopedReads === true;
     this.#storeReadThrough = options.storeReadThrough ?? (() => undefined);
+    this.#loadCrossings = options.loadCrossings;
     // Eager queue init (LT9; verdict blocker, 2026-08-12): a dead
     // predecessor replica's intents in the manager-shared store must
     // discharge WITHOUT waiting for a fresh fire. The constructor's
@@ -5197,6 +5274,15 @@ export class SpaceReplica
   /** Whether the current connection retains the negotiated view protocol. */
   viewReplicationSupported(): boolean {
     return this.#sessionClient?.serverFlags?.viewScopedReplicationV1 === true;
+  }
+
+  /**
+   * Whether the server this replica's session is on reports the links its
+   * walks follow out of the space (`syncCrossingsV1`), so a sync here loads
+   * what a read through the synced documents reaches in other spaces.
+   */
+  crossingsReported(): boolean {
+    return this.#sessionClient?.serverFlags?.syncCrossingsV1 === true;
   }
 
   /** Waits for session authentication and watch restoration after reconnect. */
@@ -6594,11 +6680,12 @@ export class SpaceReplica
 
       this.#watchView = view;
       const applyStart = performance.now();
+      let crossingLoads: Promise<void> | undefined;
       try {
         for (const precedingSync of precedingSyncs) {
           this.#applySessionSync(precedingSync, "integrate");
         }
-        this.#applySessionSync(sync, type);
+        crossingLoads = this.#applySessionSync(sync, type);
         // deno-coverage-ignore-start -- the client's own view has applied
         // every frame handed over here, so only an apply bug lands here
       } catch (error) {
@@ -6612,6 +6699,18 @@ export class SpaceReplica
         logger.time(applyStart, "watchRefresh", "applySessionSync");
       }
       this.#consumeWatchView(view);
+      // What the frame's crossings name is what a read through the synced
+      // documents reaches in other spaces; the sync resolves once those
+      // are local too, so a caller that reads next reads them warm. A
+      // crossing whose load fails is logged by the load and left absent.
+      if (crossingLoads !== undefined) {
+        const crossingStart = performance.now();
+        try {
+          await crossingLoads;
+        } finally {
+          logger.time(crossingStart, "watchRefresh", "crossingLoads");
+        }
+      }
       return { ok: {} };
     } catch (error) {
       return { error: toPullError(error) };
@@ -8274,7 +8373,7 @@ export class SpaceReplica
   #applySessionSync(
     sync: SessionSync,
     type: "pull" | "integrate",
-  ): void {
+  ): Promise<void> | undefined {
     // No read during a frame's integration — the differential checkout's
     // snapshot, the arrived-cfc hydration — starts a store read-through:
     // that would integrate a second frame from inside this one.
@@ -8284,6 +8383,13 @@ export class SpaceReplica
     } finally {
       this.#frameApplyDepth -= 1;
     }
+    // The frame's crossings name documents in other spaces: their loads
+    // are kicked once the frame's own documents are in, and handed back so
+    // a sync that wants what a read through them reaches can await them.
+    // A pushed frame's caller awaits nothing; the loads land on their own.
+    return sync.crossings === undefined || sync.crossings.length === 0
+      ? undefined
+      : this.#loadCrossings?.(sync.crossings);
   }
 
   /** Helper for `#applySessionSync()`, which carries the integration

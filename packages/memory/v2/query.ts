@@ -23,6 +23,7 @@ import {
   type IAttestation,
   MapSetStringToPathSelectors,
   type ObjectStorageManager,
+  parseCrossingDocKey,
   type SchemaMemo,
   type SchemaPathSelector,
   schemaTrackerCoversSelector,
@@ -49,6 +50,7 @@ import {
   type ScopeKey,
   type ScopeKeyIdentity,
   scopeOfScopeKey,
+  type SyncCrossing,
   toDocumentSelector,
 } from "../v2.ts";
 import * as Engine from "./engine.ts";
@@ -88,6 +90,22 @@ export type TrackedGraphState = {
   /** referrerKey → the miss keys it attributed (the reverse index the
    * re-walk clears by). */
   missesOf: Map<string, Set<string>>;
+
+  /** Value links the query's walks followed into ANOTHER space (see
+   * GraphQueryWalkOptions.onCrossing): keyed by `crossingDocKey`, each
+   * with the target-rooted selectors the reads needed there. Never
+   * loaded here — the walk reads one space — and never a miss: the
+   * session's frames carry them so the client loads each from its own
+   * space. */
+  crossings: MapSetStringToPathSelectors;
+
+  /** crossingKey → the REFERRER keys whose links crossed to it, as
+   * `missedBy` for misses: a crossing lives while a referrer attributes
+   * it, and a referrer re-walked without the link retires it. */
+  crossedBy: Map<string, Set<string>>;
+
+  /** referrerKey → the crossing keys it attributed, as `missesOf`. */
+  crossingsOf: Map<string, Set<string>>;
 
   /** The documents this graph delivered, at the version delivered. A
    * document joins only after the assembly delivering it verified its
@@ -923,6 +941,13 @@ export const cloneTrackedGraphState = (
   const missesOf = new Map(
     [...state.missesOf].map(([key, misses]) => [key, new Set(misses)] as const),
   );
+  const crossings = state.crossings.clone();
+  const crossedBy = new Map(
+    [...state.crossedBy].map(([key, refs]) => [key, new Set(refs)] as const),
+  );
+  const crossingsOf = new Map(
+    [...state.crossingsOf].map(([key, keys]) => [key, new Set(keys)] as const),
+  );
 
   const manager = new EngineObjectManager(
     engine,
@@ -938,6 +963,9 @@ export const cloneTrackedGraphState = (
     missed,
     missedBy,
     missesOf,
+    crossings,
+    crossedBy,
+    crossingsOf,
     entities: new Map(state.entities),
     memo: new Map(state.memo),
     manager,
@@ -962,6 +990,12 @@ export const stageTrackedGraphState = (
   const missed = state.missed.stage();
   const missedBy = new StagedMap(state.missedBy, (values) => new Set(values));
   const missesOf = new StagedMap(state.missesOf, (values) => new Set(values));
+  const crossings = state.crossings.stage();
+  const crossedBy = new StagedMap(state.crossedBy, (values) => new Set(values));
+  const crossingsOf = new StagedMap(
+    state.crossingsOf,
+    (values) => new Set(values),
+  );
   const entities = new StagedMap(state.entities);
   const memo = new StagedMap(state.memo);
   const manager = state.manager.stage(engine);
@@ -973,6 +1007,9 @@ export const stageTrackedGraphState = (
       missed: missed.value,
       missedBy,
       missesOf,
+      crossings: crossings.value,
+      crossedBy,
+      crossingsOf,
       entities,
       memo,
       manager: manager.value,
@@ -983,6 +1020,9 @@ export const stageTrackedGraphState = (
       missed.commit();
       missedBy.commit();
       missesOf.commit();
+      crossings.commit();
+      crossedBy.commit();
+      crossingsOf.commit();
       entities.commit();
       memo.commit();
       manager.commit();
@@ -1450,77 +1490,143 @@ const validateSelectorSchemaRefs = (
   });
 };
 
-/** The walk-side recorder over a graph state's miss structures: records
- * the miss's selector and its referrer attribution (see
- * GraphQueryWalkOptions.onMissedDoc for the contract). */
-const missRecorderFor = (
+/**
+ * Selectors recorded by key with the referrers that attributed each: the
+ * shape a graph state keeps its misses in (`missed`, `missedBy`,
+ * `missesOf`) and its crossings in (`crossings`, `crossedBy`,
+ * `crossingsOf`), so one recorder and one retirement serve both.
+ */
+type AttributedSelectors = {
+  keys: MapSetStringToPathSelectors;
+  by: Map<string, Set<string>>;
+  of: Map<string, Set<string>>;
+};
+
+/** A graph state's misses as {@link AttributedSelectors}. */
+const missesView = (
   state: Pick<TrackedGraphState, "missed" | "missedBy" | "missesOf">,
+): AttributedSelectors => ({
+  keys: state.missed,
+  by: state.missedBy,
+  of: state.missesOf,
+});
+
+/** A graph state's crossings as {@link AttributedSelectors}. */
+const crossingsView = (
+  state: Pick<TrackedGraphState, "crossings" | "crossedBy" | "crossingsOf">,
+): AttributedSelectors => ({
+  keys: state.crossings,
+  by: state.crossedBy,
+  of: state.crossingsOf,
+});
+
+/** The walk-side recorder over attributed selectors — a graph state's
+ * misses or its crossings: records the key's selector and its referrer
+ * attribution (see GraphQueryWalkOptions.onMissedDoc and onCrossing for
+ * the contracts). */
+const attributedRecorderFor = (
+  attributed: AttributedSelectors,
   changed?: Set<string>,
 ): (
-  missKey: string,
+  key: string,
   selector: SchemaPathSelector,
   referrerKey: string | undefined,
 ) => void =>
-(missKey, selector, referrerKey) => {
-  if (!state.missed.has(missKey)) changed?.add(missKey);
-  state.missed.add(missKey, selector);
+(key, selector, referrerKey) => {
+  if (!attributed.keys.has(key)) changed?.add(key);
+  attributed.keys.add(key, selector);
   if (referrerKey === undefined) return;
-  let refs = state.missedBy.get(missKey);
+  let refs = attributed.by.get(key);
   if (refs === undefined) {
     refs = new Set();
-    state.missedBy.set(missKey, refs);
+    attributed.by.set(key, refs);
   }
   refs.add(referrerKey);
-  let misses = state.missesOf.get(referrerKey);
-  if (misses === undefined) {
-    misses = new Set();
-    state.missesOf.set(referrerKey, misses);
+  let keys = attributed.of.get(referrerKey);
+  if (keys === undefined) {
+    keys = new Set();
+    attributed.of.set(referrerKey, keys);
   }
-  misses.add(missKey);
+  keys.add(key);
 };
 
-/** Retire one miss outright: the target arrived (or every referrer let
- * go) — drop its selectors and both attribution directions. */
-const retireMiss = (
-  state: Pick<TrackedGraphState, "missed" | "missedBy" | "missesOf">,
-  missKey: string,
+/** Retire one key outright — a miss whose target arrived, or one every
+ * referrer let go — dropping its selectors and both attribution
+ * directions. */
+const retireAttributed = (
+  attributed: AttributedSelectors,
+  key: string,
   changed?: Set<string>,
 ): void => {
-  if (state.missed.has(missKey)) changed?.add(missKey);
-  state.missed.delete(missKey);
-  const refs = state.missedBy.get(missKey);
+  if (attributed.keys.has(key)) changed?.add(key);
+  attributed.keys.delete(key);
+  const refs = attributed.by.get(key);
   if (refs !== undefined) {
     for (const referrerKey of refs) {
-      const misses = state.missesOf.get(referrerKey);
-      if (misses === undefined) continue;
-      misses.delete(missKey);
-      if (misses.size === 0) state.missesOf.delete(referrerKey);
+      const keys = attributed.of.get(referrerKey);
+      if (keys === undefined) continue;
+      keys.delete(key);
+      if (keys.size === 0) attributed.of.delete(referrerKey);
     }
-    state.missedBy.delete(missKey);
+    attributed.by.delete(key);
   }
 };
 
 /** A referrer is about to be re-walked: its previous attributions no
- * longer stand (the walk re-records the ones that still dead-end). A
- * miss whose last attribution goes retires with it. */
-const releaseReferrerMisses = (
-  state: Pick<TrackedGraphState, "missed" | "missedBy" | "missesOf">,
+ * longer stand (the walk re-records the ones that still dead-end or
+ * cross). A key whose last attribution goes retires with it. */
+const releaseReferrer = (
+  attributed: AttributedSelectors,
   referrerKey: string,
   changed?: Set<string>,
 ): void => {
-  const misses = state.missesOf.get(referrerKey);
-  if (misses === undefined) return;
-  state.missesOf.delete(referrerKey);
-  for (const missKey of misses) {
-    const refs = state.missedBy.get(missKey);
+  const keys = attributed.of.get(referrerKey);
+  if (keys === undefined) return;
+  attributed.of.delete(referrerKey);
+  for (const key of keys) {
+    const refs = attributed.by.get(key);
     if (refs === undefined) continue;
     refs.delete(referrerKey);
     if (refs.size === 0) {
-      changed?.add(missKey);
-      state.missedBy.delete(missKey);
-      state.missed.delete(missKey);
+      changed?.add(key);
+      attributed.by.delete(key);
+      attributed.keys.delete(key);
     }
   }
+};
+
+/**
+ * The crossings `state`'s walks recorded, in the wire form a session frame
+ * carries, each keyed by target and selector so a session delivers each
+ * once (`SessionState.deliveredCrossings`).
+ */
+export const syncCrossingsOf = (
+  state: Pick<TrackedGraphState, "crossings">,
+): Map<string, SyncCrossing> => {
+  const crossings = new Map<string, SyncCrossing>();
+  for (const [key, selectors] of state.crossings) {
+    const { space, scope, id } = parseCrossingDocKey(key);
+    for (const selector of selectors) {
+      // The selector is target-rooted at the document's value; the wire
+      // carries the path within it.
+      const path = selector.path.slice(1);
+      const schema = selector.schema === false || selector.schema === undefined
+        ? undefined
+        : selector.schema;
+      const wireKey = `${key}\0${JSON.stringify(path)}\0${
+        schema === undefined ? "" : internSchemaAsTaggedHashString(schema)
+      }`;
+      if (crossings.has(wireKey)) continue;
+      crossings.set(wireKey, {
+        space,
+        id,
+        ...(scope === DEFAULT_SCOPE ? {} : { scope }),
+        path,
+        ...(schema === undefined ? {} : { schema }),
+      });
+    }
+  }
+  return crossings;
 };
 
 export const trackGraph = (
@@ -1638,6 +1744,9 @@ export const trackGraph = (
     missed: new MapSetStringToPathSelectors(true),
     missedBy: new Map<string, Set<string>>(),
     missesOf: new Map<string, Set<string>>(),
+    crossings: new MapSetStringToPathSelectors(true),
+    crossedBy: new Map<string, Set<string>>(),
+    crossingsOf: new Map<string, Set<string>>(),
   };
   const sharedMemo = createSchemaMemo();
   const stats = createQueryTraversalStats();
@@ -1646,7 +1755,8 @@ export const trackGraph = (
     manager,
     space: space as MemorySpace,
     schemaTracker,
-    onMissedDoc: missRecorderFor(missState),
+    onMissedDoc: attributedRecorderFor(missesView(missState)),
+    onCrossing: attributedRecorderFor(crossingsView(missState)),
     identity: identityOf(manager),
     memo: sharedMemo,
     stats,
@@ -1772,7 +1882,8 @@ export const extendTrackedGraph = (
           },
           selector,
           state.tracker,
-          missRecorderFor(state),
+          attributedRecorderFor(missesView(state)),
+          attributedRecorderFor(crossingsView(state)),
           state.memo,
           stats,
         );
@@ -1995,13 +2106,16 @@ export const refreshTrackedGraph = (
     const readCountBefore = manager.readCount;
 
     const changedMisses = new Set<string>();
-    const recorder = missRecorderFor(state, changedMisses);
+    const recorder = attributedRecorderFor(missesView(state), changedMisses);
+    const crossingRecorder = attributedRecorderFor(crossingsView(state));
     for (const key of affectedDocs.keys()) {
       state.tracker.delete(key);
-      // The re-walk below re-records this referrer's still-live misses;
-      // attributions from its PREVIOUS walk no longer stand, so a link
-      // edited away retires its miss instead of leaving a stale wake.
-      releaseReferrerMisses(state, key, changedMisses);
+      // The re-walk below re-records this referrer's still-live misses and
+      // crossings; attributions from its PREVIOUS walk no longer stand, so
+      // a link edited away retires its miss, or its crossing, instead of
+      // leaving a stale wake.
+      releaseReferrer(missesView(state), key, changedMisses);
+      releaseReferrer(crossingsView(state), key);
     }
 
     for (const [key, selectors] of affectedDocs) {
@@ -2014,6 +2128,7 @@ export const refreshTrackedGraph = (
           selector,
           state.tracker,
           recorder,
+          crossingRecorder,
           sharedMemo,
           stats,
         );
@@ -2037,6 +2152,7 @@ export const refreshTrackedGraph = (
           selector,
           state.tracker,
           recorder,
+          crossingRecorder,
           sharedMemo,
           stats,
           stillAbsent,
@@ -2049,7 +2165,7 @@ export const refreshTrackedGraph = (
       // retiring the miss on that would lose the link-derived selector's
       // closure when the doc is finally born.
       if (!stillAbsent.has(key)) {
-        retireMiss(state, key, changedMisses);
+        retireAttributed(missesView(state), key, changedMisses);
       }
     }
 
@@ -2146,6 +2262,11 @@ const evaluateTrackedDocument = (
     selector: SchemaPathSelector,
     referrerKey: string | undefined,
   ) => void,
+  onCrossing: (
+    crossingKey: string,
+    selector: SchemaPathSelector,
+    referrerKey: string | undefined,
+  ) => void,
   sharedMemo: SchemaMemo,
   stats: QueryTraversalStats,
   // Where an ABSENT document's selector lands. A watch ROOT records in
@@ -2176,6 +2297,7 @@ const evaluateTrackedDocument = (
     space: space as MemorySpace,
     schemaTracker,
     onMissedDoc,
+    onCrossing,
     identity: identityOf(manager),
     memo: sharedMemo,
     stats,

@@ -104,6 +104,7 @@ import {
   type StreamEventEntry,
   type StreamEventsDocValue,
   type StreamLinkRef,
+  type SyncCrossing,
   type TransactRequest,
   type V2Error,
   type ViewInterest,
@@ -172,6 +173,7 @@ import {
   refreshTrackedGraph,
   type SlowestQueryRoot,
   stageTrackedGraphState,
+  syncCrossingsOf,
   toDirtyKey,
   type TrackedGraphState,
   trackGraph,
@@ -6665,6 +6667,17 @@ export class Server {
           undefined,
           keyed,
         );
+      // A replacement with no declared holdings tells the client every
+      // crossing again; any other frame tells it only the new ones.
+      const resetCrossings = !incremental && message.holdings === undefined;
+      const newCrossings = this.#undeliveredCrossings(
+        session,
+        [...graphs.values(), ...demandGraphs.values()],
+        resetCrossings,
+      );
+      if (newCrossings.crossings.length > 0) {
+        sync.crossings = newCrossings.crossings;
+      }
       await this.#attachOperationFields(
         message.space,
         message.sessionId,
@@ -6724,6 +6737,11 @@ export class Server {
       session.operationCursors = nextOperationCursors;
       session.graphs = graphs;
       session.entities = entities;
+      this.#markCrossingsDelivered(
+        session,
+        newCrossings.keys,
+        resetCrossings,
+      );
       session.trackedIds = addOperationWatchTrackedIds(
         trackedIdsFromEntries(entities.values()),
         message.watches,
@@ -7075,6 +7093,17 @@ export class Server {
         ),
         removes: [],
       };
+      // The crossings the added roots' walks found that this session has
+      // not been told of; a branch the additions left alone can hold none.
+      const touchedGraphs: TrackedGraphState[] = [];
+      for (const branch of groupedQueries(newWatches).keys()) {
+        const graph = graphs.get(branch);
+        if (graph !== undefined) touchedGraphs.push(graph);
+      }
+      const newCrossings = this.#undeliveredCrossings(session, touchedGraphs);
+      if (newCrossings.crossings.length > 0) {
+        sync.crossings = newCrossings.crossings;
+      }
       this.#attachOperationFieldsWithEngine(
         engine,
         session,
@@ -7102,6 +7131,7 @@ export class Server {
       // operation cursors, and wire conversion can all fail before this point.
       for (const commit of graphCommits) commit();
       graphs.commit();
+      this.#markCrossingsDelivered(session, newCrossings.keys);
       nextOperationCursors.commit();
       existingById.commit();
       for (const watch of addedWatches) nextWatches.push(watch);
@@ -7617,6 +7647,43 @@ export class Server {
    * are wake-reactivity only — they are never delivered, so they flow
    * into `trackedIds` beside the delivered entities at every site that
    * rebuilds or folds that set. */
+  /**
+   * The crossings `graphs` recorded that `session` has not been told of,
+   * in wire form with the keys to record them under once the frame that
+   * carries them is published (`#markCrossingsDelivered`). With `reset`,
+   * every crossing counts as untold: a full replacement of the watch set
+   * with no declared holdings tells the client everything again.
+   */
+  #undeliveredCrossings(
+    session: SessionState,
+    graphs: Iterable<TrackedGraphState>,
+    reset = false,
+  ): { keys: string[]; crossings: SyncCrossing[] } {
+    const keys: string[] = [];
+    const crossings: SyncCrossing[] = [];
+    const seen = new Set<string>();
+    for (const graph of graphs) {
+      for (const [key, crossing] of syncCrossingsOf(graph)) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (!reset && session.deliveredCrossings.has(key)) continue;
+        keys.push(key);
+        crossings.push(crossing);
+      }
+    }
+    return { keys, crossings };
+  }
+
+  /** Records that a published frame carried the crossings `keys` name. */
+  #markCrossingsDelivered(
+    session: SessionState,
+    keys: readonly string[],
+    reset = false,
+  ): void {
+    if (reset) session.deliveredCrossings.clear();
+    for (const key of keys) session.deliveredCrossings.add(key);
+  }
+
   #addMissedToTrackedIds(
     trackedIds: Set<string>,
     graphs: Iterable<TrackedGraphState>,
@@ -8090,7 +8157,13 @@ export class Server {
                 }
               };
               const toSeq = Engine.serverSeq(engine);
-              if (upserts.length === 0) {
+              // A re-walk that followed a link out of the space for the
+              // first time has a crossing to tell of, upserts or none.
+              const newCrossings = this.#undeliveredCrossings(
+                session,
+                session.graphs.values(),
+              );
+              if (upserts.length === 0 && newCrossings.crossings.length === 0) {
                 // The watched set was re-evaluated current as of toSeq even though it
                 // produced no net upserts; advance the watermark so a later default
                 // fromSeq is not stale. emptyCatchUp receives the original fromSeq
@@ -8129,6 +8202,9 @@ export class Server {
                     toWireUpsert(entry, keyed)
                   ),
                   removes: [],
+                  ...(newCrossings.crossings.length === 0
+                    ? {}
+                    : { crossings: newCrossings.crossings }),
                 });
                 // An unkeyed wire frame strips instance keys; retain the
                 // frame's true instance-keyed entries so a delivery failure
@@ -8147,6 +8223,7 @@ export class Server {
                 );
               }
               commitEntities();
+              this.#markCrossingsDelivered(session, newCrossings.keys);
               session.lastSyncedSeq = toSeq;
               return message;
             } finally {
@@ -8195,6 +8272,13 @@ export class Server {
             delivered,
             keyed,
           );
+          const newCrossings = this.#undeliveredCrossings(
+            session,
+            [...graphs.values(), ...demandGraphs.values()],
+          );
+          if (newCrossings.crossings.length > 0) {
+            sync.crossings = newCrossings.crossings;
+          }
           // As above: commit the re-evaluated watch state only once the
           // frame is built, so a throw leaves the diff recomputable. The
           // empty-sync branch commits first — its frame carries no doc
@@ -8271,6 +8355,7 @@ export class Server {
             session.viewDemandEntities = demandEntities;
             session.graphs = graphs;
             session.entities = entities;
+            this.#markCrossingsDelivered(session, newCrossings.keys);
             session.trackedIds = evaluatedTrackedIds;
             this.#touchDemand(session);
             session.lastSyncedSeq = serverSeq;

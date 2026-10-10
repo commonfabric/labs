@@ -65,6 +65,11 @@ export type SessionState = {
   operationCursors: Map<string, OpCursor>;
   graphs: Map<string, TrackedGraphState>;
   entities: Map<string, SessionCacheEntry>;
+
+  /** The crossings this session's frames have carried, by crossing key,
+   * so a frame carries each once; a full replacement of the watch set
+   * with no declared holdings starts the record over. */
+  deliveredCrossings: Set<string>;
   trackedIds: Set<string>;
   caughtUpLocalSeq: number;
   pendingCaughtUpLocalSeq: number;
@@ -211,6 +216,7 @@ export class SessionRegistry {
       operationCursors: existing?.operationCursors ?? new Map(),
       graphs: existing?.graphs ?? new Map(),
       entities: existing?.entities ?? new Map(),
+      deliveredCrossings: existing?.deliveredCrossings ?? new Set(),
       trackedIds: existing?.trackedIds ??
         trackedIdsFromEntries(existing?.entities?.values() ?? []),
       caughtUpLocalSeq: existing?.caughtUpLocalSeq ?? 0,

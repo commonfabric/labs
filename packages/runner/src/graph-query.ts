@@ -16,7 +16,11 @@
 import type { FabricValue } from "@commonfabric/data-model";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import type { ScopeKey, ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import type {
+  CellScope,
+  ScopeKey,
+  ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema } from "./builder/types.ts";
@@ -78,6 +82,26 @@ export const createGraphQueryWalkStats = (): GraphQueryWalkStats => ({
   schemaMemoHits: 0,
 });
 
+/**
+ * The key a walk records a crossing under: the target document by space,
+ * scope NAME, and id. The scope stays a name rather than resolving to an
+ * instance, since the client that loads the target resolves it under its
+ * own identity. None of the three parts holds a NUL, which separates them.
+ */
+export const crossingDocKey = (
+  space: MemorySpace,
+  id: string,
+  scope: CellScope | undefined,
+): string => `${space}\0${scope ?? "space"}\0${id}`;
+
+/** The parts of a {@link crossingDocKey}. */
+export const parseCrossingDocKey = (
+  key: string,
+): { space: MemorySpace; scope: CellScope; id: string } => {
+  const [space, scope, id] = key.split("\0");
+  return { space: space as MemorySpace, scope: scope as CellScope, id };
+};
+
 export type GraphQueryWalkOptions = {
   /** Supplies documents by address. */
   manager: ObjectStorageManager;
@@ -129,6 +153,21 @@ export type GraphQueryWalkOptions = {
     referrerKey: string | undefined,
   ) => void;
 
+  /**
+   * Receives one call per value link the walk followed into ANOTHER space:
+   * the target's crossing key (`crossingDocKey`), the target-rooted
+   * selector the read needed there, and the key of the referrer document
+   * whose link crossed. The walk reads one space, so the target is never
+   * loaded here; a client told of the crossing loads it from the target
+   * space under that selector. Attributed to the referrer the way a miss
+   * is, so a referrer re-walked without the link retires it.
+   */
+  onCrossing?: (
+    crossingKey: string,
+    selector: SchemaPathSelector,
+    referrerKey: string | undefined,
+  ) => void;
+
   /** Schema-traversal results reused across walks that share it. */
   memo?: SchemaMemo;
 
@@ -164,35 +203,46 @@ export class GraphQueryWalk {
     this.#manager = options.manager;
     this.#space = options.space;
     this.#identity = options.identity;
-    const { space, identity, onMissedDoc } = options;
+    const { space, identity, onMissedDoc, onCrossing } = options;
     this.#context = createTraversalContext(
       new CompoundCycleTracker<FabricValue, JSONSchema | undefined>(),
       options.schemaTracker,
       identity,
       true,
-      // Record a value-link dead-end with the caller (see `onMissedDoc`
-      // above for the contract and why it is not the schema tracker).
-      // Same-space only: a foreign-space target can never ride this
-      // space's per-space watch, and the client's own cross-space load
-      // kick owns that case. The recorded selector is the target-rooted
-      // shape the read needed, so the arrival re-walk delivers the
-      // closure this read would have reached.
-      onMissedDoc === undefined ? undefined : (link, _sourceSpace, source) => {
-        if (link.space !== space) return;
-        const referrerKey = source === undefined
-          ? undefined
-          : schemaTrackerKey(space, source.id, source.scope, identity);
-        onMissedDoc(
-          schemaTrackerKey(space, link.id, link.scope, identity),
-          internPathSelector({
+      // Record a value-link dead-end with the caller: a same-space target
+      // as a miss (see `onMissedDoc` above for the contract and why it is
+      // not the schema tracker), a target in another space as a crossing
+      // (`onCrossing`), which this space's per-space watch can never
+      // deliver. The recorded selector is the target-rooted shape the
+      // read needed, so a miss's arrival re-walk and a crossing's load
+      // each deliver the closure this read would have reached.
+      onMissedDoc === undefined && onCrossing === undefined
+        ? undefined
+        : (link, _sourceSpace, source) => {
+          const sourceKey = source === undefined
+            ? undefined
+            : schemaTrackerKey(space, source.id, source.scope, identity);
+          const referrerKey = sourceKey === undefined
+            ? undefined
+            : this.#keyOverrides.get(sourceKey) ?? sourceKey;
+          const selector = internPathSelector({
             path: ["value", ...link.path],
             schema: link.schema ?? false,
-          }),
-          referrerKey === undefined
-            ? undefined
-            : this.#keyOverrides.get(referrerKey) ?? referrerKey,
-        );
-      },
+          });
+          if (link.space !== space) {
+            onCrossing?.(
+              crossingDocKey(link.space, link.id, link.scope),
+              selector,
+              referrerKey,
+            );
+            return;
+          }
+          onMissedDoc?.(
+            schemaTrackerKey(space, link.id, link.scope, identity),
+            selector,
+            referrerKey,
+          );
+        },
     );
     this.#memo = options.memo ?? createSchemaMemo();
     this.stats = options.stats ?? createGraphQueryWalkStats();

@@ -1,6 +1,7 @@
 import type {
   FabricPlainObject,
   FabricValue,
+  JSONSchema,
   SchemaPathSelector,
 } from "@commonfabric/api";
 import { hashStringOf } from "@commonfabric/data-model";
@@ -1181,6 +1182,18 @@ export type MemoryProtocolFlags = {
   /** Hash-keyed per-frame schema table. */
   syncSchemaTableV2: boolean;
 
+  /**
+   * Server capability: a session sync payload carries the links the
+   * server's walk followed out of the space (`SessionSync.crossings`),
+   * each with the target-rooted path and schema the read needed, so the
+   * client loads them from the target space without reading a document
+   * to find them. Absent (an older server) parses to false: the client
+   * then reads each document it synced to find the links itself.
+   * Inherent to the build, so a server of this version always advertises
+   * it.
+   */
+  syncCrossingsV1: boolean;
+
   /** The peer can exchange versioned binary gzip message envelopes. */
   messageCompressionV1: boolean;
 
@@ -1335,6 +1348,7 @@ export type WireMemoryProtocolFlags = {
   applyOp?: boolean;
   operationCodecs?: readonly string[];
   syncSchemaTableV2?: boolean;
+  syncCrossingsV1?: boolean;
   messageCompressionV1?: boolean;
   sqliteCommitRowLabelEval?: boolean;
   sqliteQueryReader?: boolean;
@@ -1630,6 +1644,21 @@ export type SessionSyncRemove = {
   scopeKey?: ScopeKey;
 };
 
+/**
+ * A link the server's walk followed out of the space and stopped at: the
+ * document it names in another space, and the target-rooted path and
+ * schema the read needed there, so a client loads from the target space
+ * exactly what the walk would have reached. `path` is the path within the
+ * document's value, and an absent `schema` is a read of the document alone.
+ */
+export type SyncCrossing = {
+  space: string;
+  id: EntityId;
+  scope?: CellScope;
+  path: string[];
+  schema?: JSONSchema;
+};
+
 export type SessionSync = {
   type: "sync";
   fromSeq: number;
@@ -1637,6 +1666,14 @@ export type SessionSync = {
   caughtUpLocalSeq?: number;
   upserts: SessionSyncUpsert[];
   removes: SessionSyncRemove[];
+
+  /**
+   * The links out of the space that the walks behind this frame's watches
+   * followed and this session has not been told of before. A full
+   * replacement of the watch set with no declared holdings tells them all
+   * again. Only on frames from a server advertising `syncCrossingsV1`.
+   */
+  crossings?: SyncCrossing[];
   operationFields?: OperationFieldDelivery[];
 
   /** Complete view eligibility, applied atomically after this frame's documents. */
@@ -2549,6 +2586,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   sessionReportV1: true,
   routedAuthV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
+  // Build-inherent: this build's query walk reports the links it follows
+  // out of a space, and its session frames carry them.
+  syncCrossingsV1: true,
 });
 
 /**
@@ -2748,6 +2788,11 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const syncCrossingsV1 = value.syncCrossingsV1;
+  if (syncCrossingsV1 !== undefined && typeof syncCrossingsV1 !== "boolean") {
+    return null;
+  }
+
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
@@ -2798,6 +2843,9 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client then sends no
     // `session.report`.
     sessionReportV1: sessionReportV1 === true,
+    // Absent (an older server) parses to false: a client then finds the
+    // links out of a space by reading what it synced.
+    syncCrossingsV1: syncCrossingsV1 === true,
     routedAuthV1: value.routedAuthV1 === true,
   };
 };
@@ -2838,6 +2886,7 @@ export const wireMemoryProtocolFlags = (
   admissionNotice: flags.admissionNotice,
   sessionReportV1: flags.sessionReportV1,
   routedAuthV1: flags.routedAuthV1,
+  syncCrossingsV1: flags.syncCrossingsV1,
 });
 
 /**

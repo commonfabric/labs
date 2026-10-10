@@ -782,7 +782,7 @@ describe("resume node plan pre-sync", () => {
     expect(commitConflictCount()).toBe(before);
   });
 
-  it("reads again only the plans whose reads left a load pending", async () => {
+  it("finds a plan's far document local from the server's crossing, reading no plan", async () => {
     const txP = rt1.edit();
     const leafDoc = rt1.getCell<{ name?: string }>(
       spaceP,
@@ -814,14 +814,15 @@ describe("resume node plan pre-sync", () => {
       { def: top },
       "one crossing parent",
     );
-    // The first round reads every plan; the one plan whose read dead-ended
-    // on the far document is read once more after that load lands, and
-    // the three whose reads completed are not.
+    // The frame that answered the plan's sync named the link into the other
+    // space, and the sync loaded the far document from there before it
+    // resolved: the pass had no plan left to read.
     const stats = getTimingStatsBreakdown() as Record<
       string,
       Record<string, { count: number }>
     >;
-    expect(stats.runner?.["start/resumeCrossSpaceRead"]?.count).toBe(5);
+    expect(stats.runner?.["start/resumeCrossSpaceRead"]?.count ?? 0).toBe(0);
+    expect(localOnB(leafDoc, spaceP)).toBe(true);
     await rt2.idle();
     expect(resumed.key("label").get()).toBe("n:Ada");
     expect(resumed.key("a").get()).toBe("a:1");

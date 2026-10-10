@@ -8945,6 +8945,10 @@ export class Runner {
     let remaining: PlanRead[] = [];
     for (const plan of plans) {
       if (plan.kind === "pattern") continue;
+      // A plan in a space whose server reports the links its walk followed
+      // out of the space had those loaded by the sync that named it; there
+      // is nothing left for a read to find.
+      if (manager.followsCrossings?.(plan.inputsCell.space) === true) continue;
       const schema = this.#planReadSchema(plan);
       if (schema !== undefined) remaining.push({ plan, schema });
     }

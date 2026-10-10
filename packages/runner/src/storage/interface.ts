@@ -754,6 +754,17 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     address: { space: MemorySpace; id: URI; scope?: CellScope },
     identity: ScopeKeyIdentity,
   ): Promise<void>;
+
+  /**
+   * Whether a sync of a document in `space` also loads what the server's
+   * walk reached through links into other spaces: the server reports those
+   * links with the frame (`SessionSync.crossings`), and the sync resolves
+   * once their loads have landed. A caller that would otherwise read each
+   * synced document to find such links has nothing to find. Optional:
+   * managers without lazy remote replication, and sessions on servers
+   * that do not report crossings, answer false or nothing.
+   */
+  followsCrossings?(space: MemorySpace): boolean;
 }
 
 export interface IRemoteStorageProviderSettings {
@@ -3191,6 +3202,10 @@ export interface ISpaceReplica extends ISpace {
 
   /** Whether the current connection retains the negotiated view protocol. */
   viewReplicationSupported?(): boolean;
+
+  /** Whether the server this replica's session is on reports the links
+   * its walks follow out of the space (`syncCrossingsV1`). */
+  crossingsReported?(): boolean;
 
   /** Waits for session restoration before issuing fallback subscriptions. */
   whenSessionRestored?(): Promise<void>;

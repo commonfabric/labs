@@ -89,7 +89,8 @@ If the server accepts the protocol, it returns:
     "presenceV1": true,
     "sessionClose": true,
     "admissionNotice": true,
-    "sessionReportV1": true
+    "sessionReportV1": true,
+    "syncCrossingsV1": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -234,6 +235,13 @@ in [Session Sync Payload](#423-session-sync-payload). It defaults to `false`
 when absent. The server sends compact sync payloads only when both peers
 advertise the capability; otherwise it sends the historical fully expanded
 shape.
+
+`syncCrossingsV1` is a server capability: its session sync payloads carry
+`crossings`, the links its schema traversals followed out of the space, as
+described in [Session Sync Payload](#423-session-sync-payload). It defaults to
+`false` when absent. A client of a server that does not advertise it finds
+those links by reading the documents it synced, and sends nothing on account
+of the flag.
 
 `entityIdListing` advertises support for `entity-id.list`. It defaults to
 `false` when absent. A client must not send the request unless the server
@@ -528,6 +536,7 @@ interface HelloMessage {
     stableExpressionResultIds?: boolean;
     messageCompressionV1?: boolean;
     syncSchemaTableV2?: boolean;
+    syncCrossingsV1?: boolean;
     entityIdListing?: boolean;
     entityIdPagination?: boolean;
     entityIdLookup?: boolean;
@@ -765,6 +774,15 @@ interface SessionSync {
     branch: BranchId;
     id: EntityId;
   }>;
+  // Links the walks behind this frame's watches followed out of the space
+  // (servers advertising `syncCrossingsV1`; see below).
+  crossings?: Array<{
+    space: SpaceId;
+    id: EntityId;
+    scope?: CellScope;
+    path: string[];
+    schema?: JSONSchema;
+  }>;
 }
 ```
 
@@ -775,6 +793,20 @@ Semantics:
 - `deleted: true` means the entity is currently tombstoned
 - `removes` are not deletions in storage; they mean the entity is no longer in
   the session's relevant watch-set result
+- `crossings` are the value links a watch's schema traversal followed into
+  another space. The server walks one space, so it stops at such a link and
+  reports it instead: the target document by space, scope name, and id, and
+  the path within the document's value and the schema the read needed there,
+  which is what a walk rooted at the target would deliver. A client loads
+  each from the target space under that selector, so the documents a read
+  through the link reaches are local before anything reads them. A session
+  is told of each crossing once, on the first frame whose watches reach it,
+  and of all of them again on a `session.watch.set` that declares no
+  `holdings`. A crossing is a hint about what to load, never a holding: a
+  frame carrying only crossings is not empty, and a client that cannot load
+  a crossing's target, for want of access say, carries on without it. Only
+  servers advertising `syncCrossingsV1` send the field; a client of an
+  older server finds the links by reading what it synced.
 
 #### Negotiated schema-table encoding
 
