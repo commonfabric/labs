@@ -111,8 +111,9 @@ const childSchemas = (
   const children: unknown[] = [];
   const properties = schema.properties;
   if (isObjectOrArray(properties)) {
-    if (segment === "*") children.push(...Object.values(properties));
-    else if (Object.hasOwn(properties, segment)) {
+    if (segment === "*") {
+      for (const child of Object.values(properties)) children.push(child);
+    } else if (Object.hasOwn(properties, segment)) {
       children.push(properties[segment]);
     }
   }
@@ -122,12 +123,13 @@ const childSchemas = (
   const prefixItems = schema.prefixItems;
   if (Array.isArray(prefixItems)) {
     const index = Number(segment);
-    if (segment === "*") children.push(...prefixItems);
-    else if (Number.isInteger(index)) children.push(prefixItems[index]);
+    if (segment === "*") {
+      for (const child of prefixItems) children.push(child);
+    } else if (Number.isInteger(index)) children.push(prefixItems[index]);
   }
   const patternProperties = schema.patternProperties;
   if (isObjectOrArray(patternProperties)) {
-    children.push(...Object.values(patternProperties));
+    for (const child of Object.values(patternProperties)) children.push(child);
   }
   return children;
 };
