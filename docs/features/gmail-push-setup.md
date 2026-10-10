@@ -237,14 +237,21 @@ The watch is set once for the mailbox, whichever deployment or syncer sets
 it, since it names the topic and not a receiver. Renewing it from more than
 one place is harmless.
 
-Only the push path has to face the internet. Mint is called by the syncer
-on the user's machine, with the user's own signing key, so it needs only
-the reach the syncer already has to its toolshed, a private network
-included. Where a deployment sits behind something that admits
-public traffic by path, the rule to open is `/api/spaces/*/ingest-push/*`
-and nothing wider: the push route refuses everything without a token Google
-signed, and the control plane and data plane gain nothing from being
-reachable from outside.
+Of what Gmail push uses, only the push path has to face the internet. Mint
+is called by the syncer on the user's machine, with the user's own signing
+key, so it needs only the reach the syncer already has to its toolshed, a
+private network included. Where a deployment sits behind something that
+admits public traffic by path, Gmail push needs `/api/spaces/*/ingest-push/*`
+open and nothing wider: the push route refuses everything without a token
+Google signed, and the control plane gains nothing from being reachable from
+outside.
+
+That says nothing about the data plane, which Gmail push does not use. The
+data plane is `POST /api/spaces/:space/ingest/:id` and its older spelling
+`POST /api/ingest/:id`, where a device channel's holder posts records with
+the channel's bearer token; the location beacon posts there from a phone.
+Whether that path has to stay open is decided by where those phones post
+from, and a rule narrowed for Gmail push must leave it as it was.
 
 ## The OAuth client and a Gmail token
 
