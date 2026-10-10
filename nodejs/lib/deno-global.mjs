@@ -233,7 +233,7 @@ async function writeResponse(res, response) {
   }
   const cookies = response.headers.getSetCookie?.() ?? [];
   if (cookies.length > 0) headers["set-cookie"] = cookies;
-  res.writeHead(response.status, response.statusText, headers);
+  res.writeHead(response.status, response.statusText || undefined, headers);
   if (response.body) {
     for await (const chunk of response.body) res.write(chunk);
   }
