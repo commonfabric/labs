@@ -703,13 +703,6 @@ Diagnostics emitted in all modes:
     itself: a local holding the input (`const i = input; i[SELF]`) is not
     followed back to it, and the message says so rather than calling the read
     `undefined`
-  - in pattern context, a well-known key other than `SELF` (`NAME`, `UI`,
-    `FS`) read through `input[SELF]` on the input parameter, as in
-    `input[SELF][NAME]`: the data-flow analyzer
-    counts only `SELF` among those keys as static, so the read is lifted and
-    is `undefined` against the plain value the lift sees. The message suggests
-    `const me = input[SELF]` and reading the key off `me`, which lowers in
-    place
   - `SELF` names the pattern's own result only on the reactive proxy a
     `pattern(...)` body receives as its input. A compute callback sees plain
     values, a reactive collection callback sees a captured reference to the
@@ -1764,12 +1757,66 @@ Primary behaviors:
 - recursively rewrites lift-applied callback bodies so locally-declared
   opaque/reactive aliases created inside compute callbacks (including inside
   nested blocks) also receive `.key(...)` lowering
+- in such a body, a well-known key read off a callback parameter is rewritten
+  to its helper-backed form, `row[NAME]` to `row[__cfHelpers.NAME]`. The
+  rebuilt callback's nodes are given parent pointers, which capability
+  analysis reads to tell the root of a member access from a read of the whole
+  value, so the read is recorded as the path `$NAME` under the capture and the
+  lift's input schema declares that key alone: `row[NAME] + "!"` lifts over
+  `{ row: { $NAME } }`, not over all of `row` (golden
+  `closures/pattern-body-well-known-key-computation`,
+  `test/static-key-reads.test.ts`)
 - local opaque-root discovery is symbol-scoped and block-aware to avoid
   same-name false rewrites across scopes
+- reads an element access with a static key in place, wherever it is
+  written: `row[key]` on a tracked reactive root lowers to `row.key(...)` in
+  the pattern body, in JSX, and in a reactive collection callback alike. One
+  rule decides which keys are static, in `src/utils/reactive-keys.ts`, and
+  the data-flow analyzer, the shared expression-site policy, the opaque-root
+  path walk, the pattern-body lowering, and the collection-method receiver
+  lowering all ask it. A key's type fixes the member it names
+  (`hasStaticKeyType()`) when it is a literal; a well-known Common Fabric
+  key, the set `COMMON_FABRIC_KEY_NAMES` in
+  `packages/schema-generator/src/typescript/property-name.ts` defines (as of
+  this writing `NAME`, `UI`, `SELF`, `FS`, `VIEWS`); or an expression whose
+  type is a single string or number literal, such as a reference to
+  `const KEY = "k"`. What is emitted follows the kind of key
+  (`getStaticKeySegment()`): a literal as its string, a numeric one under its
+  decimal name (`groups[1e2]` -> `.key("groups", "100")`); a well-known key as
+  its `__cfHelpers` member (`row[NAME]` -> `row.key(__cfHelpers.NAME)`,
+  `row[VIEWS].row.rendered` ->
+  `row.key(__cfHelpers.VIEWS, "row", "rendered")`); and any other static key
+  as written, so `row[KEY]` -> `row.key(KEY)` and `row[getKey()]` ->
+  `row.key(getKey())`, the key evaluated where the read is. A destructured
+  well-known key is keyed by its string instead:
+  `const { [NAME]: n, [VIEWS]: v } = Row(...)` reads `.key("$NAME")` and
+  `.key("$VIEWS")`. A key read from a reactive value is the exception: its
+  type may name one member, but the key is a cell, and written out it would
+  hand `.key()` the cell in place of the key. So a key is static
+  (`isStaticElementKey()`) when its type fixes the member and it is not read
+  from a reactive value. The stages that write a key out, through
+  `getStaticKeySegment()`, and the pattern-body lowering ask that. The
+  data-flow analyzer asks the type question and rules a reactive key out from
+  its own analysis, and the expression-site policy asks the type question
+  alone, since it decides whether the access may become a computation, which
+  such an access may. `row[field]`, with `field` a pattern input typed
+  `"rendered"`, is a computation over `row` and `field`:
+  it lifts where the site can hold a computation (a pattern-body value, JSX,
+  the receiver of a collection method in JSX), and is reported as the
+  dynamic key access of §6.5 where it cannot (the receiver of a collection
+  method in a plain value, `lists[field].map(...)`, and a plain value in a
+  reactive collection callback) (goldens
+  `closures/pattern-body-factory-result-key-access`,
+  `closures/map-pattern-factory-result-key-access`,
+  `closures/map-pattern-factory-result-views-access`,
+  `closures/pattern-factory-result-key-destructure`,
+  `closures/pattern-body-literal-typed-key-access`;
+  `test/static-key-reads.test.ts`). Which path a read contributes to a
+  schema is decided separately, by the stricter rule §10.7 gives for
+  capability analysis
 - reads `input[SELF]` in place, as the destructured `[SELF]: self` binding is
-  read: the data-flow analyzer counts a `SELF` element key as static on any
-  receiver (`isSelfElementAccess` in `src/ast/dataflow.ts`), so the access is
-  not lifted. Outside a standalone function definition, validation has
+  read: `SELF` is a static key on any receiver, as the item above describes,
+  so the access is not lifted. Outside a standalone function definition, validation has
   already rejected every receiver but the pattern's input parameter (§6.5). A
   `pattern(...)` callback held in a `const` is read as a standalone
   definition, so there an `x[SELF]` on another receiver is not reported, and
@@ -1790,10 +1837,12 @@ Primary behaviors:
   receiver-method call over it, such as `input[SELF].title.toUpperCase()`,
   lifts with the authored `input[SELF].title` as its capture, read off the
   reactive input when the lift is applied (golden
-  `closures/pattern-input-self-index`). Other well-known keys (`UI`, `NAME`,
-  `FS`) keep their dynamic-access analysis, so `input[SELF][NAME]` would lift
-  and read `undefined`; §6.5 reports it instead, and a local bound to
-  `input[SELF]`, or a destructured `[SELF]: self`, reads `[NAME]` in place
+  `closures/pattern-input-self-index`). A well-known key read through it is
+  keyed off the self reference like any other segment: `input[SELF][NAME]`
+  becomes `input[__cfHelpers.SELF].key(__cfHelpers.NAME)`, the read a local
+  bound to `input[SELF]` makes as `me[NAME]`
+  (`test/pattern-input-self.test.ts`,
+  `packages/patterns/test/input-self/main.test.tsx`)
 - extracts static destructuring defaults into capability summaries for schema
   default application
 - registers capability summaries for transformed callbacks/builders for
