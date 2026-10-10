@@ -293,6 +293,42 @@ describe("Client authentication recovery", () => {
     }
   });
 
+  it("rejects an open canceled while resolving its principal", async () => {
+    using time = new FakeTime(Date.UTC(2026, 9, 10));
+    const peer = directPeer();
+    const client = await connect({ transport: peer.transport });
+    try {
+      await client.mount(did, {}, signer);
+      await advance(time, 2000);
+      const abort = new AbortController();
+      const reason = new Error("Principal lookup canceled the open");
+      const cancelingSigner: SessionPrincipal = {
+        ...signer,
+        get did() {
+          abort.abort(reason);
+          return did;
+        },
+      };
+      // Principal access can run caller code after the open's initial
+      // cancellation check, but before it subscribes to the renewal.
+      await expect(
+        client.openSession("space:A", {}, cancelingSigner, undefined, {
+          signal: abort.signal,
+        }),
+      ).rejects.toBe(reason);
+      expect(peer.auths).toHaveLength(2);
+      expect(peer.counts().opens).toBe(1);
+      const surviving = observe(client.mount("space:B", {}, signer));
+      await time.runMicrotasks();
+      peer.accept(1);
+      await surviving.result;
+      expect(surviving.state()).toBe("resolved");
+      expect(peer.counts().opens).toBe(2);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("ends a held mount and its backoff when the client closes", async () => {
     using time = new FakeTime(Date.UTC(2026, 9, 10));
     const peer = directPeer();
