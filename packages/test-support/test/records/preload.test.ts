@@ -160,12 +160,16 @@ async function runFixture(
       [RECORDS_DIR_VARIABLE]: fixture.spool,
       [SKIP_LIST_VARIABLE]: skipList ?? "",
       // The fixture's own `deno.json` is the configuration the child
-      // compiles the repository's preload under, so a coverage profile it
-      // writes names an emit the repository's configuration cannot find.
-      // A child inherits the directory a run under `--coverage` collects
-      // into; given one inside the fixture instead, its profiles leave
-      // with the fixture rather than failing the run's report.
-      DENO_COVERAGE_DIR: join(fixture.dir, "coverage"),
+      // compiles the repository's preload under, so the emitted file a
+      // coverage profile of it names is one the repository's configuration
+      // cannot find. A child inherits the directory a run under
+      // `--coverage` collects into; given one inside the fixture instead,
+      // its profiles leave with the fixture rather than failing the run's
+      // report. A run collecting nothing hands the child nothing, since
+      // the variable alone turns collection on.
+      ...(Deno.env.get("DENO_COVERAGE_DIR") === undefined
+        ? {}
+        : { DENO_COVERAGE_DIR: join(fixture.dir, "coverage") }),
     },
     stdout: "piped",
     stderr: "piped",
