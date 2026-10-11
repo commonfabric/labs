@@ -22,8 +22,7 @@ const CONTENT_WIDTH = 504;
 
 const TITLE_SIZE = 22;
 const MIN_TITLE_SIZE = 12;
-const TITLE_GAP = 18;
-// The page's top edge less the margin, the title and its gap.
+// The page's top edge less the margin, the title and an 18pt gap below it.
 const BODY_TOP = 698;
 const LIST_SIZE = 11;
 const LIST_LEADING = 16;
