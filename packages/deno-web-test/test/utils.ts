@@ -214,11 +214,22 @@ export const runDenoWebTest = async (
   manifest.tasks.test =
     `deno run --allow-env --allow-read --allow-write --allow-run --allow-net ${CLI_PATH} *.test.ts`;
   // The copy sits outside the workspace, so the module a project's tests
-  // import from this package is mapped to it explicitly.
+  // import from this package is mapped to it explicitly — to a copy of its
+  // own. Compiled under the project's configuration, the package's own file
+  // would replace the transpiled form its coverage is reported from, and the
+  // driver runs `commands-protocol.ts` too.
+  const pageModules = path.join(tmpProjectPath, "deno-web-test-commands");
+  await Deno.mkdir(pageModules);
+  for (const name of ["commands.ts", "commands-protocol.ts"]) {
+    await Deno.copyFile(
+      path.join(dirname, "..", name),
+      path.join(pageModules, name),
+    );
+  }
   const imports = {
     ...declared,
     "@commonfabric/deno-web-test/commands":
-      path.toFileUrl(path.join(dirname, "..", "commands.ts")).href,
+      path.toFileUrl(path.join(pageModules, "commands.ts")).href,
   };
   await Deno.writeTextFile(
     manifestPath,

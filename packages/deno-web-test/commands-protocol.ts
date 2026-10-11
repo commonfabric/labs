@@ -5,8 +5,6 @@
  * page side imports this module, so it holds nothing the page does not need.
  */
 
-import type { Keyboard } from "@astral/astral";
-
 /**
  * Name of the page global through which a test sends a command to the driver.
  * It is a CDP binding: calling it raises `Runtime.bindingCalled` in the driver.
@@ -19,13 +17,10 @@ export const DRIVER_BINDING = "__denoWebTestDriver";
  */
 export const SETTLE_GLOBAL = "__denoWebTestSettle";
 
-/** A key that astral's keyboard can press. */
-type AstralKey = Parameters<Keyboard["press"]>[0];
-
 /**
- * The keys a test may press. Each is a name astral's keyboard knows, which is
- * what lets the driver hand a name the page sent to astral without asserting
- * its type. A key missing here is added here.
+ * The keys a test may press. Each is a name astral's keyboard knows: the
+ * driver hands them to it, so a name it does not know fails the type check
+ * there. A key missing here is added here.
  */
 export const PRESSABLE_KEYS = [
   "Tab",
@@ -40,7 +35,7 @@ export const PRESSABLE_KEYS = [
   "End",
   "PageUp",
   "PageDown",
-] as const satisfies readonly AstralKey[];
+] as const;
 
 /** A key a test may press. */
 export type PressableKey = typeof PRESSABLE_KEYS[number];
@@ -51,7 +46,7 @@ export const MODIFIER_KEYS = [
   "Alt",
   "Control",
   "Meta",
-] as const satisfies readonly AstralKey[];
+] as const;
 
 /** A key a test may hold down while it presses another. */
 export type ModifierKey = typeof MODIFIER_KEYS[number];
