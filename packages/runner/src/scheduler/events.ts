@@ -1360,9 +1360,11 @@ export async function processPullQueuedEventDuringExecute(
         state.getOriginLocalSeq(queuedEvent.originTx, queuedEvent.eventLink.space) !== undefined
       }`;
     const line = `origin=${origin} handlerLoad=${queuedEvent.handlerLoadPending === true} readiness=${queuedEvent.retryReadinessPending === true} loadParked=${state.isHeadEventLoadParked(queuedEvent)} notBefore=${queuedEvent.notBefore !== undefined} q=${state.eventQueue.length}`;
-    if (diag.__diagLast !== line) {
+    const counted = queuedEvent as unknown as { __diagN?: number };
+    counted.__diagN = (counted.__diagN ?? 0) + 1;
+    if (diag.__diagLast !== line || counted.__diagN <= 60) {
       diag.__diagLast = line;
-      console.warn(`[diag-head] ${queuedEvent.id} ${line}`);
+      console.warn(`[diag-head] #${counted.__diagN} ${queuedEvent.id} ${line}`);
     }
   }
 
@@ -1454,6 +1456,7 @@ export async function processPullQueuedEventDuringExecute(
       dropEvent: (event, reason) => state.dropEvent(event, reason),
     }, queuedEvent);
     shouldSkipEvent = preflight.shouldSkipEvent;
+    console.warn(`[diag-preflight] ${queuedEvent.id} skip=${shouldSkipEvent} invalid=${preflight.hasInvalidDependencies}/${preflight.invalidDeps.size} reads=${preflight.deps.reads.length} loadParked=${state.isHeadEventLoadParked(queuedEvent)}`);
 
     if (eventBlockingDeps.size > 0) {
       // The event closure is a transient demand root for the WHOLE settle pass.
@@ -1508,6 +1511,7 @@ export async function processPullQueuedEventDuringExecute(
 
   if (shouldSkipEvent) return;
 
+  console.warn(`[diag-dispatch] ${queuedEvent.id}`);
   await dispatchQueuedEvent({
     runtime: state.runtime,
     eventQueue: state.eventQueue,
