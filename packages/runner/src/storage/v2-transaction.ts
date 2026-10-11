@@ -1567,9 +1567,6 @@ export class V2StorageTransaction implements IStorageTransaction {
               scope,
               patches: [...mergeable.ops, ...(patch?.patches ?? [])],
               value: doc.current.value,
-              ...(patch?.diffBase === undefined
-                ? {}
-                : { diffBase: patch.diffBase }),
             });
             continue;
           }
@@ -3718,20 +3715,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
     assertNoIndexedArrayStructuralOps(patches);
 
-    return {
-      op: "patch",
-      id,
-      type,
-      scope,
-      patches,
-      value: doc.current.value,
-      // A splice's index counts from the array it was diffed from, and a
-      // replay over an array that moved since would add or remove at the
-      // wrong place (state-dependent, 01-data-model §6.3).
-      ...(patches.some((patch) => patch.op === "splice")
-        ? { diffBase: base }
-        : {}),
-    };
+    return { op: "patch", id, type, scope, patches, value: doc.current.value };
   }
 
   /**

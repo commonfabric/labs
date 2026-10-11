@@ -360,7 +360,6 @@ Deno.test("memory v2 transactions emit splice patch drafts for dense array appen
         type,
         scope: "space",
         value: { value: { tags: ["one", "two", "three"] } },
-        diffBase: { value: { tags: ["one", "two"] } },
         patches: [{
           op: "splice",
           path: "/value/tags",
@@ -729,7 +728,6 @@ Deno.test("memory v2 transactions emit splice patch drafts for dense array lengt
         type,
         scope: "space",
         value: { value: { tags: ["one"] } },
-        diffBase: { value: { tags: ["one", "two"] } },
         patches: [{
           op: "splice",
           path: "/value/tags",
@@ -793,7 +791,6 @@ Deno.test("memory v2 writeBatch combines dense array element and length writes i
         type,
         scope: "space",
         value: { value: { tags: ["zero"] } },
-        diffBase: { value: { tags: ["one", "two"] } },
         patches: [{
           op: "replace",
           path: "/value/tags/0",

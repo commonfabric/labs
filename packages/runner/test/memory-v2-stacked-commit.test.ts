@@ -644,7 +644,6 @@ const createHarness = (
             type: MIME;
             patches: PatchOp[];
             value: unknown;
-            diffBase?: unknown;
           }
           | { op: "delete"; id: URI; type: MIME }
         >;
@@ -5337,7 +5336,6 @@ describe("a pending tail splice whose array moved under it", () => {
             add: tail,
           }],
           value: { value: after },
-          diffBase: { value: before },
         }],
       },
       undefined,

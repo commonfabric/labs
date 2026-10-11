@@ -3618,12 +3618,6 @@ export type NativeStorageCommitOperation =
     scope?: CellScope;
     patches: PatchOp[];
     value: FabricValue;
-    /**
-     * The document `patches` were diffed against, where they hold a
-     * positional op (`splice`): what that op's positions count from. Kept by
-     * this replica and never sent.
-     */
-    diffBase?: FabricValue;
   };
 
 export interface NativeStorageCommit {

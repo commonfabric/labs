@@ -104,8 +104,9 @@ Read(entity, path):
 
 A pending write whose ops cannot mean what they meant against the confirmed
 state now beneath it is left out of the view until its verdict: a patch whose
-ops do not apply there, and a `splice` whose array has changed since the
-transaction diffed it (its positions count from that array, §6.3 of
+ops do not apply there, and a `splice` whose array has changed length since
+the transaction diffed it (the diff emits only tail splices, whose positions
+count from the array's old length; §6.3 of
 [01-data-model.md](./01-data-model.md)). The server refuses such a commit
 whenever the write read the value it replaced; when it accepts one anyway, the
 confirmed state takes the write as the store applied it.

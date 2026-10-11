@@ -4,7 +4,6 @@ import {
   hashStringOf,
   isKeyableObjectOrArray,
   taggedHashStringOf,
-  valueEqual,
 } from "@commonfabric/data-model";
 import {
   hasDataUriScheme,
@@ -506,9 +505,6 @@ const documentOperationsOf = (
           scope: operation.scope,
           patches: operation.patches,
           value: toExplicitDocument(operation.value),
-          ...(operation.diffBase === undefined
-            ? {}
-            : { diffBase: toExplicitDocument(operation.diffBase) }),
         }
         : {
           op: "set" as const,
@@ -582,8 +578,8 @@ type PendingVersion =
       op: "patch";
       patches: PatchOp[];
       value: EntityDocument;
-      /** The document `patches` were diffed against, where they splice. */
-      diffBase?: EntityDocument;
+      /** Set once the store accepted the layer: replay its ops as they stand. */
+      accepted?: true;
     }
     | {
       localSeq: number;
@@ -695,7 +691,6 @@ const pendingVersion = (
       op: "patch";
       patches: PatchOp[];
       value: EntityDocument;
-      diffBase?: EntityDocument;
     }
     | { op: "delete" },
   baseSeq: number,
@@ -722,37 +717,28 @@ const transactionValueForVersion = (
 };
 
 /**
- * Whether each `splice` in a layer would land on the array it was diffed
- * from. A splice names positions: the diff's tail splice adds at the array's
- * old length. Replayed over an array another writer has since changed, it
+ * Whether each `splice` in a layer still lands where it was computed to. The
+ * diff emits only tail splices (`buildArrayPatchCandidates`: a grown array
+ * adds at its old length, a shrunk one removes from its new length), so
+ * `index + remove` is the length of the array the splice was diffed from.
+ * Replayed over an array another writer has since grown or shrunk, the splice
  * says something its writer never wrote; where that writer appended the same
  * tail, the tail is appended twice. The server refuses such a commit, since
- * the write read the array it diffed (and an identity commit is accepted
- * only when its ops are idempotent on the stored value), so until the verdict
- * the layer renders without it. A write that read no value (a blind UI
- * write) is the exception: the server applies its splice where it stands,
- * and the accept promotes the layer as the store applied it
- * (`#confirmPending`).
+ * the write read the array it diffed (and an identity commit is accepted only
+ * when its ops are idempotent on the stored value), so until the verdict the
+ * layer renders without it. A write that read no value (a blind UI write) is
+ * the exception: the server applies its splice where it stands, and the
+ * accept promotes the layer as the store applied it (`#confirmPending`).
  */
-const splicesLandOnTheirDiffBase = (
+const tailSplicesFitTheirArrays = (
   base: EntityDocument | undefined,
   patches: readonly PatchOp[],
-  diffBase: EntityDocument,
 ): boolean =>
   patches.every((patch) => {
     if (patch.op !== "splice") return true;
-    const path = parsePointer(patch.path);
-    const now = readValueAtPath(base, path);
-    const then = readValueAtPath(diffBase, path);
-    return now === then || valueEqual(now, then);
+    const now = readValueAtPath(base, parsePointer(patch.path));
+    return Array.isArray(now) && now.length === patch.index + patch.remove;
   });
-
-/** `pending`, replayed as its ops stand wherever its arrays now are. */
-const withoutDiffBase = (pending: PendingVersion): PendingVersion => {
-  if (pending.op !== "patch" || pending.diffBase === undefined) return pending;
-  const { diffBase: _, ...rest } = pending;
-  return rest;
-};
 
 const applyPendingVersion = (
   base: EntityDocument | undefined,
@@ -777,15 +763,15 @@ const applyPendingVersion = (
       // express this layer's own writes, so a dropped sibling's data is
       // unrepresentable in the result (CT-1872 1a).
       //
-      // A positional op is the exception to re-folding: over an array that
-      // moved since its diff, the layer renders without it, as an
-      // inapplicable layer does below, until the verdict that refuses it.
+      // A positional op is the exception to re-folding: over an array whose
+      // length moved since its diff, the layer renders without it, as an
+      // inapplicable layer does below, until its verdict.
       if (
-        pending.diffBase !== undefined &&
-        !splicesLandOnTheirDiffBase(base, pending.patches, pending.diffBase)
+        pending.accepted !== true &&
+        !tailSplicesFitTheirArrays(base, pending.patches)
       ) {
         pendingPatchLogger.debug("pending-replay-skip", () => [
-          "pending patch layer skipped: a splice's array moved since its diff",
+          "pending patch layer skipped: a splice's array changed length since its diff",
           {
             space: logContext.space,
             id: logContext.id,
@@ -3893,7 +3879,6 @@ type NativeCommitOperation =
     scope?: CellScope;
     patches: PatchOp[];
     value: EntityDocument;
-    diffBase?: EntityDocument;
   }
   | { op: "delete"; id: URI; scope?: CellScope };
 
@@ -9325,15 +9310,18 @@ export class SpaceReplica
       const lastPendingIndex = pendingIndexes[pendingIndexes.length - 1]!;
       // The verdict is in: the store applied these ops where they stand, so a
       // splice held out of the view while its array had moved
-      // (`splicesLandOnTheirDiffBase`) promotes with the rest of them.
+      // (`tailSplicesFitTheirArrays`) promotes with the rest of them.
       if (
-        pendingIndexes.some((index) =>
-          record.pending[index]!.op === "patch" &&
-          record.pending[index]!.diffBase !== undefined
-        )
+        pendingIndexes.some((index) => {
+          const entry = record.pending[index]!;
+          return entry.op === "patch" &&
+            entry.patches.some((patch) => patch.op === "splice");
+        })
       ) {
         record.pending = record.pending.map((entry) =>
-          entry.localSeq === localSeq ? withoutDiffBase(entry) : entry
+          entry.localSeq === localSeq && entry.op === "patch"
+            ? { ...entry, accepted: true }
+            : entry
         );
         dropMaterializedSuffix(record, firstPendingIndex);
       }
