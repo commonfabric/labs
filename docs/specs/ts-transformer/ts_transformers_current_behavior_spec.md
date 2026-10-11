@@ -1497,6 +1497,12 @@ Capture analysis:
 - captures identifiers/property chains declared outside callback scope
 - excludes imports, module-scoped declarations, function declarations, type
   parameters, JSX tag names, property keys
+- never looks inside a type: a function type's parameter names (`next` in
+  `(value as { set: (next: string) => void })`), a `typeof` query and a type
+  argument name no runtime value, so none is captured. The expression of an
+  `extends Base<T>` clause is a value and is still walked. A captured name with
+  no binding in scope would otherwise become a required input that nothing
+  supplies (fixture `closures/captures-skip-type-positions`)
 - captures nested callback closures with filtering for outer locals/params
 - builds hierarchical capture trees by root path
 
