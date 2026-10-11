@@ -3,6 +3,7 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import type ts from "typescript";
 
 import type { TransformationContext } from "../core/mod.ts";
+import { localDefinition } from "../utils/schema-definitions.ts";
 
 /** The type to name instead, for the keys whose value has a fixed shape. */
 const SUGGESTED_TYPE: Readonly<Record<string, string>> = {
@@ -21,25 +22,15 @@ const SUGGESTED_TYPE: Readonly<Record<string, string>> = {
  * framework's to name.
  */
 function resolveRootSchema(
-  schema: Record<string, unknown>,
-): Record<string, unknown> | undefined {
+  schema: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> | undefined {
   const seen = new Set<string>();
   let current = schema;
   while (typeof current.$ref === "string") {
-    const ref = current.$ref;
-    if (seen.has(ref)) return undefined;
-    seen.add(ref);
-    const path = ref.split("/");
-    if (path.length !== 3 || path[0] !== "#" || path[1] !== "$defs") {
-      return undefined;
-    }
-    const defs = schema.$defs;
-    if (!isObjectOrArray(defs)) return undefined;
-    const target = (defs as Record<string, unknown>)[path[2]!];
-    if (!isObjectNotArray(target)) {
-      return undefined;
-    }
-    current = target as Record<string, unknown>;
+    const definition = localDefinition(schema, current.$ref);
+    if (!definition || seen.has(definition.name)) return undefined;
+    seen.add(definition.name);
+    current = definition.schema;
   }
   return current;
 }

@@ -78,8 +78,11 @@ const SURFACE_PROGRAM: RuntimeProgram = {
 };
 
 const WISH_SRC = [
-  "import { pattern, wish } from 'commonfabric';",
-  "export default pattern(() => ({",
+  "import { pattern, wish, type WishState } from 'commonfabric';",
+  "export default pattern<",
+  "  Record<string, never>,",
+  "  { profile: WishState<unknown> }",
+  ">(() => ({",
   "  profile: wish({ query: '#profile' }),",
   "}));",
 ].join("\n");
