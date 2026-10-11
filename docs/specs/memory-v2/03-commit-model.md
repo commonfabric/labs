@@ -102,8 +102,9 @@ Read(entity, path):
   3. Otherwise read from confirmed state
 ```
 
-A pending write whose ops cannot mean what they meant against the confirmed
-state now beneath it is left out of the view until its verdict: a patch whose
+A document's pending layer whose ops cannot mean what they meant against the
+confirmed state now beneath it is left out of that document's view, every op in
+it, until its verdict: a patch whose
 ops do not apply there, and a `splice` whose array has changed length since
 the transaction diffed it (the diff emits only tail splices, whose positions
 count from the array's old length; §6.3 of

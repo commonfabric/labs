@@ -723,12 +723,13 @@ const transactionValueForVersion = (
  * `index + remove` is the length of the array the splice was diffed from.
  * Replayed over an array another writer has since grown or shrunk, the splice
  * says something its writer never wrote; where that writer appended the same
- * tail, the tail is appended twice. The server refuses such a commit, since
- * the write read the array it diffed (and an identity commit is accepted only
- * when its ops are idempotent on the stored value), so until the verdict the
- * layer renders without it. A write that read no value (a blind UI write) is
- * the exception: the server applies its splice where it stands, and the
- * accept promotes the layer as the store applied it (`#confirmPending`).
+ * tail, the tail is appended twice. The server refuses the whole commit,
+ * since the write read the array it diffed (and an identity commit is
+ * accepted only when its ops are idempotent on the stored value), so until
+ * the verdict the whole layer, every op in it, is left out of the document's
+ * view. A write that read no value (a blind UI write) is the exception: the
+ * server applies its splice where it stands, and the accept promotes the
+ * layer as the store applied it (`#confirmPending`).
  */
 const tailSplicesFitTheirArrays = (
   base: EntityDocument | undefined,
@@ -764,7 +765,7 @@ const applyPendingVersion = (
       // unrepresentable in the result (CT-1872 1a).
       //
       // A positional op is the exception to re-folding: over an array whose
-      // length moved since its diff, the layer renders without it, as an
+      // length moved since its diff, the whole layer is left out, as an
       // inapplicable layer does below, until its verdict.
       if (
         pending.accepted !== true &&
