@@ -135,8 +135,8 @@ wall time of the whole seed process against a fresh toolshed. "main" is
 
 | seed | main OFF | branch OFF | main ON | branch ON |
 | --- | --- | --- | --- | --- |
-| 30 topics | 45.1 s | {{BRANCH_OFF_30}} | 61.8 s | {{BRANCH_ON_30}} |
-| 100 topics | 235.4 s | {{BRANCH_OFF_100}} | {{MAIN_ON_100}} | {{BRANCH_ON_100}} |
+| 30 topics | 45.1 s | 27.3 s | 61.8 s | 59.5 s |
+| 100 topics | 235.4 s | 81.8 s | 342.2 s | 322.9 s |
 
 {{SEED_COMMENTARY}}
 
