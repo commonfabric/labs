@@ -310,6 +310,24 @@ describe("CFPicker stepping", () => {
     ]);
   });
 
+  it("writes a pick of the index shown while a step waits on the worker", async () => {
+    // The step will move the selection on from the shown 0, so picking 0 is
+    // a move of its own.
+    const selectedIndex = createMockCellHandle<number>();
+    const answer = holdReads(selectedIndex);
+    const element = pickerAt(selectedIndex);
+
+    element._selectNext();
+    element._selectIndex(0);
+    answer({ value: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(writesSent(selectedIndex).map((write) => write.value)).toEqual([
+      1,
+      0,
+    ]);
+  });
+
   it("writes nothing while the worker refuses the selection's read", () => {
     const selectedIndex = createMockCellHandle(1);
     const element = pickerAt(selectedIndex);

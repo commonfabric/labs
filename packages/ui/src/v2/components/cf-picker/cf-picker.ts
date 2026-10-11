@@ -421,9 +421,9 @@ export class CFPicker extends BaseElement {
 
   private _selectIndex(index: number): void {
     const len = this._getItems().length;
-    if (index < 0 || index >= len || index === this._currentIndex) {
-      return;
-    }
+    // The index shown may yet be moved by a step waiting its turn, so a pick
+    // of it is written too.
+    if (index < 0 || index >= len) return;
     this._indexCellController.setValue(index);
     this._updateAriaAttributes();
     this.requestUpdate();

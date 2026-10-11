@@ -1512,7 +1512,10 @@ describe("CellController — writes land in the order they were made", () => {
   });
 
   it("removes, then adds back, an item in that order", async () => {
-    const ctrl = new ArrayCellController<string>(createMockHost());
+    const changes: unknown[] = [];
+    const ctrl = new ArrayCellController<string>(createMockHost(), {
+      onChange: (value) => changes.push(value),
+    });
     const cell = createMockCellHandle<string[]>();
     const answer = holdReads(cell);
     ctrl.bind(cell);
@@ -1527,6 +1530,10 @@ describe("CellController — writes land in the order they were made", () => {
       "cell:push",
     ]);
     expect(cell.get()).toEqual(["x"]);
+    // The removal's turn came after the add was asked for, so it shows and
+    // announces nothing over the add.
+    expect(ctrl.getValue()).toEqual(["x"]);
+    expect(changes).not.toContainEqual([]);
   });
 
   it("makes the writes asked for on one cell there, and shows none of them once another is bound", async () => {
@@ -1617,6 +1624,115 @@ describe("CellController — writes land in the order they were made", () => {
     } finally {
       time.restore();
     }
+  });
+
+  it("shows and announces nothing of an update whose turn comes after another cell is bound", async () => {
+    const changes: unknown[] = [];
+    const ctrl = new CellController<number>(createMockHost(), {
+      timing: { strategy: "immediate" },
+      onChange: (value) => changes.push(value),
+    });
+    const first = createMockCellHandle<number>();
+    const answer = holdReads(first);
+    ctrl.bind(first);
+    void ctrl.updateValue((held) => (held ?? 0) + 1);
+
+    const other = createMockCellHandle<number>(5, { id: "of:another-cell" });
+    ctrl.bind(other);
+    changes.length = 0;
+    answer({ value: 50 });
+    await settleWrites();
+
+    expect(values(first)).toEqual([51]);
+    expect(changes).toEqual([]);
+    expect(ctrl.getValue()).toBe(5);
+  });
+
+  it("writes nothing, and shows nothing, for an update whose cell is refused while it reads", async () => {
+    const changes: unknown[] = [];
+    const ctrl = new BooleanCellController(createMockHost(), {
+      onChange: (value) => changes.push(value),
+    });
+    const cell = createMockCellHandle<boolean>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+
+    const toggled = ctrl.toggle();
+    pushRefusal(cell);
+    answer({ value: false });
+    await toggled;
+    await settleWrites();
+
+    expect(values(cell)).toEqual([]);
+    expect(ctrl.getValue()).toBe(false);
+    expect(changes).not.toContain(true);
+  });
+
+  it("shows a newer value from the cell once a toggle's write settles", async () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle(false);
+    ctrl.bind(cell);
+
+    await ctrl.toggle();
+    await settleWrites();
+    pushUpdate(cell, false);
+
+    expect(ctrl.getValue()).toBe(false);
+  });
+
+  it("announces a toggle as it announces the value set in its place", async () => {
+    const announced = async (write: (ctrl: BooleanCellController) => void) => {
+      const changes: unknown[] = [];
+      const ctrl = new BooleanCellController(createMockHost(), {
+        onChange: (value, oldValue) => changes.push([value, oldValue]),
+      });
+      ctrl.bind(createMockCellHandle(false));
+      changes.length = 0;
+      write(ctrl);
+      await settleWrites();
+      return changes;
+    };
+
+    expect(await announced((ctrl) => void ctrl.toggle())).toEqual(
+      await announced((ctrl) => ctrl.setValue(true)),
+    );
+  });
+
+  it("still writes a toggle whose onChange throws", async () => {
+    const ctrl = new BooleanCellController(createMockHost(), {
+      onChange: (value) => {
+        if (value) throw new Error("listener failed");
+      },
+    });
+    const cell = createMockCellHandle(false);
+    ctrl.bind(cell);
+
+    const logged = console.error;
+    console.error = () => {};
+    try {
+      await ctrl.toggle();
+      await settleWrites();
+    } finally {
+      console.error = logged;
+    }
+
+    expect(values(cell)).toEqual([true]);
+  });
+
+  it("refuses an update on a cell written through a custom setter, which it cannot order", () => {
+    const ctrl = new CellController<number>(createMockHost(), {
+      timing: { strategy: "immediate" },
+      setValue: (value, next) => {
+        if (isCellHandle(value)) void (value as CellHandle<number>).set(next);
+      },
+    });
+    const cell = createMockCellHandle(1);
+    ctrl.bind(cell);
+
+    expect(() => ctrl.updateValue((held) => (held ?? 0) + 1)).toThrow(
+      "custom `setValue`",
+    );
+    expect(values(cell)).toEqual([]);
   });
 
   it("goes on with the writes queued behind an update whose read fails", async () => {
