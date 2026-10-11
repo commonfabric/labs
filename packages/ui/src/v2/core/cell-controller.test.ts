@@ -12,6 +12,7 @@ import type { ReactiveControllerHost } from "lit";
 import {
   createMockCellHandle,
   holdReads,
+  holdWrites,
   pushRefusal,
   pushUpdate,
   refuseReads,
@@ -1733,6 +1734,18 @@ describe("CellController — writes land in the order they were made", () => {
       "custom `setValue`",
     );
     expect(values(cell)).toEqual([]);
+  });
+
+  it("settles an update in its turn, before the worker has taken its write", async () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle(false);
+    ctrl.bind(cell);
+    const release = holdWrites(cell);
+
+    await ctrl.toggle();
+
+    expect(values(cell)).toEqual([true]);
+    release();
   });
 
   it("goes on with the writes queued behind an update whose read fails", async () => {

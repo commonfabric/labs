@@ -136,8 +136,9 @@ export class CellController<T> implements ReactiveController {
   private _computedEcho: { value: T } | undefined;
 
   /**
-   * Counts the writes asked of this controller, every one of which goes
-   * through {@link _askWrite}. A computed write whose turn comes after a
+   * Counts the writes asked of this controller in the bound cell's order,
+   * every one of which goes through {@link _askWrite}; a child's write, in
+   * an order of its own, is not one. A computed write whose turn comes after a
    * later one was asked for is made, and neither shown nor announced: the
    * later write's value stands, as the handle's generations have it.
    */
@@ -327,7 +328,7 @@ export class CellController<T> implements ReactiveController {
    * for a cell that holds nothing where the controller has no empty value of
    * its own. A value equal to the current one is not written. Settles in its
    * turn, once the value is computed, or once the update is passed over;
-   * rejects when `compute` throws.
+   * rejects when `compute` throws, which on a plain value throws at once.
    *
    * @throws On a cell, when the component writes through a custom
    *   `setValue`, whose writes the controller cannot put in the cell's order.
@@ -902,7 +903,7 @@ export class ArrayCellController<T> extends CellController<T[]> {
     const index = currentArray.findIndex((item) => Object.is(item, oldItem));
     if (index !== -1) {
       if (cell !== null) {
-        this._askWrite();
+        // A child's write keeps its own order, apart from the list's.
         cell.key(index).set(newItem);
       } else {
         // Fallback for plain arrays

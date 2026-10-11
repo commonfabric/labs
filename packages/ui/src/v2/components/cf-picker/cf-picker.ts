@@ -419,14 +419,18 @@ export class CFPicker extends BaseElement {
     });
   }
 
+  /**
+   * Moves the selection to `index`. Whether that changes it is decided in
+   * its turn among the cell's writes, not against the index shown, which a
+   * step still waiting its turn may yet move.
+   */
   private _selectIndex(index: number): void {
     const len = this._getItems().length;
-    // The index shown may yet be moved by a step waiting its turn, so a pick
-    // of it is written too.
     if (index < 0 || index >= len) return;
-    this._indexCellController.setValue(index);
-    this._updateAriaAttributes();
-    this.requestUpdate();
+    void this._indexCellController.updateValue(() => index).then(() => {
+      this._updateAriaAttributes();
+      this.requestUpdate();
+    });
   }
 
   //

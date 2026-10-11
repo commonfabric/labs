@@ -3611,6 +3611,34 @@ describe("cell-handle", () => {
       expect(cell.get()).toBe(50);
     });
 
+    it("shows a later write's value over what an update that writes nothing found", async () => {
+      const fake = worker(50);
+      const cell = new CellHandle<number>(fake.runtime, ref, { value: 5 });
+
+      const reading = cell.pull();
+      const updating = cell.update((n) => n ?? 0);
+      const setting = cell.set(30);
+      fake.answerReads({ value: 50 });
+      await Promise.all([reading, updating, setting]);
+
+      expect(cell.get()).toBe(30);
+    });
+
+    it("shows what a read it overtook found, where its updater throws", async () => {
+      const fake = worker(50);
+      const cell = new CellHandle<number>(fake.runtime, ref, { value: 5 });
+
+      const reading = cell.pull();
+      const updating = cell.update(() => {
+        throw new Error("no value from here");
+      });
+      fake.answerReads({ value: 50 });
+      await reading;
+      await expect(updating).rejects.toThrow("no value from here");
+
+      expect(cell.get()).toBe(50);
+    });
+
     it("reads the cell, rather than compute from a write asked for after it", async () => {
       // The send leaves the queue holding no value, so the update has only
       // the handle's own value, which the later set already replaced.
