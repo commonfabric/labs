@@ -84,6 +84,15 @@ export class CaptureCollector {
     const captures = new Set<ts.Expression>();
 
     const visit = (node: ts.Node) => {
+      // A type is erased before the callback runs, so nothing named inside
+      // one is a value it closes over: not a function type's parameters
+      // (`(next: string) => void` in a cast), not a `typeof` query, not a type
+      // argument. The expression of an `extends Base<T>` clause is a value,
+      // so that node is still walked; its type arguments are skipped here.
+      if (ts.isTypeNode(node) && !ts.isExpressionWithTypeArguments(node)) {
+        return;
+      }
+
       // For nested functions, recursively collect their captures too
       // Even though they have their own scope for parameters, they still
       // close over variables from outer scopes, and we need to know about
