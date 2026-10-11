@@ -4798,11 +4798,13 @@ describe("describeFollowState", () => {
     expect(refusal("argument-mismatch").canForce).toBe(false);
   });
 
-  it("says a mismatch with the advertised identity lasts until the host's deployment finishes or this client runs the host's version", () => {
+  it("says a mismatch with the advertised identity lasts until the host's deployment finishes or a client on the host's version opens the piece", () => {
     // A host part-way through a deployment can serve modules that compile to
     // another identity than the one it advertises, and that ends when the
     // deployment does. So does a runtime that compiles the source to another
-    // identity than the host's, once this client runs the host's version.
+    // identity than the host's, once a client on the host's version opens the
+    // piece. The record is the piece's, and on a shared piece another
+    // member's client may have left it, so the panel blames no client.
     const described = describeFollowState({
       ...SOURCE,
       reconciliation: {
@@ -4814,15 +4816,17 @@ describe("describeFollowState", () => {
     });
     expect(described.detail).toContain(
       "If the origin's host is part-way through a deployment, this lasts " +
-        "until it finishes; otherwise until this client runs the same " +
-        "version as the host.",
+        "until it finishes; otherwise until the piece is opened on a client " +
+        "that runs the same version as the host.",
     );
+    expect(described.detail).not.toContain("this client");
     expect(described.detail).not.toContain("every time");
   });
 
-  it("says source that does not compile lasts until the origin offers other source or this client compiles it", () => {
-    // Source written for a newer runtime than this client's can compile at
-    // the origin's host and fail here, which an update to this client ends.
+  it("says source that does not compile lasts until the origin offers other source or a client that compiles it opens the piece", () => {
+    // Source written for a newer runtime than the client's that opened the
+    // piece can compile at the origin's host and fail there, which a client
+    // that compiles it ends when it opens the piece.
     const described = describeFollowState({
       ...SOURCE,
       reconciliation: {
@@ -4833,7 +4837,10 @@ describe("describeFollowState", () => {
       },
     });
     expect(described.detail).toContain("until the origin offers other source");
-    expect(described.detail).toContain("runs a version that compiles it");
+    expect(described.detail).toContain(
+      "opened on a client that runs a version that compiles it",
+    );
+    expect(described.detail).not.toContain("this client");
     expect(described.detail).not.toContain("every time");
   });
 

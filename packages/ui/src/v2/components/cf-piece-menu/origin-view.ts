@@ -261,18 +261,20 @@ function refusalOutlook(reconciliation: PieceReconciliationView): string {
         "can stop following this origin or go back to an earlier version.";
     // A host part-way through a deployment can serve source that does not
     // compile to the identity it advertises, as can a host whose runtime
-    // differs from this client's.
+    // differs from the client's that opened the piece. The record is the
+    // piece's, and a shared piece's may have been left by another member's
+    // client, so this names no client in particular.
     case "identity-mismatch":
       return "The piece is running the source it last accepted. If the " +
         "origin's host is part-way through a deployment, this lasts until it " +
-        "finishes; otherwise until this client runs the same version as the " +
-        "host.";
-    // Source written for a newer runtime than this client's can compile at
-    // the origin's host and fail here.
+        "finishes; otherwise until the piece is opened on a client that runs " +
+        "the same version as the host.";
+    // Source written for a newer runtime than the client's that opened the
+    // piece can compile at the origin's host and fail there.
     case "source-invalid":
       return "The piece is running the source it last accepted. This lasts " +
-        "until the origin offers other source, or until this client runs a " +
-        "version that compiles it.";
+        "until the origin offers other source, or until the piece is opened " +
+        "on a client that runs a version that compiles it.";
     default:
       return "The piece is running the source it last accepted, and this " +
         "will happen again every time the piece is opened.";
