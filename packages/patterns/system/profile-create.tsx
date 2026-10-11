@@ -112,8 +112,11 @@ export const seedProfileName = handler<
 >((event, { profiles, privateInbox }) => {
   const name = (event.name ?? "").trim();
   const index = event.index;
+  const target = typeof index === "number" ? profiles[index] : undefined;
+  console.warn(
+    `[diag-seed] name=${name !== ""} index=${index} len=${profiles?.length} target=${target === undefined ? "undef" : "def"} stored=${JSON.stringify(target?.name)} setName=${typeof target?.setName} inbox=${privateInbox === undefined ? "undef" : "def"}`,
+  );
   if (!name || typeof index !== "number") return;
-  const target = profiles[index];
   // The profile at `index` is the one just created only while its name is
   // unstored; an index taken from a list this replica had not loaded may name
   // an existing profile, which both steps below leave alone.
