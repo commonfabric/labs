@@ -34,7 +34,7 @@ a record: archive it to `docs/history/plans/` following the procedure in
   an access consumed and the other rules over the join (§5.3, §4.6.3). What
   remains is a specs ruling on the join within one location and the display's
   fit of a cell's stored label.
-- [Input requirements on an endorsed computation's arguments](cfc-argument-input-requirements.md)
+- [Input requirements on a node's inputs](cfc-node-input-requirements.md)
   refuses a stand-in fed to code a rule endorses, by checking the integrity
   each argument declares against the reads made through it. The declaration is
   taken from the code's own module, not the graph's data, so a rule that guards

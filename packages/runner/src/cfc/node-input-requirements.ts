@@ -6,15 +6,11 @@
  * contract ("MUST be enforced before commit"), §4.6.1 gives a node its input
  * cells, and §3.8.4 and §10's `to_city()` are the reason: trusted code that
  * requires integrity on its input refuses a value untrusted code computed or
- * chose. Requirements on confidentiality (`maxConfidentiality`) and the
- * inputs of builtins are not checked here yet; the conformance statement
- * records both.
+ * chose. `maxConfidentiality` on an input and the inputs of builtins are not
+ * checked here yet; the conformance statement records both.
  *
  * Which schema's requirements apply is the one point the specification does
- * not yet settle: here, the schema bound to the code identity that ran, to
- * which a graph's schema can add requirements and from which it can remove
- * none (marked pending its ruling, commonfabric/specs#62, in the runner,
- * where the schemas are resolved).
+ * not yet settle, decided in `resolveNodeInputRequirements` below.
  *
  * How the reads are found is a host arrangement, recorded in
  * `docs/specs/cfc-conformance-statement.md`: the runner follows the node's
@@ -29,19 +25,27 @@
  *   integrity. The slot that holds a reference contributes confidentiality
  *   only (§8.2.4), so it is not an integrity observation here; evidence
  *   copied onto a reference from its target (§8.2.5) never counts.
- * - A value written in the node's binding itself (a literal in the wiring)
- *   carries no evidence.
- * - A path that is read and found absent is a `shape` observation (§4.6.3)
- *   of the position it is absent from, labeled as that position is. If a
- *   schema other than the code's own (one a reference carries, or the
- *   graph's where it is not the code's) would fill it with a `default`, the
- *   code would be handed the value that schema chose, which carries no
- *   evidence either.
+ * - A value written in the node's binding itself (a literal in the wiring,
+ *   including a handler's `$event` payload) carries no evidence, so it never
+ *   satisfies a `requiredIntegrity`.
+ * - A path read and found absent from a container is a `shape` observation
+ *   (§4.6.3) carrying the evidence the container holds about its own current
+ *   value (`ownEvidenceAt`): never a label it inherits from an ancestor, and
+ *   never a declared store policy, so neither a reference into a stamped
+ *   document nor a deletion by other code can borrow its writer's stamp for
+ *   an absence. A path the walk cannot descend to (past a scalar, into a
+ *   missing document) carries no evidence. If a schema other than the
+ *   code's own would fill an absence with a `default` the code's schema does
+ *   not declare (one a reference carries, or the graph's), the code would be
+ *   handed the value that schema chose, which carries no evidence either.
  * - A cycle of references, or a chain longer than the runtime resolves,
- *   reaches no value the code is handed and carries no evidence.
+ *   carries no evidence. The cycle check is keyed on each reference's target,
+ *   so a chain that passes one target twice on different walks is refused
+ *   too, which refuses more than the runtime's own resolution would.
  */
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
+import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectOrArray, isPlainContainer } from "@commonfabric/utils/types";
 
@@ -61,12 +65,16 @@ import type {
   Metadata,
 } from "../storage/interface.ts";
 import { cfcIntegritySatisfiesFloorCoherently } from "./observation.ts";
-import { cfcFloorTrustContext, consumedIntegrityAt } from "./prepare.ts";
+import {
+  cfcFloorTrustContext,
+  consumedIntegrityAt,
+  ownEvidenceAt,
+} from "./prepare.ts";
 import { cfcSchemaEntries } from "./schema-label-view.ts";
-import type { CfcArgumentInputRefusal } from "./types.ts";
+import type { CfcNodeInputRefusal, ImplementationIdentity } from "./types.ts";
 
 /** One input path whose value must carry `requiredIntegrity`. */
-export type ArgumentRequirement = {
+export type NodeInputRequirement = {
   readonly path: readonly string[];
   readonly requiredIntegrity: readonly CfcAtom[];
 };
@@ -78,10 +86,10 @@ export type ArgumentRequirement = {
  * than the branch would (§8.10 leaves branch-local obligations outside the
  * automatic check).
  */
-export const argumentIntegrityRequirements = (
+export const nodeIntegrityRequirements = (
   schemas: readonly (JSONSchema | undefined)[],
-): ArgumentRequirement[] => {
-  const requirements: ArgumentRequirement[] = [];
+): NodeInputRequirement[] => {
+  const requirements: NodeInputRequirement[] = [];
   for (const schema of schemas) {
     if (schema === undefined) continue;
     for (const entry of cfcSchemaEntries(schema)) {
@@ -98,16 +106,65 @@ export const argumentIntegrityRequirements = (
   return requirements;
 };
 
-/** A node's input requirements, as the runner resolves them. */
-export type ArgumentRequirementResolution = {
-  readonly requirements: ArgumentRequirement[];
+/** A node's input requirements, as resolved for the code that runs. */
+export type NodeInputResolution = {
+  readonly requirements: NodeInputRequirement[];
   /** Whether the schema bound to the code identity was found. */
-  readonly codeSchema: boolean;
-  /**
-   * The schema the graph carries for the node when it is not the code's own,
-   * whose `default`s would be the wiring's choice.
-   */
-  readonly foreignSchema: JSONSchema | undefined;
+  readonly codeSchemaKnown: boolean;
+  /** The code's own input schema, whose `default`s are the code's choice. */
+  readonly codeSchema: JSONSchema | undefined;
+  /** The schema the graph carries for the node, checked as well. */
+  readonly graphSchema: JSONSchema | undefined;
+};
+
+/**
+ * The input requirements of a node whose code has `identity` and whose graph
+ * carries `graphSchema` for it. For verified code they are those of the
+ * schema bound to the identity that ran — the artifact `artifactFor` finds
+ * under the identity the outputs are stamped with, not whatever module
+ * carried the function — together with the graph's, which can add a
+ * requirement and cannot remove one. Code with no verified identity has no
+ * schema but the graph's. A verified identity under which no artifact is
+ * found has no known schema, and its run is refused.
+ *
+ * The identity is the function's verified provenance, recorded when its
+ * module is evaluated; a function two factories share carries the identity it
+ * was first registered under, and so that factory's requirements.
+ */
+export const resolveNodeInputRequirements = (
+  identity: ImplementationIdentity | undefined,
+  graphSchema: JSONSchema | undefined,
+  artifactFor: (moduleIdentity: string, symbol: string) => unknown,
+): NodeInputResolution => {
+  if (identity?.kind !== "verified") {
+    return {
+      requirements: nodeIntegrityRequirements([graphSchema]),
+      codeSchemaKnown: true,
+      codeSchema: graphSchema,
+      graphSchema: undefined,
+    };
+  }
+  const artifact: unknown =
+    identity.moduleIdentity === undefined || identity.symbol === undefined
+      ? undefined
+      : artifactFor(identity.moduleIdentity, identity.symbol);
+  if (typeof artifact !== "function" && !isObjectOrArray(artifact)) {
+    return {
+      requirements: [],
+      codeSchemaKnown: false,
+      codeSchema: undefined,
+      graphSchema,
+    };
+  }
+  const declared: unknown = Reflect.get(artifact, "argumentSchema");
+  const codeSchema = isSubschema(declared) ? declared : undefined;
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/62
+  return {
+    requirements: nodeIntegrityRequirements([codeSchema, graphSchema]),
+    codeSchemaKnown: true,
+    codeSchema,
+    graphSchema,
+  };
 };
 
 /** The subschemas that describe the same position as `schema`. */
@@ -117,101 +174,143 @@ const sameDepth = (schema: Record<string, unknown>): unknown[] =>
     return Array.isArray(branches) ? branches : [];
   });
 
-/** The subschemas that describe the child `segment` of `schema`'s position. */
+/** The subschemas below `schema`'s position, by the segment each describes. */
 const childSchemas = (
   schema: Record<string, unknown>,
-  segment: string,
-): unknown[] => {
-  const children: unknown[] = [];
+): [string, unknown][] => {
+  const children: [string, unknown][] = [];
   const properties = schema.properties;
   if (isObjectOrArray(properties)) {
-    if (segment === "*") {
-      for (const child of Object.values(properties)) children.push(child);
-    } else if (Object.hasOwn(properties, segment)) {
-      children.push(properties[segment]);
+    for (const [key, child] of Object.entries(properties)) {
+      children.push([key, child]);
     }
   }
   for (const keyword of ["additionalProperties", "items"]) {
-    if (schema[keyword] !== undefined) children.push(schema[keyword]);
+    if (schema[keyword] !== undefined) children.push(["*", schema[keyword]]);
   }
   const prefixItems = schema.prefixItems;
   if (Array.isArray(prefixItems)) {
-    const index = Number(segment);
-    if (segment === "*") {
-      for (const child of prefixItems) children.push(child);
-    } else if (Number.isInteger(index)) children.push(prefixItems[index]);
+    for (const [index, child] of prefixItems.entries()) {
+      children.push([String(index), child]);
+    }
   }
   const patternProperties = schema.patternProperties;
   if (isObjectOrArray(patternProperties)) {
-    for (const child of Object.values(patternProperties)) children.push(child);
+    for (const child of Object.values(patternProperties)) {
+      children.push(["*", child]);
+    }
   }
   return children;
 };
 
-/** Whether `value` holds something at `path` (`*` matching any member). */
-const valueReachesPath = (value: unknown, path: readonly string[]): boolean => {
-  if (value === undefined) return false;
-  if (path.length === 0) return true;
-  if (!isPlainContainer(value)) return false;
+/** The values `value` holds at `path` (`*` matching any member). */
+const valuesAt = (value: unknown, path: readonly string[]): unknown[] => {
+  if (value === undefined) return [];
+  if (path.length === 0) return [value];
+  if (!isPlainContainer(value)) return [];
   const [segment, ...rest] = path;
-  return Object.entries(value).some(([key, child]) =>
-    (segment === "*" || key === segment) && valueReachesPath(child, rest)
+  return Object.entries(value).flatMap(([key, child]) =>
+    segment === "*" || key === segment ? valuesAt(child, rest) : []
   );
 };
 
 /**
- * Whether `schema` could supply a value at `path` with a `default`: one at
- * or below `path`, or one above it whose value reaches `path`. A `$ref` that does not resolve
- * against `root` counts as one, which refuses more.
+ * The `default`s `schema` would supply at `path`, each as a comparable key:
+ * the part of a default above `path` that reaches it, and each default at or
+ * below it with its position. `undefined` when a `$ref` does not resolve, so
+ * what it would supply is not known.
  */
 export const schemaDefaultsAt = (
   schema: unknown,
   path: readonly string[],
-  root: unknown = schema,
-  visited: Map<object, Set<number>> = new Map(),
+): Set<string> | undefined => {
+  const found = new Set<string>();
+  let unknown = false;
+  const visited = new Map<object, Set<string>>();
+  const walk = (
+    node: unknown,
+    rest: readonly string[],
+    below: readonly string[],
+  ): void => {
+    if (!isObjectOrArray(node) || Array.isArray(node)) return;
+    // Each subschema once per position, so a recursive `$ref` ends.
+    const position = JSON.stringify([rest, below]);
+    const seen = visited.get(node) ?? new Set<string>();
+    if (seen.has(position)) return;
+    seen.add(position);
+    visited.set(node, seen);
+    let resolved: Record<string, unknown> = node;
+    if (typeof node.$ref === "string") {
+      const target = isObjectOrArray(schema) && !Array.isArray(schema)
+        ? ContextualFlowControl.resolveSchemaRefs(node, schema)
+        : undefined;
+      if (!isObjectOrArray(target) || Array.isArray(target)) {
+        unknown = true;
+        return;
+      }
+      resolved = target;
+    }
+    if (Object.hasOwn(resolved, "default")) {
+      const value: unknown = Reflect.get(resolved, "default");
+      if (rest.length === 0) found.add(JSON.stringify(["at", below, value]));
+      else {
+        for (const part of valuesAt(value, rest)) {
+          found.add(JSON.stringify(["at", [], part]));
+        }
+      }
+    }
+    for (const branch of sameDepth(resolved)) walk(branch, rest, below);
+    if (rest.length === 0) {
+      for (const [key, child] of childSchemas(resolved)) {
+        walk(child, [], [...below, key]);
+      }
+      return;
+    }
+    const [segment, ...remaining] = rest;
+    for (const [key, child] of childSchemas(resolved)) {
+      if (key === "*" || segment === "*" || key === segment) {
+        walk(child, remaining, below);
+      }
+    }
+  };
+  walk(schema, path, []);
+  return unknown ? undefined : found;
+};
+
+/**
+ * Whether `foreign`, a schema other than the code's own, would supply a
+ * `default` at a position the code's schema would not fill the same way:
+ * `foreign` described at `foreignPath`, the code's schema at `codePath`.
+ */
+export const foreignDefaultAt = (
+  foreign: unknown,
+  foreignPath: readonly string[],
+  code: JSONSchema | undefined,
+  codePath: readonly string[],
 ): boolean => {
-  if (!isObjectOrArray(schema) || Array.isArray(schema)) return false;
-  // Each subschema once per remaining depth, so a recursive `$ref` ends.
-  const depths = visited.get(schema) ?? new Set<number>();
-  if (depths.has(path.length)) return false;
-  depths.add(path.length);
-  visited.set(schema, depths);
-  let node: Record<string, unknown> = schema;
-  if (typeof schema.$ref === "string") {
-    const resolved = isObjectOrArray(root) && !Array.isArray(root)
-      ? ContextualFlowControl.resolveSchemaRefs(schema, root)
-      : undefined;
-    if (!isObjectOrArray(resolved) || Array.isArray(resolved)) return true;
-    node = resolved;
-  }
-  // A default at or below the path supplies a value there; one above it
-  // supplies one only if that default holds something at the rest of the path.
-  if (
-    Object.hasOwn(node, "default") &&
-    valueReachesPath(Reflect.get(node, "default"), path)
-  ) return true;
-  const inner = (child: unknown, at: readonly string[]) =>
-    schemaDefaultsAt(child, at, root, visited);
-  if (sameDepth(node).some((branch) => inner(branch, path))) return true;
-  if (path.length === 0) {
-    return childSchemas(node, "*").some((child) => inner(child, []));
-  }
-  const [segment, ...rest] = path;
-  return childSchemas(node, segment).some((child) => inner(child, rest));
+  if (foreign === undefined) return false;
+  const supplied = schemaDefaultsAt(foreign, foreignPath);
+  if (supplied === undefined) return true;
+  if (supplied.size === 0) return false;
+  const own = schemaDefaultsAt(code, codePath) ?? new Set<string>();
+  return [...supplied].some((key) => !own.has(key));
 };
 
 /** What a node's binding gives one declared input path. */
 type InputReach = {
   /**
-   * Each position an observation was made at, with the leaf positions
-   * observed below it (`[[]]` for the position itself).
+   * Each position a value was observed at, with its leaf positions and the
+   * reference slots it holds, both relative to it.
    */
   readonly locations: {
     location: NormalizedFullLink;
     leaves: (readonly string[])[];
+    references: (readonly string[])[];
   }[];
+  /** The evidence of each container a declared path was found absent from. */
+  readonly absences: (readonly CfcAtom[])[];
   /** How many observations carry no evidence (see the module comment). */
-  readonly inWiring: number;
+  readonly withoutEvidence: number;
 };
 
 /** A value's leaf positions relative to it, and the references it holds. */
@@ -247,18 +346,21 @@ const reachThroughInput = (
   base: NormalizedFullLink,
   path: readonly string[],
   meta: Metadata,
-  foreignSchema: JSONSchema | undefined,
+  resolution: NodeInputResolution,
 ): InputReach => {
   const locations: InputReach["locations"] = [];
-  let inWiring = 0;
+  const absences: (readonly CfcAtom[])[] = [];
+  let withoutEvidence = 0;
   const followed = new Set<string>();
-  const graphDefaults = schemaDefaultsAt(foreignSchema, path);
+  const { codeSchema, graphSchema } = resolution;
+  const graphDefaults = foreignDefaultAt(graphSchema, path, codeSchema, path);
 
-  // A position read and found absent: a `shape` observation of it, unless a
-  // schema not the code's would hand the code a default there.
-  const absentAt = (location: NormalizedFullLink, defaulting: boolean) => {
-    if (defaulting) inWiring += 1;
-    else locations.push({ location, leaves: [[]] });
+  // `container` holds no value at the rest of the walk: a `shape`
+  // observation with the container's own evidence, unless a schema not the
+  // code's would hand the code a default there.
+  const absentFrom = (container: NormalizedFullLink, defaulting: boolean) => {
+    if (defaulting) withoutEvidence += 1;
+    else absences.push(ownEvidenceAt(tx, container));
   };
 
   const at = (location: NormalizedFullLink, key: string) => ({
@@ -276,47 +378,50 @@ const reachThroughInput = (
     chain: readonly string[],
   ): void => {
     if (isPrimitiveCellLink(value)) {
-      return follow(parseLink(value, location), rest, defaulting, chain);
+      const link = parseLink(value, location);
+      if (link === undefined) withoutEvidence += 1;
+      else follow(link, rest, defaulting, chain);
+      return;
     }
     if (rest.length === 0) {
-      if (value === undefined) return absentAt(location, defaulting);
+      // Absence at the end of the walk is handled by the caller, which
+      // knows the container; a value is observed whole.
       const { leaves, references } = leavesOf(value);
-      if (leaves.length > 0) locations.push({ location, leaves });
+      if (leaves.length > 0) locations.push({ location, leaves, references });
       // A reference inside the value is followed: its target's integrity
       // is what the code is handed (the slot adds confidentiality only).
       for (const reference of references) {
-        const slot = { ...location, path: [...location.path, ...reference] };
-        const held: unknown = reference.reduce<unknown>(
-          (inner, key) =>
-            isObjectOrArray(inner) ? Reflect.get(inner, key) : undefined,
-          value,
-        );
-        const link = parseLink(held, slot);
-        if (link !== undefined) follow(link, [], defaulting, chain);
+        const held = valuesAt(value, reference)[0];
+        const link = parseLink(held, {
+          ...location,
+          path: [...location.path, ...reference],
+        });
+        if (link === undefined) withoutEvidence += 1;
+        else follow(link, [], defaulting, chain);
       }
       return;
     }
     const [segment, ...remaining] = rest;
     if (!isPlainContainer(value)) {
-      // Nothing to descend into: the position is read and the path absent.
-      return absentAt(
-        segment === "*" ? location : at(location, segment),
-        defaulting,
-      );
+      // Past a scalar or into nothing: the walk chose a path no container
+      // holds, so nothing vouches for it.
+      withoutEvidence += 1;
+      return;
     }
     if (segment === "*") {
       const children = Object.entries(value);
-      // An empty container enumerated: an observation of the container.
-      if (children.length === 0) return absentAt(location, defaulting);
+      // An empty container enumerated: absence of any member.
+      if (children.length === 0) return absentFrom(location, defaulting);
       for (const [key, child] of children) {
         inDocument(at(location, key), child, remaining, defaulting, chain);
       }
       return;
     }
     if (!Object.hasOwn(value, segment)) {
-      return absentAt(at(location, segment), defaulting);
+      return absentFrom(location, defaulting);
     }
     const child: unknown = Reflect.get(value, segment);
+    if (child === undefined) return absentFrom(location, defaulting);
     inDocument(at(location, segment), child, remaining, defaulting, chain);
   };
 
@@ -329,9 +434,11 @@ const reachThroughInput = (
     chain: readonly string[],
   ) => {
     const walk = [...link.path, ...rest];
-    // The link's schema describes its target, so a `default` in it at or
-    // around the rest of the walk is one the code could be handed.
-    const carriesDefault = defaulting || schemaDefaultsAt(link.schema, rest);
+    // The link's schema describes its target, the position `rest` above
+    // the declared path's end; a default it would supply there that the
+    // code's schema would not is the wiring's.
+    const carriesDefault = defaulting ||
+      foreignDefaultAt(link.schema, rest, codeSchema, path);
     const target = addressKey({
       ...link,
       scope: normalizeCellScope(link.scope),
@@ -339,7 +446,7 @@ const reachThroughInput = (
     if (
       chain.includes(target) || chain.length >= MAX_PATH_RESOLUTION_LENGTH
     ) {
-      inWiring += 1;
+      withoutEvidence += 1;
       return;
     }
     // The same target, walk and default exposure observe the same values.
@@ -347,39 +454,45 @@ const reachThroughInput = (
     if (followed.has(key)) return;
     followed.add(key);
     // The verifier's own read (§8.10.1, §18.6.2): marked by `meta`, so it
-    // enters no consumed set; the observation it supports is recorded above.
+    // enters no consumed set; the observation it supports is recorded here.
     const root = { ...link, path: [] };
-    inDocument(
-      root,
-      tx.readValueOrThrow(root, { meta }),
-      walk,
-      carriesDefault,
-      [...chain, target],
-    );
+    const value: unknown = tx.readValueOrThrow(root, { meta });
+    // A document with no value at all is no container to be absent from.
+    if (value === undefined) {
+      withoutEvidence += 1;
+      return;
+    }
+    inDocument(root, value, walk, carriesDefault, [...chain, target]);
   };
 
   // A value the binding holds at the declared path: its references are
   // followed, and every other value in it is the wiring's own.
   const heldAtPath = (value: unknown): void => {
     if (isCellLink(value)) {
-      return follow(parseLink(value, base), [], graphDefaults, []);
+      const link = parseLink(value, base);
+      if (link === undefined) withoutEvidence += 1;
+      else follow(link, [], graphDefaults, []);
+      return;
     }
     if (isPlainContainer(value) && Object.keys(value).length > 0) {
       for (const child of Object.values(value)) heldAtPath(child);
       return;
     }
-    inWiring += 1;
+    withoutEvidence += 1;
   };
 
   const inBinding = (value: unknown, rest: readonly string[]): void => {
     if (isCellLink(value)) {
-      return follow(parseLink(value, base), rest, graphDefaults, []);
+      const link = parseLink(value, base);
+      if (link === undefined) withoutEvidence += 1;
+      else follow(link, rest, graphDefaults, []);
+      return;
     }
     if (rest.length === 0) return heldAtPath(value);
     const [segment, ...remaining] = rest;
+    // The wiring leaving a path out is the wiring's choice: no evidence.
     if (!isPlainContainer(value)) {
-      // The wiring left the path out: the code is handed nothing it chose.
-      inWiring += 1;
+      withoutEvidence += 1;
       return;
     }
     const children = segment === "*"
@@ -388,58 +501,68 @@ const reachThroughInput = (
       ? [Reflect.get(value, segment)]
       : [];
     if (children.length === 0) {
-      inWiring += 1;
+      withoutEvidence += 1;
       return;
     }
     for (const child of children) inBinding(child, remaining);
   };
 
   inBinding(binding, path);
-  return { locations, inWiring };
+  return { locations, absences, withoutEvidence };
 };
 
 /**
- * The input requirements `requirements` that the node running `code`, bound
- * by `binding`, fails, each as a refusal. Reads go through `tx` under `meta`,
- * which marks them as the verifier's own (§8.10.1, §18.6.2), so they are not
- * consumed inputs of anything else in the transaction.
+ * The input requirements of `resolution` that the node running `code`,
+ * bound by `binding`, fails, each as a refusal. Reads go through `tx` under
+ * `meta`, which marks them as the verifier's own (§8.10.1, §18.6.2), so they
+ * are not consumed inputs of anything else in the transaction.
  *
  * Labels are the stored ones, so the check is made before the transaction
  * writes: a transaction that has written may have changed a value whose label
- * the boundary pass has not yet derived, and is refused instead.
+ * the boundary pass has not yet derived, and is refused instead. The runner
+ * checks before the node's code runs, when nothing has been written.
  */
-export const argumentInputRefusals = (
+export const nodeInputRefusals = (
   tx: IExtendedStorageTransaction,
   code: string,
   binding: unknown,
   base: NormalizedFullLink,
-  requirements: readonly ArgumentRequirement[],
+  resolution: NodeInputResolution,
   meta: Metadata,
-  foreignSchema?: JSONSchema,
-): CfcArgumentInputRefusal[] => {
-  if (requirements.length === 0) return [];
+): CfcNodeInputRefusal[] => {
+  if (!resolution.codeSchemaKnown) {
+    return [{
+      reason: `input schema of ${code} is not available`,
+      verdict: true,
+    }];
+  }
+  if (resolution.requirements.length === 0) return [];
   if (tx.hasWrites()) {
     return [{
       reason: `input requiredIntegrity of ${code} checked after a write`,
-      verdict: false,
+      verdict: true,
     }];
   }
   const trust = cfcFloorTrustContext(tx);
-  const refusals: CfcArgumentInputRefusal[] = [];
-  for (const requirement of requirements) {
+  const refusals: CfcNodeInputRefusal[] = [];
+  for (const requirement of resolution.requirements) {
     const reach = reachThroughInput(
       tx,
       binding,
       base,
       requirement.path,
       meta,
-      foreignSchema,
+      resolution,
     );
     const observations: (readonly CfcAtom[])[] = [
-      ...reach.locations.flatMap(({ location, leaves }) =>
-        consumedIntegrityAt(tx, location, leaves)
+      ...reach.locations.flatMap(({ location, leaves, references }) =>
+        consumedIntegrityAt(tx, location, leaves, references)
       ),
-      ...Array.from({ length: reach.inWiring }, (): readonly CfcAtom[] => []),
+      ...reach.absences,
+      ...Array.from(
+        { length: reach.withoutEvidence },
+        (): readonly CfcAtom[] => [],
+      ),
     ];
     if (
       cfcIntegritySatisfiesFloorCoherently(

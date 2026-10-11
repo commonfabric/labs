@@ -64,7 +64,6 @@ import type { Cancel } from "../cancel.ts";
 import { Cell } from "../cell.ts";
 import type {
   CfcAddress,
-  CfcArgumentInputRefusal,
   CfcContentAddressedLabels,
   CfcDeclaredMonotonicityMode,
   CfcDeclaredWideningExemption,
@@ -76,6 +75,7 @@ import type {
   CfcGrantWriteInput,
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
+  CfcNodeInputRefusal,
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcRefusalDetail,
@@ -2178,7 +2178,7 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * boundary pass turns into a reason, and marks the transaction CFC-relevant
    * so that pass runs.
    */
-  recordCfcArgumentInputRefusal(refusal: CfcArgumentInputRefusal): void;
+  recordCfcNodeInputRefusal(refusal: CfcNodeInputRefusal): void;
 
   markCfcRelevant(reason?: string): void;
   invalidateCfc(reason: string): void;

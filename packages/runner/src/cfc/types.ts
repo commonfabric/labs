@@ -1040,7 +1040,7 @@ export const DEFAULT_CFC_DECLARED_MONOTONICITY_MODE:
  * runner before the node's code runs and turned into a reason by the
  * boundary pass.
  */
-export type CfcArgumentInputRefusal = {
+export type CfcNodeInputRefusal = {
   readonly reason: string;
   /**
    * Whether the failure is a verdict on the data (see `verdict-reason.ts`).
@@ -1195,7 +1195,7 @@ export type CfcTxState = {
   // Input requirements a node's code declares that this attempt's inputs
   // failed (§8.9, §8.10.3), recorded by the runner before the code runs.
   // prepareBoundaryCommit turns each into a reason.
-  argumentInputRefusals: CfcArgumentInputRefusal[];
+  nodeInputRefusals: CfcNodeInputRefusal[];
   // Grant documents consulted by policyState-guarded boundary evaluation in
   // this transaction (§8.12.7 route 2a), recorded by the runner-side grant
   // resolver, deduplicated by address. Folded into PreparedDigestInput.

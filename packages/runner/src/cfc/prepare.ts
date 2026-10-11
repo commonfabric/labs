@@ -6798,19 +6798,21 @@ export const cfcFloorTrustContext = (
  * a read in the transaction's log, and one for each of `leaves` — the value's
  * leaf positions, relative to `address.path` — as its own label resolves
  * there, empty where no label reaches it, since a public location is consumed
- * too (§8.10.3). Link-carried entries are left out: they copy a reference's
- * target evidence onto the reference (§8.2.5), which is not evidence the
- * reference's holder gave it. `address.path` is a payload path, as a link's
- * is.
+ * too (§8.10.3). Entries at or below each of `references` — the reference
+ * slots the value holds, relative to `address.path` — are left out: a slot
+ * contributes confidentiality only (§8.2.4), and the reference's target is
+ * observed on its own. Link-carried entries are left out too: they copy a
+ * target's evidence onto the reference (§8.2.5). `address.path` is a payload
+ * path, as a link's is.
  *
- * For a node's input requirements (§8.9, §8.10.3), whose
- * observations are made by following the node's binding rather than read
- * from the log.
+ * For a node's input requirements (§8.9, §8.10.3), whose observations are
+ * made by following the node's binding rather than read from the log.
  */
 export const consumedIntegrityAt = (
   tx: IExtendedStorageTransaction,
   address: NormalizedFullLink,
   leaves: readonly (readonly string[])[],
+  references: readonly (readonly string[])[] = [],
 ): (readonly CfcAtom[])[] => {
   const scope = normalizeCellScope(address.scope);
   const metadata = storedMetadataFor(
@@ -6822,10 +6824,14 @@ export const consumedIntegrityAt = (
   );
   if (metadata === undefined) return [[]];
   const path = canonicalizeLogicalPath(address.path);
+  const slots = references.map((reference) => [...path, ...reference]);
   const entries = consumedEntriesForRead(metadata, path, {
     nonRecursive: false,
     consumes: "all",
-  }).filter((entry) => entry.origin !== "link");
+  }).filter((entry) =>
+    entry.origin !== "link" &&
+    !slots.some((slot) => isPrefix(slot, entry.path))
+  );
   const observations: (readonly CfcAtom[])[] = consumedLocations(
     stringTupleKey([address.space, address.id, scope]),
     entries,
@@ -6841,6 +6847,37 @@ export const consumedIntegrityAt = (
     );
   }
   return observations.length > 0 ? observations : [[]];
+};
+
+/**
+ * The evidence a container at `address` carries about its own current value:
+ * the integrity of the entries at exactly its path that bind the value now
+ * there (derived, structure and minted entries), never one inherited from an
+ * ancestor, and never a declared store policy, which outlives the value it
+ * was declared over. A path found absent from the container is observed with
+ * this evidence (§4.6.3's `shape`): the writer of the container's current
+ * value is who left the path out.
+ */
+export const ownEvidenceAt = (
+  tx: IExtendedStorageTransaction,
+  address: NormalizedFullLink,
+): readonly CfcAtom[] => {
+  const scope = normalizeCellScope(address.scope);
+  const metadata = storedMetadataFor(
+    tx,
+    address.space,
+    address.id,
+    scope,
+    "application/json",
+  );
+  if (metadata === undefined) return [];
+  const path = canonicalizeLogicalPath(address.path);
+  const at = pathKey(path);
+  const entries = metadata.labelMap.entries.filter((entry) =>
+    pathKey(entry.path) === at && bindsCurrentValueEvidence(entry) &&
+    isWitnessEvidence(entry)
+  ).map(asWitnessEvidence);
+  return labelForEntriesAtPath(entries, path)?.integrity ?? [];
 };
 
 const verifyInputRequirements = (
@@ -10778,7 +10815,7 @@ export function* prepareBoundaryCommitSteps(
   }
   // The input requirements a node's code declares, checked by the runner
   // before the code ran (§8.9, §8.10.3; `cfc/node-input-requirements.ts`).
-  for (const refusal of state.argumentInputRefusals) {
+  for (const refusal of state.nodeInputRefusals) {
     reasons.push(
       refusal.verdict ? verdictReason(refusal.reason) : refusal.reason,
     );

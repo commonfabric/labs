@@ -430,22 +430,40 @@ Not one of §18.6.4's eight items, but a check §8.9 requires of every node
 defines, so its arrangement and gaps are recorded here.
 
 **What the runtime does.** Before a lift's, a computed node's or a handler's
-code runs, `#checkInputRequirements` in `runner.ts` resolves the
-`requiredIntegrity` declarations of the node's input schema and
-`argumentInputRefusals` in `cfc/node-input-requirements.ts` checks each
-against what the node's binding reaches at the declared path, coherently
-(`cfcIntegritySatisfiesFloorCoherently`, the predicate the write gate uses).
-Each failure is recorded on the transaction (`recordCfcArgumentInputRefusal`)
-and becomes a prepare reason, so it refuses the commit under the enforcing
-modes. A reference supplies its target's integrity and its slot contributes
-confidentiality only (§8.2.4, as the dereference join does); a value written
-in the binding itself carries no evidence; a path read and found absent is a
-`shape` observation (§4.6.3) of the position it is absent from; every leaf of
-a reached value is an observation, an unlabeled one carrying no integrity.
+code runs, `#checkInputRequirements` in `runner.ts` calls
+`resolveNodeInputRequirements` and `nodeInputRefusals` in
+`cfc/node-input-requirements.ts`. They check each `requiredIntegrity` the
+node's input schema declares against what the node's binding reaches at the
+declared path, coherently (`cfcIntegritySatisfiesFloorCoherently`, the
+predicate the write gate uses). Each failure is recorded on the transaction
+(`recordCfcNodeInputRefusal`) and becomes a prepare reason, so it refuses the
+commit under the enforcing modes. What each observation carries:
+
+- a reference supplies its target's integrity, and its slot contributes
+  confidentiality only (§8.2.4): entries at a reference slot, and link-carried
+  entries copied from a target (§8.2.5), are left out of integrity;
+- a value written in the binding itself, a handler's `$event` payload
+  included, carries no evidence;
+- a path read and found absent is a `shape` observation (§4.6.3) carrying the
+  evidence its container holds about its own current value (`ownEvidenceAt`
+  in `cfc/prepare.ts`: derived, structure and minted entries at exactly the
+  container's path), never a label inherited from an ancestor and never a
+  declared store policy; a path past a scalar or into a missing document
+  carries none;
+- a `default` that a schema other than the code's own would supply at an
+  absent path (one a reference carries, or the graph's) and that the code's
+  schema would not supply the same way carries none;
+- every leaf of a reached value is an observation, an unlabeled one carrying
+  no integrity.
+
 For verified code the requirements are those of the schema bound to the code
 identity that ran, together with the graph's own, which may add requirements
-and cannot remove one: that is the one point under a `SPEC-PENDING` marker
-(commonfabric/specs#62).
+and cannot remove one: the one point under a `SPEC-PENDING` marker
+(commonfabric/specs#62). A verified identity whose artifact is not indexed is
+refused, terminally for that run. The identity is the function's verified
+provenance, recorded when its module is evaluated, so a function two factories
+share carries the identity, and the requirements, of the factory it was first
+registered under.
 
 **A host arrangement, with direction.** The observations are found by
 following the node's binding to everything its code can reach at each
@@ -465,14 +483,18 @@ read. It stands in for three gaps in the read log, each a follow-up:
 When the log records each of these, the check can take its observations from
 the log and the reach can go.
 
-**Known gaps, with direction.**
+**Known gaps and residuals, with direction.**
 
 - `maxConfidentiality` declared on a node's input is not checked: an
   under-taint for code that relies on such a ceiling.
 - The inputs of builtins are not checked: an under-taint for a builtin whose
   input schema declares `requiredIntegrity`.
+- Choosing which stamped value to bind is not ruled out: a binding may point
+  an input at any value carrying the required evidence, an older one or one
+  from another item included. Binding two inputs to one item is what
+  instance-bound integrity (`scope.valueRef`, §4.5.1, §8.10.4) is for.
 - A `requiredIntegrity` inside an `anyOf` or `oneOf` branch is applied
   whichever branch the value takes, an over-taint; §4.2.1.1 keeps such
   declarations outside the normalized profile.
-- A verified identity whose artifact is not indexed is refused with a
-  retryable reason, an over-taint until the artifact is indexed.
+- The cycle check keys on each reference's target, so a chain that passes one
+  target twice on different walks is refused, an over-taint.

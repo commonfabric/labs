@@ -82,9 +82,9 @@ import {
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
 import {
-  argumentInputRefusals,
-  argumentIntegrityRequirements,
-  type ArgumentRequirementResolution,
+  nodeInputRefusals,
+  type NodeInputResolution,
+  resolveNodeInputRequirements,
 } from "./cfc/node-input-requirements.ts";
 import {
   recordNewDocumentProtectedDefaults,
@@ -143,10 +143,7 @@ import {
   type ScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import {
-  forEachSubschema,
-  isSubschema,
-} from "@commonfabric/data-model-schema/schema-walk";
+import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import { speculationRunContextOf } from "./speculation/overlay-destination.ts";
 import {
   navigateEventContextFromRunInfo,
@@ -10667,52 +10664,8 @@ export class Runner {
   }
 
   /**
-   * The integrity requirements of a node's code on its input (§8.9, §8.10.3).
-   * For verified code they are those of the schema bound to the identity that
-   * ran — the artifact indexed under the identity its outputs are stamped
-   * with, not whatever module carried the function here — together with those
-   * of the schema the graph carries for the node, which can add a requirement
-   * and cannot remove one. Code with no verified identity has no other schema
-   * than the graph's. `codeSchema` is false when no artifact is indexed under
-   * a verified identity, so the code's own schema is unknown. `foreignSchema`
-   * is the graph's schema when it is not the code's: a `default` in it would
-   * hand the code a value the graph chose.
-   */
-  #inputRequirements(
-    identity: ImplementationIdentity | undefined,
-    graphSchema: JSONSchema | undefined,
-  ): ArgumentRequirementResolution {
-    if (identity?.kind !== "verified") {
-      return {
-        requirements: argumentIntegrityRequirements([graphSchema]),
-        codeSchema: true,
-        foreignSchema: undefined,
-      };
-    }
-    const artifact: unknown =
-      identity.moduleIdentity === undefined || identity.symbol === undefined
-        ? undefined
-        : this.#runtime.patternManager.artifactFromIdentitySync(
-          identity.moduleIdentity,
-          identity.symbol,
-        );
-    if (typeof artifact !== "function" && !isObjectOrArray(artifact)) {
-      return { requirements: [], codeSchema: false, foreignSchema: undefined };
-    }
-    const declared: unknown = Reflect.get(artifact, "argumentSchema");
-    const codeSchema = isSubschema(declared) ? declared : undefined;
-    // SPEC-PENDING https://github.com/commonfabric/specs/pull/62
-    return {
-      requirements: argumentIntegrityRequirements([codeSchema, graphSchema]),
-      codeSchema: true,
-      foreignSchema: deepEqual(graphSchema, codeSchema)
-        ? undefined
-        : graphSchema,
-    };
-  }
-
-  /**
-   * Checks a node's input requirements before its code runs, and records each
+   * Checks a node's input requirements (§8.9, §8.10.3,
+   * `cfc/node-input-requirements.ts`) before its code runs, and records each
    * failure on `tx` for the boundary pass, which refuses the commit under the
    * enforcing modes. The reads are the verifier's own (§8.10.1, §18.6.2):
    * marked so they enter no consumed set, while the scheduler still sees them,
@@ -10726,35 +10679,34 @@ export class Runner {
     binding: unknown,
     inputsCell: Cell<any>,
     graphSchema: JSONSchema | undefined,
-    resolved: Map<string, ArgumentRequirementResolution>,
+    resolved: Map<string, NodeInputResolution>,
   ): void {
     const code = identity?.kind === "verified"
       ? `${identity.moduleIdentity ?? "?"}:${identity.symbol ?? "?"}`
       : "unverified code";
-    let inputs = resolved.get(code);
-    if (inputs === undefined) {
-      inputs = this.#inputRequirements(identity, graphSchema);
-      // Only a found artifact is remembered: one not indexed yet may be later.
-      if (inputs.codeSchema) resolved.set(code, inputs);
+    let resolution = resolved.get(code);
+    if (resolution === undefined) {
+      resolution = resolveNodeInputRequirements(
+        identity,
+        graphSchema,
+        (moduleIdentity, symbol) =>
+          this.#runtime.patternManager.artifactFromIdentitySync(
+            moduleIdentity,
+            symbol,
+          ),
+      );
+      // An artifact not indexed yet may be on a later run.
+      if (resolution.codeSchemaKnown) resolved.set(code, resolution);
     }
-    if (!inputs.codeSchema) {
-      tx.recordCfcArgumentInputRefusal({
-        reason: `input schema of ${code} is not available`,
-        verdict: false,
-      });
-      return;
-    }
-    if (inputs.requirements.length === 0) return;
     let refusals;
     try {
-      refusals = argumentInputRefusals(
+      refusals = nodeInputRefusals(
         tx,
         code,
         binding,
         inputsCell.getAsNormalizedFullLink(),
-        inputs.requirements,
+        resolution,
         internalVerifierRead,
-        inputs.foreignSchema,
       );
     } catch (error) {
       refusals = [{
@@ -10764,7 +10716,7 @@ export class Runner {
         verdict: !(error instanceof LocalReadUnavailable),
       }];
     }
-    for (const refusal of refusals) tx.recordCfcArgumentInputRefusal(refusal);
+    for (const refusal of refusals) tx.recordCfcNodeInputRefusal(refusal);
   }
 
   #readJavaScriptArgument(
@@ -11509,7 +11461,7 @@ export class Runner {
     // resolved on its first run.
     const inputRequirements = new Map<
       string,
-      ArgumentRequirementResolution
+      NodeInputResolution
     >();
 
     const handlerResultCell = schedulerRehydration.viewLocalOnly
@@ -11587,7 +11539,9 @@ export class Runner {
           tx,
         );
         // Before the body, while the transaction has written nothing, as for
-        // a lift: the event and the state the handler is bound to.
+        // a lift: the state the handler is bound to, under `$ctx`, and the
+        // event, under `$event`, whose payload is a value in the wiring and
+        // so never satisfies a `requiredIntegrity`.
         this.#checkInputRequirements(
           tx,
           policyFacingIdentity,
@@ -11886,7 +11840,7 @@ export class Runner {
     // resolved on its first run.
     const inputRequirements = new Map<
       string,
-      ArgumentRequirementResolution
+      NodeInputResolution
     >();
     const fnSource = fn.toString();
     // See the handler's counterpart above: what names the node, reduced once

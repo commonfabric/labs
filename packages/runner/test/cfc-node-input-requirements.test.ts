@@ -15,11 +15,14 @@ import { Identity } from "@commonfabric/identity";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import {
-  argumentInputRefusals,
-  argumentIntegrityRequirements,
+  foreignDefaultAt,
+  nodeInputRefusals,
+  type NodeInputResolution,
+  nodeIntegrityRequirements,
+  resolveNodeInputRequirements,
   schemaDefaultsAt,
 } from "../src/cfc/node-input-requirements.ts";
-import type { CfcArgumentInputRefusal } from "../src/cfc/types.ts";
+import type { CfcNodeInputRefusal } from "../src/cfc/types.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -184,14 +187,35 @@ export const wrapView = handler<
 });
 
 /** Settings the owner writes whole, stamped, with no gate in them. */
-export type OwnerSettings = AddIntegrity<{ fix: Fix; gate?: Gate }, readonly ["owner-gate"]>;
+export type OwnerSettings = AddIntegrity<
+  { fix: Fix; gate?: Gate; nested?: { fix: Fix; gate?: Gate } },
+  readonly ["owner-gate"]
+>;
 
 /** The owner saves settings that leave the gate out. */
 export const saveSettings = handler<void, { settings: Writable<OwnerSettings> }>(
   (_, { settings }) => {
-    settings.set({ fix: { lat: 51.6 } } as OwnerSettings);
+    settings.set(
+      { fix: { lat: 51.6 }, nested: { fix: { lat: 51.6 } } } as OwnerSettings,
+    );
   },
 );
+
+/** The owner saves settings with a gate in them. */
+export const saveSettingsWithGate = handler<
+  void,
+  { settings: Writable<OwnerSettings> }
+>((_, { settings }) => {
+  settings.set({ fix: { lat: 51.6 }, gate: { always: true } } as OwnerSettings);
+});
+
+/** Other code deletes the gate from the owner's settings. */
+export const dropGate = handler<
+  void,
+  { settings: Writable<{ fix: Fix; gate?: Gate }> }
+>((_, { settings }) => {
+  settings.set({ fix: { lat: 51.6 } });
+});
 
 /** A trusted handler that acts on a gate, which it requires the owner wrote. */
 export const useGate = handler<
@@ -261,11 +285,14 @@ const GATE_OUTPUTS = `
     nullableRun: coarsenNullable({ fix, gate: standIn as any }),
     bareRun: coarsenOptional(bare as any),
     settingsRun: coarsenOptional(settings as any),
+    settingsFixRun: coarsenOptional(settings.key("nested") as any),
     openGate: openGate({ gate }),
     forge: forge({ standIn }),
     assemble: assemble({ view, fix }),
     wrapView: wrapView({ wrap, view }),
-    saveSettings: saveSettings({ settings }),`;
+    saveSettings: saveSettings({ settings }),
+    saveSettingsWithGate: saveSettingsWithGate({ settings }),
+    dropGate: dropGate({ settings }),`;
 
 const HONEST_GATE_OUTPUTS = `
     honest: coarsen({ fix, gate: gate as any }),
@@ -290,8 +317,8 @@ type Outputs = Record<string, string | undefined>;
 // counts the verifier's own reads its transaction had made by then.
 type Recorded = { reason: string; verifierReads: number };
 let recorded: Recorded[] = [];
-const recordCfcArgumentInputRefusal = ExtendedStorageTransaction.prototype
-  .recordCfcArgumentInputRefusal;
+const recordCfcNodeInputRefusal = ExtendedStorageTransaction.prototype
+  .recordCfcNodeInputRefusal;
 
 const failedAt = (path: string) =>
   recorded.filter(({ reason }) =>
@@ -354,24 +381,23 @@ const run = async (
 describe("cfc node input requirements", () => {
   beforeEach(() => {
     recorded = [];
-    ExtendedStorageTransaction.prototype.recordCfcArgumentInputRefusal =
-      function (
-        this: ExtendedStorageTransaction,
-        refusal: CfcArgumentInputRefusal,
-      ) {
-        recorded.push({
-          reason: refusal.reason,
-          verifierReads: [...(this.getReadActivities?.() ?? [])].filter(
-            (read) => isInternalVerifierRead(read.meta),
-          ).length,
-        });
-        return recordCfcArgumentInputRefusal.call(this, refusal);
-      };
+    ExtendedStorageTransaction.prototype.recordCfcNodeInputRefusal = function (
+      this: ExtendedStorageTransaction,
+      refusal: CfcNodeInputRefusal,
+    ) {
+      recorded.push({
+        reason: refusal.reason,
+        verifierReads: [...(this.getReadActivities?.() ?? [])].filter(
+          (read) => isInternalVerifierRead(read.meta),
+        ).length,
+      });
+      return recordCfcNodeInputRefusal.call(this, refusal);
+    };
   });
 
   afterEach(() => {
-    ExtendedStorageTransaction.prototype.recordCfcArgumentInputRefusal =
-      recordCfcArgumentInputRefusal;
+    ExtendedStorageTransaction.prototype.recordCfcNodeInputRefusal =
+      recordCfcNodeInputRefusal;
   });
 
   // §10's boundary-probing example: the integrity that matters is on the
@@ -473,6 +499,30 @@ describe("cfc node input requirements", () => {
       });
     });
 
+    // The absence is observed with the evidence the container holds about
+    // its own value, never a label inherited from an ancestor: a wiring that
+    // points into a stamped document at a path it chose is refused.
+    it("refuses a gate found absent where the wiring chose the container", async () => {
+      await run(GATE_OUTPUTS, async (send, read) => {
+        await send("saveSettings");
+        expect((await read()).settingsFixRun).toBeUndefined();
+      });
+    });
+
+    // Nor can other code launder an absence by deleting the owner's gate:
+    // the container's evidence is then the deleter's.
+    it("refuses a gate other code deleted from the owner's settings", async () => {
+      await run(GATE_OUTPUTS, async (send, read) => {
+        await send("saveSettingsWithGate");
+        expect((await read()).settingsRun).toBe("near 52");
+        const before = failedAt("/gate").length;
+        await send("dropGate");
+        // Refused: the result keeps the run before the deletion.
+        expect((await read()).settingsRun).toBe("near 52");
+        expect(failedAt("/gate").length).toBeGreaterThan(before);
+      });
+    });
+
     // Selection among values the owner stamped is not something an input
     // requirement rules out: binding two inputs to one item is what
     // instance-bound integrity is for.
@@ -522,44 +572,110 @@ describe("cfc node input requirements", () => {
     // runner checks it beside the schema of the code the identity names.
     it("keeps the code's requirement under a weaker graph schema", () => {
       expect(
-        argumentIntegrityRequirements([required, { type: "object" }]),
+        nodeIntegrityRequirements([required, { type: "object" }]),
       ).toEqual([{ path: ["gate"], requiredIntegrity: ["owner-gate"] }]);
-      expect(argumentIntegrityRequirements([required, required])).toHaveLength(
+      expect(nodeIntegrityRequirements([required, required])).toHaveLength(
         1,
       );
     });
 
     it("finds a default that could fill a path, and only such a default", () => {
-      expect(schemaDefaultsAt({ default: 1 }, [])).toBe(true);
+      expect(schemaDefaultsAt({ default: 1 }, [])?.size).toBe(1);
       expect(
         schemaDefaultsAt(
           { properties: { gate: { default: { always: true } } } },
           ["gate"],
-        ),
-      ).toBe(true);
+        )?.size,
+      ).toBe(1);
       expect(
-        schemaDefaultsAt({ properties: { other: { default: "x" } } }, ["gate"]),
-      ).toBe(false);
-      expect(schemaDefaultsAt({ default: { other: 1 } }, ["gate"])).toBe(false);
-      expect(schemaDefaultsAt({ default: { gate: 1 } }, ["gate"])).toBe(true);
-      expect(schemaDefaultsAt({ $ref: "#/$defs/missing" }, ["gate"])).toBe(
+        schemaDefaultsAt({ properties: { other: { default: "x" } } }, ["gate"])
+          ?.size,
+      ).toBe(0);
+      expect(schemaDefaultsAt({ default: { other: 1 } }, ["gate"])?.size).toBe(
+        0,
+      );
+      expect(schemaDefaultsAt({ default: { gate: 1 } }, ["gate"])?.size).toBe(
+        1,
+      );
+      expect(schemaDefaultsAt({ $ref: "#/$defs/missing" }, ["gate"]))
+        .toBeUndefined();
+    });
+
+    // A default another schema would supply counts as the wiring's only where
+    // the code's own schema would not supply the same one.
+    it("counts a foreign default only where it differs from the code's", () => {
+      const code: JSONSchema = {
+        properties: { gate: { default: { always: false } } },
+      };
+      const same = { properties: { gate: { default: { always: false } } } };
+      const opened = { properties: { gate: { default: { always: true } } } };
+      expect(foreignDefaultAt(same, ["gate"], code, ["gate"])).toBe(false);
+      expect(foreignDefaultAt(opened, ["gate"], code, ["gate"])).toBe(true);
+      expect(foreignDefaultAt(opened, ["gate"], undefined, ["gate"])).toBe(
         true,
       );
+      expect(
+        foreignDefaultAt(
+          { properties: { other: { default: 1 } } },
+          ["gate"],
+          undefined,
+          ["gate"],
+        ),
+      ).toBe(false);
+    });
+
+    // A graph built as data that names the code's identity under an empty
+    // schema still runs under the code's requirement.
+    it("takes the code's requirements whatever schema the graph carries", () => {
+      const resolution = resolveNodeInputRequirements(
+        { kind: "verified", moduleIdentity: "m", symbol: "toCity" },
+        { type: "object" },
+        (moduleIdentity, symbol) =>
+          moduleIdentity === "m" && symbol === "toCity"
+            ? { argumentSchema: required }
+            : undefined,
+      );
+      expect(resolution.requirements).toEqual([
+        { path: ["gate"], requiredIntegrity: ["owner-gate"] },
+      ]);
+    });
+
+    it("refuses a verified identity with no indexed artifact", () => {
+      const resolution = resolveNodeInputRequirements(
+        { kind: "verified", moduleIdentity: "m", symbol: "gone" },
+        required,
+        () => undefined,
+      );
+      expect(resolution.codeSchemaKnown).toBe(false);
+    });
+
+    it("takes the graph's schema for code with no verified identity", () => {
+      expect(
+        resolveNodeInputRequirements(undefined, required, () => undefined)
+          .requirements,
+      ).toEqual([{ path: ["gate"], requiredIntegrity: ["owner-gate"] }]);
     });
   });
 
   // Each reference and absence case, against one unlabeled document.
   describe("references and absence", () => {
-    const requirements = [{
-      path: ["gate"],
-      requiredIntegrity: ["owner-gate"],
-    }];
+    const resolutionWith = (
+      graphSchema?: JSONSchema,
+    ): NodeInputResolution => ({
+      requirements: [{ path: ["gate"], requiredIntegrity: ["owner-gate"] }],
+      codeSchemaKnown: true,
+      codeSchema: undefined,
+      graphSchema,
+    });
     const withDocument = async (
       body: (
-        refusals: (binding: unknown) => readonly unknown[],
+        refusals: (
+          binding: unknown,
+          graphSchema?: JSONSchema,
+        ) => readonly unknown[],
         link: (schema?: unknown, path?: string[]) => unknown,
         write: (value: unknown) => Promise<void>,
-      ) => Promise<void>,
+      ) => Promise<void> | void,
     ) => {
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = new Runtime({
@@ -588,15 +704,15 @@ describe("cfc node input requirements", () => {
           tx.writeValueOrThrow({ ...base, path: [] }, value as never);
           await tx.commit().settled;
         };
-        const refusals = (binding: unknown) => {
+        const refusals = (binding: unknown, graphSchema?: JSONSchema) => {
           const tx = runtime.edit();
           try {
-            return argumentInputRefusals(
+            return nodeInputRefusals(
               tx,
               "code",
               binding,
               base,
-              requirements,
+              resolutionWith(graphSchema),
               internalVerifierRead,
             );
           } finally {
@@ -611,10 +727,10 @@ describe("cfc node input requirements", () => {
     };
 
     const reason = (refused: readonly unknown[]) =>
-      (refused[0] as CfcArgumentInputRefusal | undefined)?.reason;
+      (refused[0] as CfcNodeInputRefusal | undefined)?.reason;
 
     it("refuses a gate found absent where no label vouches for it", async () => {
-      await withDocument(async (refusals, link) => {
+      await withDocument((refusals, link) => {
         expect(reason(refusals({ gate: link() }))).toBe(
           "input requiredIntegrity failed at /gate of code",
         );
@@ -622,7 +738,7 @@ describe("cfc node input requirements", () => {
     });
 
     it("refuses a gate the wiring left out", async () => {
-      await withDocument(async (refusals) => {
+      await withDocument((refusals) => {
         expect(reason(refusals({}))).toBe(
           "input requiredIntegrity failed at /gate of code",
         );
@@ -635,6 +751,30 @@ describe("cfc node input requirements", () => {
         expect(reason(refusals({ gate: link() }))).toBe(
           "input requiredIntegrity failed at /gate of code",
         );
+      });
+    });
+
+    // A default a reference's schema or the graph's would supply where the
+    // gate is absent is the wiring's value, whatever the container holds.
+    it("refuses a gate a reference's schema would default", async () => {
+      await withDocument(async (refusals, link, write) => {
+        await write({});
+        expect(
+          reason(refusals({ gate: link({ default: { always: true } }) })),
+        ).toBe("input requiredIntegrity failed at /gate of code");
+      });
+    });
+
+    it("refuses a gate the graph's schema would default", async () => {
+      await withDocument(async (refusals, link, write) => {
+        await write({});
+        expect(
+          reason(
+            refusals({ gate: link() }, {
+              properties: { gate: { default: { always: true } } },
+            }),
+          ),
+        ).toBe("input requiredIntegrity failed at /gate of code");
       });
     });
   });

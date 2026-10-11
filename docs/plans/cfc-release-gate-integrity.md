@@ -10,7 +10,7 @@ wrote releases both. The write input gate, sink egress and the display's read
 fit now evaluate each observation, then the join ("How the gates evaluate").
 What remains is a specification ruling on the join within one location, and
 the display's fit of a cell's stored label, which still pools.
-[Input requirements on arguments](cfc-argument-input-requirements.md) depends
+[Input requirements on a node's inputs](cfc-node-input-requirements.md) depends
 on the gates holding.
 
 ## What the specification says

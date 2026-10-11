@@ -363,11 +363,15 @@ export const MANIFEST: readonly ManifestRow[] = [
     relation: "missing",
     decidedToday: [
       { file: PREPARE, symbol: "verifyInputRequirements" },
+      { file: "cfc/node-input-requirements.ts", symbol: "nodeInputRefusals" },
     ],
     note: "walks the write target's schema entries rather than an input " +
       "schema, takes the transaction and per-write prefix bounds in place " +
       "of the pseudocode's consumed reads and labels, and returns a " +
-      "tagged refusal reason rather than a boolean",
+      "tagged refusal reason rather than a boolean; a node's own input " +
+      "schema is checked by `nodeInputRefusals`, over observations found by " +
+      "following the node's binding rather than the read log, and it " +
+      "checks `requiredIntegrity` only",
   },
   {
     file: BOUNDARIES,

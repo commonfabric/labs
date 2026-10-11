@@ -33,7 +33,6 @@ import {
   CFC_ENFORCING_STRICTNESS,
   CFC_GRANT_ID_PREFIX,
   type CfcAddress,
-  type CfcArgumentInputRefusal,
   type CfcContentAddressedLabels,
   type CfcDeclaredMonotonicityMode,
   type CfcDeclaredWideningExemption,
@@ -48,6 +47,7 @@ import {
   type CfcLabelMetadataObservation,
   type CfcLabelMetadataProtectionMode,
   cfcMetadataPresent,
+  type CfcNodeInputRefusal,
   type CfcPolicyEvaluationMode,
   type CfcPrefixProvenanceSummary,
   type CfcRecordAddress,
@@ -596,7 +596,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     outbox: [],
     diagnostics: [],
     unprivilegedSystemWrites: [],
-    argumentInputRefusals: [],
+    nodeInputRefusals: [],
     consultedGrants: [],
     consultedPolicyManifests: [],
     labelMetadataObservations: [],
@@ -1287,14 +1287,14 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#cfcState.moduleDelegations = snapshot;
   }
 
-  recordCfcArgumentInputRefusal(refusal: CfcArgumentInputRefusal): void {
+  recordCfcNodeInputRefusal(refusal: CfcNodeInputRefusal): void {
     this.#noteCfcActivity();
     // A refusal recorded after a preparation is one that preparation never
     // saw, so the preparation no longer stands.
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("argument input refusal recorded after prepare");
     }
-    this.#cfcState.argumentInputRefusals.push(Object.freeze({ ...refusal }));
+    this.#cfcState.nodeInputRefusals.push(Object.freeze({ ...refusal }));
     this.markCfcRelevant("node-input-requirements");
   }
 
@@ -4254,8 +4254,8 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     this.#wrapped.clearSchemaRefusal(refusal);
   }
 
-  recordCfcArgumentInputRefusal(refusal: CfcArgumentInputRefusal): void {
-    this.#wrapped.recordCfcArgumentInputRefusal(refusal);
+  recordCfcNodeInputRefusal(refusal: CfcNodeInputRefusal): void {
+    this.#wrapped.recordCfcNodeInputRefusal(refusal);
   }
 
   markCfcRelevant(reason?: string): void {
