@@ -21,8 +21,8 @@ import { BaseElement } from "../../core/base-element.ts";
  * <cf-radio name="option" value="yes" checked>Yes</cf-radio>
  * <cf-radio name="option" value="no">No</cf-radio>
  *
- * @note Use within cf-radio-group, which keeps one radio selected and moves the
- * selection with the arrow keys. Each enabled radio is its own Tab stop.
+ * @note Use within cf-radio-group, which handles the arrow keys and the
+ * selection among its radios. Each enabled radio is its own Tab stop.
  */
 
 export class CFRadio extends BaseElement {
