@@ -102,6 +102,8 @@ export interface CellControllerOptions<T> {
 export class CellController<T> implements ReactiveController {
   private host: ReactiveControllerHost;
   private options: Required<CellControllerOptions<T>>;
+  /** Whether the component writes through a setter of its own. */
+  private readonly _customSetter: boolean;
   private _currentValue: CellHandle<T> | T | undefined;
   private _cellUnsubscribe: (() => void) | null = null;
   private _inputTiming?: InputTimingController;
@@ -125,6 +127,23 @@ export class CellController<T> implements ReactiveController {
    * release the edit — only durable/bound state catching up may.
    */
   private _applyingLocalWrite = false;
+
+  /**
+   * The value of a computed write the bound handle is about to show, which it
+   * shows as {@link updateValue}'s computation returns, in the cell's turn.
+   * Its delivery is a local echo, as one under `_applyingLocalWrite` is.
+   */
+  private _computedEcho: { value: T } | undefined;
+
+  /**
+   * Counts the writes asked of this controller in the bound cell's order,
+   * every one of which goes through {@link _askWrite}; a child's write, in
+   * an order of its own, is not one. A computed write whose turn comes after a
+   * later one was asked for is made, and the controller neither shows nor
+   * announces it: the later write's value stands, as the handle's
+   * generations have it.
+   */
+  private _writesAsked = 0;
 
   /**
    * All writes settled but bound state never converged (e.g. a rebind swapped
@@ -176,6 +195,7 @@ export class CellController<T> implements ReactiveController {
     options: CellControllerOptions<T> = {},
   ) {
     this.host = host;
+    this._customSetter = options.setValue !== undefined;
     this.options = {
       timing: options.timing || { strategy: "debounce", delay: 300 },
       getValue: options.getValue || this.defaultGetValue.bind(this),
@@ -288,17 +308,36 @@ export class CellController<T> implements ReactiveController {
   /**
    * Writes the value `compute` makes from the current one, as a toggle, or a
    * list with an item added or removed, does. Nothing is computed unless the
-   * controller holds a value its cell's read returned: while the read is
-   * refused nothing is written, and while the bound handle has read nothing
-   * yet the worker is asked first, and the value computed from its answer.
-   * That nothing is not a value: a toggle or a list computed from it would
-   * replace one never shown. A refusal of the read asked for stops it, even
-   * where an update that raced it left the handle holding a value.
+   * cell's value is known: while the read is refused nothing is written, and
+   * while the bound handle has read nothing yet the worker is asked first,
+   * and the value computed from its answer. That nothing is not a value: a
+   * toggle or a list computed from it would replace one never shown.
+   *
+   * On a cell, `compute` runs in its turn among the cell's operations
+   * ({@link CellHandle.update}): after the writes asked for before it,
+   * through any handle on the cell's path, a write still waiting on its
+   * timing included, and before those asked for after it. A write asked for
+   * while it waits on the worker so lands after it, as the person made them.
+   * Its value shows, and `onChange` hears of it, in that turn: at once where
+   * nothing waits, else once what was asked for before it is done. Where a
+   * write was asked of this controller after it, by its turn, the controller
+   * neither shows nor announces it: its echo from the worker is then a
+   * delivery like any other, until the later write's turn.
+   * One asked for on a cell no longer bound when its turn comes is made
+   * there, where it was asked for, and this controller shows and announces
+   * nothing of it.
    *
    * `compute` is handed what the controller reads as, which is `undefined`
    * for a cell that holds nothing where the controller has no empty value of
-   * its own. A value equal to the current one is not written. Settles once
-   * the value is written or passed over.
+   * its own. A value equal to the current one is not written. Settles in its
+   * turn, once the value is computed, or once the update is passed over.
+   * On a cell, it rejects when `compute` throws, and when `onChange` throws,
+   * once the write has gone ahead; on a plain value, `compute`'s failure
+   * throws from `updateValue()` itself, and `onChange`'s as {@link setValue}'s
+   * does.
+   *
+   * @throws On a cell, when the component writes through a custom
+   *   `setValue`, whose writes the controller cannot put in the cell's order.
    */
   updateValue(
     compute: (current: Readonly<T> | undefined) => T,
@@ -307,22 +346,80 @@ export class CellController<T> implements ReactiveController {
       return Promise.resolve();
     }
     if (this._refusal !== undefined) return Promise.resolve();
-    const handle = isCellHandle(this._currentValue)
-      ? this._currentValue as CellHandle<T>
-      : undefined;
-    if (handle === undefined || !("unread" in handle.lastRead())) {
+    if (!isCellHandle(this._currentValue)) {
       this._writeComputed(compute);
       return Promise.resolve();
     }
+    if (this._customSetter) {
+      throw new Error(
+        "CellController.updateValue(): a cell is written in its order only " +
+          "through the default setter, not a custom `setValue`",
+      );
+    }
+    const handle = this._currentValue as CellHandle<T>;
     const epoch = this._bindEpoch;
-    return this._askWorker().then((admitted) => {
-      if (
-        !admitted || epoch !== this._bindEpoch ||
-        this._currentValue !== handle || this._refusal !== undefined ||
-        !("value" in handle.lastRead())
-      ) return;
-      this._writeComputed(compute);
-    });
+    // A write waiting on its timing was asked for first.
+    this._inputTiming?.flush();
+    const asked = this._askWrite();
+    const turn = Promise.withResolvers<void>();
+    let inFlight = false;
+    let computing = false;
+    handle.update((held) => {
+      const current = this.options.getValue(held as T | undefined);
+      computing = true;
+      const next = compute(current);
+      computing = false;
+      if (deepValueEqual(next, current)) {
+        turn.resolve();
+        return held as T;
+      }
+      if (epoch !== this._bindEpoch || asked !== this._writesAsked) {
+        turn.resolve();
+        return next;
+      }
+      this._beginLocalEdit(next);
+      this._computedEcho = { value: next };
+      this._inFlightWrites++;
+      inFlight = true;
+      try {
+        this.options.onChange(next, current as T);
+        turn.resolve();
+      } catch (error) {
+        // The write goes ahead, as setValue's is made before its onChange
+        // runs; the failure is the caller's, as it is there.
+        turn.reject(error);
+      }
+      return next;
+    }).then(
+      () => this._settleComputed(inFlight, epoch),
+      (error) => {
+        this._settleComputed(inFlight, epoch);
+        if (computing) {
+          turn.reject(error);
+          return;
+        }
+        // A refused read writes nothing, as it shows nothing.
+        if (!(error instanceof CellReadRefusedError)) {
+          console.error("[CellController] Updating the cell failed:", error);
+        }
+        turn.resolve();
+      },
+    );
+    return turn.promise;
+  }
+
+  /** Counts a write asked of this controller; returns its place. */
+  protected _askWrite(): number {
+    return ++this._writesAsked;
+  }
+
+  /** A computed write settled, or was passed over. */
+  private _settleComputed(inFlight: boolean, epoch: number): void {
+    this._computedEcho = undefined;
+    if (!inFlight) return;
+    this._inFlightWrites--;
+    if (epoch !== this._bindEpoch || this._inFlightWrites > 0) return;
+    this._releaseLocalEditAfterSettle();
   }
 
   /** Writes what `compute` makes of the current value, where it changes it. */
@@ -333,6 +430,16 @@ export class CellController<T> implements ReactiveController {
     const next = compute(current);
     if (deepValueEqual(next, current)) return;
     this.setValue(next);
+  }
+
+  /**
+   * Shows `value`, a local edit, over bound state until bound state confirms
+   * it or a post-settle delivery supersedes it.
+   */
+  private _beginLocalEdit(value: T): void {
+    this._localEdit = { value };
+    this._settledAwaitingRelease = false;
+    this._lastKnownValue = value;
   }
 
   /**
@@ -360,11 +467,14 @@ export class CellController<T> implements ReactiveController {
   /**
    * Set a new value, handling timing and transactions. Nothing is written
    * while the bound cell's read is refused ({@link refusal}). For a value
-   * computed from the current one, use {@link updateValue}.
+   * computed from the current one, use {@link updateValue}. The value shows
+   * at once; it reaches the cell in its turn among the cell's operations, so
+   * after an update asked for before it, even one waiting on the worker.
    */
   setValue(newValue: T): void {
     if (this._currentValue === undefined || this._currentValue === null) return;
     if (this._refusal !== undefined) return;
+    this._askWrite();
 
     const oldValue = this.getValue();
 
@@ -372,9 +482,7 @@ export class CellController<T> implements ReactiveController {
       // Track the edit so stale bound-state deliveries (late hydration,
       // partial echoes of earlier keystrokes, pre-write snapshots on rebound
       // handles) cannot repaint over it while the write is pending.
-      this._localEdit = { value: newValue };
-      this._settledAwaitingRelease = false;
-      this._lastKnownValue = newValue;
+      this._beginLocalEdit(newValue);
     }
 
     const performUpdate = () => {
@@ -608,7 +716,12 @@ export class CellController<T> implements ReactiveController {
       }
       return false;
     }
-    if (this._applyingLocalWrite) {
+    if (
+      this._applyingLocalWrite ||
+      (this._computedEcho !== undefined &&
+        deepValueEqual(value, this._computedEcho.value))
+    ) {
+      this._computedEcho = undefined;
       // Our own optimistic apply echoing back synchronously. Deliver it as
       // before, but a local echo does not confirm the edit — only bound state
       // catching up (below) or the write settling may release it.
@@ -767,6 +880,7 @@ export class ArrayCellController<T> extends CellController<T[]> {
     if (this.hasCell()) {
       // The runtime merges the append into what the cell holds.
       const cell = this.getCell()!;
+      this._askWrite();
       cell.push(item);
     } else {
       // Fallback for plain arrays
@@ -800,6 +914,7 @@ export class ArrayCellController<T> extends CellController<T[]> {
     const index = currentArray.findIndex((item) => Object.is(item, oldItem));
     if (index !== -1) {
       if (cell !== null) {
+        // A child's write keeps its own order, apart from the list's.
         cell.key(index).set(newItem);
       } else {
         // Fallback for plain arrays

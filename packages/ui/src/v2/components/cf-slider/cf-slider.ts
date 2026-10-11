@@ -316,11 +316,13 @@ export class CFSlider extends BaseElement {
   #pointer: number | undefined;
 
   /**
-   * Moves run in the order they were made. A step on a cell not yet read
-   * waits for the worker; while one waits, later moves to the same cell queue
-   * behind it. A move belongs to the binding it was made on: binding `value`
-   * anew drops the queue, so no move made for one cell reaches another, and a
-   * read the old cell never answers holds nothing up.
+   * Moves run in the order they were made. The cell puts their writes in
+   * order itself; this queue keeps what the slider does around them, its
+   * announcements and a drag's start and commit, in that order too. A step
+   * on a cell not yet read waits for the worker; while one waits, later moves
+   * queue behind it. A move belongs to the binding it was made on: binding
+   * `value` anew drops the queue, so no move made for one cell reaches
+   * another, and a read the old cell never answers holds nothing up.
    */
   #queue: Promise<void> | undefined;
   #binding = 0;

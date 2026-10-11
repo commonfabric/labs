@@ -3,6 +3,7 @@ import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
 import { css, html, PropertyValues } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
+import { valueForDisplay } from "../../core/value-for-display.ts";
 import {
   createArrayCellController,
   createCellController,
@@ -223,6 +224,10 @@ export class CFPicker extends BaseElement {
 
   private _indexCellController = createCellController<number>(this, {
     timing: { strategy: "immediate" },
+    // A cell holding nothing selects the first item, so a pick of it moves
+    // nothing.
+    getValue: (value) =>
+      (isCellHandle<number>(value) ? valueForDisplay(value) : value) ?? 0,
     onChange: (newIndex) => {
       this.emit("cf-change", {
         index: newIndex,
@@ -419,14 +424,18 @@ export class CFPicker extends BaseElement {
     });
   }
 
+  /**
+   * Moves the selection to `index`. Whether that changes it is decided in
+   * its turn among the cell's writes, not against the index shown, which a
+   * step still waiting its turn may yet move.
+   */
   private _selectIndex(index: number): void {
     const len = this._getItems().length;
-    if (index < 0 || index >= len || index === this._currentIndex) {
-      return;
-    }
-    this._indexCellController.setValue(index);
-    this._updateAriaAttributes();
-    this.requestUpdate();
+    if (index < 0 || index >= len) return;
+    void this._indexCellController.updateValue(() => index).then(() => {
+      this._updateAriaAttributes();
+      this.requestUpdate();
+    });
   }
 
   //

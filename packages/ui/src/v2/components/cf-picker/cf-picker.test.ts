@@ -247,6 +247,7 @@ describe("CFPicker stepping", () => {
     willUpdate(changedProperties: Map<string, unknown>): void;
     _selectNext(): void;
     _selectPrevious(): void;
+    _selectIndex(index: number): void;
   };
 
   /** A picker of three items whose selection is `selectedIndex`. */
@@ -291,6 +292,64 @@ describe("CFPicker stepping", () => {
     element._selectPrevious();
 
     expect(writesSent(selectedIndex)).toEqual([]);
+  });
+
+  it("lands a step, then a pick made while the step waits on the worker, in that order", async () => {
+    const selectedIndex = createMockCellHandle<number>();
+    const answer = holdReads(selectedIndex);
+    const element = pickerAt(selectedIndex);
+
+    element._selectNext();
+    element._selectIndex(2);
+    answer({ value: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(writesSent(selectedIndex).map((write) => write.value)).toEqual([
+      1,
+      2,
+    ]);
+  });
+
+  it("writes a pick of the index shown while a step waits on the worker", async () => {
+    // The step will move the selection on from the shown 0, so picking 0 is
+    // a move of its own.
+    const selectedIndex = createMockCellHandle<number>();
+    const answer = holdReads(selectedIndex);
+    const element = pickerAt(selectedIndex);
+
+    element._selectNext();
+    element._selectIndex(0);
+    answer({ value: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(writesSent(selectedIndex).map((write) => write.value)).toEqual([
+      1,
+      0,
+    ]);
+  });
+
+  it("writes nothing for a pick of the index the cell holds", async () => {
+    const selectedIndex = createMockCellHandle(0);
+    const element = pickerAt(selectedIndex);
+
+    element._selectIndex(0);
+    element._selectIndex(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(writesSent(selectedIndex).map((write) => write.value)).toEqual([1]);
+  });
+
+  it("writes nothing for a pick of the first item on a cell holding nothing", async () => {
+    // Nothing selected shows the first item.
+    const selectedIndex = createMockCellHandle<number>();
+    const element = pickerAt(selectedIndex);
+
+    element._selectIndex(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    element._selectIndex(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(writesSent(selectedIndex).map((write) => write.value)).toEqual([1]);
   });
 
   it("writes nothing while the worker refuses the selection's read", () => {
