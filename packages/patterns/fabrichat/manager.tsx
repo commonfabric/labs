@@ -1036,9 +1036,23 @@ interface PickMemberState {
 }
 
 /**
- * Adds a profile to the members the session's group draft has picked, or
- * removes it when it is picked already. Two profiles are the same when they
- * are the same cell.
+ * Whether two profiles name the same person: they are the same cell, or their
+ * `represents-principal` labels attest the same principal.
+ */
+const samePerson = (
+  a: Cell<ChatManagerProfile>,
+  b: Cell<ChatManagerProfile>,
+): boolean => {
+  if (equals(a, b)) return true;
+  const principal = principalOf(a, "represents-principal");
+  return principal !== undefined &&
+    principal === principalOf(b, "represents-principal");
+};
+
+/**
+ * Adds a profile to the members the session's group draft has picked, or,
+ * when the draft has picked that person already, by this profile or another
+ * of theirs, removes every profile of theirs it holds.
  */
 const pickMember = handler<PickMemberEvent, PickMemberState>(
   (event, { draft, profile: bound }) => {
@@ -1046,8 +1060,8 @@ const pickMember = handler<PickMemberEvent, PickMemberState>(
     if (profile === undefined) return;
     const picked = draft.key("picked").get() ?? [];
     draft.key("picked").set(
-      picked.some((known) => equals(known, profile))
-        ? picked.filter((known) => !equals(known, profile))
+      picked.some((known) => samePerson(known, profile))
+        ? picked.filter((known) => !samePerson(known, profile))
         : [...picked, profile],
     );
   },
@@ -1279,8 +1293,9 @@ export const FabriChatManagerCore = pattern<
     // The people the listed rooms' rosters hold, by the principal each
     // profile's own label attests, read beside the rooms that list them, and
     // per session, as `newestFirst` is: a profile attests no one to a reader
-    // its space refuses. A profile attesting no principal names no one to
-    // offer a room to, and this user's own are left out.
+    // its space refuses. A profile attesting no principal, or a DID no
+    // principal can have, names no one to offer a room to, and this user's
+    // own are left out.
     const people = computed(
       (): PerSession<Record<string, ManagerProfileCell[]>> => {
         const self = principalOf(myProfile, "represents-principal");
@@ -1288,7 +1303,9 @@ export const FabriChatManagerCore = pattern<
           (found, entry) =>
             (entry.room.key("roster").get() ?? []).reduce((known, profile) => {
               const principal = principalOf(profile, "represents-principal");
-              if (principal === undefined || principal === self) return known;
+              if (!isPrincipalDID(principal) || principal === self) {
+                return known;
+              }
               const profiles = known[principal] ?? [];
               return profiles.some((each) => equals(each, profile))
                 ? known
@@ -1330,7 +1347,8 @@ export const FabriChatManagerCore = pattern<
       startRefusal.get() === "" ? "none" : "block"
     );
     // Each person once, by the first profile attesting them, and whether the
-    // session's draft has picked them, per session, as `people` is.
+    // session's draft has picked them, by any profile of theirs, per session,
+    // as `people` is.
     const shownPeople = computed((): PerSession<ShownPerson[]> => {
       const picked = draft.get()?.picked ?? [];
       return Object.values(people).flatMap((profiles): ShownPerson[] => {
@@ -1338,7 +1356,7 @@ export const FabriChatManagerCore = pattern<
         if (profile === undefined) return [];
         return [{
           profile,
-          label: picked.some((known) => equals(known, profile))
+          label: picked.some((known) => samePerson(known, profile))
             ? "Added"
             : "Add",
         }];

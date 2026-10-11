@@ -22,8 +22,9 @@ Against the manager's baselines `20261008T225324Z-Oj3DbCTq-94tEYN3`,
 `20261009T161813Z-r7DggcJdZ7FzrPCR`, `20261009T210116Z-99YN5H9jf2UFET6M` and
 `20261010T083035Z-Mp5ZALK-A2rUfm_u`, the pattern-update proof reports
 `argument.requests.*: a schema alternative accepted previously is not
-accepted by the candidate`. A request outcome that is `done` holds the
-`ChatIndexEntry` it produced, whose `room` is a `Cell<ChatRoomLink>`. The
+accepted by the candidate`. A request outcome that is `done` and carries an
+entry, as every one but a `forget`'s does, holds the `ChatIndexEntry` it
+produced, whose `room` is a `Cell<ChatRoomLink>`. The
 recorded `ChatRoomLink` leaves every field it doesn't declare open, so any
 `roster` value was admitted. The candidate types `roster`, and so admits fewer
 values there.
@@ -31,12 +32,12 @@ values there.
 ## Why this could not be done compatibly
 
 Any typed field added to the link narrows it the same way, since the recorded
-link admits anything under a name it does not declare. The room's
-`participants` was no alternative: it adds every author to the roster, so
-deriving it reads every message, and the link's schema is part of every
-manager handler's declared reads. An untyped `roster` would leave the
-manager reading each profile through the link, where typing each entry as a
-link keeps the declared read at the roster itself.
+link admits anything under a name it does not declare. The room's `participants`
+was no alternative: it lists every author beside those the roster holds, so
+deriving it reads every message, and the link's schema is part of every manager
+handler's declared reads. An untyped `roster` would leave the manager reading
+each profile through the link, where typing each entry as a link keeps the
+declared read at the roster itself.
 
 ## Why nothing stored is refused
 

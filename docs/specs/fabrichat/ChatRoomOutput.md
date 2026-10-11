@@ -223,8 +223,9 @@ client:
 - **`PerSpace`**: one instance for the whole room, the same for everyone the
   room's space admits. That is nearly everything: `about`, the messages,
   `recentActivity` and `recentActivityExpiredThrough`, `participants` and
-  `roster`, and the streams. These are the room: a link to the room names them, and passing the
-  link around, to another component or another person, passes the room.
+  `roster`, and the streams. These are the room: a link to the room names them,
+  and passing the link around, to another component or another person, passes
+  the room.
 - **`PerSession`**: one instance per memory session in the room's space. That is
   `messages.windows`, the windows a session has opened onto the messages (see
   [`ChatMessageList`](ChatMessageList.md#scope)), and `participantEntries` and
@@ -241,9 +242,9 @@ client:
 
 Some values are derived when they're read, and stored nowhere, so reading them
 needs no instance of anything: `participants` and `roster`, and in `messages`,
-everything but `windows`. A session's windows come into being with its first `openWindow`, so a
-READ member, who can't write, never has any, and can still read
-`messages.latest`.
+everything but `windows`. A session's windows come into being with its first
+`openWindow`, so a READ member, who can't write, never has any, and can still
+read `messages.latest`.
 
 ## Streams
 

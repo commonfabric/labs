@@ -99,8 +99,8 @@ each of them by profile.
 
 The manager offers its facts and streams as a `[VIEWS]` group, `chats`, for
 hosts that draw natively: `rooms`, `direct`, `requests`, `outgoingNotices`, and
-`people`, and every stream below. A native client drives the manager through that group as
-it drives a room through the room's `room` group (see
+`people`, and every stream below. A native client drives the manager through
+that group as it drives a room through the room's `room` group (see
 [`clients.md`](clients.md#showing-a-room)).
 
 ## Scopes
@@ -113,12 +113,13 @@ it stores needs to be `PerUser` or `PerSession`.
 `rooms` is derived per session all the same, and so is `people`, which is drawn
 from it, though each room's `roster` is shared by everyone the room's space
 admits: a profile lives in its owner's own space, and attests no principal to a
-reader that space refuses, so two readers can key the same roster differently. Each room in it is read under the reader's own access, so a manager
-more than one principal reads, as one outside a home space can be, lists
-different rooms to a principal a room's space refuses than to its members.
-Stored once for every reader, a value readers derive differently is one their
-runtimes overwrite without end. A stream reads neither: a request names a
-room's members by principal or by profile itself.
+reader that space refuses, so two readers can key the same roster differently.
+Each room in it is read under the reader's own access, so a manager more than
+one principal reads, as one outside a home space can be, lists different rooms
+to a principal a room's space refuses than to its members. Stored once for every
+reader, a value readers derive differently is one their runtimes overwrite
+without end. A stream reads neither: a request names a room's members by
+principal or by profile itself.
 
 ## Facts
 
@@ -155,9 +156,10 @@ room's members by principal or by profile itself.
   profile's own `represents-principal` label, never by what a roster claims
   about it. Each profile is listed once, in the order the rooms list them:
   newest room first, and within a room in its roster's order. So a person's
-  first profile is a fixed choice for a given list of rooms. A profile that attests no principal, or one whose label
-  the reader can't read, names no one and is left out, and so are this user's
-  own profiles. Like a roster, it is a claim, not an access list: a client uses
+  first profile is a fixed choice for a given list of rooms. A profile that
+  attests no principal, or a DID no principal can have, or one whose label the
+  reader can't read, names no one and is left out, and so are this user's own
+  profiles. Like a roster, it is a claim, not an access list: a client uses
   it to offer the people to name a new room's members by, through
   `createGroup`'s `profiles`.
 

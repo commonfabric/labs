@@ -5,7 +5,8 @@
  * people, by the principal her profile attests, and leaves him out. He picks
  * her for a group from his draft and creates it, which offers her the group
  * and adds her to its roster with no notice queued; a pick taken back, and a
- * draft emptied by creating its group, offer her nothing. A group whose
+ * draft emptied by creating its group, offer her nothing, and so does a pick
+ * taken back through another profile of hers. A group whose
  * request names her profile on its event is offered to her too, and one
  * naming a profile that attests no principal is refused. Each person writes
  * their own profile here, so its label names them, as a Fabric profile's does.
@@ -19,6 +20,7 @@ import {
   handler,
   multiUserTest,
   pattern,
+  principalOf,
   type RepresentsCurrentUser,
   type Stream,
   TESTS,
@@ -164,6 +166,9 @@ interface Setup {
 
   /** Alice's principal, as her own run of a handler finds it. */
   aliceDid: Writable<string>;
+
+  /** A second profile of Alice's, which she writes as her own. */
+  aliceSecond: Writable<OwnProfile>;
 }
 
 export const setup = pattern(() => ({
@@ -176,6 +181,7 @@ export const setup = pattern(() => ({
     counters: Writable.of<ActivityCounters[]>([]),
   },
   aliceDid: Writable.of<string>(""),
+  aliceSecond: Writable.of<OwnProfile>(),
 }));
 
 // Points her profile at her private inbox, and sends a message, which hands
@@ -187,6 +193,11 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const writeProfile = writeOwnProfile({
     profile,
     name: "Alice",
+    inbox: inboxLinkOf(counting),
+  });
+  const writeSecond = writeOwnProfile({
+    profile: setup.aliceSecond,
+    name: "Alice, again",
     inbox: inboxLinkOf(counting),
   });
   const action_note_principal = action(() =>
@@ -206,6 +217,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   return {
     [TESTS]: [
       { action: writeProfile, event: {}, trustedUi: profileGesture },
+      { action: writeSecond, event: {}, trustedUi: profileGesture },
       { action: action_note_principal },
       {
         action: room.composerSend,
@@ -254,6 +266,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     )
   );
   const pick = { action: manager.pickMember, event: { profile: aliceProfile } };
+  const aliceSecond = profileOf(setup.aliceSecond);
 
   return {
     [TESTS]: [
@@ -285,6 +298,21 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       {
         action: manager.createDraftedGroup,
         event: { requestId: "g-unpicked", title: "g-unpicked", members: [] },
+        trustedUi: startGesture,
+      },
+      // A pick taken back through her other profile offers her nothing
+      // either: both name her.
+      {
+        assertion: assert(() =>
+          principalOf(aliceSecond, "represents-principal") ===
+            setup.aliceDid.get()
+        ),
+      },
+      pick,
+      { action: manager.pickMember, event: { profile: aliceSecond } },
+      {
+        action: manager.createDraftedGroup,
+        event: { requestId: "g-swapped", title: "g-swapped", members: [] },
         trustedUi: startGesture,
       },
       // A pick kept offers her the group, so no notice is queued for her.
@@ -345,6 +373,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           const refused = outcomes["g-nobody"];
           return outcomes["g-event"]?.status === "done" &&
             outcomes["g-unpicked"]?.status === "done" &&
+            outcomes["g-swapped"]?.status === "done" &&
             outcomes["g-after"]?.status === "done" &&
             refused?.status === "refused" &&
             refused.reason === "A member's profile attests no principal.";

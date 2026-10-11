@@ -255,12 +255,12 @@ names the ones it needs, and they are gathered here:
   space with a random DID whose genesis document grants only its creator
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
   as well ([random space identities](../random-space-identities.md)).
-- **Delivering a notice.** A room is offered to its recipient through the
-  share inbox their profile points at when the request that creates it names
-  their profile, as a group picked from the manager's people does. A member whose profile the request doesn't name, or whose
-  profile points at no inbox, is reached by nothing but a notice, and nothing
-  delivers a notice to a principal who shares no space with the sender end to
-  end (see
+- **Delivering a notice.** A room is offered to its recipient through the share
+  inbox their profile points at when the request that creates it names their
+  profile, as a group picked from the manager's people does. A member whose
+  profile the request doesn't name, or whose profile points at no inbox, is
+  reached by nothing but a notice, and nothing delivers a notice to a principal
+  who shares no space with the sender end to end (see
   [`FabriChatManager.md`](FabriChatManager.md#first-contact)).
 - **Scoped sub-patterns and split write policies**, both still to check: a
   room's handler writing the sending session's own windows, and one message
@@ -284,11 +284,11 @@ home pattern holds a manager, and `#chatManager` resolves to it (see
 [`HOME_SPACE`](../../common/conventions/HOME_SPACE.md#chat-manager)). Home's
 **Chats** tab renders the manager: the user's rooms, each a link that opens the
 room as a page of its own, the controls that start a direct or a group chat,
-and, when the session's latest start was refused, the reason. A group's
-members can be typed as chat addresses or picked from the people the user's
-rooms list, each shown by their profile. A refusal of text that isn't a principal
-also shows the text. Where the runtime lacks a prerequisite, the patterns depart
-from this design, as below.
+and, when the session's latest start was refused, the reason. A group's members
+can be typed as chat addresses or picked from the people the user's rooms list,
+each shown by their profile. A refusal of text that isn't a principal also shows
+the text. Where the runtime lacks a prerequisite, the patterns depart from this
+design, as below.
 
 ### Access and principals
 

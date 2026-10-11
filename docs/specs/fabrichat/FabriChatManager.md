@@ -36,14 +36,14 @@ read is listed with no counterpart. A room appears in `rooms` once its root
 resolves and its `about` reads. `people` is drawn from `rooms` in the same
 session: each listed room's `roster`, read through the room's link, with each
 profile keyed by the principal its own `represents-principal` label attests
-(`principalOf()`). No handler reads it. `direct` holds one entry per counterpart,
-including forgotten rooms, for the direct rooms this manager created or
-accepted, and `openDirect` finds a direct room there and nowhere else. A room
-another manager created and offered the user is there too, once the user's host
-has registered the offer, since the host's share intake then has the manager
-accept it on the user's behalf (see [first contact](#first-contact)). `rooms`
-can also hold a second direct room with the same counterpart, after crossing
-creations.
+(`principalOf()`). No handler reads it. `direct` holds one entry per
+counterpart, including forgotten rooms, for the direct rooms this manager
+created or accepted, and `openDirect` finds a direct room there and nowhere
+else. A room another manager created and offered the user is there too, once the
+user's host has registered the offer, since the host's share intake then has the
+manager accept it on the user's behalf (see [first contact](#first-contact)).
+`rooms` can also hold a second direct room with the same counterpart, after
+crossing creations.
 
 `direct`'s entries, and the entry a `done` outcome in `requests` carries, hold a
 room as `FabriChatRoom.inSpace(…)` returned it at creation, or as `accept` was
