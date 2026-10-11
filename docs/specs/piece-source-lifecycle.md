@@ -804,7 +804,9 @@ schema-aware read does against whatever they hold then. A malformed document
 behind a handle therefore does not refuse the argument, and its contents are
 not a dependency of the validating transaction. A handle position holding its
 value inline is part of the document holding it, and is judged with that
-document. A by-value position is materialized with its links followed and
+document, handles nested in it standing on the same terms. An array element
+that `Cell.set()` stores as a document of its own is a link at its position,
+however it was written. A by-value position is materialized with its links followed and
 judged. A union leads to a handle when each branch leads to one or admits only
 `null` or `undefined`; any other union, and a node carrying a keyword that
 judges its value whole, such as `const`, `enum`, or `if`, reads by value.

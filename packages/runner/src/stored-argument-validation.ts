@@ -13,7 +13,7 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema, JSONSchemaObj } from "./builder/types.ts";
 import { type Cell, isCell, isStream } from "./cell.ts";
-import { ContextualFlowControl } from "./cfc.ts";
+import { ContextualFlowControl, resolveRootRefForStructure } from "./cfc.ts";
 import { localDefinitionName } from "./cfc/schema-primitives.ts";
 import { validateSchemaValue } from "./cfc/schema-sanitization.ts";
 import {
@@ -199,12 +199,24 @@ function absenceBranchType(
   schema: JSONSchema,
 ): "null" | "undefined" | undefined {
   if (!isObjectNotArray(schema)) return undefined;
-  const keys = Object.keys(schema);
-  return keys.length === 1 &&
-      (schema.type === "null" || schema.type === "undefined")
+  return Object.keys(schema).every((key) =>
+      key === "type" || ANNOTATION_KEYWORDS.has(key)
+    ) && (schema.type === "null" || schema.type === "undefined")
     ? schema.type
     : undefined;
 }
+
+/** Keywords that describe a schema without constraining its value. */
+const ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
+  "$comment",
+  "default",
+  "deprecated",
+  "description",
+  "examples",
+  "readOnly",
+  "title",
+  "writeOnly",
+]);
 
 /**
  * Helper for {@link handleBoundarySchema}, which reduces one schema node to
@@ -242,8 +254,16 @@ function reduceToHandles(
       const reduced = reduceToHandles(branch, leads);
       return reduced === true ? undefined : reduced;
     });
-    return reduced.every((branch) => branch !== undefined) &&
-        reduced.some((branch) => absenceBranchType(branch) === undefined)
+    // A `oneOf` judges a handle against each branch, and a handle satisfies
+    // every handle branch, so only one such branch can lead to it.
+    const handleBranches = reduced.filter((branch) =>
+      branch !== undefined && absenceBranchType(branch) === undefined
+    ).length;
+    return reduced.every((branch) =>
+        branch !== undefined
+      ) &&
+        handleBranches > 0 &&
+        (schema.oneOf === undefined || handleBranches === 1)
       ? { anyOf: reduced as JSONSchema[] }
       : true;
   }
@@ -295,7 +315,9 @@ function reduceToHandles(
  * they are already among what the validation reads, change only by writes to
  * that document, and are judged with it. Which is which is answered by the
  * stored value at each handle position, found by following the by-value links
- * on the way there, whose documents the materialization has already read.
+ * on the way there, whose documents the materialization has already read. An
+ * array element `Cell.set()` stored as a document of its own is a link there,
+ * however it was written.
  */
 export function materializeForValidation(
   cell: Cell<unknown>,
@@ -321,6 +343,7 @@ export function materializeForValidation(
     value: unknown,
     raw: unknown,
     base: NormalizedFullLink,
+    path: readonly string[],
   ): unknown => {
     if (!reachesHandle(value)) return value;
     if (isCellLink(raw) && !isCell(value)) {
@@ -329,12 +352,15 @@ export function materializeForValidation(
         parseLink(raw, base),
         new Set(),
       );
-      return open(value, reading.value, reading.base);
+      return open(value, reading.value, reading.base, path);
     }
     if (isCell(value)) {
-      return isCellLink(raw) || isStream(value)
-        ? value
-        : value.asSchema(undefined).withTx(tx).get();
+      if (isCellLink(raw) || isStream(value)) return value;
+      // A handle at the root is the value this call was asked to open, and
+      // reads as a schemaless value would rather than as itself again.
+      return path.length === 0
+        ? value.asSchema(undefined).withTx(tx).get()
+        : materializeHandleForValidation(value, schema, path, tx);
     }
     const container = value as Record<string, unknown> | unknown[];
     if (opened.has(container)) return opened.get(container);
@@ -344,7 +370,7 @@ export function materializeForValidation(
       const rawChild = isObjectOrArray(raw)
         ? (raw as Record<string, unknown>)[key]
         : undefined;
-      const next = open(child, rawChild, base);
+      const next = open(child, rawChild, base, [...path, key]);
       if (next === child) continue;
       result ??= Array.isArray(container)
         ? container.slice()
@@ -359,6 +385,36 @@ export function materializeForValidation(
     cell.asSchema(boundary).withTx(tx).get(),
     cell.withTx(tx).getRaw({ meta: ignoreReadForScheduling }),
     { ...link, path: [] },
+    [],
+  );
+}
+
+/**
+ * Materializes the value of `handle`, which stands at `path` of a value
+ * `schema` describes, for validation against the schema declared for what the
+ * handle holds: the handles nested in it stay handles on the terms
+ * {@link materializeForValidation} sets.
+ */
+export function materializeHandleForValidation(
+  handle: Cell<unknown>,
+  schema: JSONSchema,
+  path: readonly (string | number)[],
+  tx: IExtendedStorageTransaction,
+): unknown {
+  const declared = ContextualFlowControl.schemaAtPath(
+    schema,
+    path.map(String),
+  );
+  if (!isObjectNotArray(declared)) {
+    return handle.asSchema(undefined).withTx(tx).get();
+  }
+  const resolved = resolveRootRefForStructure(declared);
+  const { asCell: _wrappers, ...held } = resolved;
+  const wrappers = ContextualFlowControl.getAsCellValues(resolved);
+  return materializeForValidation(
+    handle,
+    wrappers.length > 1 ? { ...held, asCell: wrappers.slice(1) } : held,
+    tx,
   );
 }
 

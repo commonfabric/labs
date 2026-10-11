@@ -20,7 +20,7 @@ import {
 } from "../src/runner-utils.ts";
 import { externalizeSchema } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
-import { isLinkResolutionProbe } from "../src/storage/reactivity-log.ts";
+import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
 import {
   acceptsOpaqueCellOrUnresolvedLink,
   handleBoundarySchema,
@@ -678,19 +678,23 @@ describe("stored-argument-validation", () => {
       }
     });
 
-    it("reads no contents of the document behind an asCell link", () => {
+    it("reads only the link and stream markers of the document behind an asCell link", () => {
+      // Resolving the link probes whether the target is itself a link, and
+      // the handle's kind is told by the target's stream marker; neither is
+      // the target's contents.
       const tx = runtime.edit();
       try {
         const { argument, portraitIds } = stagePeople(tx);
-        using reads = spy(tx, "read");
+        const readsBefore = [...getTransactionReadActivities(tx)].length;
         issue(argument, peopleSchema(true), tx);
-        // Resolving the link probes whether the target is itself a link,
-        // which observes the reference and not the target's contents.
-        const contentReads = reads.calls.filter((call) =>
-          portraitIds.has(call.args[0].id) &&
-          !isLinkResolutionProbe(call.args[1]?.meta)
+        const targetPaths = [...getTransactionReadActivities(tx)]
+          .slice(readsBefore)
+          .filter((read) => portraitIds.has(read.id))
+          .map((read) => read.path.slice(0, 2).join("/"));
+        expect(targetPaths.length).toBeGreaterThan(0);
+        expect(new Set(targetPaths)).toEqual(
+          new Set(["value//", "value/$stream"]),
         );
-        expect(contentReads).toEqual([]);
       } finally {
         tx.abort();
       }
@@ -799,6 +803,82 @@ describe("stored-argument-validation", () => {
       }
     });
 
+    it("returns no issue for a malformed document behind an asCell link nested in an inline one", () => {
+      const tx = runtime.edit();
+      try {
+        const thumb = runtime.getCell(space, "thumb", undefined, tx);
+        thumb.set({ mediaType: 42 });
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ portrait: { mediaType: "image/png", thumb } });
+        const schema: JSONSchema = {
+          type: "object",
+          properties: {
+            portrait: {
+              type: "object",
+              properties: {
+                mediaType: { type: "string" },
+                thumb: portraitSchema(true),
+              },
+              asCell: ["cell"],
+            },
+          },
+        };
+        expect(issue(argument, schema, tx)).toBeUndefined();
+        argument.key("portrait").key("mediaType").set(7 as never);
+        expect(issue(argument, schema, tx)).toContain(
+          "portrait: mediaType: value does not match type string",
+        );
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns no issue for a linked value under a `oneOf` of two handles", () => {
+      const tx = runtime.edit();
+      try {
+        const portrait = runtime.getCell(space, "portrait", undefined, tx);
+        portrait.set({ mediaType: "image/png" });
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ portrait });
+        const schema: JSONSchema = {
+          type: "object",
+          properties: {
+            portrait: {
+              oneOf: [portraitSchema(true), {
+                type: "object",
+                properties: { url: { type: "string" } },
+                required: ["url"],
+                asCell: ["cell"],
+              }],
+            },
+          },
+        };
+        expect(issue(argument, schema, tx)).toBeUndefined();
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns no issue for a malformed array element `Cell.set()` stored as its own document", () => {
+      // An element written inline is stored as a document of its own and
+      // linked, so at a handle position it holds a reference like any link.
+      const tx = runtime.edit();
+      try {
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ items: [{ mediaType: 42 }] });
+        expect(
+          issue(argument, {
+            type: "object",
+            properties: {
+              items: { type: "array", items: portraitSchema(true) },
+            },
+          }, tx),
+        ).toBeUndefined();
+      } finally {
+        tx.abort();
+      }
+    });
+
     it("returns no issue for a well-formed document behind an asCell link under an `if`", () => {
       // A keyword judging a value whole reads its value by value, so it
       // judges what is stored rather than a handle minted in its place.
@@ -870,6 +950,16 @@ describe("stored-argument-validation", () => {
       expect(handleBoundarySchema({
         anyOf: [{ type: "null" }, portrait],
       })).toEqual({ anyOf: [{ type: "null" }, { asCell: ["cell"] }] });
+    });
+
+    it("returns a union of a handle and an annotated absence as that union", () => {
+      expect(handleBoundarySchema({
+        anyOf: [{ type: "null", description: "none yet" }, portrait],
+      })).toEqual({ anyOf: [{ type: "null" }, { asCell: ["cell"] }] });
+    });
+
+    it("returns `true` for a `oneOf` of two handles", () => {
+      expect(handleBoundarySchema({ oneOf: [portrait, portrait] })).toBe(true);
     });
 
     it("returns `true` for a union whose value branch declares no handle", () => {

@@ -30,6 +30,7 @@ import {
   type JSONSchema,
   KeepAsCell,
   materializeForValidation,
+  materializeHandleForValidation,
   type MemorySpace,
   mergeSchemaDefaults,
   NAME,
@@ -3481,7 +3482,12 @@ class PiecePropIo implements PieceCellIo {
           : replaceMaterializedValueAtPath(
             storedRoot,
             crossedHandle.path,
-            crossedHandle.cell.asSchema(undefined).withTx(tx).get(),
+            materializeHandleForValidation(
+              crossedHandle.cell,
+              schema,
+              crossedHandle.path,
+              tx,
+            ),
           );
         const stageAt = (candidate: unknown) =>
           replaceMaterializedValueAtPath(openedRoot, writePath, candidate);
