@@ -4,6 +4,7 @@ import {
   hashStringOf,
   isKeyableObjectOrArray,
   taggedHashStringOf,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import {
   hasDataUriScheme,
@@ -37,6 +38,7 @@ import {
   type ClientCommit,
   type CommitClass,
   type CommitPrecondition,
+  type ConfirmedRead,
   DEFAULT_BRANCH,
   type DocumentPath,
   type EntityDocument,
@@ -556,6 +558,15 @@ type MaterializedVersion = {
   transactionValue: CachedTransactionValue;
 };
 
+/** A recursive read a commit made of a document, with the value it read. */
+type BasisRead = {
+  /** Path of the read within the document. */
+  path: readonly string[];
+
+  /** Value at `path` in the store's document at the read's seq. */
+  value: FabricValue | undefined;
+};
+
 type PendingVersion =
   & {
     /** A sealed verdict already accepted this operation at the store seq. */
@@ -567,6 +578,26 @@ type PendingVersion =
      * writer read.
      */
     baseSeq: number;
+
+    /**
+     * The recursive confirmed reads the entry's commit made of this document
+     * at `baseSeq`, where the confirmed version there was the store's own
+     * document. Absent on a sealed commit's entry, on an entry holding a
+     * `splice`, and wherever the commit made no such read.
+     */
+    basisReads?: readonly BasisRead[];
+
+    /**
+     * Whether a delivered confirmed version past `baseSeq` holds a value at
+     * the path of one of `basisReads` other than the value read there. Some
+     * write after `baseSeq` then overlaps that read, which the server's
+     * staleness check finds: the entry's commit is either already covered by
+     * that confirmed version, refused, or accepted as an identity that changes
+     * nothing (03-commit-model.md §3.3.3). In none of the three does replaying
+     * the entry over the confirmed version show a write the store holds, so
+     * materialization skips it.
+     */
+    superseded?: true;
   }
   & (
     | {
@@ -607,6 +638,14 @@ type PendingVersion =
 
 type ConfirmedVersion = MaterializedVersion & {
   seq: number;
+
+  /**
+   * Whether a frame delivered `value` as the store's document at `seq`. A
+   * version this replica made itself, by promoting its own accepted write or
+   * folding a refused one, carries the write over a base that may predate
+   * `seq`, and is not the store's document there.
+   */
+  delivered?: true;
 
   /**
    * Whether `value` is the store's value at `seq` with a derived write folded
@@ -713,7 +752,13 @@ const pendingVersion = (
     }
     | { op: "delete" },
   baseSeq: number,
-): PendingVersion => ({ localSeq, baseSeq, ...operation });
+  basisReads?: readonly BasisRead[],
+): PendingVersion => ({
+  localSeq,
+  baseSeq,
+  ...(basisReads === undefined ? {} : { basisReads }),
+  ...operation,
+});
 
 /**
  * The paths of `operation`'s splices that a recursive read among `reads`
@@ -867,6 +912,83 @@ const isCoveredPendingVersion = (
   confirmed.localWavePromotion === undefined &&
   pending.acceptedSeq !== undefined && pending.acceptedSeq <= confirmed.seq;
 
+/**
+ * Whether materializing over `confirmed` skips `pending`: the view covers its
+ * accepted operation, or the entry is superseded.
+ */
+const skipsPendingVersion = (
+  confirmed: ConfirmedVersion,
+  pending: PendingVersion,
+): boolean =>
+  pending.superseded === true || isCoveredPendingVersion(confirmed, pending);
+
+/**
+ * Whether `confirmed.value` is the store's document at `confirmed.seq`: a
+ * delivered version, or the absence every document is before its first write.
+ */
+const isStoreVersion = (confirmed: ConfirmedVersion): boolean =>
+  confirmed.delivered === true ||
+  (confirmed.seq === 0 && confirmed.value === undefined);
+
+/** The value at `path` in `document`, as a commit read records it. */
+const basisValueAt = (
+  document: EntityDocument | undefined,
+  path: readonly string[],
+): FabricValue | undefined =>
+  readValueAtPath(document as FabricValue | undefined, path, {
+    allowArrayLength: true,
+  });
+
+/**
+ * The recursive reads among `reads`, a commit's confirmed reads of one
+ * document, made at the seq of `confirmed`, each with the value it read; or
+ * `undefined` where there are none or `confirmed` is not the store's document.
+ */
+const basisReadsOf = (
+  confirmed: ConfirmedVersion,
+  reads: readonly ConfirmedRead[],
+): BasisRead[] | undefined => {
+  if (!isStoreVersion(confirmed)) return undefined;
+  const basisReads = reads
+    .filter((read) =>
+      read.branch === undefined && read.nonRecursive !== true &&
+      read.seq === confirmed.seq
+    )
+    .map((read) => ({
+      path: read.path,
+      value: basisValueAt(confirmed.value, read.path),
+    }));
+  return basisReads.length > 0 ? basisReads : undefined;
+};
+
+/**
+ * Marks superseded each of `record`'s pending entries whose basis reads the
+ * newly delivered confirmed version contradicts. A value differing at a read's
+ * path means some write after the read's seq changed data at, above, or below
+ * that path, which is a write the server's staleness check finds overlapping
+ * the read (03-commit-model.md §3.6.2). Equal values prove nothing, since a
+ * write can leave the value it overlaps unchanged, so those entries keep
+ * replaying.
+ */
+const markSupersededPendingVersions = (record: DocumentRecord): void => {
+  const { seq, value } = record.confirmed;
+  for (const entry of record.pending) {
+    if (
+      entry.superseded === true || entry.basisReads === undefined ||
+      seq <= entry.baseSeq
+    ) {
+      continue;
+    }
+    if (
+      entry.basisReads.some((read) =>
+        !valueEqualByWalk(basisValueAt(value, read.path), read.value)
+      )
+    ) {
+      entry.superseded = true;
+    }
+  }
+};
+
 /** Folds pending and locally accepted wave contributions in sealing order. */
 const materializePendingVersions = (
   confirmed: ConfirmedVersion,
@@ -882,7 +1004,7 @@ const materializePendingVersions = (
     : pending;
   let value = interleaved ? promotion.base : confirmed.value;
   for (const entry of entries) {
-    if (isCoveredPendingVersion(confirmed, entry)) continue;
+    if (skipsPendingVersion(confirmed, entry)) continue;
     value = applyPendingVersion(value, entry, logContext);
   }
   return value;
@@ -932,13 +1054,13 @@ const materializedVersionThroughPending = (
       ? record.confirmed
       : cache.prefixes[nextIndex - 1]!;
     const pending = record.pending[nextIndex]!;
-    const covered = isCoveredPendingVersion(record.confirmed, pending);
+    const skipped = skipsPendingVersion(record.confirmed, pending);
     cache.prefixes.push({
       localSeq: pending.localSeq,
-      value: covered
+      value: skipped
         ? base.value
         : applyPendingVersion(base.value, pending, logContext),
-      transactionValue: covered
+      transactionValue: skipped
         ? base.transactionValue
         : UNCACHED_TRANSACTION_VALUE,
     });
@@ -7177,8 +7299,26 @@ export class SpaceReplica
     );
 
     withCommitTiming(["commitOperations", "applyPending"], () => {
+      const readsByDocument = new Map<string, ConfirmedRead[]>();
+      for (const read of commit.reads.confirmed) {
+        const key = docKey(read.id as URI, this.instanceKey(read.scope));
+        const reads = readsByDocument.get(key);
+        if (reads === undefined) {
+          readsByDocument.set(key, [read]);
+        } else {
+          reads.push(read);
+        }
+      }
       for (const operation of operations) {
-        this.#applyPending(operation, localSeq, commit.reads);
+        this.#applyPending(
+          operation,
+          localSeq,
+          commit.reads,
+          undefined,
+          readsByDocument.get(
+            docKey(operation.id, this.instanceKey(operation.scope)),
+          ) ?? [],
+        );
       }
     });
 
@@ -8726,12 +8866,16 @@ export class SpaceReplica
       const coverClass = upsert.coverClass ??
         (upsert.seq === previousConfirmedSeq ? previousCoverClass : undefined);
       if (!keepsLocalFold) {
-        record.confirmed = confirmedVersion(
-          upsert.seq,
-          upsert.deleted === true ? undefined : upsert.doc,
-          coverClass,
-        );
+        record.confirmed = {
+          ...confirmedVersion(
+            upsert.seq,
+            upsert.deleted === true ? undefined : upsert.doc,
+            coverClass,
+          ),
+          delivered: true,
+        };
         record.materialized = undefined;
+        markSupersededPendingVersions(record);
       }
       // The arrival wake fires on a FORWARD move — and on a same-seq
       // frame whose class arrives LATE (undefined -> defined): an entry
@@ -9353,6 +9497,9 @@ export class SpaceReplica
     localSeq: number,
     reads: ClientCommit["reads"],
     identity?: ScopeKeyIdentity,
+    // A pushed commit's confirmed reads of the document, from which the
+    // entry takes its basis reads.
+    confirmedReads?: readonly ConfirmedRead[],
   ): void {
     const { id, scope, ...pending } = operation;
     const record = this.#record(id, scope, identity);
@@ -9375,6 +9522,13 @@ export class SpaceReplica
           ? { ...pending, intended }
           : pending,
         record.confirmed.seq,
+        // A write holding a `splice` is left to `displayedPatches` until its
+        // verdict, whatever its reads say.
+        confirmedReads === undefined ||
+          (pending.op === "patch" &&
+            pending.patches.some((patch) => patch.op === "splice"))
+          ? undefined
+          : basisReadsOf(record.confirmed, confirmedReads),
       ),
     );
   }
@@ -9673,11 +9827,13 @@ export class SpaceReplica
         } else {
           promoted = confirmedVersion(
             applied.seq,
-            applyPendingVersion(record.confirmed.value, pending, {
-              space: this.#space,
-              id,
-              scope,
-            }),
+            skipsPendingVersion(record.confirmed, pending)
+              ? record.confirmed.value
+              : applyPendingVersion(record.confirmed.value, pending, {
+                space: this.#space,
+                id,
+                scope,
+              }),
             coverClass,
           );
         }

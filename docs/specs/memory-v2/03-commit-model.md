@@ -126,6 +126,22 @@ they stand, since that is how the store applied them. Mergeable ops are not
 positional and are never substituted: an `append` means "add to whatever is
 there", and a concurrent write must read through it.
 
+A pending write is passed over for an entity once the client knows the
+commit's own read of that entity is stale, unless the write holds a `splice`,
+which is read as above until its verdict. The client knows the read is stale
+when a frame delivers a confirmed version of the entity that holds a different
+value, at the path of a recursive confirmed read the commit made, than the
+version the commit was layered on held there. A value that
+changed at a path is a write overlapping that path (§3.6.2), so the commit is
+in one of three states, and in none of them does reading through it show
+something the server holds: the delivered version already includes it, the
+server refuses it (§3.6.1), or the server accepts it as an identity commit
+that changes nothing. Equal values decide nothing, since an overlapping write
+can leave the value it overlaps unchanged, and the commit keeps being read
+through. The decision needs both values to be the server's own, so a confirmed
+version the client made itself, by promoting its own accepted write or by a
+local fold (§3.8.3), is never one of the two.
+
 ### 3.3.4 Single-Snapshot Rule
 
 A commit's read set MUST describe one coherent client view: confirmed bases
