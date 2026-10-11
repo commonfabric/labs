@@ -1169,6 +1169,19 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
         properties: { title: { type: "string" }, rank: { type: "number" } },
         required: ["title", "rank"],
       };
+      const writtenBy = (path: string) => ({
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: { file: "/main.tsx", path: [path] },
+        },
+      });
+      const NULLABLE_NAME_WRITER = {
+        anyOf: [{ type: "string" }, { type: "null" }],
+        ifc: writtenBy("setName"),
+      };
+      const NULLABLE_ENTRY_WRITER = {
+        anyOf: [TITLE_AND_RANK, { type: "null" }],
+        ifc: writtenBy("setEntry"),
+      };
       for (
         const [spelling, declaration, a, input, output] of [
           [
@@ -1207,18 +1220,8 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
             "a nullable value's writer written directly",
             `const setName = handler<{ name: string }, { name: Writable<string | null> }>((event, { name }) => { name.set(event.name); });`,
             "WriteAuthorizedBy<string | null, typeof setName>",
-            {
-              anyOf: [{ type: "string" }, { type: "null" }],
-              ifc: {
-                writeAuthorizedBy: {
-                  __ctWriterIdentityOf: {
-                    file: "/main.tsx",
-                    path: ["setName"],
-                  },
-                },
-              },
-            },
-            { type: "string" },
+            NULLABLE_NAME_WRITER,
+            NULLABLE_NAME_WRITER,
           ],
           [
             "a nullable projection",
@@ -1303,18 +1306,8 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
             "a nullable intersection's writer written directly",
             `const setEntry = handler<{ title: string }, { entry: Writable<({ title: string } & { rank: number }) | null> }>((event, { entry }) => { entry.set({ title: event.title, rank: 0 }); });`,
             "WriteAuthorizedBy<({ title: string } & { rank: number }) | null, typeof setEntry>",
-            {
-              anyOf: [TITLE_AND_RANK, { type: "null" }],
-              ifc: {
-                writeAuthorizedBy: {
-                  __ctWriterIdentityOf: {
-                    file: "/main.tsx",
-                    path: ["setEntry"],
-                  },
-                },
-              },
-            },
-            TITLE_AND_RANK,
+            NULLABLE_ENTRY_WRITER,
+            NULLABLE_ENTRY_WRITER,
           ],
         ] as const
       ) {
@@ -1327,7 +1320,9 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           }, { types: COMMONFABRIC_TYPES, typeCheck: true });
           const schemas = patternSchemas(parseModule(files["/main.tsx"]!));
           // The argument is read from its written reference, which keeps
-          // `null`; the result from the reduced type, which has none.
+          // `null`; the result from the reduced type, which has none, except
+          // where the argument's annotation names a writer: the result reads
+          // the value of `a`, so it is read at that annotation.
           expect((schemas.input.properties as Schema).a).toEqual(input);
           expect((schemas.output.properties as Schema).a).toEqual(output);
         });
@@ -2840,6 +2835,112 @@ export default pattern(() => {
             ],
           },
         },
+      });
+    });
+  });
+
+  describe("an inferred result that reads a binding whose annotation names one", () => {
+    // `readers` and `writers` are declared with one type, so only the
+    // annotation each value is read at tells their policies apart.
+    const RULES =
+      `import { type CfcExchangeRulesDeclaration, exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";
+const release = (role: string) => exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: { integrity: [role] },
+  post: { dropClause: true },
+});
+export const readers: CfcExchangeRulesDeclaration = exchangeRules([release("reader")]);
+export const writers: CfcExchangeRulesDeclaration = exchangeRules([release("writer")]);`;
+
+    const policy = (binding: string) => ({
+      confidentiality: [{
+        type: "https://commonfabric.org/cfc/atom/Policy",
+        policyRefKind: "module",
+        __ctPolicyIdentityOf: { file: "/rules.ts", path: [binding] },
+      }],
+    });
+
+    /**
+     * The result schema of the one `computed()` in a module whose pattern
+     * takes `input` and returns `result`, and a reader of the pattern's own.
+     */
+    async function inferred(
+      input: string,
+      result: string,
+    ): Promise<{ lift?: Schema; pattern: () => Schema }> {
+      const output = await transformFiles({
+        "/rules.ts": RULES,
+        "/main.tsx":
+          `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { readers, writers } from "./rules.ts";
+export default pattern<{ ${input} }>(({ a, b }) => (${result}));`,
+      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+      const root = parseModule(output["/main.tsx"]!);
+      const [lift] = callsNamed(root, "lift");
+      const resultSchema = lift?.arguments[2];
+      return {
+        ...(resultSchema && ts.isSatisfiesExpression(resultSchema) && {
+          lift: literalToValue(resultSchema.expression) as Schema,
+        }),
+        pattern: () => patternSchemas(root).output.properties as Schema,
+      };
+    }
+
+    it("reads the policy of a lift's result member written from a binding", async () => {
+      const { lift, pattern } = await inferred(
+        "a: Confidential<string[], [PolicyOf<typeof readers>]>; b: string",
+        "{ out: computed(() => ({ whole: a, length: a.length })) }",
+      );
+
+      expect((lift!.properties as Schema).whole).toMatchObject({
+        ifc: policy("readers"),
+      });
+      expect(
+        ((pattern().out as Schema).properties as Schema).whole,
+      ).toMatchObject({ ifc: policy("readers") });
+    });
+
+    it("reads the policy of a lift's result member written from a nullable binding", async () => {
+      const { lift } = await inferred(
+        "a: Confidential<string[] | null, [PolicyOf<typeof readers>]>; b: string",
+        "{ out: computed(() => ({ whole: a, length: a?.length })) }",
+      );
+
+      expect((lift!.properties as Schema).whole).toMatchObject({
+        ifc: policy("readers"),
+      });
+    });
+
+    it("reads the policy of a lift's result that returns a binding", async () => {
+      const { lift } = await inferred(
+        "a: Confidential<string[], [PolicyOf<typeof readers>]>; b: string",
+        "{ out: computed(() => a) }",
+      );
+
+      expect(lift).toMatchObject({ ifc: policy("readers") });
+    });
+
+    it("reads the policy of a pattern's result member written from a binding", async () => {
+      const { pattern } = await inferred(
+        "a: Confidential<string[], [PolicyOf<typeof readers>]>; b: string",
+        "{ out: a }",
+      );
+
+      expect(pattern().out).toMatchObject({ ifc: policy("readers") });
+    });
+
+    it("reads each member at its own binding's policy where the two policies' rules share a type", async () => {
+      const { lift } = await inferred(
+        "a: Confidential<string, [PolicyOf<typeof readers>]>; b: Confidential<string, [PolicyOf<typeof writers>]>",
+        "{ out: computed(() => ({ r: a, w: b })) }",
+      );
+
+      expect((lift!.properties as Schema).r).toMatchObject({
+        ifc: policy("readers"),
+      });
+      expect((lift!.properties as Schema).w).toMatchObject({
+        ifc: policy("writers"),
       });
     });
   });

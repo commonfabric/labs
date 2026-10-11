@@ -39,6 +39,10 @@ import {
   typeParameterOfType,
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
+import {
+  readBindingAnnotation,
+  readDeclaringSymbol,
+} from "../typescript/value-annotation.ts";
 import { usesParameterUnreachably } from "../type-parameter-bindings.ts";
 import { CFC_CARRIER_PROPERTY } from "../typescript/cfc-carrier.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
@@ -300,6 +304,26 @@ export class ObjectFormatter implements TypeFormatter {
           if (!propTypeNode && propDecl.type) {
             propTypeNode = propDecl.type as ts.TypeNode;
           }
+        } else if (
+          !propTypeNode &&
+          (ts.isPropertyAssignment(propDecl) ||
+            ts.isShorthandPropertyAssignment(propDecl))
+        ) {
+          // An object literal's member writes no annotation, and the value it
+          // is written from may be one only syntax spells, such as a
+          // `PolicyOf<typeof rules>` label. It is read at the annotation of
+          // the binding it reads, where that annotation names a value binding
+          // and denotes the member's type (`readBindingAnnotation()`).
+          propTypeNode = readBindingAnnotation(
+            readDeclaringSymbol(
+              ts.isPropertyAssignment(propDecl)
+                ? propDecl.initializer
+                : propDecl.name,
+              checker,
+            ),
+            checker.getTypeOfSymbol(prop),
+            checker,
+          );
         }
       }
 

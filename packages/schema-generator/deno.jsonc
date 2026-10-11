@@ -14,6 +14,7 @@
     "./cfc-carrier": "./src/typescript/cfc-carrier.ts",
     "./numeric-expression": "./src/typescript/numeric-expression.ts",
     "./type-node": "./src/typescript/type-node.ts",
+    "./value-annotation": "./src/typescript/value-annotation.ts",
     "./writer-binding": "./src/typescript/writer-binding.ts"
   },
   "imports": {

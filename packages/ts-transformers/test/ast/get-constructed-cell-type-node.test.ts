@@ -2,10 +2,8 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
-import {
-  getConstructedCellTypeNode,
-  namesValueBinding,
-} from "../../src/ast/type-building.ts";
+import { namesValueBinding } from "@commonfabric/schema-generator/value-annotation";
+import { getConstructedCellTypeNode } from "../../src/ast/type-building.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { collect } from "../transformed-ast.ts";
 
