@@ -3725,8 +3725,9 @@ export class V2StorageTransaction implements IStorageTransaction {
       scope,
       patches,
       value: doc.current.value,
-      // Only a positional op means something relative to the document it was
-      // diffed from; every other op re-folds over any base as it stands.
+      // A splice's index counts from the array it was diffed from, and a
+      // replay over an array that moved since would add or remove at the
+      // wrong place (state-dependent, 01-data-model §6.3).
       ...(patches.some((patch) => patch.op === "splice")
         ? { diffBase: base }
         : {}),

@@ -728,10 +728,11 @@ const transactionValueForVersion = (
  * says something its writer never wrote; where that writer appended the same
  * tail, the tail is appended twice. The server refuses such a commit, since
  * the write read the array it diffed (and an identity commit is accepted
- * only when its ops are idempotent on the stored value). A blind UI write
- * reads no value, so the server takes its splice where it stands; the layer
- * renders without it here all the same, until the accept brings the stored
- * value.
+ * only when its ops are idempotent on the stored value), so until the verdict
+ * the layer renders without it. A write that read no value (a blind UI
+ * write) is the exception: the server applies its splice where it stands,
+ * and the accept promotes the layer as the store applied it
+ * (`#confirmPending`).
  */
 const splicesLandOnTheirDiffBase = (
   base: EntityDocument | undefined,
@@ -745,6 +746,13 @@ const splicesLandOnTheirDiffBase = (
     const then = readValueAtPath(diffBase, path);
     return now === then || valueEqual(now, then);
   });
+
+/** `pending`, replayed as its ops stand wherever its arrays now are. */
+const withoutDiffBase = (pending: PendingVersion): PendingVersion => {
+  if (pending.op !== "patch" || pending.diffBase === undefined) return pending;
+  const { diffBase: _, ...rest } = pending;
+  return rest;
+};
 
 const applyPendingVersion = (
   base: EntityDocument | undefined,
@@ -9315,6 +9323,20 @@ export class SpaceReplica
       }
       const firstPendingIndex = pendingIndexes[0]!;
       const lastPendingIndex = pendingIndexes[pendingIndexes.length - 1]!;
+      // The verdict is in: the store applied these ops where they stand, so a
+      // splice held out of the view while its array had moved
+      // (`splicesLandOnTheirDiffBase`) promotes with the rest of them.
+      if (
+        pendingIndexes.some((index) =>
+          record.pending[index]!.op === "patch" &&
+          record.pending[index]!.diffBase !== undefined
+        )
+      ) {
+        record.pending = record.pending.map((entry) =>
+          entry.localSeq === localSeq ? withoutDiffBase(entry) : entry
+        );
+        dropMaterializedSuffix(record, firstPendingIndex);
+      }
       const pending = record.pending[lastPendingIndex]!;
       const previousConfirmed = record.confirmed;
       let promoted: ConfirmedVersion | undefined;

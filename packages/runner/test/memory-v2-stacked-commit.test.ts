@@ -5390,6 +5390,52 @@ describe("a pending tail splice whose array moved under it", () => {
     }
   });
 
+  it("promotes it as the store applied it when the verdict accepts", async () => {
+    // A write that read no value (a blind UI write) is accepted over the
+    // moved array: the store applies the splice where it stands, and the
+    // replica's confirmed value must be the store's.
+    const harness = await createHarness();
+    const responseGate = Promise.withResolvers<void>();
+    try {
+      await seedAccepted(harness, DOCS.A, { items: ["a", "b"] });
+      await watch(harness);
+      harness.model.setOutcome(2, {
+        kind: "accept",
+        responseGate: responseGate.promise,
+        remoteInterleave: {
+          label: "foreign",
+          operations: [{
+            op: "set",
+            id: DOCS.A,
+            value: { items: ["a", "b", "x"] },
+          }],
+        },
+      });
+      const splice = growTo(
+        harness,
+        { items: ["a", "b"] },
+        { items: ["a", "b", "c"] },
+        ["c"],
+      );
+      harness.pushSync({
+        upserts: [{
+          id: DOCS.A,
+          seq: currentSeq(harness, DOCS.A) + 1,
+          value: { items: ["a", "b", "x"] },
+        }],
+      });
+      await clock.settle();
+      expectVisible(harness, { A: { items: ["a", "b", "x"] } });
+
+      responseGate.resolve();
+      await expectResultOk(splice);
+      expectVisible(harness, { A: { items: ["a", "b", "c", "x"] } });
+    } finally {
+      responseGate.resolve();
+      await harness.close();
+    }
+  });
+
   it("keeps it over a frame that left its array alone", async () => {
     const harness = await createHarness();
     const responseGate = Promise.withResolvers<void>();
