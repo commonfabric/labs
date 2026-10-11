@@ -4234,7 +4234,9 @@ export class SpaceReplica
   /**
    * docKey → required `caughtUpLocalSeq`. An entry means this id conflicted and
    * is stale until we observe `caughtUpLocalSeq >= value`. Pruned as the runner
-   * catches up; only populated while conflict admission control is enabled.
+   * catches up, and cleared when no marker can arrive (`#releaseMarkerWaits()`);
+   * only populated while conflict admission control is enabled and a marker
+   * channel exists.
    */
   #staleFloor = new Map<string, number>();
 
@@ -5693,7 +5695,7 @@ export class SpaceReplica
         // Re-entrancy guard (Phase 2): confirmPending's flag-ON
         // shadow-flip notification runs subscriber callbacks
         // synchronously, and a callback that re-enters the replica
-        // (reset, applyParkedAcceptsNow via a closing watch view) can
+        // (reset, releaseMarkerWaits via a closing watch view) can
         // consume parked entries out from under this loop — so the
         // lookup tolerates an entry another frame already applied.
         const entry = this.#parkedAccepts.get(parked);
@@ -5734,11 +5736,59 @@ export class SpaceReplica
     }
   }
 
+  /**
+   * Whether a `caughtUpLocalSeq` marker can reach this replica unprompted.
+   * Markers ride the session's frames. This replica applies the frames its
+   * subscribed watch view delivers, and the ones a watch mutation of its own
+   * hands over; with no subscribed view, a marker arrives only if the replica
+   * happens to mutate its watches. So nothing here waits on a marker without a
+   * channel: an accept applies at its verdict, a caught-up wait resolves at
+   * once, and no stale floor is recorded. The one window this leaves is the
+   * replica's first watch mutation while it is in flight, whose response can
+   * carry a marker the replica has already stopped waiting for; a retry then
+   * pulls the documents its conflict names, which waits on that mutation.
+   */
+  #hasMarkerChannel(): boolean {
+    return this.#subscribedWatchView !== null;
+  }
+
+  /**
+   * Releases everything waiting on a marker, for when no marker can arrive to
+   * cover it: the marker channel closed, or the session was replaced and its
+   * markers with it. Parked accepts apply, caught-up waits resolve, and stale
+   * floors clear.
+   */
+  #releaseMarkerWaits(): void {
+    const due = [...this.#parkedAccepts.keys()].sort((left, right) =>
+      left - right
+    );
+    for (const parked of due) {
+      const entry = this.#parkedAccepts.get(parked)!;
+      this.#parkedAccepts.delete(parked);
+      // Parked accepts are pushed transact accepts: authored.
+      this.#confirmPending(parked, entry.operations, entry.applied, "authored");
+      entry.settled.resolve();
+    }
+    const waiters = this.#caughtUpLocalSeqWaiters;
+    this.#caughtUpLocalSeqWaiters = [];
+    for (const waiter of waiters) {
+      waiter.pending.resolve();
+    }
+    this.#staleFloor.clear();
+  }
+
+  /**
+   * Resolves once this replica has applied a frame whose marker covers
+   * `localSeq`, or at once without a marker channel (see
+   * `#hasMarkerChannel()`). Rejects when the replica closes or resets. The
+   * session's own marker covering a conflict is awaited separately, through
+   * the rejection's `readyToRetry`.
+   */
   #waitForCaughtUpLocalSeq(localSeq: number): Promise<void> {
     if (this.#closed) {
       return Promise.reject(new Error("memory replica closed"));
     }
-    if (this.#caughtUpLocalSeq >= localSeq) {
+    if (this.#caughtUpLocalSeq >= localSeq || !this.#hasMarkerChannel()) {
       return Promise.resolve();
     }
     const pending = Promise.withResolvers<void>();
@@ -6639,7 +6689,7 @@ export class SpaceReplica
         this.#updatePromises.delete(updates);
         if (this.#subscribedWatchView === view) {
           this.#subscribedWatchView = null;
-          this.#applyParkedAcceptsNow();
+          this.#releaseMarkerWaits();
         }
       });
     this.#updatePromises.add(updates);
@@ -8672,9 +8722,12 @@ export class SpaceReplica
   /**
    * Marks every id this conflicted commit touched (reads and writes) stale
    * until the runner observes `caughtUpLocalSeq >= localSeq` — the seq the
-   * server stages as the post-conflict catch-up point for these ids.
+   * server stages as the post-conflict catch-up point for these ids. Records
+   * nothing without a marker channel (`#hasMarkerChannel()`), since no marker
+   * could clear the floor.
    */
   #recordStaleFloor(commit: ClientCommit, localSeq: number): void {
+    if (!this.#hasMarkerChannel()) return;
     const mark = (id: string, scope?: CellScope) => {
       const key = this.#docKeyOf({ id: id as URI, scope });
       const current = this.#staleFloor.get(key);
@@ -9125,14 +9178,13 @@ export class SpaceReplica
         ]);
       }
     }
-    // Parking requires a live marker channel: a server that stages
-    // per-verdict markers AND an active sync consumer to deliver them. With
-    // no subscribed watch view, no frames arrive at all — there is no
-    // novelty stream to order the promotion against, and verdict-time
-    // extrapolation is exactly as current as this replica can be.
+    // Parking requires a server that stages a marker for every verdict and a
+    // channel for that marker to reach this replica (`#hasMarkerChannel()`).
+    // Lacking either, no marker would release a parked promotion, so it
+    // applies at the verdict.
     const parkable =
       this.#sessionClient?.serverFlags?.verdictCatchUpMarkers === true &&
-      this.#subscribedWatchView !== null;
+      this.#hasMarkerChannel();
     // Zero-operation commits (scheduler observation batches) carry no state
     // to apply and no view consequences — parking them would only stall
     // synced() on the batch window for nothing.
@@ -9169,27 +9221,6 @@ export class SpaceReplica
       hold.then(() => this.#commitPromises.delete(hold));
     }
     return settled.promise;
-  }
-
-  /**
-   * Applies everything parked immediately, for when the marker channel died
-   * (the subscribed view closed), so promotions never wait on frames that can
-   * no longer arrive.
-   */
-  #applyParkedAcceptsNow(): void {
-    if (this.#parkedAccepts.size === 0) {
-      return;
-    }
-    const due = [...this.#parkedAccepts.keys()].sort((left, right) =>
-      left - right
-    );
-    for (const parked of due) {
-      const entry = this.#parkedAccepts.get(parked)!;
-      this.#parkedAccepts.delete(parked);
-      // Parked accepts are pushed transact accepts: authored.
-      this.#confirmPending(parked, entry.operations, entry.applied, "authored");
-      entry.settled.resolve();
-    }
   }
 
   #confirmPending(
@@ -9779,15 +9810,15 @@ export class SpaceReplica
               }
             },
           );
-          // Session replacement resets the marker epoch: markers for the
-          // parked accepts' localSeqs can never arrive from the fresh
-          // session, so apply them immediately (the same rule as consumer
-          // teardown). Promotion consumes the pending overlays, so the
-          // authoritative reinstall sync that follows replaces — never
-          // double-applies — their contribution.
+          // Session replacement resets the marker epoch: markers for
+          // localSeqs the old session staged can never arrive from the fresh
+          // session, so everything waiting on one is released (the same rule
+          // as consumer teardown). Promotion consumes the parked accepts'
+          // pending overlays, so the authoritative reinstall sync that
+          // follows replaces — never double-applies — their contribution.
           resolved.session.onSessionReplaced = () => {
             this.#publishViewPlans([]);
-            this.#applyParkedAcceptsNow();
+            this.#releaseMarkerWaits();
             // A replaced session rejected its outstanding commits; queued
             // event intents re-submit under fresh localSeqs (the target's
             // eventId dedupe keeps a landed original sound — events.md §5).

@@ -3006,6 +3006,43 @@ describe("memory-v2-stacked-commit", () => {
       }
     });
 
+    it("releases caught-up waits and stale floors at session replacement", async () => {
+      const harness = await markerHarness();
+      try {
+        expect(
+          await harness.replica.pull([[
+            { id: DOCS.A, type: DOCUMENT_MIME },
+            undefined,
+          ]]),
+        ).toEqual({ ok: {} });
+        const replica = harness.replica.accessForTestingOnly;
+        const reading = {
+          localSeq: 50,
+          reads: {
+            confirmed: [{ id: DOCS.A, path: toDocumentPath([]), seq: 0 }],
+            pending: [],
+          },
+          operations: [],
+        };
+        replica.recordStaleFloor(reading, 50);
+        let released = false;
+        replica.waitForCaughtUpLocalSeq(50).then(() => {
+          released = true;
+        }, () => {});
+        await clock.settle();
+        expect(released, "the wait holds within the session").toBe(false);
+
+        // A restore against the scripted server comes back NON-resumed: the
+        // session is replaced, and the markers the old one staged with it.
+        await harness.sessionFactory.session!.restore();
+        await clock.settle();
+        expect(released, "the wait resolves at replacement").toBe(true);
+        expect(replica.preemptThreshold(reading)).toBeUndefined();
+      } finally {
+        await harness.close();
+      }
+    });
+
     it("applies parked accepts at session replacement", async () => {
       const harness = await markerHarness();
       try {
@@ -3112,6 +3149,44 @@ describe("memory-v2-stacked-commit", () => {
           "parked application at consumer teardown",
         );
         expectVisible(harness, { B: valueFor("optimistic") });
+      } finally {
+        await harness.close();
+      }
+    });
+
+    it("releases caught-up waits and stale floors when the sync consumer is lost", async () => {
+      const harness = await markerHarness();
+      try {
+        expect(
+          await harness.replica.pull([[
+            { id: DOCS.A, type: DOCUMENT_MIME },
+            undefined,
+          ]]),
+        ).toEqual({ ok: {} });
+        const replica = harness.replica.accessForTestingOnly;
+        const reading = {
+          localSeq: 50,
+          reads: {
+            confirmed: [{ id: DOCS.A, path: toDocumentPath([]), seq: 0 }],
+            pending: [],
+          },
+          operations: [],
+        };
+        replica.recordStaleFloor(reading, 50);
+        expect(replica.preemptThreshold(reading)).toBe(50);
+        let released = false;
+        replica.waitForCaughtUpLocalSeq(50).then(() => {
+          released = true;
+        }, () => {});
+        await clock.settle();
+        expect(released, "the wait holds while the channel is open")
+          .toBe(false);
+
+        harness.transport.emitRevoked();
+        await clock.settle();
+        expect(released, "the wait resolves when the channel closes")
+          .toBe(true);
+        expect(replica.preemptThreshold(reading)).toBeUndefined();
       } finally {
         await harness.close();
       }
@@ -3779,6 +3854,12 @@ describe("memory-v2-stacked-commit", () => {
       const previousLevel = storageLogger.level;
       storageLogger.level = "debug";
       try {
+        expect(
+          await harness.replica.pull([[
+            { id: DOCS.A, type: DOCUMENT_MIME },
+            undefined,
+          ]]),
+        ).toEqual({ ok: {} });
         const replica = harness.replica.accessForTestingOnly;
         replica.recordStaleFloor({
           localSeq: 50,
