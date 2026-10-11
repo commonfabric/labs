@@ -115,6 +115,10 @@ const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
     reason: "a project the harness runs to prove it bundles before serving",
   },
   {
+    path: "packages/deno-web-test/test/commands-project/press.test.ts",
+    reason: "a project the harness runs to prove a test can press trusted keys",
+  },
+  {
     path: "packages/deno-web-test/test/project-with-config/ed25519.test.ts",
     reason: "a project the harness runs to prove it reads a project config",
   },
