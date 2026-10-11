@@ -12,15 +12,18 @@ import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
-import type { JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 import { validateSchemaValue } from "../src/cfc/schema-sanitization.ts";
 import {
   extractDefaultValues,
   mergeSchemaDefaults,
 } from "../src/runner-utils.ts";
+import { externalizeSchema } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
+import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
 import {
   acceptsOpaqueCellOrUnresolvedLink,
+  handleBoundarySchema,
   overlayUnreadableLinkPlaceholders,
   storedArgumentValidationIssue,
 } from "../src/stored-argument-validation.ts";
@@ -566,5 +569,485 @@ describe("stored-argument-validation", () => {
     } finally {
       tx.abort();
     }
+  });
+
+  describe("asCell positions", () => {
+    // A handle stored as a link holds a reference. Validation leaves what it
+    // refers to for whoever reads through the handle, so the target's contents
+    // neither refuse the argument nor join the read set. A handle holding its
+    // value inline is part of the document holding it, and is judged with it.
+
+    const portraitSchema = (asCell: boolean): JSONSchema => ({
+      type: "object",
+      properties: {
+        mediaType: { type: "string" },
+        width: { type: "number" },
+      },
+      required: ["mediaType"],
+      ...(asCell ? { asCell: ["cell"] } : {}),
+    });
+
+    const peopleSchema = (asCell: boolean): JSONSchema => ({
+      type: "object",
+      properties: {
+        people: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              portrait: portraitSchema(asCell),
+            },
+            required: ["name"],
+          },
+        },
+      },
+      required: ["people"],
+    });
+
+    /** The same schema with `Person` a definition, as the generator writes. */
+    const peopleSchemaWithDefinitions = (asCell: boolean): JSONSchemaObj => ({
+      type: "object",
+      properties: {
+        people: {
+          type: "object",
+          additionalProperties: { $ref: "#/$defs/Person" },
+        },
+      },
+      required: ["people"],
+      $defs: {
+        Person: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            portrait: portraitSchema(asCell),
+          },
+          required: ["name"],
+        },
+      },
+    });
+
+    /** Stages people whose portraits link to separate, malformed documents. */
+    const stagePeople = (tx: ReturnType<Runtime["edit"]>) => {
+      const portraitIds = new Set<string>();
+      const people: Record<string, unknown> = {};
+      for (const key of ["ada", "grace"]) {
+        const portrait = runtime.getCell(
+          space,
+          `portrait-${key}`,
+          undefined,
+          tx,
+        );
+        portrait.set({ mediaType: 42, width: 10 });
+        portraitIds.add(portrait.getAsNormalizedFullLink().id);
+        const person = runtime.getCell(space, `person-${key}`, undefined, tx);
+        person.set({ name: key, portrait });
+        people[key] = person;
+      }
+      const argument = runtime.getCell(space, "argument", undefined, tx);
+      argument.set({ people });
+      return { argument, portraitIds };
+    };
+
+    /** Validates `argument` against `schema` with no defaults. */
+    const issue = (
+      argument: ReturnType<typeof stagePeople>["argument"],
+      schema: JSONSchema,
+      tx: ReturnType<Runtime["edit"]>,
+    ) => storedArgumentValidationIssue(argument, schema, undefined, tx);
+
+    it("returns no issue for a malformed document behind an asCell link", () => {
+      const tx = runtime.edit();
+      try {
+        const { argument } = stagePeople(tx);
+        expect(issue(argument, peopleSchema(true), tx)).toBeUndefined();
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns no issue for a malformed document behind an asCell link in a reference-form schema", () => {
+      const tx = runtime.edit();
+      try {
+        const { argument } = stagePeople(tx);
+        const stored = externalizeSchema(peopleSchemaWithDefinitions(true));
+        expect(stored).toEqual({ $ref: expect.stringMatching(/^cid:/) });
+        expect(issue(argument, stored, tx)).toBeUndefined();
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("reads only the link and stream markers of the document behind an asCell link", () => {
+      // Resolving the link probes whether the target is itself a link, and
+      // the handle's kind is told by the target's stream marker; neither is
+      // the target's contents.
+      const tx = runtime.edit();
+      try {
+        const { argument, portraitIds } = stagePeople(tx);
+        const readsBefore = [...getTransactionReadActivities(tx)].length;
+        issue(argument, peopleSchema(true), tx);
+        const targetPaths = [...getTransactionReadActivities(tx)]
+          .slice(readsBefore)
+          .filter((read) => portraitIds.has(read.id))
+          .map((read) => read.path.slice(0, 2).join("/"));
+        expect(targetPaths.length).toBeGreaterThan(0);
+        expect(new Set(targetPaths)).toEqual(
+          new Set(["value//", "value/$stream"]),
+        );
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns no issue for a malformed document behind a nullable asCell link", () => {
+      const tx = runtime.edit();
+      try {
+        const { argument } = stagePeople(tx);
+        const schema: JSONSchema = {
+          type: "object",
+          properties: {
+            people: {
+              type: "object",
+              additionalProperties: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  portrait: {
+                    anyOf: [{ type: "null" }, portraitSchema(true)],
+                  },
+                },
+              },
+            },
+          },
+        };
+        expect(issue(argument, schema, tx)).toBeUndefined();
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns the mismatch for a malformed document behind a by-value link", () => {
+      const tx = runtime.edit();
+      try {
+        const { argument } = stagePeople(tx);
+        expect(issue(argument, peopleSchema(false), tx)).toContain(
+          "mediaType: value does not match type string",
+        );
+        expect(
+          issue(
+            argument,
+            externalizeSchema(peopleSchemaWithDefinitions(false)),
+            tx,
+          ),
+        ).toContain("mediaType: value does not match type string");
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns the mismatch for an inline value at an asCell position", () => {
+      const tx = runtime.edit();
+      try {
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({
+          people: { ada: { name: "ada", portrait: { mediaType: 42 } } },
+        });
+        expect(issue(argument, peopleSchema(true), tx)).toContain(
+          "mediaType: value does not match type string",
+        );
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns the mismatch for an inline value at an asCell position in a linked document", () => {
+      const tx = runtime.edit();
+      try {
+        const person = runtime.getCell(space, "person-ada", undefined, tx);
+        person.set({ name: "ada", portrait: { mediaType: 42 } });
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ people: { ada: person } });
+        expect(issue(argument, peopleSchema(true), tx)).toContain(
+          "mediaType: value does not match type string",
+        );
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns the mismatch for an inline value at a root asCell position", () => {
+      const tx = runtime.edit();
+      try {
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ mediaType: 42 });
+        expect(issue(argument, portraitSchema(true), tx)).toContain(
+          "mediaType: value does not match type string",
+        );
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns the mismatch for a by-value field of the referring document", () => {
+      const tx = runtime.edit();
+      try {
+        const { argument } = stagePeople(tx);
+        const person = runtime.getCell(space, "person-ada", undefined, tx);
+        person.key("name").set(7 as never);
+        expect(issue(argument, peopleSchema(true), tx)).toContain(
+          "name: value does not match type string",
+        );
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns no issue for a malformed document behind an asCell link nested in an inline one", () => {
+      const tx = runtime.edit();
+      try {
+        const thumb = runtime.getCell(space, "thumb", undefined, tx);
+        thumb.set({ mediaType: 42 });
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ portrait: { mediaType: "image/png", thumb } });
+        const schema: JSONSchema = {
+          type: "object",
+          properties: {
+            portrait: {
+              type: "object",
+              properties: {
+                mediaType: { type: "string" },
+                thumb: portraitSchema(true),
+              },
+              asCell: ["cell"],
+            },
+          },
+        };
+        expect(issue(argument, schema, tx)).toBeUndefined();
+        argument.key("portrait").key("mediaType").set(7 as never);
+        expect(issue(argument, schema, tx)).toContain(
+          "portrait: mediaType: value does not match type string",
+        );
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns no issue for a linked value under a `oneOf` of two handles", () => {
+      const tx = runtime.edit();
+      try {
+        const portrait = runtime.getCell(space, "portrait", undefined, tx);
+        portrait.set({ mediaType: "image/png" });
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ portrait });
+        const schema: JSONSchema = {
+          type: "object",
+          properties: {
+            portrait: {
+              oneOf: [portraitSchema(true), {
+                type: "object",
+                properties: { url: { type: "string" } },
+                required: ["url"],
+                asCell: ["cell"],
+              }],
+            },
+          },
+        };
+        expect(issue(argument, schema, tx)).toBeUndefined();
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns no issue for a malformed array element `Cell.set()` stored as its own document", () => {
+      // An element written inline is stored as a document of its own and
+      // linked, so at a handle position it holds a reference like any link.
+      const tx = runtime.edit();
+      try {
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ items: [{ mediaType: 42 }] });
+        expect(
+          issue(argument, {
+            type: "object",
+            properties: {
+              items: { type: "array", items: portraitSchema(true) },
+            },
+          }, tx),
+        ).toBeUndefined();
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("returns no issue for a well-formed document behind an asCell link under an `if`", () => {
+      // A keyword judging a value whole reads its value by value, so it
+      // judges what is stored rather than a handle minted in its place.
+      const tx = runtime.edit();
+      try {
+        const portrait = runtime.getCell(space, "portrait", undefined, tx);
+        portrait.set({ mediaType: "image/png" });
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ held: { portrait } });
+        const schema: JSONSchema = {
+          type: "object",
+          properties: {
+            held: {
+              type: "object",
+              properties: { portrait: portraitSchema(true) },
+              if: {},
+              then: { properties: { portrait: { type: "object" } } },
+            },
+          },
+        };
+        expect(issue(argument, schema, tx)).toBeUndefined();
+      } finally {
+        tx.abort();
+      }
+    });
+  });
+
+  describe("handleBoundarySchema()", () => {
+    const portrait: JSONSchema = {
+      type: "object",
+      properties: { mediaType: { type: "string" } },
+      asCell: ["cell"],
+    };
+
+    it("returns `true` for a schema declaring no handle", () => {
+      expect(handleBoundarySchema({
+        type: "object",
+        properties: { name: { type: "string" } },
+      })).toBe(true);
+    });
+
+    it("returns the path to each handle and nothing else", () => {
+      expect(handleBoundarySchema({
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          people: {
+            type: "object",
+            additionalProperties: {
+              type: "object",
+              properties: { portrait, age: { type: "number" } },
+            },
+          },
+        },
+      })).toEqual({
+        properties: {
+          people: {
+            additionalProperties: {
+              properties: { portrait: { asCell: ["cell"] } },
+              additionalProperties: true,
+            },
+          },
+        },
+        additionalProperties: true,
+      });
+    });
+
+    it("returns a union of a handle and an absence as that union", () => {
+      expect(handleBoundarySchema({
+        anyOf: [{ type: "null" }, portrait],
+      })).toEqual({ anyOf: [{ type: "null" }, { asCell: ["cell"] }] });
+    });
+
+    it("returns a union of a handle and an annotated absence as that union", () => {
+      expect(handleBoundarySchema({
+        anyOf: [{ type: "null", description: "none yet" }, portrait],
+      })).toEqual({ anyOf: [{ type: "null" }, { asCell: ["cell"] }] });
+    });
+
+    it("returns `true` for a `oneOf` of two handles", () => {
+      expect(handleBoundarySchema({ oneOf: [portrait, portrait] })).toBe(true);
+    });
+
+    it("returns `true` for a union whose value branch declares no handle", () => {
+      expect(handleBoundarySchema({
+        anyOf: [{ type: "string" }, portrait],
+      })).toBe(true);
+    });
+
+    it("returns `true` for a node judging its value whole", () => {
+      for (const keyword of ["const", "enum", "not", "if"]) {
+        expect(handleBoundarySchema({
+          type: "object",
+          properties: { portrait },
+          [keyword]: keyword === "enum" ? [{}] : {},
+        })).toBe(true);
+      }
+    });
+
+    it("keeps a local reference only to a definition leading to a handle", () => {
+      expect(handleBoundarySchema({
+        $ref: "#/$defs/Root",
+        $defs: {
+          Root: {
+            type: "object",
+            properties: {
+              held: { $ref: "#/$defs/Held" },
+              plain: { $ref: "#/$defs/Plain" },
+            },
+          },
+          Held: { type: "object", asCell: ["cell"] },
+          Plain: { type: "object", properties: { x: { type: "number" } } },
+        },
+      })).toEqual({
+        $ref: "#/$defs/Root",
+        $defs: {
+          Root: {
+            properties: { held: { $ref: "#/$defs/Held" } },
+            additionalProperties: true,
+          },
+          Held: { asCell: ["cell"] },
+        },
+      });
+    });
+
+    it("keeps a recursive definition that leads to a handle", () => {
+      expect(handleBoundarySchema({
+        $ref: "#/$defs/Node",
+        $defs: {
+          Node: {
+            type: "object",
+            properties: {
+              next: { $ref: "#/$defs/Node" },
+              held: { type: "string", asCell: ["cell"] },
+            },
+          },
+        },
+      })).toEqual({
+        $ref: "#/$defs/Node",
+        $defs: {
+          Node: {
+            properties: {
+              next: { $ref: "#/$defs/Node" },
+              held: { asCell: ["cell"] },
+            },
+            additionalProperties: true,
+          },
+        },
+      });
+    });
+
+    it("returns the reduction of a reference-form schema's recomposed form", () => {
+      // Recomposition names definitions by content, so the reduction is
+      // compared by shape rather than by name.
+      const reduced = handleBoundarySchema(externalizeSchema({
+        type: "object",
+        properties: { held: { $ref: "#/$defs/Held" } },
+        $defs: { Held: portrait },
+      })) as JSONSchemaObj;
+      const ref = (reduced.properties?.held as JSONSchemaObj).$ref!;
+      expect(reduced.$defs?.[ref.slice("#/$defs/".length)]).toEqual({
+        asCell: ["cell"],
+      });
+    });
+
+    it("returns `true` for a reference to a document that has not arrived", () => {
+      expect(handleBoundarySchema({
+        $ref: "cid:fid1:absent-schema-document",
+      })).toBe(true);
+    });
   });
 });

@@ -7689,6 +7689,138 @@ describe("piece pull materialization", () => {
     expect(await piece.result.get(["output"])).toBe(10);
     expect(await piece.input.get(["input"])).toBe(5);
   });
+
+  describe("input writes beside an asCell position", () => {
+    // An input write judges the argument it stages, and a handle position in
+    // it holds a reference: the document behind the handle is judged where
+    // it is read through the handle, so its contents do not decide the write.
+
+    const portraitSchema = (asCell: boolean): JSONSchema => ({
+      type: "object",
+      properties: {
+        mediaType: { type: "string" },
+        width: { type: "number" },
+      },
+      required: ["mediaType", "width"],
+      ...(asCell ? { asCell: ["cell"] } : {}),
+    });
+
+    /** Starts a piece whose argument links a portrait document. */
+    const startWithPortrait = async (
+      asCell: boolean,
+      portraitValue: Record<string, unknown>,
+    ) => {
+      const portrait = runtime.getCell(
+        pieces.getSpace(),
+        "portrait-" + crypto.randomUUID(),
+      );
+      await runtime.editWithRetry((tx) => {
+        portrait.withTx(tx).set(portraitValue);
+      });
+      const piece = await pieces.runPersistent(
+        trustPattern(runtime, {
+          argumentSchema: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              portrait: portraitSchema(asCell),
+            },
+            required: ["name"],
+          },
+          resultSchema: { type: "object", properties: {} },
+          result: {},
+          nodes: [],
+        }),
+        { name: "ada" },
+        undefined,
+        { start: true },
+      );
+      await runtime.editWithRetry((tx) => {
+        pieces.getArgument(piece).withTx(tx).key("portrait").setRaw(
+          portrait.getAsLink() as never,
+        );
+      });
+      return { piece, portrait };
+    };
+
+    it("writes a sibling field when the document behind the handle is malformed", async () => {
+      const { piece } = await startWithPortrait(true, {
+        mediaType: 42,
+        width: 10,
+      });
+      const controller = new PieceController(pieces, piece);
+
+      await expect(controller.input.set("grace", ["name"])).resolves
+        .toBeUndefined();
+      expect(await controller.input.get(["name"])).toBe("grace");
+    });
+
+    it("refuses a sibling write when a by-value linked document is malformed", async () => {
+      const { piece } = await startWithPortrait(false, {
+        mediaType: 42,
+        width: 10,
+      });
+      const controller = new PieceController(pieces, piece);
+
+      await expect(controller.input.set("grace", ["name"])).rejects.toThrow(
+        /updated input does not match its schema: .*mediaType/,
+      );
+    });
+
+    /** Starts a piece holding its portrait inline at the handle position. */
+    const startWithInlinePortrait = async () => {
+      const piece = await pieces.runPersistent(
+        trustPattern(runtime, {
+          argumentSchema: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              portrait: portraitSchema(true),
+            },
+            required: ["name"],
+          },
+          resultSchema: { type: "object", properties: {} },
+          result: {},
+          nodes: [],
+        }),
+        { name: "ada" },
+        undefined,
+        { start: true },
+      );
+      await runtime.editWithRetry((tx) => {
+        pieces.getArgument(piece).withTx(tx).key("portrait").setRaw(
+          { mediaType: "image/gif", width: 10 } as never,
+        );
+      });
+      return piece;
+    };
+
+    it("writes below a handle position holding an inline value", async () => {
+      const piece = await startWithInlinePortrait();
+      const controller = new PieceController(pieces, piece);
+
+      await expect(
+        controller.input.set("image/png", ["portrait", "mediaType"]),
+      ).resolves.toBeUndefined();
+      expect(pieces.getArgument(piece).getRaw()).toEqual({
+        name: "ada",
+        portrait: { mediaType: "image/png", width: 10 },
+      });
+    });
+
+    it("refuses a malformed value written below a handle position", async () => {
+      const piece = await startWithInlinePortrait();
+      const controller = new PieceController(pieces, piece);
+
+      await expect(
+        controller.input.set(42, ["portrait", "mediaType"]),
+      ).rejects.toThrow(/does not match/);
+      expect(pieces.getArgument(piece).getRaw()).toEqual({
+        name: "ada",
+        portrait: { mediaType: "image/gif", width: 10 },
+      });
+    });
+  });
 });
 
 describe("piece cold-replica slot read (two replicas, one server)", () => {

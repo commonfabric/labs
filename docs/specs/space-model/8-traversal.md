@@ -195,6 +195,12 @@ Defaults:
 - `asCell: ["opaque"]` is a hard boundary in both modes. Inline values are not
   descended into; pointer targets are not loaded, traversed, or added to
   `schemaTracker`.
+- An unknown-valued handle (`{ "type": "unknown", "asCell": [...] }`, which
+  `Cell<unknown>` generates) stops at an ordinary link in both modes: write
+  redirects still resolve, and the handle is minted from the link without
+  loading its target. A reader that wants the target reads it through the
+  handle under a schema of its own, which fetches it then. This is the way to
+  hold a reference to a large document without a query delivering it.
 
 ### Detection Rules
 

@@ -29,6 +29,8 @@ import {
   isStream,
   type JSONSchema,
   KeepAsCell,
+  materializeForValidation,
+  materializeHandleForValidation,
   type MemorySpace,
   mergeSchemaDefaults,
   NAME,
@@ -283,6 +285,26 @@ function writePathCrossesLink(
     if (isLink(current)) return true;
   }
   return false;
+}
+
+/**
+ * The first Cell `materialized` holds at a proper prefix of `path`, and that
+ * prefix: the handle a write at `path` lands behind.
+ */
+function handleOnWritePath(
+  materialized: unknown,
+  path: readonly (string | number)[],
+): { cell: Cell<unknown>; path: readonly (string | number)[] } | undefined {
+  let current = materialized;
+  for (let depth = 0; depth < path.length - 1; depth++) {
+    current = isObjectOrArray(current)
+      ? (current as Record<PropertyKey, unknown>)[path[depth]]
+      : undefined;
+    if (isCell(current)) {
+      return { cell: current, path: path.slice(0, depth + 1) };
+    }
+  }
+  return undefined;
 }
 
 /** Replace a schema-aware snapshot path, reading through Cell ancestors. */
@@ -3448,11 +3470,28 @@ class PiecePropIo implements PieceCellIo {
             linkValue,
           );
         }
-        const stagedRoot = replaceMaterializedValueAtPath(
-          targetCell.asSchema(undefined).withTx(tx).get(),
-          writePath,
-          materializedValue,
-        );
+        // The stored root reads with each declared handle left a handle, so
+        // what a handle refers to is judged where it is read through the
+        // handle and does not decide this write. The one exception is a
+        // handle the write path passes through: the write lands in what that
+        // handle holds, so it is opened and judged with the write applied.
+        const storedRoot = materializeForValidation(targetCell, schema, tx);
+        const crossedHandle = handleOnWritePath(storedRoot, writePath);
+        const openedRoot = crossedHandle === undefined
+          ? storedRoot
+          : replaceMaterializedValueAtPath(
+            storedRoot,
+            crossedHandle.path,
+            materializeHandleForValidation(
+              crossedHandle.cell,
+              schema,
+              crossedHandle.path,
+              tx,
+            ),
+          );
+        const stageAt = (candidate: unknown) =>
+          replaceMaterializedValueAtPath(openedRoot, writePath, candidate);
+        const stagedRoot = stageAt(materializedValue);
         // A slot whose stored value routes through a link this replica cannot
         // read — another principal's per-user instance, a document not
         // replicated here — materializes as absent, and judged as it stands
@@ -3515,23 +3554,13 @@ class PiecePropIo implements PieceCellIo {
               mergeMaterializedLinks: true,
               acceptOpaqueValue: schemaAcceptsOpaqueCellValue,
               acceptUnionCandidate: (candidate) =>
-                inputIssue(
-                  replaceMaterializedValueAtPath(
-                    stagedRoot,
-                    writePath,
-                    candidate,
-                  ),
-                ) === undefined,
+                inputIssue(stageAt(candidate)) === undefined,
             },
           );
         }
         const validationRoot = writePath.length === 0
           ? nextValue
-          : replaceMaterializedValueAtPath(
-            stagedRoot,
-            writePath,
-            nextValue,
-          );
+          : stageAt(nextValue);
         const issue = inputIssue(validationRoot);
         if (issue !== undefined) {
           throw new Error(`updated input does not match its schema: ${issue}`);
