@@ -3037,6 +3037,14 @@ class PiecePropIo implements PieceCellIo {
   }
 
   async get(path?: CellPath) {
+    // Under server execution the run that stores a handler's consequences is
+    // the serving runtime's, and a send returns ahead of it. The read waits
+    // for every event this runtime fired to reach its terminal consequence
+    // here, so a caller that sent and then reads sees what the served run
+    // stored. A runtime that fired nothing has no overlay and waits for
+    // nothing.
+    await this.#cc.pieces().runtime.speculationOverlay
+      ?.waitForIntentQuiescence();
     const targetCell = await this.#getTargetCell();
     if (this.#type === "input" && path?.length) {
       assertPieceInputPath(targetCell, path, { allowArrayLength: true });
@@ -3202,6 +3210,7 @@ class PiecePropIo implements PieceCellIo {
   ): Promise<{ wrote: boolean }> {
     const pieces = this.#cc.pieces();
     let committedTargetCell: Cell<unknown> | undefined;
+    let sentEvent = false;
     // Under server execution a stream send appends outside this transaction,
     // so an aborted attempt can leave its event durable. Reusing one caller
     // identity makes both guards converge on that event: admission rejects a
@@ -3215,6 +3224,10 @@ class PiecePropIo implements PieceCellIo {
       | undefined;
 
     const { ok, error } = await pieces.runtime.editWithRetry((tx) => {
+      // Each attempt decides afresh what it wrote: a retry can resolve the
+      // same path to a durable destination where the attempt before it found
+      // a stream.
+      sentEvent = false;
       // Resolve the target from the piece metadata inside every retry. A
       // concurrent setsrc may replace the argument link/schema after this
       // write starts; reusing a cell captured before the retry would then
@@ -3384,11 +3397,12 @@ class PiecePropIo implements PieceCellIo {
           pieces.runtime.getCellFromLink(rawTarget, undefined, tx)
             .setRawUntyped(undefined);
         } else {
+          sentEvent = isStream(txCell);
           setCell(
             txCell,
             nextValue,
             undefined,
-            isStream(txCell) &&
+            sentEvent &&
               pieces.runtime.experimental.serverExecution === true
               ? streamSendOptions ??= {
                 eventId: crypto.randomUUID(),
@@ -3766,7 +3780,22 @@ class PiecePropIo implements PieceCellIo {
 
     const targetCell = committedTargetCell ?? await this.#getTargetCell();
 
-    if (this.#type === "input") {
+    // What a caller is owed when this returns is what the write made current.
+    // An input write pulls the result root, so the results derived from the
+    // new input are materialized. A result write pulls the root it wrote. A
+    // stream send stores nothing: its event is consumed by a handler, so what
+    // it owes is this runtime's run of that handler having finished, which
+    // reactive quiescence covers, and the event's own commit having settled,
+    // which `synced()` below covers. Under server execution that run is the
+    // client's speculative echo and the run that counts is the serving
+    // runtime's, which a send does not wait for: the event is the client's
+    // whole contribution, and a reader that needs the served consequence waits
+    // for it where it reads, as `get()` does. Pulling the result root for a
+    // send would demand every derivation of the result on every send, a read
+    // as wide as the whole result for a write that touched none of it.
+    if (sentEvent) {
+      await pieces.runtime.idle();
+    } else if (this.#type === "input") {
       await pieces.getResult(this.#cc.getCell()).pull();
     } else {
       await targetCell.pull();

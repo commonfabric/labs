@@ -375,7 +375,14 @@ code that resolves them.
   schema and keying into a bounded surface first — a board's `index` rather than
   its result — buys the same liveness for a fraction of the walk. This is a
   cause in product code and a confound in a harness; see "What your harness
-  holds live".
+  holds live". `pull()` is the same read without the subscription, paid once per
+  call: `getResult(piece).pull()` walks the whole result and every piece it
+  links to in the effect that demands it, and `pull()` on a key taken from that
+  schemaless cell walks everything under that key, which for a board's list of
+  topics is every topic. The value it returns is a view over what that walk
+  materialized, not a second walk. A harness that pulls per write to find what
+  the write made is quadratic in the board, and the fix is the same: apply the
+  durable schema and key into the one row the write made.
 - **An append re-walks the list against its element schema.** Appending to a
   growing array is free, and so is appending a piece to one. Appending a piece
   whose declared shape is wide re-walks every element already there, once per

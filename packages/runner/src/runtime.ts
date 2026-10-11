@@ -2855,6 +2855,21 @@ export class Runtime {
       (() => undefined);
   }
 
+  /**
+   * Tracks an event this runtime fired until its terminal consequence
+   * arrives, installing the flag-ON client overlay if the fire is the first
+   * thing this runtime does, so that `waitForIntentQuiescence` counts the
+   * event whether or not a speculative edit came before it. Does nothing in
+   * the OFF arm and on a serving runtime, where no overlay exists.
+   */
+  trackEventIntent(
+    space: MemorySpace,
+    sidecarId: string,
+    eventId: string,
+  ): void {
+    this.#speculationDestination()?.trackIntent(space, sidecarId, eventId);
+  }
+
   /** The client-effect channel of a flag-ON non-serving runtime
    * (server-execution v2 Phase 4, protocol.md §5): the overlay's
    * optimistic navigateTo enactment records its nonce here, and the

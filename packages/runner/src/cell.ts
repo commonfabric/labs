@@ -2233,8 +2233,10 @@ export class CellImpl<T extends FabricValue>
           );
         }
         {
+          this.#runtime.trackEventIntent(space, sidecarId, firedEventId);
+          // Read after the tracking call, which installs the overlay when
+          // this fire is the first thing the runtime does.
           const overlay = this.#runtime.speculationOverlay;
-          overlay?.trackIntent(space, sidecarId, firedEventId);
           const eventId = firedEventId;
           const outcome = replica.enqueueEventAppend({
             sidecarId,

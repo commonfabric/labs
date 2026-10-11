@@ -17,6 +17,8 @@
 import type { JSONSchema } from "@commonfabric/api";
 import { type DID, Identity } from "@commonfabric/identity";
 import { createTestSpace } from "@commonfabric/integration/test-space";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import type { Cell } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { join } from "@std/path";
@@ -95,17 +97,37 @@ export function demandTopicBoard(
   board: PieceController,
   demand: TopicBoardDemand = "index",
 ): () => void {
-  const result = board.pieces().getResult(board.getCell());
-  if (demand === "full") return result.sink(() => {});
-  const schema = result.getMetaRaw("schema") as JSONSchema | undefined;
-  if (schema === undefined) {
-    throw new Error(
-      "Topic board result has no durable schema for index demand.",
-    );
+  if (demand === "full") {
+    return board.pieces().getResult(board.getCell()).sink(() => {});
   }
-  // The durable schema describes the result root. key() needs it on that root
-  // to select the index row schema for the subscription.
-  return result.asSchema(schema).key("index").sink(() => {});
+  return topicBoardIndex(board).sink(() => {});
+}
+
+/**
+ * Each board's durable result schema, read once. The schema does not change
+ * while a board is seeded, and the stored metadata it is read from is not
+ * always at hand: under server execution a frame can leave the replica
+ * between the result document and the schema document it names.
+ */
+const durableSchemas = new WeakMap<PieceController, JSONSchema>();
+
+/**
+ * The board's `index` under its durable result schema: one bounded row per
+ * topic, whose address is the topic's own. The schema has to be applied at the
+ * result root, where it describes the value, for `key()` to select the row
+ * schema under it.
+ */
+function topicBoardIndex(board: PieceController): Cell<unknown> {
+  const result = board.pieces().getResult(board.getCell());
+  let schema = durableSchemas.get(board);
+  if (schema === undefined) {
+    schema = result.getMetaRaw("schema") as JSONSchema | undefined;
+    if (schema === undefined) {
+      throw new Error("Topic board result has no durable schema.");
+    }
+    durableSchemas.set(board, schema);
+  }
+  return result.asSchema(schema).key("index");
 }
 
 /**
@@ -233,20 +255,26 @@ function topicBody(
 /**
  * The topic piece at `index` in the board's list.
  *
- * Only the `topics` key is pulled. The board's result also carries `crossrefs`,
- * whose rows are piece-valued and expand through each topic's view of every
- * sibling; pulling the whole result grows without bound as the board fills.
+ * What is read is the board's index row at `index`, whose schema bounds the
+ * read to that row's scalars. Reading the `topics` key with no schema, or the
+ * result as a whole, walks every topic the board holds through its links, so
+ * each call costs the whole board and the seed that calls it per topic grows
+ * quadratically. The read waits for the row to be present: under server
+ * execution the verb that files a topic can return before its consequence
+ * lands in this replica.
  */
 export async function topicAt(
   board: PieceController,
   index: number,
 ): Promise<PieceController> {
-  const topics = (await board.result.getCell()).key("topics");
-  await topics.pull();
-  return new PieceController(
-    board.pieces(),
-    topics.key(index).resolveAsCell(),
+  const row = topicBoardIndex(board).key(index);
+  await waitForCellValue(
+    board.pieces().runtime,
+    row,
+    (value: { title?: string } | undefined) => value?.title !== undefined,
+    { stuckLabel: `the board's index row for topic ${index}` },
   );
+  return new PieceController(board.pieces(), row.resolveAsCell());
 }
 
 /**
@@ -287,6 +315,15 @@ export async function seedTopicBoard(
 
     const demand = options.demand ?? "index";
     releaseBoard = demandTopicBoard(board, demand);
+    // Who derives what a topic publishes decides what the seed reads. With
+    // client execution the seed's runtime is the only runtime running the
+    // board and its topics, so what it never reads is never derived, and a
+    // board opened elsewhere would find no published summaries and an empty
+    // crossref table. Under server execution the serving runtime derives a
+    // published value when a reader demands it, so the seed sends its events
+    // and reads none of it: every read here would be demand for the serving
+    // runtime to derive, and a wait for it to do so, per topic.
+    const served = cc.runtime.experimental.serverExecution === true;
 
     const topics: SeededTopic[] = [];
     // The created pieces themselves, because a mention is a reference: the
@@ -305,14 +342,37 @@ export async function seedTopicBoard(
       // reads prose for addresses now, so a seeded board built that way would
       // carry the sentences and none of the graph — and every benchmark over it
       // would quietly measure a board with no crossrefs at all.
-      for (const target of crossrefTargets(index, shape)) {
+      const targets = crossrefTargets(index, shape);
+      for (const target of targets) {
         await created.result.set({ topic: pieces[target].getCell() }, [
           "mention",
         ]);
       }
+      // What a topic publishes — its summary, and the mentions the board's
+      // pivot joins over — is derived by a running topic: a reader that opens
+      // another topic reads this one's published result and runs nothing of
+      // it. One read of the topic's result derives all of it, once per topic
+      // rather than once per write. The result includes the topic's
+      // backlinks, which read the board's crossref table, so this read still
+      // grows with the board.
+      if (!served) await created.result.get();
       pieces.push(created);
       topics.push({ fid: created.id, title });
       options.onTopic?.(index);
+    }
+    if (served) {
+      // A send returns with its event committed and the served run of the
+      // handler ahead. The board is handed on once every event sent above
+      // has its consequence stored, which is one wait at the end rather than
+      // one per send.
+      await cc.runtime.speculationOverlay?.waitForIntentQuiescence();
+    } else {
+      // The board's crossref pivot is what every topic reads its backlinks
+      // from, and a reader that opens one topic runs that topic, not the
+      // board. Derived here once, over the seeded board, so the table a
+      // reader finds is the one these references make; per write it would be
+      // rebuilt as many times as there are topics.
+      await board.result.get(["crossrefs"]);
     }
 
     return {

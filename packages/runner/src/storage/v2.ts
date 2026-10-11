@@ -3733,6 +3733,11 @@ class Provider
     return this.#followReplacement((replica) => replica.pullToServerHead());
   }
 
+  /** @inheritDoc */
+  serverHeadSeq(): Promise<number> {
+    return this.#followReplacement((replica) => replica.serverHeadSeq());
+  }
+
   sqliteQuery(
     db: SqliteDbRef,
     sql: string,
@@ -5137,6 +5142,11 @@ export class SpaceReplica
   }
 
   async pullToServerHead(): Promise<void> {
+    await this.serverHeadSeq();
+  }
+
+  /** @inheritDoc */
+  async serverHeadSeq(): Promise<number> {
     const { session } = await this.#activeSessionHandle();
     // An empty-root graph query fetches no document but still crosses the wire
     // and returns the server's current sequence. Because a WebSocket delivers a
@@ -5146,7 +5156,7 @@ export class SpaceReplica
     // caught up to everything the server had sent" barrier. `graph.query` is an
     // unconditional round trip (it cannot be answered from the local replica),
     // unlike the entity-id listing calls, which a server may decline by flag.
-    await session.queryGraph({ roots: [] });
+    return (await session.queryGraph({ roots: [] })).serverSeq;
   }
 
   /**
