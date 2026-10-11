@@ -797,15 +797,17 @@ the validating transaction defers to reactive reads; a readable wrong-typed
 value is refused. Preflight does not establish that every linked value is
 available.
 
-A position the argument schema declares a handle (`asCell`) holds a reference,
-and validation checks that it holds one without reading what it refers to,
-whether that is another document or a value stored inline. The contents are
-judged where they are read through the handle, which a schema-aware read does
-against whatever they hold then; a malformed document behind a handle does not
-refuse the argument, and is not a dependency of the validating transaction. A
-by-value position is materialized and judged as before, links followed. A
-union, and a position reached through a reference to another schema document,
-reads by value whatever its branches declare.
+A position the argument schema declares a handle (`asCell`) and that stores a
+link holds a reference. Validation leaves what the reference refers to unread:
+its contents are judged where they are read through the handle, which a
+schema-aware read does against whatever they hold then. A malformed document
+behind a handle therefore does not refuse the argument, and its contents are
+not a dependency of the validating transaction. A handle position holding its
+value inline is part of the document holding it, and is judged with that
+document. A by-value position is materialized with its links followed and
+judged. A union leads to a handle when each branch leads to one or admits only
+`null` or `undefined`; any other union, and a node carrying a keyword that
+judges its value whole, such as `const`, `enum`, or `if`, reads by value.
 
 When validation needs to distinguish unreadable links from literal absence, its
 fallback builds a view whose fields follow stored links as validation reads

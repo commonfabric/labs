@@ -213,7 +213,7 @@ carries a label independently of this drop.
 ## 5. A subtree read in full is stated at its root
 
 A reader that walks a whole value, such as validation of a stored argument
-following every link in it, reads each container's shape and each member below
+following every by-value link in it, reads each container's shape and each member below
 it. Stated path by path, that read set grows with every member of every
 document the walk reaches, and a large enough value makes the commit too large
 to send.

@@ -979,11 +979,12 @@ refused over an unrelated allocated field whose value is readable and violates
 the schema. A field whose stored or supplied value is a link this replica cannot
 read — a per-user instance another principal owns, a document not replicated
 here — is not judged by that check: its value is owned elsewhere and is checked
-when a reactive read materializes it. Nor is a field the input schema declares a
-handle (`asCell`): the check confirms that it holds a reference and leaves its
-contents to whatever reads through the handle, unless the write path itself
-passes through that handle, in which case the handle is judged with the write
-applied. A write that itself resolves through a link is also checked against its
+when a reactive read materializes it. Nor is the document behind a link stored
+at a field the input schema declares a handle (`asCell`): its contents are left
+to whatever reads through the handle, unless the write path itself passes
+through that handle, in which case the handle is judged with the write applied.
+A handle field holding its value inline is judged with the input document. A
+write that itself resolves through a link is also checked against its
 destination's contract, which still refuses a required field it cannot reach.
 Addressing the raw argument cell by id avoids that whole-document check, but it
 is an unsafe recovery tool: it can erase link-bearing data that a later

@@ -1,19 +1,19 @@
 /** Validates stored arguments without treating unreadable links as invalid values. */
 
 import {
+  deepFreeze,
   FabricInstance,
   type FabricValue,
+  isDeepFrozen,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
+import { classifySchemaMetaValue } from "@commonfabric/data-model-schema/schema-refs";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type { JSONSchema } from "./builder/types.ts";
-import { type Cell, isCell } from "./cell.ts";
-import {
-  ContextualFlowControl,
-  resolveExternalRootRefForStructure,
-} from "./cfc.ts";
+import type { JSONSchema, JSONSchemaObj } from "./builder/types.ts";
+import { type Cell, isCell, isStream } from "./cell.ts";
+import { ContextualFlowControl } from "./cfc.ts";
 import { localDefinitionName } from "./cfc/schema-primitives.ts";
 import { validateSchemaValue } from "./cfc/schema-sanitization.ts";
 import {
@@ -26,6 +26,12 @@ import {
   mergeSchemaDefaults,
   schemaAcceptsOpaqueCellValue,
 } from "./runner-utils.ts";
+import { recomposeSchemaRefs } from "./schema-decompose.ts";
+import {
+  isSchemaDocumentClosureComplete,
+  lookupSchemaDocument,
+  onSchemaRegistryClear,
+} from "./schema-registry.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
 import {
   type IExtendedStorageTransaction,
@@ -55,8 +61,40 @@ export const acceptsOpaqueCellOrUnresolvedLink = (
 
 const READ_NON_RECURSIVE: IReadOptions = { nonRecursive: true };
 
-/** Keywords whose subschemas describe the same value against other schemas. */
-const COMBINATOR_KEYWORDS = ["anyOf", "oneOf", "allOf"] as const;
+/**
+ * The keywords a node may carry and still lead to a handle below it: those
+ * that descend into the value, and those whose verdict does not change when a
+ * value below is a handle rather than the data it holds. Any other keyword —
+ * `const`, `enum`, `if`, `not`, `dependentSchemas`, and the rest — judges the
+ * value whole, and the node reads by value so that it judges what is stored.
+ */
+const HANDLE_PATH_KEYWORDS: ReadonlySet<string> = new Set([
+  "$comment",
+  "$defs",
+  "$ref",
+  "additionalProperties",
+  "default",
+  "deprecated",
+  "description",
+  "examples",
+  "ifc",
+  "items",
+  "maxItems",
+  "maxProperties",
+  "minItems",
+  "minProperties",
+  "prefixItems",
+  "properties",
+  "propertyNames",
+  "readOnly",
+  "required",
+  "title",
+  "type",
+  "writeOnly",
+]);
+
+/** Keywords that offer a value branches to take. */
+const UNION_KEYWORDS: ReadonlySet<string> = new Set(["anyOf", "oneOf"]);
 
 /**
  * The schema a value is materialized under before it is validated against
@@ -76,29 +114,62 @@ const COMBINATOR_KEYWORDS = ["anyOf", "oneOf", "allOf"] as const;
  * mismatched value: the validator has to see what is stored to refuse it. For
  * the same reason no reference survives into the result unless it names a
  * reduced definition, since any other would carry the full schema back into
- * the read. A union reads as a schemaless value, because which branch a value
- * takes is the validator's question, and a handle one branch declares is not
- * one the reader mints. So does a position behind a reference to another
- * schema document, and a reference-form schema whose document has not
- * arrived: a handle there is judged by its contents, as a value would be.
+ * the read. A reference-form schema is recomposed first, and reads as `true`
+ * until every document it names has arrived.
+ *
+ * The keywords that lead somewhere are `properties`, `additionalProperties`,
+ * `prefixItems`, `items`, and a local `$ref`, on a node carrying no keyword
+ * outside {@link HANDLE_PATH_KEYWORDS}. A union leads to a handle when each
+ * branch either leads to one or admits only `null` or `undefined`, the shape
+ * an optional or nullable handle takes; any other union reads by value, since
+ * which branch it takes is the validator's question. A handle anywhere else
+ * reads by value too, and is judged by its contents.
  */
 export function handleBoundarySchema(schema: JSONSchema): JSONSchema {
   if (!isObjectNotArray(schema)) return true;
-  const root = resolveExternalRootRefForStructure(schema);
+  const cached = handleBoundaryCache.get(schema);
+  if (cached !== undefined) return cached;
+  const form = classifySchemaMetaValue(schema);
+  if (form.kind === "reference") {
+    if (!isSchemaDocumentClosureComplete(form.taggedHash)) return true;
+  } else if (form.kind !== "inline") {
+    return true;
+  }
+  const root = form.kind === "reference"
+    ? recomposeSchemaRefs(schema, lookupSchemaDocument)
+    : schema;
+  const result = isObjectNotArray(root) ? reduceRootToHandles(root) : true;
+  if (isDeepFrozen(schema)) {
+    handleBoundaryCache.set(schema, deepFreeze(result));
+  }
+  return result;
+}
+
+// Reductions of deep-frozen schemas, by identity. A reference-form schema is
+// reduced only once its closure has arrived, and documents never change, so
+// an entry stays right until the registry clears.
+let handleBoundaryCache = new WeakMap<object, JSONSchema>();
+onSchemaRegistryClear(() => {
+  handleBoundaryCache = new WeakMap();
+});
+
+/** Helper for {@link handleBoundarySchema}, which reduces a resolved root. */
+function reduceRootToHandles(root: JSONSchemaObj): JSONSchema {
   const definitions = isObjectNotArray(root.$defs) ? root.$defs : {};
   // A definition, or the root, can lead to a handle through a reference to
   // another, so which of them do is found by repeating the reduction until
   // the answer stops growing.
   const leads: HandleLeads = { definitions: new Set(), root: false };
   while (true) {
-    const reducedDefinitions = Object.entries(definitions).map((
-      [name, definition],
-    ) => [name, reduceToHandles(definition, leads)] as const);
-    const body = reduceToHandles(root, leads);
     const before = leads.definitions.size + (leads.root ? 1 : 0);
-    for (const [name, definition] of reducedDefinitions) {
-      if (definition !== true) leads.definitions.add(name);
-    }
+    const reducedDefinitions = Object.entries(definitions).map(
+      ([name, definition]) => {
+        const reduced = reduceToHandles(definition, leads);
+        if (reduced !== true) leads.definitions.add(name);
+        return [name, reduced] as const;
+      },
+    );
+    const body = reduceToHandles(root, leads);
     leads.root ||= body !== true;
     if (leads.definitions.size + (leads.root ? 1 : 0) > before) continue;
     if (body === true) return true;
@@ -121,6 +192,21 @@ interface HandleLeads {
 }
 
 /**
+ * The `type` of a union branch admitting only `null` or `undefined`, or
+ * `undefined` for any other branch.
+ */
+function absenceBranchType(
+  schema: JSONSchema,
+): "null" | "undefined" | undefined {
+  if (!isObjectNotArray(schema)) return undefined;
+  const keys = Object.keys(schema);
+  return keys.length === 1 &&
+      (schema.type === "null" || schema.type === "undefined")
+    ? schema.type
+    : undefined;
+}
+
+/**
  * Helper for {@link handleBoundarySchema}, which reduces one schema node to
  * the paths below it that lead to a handle. A `$ref` survives only when it
  * names a definition, or the root, that `leads` says leads to one.
@@ -136,8 +222,30 @@ function reduceToHandles(
       ...(schema.scope === undefined ? {} : { scope: schema.scope }),
     };
   }
-  if (COMBINATOR_KEYWORDS.some((keyword) => schema[keyword] !== undefined)) {
+  const keys = Object.keys(schema);
+  const unions = keys.filter((key) => UNION_KEYWORDS.has(key));
+  if (
+    unions.length > 1 ||
+    keys.some((key) =>
+      !HANDLE_PATH_KEYWORDS.has(key) && !UNION_KEYWORDS.has(key)
+    )
+  ) {
     return true;
+  }
+  const branches = schema.anyOf ?? schema.oneOf;
+  if (branches !== undefined) {
+    // The absence branches keep their type, so that `null` takes its own
+    // branch rather than the handle's, as it does when the reader reads it.
+    const reduced = branches.map((branch) => {
+      const absence = absenceBranchType(branch);
+      if (absence !== undefined) return { type: absence };
+      const reduced = reduceToHandles(branch, leads);
+      return reduced === true ? undefined : reduced;
+    });
+    return reduced.every((branch) => branch !== undefined) &&
+        reduced.some((branch) => absenceBranchType(branch) === undefined)
+      ? { anyOf: reduced as JSONSchema[] }
+      : true;
   }
   if (typeof schema.$ref === "string") {
     // Siblings of a `$ref` describe the same value, and a reduced sibling
@@ -181,6 +289,13 @@ function reduceToHandles(
 /**
  * Materializes `cell` for validation against `schema`, stopping at the handles
  * `schema` declares; see {@link handleBoundarySchema}.
+ *
+ * Only a handle stored as a link stays a handle. One holding its value inline
+ * is opened, because those bytes are part of the document holding the handle:
+ * they are already among what the validation reads, change only by writes to
+ * that document, and are judged with it. Which is which is answered by the
+ * stored value at each handle position, found by following the by-value links
+ * on the way there, whose documents the materialization has already read.
  */
 export function materializeForValidation(
   cell: Cell<unknown>,
@@ -188,8 +303,63 @@ export function materializeForValidation(
   tx: IExtendedStorageTransaction,
 ): unknown {
   const boundary = handleBoundarySchema(schema);
-  return cell.asSchema(boundary === true ? undefined : boundary).withTx(tx)
-    .get();
+  if (boundary === true) return cell.asSchema(undefined).withTx(tx).get();
+  const holdsHandle = new Map<object, boolean>();
+  const reachesHandle = (value: unknown): boolean => {
+    if (isCell(value)) return true;
+    if (!isWalkableObjectOrArray(value)) return false;
+    const known = holdsHandle.get(value);
+    if (known !== undefined) return known;
+    // A container reached again before its walk finishes adds nothing to it.
+    holdsHandle.set(value, false);
+    const result = Object.values(value).some(reachesHandle);
+    holdsHandle.set(value, result);
+    return result;
+  };
+  const opened = new Map<object, unknown>();
+  const open = (
+    value: unknown,
+    raw: unknown,
+    base: NormalizedFullLink,
+  ): unknown => {
+    if (!reachesHandle(value)) return value;
+    if (isCellLink(raw) && !isCell(value)) {
+      const reading = readStoredLinkChainRaw(
+        tx,
+        parseLink(raw, base),
+        new Set(),
+      );
+      return open(value, reading.value, reading.base);
+    }
+    if (isCell(value)) {
+      return isCellLink(raw) || isStream(value)
+        ? value
+        : value.asSchema(undefined).withTx(tx).get();
+    }
+    const container = value as Record<string, unknown> | unknown[];
+    if (opened.has(container)) return opened.get(container);
+    opened.set(container, container);
+    let result: Record<string, unknown> | unknown[] | undefined;
+    for (const [key, child] of Object.entries(container)) {
+      const rawChild = isObjectOrArray(raw)
+        ? (raw as Record<string, unknown>)[key]
+        : undefined;
+      const next = open(child, rawChild, base);
+      if (next === child) continue;
+      result ??= Array.isArray(container)
+        ? container.slice()
+        : { ...container };
+      (result as Record<string, unknown>)[key] = next;
+    }
+    opened.set(container, result ?? container);
+    return result ?? container;
+  };
+  const link = cell.getAsNormalizedFullLink();
+  return open(
+    cell.asSchema(boundary).withTx(tx).get(),
+    cell.withTx(tx).getRaw({ meta: ignoreReadForScheduling }),
+    { ...link, path: [] },
+  );
 }
 
 /** Per-validation caches for the unreadable-link view. */
