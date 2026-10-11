@@ -1,3 +1,8 @@
+import {
+  PatternIndexError,
+  type PatternIndexEventType,
+  type PatternIndexPublishRequest,
+} from "@commonfabric/pattern-index/client";
 import type { JSONSchema } from "@commonfabric/api";
 import {
   type Cell,
@@ -58,11 +63,7 @@ import {
   parseStructuredResultSchema,
   validateAndSanitizeStructuredResult,
 } from "../structured-result.ts";
-import type {
-  PatternIndexEventType,
-  PatternIndexPublishRequest,
-} from "../pattern-index/client.ts";
-import { PatternIndexError } from "../pattern-index/client.ts";
+
 import {
   classifyRenderedHtml,
   PATTERN_DISCOVERABILITY_REASONS,

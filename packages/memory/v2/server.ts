@@ -85,6 +85,7 @@ import {
   type SessionOpenRequest,
   type SessionOpenResult,
   type SessionReadCeiling,
+  type SessionReportRequest,
   type SessionRevokedMessage,
   type SessionSync,
   type SessionViewHandle,
@@ -122,6 +123,11 @@ import {
   commitStormThresholds,
 } from "./commit-rates.ts";
 import { classifyCommitTelemetry } from "./commit-telemetry.ts";
+import {
+  parseSessionReport,
+  SessionReportLog,
+  type SessionReportsReport,
+} from "./session-reports.ts";
 import * as Engine from "./engine.ts";
 import {
   executeInvite,
@@ -265,6 +271,14 @@ const commitCount = operationMeter.createCounter(
     description:
       "Commits decided on every path, by space, by outcome, and by whether " +
       "the space was in a write storm at the time.",
+  },
+);
+const echoBreakerReportCount = operationMeter.createCounter(
+  "ct.memory.echo_breaker",
+  {
+    description:
+      "Remote-echo breaker trips and clears clients reported, by space, by " +
+      "event, and for a clear by how the trip ended.",
   },
 );
 
@@ -590,6 +604,16 @@ const commitRatesProviders: (() => CommitRatesReport)[] = [];
  * most recently constructed server still open; undefined when none is. */
 export const getCommitRates = (): CommitRatesReport | undefined =>
   commitRatesProviders.at(-1)?.();
+
+/** Live servers' session-report providers in construction order; a server
+ * removes its own on close(), so the newest LIVE server is always the one
+ * reported. */
+const sessionReportsProviders: (() => SessionReportsReport)[] = [];
+
+/** The co-hosted memory server's session reports for the health route — the
+ * most recently constructed server still open; undefined when none is. */
+export const getSessionReports = (): SessionReportsReport | undefined =>
+  sessionReportsProviders.at(-1)?.();
 
 const randomHex = (bytes: number): string => {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
@@ -1438,15 +1462,16 @@ class Connection {
 
   async receive(payload: string): Promise<void> {
     const parsed = parseClientMessage(payload);
-    // A presence message is handled as it is handed over, not behind the
-    // frames already queued here: it carries no seq and settles nothing.
-    // Whether it can overtake a frame ahead of it on the socket is the
-    // host's business — one that hands frames over one at a time keeps it
-    // behind them (04-protocol.md §4.13.4). Everything else keeps the
-    // connection's order.
-    if (parsed !== null && isPresenceClientMessage(parsed)) {
+    // A presence message or a session report is handled as it is handed
+    // over, not behind the frames already queued here: it carries no seq and
+    // settles nothing, and the space a report describes is often the one
+    // whose frames are queued deepest (04-protocol.md §4.14). Whether it can
+    // overtake a frame ahead of it on the socket is the host's business — one
+    // that hands frames over one at a time keeps it behind them
+    // (04-protocol.md §4.13.4). Everything else keeps the connection's order.
+    if (parsed !== null && isImmediateClientMessage(parsed)) {
       try {
-        this.#receivePresence(parsed);
+        this.#receiveImmediate(parsed);
       } catch (error) {
         if (!this.#answerFailedRequest(parsed, error)) throw error;
       }
@@ -1681,12 +1706,7 @@ class Connection {
     this.#server.detachSession(space, sessionId, this.id);
   }
 
-  #receivePresence(
-    message:
-      | PresenceJoinRequest
-      | PresencePublishRequest
-      | PresenceLeaveRequest,
-  ): void {
+  #receiveImmediate(message: ImmediateClientMessage): void {
     if (this.#closed) return;
     if (!this.#ready) {
       this.#send({
@@ -1701,7 +1721,11 @@ class Connection {
     ) {
       return;
     }
-    this.#send(this.#server.receivePresence(message, this));
+    this.#send(
+      message.type === "session.report"
+        ? this.#server.receiveSessionReport(message, this)
+        : this.#server.receivePresence(message, this),
+    );
   }
 
   async #receiveOrdered(
@@ -1953,6 +1977,20 @@ class Connection {
         }
         return;
       case "sqlite.register-disk-source":
+        // Maps a toolshed path into a space: an operator surface, never
+        // offered to the public router's clients, any of whom can create a
+        // space and own it.
+        if (this.routed) {
+          this.#send({
+            type: "response",
+            requestId: parsed.requestId,
+            error: toError(
+              "AuthorizationError",
+              "Routed memory request denied",
+            ),
+          });
+          return;
+        }
         if (
           !this.#requireSession(
             parsed.requestId,
@@ -2241,6 +2279,21 @@ const isPresenceClientMessage = (
   message.type === "presence.leave";
 
 /**
+ * A request a connection handles as it is handed over rather than in frame
+ * order: presence, and a session report.
+ */
+type ImmediateClientMessage =
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest
+  | SessionReportRequest;
+
+const isImmediateClientMessage = (
+  message: ClientMessage | OversizedClientMessage,
+): message is ImmediateClientMessage =>
+  isPresenceClientMessage(message) || message.type === "session.report";
+
+/**
  * The engine opener a test supplies in place of `Server`'s own step, which
  * opens the engine for a space or hands back the one already open. It
  * receives that step as `open`, so it can pause before it or fail in its
@@ -2291,6 +2344,7 @@ export class Server {
    * keeps their recency; every engine this server opens reports to it. */
   #documentCacheCoordinator: Engine.DocumentCacheCoordinator;
   #commitRates = new CommitRateTracker({ storm: COMMIT_STORM_THRESHOLDS });
+  #sessionReports = new SessionReportLog();
 
   /**
    * Synthesized session id for direct out-of-band document writes, such as
@@ -2425,8 +2479,19 @@ export class Server {
       store?: URL;
       /** Synchronous authoritative fence, checked in protected engine turns. */
       ownsSpace?: (space: string) => boolean;
-      /** Existing-space stage: refuse missing ACLs and implicit legacy grants. */
+      /**
+       * Mode A: refuse missing ACLs and implicit legacy grants. A space with
+       * no history admits only its own DID, to write its genesis ACL, and an
+       * open by anyone else creates no store for it. A service DID may still
+       * give a space with history an ACL, or repair an invalid one.
+       */
       requireExplicitAcl?: boolean;
+      /**
+       * Mode A: whether a space with no store may be created here. A space
+       * the directory lists must already have its store, so an open of one
+       * whose store has not arrived is refused rather than re-created empty.
+       */
+      createsSpace?: (space: string) => boolean;
 
       operationCodecs?: OperationCodecRegistry;
 
@@ -2497,8 +2562,8 @@ export class Server {
       };
 
       /**
-       * Space access control. `off` (default) preserves the historical
-       * any-authenticated-session-may-do-anything behavior. `observe`
+       * Space access control. `off` (default) permits any operation by an
+       * authenticated session. `observe`
        * evaluates ordinary capability decisions, counts and logs
        * would-denies, but allows those decisions. Invalid ACL state,
        * fresh-space genesis violations, and OWNER shortfalls remain hard
@@ -2509,10 +2574,14 @@ export class Server {
        * (entity id == the space DID, as managed by the runner's
        * `ACLManager` / `cf acl`) grants per-DID or `"*"` capabilities. A
        * missing ACL on a populated legacy space grants every authenticated
-       * principal READ and WRITE (never OWNER). A fresh space grants
-       * authenticated READ only, and the space DID OWNER: its first write
-       * must be a valid ACL initialized by the space identity or a service
-       * DID. Past that genesis the space DID holds what the ACL grants it.
+       * principal READ and WRITE (never OWNER) unless `requireExplicitAcl`
+       * is set. Without that option, a fresh space grants authenticated READ
+       * and the space DID OWNER; its first write must be a valid ACL
+       * initialized by the space identity or a service DID. With
+       * `requireExplicitAcl` (Mode A), only the space's own DID may open a
+       * fresh space and initialize its ACL. A service DID may repair or add
+       * an ACL only once the space has history. Past genesis the space DID
+       * holds what the ACL grants it.
        *
        * Requirements: session.open, queries, and watches need READ;
        * transact needs WRITE; ACL-document writes and disk-source
@@ -2575,6 +2644,7 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     commitRatesProviders.push(this.#commitRatesProvider);
+    sessionReportsProviders.push(this.#sessionReportsProvider);
   }
 
   /**
@@ -2623,6 +2693,7 @@ export class Server {
   #pushPriorityStatsProvider = () => this.pushPriorityStats();
   #documentCachesDiagnosticsProvider = () => this.documentCachesDiagnostics();
   #commitRatesProvider = () => this.commitRates();
+  #sessionReportsProvider = () => this.sessionReports();
 
   /** Every open engine's document-cache counters, keyed by space. A peek:
    * nothing is opened by asking. */
@@ -2646,6 +2717,12 @@ export class Server {
    * gone quiet. */
   commitRates(): CommitRatesReport {
     return this.#commitRates.report();
+  }
+
+  /** The diagnostics clients have reported about their sessions: running
+   * totals and the most recent reports in full (04-protocol.md §4.14). */
+  sessionReports(): SessionReportsReport {
+    return this.#sessionReports.report();
   }
 
   /** Helper for the engines' commit observer and for `transact()`'s own
@@ -2737,9 +2814,25 @@ export class Server {
    *  would break that traffic). */
   readonly aclStats = { wouldDeny: 0, denied: 0 };
 
-  /** space → (principal key → capability). Invalidated whenever a commit
-   *  touches the space's ACL document. */
-  #aclCapabilities = new Map<string, Map<string, Capability | null>>();
+  /** space → the capabilities its ACL grants, by principal key, and what
+   *  they were resolved from: the space's engine, its store's data version
+   *  as read before the ACL, and the ACL document's revision. A space's
+   *  entry is dropped when this process commits a change to its ACL, and by
+   *  {@link #capabilityFor} when the store's data version has moved, which
+   *  is how a grant or revocation written through another connection to
+   *  the same store takes effect here at the next access. */
+  #aclCapabilities = new Map<string, {
+    engine: Engine.Engine;
+    dataVersion: number;
+    aclRevision: string | null;
+    byPrincipal: Map<string, Capability | null>;
+  }>();
+
+  /** Spaces whose ACL document another connection changed, as
+   *  {@link #capabilityFor} found. At the space's next refresh turn the
+   *  server revokes the sessions the change deauthorized and notices the
+   *  admissions it allows, as it does when an ACL commit of its own lands. */
+  #aclChangedElsewhere = new Set<string>();
 
   #aclMode(): MemoryAclMode {
     return this.options.acl?.mode ?? "off";
@@ -2826,9 +2919,6 @@ export class Server {
     space: string,
     principal: string | undefined,
   ): Capability | null {
-    if (principal !== undefined && this.#isServicePrincipal(principal)) {
-      return "OWNER";
-    }
     const state = this.#aclState(engine, space);
     if (state.kind === "valid") {
       return (principal !== undefined ? state.acl[principal] : undefined) ??
@@ -2856,18 +2946,58 @@ export class Server {
     space: string,
     principal: string | undefined,
   ): Capability | null {
+    // A service DID is OWNER whatever the ACL says, so neither the store nor
+    // the cache is consulted for it.
+    if (principal !== undefined && this.#isServicePrincipal(principal)) {
+      return "OWNER";
+    }
     const key = principal ?? "";
-    let bySpace = this.#aclCapabilities.get(space);
-    if (bySpace !== undefined && bySpace.has(key)) {
-      return bySpace.get(key) ?? null;
+    // The version is read before the ACL, never after: a commit from another
+    // connection landing between the two pairs the old version with the new
+    // list, and the next check re-reads; the other order would pair the new
+    // version with the old list and serve it until the version next moved.
+    const dataVersion = Engine.dataVersion(engine);
+    let cached = this.#aclCapabilities.get(space);
+    if (
+      cached !== undefined &&
+      (cached.engine !== engine || cached.dataVersion !== dataVersion)
+    ) {
+      this.#invalidateAclCapabilities(space);
+      // Another connection committed to the store. Only a commit that moved
+      // the ACL document calls for the follow-ups of an ACL change; any
+      // other costs the re-read alone. A version from another engine says
+      // nothing about this one's connection.
+      if (
+        cached.engine === engine &&
+        cached.aclRevision !== this.#aclRevision(engine, space)
+      ) {
+        this.#aclChangedElsewhere.add(space);
+        this.markSpaceDirty(space, [toDirtyKey(aclDocId(space))]);
+      }
+      cached = undefined;
+    }
+    if (cached !== undefined && cached.byPrincipal.has(key)) {
+      return cached.byPrincipal.get(key) ?? null;
     }
     const capability = this.#resolveCapability(engine, space, principal);
-    if (bySpace === undefined) {
-      bySpace = new Map();
-      this.#aclCapabilities.set(space, bySpace);
+    if (cached === undefined) {
+      cached = {
+        engine,
+        dataVersion,
+        aclRevision: this.#aclRevision(engine, space),
+        byPrincipal: new Map(),
+      };
+      this.#aclCapabilities.set(space, cached);
     }
-    bySpace.set(key, capability);
+    cached.byPrincipal.set(key, capability);
     return capability;
+  }
+
+  /** The revision of `space`'s ACL document, `seq/opIndex`, or `null` when
+   *  its store holds no row for it. */
+  #aclRevision(engine: Engine.Engine, space: string): string | null {
+    const state = Engine.readState(engine, { id: aclDocId(space) });
+    return state === null ? null : `${state.seq}/${state.opIndex}`;
   }
 
   /** Evaluate the ACL policy for a message. Returns `null` when the message
@@ -2885,11 +3015,23 @@ export class Server {
     ) {
       return toError("AuthorizationError", "Routed memory request denied");
     }
-    if (
-      this.options.requireExplicitAcl === true &&
-      this.#aclState(engine, space).kind !== "valid"
-    ) {
-      return toError("AuthorizationError", "Routed memory request denied");
+    if (this.options.requireExplicitAcl === true) {
+      const kind = this.#aclState(engine, space).kind;
+      // Creation: until its genesis ACL lands, a space with no history
+      // admits its own DID alone, which `#resolveCapability` makes OWNER.
+      const genesis = kind === "missing" && principal === space &&
+        Engine.serverSeq(engine) === 0;
+      // Operators: a service DID may give a space with history an ACL, or
+      // repair an invalid one, as in direct mode, so legacy spaces can be
+      // given ACLs after cutover. It already acts as OWNER of every space
+      // that has one. A space with no history is its own DID's to create,
+      // so no operator writes its genesis ACL. An invalid ACL is a stored
+      // document, so its space has history too.
+      const operator = principal !== undefined &&
+        this.#isServicePrincipal(principal) && Engine.serverSeq(engine) > 0;
+      if (kind !== "valid" && !genesis && !operator) {
+        return toError("AuthorizationError", "Routed memory request denied");
+      }
     }
     if (this.#aclMode() === "off") return null;
     const capability = this.#capabilityFor(engine, space, principal);
@@ -3039,8 +3181,11 @@ export class Server {
     }
     if (this.#aclMode() === "off") return null;
 
-    const state = this.#aclState(engine, space);
     const aclTouched = commitTouchesAclDoc(commit.operations, space);
+    // Ordinary writes to established spaces need no genesis shape check.
+    // Their current ACL and ownership are enforced by message authorization.
+    if (!aclTouched && Engine.serverSeq(engine) !== 0) return null;
+    const state = this.#aclState(engine, space);
 
     if (!aclTouched) {
       if (state.kind === "missing" && Engine.serverSeq(engine) === 0) {
@@ -3380,26 +3525,8 @@ export class Server {
     connection: Connection,
   ): ResponseMessage<PresenceJoinResult | Record<PropertyKey, never>> {
     const { requestId, space, sessionId, room } = message;
-    if (!this.isSessionAttached(space, sessionId, connection.id)) {
-      return respondTypedError(
-        requestId,
-        toError("SessionRevokedError", "Session is not attached"),
-      );
-    }
-    if (connection.routed) {
-      const engine = this.#resolvedEngines.get(space);
-      const session = this.#sessions.get(space, sessionId);
-      const deny = engine === undefined || session === null
-        ? toError("SessionRevokedError", "Routed memory authority ended")
-        : this.#authorizeCurrentSessionWithEngine(
-          engine,
-          space,
-          sessionId,
-          session,
-          "READ",
-        );
-      if (deny) return respondTypedError(requestId, deny);
-    }
+    const refusal = this.#refuseImmediateRequest(space, sessionId, connection);
+    if (refusal !== null) return respondTypedError(requestId, refusal);
     if (!isPresenceRoom(room)) {
       return respondTypedError(
         requestId,
@@ -3447,6 +3574,81 @@ export class Server {
     }
   }
 
+  /**
+   * Records one session report on behalf of `connection`, which has already
+   * established that the request's session is open on it, and returns the
+   * response to send (04-protocol.md §4.14). The report is counted, kept in
+   * the log the health route reads, and written to the server's log as one
+   * line; a session the connection no longer owns gets a
+   * `SessionRevokedError`.
+   */
+  receiveSessionReport(
+    message: SessionReportRequest,
+    connection: Connection,
+  ): ResponseMessage<Record<PropertyKey, never>> {
+    const { requestId, space, sessionId, report } = message;
+    const refusal = this.#refuseImmediateRequest(space, sessionId, connection);
+    if (refusal !== null) return respondTypedError(requestId, refusal);
+    const principal = this.#sessions.get(space, sessionId)?.principal;
+    this.#sessionReports.record({
+      space,
+      session: sessionId,
+      ...(principal === undefined || principal === ANYONE_USER
+        ? {}
+        : { principal }),
+      report,
+    });
+    const document = `${report.document.scopeKey} ${report.document.id}`;
+    if (report.event === "trip") {
+      echoBreakerReportCount.add(1, { "space.did": space, event: "trip" });
+      console.warn(
+        `[memory-echo-breaker] session ${sessionId} on ${space} is ` +
+          `backing off action ${report.action}: it kept rewriting ` +
+          `${document} against another writer`,
+      );
+    } else {
+      echoBreakerReportCount.add(1, {
+        "space.did": space,
+        event: "clear",
+        reason: report.reason,
+      });
+      console.info(
+        `[memory-echo-breaker] session ${sessionId} on ${space} cleared ` +
+          `action ${report.action} on ${document} (${report.reason}) after ` +
+          `${report.trippedMs}ms and ${report.renewals} renewals`,
+      );
+    }
+    return { type: "response", requestId, ok: {} };
+  }
+
+  /**
+   * The error refusing a presence request or session report `connection`
+   * makes on `sessionId`, or `null` to handle it: the session must still be
+   * attached to the connection, and on a routed connection its routed
+   * authority must still hold `READ` on the space.
+   */
+  #refuseImmediateRequest(
+    space: string,
+    sessionId: string,
+    connection: Connection,
+  ): V2Error | null {
+    if (!this.isSessionAttached(space, sessionId, connection.id)) {
+      return toError("SessionRevokedError", "Session is not attached");
+    }
+    if (!connection.routed) return null;
+    const engine = this.#resolvedEngines.get(space);
+    const session = this.#sessions.get(space, sessionId);
+    return engine === undefined || session === null
+      ? toError("SessionRevokedError", "Routed memory authority ended")
+      : this.#authorizeCurrentSessionWithEngine(
+        engine,
+        space,
+        sessionId,
+        session,
+        "READ",
+      );
+  }
+
   /** Ends every presence membership the connection holds. */
   endPresenceForConnection(connectionId: string): void {
     this.#presence.leaveConnection(connectionId);
@@ -3491,6 +3693,7 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     withdrawProvider(commitRatesProviders, this.#commitRatesProvider);
+    withdrawProvider(sessionReportsProviders, this.#sessionReportsProvider);
     this.#cancelScheduledRefresh();
     for (const connection of [...this.#connections.values()]) {
       connection.close();
@@ -3723,7 +3926,8 @@ export class Server {
    * space's (or a cell-derived) `.sqlite` file and read it cross-tenant.
    * (Confining injected sources to an operator allowlist, and gating the verb to
    * an operator capability rather than any session, awaits CFC labels —
-   * 08-open-questions Q18.)
+   * 08-open-questions Q18. Mode A already admits only service DIDs, since any
+   * client there can create and own a space; see `sqliteRegisterDiskSource`.)
    */
   async registerDiskSource(
     space: string,
@@ -4238,8 +4442,11 @@ export class Server {
    * never the space, so a space with no list refuses. The grant is resolved
    * too: `capabilityRef` must name the entry the run delivers, and that entry
    * must have been fired by the carried actor. The list is read, changed and
-   * written with no wait between, so nothing lands in between. On admission
-   * the commit is published as a transact writing the list is.
+   * written in one immediate transaction, as an invitation's grant is, so a
+   * write to the store through another connection either precedes the read
+   * or waits for the commit; the whole-document `set` never writes over
+   * one. On admission the commit is published as a transact writing the
+   * list is.
    */
   async commitServedAclChange(
     request: ServedAclChange & { sessionId: string; localSeq: number },
@@ -4247,27 +4454,37 @@ export class Server {
     return await this.#withSpacePublicationLock(request.space, async () => {
       const engine = await this.#openEngine(request.space);
       const sourceEngine = await this.#openEngine(request.sourceEvent.space);
-      const prepared = this.#prepareServedAclChange(
+      const outcome = Engine.runAtomicCommit(
         engine,
-        sourceEngine,
-        request,
-        request.localSeq,
-      );
-      if ("refused" in prepared) return prepared;
-      if (prepared.commit === undefined) return { admitted: true };
-      const applied = Engine.applyCommit(engine, {
-        sessionId: request.sessionId,
-        space: request.space,
-        commit: prepared.commit,
-        commitClass: "authored",
-        delegated: {
-          actingPrincipal: request.actingPrincipal,
-          ...(request.actingSession === undefined
-            ? {}
-            : { actingSession: request.actingSession }),
-          capabilityRef: request.capabilityRef,
+        (apply): { refused: string } | { applied?: Engine.AppliedCommit } => {
+          const prepared = this.#prepareServedAclChange(
+            engine,
+            sourceEngine,
+            request,
+            request.localSeq,
+          );
+          if ("refused" in prepared) return prepared;
+          if (prepared.commit === undefined) return {};
+          return {
+            applied: apply({
+              sessionId: request.sessionId,
+              space: request.space,
+              commit: prepared.commit,
+              commitClass: "authored",
+              delegated: {
+                actingPrincipal: request.actingPrincipal,
+                ...(request.actingSession === undefined
+                  ? {}
+                  : { actingSession: request.actingSession }),
+                capabilityRef: request.capabilityRef,
+              },
+            }),
+          };
         },
-      });
+      );
+      if ("refused" in outcome) return outcome;
+      if (outcome.applied === undefined) return { admitted: true };
+      const applied = outcome.applied;
       const aclId = aclDocId(request.space);
       this.#invalidateAclCapabilities(request.space);
       this.#revokeDeauthorizedSessions(engine, request.space);
@@ -4511,6 +4728,18 @@ export class Server {
         toError("SessionError", "Unknown session for space"),
       );
     }
+    // Mode A: any client can create and own a space, so this operator
+    // surface is open only to service DIDs, on any connection.
+    if (
+      this.options.requireExplicitAcl === true &&
+      (session.principal === undefined ||
+        !this.#isServicePrincipal(session.principal))
+    ) {
+      return respondTypedError<SqliteRegisterDiskSourceResult>(
+        message.requestId,
+        toError("AuthorizationError", "Routed memory request denied"),
+      );
+    }
     const aclEngine = this.#aclMode() === "off"
       ? undefined
       : await this.#openEngine(message.space);
@@ -4664,6 +4893,20 @@ export class Server {
         : await this.options.authorizeSessionOpen(message, authContext);
       if (authContext !== undefined) {
         connection.consumeSessionOpenChallenge(authContext.challenge);
+      }
+      // Mode A: a DID with no store here names a space nobody has created
+      // here. Only its own key may create it, and only where `createsSpace`
+      // allows; anyone else is refused before opening the engine would
+      // create the store. `createsSpace` is asked after the existence check,
+      // so a directory change during that wait is seen. The refusal stays
+      // permanent: a retriable one would show which DIDs the directory lists.
+      if (
+        this.options.requireExplicitAcl === true &&
+        !(await this.#spaceStoreExists(message.space)) &&
+        (principal !== message.space ||
+          this.options.createsSpace?.(message.space) === false)
+      ) {
+        throw authorizationError("Routed memory request denied");
       }
       const engine = await this.#openEngine(message.space);
       if (!connection.allowsRoutedOpen(message.space, named)) {
@@ -9136,7 +9379,18 @@ export class Server {
           // context manager propagates the active context into timer callbacks,
           // so without it this span could parent under whichever memory.transact
           // happened to schedule the refresh.
+          const aclChangedElsewhere = this.#aclChangedElsewhere.delete(space);
           try {
+            if (aclChangedElsewhere) {
+              // An ACL change written through another connection: revoke
+              // the sessions it deauthorized and notice the admissions it
+              // allows, as an ACL commit of this server's own does when it
+              // lands, before any frame of this turn can reach a revoked
+              // session.
+              const engine = await this.#openEngine(space);
+              this.#revokeDeauthorizedSessions(engine, space);
+              this.#noticeAdmissions(engine, space);
+            }
             await tracer.startActiveSpan(
               "memory.fanout",
               { root: true },
@@ -9200,6 +9454,9 @@ export class Server {
             // (newer provenance wins), reschedule, and rethrow so callers
             // see the failure.
             this.#dirtySpaces.add(space);
+            if (aclChangedElsewhere) {
+              this.#aclChangedElsewhere.add(space);
+            }
             if (dirtyIds !== undefined) {
               let current = this.#dirtyDocsBySpace.get(space);
               if (current === undefined) {
@@ -9986,6 +10243,23 @@ export const parseClientMessage = (
       revision: parsed.revision,
       name: parsed.name,
       facets,
+    };
+  }
+
+  if (
+    parsed.type === "session.report" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string"
+  ) {
+    const report = parseSessionReport(parsed.report);
+    if (report === null) return null;
+    return {
+      type: "session.report",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      report,
     };
   }
 

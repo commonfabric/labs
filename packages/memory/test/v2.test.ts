@@ -162,6 +162,7 @@ describe("memory v2 flags", () => {
       viewScopedReplicationV1: false,
       sessionReadCeiling: true,
       presenceV1: true,
+      sessionReportV1: true,
       sessionClose: true,
       connectionAuth: true,
       admissionNotice: true,
@@ -194,6 +195,7 @@ describe("memory v2 flags", () => {
       viewScopedReplicationV1: false,
       sessionReadCeiling: true,
       presenceV1: true,
+      sessionReportV1: true,
       sessionClose: true,
       connectionAuth: true,
       admissionNotice: true,
@@ -228,6 +230,7 @@ describe("memory v2 flags", () => {
         viewScopedReplicationV1: true,
         sessionReadCeiling: true,
         presenceV1: true,
+        sessionReportV1: true,
         sessionClose: true,
         connectionAuth: true,
         admissionNotice: true,
@@ -256,6 +259,7 @@ describe("memory v2 flags", () => {
         // server itself, and one carrying none connects as before.
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionReportV1: false,
         sessionClose: false,
         connectionAuth: false,
         admissionNotice: false,
@@ -362,6 +366,7 @@ describe("parseMemoryProtocolFlags", () => {
       viewScopedReplicationV1: false,
       sessionReadCeiling: false,
       presenceV1: false,
+      sessionReportV1: false,
       sessionClose: false,
       connectionAuth: false,
       admissionNotice: false,
@@ -387,6 +392,7 @@ describe("parseMemoryProtocolFlags", () => {
       viewScopedReplicationV1: false,
       sessionReadCeiling: false,
       presenceV1: false,
+      sessionReportV1: false,
       sessionClose: false,
       connectionAuth: false,
       admissionNotice: false,
@@ -419,6 +425,7 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionReportV1: false,
         sessionClose: false,
         connectionAuth: false,
         admissionNotice: false,
@@ -463,6 +470,7 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionReportV1: false,
         sessionClose: false,
         connectionAuth: false,
         admissionNotice: false,
@@ -501,6 +509,7 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionReportV1: false,
         sessionClose: false,
         connectionAuth: false,
         admissionNotice: false,
@@ -534,6 +543,7 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionReportV1: false,
         sessionClose: false,
         connectionAuth: false,
         admissionNotice: false,
@@ -575,6 +585,7 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionReportV1: false,
         sessionClose: false,
         connectionAuth: false,
         admissionNotice: false,
@@ -609,6 +620,7 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionReportV1: false,
         sessionClose: false,
         connectionAuth: false,
         admissionNotice: false,
@@ -640,6 +652,7 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionReportV1: false,
         sessionClose: false,
         connectionAuth: false,
         admissionNotice: false,
@@ -657,6 +670,7 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionReportV1: false,
         sessionClose: false,
         connectionAuth: false,
         admissionNotice: false,
@@ -682,6 +696,7 @@ describe("parseMemoryProtocolFlags", () => {
         viewScopedReplicationV1: false,
         sessionReadCeiling: false,
         presenceV1: false,
+        sessionReportV1: false,
         sessionClose: false,
         connectionAuth: false,
         admissionNotice: false,
@@ -697,6 +712,15 @@ describe("parseMemoryProtocolFlags", () => {
     );
     assertEquals(parseMemoryProtocolFlags({})?.admissionNotice, false);
     assertEquals(parseMemoryProtocolFlags({ admissionNotice: "true" }), null);
+  });
+
+  it("accepts the sessionReportV1 capability key", () => {
+    assertEquals(
+      parseMemoryProtocolFlags({ sessionReportV1: true })?.sessionReportV1,
+      true,
+    );
+    assertEquals(parseMemoryProtocolFlags({})?.sessionReportV1, false);
+    assertEquals(parseMemoryProtocolFlags({ sessionReportV1: "true" }), null);
   });
 
   it("rejects values that are not a recognizable flags shape", () => {

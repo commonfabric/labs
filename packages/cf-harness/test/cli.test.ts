@@ -29,6 +29,7 @@ import {
   formatCfHarnessTranscriptEvent,
   installCfHarnessSignalHandlers,
   resolveCfHarnessCliSystemPrompt,
+  validateCfHarnessStructuredResult,
 } from "../src/cli.ts";
 import {
   LINUX_HOME,
@@ -137,7 +138,7 @@ Deno.test("parseCfHarnessCliArgs resolves defaults from cwd and positional promp
   assertEquals(parsed.skillNames, []);
   assertEquals(parsed.skillCatalogEnabled, true);
   assertEquals(parsed.artifactRoot, "/tmp/project/.cf-harness-artifacts");
-  assertEquals(parsed.maxModelTurns, 8);
+  assertEquals(parsed.maxModelTurns, 32);
   assertEquals(parsed.printTranscript, false);
   assertEquals(parsed.imageAttachments, []);
 });
@@ -4278,7 +4279,15 @@ Deno.test("runCfHarnessCli validates a top-level structured result sidecar", asy
     true,
   );
   assertEquals(
-    runPromptOptions?.systemPrompt?.includes("call submit_result"),
+    runPromptOptions?.systemPrompt?.includes(
+      "Finish by calling submit_result",
+    ),
+    true,
+  );
+  assertEquals(
+    runPromptOptions?.systemPrompt?.includes(
+      "an accepted result ends the run",
+    ),
     true,
   );
   assertEquals(writes.length, 1);
@@ -4365,7 +4374,7 @@ Deno.test("runCfHarnessCli exits nonzero when top-level structured result is inv
   assertEquals(exitCode, 1);
   assertEquals(stdout, ["Batch result.\n"]);
   assertEquals(stderr, [
-    "structured result validation failed: structured result did not match the schema\n",
+    "structured result validation failed: structured result did not match the schema: additional property extra\n",
   ]);
   assertEquals(writes.length, 1);
   const batchResult = JSON.parse(writes[0].text);
@@ -4374,12 +4383,60 @@ Deno.test("runCfHarnessCli exits nonzero when top-level structured result is inv
     status: "invalid",
     schema_digest: batchResult.structured_result.schema_digest,
     result_path: syntheticTmpProjectPath("capture.results.json"),
-    validation_error: "structured result did not match the schema",
+    validation_error:
+      "structured result did not match the schema: additional property extra",
   });
   assertEquals(
     batchResult.structured_result.schema_digest.startsWith("sha256:"),
     true,
   );
+});
+
+describe("validateCfHarnessStructuredResult()", () => {
+  const validate = (readTextFile: (path: string) => Promise<string>) =>
+    validateCfHarnessStructuredResult({
+      config: {
+        path: "/workspace/result.json",
+        sandboxPath: "/workspace/result.json",
+        schema: {
+          type: "object",
+          properties: { answer: { type: "string" } },
+          required: ["answer"],
+        },
+      },
+      readTextFile,
+    });
+
+  it("says no result was submitted when the result file does not exist", async () => {
+    const validation = await validate(() =>
+      Promise.reject(new Deno.errors.NotFound("no such file"))
+    );
+
+    expect(validation).toMatchObject({
+      status: "invalid",
+      validation_error: "no structured result was submitted",
+    });
+  });
+
+  it("says the result file could not be read when reading it fails otherwise", async () => {
+    const validation = await validate(() =>
+      Promise.reject(new Deno.errors.PermissionDenied("denied"))
+    );
+
+    expect(validation.validation_error).toBe(
+      "structured result file could not be read",
+    );
+  });
+
+  it("names the field and the reason a result does not match the schema", async () => {
+    const validation = await validate(() =>
+      Promise.resolve(JSON.stringify({ answer: 7 }))
+    );
+
+    expect(validation.validation_error).toBe(
+      "structured result did not match the schema: answer: value does not match type string",
+    );
+  });
 });
 
 Deno.test({
@@ -4714,7 +4771,7 @@ Deno.test("buildCfHarnessBatchSystemPrompt omits submit_result guidance when the
   };
   const prompt = buildCfHarnessBatchSystemPrompt(config);
 
-  assertEquals(prompt.includes("call submit_result"), false);
+  assertEquals(prompt.includes("submit_result"), false);
   assertStringIncludes(
     prompt,
     "Writing a JSON file at /workspace/result.json",

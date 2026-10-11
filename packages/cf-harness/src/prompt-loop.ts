@@ -263,7 +263,8 @@ import {
   type WebFetchToolOutput,
 } from "./tools/web-fetch.ts";
 
-const DEFAULT_MAX_MODEL_TURNS = 8;
+/** Root model turns a run gets when its host names no budget. */
+export const DEFAULT_MAX_MODEL_TURNS = 32;
 const BASH_CWD_MARKER_PREFIX = "__CF_HARNESS_CWD__";
 
 export interface CreateHarnessPromptLoopOptions
@@ -2126,6 +2127,9 @@ interface InvokedToolCallMessages {
   /** The admitted user-facing result before model-bound handle substitution. */
   taskOutcome?: HarnessTaskOutcome;
 
+  /** The call was a `submit_result` whose value the schema accepted. */
+  resultAccepted?: true;
+
   followupMessages?: readonly HarnessTranscriptMessage[];
   cfcModelContextObservations?:
     readonly HarnessCfcModelContextObservationInput[];
@@ -3253,6 +3257,15 @@ export class CfHarnessPromptLoop {
     };
   }
 
+  /**
+   * Whether the run must still name a piece before it ends: it requires one,
+   * has not browsed, and holds no naming receipt.
+   */
+  #pieceOutputOwed(): boolean {
+    return this.#requirePieceOutput && !this.#browsed &&
+      (this.engine.getRunState().assignedPieces?.length ?? 0) === 0;
+  }
+
   #parentToolAllowance(): HarnessParentToolAllowance {
     return this.#parentToolAllowanceMode;
   }
@@ -3918,7 +3931,8 @@ export class CfHarnessPromptLoop {
     for (const message of transcript) {
       await options.onTranscriptEvent?.({ message, transcript });
     }
-    // A normal final answer or an admitted finish_task ends the model loop.
+    // A normal final answer, an admitted finish_task, or an accepted
+    // submit_result ends the model loop.
     let finalAssistantText: string | undefined;
     let taskOutcome: HarnessTaskOutcome = { outcome: "completed" };
     try {
@@ -3978,15 +3992,22 @@ export class CfHarnessPromptLoop {
         modelTurns += 1;
         const finalizing = this.#finalizeOnTurnLimit &&
           modelTurns === maxModelTurns;
-        if (
-          finalizing ||
-          (this.#finalizeOnTurnLimit && modelTurns === maxModelTurns - 2)
-        ) {
+        // Every run is warned two turns out, so a model can wrap up rather
+        // than be cut off; only a finalizing run also gets the last turn's
+        // notice, since only it holds that turn back for the answer.
+        if (finalizing || modelTurns === maxModelTurns - 2) {
           const budgetMessage: HarnessTranscriptMessage = {
             role: "user",
             content: finalizing
-              ? "Host turn budget: provide your final response now. Tools are unavailable. Summarize verified findings with source citations, explicitly identify unread material and uncertainty, and do not claim exhaustive coverage. This notice applies only to this user turn; subsequent user requests have a fresh budget."
-              : "Host turn budget: two root turns remain after this call, with the last reserved for your final response. Prioritize essential source reads and prepare verified findings and remaining gaps. This notice applies only to this user turn; subsequent user requests have a fresh budget.",
+              ? "Host turn budget: provide your final response now. Tools are unavailable. Report what you established and how, name what remains unchecked or uncertain, and do not claim the task is complete if it is not. This notice applies only to this user turn; subsequent user requests have a fresh budget."
+              : this.#finalizeOnTurnLimit
+              ? "Host turn budget: two root turns remain after this call, with the last reserved for your final response. Spend the next on what matters most, and prepare what you established and what remains open. This notice applies only to this user turn; subsequent user requests have a fresh budget."
+              : `Host turn budget: two model turns remain after this call, and the run fails if they end without your final response. Stop gathering and finish.${
+                // A run that returns through `submit_result` ends on the
+                // turn whose submission is accepted.
+                this.#allowedToolIds.has("submit_result")
+                  ? " Call submit_result on the next turn; an accepted result ends the run."
+                  : ""} This notice applies only to this user turn; subsequent user requests have a fresh budget.`,
           };
           turnNotices.add(budgetMessage);
           transcript.push(budgetMessage);
@@ -4089,10 +4110,7 @@ export class CfHarnessPromptLoop {
               "The model returned an empty assistant response with no tool calls",
             );
           }
-          if (
-            !finalizing && this.#requirePieceOutput && !this.#browsed &&
-            (this.engine.getRunState().assignedPieces?.length ?? 0) === 0
-          ) {
+          if (!finalizing && this.#pieceOutputOwed()) {
             const correction: HarnessTranscriptMessage = {
               role: "user",
               content:
@@ -4183,6 +4201,17 @@ export class CfHarnessPromptLoop {
         // Every invocation has settled, and none rejected: a rejection is
         // the turn's failure and was thrown above.
         const invokedToolCalls = await Promise.all(invocations);
+        // An accepted result is the run's return, so the turn that made it
+        // is the run's last: the model is asked for nothing further, and a
+        // turn it would have spent cannot lose the result. The words written
+        // beside the call are the final answer, which may be empty. A run
+        // that still owes a piece keeps going until it names one.
+        if (
+          invokedToolCalls.some((invoked) => invoked.resultAccepted === true) &&
+          !this.#pieceOutputOwed()
+        ) {
+          finalAssistantText = assistantMessage.content;
+        }
         for (const invokedToolCall of invokedToolCalls) {
           const toolMessage = invokedToolCall.toolMessage;
           const outcome = invokedToolCall.taskOutcome;
@@ -5290,9 +5319,12 @@ export class CfHarnessPromptLoop {
         "taskOutcome" in result.output
       ? readHarnessTaskOutcome(result.output.taskOutcome)
       : undefined;
+    const resultAccepted = toolId === "submit_result" &&
+      isObjectNotArray(result.output) && result.output.status === "ok";
     return {
       toolMessage,
       ...(taskOutcome !== undefined ? { taskOutcome } : {}),
+      ...(resultAccepted ? { resultAccepted } : {}),
       ...labeled,
     };
   }

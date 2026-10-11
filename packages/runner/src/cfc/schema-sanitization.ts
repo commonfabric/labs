@@ -67,7 +67,7 @@ const PROMPT_INJECTION_RISK_KINDS = new Set(MATERIAL_RISK_DISCHARGE_KINDS);
 // sanitizer's InjectionSafe mint + discharge as the profile's own transition
 // rule. This uses the SANITIZER-only policy, not the deployment profile:
 // bare-InjectionSafe discharge is value-local here (one path, that path's
-// evidence) but would be cross-value at a tx-wide boundary.
+// evidence) but would be cross-value wherever a boundary pools integrity.
 const MATERIAL_RISK_SNAPSHOT = buildCfcPolicySnapshot(
   MATERIAL_RISK_DISCHARGE_POLICY,
 );

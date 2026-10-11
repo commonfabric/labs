@@ -12,6 +12,7 @@
 import {
   type EnvReader,
   experimentalOptionsFromEnv,
+  type RuntimeFetch,
 } from "@commonfabric/runner";
 import { publishServingExperimentalOverrides } from "./experimental-posture.ts";
 import { serverExecutionEnabledFromEnv } from "./server-execution-flag.ts";
@@ -22,6 +23,7 @@ import {
 } from "@commonfabric/runner/executor/serving-runtime";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import type { Identity } from "@commonfabric/identity";
+import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 
 let host: ExecutorHost | undefined;
 
@@ -210,6 +212,9 @@ export function startServerExecutionHost(options: {
   /** The patterns/compile base — the serving runtimes' `apiUrl`. */
   apiUrl: URL;
 
+  /** The serving runtimes' outbound fetch; unset, the platform fetch. */
+  fetch?: RuntimeFetch;
+
   envGet?: EnvReader;
 }): ExecutorHost | undefined {
   const envGet = options.envGet ?? Deno.env.get;
@@ -253,7 +258,13 @@ export function startServerExecutionHost(options: {
       server: options.server,
       identity: options.identity,
       apiUrl: options.apiUrl,
+      ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
       experimental,
+      // One cache for every space this host serves. A space's root pattern
+      // compiles into that space's own storage closure, which a fresh space
+      // never holds; the shared cache is what lets a later space's activation
+      // skip the transform-and-emit step for modules this process compiled.
+      moduleByteCache: new ProcessModuleByteCache(),
     }),
   });
   // Only now, with the loop actually up: what `/api/meta` adds to the base

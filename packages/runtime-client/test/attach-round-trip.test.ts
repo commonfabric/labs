@@ -119,6 +119,33 @@ function joiningSide(clients: RuntimeClients) {
 }
 
 describe("attach-round-trip", () => {
+  it("asserts the memory URL as the runtime records it", async () => {
+    // Normalized on this side as `securityContextFrom` normalizes it on the
+    // worker's: one spelling per origin, and the backend's own origin read as
+    // no memory URL at all.
+    const worker = await runningWorker();
+    const routed = await RuntimeClient.attach(joiningSide(worker.clients), {
+      ...clientOptions(identity),
+      memoryUrl: new URL("http://router.attach-round-trip.test"),
+    });
+    const atBackend = await RuntimeClient.attach(
+      joiningSide(worker.clients),
+      {
+        ...clientOptions(identity),
+        memoryUrl: new URL("http://attach-round-trip.test:80"),
+      },
+    );
+    try {
+      expect(worker.asserted.map((context) => context.memoryUrl)).toEqual([
+        "http://router.attach-round-trip.test/",
+        undefined,
+      ]);
+    } finally {
+      await routed.dispose();
+      await atBackend.dispose();
+    }
+  });
+
   it("reports the trust snapshot actor on an attached client", async () => {
     const worker = await runningWorker();
     const client = await RuntimeClient.attach(

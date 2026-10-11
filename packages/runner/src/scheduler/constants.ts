@@ -103,8 +103,8 @@ export const MAX_ACTION_STATS = 20_000;
 // that opens between two of its echoes
 // (test/scheduler-remote-echo-breaker-traces.test.ts replays them). Over a
 // minute an honest derivation on that space changed one document at most
-// five times. The values await a live per-space rate signal (Topic 913)
-// before any default-on decision.
+// five times. The live per-space commit rates and the trips the breaker
+// reports beside them on the health route are what to tune them against.
 export const ECHO_WINDOW_MS = 60_000;
 export const ECHO_TRIP_THRESHOLD = 12;
 // Capped exponential backoff on the tripped action's re-run. Once a pair has

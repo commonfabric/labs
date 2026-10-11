@@ -56,6 +56,15 @@
 
 import { readLoomAuthoringConfig } from "../src/loom-authoring.ts";
 import { parseArgs } from "@std/cli/parse-args";
+import type { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import {
+  feedbackEventType,
+  recordPatternFeedback,
+} from "@commonfabric/pattern-index/feedback";
+import {
+  patternIndexFailure,
+  patternIndexSearchRequest,
+} from "@commonfabric/pattern-index/front";
 import { isDID } from "@commonfabric/identity/did";
 import {
   dirname,
@@ -155,13 +164,7 @@ import {
   cacheHarnessPatternIndexClientFactory,
   createHarnessPatternIndexClientFactory,
   type HarnessPatternIndexClientFactory,
-  type PatternIndexClient,
-  PatternIndexError,
-} from "../src/pattern-index/client.ts";
-import {
-  feedbackEventType,
-  recordPatternFeedback,
-} from "../src/tools/record-feedback.ts";
+} from "../src/pattern-index/factory.ts";
 import {
   assertRunscCfcPolicyForMode,
   resolveRunscSandboxConfig,
@@ -354,11 +357,6 @@ const isIndexFunction = (value: unknown): value is IndexFunction =>
   typeof value === "string" &&
   (INDEX_FUNCTIONS as readonly string[]).includes(value);
 
-const stringList = (value: unknown): readonly string[] | undefined =>
-  Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string")
-    : undefined;
-
 /**
  * Dispatches one allowlisted read at the typed client. The request is rebuilt
  * field by field rather than forwarded, so what reaches the index is what this
@@ -371,14 +369,8 @@ const callPatternIndex = (
   body: Readonly<Record<string, unknown>>,
 ): Promise<unknown> => {
   switch (fn) {
-    case "searchPatterns": {
-      const tags = stringList(body.tags);
-      return client.searchPatterns({
-        ...(tags !== undefined ? { tags } : {}),
-        ...(typeof body.text === "string" ? { text: body.text } : {}),
-        ...(typeof body.limit === "number" ? { limit: body.limit } : {}),
-      });
-    }
+    case "searchPatterns":
+      return client.searchPatterns(patternIndexSearchRequest(body));
     case "listPatterns":
       return client.listPatterns();
     case "listEvents":
@@ -1834,6 +1826,9 @@ export class ConsoleServer {
     if (request.method === "POST" && url.pathname === "/api/index/call") {
       return await this.#indexCall(request);
     }
+    // Retirement (2026-10-09): The labs console-feedback cleanup PR removes
+    // this route after supported Weaver clients use CFS `index.feedback`
+    // from loom #7564.
     if (request.method === "POST" && url.pathname === "/api/index/feedback") {
       return await this.#indexFeedback(request);
     }
@@ -2615,11 +2610,11 @@ export class ConsoleServer {
    * being served, for the log alone.
    */
   #indexFailure(error: unknown, where: string): Response {
-    if (error instanceof PatternIndexError) {
-      const status = error.status >= 400 && error.status < 500
-        ? error.status
-        : 502;
-      return Response.json({ error: error.message }, { status });
+    const failure = patternIndexFailure(error);
+    if (failure !== undefined) {
+      return Response.json({ error: failure.error }, {
+        status: failure.status,
+      });
     }
     // The generic answer promises the log carries the detail, so it must.
     console.error(`${where} failed host-side:`, error);

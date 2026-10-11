@@ -214,6 +214,24 @@ describe("submit_result", () => {
   const submit = (id: string, result: unknown) =>
     toolCallTurn(id, "submit_result", JSON.stringify({ result }));
 
+  /** One `submit_result` call, as an assistant turn carries it. */
+  const submitCall = (id: string, result: unknown) => ({
+    id,
+    type: "function",
+    function: { name: "submit_result", arguments: JSON.stringify({ result }) },
+  });
+
+  /** An assistant turn writing `content` beside `calls`. */
+  const submitting = (
+    content: string,
+    ...calls: ReturnType<typeof submitCall>[]
+  ) => ({
+    choices: [{
+      index: 0,
+      message: { role: "assistant", content, tool_calls: calls },
+    }],
+  });
+
   it("is withheld from a run that configures no structured-result schema", async () => {
     expect(withheldToolIds(NO_BACKING).has("submit_result")).toBe(true);
     expect(parentToolIdsForBacking(NO_BACKING)).not.toContain("submit_result");
@@ -294,6 +312,61 @@ describe("submit_result", () => {
     });
   });
 
+  it("completes the run on an accepted submission and asks the model for no further turn", async () => {
+    // The turn queued after the submission is the empty one a model gives
+    // when it has nothing left to say, which the run used to fail on.
+    const { result, offeredTools } = await run("run-ends-on-result", [
+      submit("call-1", { answer: "Hyperion" }),
+      finalTurn(""),
+    ]);
+
+    expect(offeredTools).toHaveLength(1);
+    expect(result.runState.status).toBe("completed");
+    expect(result.runState.terminalReason).toBe("assistant_completed");
+    expect(result.runState.failureRecords ?? []).toEqual([]);
+    expect(result.finalAssistantText).toBe("");
+    expect(JSON.parse(await Deno.readTextFile(resultPath))).toEqual({
+      answer: "Hyperion",
+    });
+  });
+
+  it("completes with the accepted submission where a further model turn would fail", async () => {
+    // The script holds no turn after the submission, so asking the provider
+    // for one throws.
+    const { result, offeredTools } = await run("run-result-then-failure", [
+      submit("call-1", { answer: "Hyperion" }),
+    ]);
+
+    expect(offeredTools).toHaveLength(1);
+    expect(result.runState.status).toBe("completed");
+    expect(JSON.parse(await Deno.readTextFile(resultPath))).toEqual({
+      answer: "Hyperion",
+    });
+  });
+
+  it("returns the words written beside an accepted submission as the final answer", async () => {
+    const { result } = await run("run-result-with-words", [
+      submitting(
+        "Hyperion it is.",
+        submitCall("call-1", { answer: "Hyperion" }),
+      ),
+    ]);
+
+    expect(result.finalAssistantText).toBe("Hyperion it is.");
+    expect(result.modelTurns).toBe(1);
+  });
+
+  it("gives the model another turn after a refused submission", async () => {
+    const { result, offeredTools } = await run("run-refused-continues", [
+      submit("call-1", { answer: 7 }),
+      finalTurn("I could not form the result."),
+    ]);
+
+    expect(offeredTools).toHaveLength(2);
+    expect(result.finalAssistantText).toBe("I could not form the result.");
+    await expect(Deno.stat(resultPath)).rejects.toThrow(Deno.errors.NotFound);
+  });
+
   it("leaves no file behind a submission that was only ever invalid", async () => {
     await run("run-only-invalid", [
       submit("call-1", { wrong: true }),
@@ -303,11 +376,13 @@ describe("submit_result", () => {
     await expect(Deno.stat(resultPath)).rejects.toThrow(Deno.errors.NotFound);
   });
 
-  it("replaces an earlier submission with a later valid one", async () => {
+  it("replaces an earlier submission with a later valid one in the same turn", async () => {
     const { result } = await run("run-replace", [
-      submit("call-1", { answer: "Hyperion" }),
-      submit("call-2", { answer: "Ubik" }),
-      finalTurn("Done."),
+      submitting(
+        "",
+        submitCall("call-1", { answer: "Hyperion" }),
+        submitCall("call-2", { answer: "Ubik" }),
+      ),
     ]);
 
     expect(toolOutputs(result.transcript)[1]).toMatchObject({

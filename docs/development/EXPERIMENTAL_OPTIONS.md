@@ -38,8 +38,7 @@ was last checked against the code.
 | [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental` | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
 | [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental` | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
-| [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env / shell build define, or `RuntimeOptions.experimental` | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
-| [`remoteEchoBreaker`](#remoteechobreaker) | `EXPERIMENTAL_REMOTE_ECHO_BREAKER` env, or `RuntimeOptions.experimental` | off | Gideon Wald (remote-echo breaker) | tune thresholds against a live rate signal, soak, then fold into base scheduler semantics and delete the flag | implemented, off by default |
+| [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
 | [`cfcEnforcementMode`](#cfcenforcementmode)                                 | `RuntimeOptions.cfcEnforcementMode` (`CF_CFC_MODE` in the cf-harness / fuse)                                                                    | `enforce-strict`                                                                     | Bernhard Seefeld (#3263)                              | the ladder stays; the default is at its top rung                                                                                                                                                                                  | implemented, on by default at the strictest rung                                |
@@ -58,7 +57,6 @@ was last checked against the code.
 | [`ownWriteEcho`](#ownwriteecho)                                             | `setOwnWriteEchoConfig()` (server-side only, not negotiated)                                                                                    | on                                                                                   | Robin McCollum (CT-1965)                              | remove the switch once the echo has field-soaked                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`experimentalConcurrentWatchRefresh`](#experimentalconcurrentwatchrefresh) | `IRemoteStorageProviderSettings`; in the shell, the `commonfabric.concurrentWatchRefresh()` console command (localStorage, per browser profile) | off                                                                                  | Ben Follington (#4937; shell toggle #4974)            | graduate to always-on after live measurement, or remove if superseded                                                                                                                                                             | off by default; acquisition/removal ordering tested; real-latency measurement pending |
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
-| [`INGEST_SELF_SERVE_ENABLED`](#ingest_self_serve_enabled) | `INGEST_SELF_SERVE_ENABLED` env on toolshed | off | Alex Komoroske (self-serve ingest channels) | graduate on once named-space keys stop deriving from a public passphrase | implemented, off by default |
 | [`SERVER_EXECUTION_STORE_READ_THROUGH`](#server_execution_store_read_through) | `SERVER_EXECUTION_STORE_READ_THROUGH` env on toolshed, or `SpaceServerPolicy.storeReadThrough` | off | Bernhard Seefeld (store read-through) | soak with the posture forced on, flip on, then delete the knob and the home-space session read path | implemented, off by default |
 | [`fuseNfsCacheTuning`](#fusenfscachetuning)                                 | `cf fuse mount --attrcache-timeout <whole seconds; 0 = untuned>` or `--noattrcache`                                                             | cf adds `attrcache-timeout=1` (one second) to FUSE-T mounts                          | Ian Hickson                                           | keep the default; shrink the exec.ts listing-recheck delay once the default has field-soaked                                                                                                                                      | implemented, on by default for FUSE-T, soak-validated                           |
 
@@ -94,7 +92,10 @@ both go through that one mapping, so their wirings cannot drift; the shell
 reads the same variables from its build-time defines through the same canonical
 parser, for the flags it defines;
 `packages/shell/felt.config.ts` and `packages/shell/src/lib/env.ts` are the
-authority on which those are. A CI lane builds the binaries it caches with
+authority on which those are, and `SHELL_FLAG_SOURCES` in
+`packages/runner/src/deployment-meta.ts` on which of them the shell adopts
+from its deployment instead (see
+[Browser-side](#browser-side-build-time-defines)). A CI lane builds the binaries it caches with
 every define's variable unset unless `cachedBinaries()` in
 [`tasks/ci-capabilities.ts`](../../tasks/ci-capabilities.ts) sets it, so a lane
 that needs a flag in its baked shell names it there.
@@ -111,7 +112,10 @@ from its own environment, with an explicit `EXPERIMENTAL_*` still winning per
 flag. Which flags it takes that way is the second registry in the same file,
 `EXPERIMENTAL_FLAG_AUTHORITY`; see
 [Clients that are not built alongside their
-server](#clients-that-are-not-built-alongside-their-server).
+server](#clients-that-are-not-built-alongside-their-server). The shell is
+built alongside its toolshed but served by every deployment, so it takes a
+third registry's word, `SHELL_FLAG_SOURCES` in `deployment-meta.ts`, on which
+flags it adopts from the deployment it runs against.
 
 ### `modernCellRep`
 
@@ -335,7 +339,9 @@ server](#clients-that-are-not-built-alongside-their-server).
   (`serverExecution`), as a fact a client reads before opening any session
   rather than a capability the two agree on. A server that predates the flag
   sends no `serverExecution` at all, and a client receiving none does not know
-  whether server execution is on.
+  whether server execution is on. A Mode A router also omits it: the owning
+  toolsheds can differ or change posture when their links are replaced, so
+  routed clients treat execution posture as unknown.
 - **Added by.** Bernhard Seefeld, in server-execution v2 Phase 1 stage A
   (#5339;
   [`docs/plans/server-execution-v2.md`](../plans/server-execution-v2.md);
@@ -751,11 +757,23 @@ holds the measurements and the conditions for revisiting.
 ### `sharedMemoryConnection`
 
 - **Toggle via.** `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` environment variable
-  (through the canonical env registry), the shell build define of the same
-  name, or `RuntimeOptions.experimental.sharedMemoryConnection`.
-  Server-authoritative in `EXPERIMENTAL_FLAG_AUTHORITY`: whether a connection
-  may carry several spaces is a property of how the deployment routes
-  connections, so a client follows what the deployment publishes.
+  (through the canonical env registry) or
+  `RuntimeOptions.experimental.sharedMemoryConnection`. Server-authoritative in
+  `EXPERIMENTAL_FLAG_AUTHORITY`: whether a connection may carry several spaces
+  is a property of how the deployment routes connections, so a client follows
+  what the deployment publishes. The shell follows it too, unlike its other
+  flags: `SHELL_FLAG_SOURCES`
+  ([`packages/runner/src/deployment-meta.ts`](../../packages/runner/src/deployment-meta.ts))
+  gives it to the deployment,
+  so a compiled toolshed publishes its value in the
+  `<meta name="cf-deployment">` element of every page it serves, beside the
+  memory URL, and the shell adopts it from there, or from `/api/meta` when the
+  page states nothing or came from another origin, under
+  `adoptServerExperimentalOptions` (`experimentalForDeployment` in
+  [`packages/shell/src/lib/env.ts`](../../packages/shell/src/lib/env.ts)). The
+  shell build define of the same name is the override: set, it wins over the
+  deployment either way, as an explicit `EXPERIMENTAL_*` does for `cf`; a
+  release build leaves it unset.
 - **Added by.** Bernhard Seefeld, 2026-09-29
   ([`docs/specs/memory-v2/connection-multiplexing.md`](../specs/memory-v2/connection-multiplexing.md)).
 - **Purpose.** With the flag on, the runner's storage manager opens one
@@ -765,15 +783,29 @@ holds the measurements and the conditions for revisiting.
   open without a signature of their own. Toolshed under the flag verifies
   `connection.auth` and advertises the [`connectionAuth`](#connectionauth)
   capability. With the flag off, each space has a connection of its own
-  whose address names the space, every `session.open` is signed, and
-  toolshed advertises no `connectionAuth`. A client with the flag on
-  against a server that does not advertise `connectionAuth` still shares
-  the connection, and signs each `session.open` on it, one at a time.
+  whose address names the space. Authentication follows the server's
+  advertised capabilities in either topology: `connection.auth` when
+  advertised, otherwise a signed `session.open`. A routed toolshed
+  advertises `connectionAuth` independently of this flag. Direct toolshed
+  advertises it under the flag. A client with the flag on against a server
+  that does not advertise `connectionAuth` still shares the connection,
+  and signs each `session.open` on it, one at a time. One runner does not
+  follow the flag: the toolshed's own in-process runtime always dials
+  dedicated connections to `MEMORY_URL` (`createToolshedRuntime` in
+  `packages/toolshed/runtime-options.ts`), because under Mode A that address
+  routes by the space in it; the posture the toolshed publishes still
+  carries the flag.
 - **Current default and planned end state.** Off by default. A deployment
   that routes a memory connection to a toolshed by the space its address
   names cannot serve a connection that carries several spaces, so the flag
-  stays off there until a router terminates client connections. The end
-  state is always-on.
+  stays off there until a router terminates client connections. The Mode A
+  router also accepts the dedicated `?space=<DID>` address, so routed-capable
+  clients and toolsheds can be installed with sharing off, Memory WebSockets
+  moved to the router, and sharing enabled after that path passes acceptance.
+  Enabling it is a toolshed restart with the variable set: every client,
+  the shell included, adopts the value from the deployment, so one release
+  build serves a deployment with sharing on and one that routes by space.
+  The end state is always-on.
 - **Status on 2026-09-29.** Implemented behind the flag. The server side is
   covered by `packages/memory/test/v2-server-connection-auth.test.ts`, the
   client library by `packages/memory/test/v2-client-connection-auth.test.ts`,
@@ -783,65 +815,20 @@ holds the measurements and the conditions for revisiting.
   not gated: a connection handles frames for different spaces independently,
   `session.close` ends one session, and a presence membership belongs to a
   session.
+- **Status on 2026-10-08.** The shell adopts the flag from its deployment,
+  from the `cf-deployment` element of the page a compiled toolshed serves or
+  from `/api/meta`, with the build define as the override; a release build
+  leaves the define unset. Covered by `packages/shell/test/deployment.test.ts`
+  and `env.test.ts`, `packages/toolshed/routes/shell/shell.test.ts` and
+  `packages/runner/test/deployment-meta.test.ts`.
 - **Path to removal.** Turn the default on once every deployment serves
-  shared connections; then remove the env mapping, the runtime option and its
-  authority entry, the shell define, `RemoteSessionFactory`'s
-  connection-per-space path, and the `?space=` address parameter.
-
-### `remoteEchoBreaker`
-
-**Last checked:** 2026-10-08. **Status:** implemented, off by default.
-
-- **Toggle via.** `EXPERIMENTAL_REMOTE_ECHO_BREAKER` env, or
-  `new Runtime({ experimental: { remoteEchoBreaker: true } })`.
-  Server-authoritative (`EXPERIMENTAL_FLAG_AUTHORITY`): under server execution
-  the server runs the derivations, so a client and server that disagreed on
-  whether to rate-limit a shared document's re-runs would write it at
-  different cadences, and the deployment decides.
-- **Purpose.** Bound the remote-echo write loop in the scheduler: a derivation
-  that reads and writes one document, re-triggered by a remote change to that
-  same document and writing a differing value back, because another session is
-  writing the same document from the other side. Each run succeeds and commits
-  cleanly, so the reactive retry budget and committed-write backpressure never
-  see it. Under this flag the scheduler counts the successful re-runs per
-  `(action, document)` pair and, once they sustain, defers the action's
-  re-runs with capped exponential backoff renewed on every further echo, so a
-  continuing loop re-runs at most once per backoff. It logs one counted line
-  per trip and exposes `scheduler.getEchoBreakerStats()`. A run that leaves the
-  document unchanged clears the pair. It is trigger-independent: it
-  bounds the loop whatever made the two sides disagree, the guardrail Topic 911
-  waits for and the first of Topic 913's three.
-- **Behavior and design.**
-  [`../plans/scheduler-remote-echo-breaker.md`](../plans/scheduler-remote-echo-breaker.md)
-  — the detection conditions, the thresholds, the backoff, how it is told from
-  legitimate collaboration, and how it composes with the existing retry budget
-  and with server execution.
-- **Current default and planned end state.** Off by default: a new guardrail
-  that changes write cadence under a loop, enabled deliberately for dogfooding
-  on a dev space before any default-on decision. The thresholds
-  (`ECHO_WINDOW_MS`, `ECHO_TRIP_THRESHOLD`, the backoff bounds, and
-  `ECHO_QUIET_RESET_MS` in `packages/runner/src/scheduler/constants.ts`)
-  await the per-space rate signal of Topic 913 for live tuning; the window and
-  the threshold are set against the Topics space's own loops and quiet weeks,
-  which `packages/runner/test/scheduler-remote-echo-breaker-traces.test.ts`
-  replays. The end state is to fold the breaker into base scheduler semantics
-  and delete the flag once the thresholds have soaked.
-- **Status on 2026-10-08.** Implemented behind the flag; detection hooked at
-  the reactive commit success path (`scheduler/run.ts`), backoff through the
-  existing gate primitive (`scheduler/gates.ts`, the `echoBackoffUntil` field).
-  The classifier, the threshold, the renewal and reset rules, and the bounded
-  table are pinned by
-  `packages/runner/test/scheduler-remote-echo-breaker.test.ts`, which also
-  drives a two-session loop over a shared emulated server: the trip, the
-  sustained one-re-run-per-backoff bound, the reset once the sessions agree, a
-  legitimate re-derivation that does not trip, and a re-registration that does
-  not inherit an old backoff. `scoped-output-convergence.test.ts` runs the
-  October storm's pattern shape under the flag and shows nothing trips once
-  the sessions place their output the same way.
-- **Path to removal.** Tune the thresholds from live rate data, soak at a
-  default-on posture, then make the breaker unconditional in
-  `#createActionRunState`, remove the env mapping, the runtime option and its
-  authority entry, and the explicit-off tests.
+  shared connections, and point every toolshed's `MEMORY_URL` at its router
+  (infra#244) so the toolshed's own runtime no longer needs the
+  connection-per-space path; then remove the env mapping, the runtime option
+  and its authority entry, the shell define and its `SHELL_FLAG_SOURCES`
+  entry, the toolshed's override in `createToolshedRuntime`,
+  `RemoteSessionFactory`'s connection-per-space path, and the `?space=`
+  address parameter.
 
 ## Category 2: Contextual Flow Control enforcement rollout dials
 
@@ -1479,6 +1466,13 @@ the per-epic implementation notes).
 >   it, which parses as `false`, and a client then reports presence as
 >   unavailable rather than sending a message the server would refuse. It is
 >   permanent.
+> - **`sessionReportV1`** is a build-inherent capability, hardwired to `true`.
+>   It advertises that the server records the diagnostics a client reports
+>   about its own session — the `session.report` command of the memory
+>   protocol chapter's section 4.14 — and shows them on the health route.
+>   Older servers omit it, which parses as `false`, and a client then keeps its
+>   reports to itself rather than sending a message the server would refuse.
+>   It is permanent.
 > - **`admissionNotice`** is a build-inherent capability, hardwired to `true`
 >   on both peers. It advertises the `session/admissible` push of the memory
 >   protocol chapter's section 4.2.2: a server tells a connection it refused a
@@ -1635,46 +1629,6 @@ the per-epic implementation notes).
 ---
 
 ## Category 6: Deployment feature gates
-
-### `INGEST_SELF_SERVE_ENABLED`
-
-- **Toggle via.** The `INGEST_SELF_SERVE_ENABLED` environment variable on
-  toolshed, read once at module load
-  ([`packages/toolshed/env.ts`](../../packages/toolshed/env.ts)). Not a
-  `RuntimeOptions` flag: it gates an HTTP router, not runtime behavior.
-- **Added by.** Alex Komoroske, in the self-serve ingest channels change.
-- **Purpose.** Gates the ingest-channel control plane
-  (`/api/spaces/:space/ingest-channels/*` and `/api/ingest-channels/list`),
-  through which a
-  user holding their own identity key mints, lists, rotates, and revokes ingest
-  channels for spaces they own — without an operator. When off, the router
-  [404s every verb](../../packages/toolshed/routes/ingest-channels/gate.ts)
-  before the body limit, the rate limiter, or signature verification runs, so a
-  deployment that has not opted in does not advertise the endpoint. The data
-  plane (`/api/spaces/:space/ingest/:id` and `/api/ingest/:id`) and the
-  operator provisioning scripts are
-  unaffected by the flag.
-- **Current default and planned end state.** Off by default. The gate exists
-  because minting issues a durable bearer capability that outlives the trust
-  conditions that authorized it, and because authorization rests on the memory
-  ACL. New spaces get random keys and the memory server grants a space's own
-  DID nothing past genesis
-  ([random space identities](../specs/random-space-identities.md)), but a
-  legacy named space was given a key derived from the public passphrase
-  `"common user"`, and while the server treated that key as a permanent owner,
-  anyone who could reach the server could have granted themselves OWNER on
-  such a space, and such a grant survives until an operator removes it. The end
-  state is on by default.
-- **Status on 2026-09-29.** Implemented, off by default. Space creation
-  generates a random key. Every deployment has been reachable only on the
-  team's private network, so nobody outside the team minted a channel or
-  granted themselves OWNER under the old trust conditions; a deployment
-  reachable more widely would first retire its channels with
-  `retire-ingest-channels` and review its space ACLs, as
-  [`self-serve-ingest-channels.md`](../features/self-serve-ingest-channels.md)
-  describes.
-- **Path to removal.** Turn the flag on by default, then delete the gate and
-  mount the router unconditionally.
 
 ### `SERVER_EXECUTION_STORE_READ_THROUGH`
 
@@ -1900,7 +1854,10 @@ mapping.
 
 Browser-side flags are baked at build time and carried to the web worker
 that hosts the runtime; changing one means rebuilding and redeploying the
-shell.
+shell. The exception is the flags `SHELL_FLAG_SOURCES` gives the deployment
+(`sharedMemoryConnection` today), which the shell adopts from its deployment
+where the define leaves them unset: see
+[Clients that are not built alongside their server](#clients-that-are-not-built-alongside-their-server).
 
 ```
 Build Time (shell)
@@ -1910,7 +1867,8 @@ Build Time (shell)
   +-- src/lib/env.ts   --> EXPERIMENTAL (parsed via the canonical parser)
   |
 Browser (main thread)
-  +-- views/RootView.ts --> RuntimeInternals.create({ ..., experimental: EXPERIMENTAL })
+  +-- lib/deployment.ts --> the page's <meta name="cf-deployment">, else /api/meta
+  +-- views/RootView.ts --> RuntimeInternals.create({ ..., experimental: experimentalForDeployment(deployment.experimental) })
   +-- RuntimeClient.initialize(transport, { ..., experimental })
         |  postMessage (IPC), InitializationData carries experimental + CFC dials
         v
@@ -1927,7 +1885,17 @@ construction: the `browserWorker` preset takes `cfcEnforcementMode` and
 
 The shell disagrees with its server only by explicit define: toolshed bakes
 the defines and serves the bundle, so the two ship one posture per deploy.
-Every other client is installed, deployed, or checked out on its own
+One shell build is served by every deployment, though, so a flag that
+deployments sharing a build set differently cannot be a define alone. Those
+flags are the ones `SHELL_FLAG_SOURCES` in `deployment-meta.ts` gives the
+deployment (`sharedMemoryConnection`): a compiled toolshed publishes them, out of the
+posture it publishes on `/api/meta`, in the `<meta name="cf-deployment">`
+element of the page it serves, beside the memory URL, and the shell adopts
+them from the page, or from `/api/meta` when the page states nothing or came
+from another origin, with the same `adoptServerExperimentalOptions` rule as
+the clients below: an explicit define wins, otherwise the deployment's value,
+otherwise the built-in default. Every other client is installed, deployed, or
+checked out on its own
 schedule — the `cf` binary, the pieces controller a FUSE mount opens, the
 agents host, the GitHub connector host — and
 the environment they read
@@ -1936,19 +1904,21 @@ there, the operator has to know a deployment's flags and set them by hand, and
 nothing reports it when they do not.
 
 These clients take the posture from the server instead. Each one calls
-`experimentalOptionsForDeployedClient` in place of `experimentalOptionsFromEnv`
-before constructing its `Runtime`:
+`settingsForDeployedClient` in place of `experimentalOptionsFromEnv` before
+constructing its `Runtime`:
 
 ```
 cf / pieces controller / agents host / github host
   |
-  +-- GET <apiUrl>/api/meta  --> { experimental: { <flag>: <boolean>, ... } }
-  |     the posture the SERVER runs at
+  +-- GET <apiUrl>/api/meta  --> { experimental: { <flag>: <boolean>, ... },
+  |                                memoryUrl: <origin> | null }
+  |     the posture the SERVER runs at, and where its clients open Memory
   |
-  +-- runner/experimental-posture.ts --> experimentalOptionsForDeployedClient()
-  |     explicit EXPERIMENTAL_* > server declaration > built-in default
+  +-- runner/deployment-meta.ts --> settingsForDeployedClient()
+  |     experimental: explicit EXPERIMENTAL_* > server declaration > default
+  |     memoryHost:   the published memory URL, else apiUrl
   |
-  +-- runtimePresets.remoteClient({ experimental, ... })
+  +-- runtimePresets.remoteClient({ experimental, memoryHost, ... })
 ```
 
 What the server publishes is the posture its constructed `Runtime` resolved —
@@ -2001,14 +1971,29 @@ Three rules govern what a client does with a declaration:
 `CF_ADOPT_SERVER_FLAGS=false` turns the whole mechanism off for one process,
 for the case where a deployment publishes something a client cannot run and you
 do not yet know which flag it is. Per-flag `EXPERIMENTAL_*` overrides are the
-answer when you do.
+answer when you do. The client still reads `/api/meta`, which also names the
+memory URL a deployment with a memory router publishes (`MEMORY_PUBLIC_URL` in
+[the configuration reference](./CONFIGURATION.md#memory-store)).
+
+A server that returns 404, 405 or 410, as one without the route does, has said
+it publishes nothing: there is no posture and no memory URL to adopt, and it is
+not asked again. Any other failure leaves the document unread, and the posture
+then falls back to the environment and Memory to the API URL, with a warning
+that names it. A transient failure (the server is unreachable, or it returns
+408, 429, 502, 503 or 504) is asked again first: three attempts in all, a
+quarter of a second and then a second apart. One that would come out the same,
+such as a 401, a 403, a 500 or a body that is not a JSON object, is not, and
+neither is an attempt that takes more than five seconds, since the health check
+a client runs next would wait on that server too. The bound covers the read
+alone: the health check has no timeout. A redirect that leaves the API URL's
+deployment (anything but its own origin, or the same host on https where the
+API URL names http) still gives the posture, as before, but no memory URL; a
+warning names where the redirect ended.
 
 A caller whose startup can be cancelled passes its `AbortSignal`, and the
-request carries it. Without one, a deployment that accepts the connection and
-then says nothing holds that startup for as long as it stays silent, with no
-shutdown able to reach it. An aborted signal is the one failure that does not
-resolve to the environment: it throws the abort reason, because the caller has
-stopped wanting a posture at all.
+request carries it, joined with each attempt's timeout. An aborted signal is
+the one failure that does not resolve to the environment: it throws the abort
+reason, because the caller has stopped wanting settings at all.
 
 Presets that run against local emulated storage — `cf test`, `cf check`, the
 pattern harnesses — have no server to ask and keep reading the environment
@@ -2097,11 +2082,16 @@ control point, and then reads the effective state back so that
 
 First-party construction config is centralized in
 [`packages/runner/src/runtime-presets.ts`](../../packages/runner/src/runtime-presets.ts),
-while flag parsing, environment mappings, and deployed-client adoption live in
+while flag parsing, environment mappings, each flag's authority and the rule
+for adopting a server's posture live in
 [`packages/runner/src/experimental-posture.ts`](../../packages/runner/src/experimental-posture.ts).
-The browser-safe `@commonfabric/runner/experimental-posture` export provides
-those functions to standalone hosts without loading the runtime implementation.
-`runtime-presets.ts` re-exports those functions. The modules use these
+A deployed client reads `/api/meta` through `settingsForDeployedClient` in
+[`packages/runner/src/deployment-meta.ts`](../../packages/runner/src/deployment-meta.ts),
+which returns both the posture it adopts and the memory URL the deployment
+names. The browser-safe `@commonfabric/runner/experimental-posture` and
+`@commonfabric/runner/deployment-meta` exports provide those functions to
+standalone hosts without loading the runtime implementation.
+`runtime-presets.ts` re-exports the posture functions. The modules use these
 registries:
 
 - `EXPERIMENTAL_ENV_VARS` is
@@ -2119,10 +2109,14 @@ registries:
 - `EXPERIMENTAL_FLAG_AUTHORITY` classifies every flag as `"server"` or
   `"client"` for a client that is not built alongside its server, typed the same
   way, so a new flag forces that decision too.
-  `experimentalOptionsForDeployedClient` resolves one client's posture through
-  it; see
+  `settingsForDeployedClient` resolves one client's posture through it; see
   [Clients that are not built alongside their
 server](#clients-that-are-not-built-alongside-their-server).
+- `SHELL_FLAG_SOURCES` in `deployment-meta.ts` places every flag as `"build"`
+  or `"deployment"` for the shell, typed the same way, so a new flag forces
+  the decision whether one shell build follows the deployment on it.
+  `SHELL_DEPLOYMENT_FLAGS` is the `"deployment"` entries; a compiled toolshed
+  publishes those in the page it serves and the shell adopts them.
 
 - Only one set of experimental flags is active per JavaScript context at a time.
 - In the browser the web worker is a separate JavaScript context, so its flags
@@ -2141,6 +2135,42 @@ server](#clients-that-are-not-built-alongside-their-server).
 
 These are recorded so that references to them elsewhere in the tree do not send
 a future reader hunting for a flag that no longer exists.
+
+### `INGEST_SELF_SERVE_ENABLED` (removed)
+
+Gated the ingest-channel control plane
+(`/api/spaces/:space/ingest-channels/*` and `/api/ingest-channels/list`),
+through which a user holding their own identity key mints, lists, rotates,
+and revokes ingest channels for spaces they own. Added by Alex Komoroske in
+the self-serve ingest channels change; implemented and OFF by default
+throughout its life. Removed in the change that holds a gmail channel's
+mailbox binding in its registration (2026-10-09): the control plane is
+mounted unconditionally, and the environment variable is ignored. The gate
+existed because a mint hands out a capability that outlives the trust
+conditions that authorized it, and a legacy named space's key once derived
+from a public passphrase, so a planted OWNER grant on such a space could
+have minted. It was retired because a planted OWNER grant already carries
+every power over the space that mint confers and more, and what mint adds,
+survival of the channel past the grant's removal, is bounded by the
+channel's hard expiry, by the space's current owner listing and revoking
+foreign channels, and by `retire-ingest-channels`. The same `ingestGate`
+middleware still fronts the Gmail push route, on whether a push service
+account is configured. The feature's design is
+[`self-serve-ingest-channels.md`](../features/self-serve-ingest-channels.md).
+
+### `remoteEchoBreaker` / `EXPERIMENTAL_REMOTE_ECHO_BREAKER` (removed)
+
+Gated the scheduler's remote-echo breaker, which bounds a reactive
+computation that keeps rewriting a document it reads, re-triggered each time
+by another writer's change to that same document
+([plan](../plans/scheduler-remote-echo-breaker.md)). Added off by default in
+#8587 (2026-10-08). The browser shell bakes experimental flags in at build
+time and had no define for it, so the flag could not reach the browser tabs
+where the loops it bounds run. It was deleted on 2026-10-09 to keep the
+runtime's configuration small: the breaker runs unconditionally, and its
+trips and clears are reported, best-effort, over each space's memory session
+to the health route (`sessionReports`, memory protocol §4.14), which is where
+its behavior is judged.
 
 ### `persistentSchedulerState` / `EXPERIMENTAL_PERSISTENT_SCHEDULER_STATE` (removed)
 

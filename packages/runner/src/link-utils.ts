@@ -316,13 +316,25 @@ export function schemaForSpaceCrossing(
   }
 }
 
+// The inline form each external reference recomposed to, by reference.
+// Recomposition builds a fresh closure every time, so without this every
+// node plan's inputs document deep-froze and hashed the same few schemas
+// again; a reference names one content, so the form it recomposed to in
+// this registry epoch is the form it has.
+let inlinedSchemaByRef = new Map<string, FabricValue>();
+onSchemaRegistryClear(() => {
+  inlinedSchemaByRef = new Map();
+});
+
 /**
  * Rewrites reference-form link schemas inside `value` back to their inline
- * (recomposed) form. A `data:` document is self-contained by construction —
- * the value lives in the id and no write ever installs anything alongside
- * it — so a link serialized into one carries its schema inline, exactly as
- * with the flag off. A reference whose closure the registry cannot supply
- * stays a reference; the traversal's loader gates that read either way.
+ * (recomposed) form. A `data:` document is its id: no write ever carries
+ * it, so nothing persists the closure a reference inside it would name,
+ * and the traversal admits a reference-form link schema only where its
+ * closure is persisted in the space (`schemaForSpaceCrossing`). A link
+ * serialized into one therefore carries its schema inline, exactly as with
+ * the flag off. A reference whose closure the registry cannot supply stays
+ * a reference; the traversal's loader gates that read either way.
  */
 export function inlineExternalSchemaRefsInValue<T extends FabricValue>(
   value: T,
@@ -331,13 +343,17 @@ export function inlineExternalSchemaRefsInValue<T extends FabricValue>(
     if (!isObjectNotArray(schema)) return schema;
     const ref = schema.$ref;
     if (typeof ref !== "string" || !isExternalSchemaRef(ref)) return schema;
+    const inlined = inlinedSchemaByRef.get(ref);
+    if (inlined !== undefined) return inlined;
     try {
       // Recomposition never mints an empty `$defs` (a closure of one
       // document returns the body alone), so the result rides as it is. A
       // schema document is plain JSON, hence a FabricValue.
-      return internSchema(
+      const recomposed = internSchema(
         recomposeSchema(ref, lookupSchemaDocument),
       ) as FabricValue;
+      inlinedSchemaByRef.set(ref, recomposed);
+      return recomposed;
     } catch {
       return schema;
     }

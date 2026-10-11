@@ -144,11 +144,12 @@ cannot deliver, since its query is per space. A read that dead-ends on a link
 into another space kicks a load there (`ensureLinkedDocLoaded`), and that
 load is the subscription: the storage manager opens the space and tracks the
 load. The pre-sync uses exactly that: after a wave's plan syncs land, it
-reads each plan's inputs under its read schema through a read transaction,
-awaits the loads pending after those reads by document (`loadsSettled` over
-`pendingLoadAddresses`), and reads again until a round leaves no load
-pending that an earlier round did not await (`#syncCrossSpaceReads`). The
-read's own traversal decides what is missing, so no second walk exists. The
+reads each plan's inputs under its read schema through a read transaction of
+the plan's own, awaits the loads pending after those reads by document
+(`loadsSettled` over `pendingLoadAddresses`), and reads again — only the
+plans whose reads left a load pending — until a round leaves no load pending
+that an earlier round did not await (`#syncCrossSpaceReads`). The read's own
+traversal decides what is missing, so no second walk exists. The
 pass awaits loads, never the storage manager's settled pool: on a client that
 pool holds the runtime's other work, and a resume that waited for it would
 wait behind sinks and coordinators that never go quiet. Awaiting each

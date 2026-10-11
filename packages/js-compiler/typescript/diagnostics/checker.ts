@@ -1,5 +1,6 @@
 import { type Diagnostic, type Program, type SourceFile } from "typescript";
 import {
+  type AuthoredSourceLookup,
   CompilerError,
   type DiagnosticMessageTransformer,
   ErrorDetails,
@@ -14,6 +15,9 @@ export interface CheckerOptions {
    * ({@link isNonFatalDiagnosticCode}) are dropped instead of thrown.
    */
   storedSource?: boolean;
+
+  /** Maps a diagnostic back to the line its author wrote. */
+  authoredSource?: AuthoredSourceLookup;
 }
 
 // These symbols are exported from commonfabric but TypeScript's declaration
@@ -54,11 +58,13 @@ export class Checker {
   #program: Program;
   #messageTransformer?: DiagnosticMessageTransformer;
   #storedSource: boolean;
+  #authoredSource?: AuthoredSourceLookup;
 
   constructor(program: Program, options: CheckerOptions = {}) {
     this.#program = program;
     this.#messageTransformer = options.messageTransformer;
     this.#storedSource = options.storedSource === true;
+    this.#authoredSource = options.authoredSource;
   }
 
   typeCheck() {
@@ -145,7 +151,11 @@ export class Checker {
 
   throwIfErrors(errors: ErrorDetails[]) {
     if (errors.length) {
-      throw new CompilerError(errors, this.#messageTransformer);
+      throw new CompilerError(
+        errors,
+        this.#messageTransformer,
+        this.#authoredSource,
+      );
     }
   }
 
@@ -163,6 +173,7 @@ export class Checker {
     throw new CompilerError(
       fatal.map((diagnostic) => ({ diagnostic })),
       this.#messageTransformer,
+      this.#authoredSource,
     );
   }
 

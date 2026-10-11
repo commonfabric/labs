@@ -1,20 +1,22 @@
 # Self-Serve Ingest Channels
 
-*Minting an ingest channel is a user action — "let my own device write into my own space." Today it is an operator action. This closes the create-authorization gap named in [ingest-channels-journal-sink.md](../plans/ingest-channels-journal-sink.md) §"Security model & the create-authorization gap".*
+*Minting an ingest channel is a user action — "let my own device write into my own space." A user holding their own identity key mints into a space they own, with no operator in the loop. This closes the create-authorization gap named in [ingest-channels-journal-sink.md](../plans/ingest-channels-journal-sink.md) §"Security model & the create-authorization gap".*
 
-**Status:** implemented (this branch), gated OFF by default —
-`INGEST_SELF_SERVE_ENABLED` · **Updated:** 2026-08-04 · **Depends on:** the landed `journal` sink (labs #4446) and first-party HTTP request proofs (`docs/specs/toolshed-access-control.md`)
+**Status:** implemented, mounted on every deployment · **Updated:**
+2026-10-09 · **Depends on:** the landed `journal` sink (labs #4446) and first-party HTTP request proofs (`docs/specs/toolshed-access-control.md`)
 
 ---
 
 ## Why
 
-The only way to mint an ingest channel is `deno task provision-ingest-channel`,
-run on the deployed host with the toolshed's private identity
-(`packages/toolshed/scripts/provision-ingest-channel.ts`). Every user onboarding
-a device is an admin ticket to whoever holds the Ansible vault password. That
-does not scale past a handful of people, and it blocks the iOS location beacon's
-first-run experience entirely.
+Without self-serve, the only way to mint an ingest channel is
+`deno task provision-ingest-channel`, run on the deployed host with the
+toolshed's private identity
+(`packages/toolshed/scripts/provision-ingest-channel.ts`). Every user
+onboarding a device would be an admin ticket to whoever holds the Ansible
+vault password. That does not scale past a handful of people, and it would
+block the iOS location beacon's first-run experience entirely. The operator
+script remains for channels an operator provisions.
 
 There is also a sharper, quieter problem. `MEMORY_ACL_MODE` now defaults to
 `enforce` (`packages/toolshed/env.ts:230`) and ingest writes into the *user's*
@@ -168,8 +170,7 @@ Four forks were resolved explicitly rather than by default:
    routine, and a beacon offline across one otherwise cannot tell "re-pair me"
    from "the server is broken" — it drops its buffer or retries forever.
 2. **The deployment precondition below is documented, not enforced by a flag.**
-3. **`requestId` is required** on mint, rotate, AND revoke (see Hardening §1),
-   and on `gmail-bind` and `gmail-unbind`.
+3. **`requestId` is required** on mint, rotate, AND revoke (see Hardening §1).
 4. **The control plane's paths are NOT added to
    `PROTECTED_TOOLSHED_FIRST_PARTY_ROUTES`.** That list is the in-runtime
    signer's allowlist; adding these would let any pattern mint a channel with
@@ -204,12 +205,15 @@ footnote:
 > derivable from public inputs. Where they are, the mint endpoint inherits a
 > space-takeover primitive.
 
-This is **enforced, not just documented**: the control plane is mounted only
-when `INGEST_SELF_SERVE_ENABLED` is set, and the default is off. Credentials
-issued under the old trust condition are not retracted by making space keys
-random, so a deployment that anyone outside its operators could reach while
-keys were derivable reviews its space ACLs and retires existing channels
-(`deno task retire-ingest-channels`) before enabling.
+Space keys are random now, and the control plane is mounted on every
+deployment. What the footnote warns of is a planted OWNER grant on a legacy
+named space, and such a grant already carries every power over the space
+that mint confers; what mint adds is a channel that outlives the grant's
+removal, which the channel's hard expiry bounds, the space's current owner
+can end by listing and revoking foreign channels, and an operator can end
+for every channel at once with `deno task retire-ingest-channels`. A
+deployment that anyone outside its operators could reach while keys were
+derivable reviews its space ACLs and retires existing channels the same way.
 
 Consequently the acceptance criterion "refused when naming a space you don't
 control" must be tested against a space with a **concrete, non-derived** owner,
@@ -252,13 +256,11 @@ caller, ever. POST-only keeps the door open for a shell/pattern client later.
 
 | Verb | Purpose |
 |---|---|
-| `POST /api/spaces/:space/ingest-channels/mint` | mint (or rotate-in-place); returns the token **once** |
+| `POST /api/spaces/:space/ingest-channels/mint` | mint (or rotate-in-place); for a device channel, returns the device URL and token **once**; a gmail channel has neither |
 | `POST /api/spaces/:space/ingest-channels/list` | every channel targeting the space, whoever minted it, revoked ones included; never returns `secretHash` |
 | `POST /api/ingest-channels/list` | the caller's own live channels, in whichever spaces; never returns `secretHash` |
-| `POST /api/spaces/:space/ingest-channels/rotate` | new token, same id and target |
+| `POST /api/spaces/:space/ingest-channels/rotate` | new token, same id and target, for a device channel; a gmail channel answers 400, since it has none |
 | `POST /api/spaces/:space/ingest-channels/revoke` | flips `enabled: false` |
-| `POST /api/spaces/:space/ingest-channels/gmail-bind` | binds a channel to a Gmail mailbox; see [gmail-push-ingest.md](gmail-push-ingest.md) |
-| `POST /api/spaces/:space/ingest-channels/gmail-unbind` | removes that binding |
 
 The caller's own list takes an empty body and refuses any other, so a request
 that names a space there, where it would be dropped, is told so with a 422
@@ -290,12 +292,13 @@ otherwise force arbitrary allocation with a garbage signature.
 
 ### Client
 
-`cf ingest mint|ls|rotate|revoke`, alongside `cf acl`, and `cf ingest gmail-bind`
-and `cf ingest gmail-unbind` for [Gmail push](gmail-push-ingest.md). A channel
-is minted with a sink, which decides what its writes land in and cannot change
-afterwards: the default `journal`, records in per-day partition cells that a
-device POSTs to, or `latest`, one cell holding the newest record written to
-it. `gmail-bind` accepts only a `latest` channel. `cf ingest rotate <id>`
+`cf ingest mint|ls|rotate|revoke`, alongside `cf acl`. A mint decides what
+kind of channel it makes, which cannot change afterwards: a device channel,
+records in per-day partition cells under a cause prefix that a device POSTs
+to with the token, or, when the mint names a target cell and carries a
+proof of a Gmail mailbox, a gmail channel bound to that mailbox, whose one
+cell toolshed writes, as [Gmail push](gmail-push-ingest.md) describes.
+`cf ingest rotate <id>`
 mints a new token for a channel the caller owns, leaving the channel and its
 grants in place — the spelling for a token that leaked or aged, where revoking
 would take the channel down with it. Rotate and revoke are addressed to the

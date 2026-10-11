@@ -1225,6 +1225,7 @@ describe("attachOptionsFrom()", () => {
     const identity = await Identity.fromPassphrase("attach-options-posture");
     const attach = attachOptionsFrom({
       apiUrl: new URL("http://backend.test/"),
+      memoryUrl: new URL("http://router.test/"),
       identity,
       spaceDid: identity.did(),
       spaceHostMap: { [identity.did()]: "http://memory.test/" },
@@ -1235,6 +1236,7 @@ describe("attachOptionsFrom()", () => {
     });
 
     expect(attach.apiUrl.toString()).toBe("http://backend.test/");
+    expect(attach.memoryUrl?.toString()).toBe("http://router.test/");
     expect(attach.spaceHostMap).toEqual({
       [identity.did()]: "http://memory.test/",
     });

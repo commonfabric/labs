@@ -1288,11 +1288,11 @@ logic, and that is what the ids in demo 4's prompt used to stand in for.
 **A correction published under a different identity does not displace what it
 corrects, and starts below it.** Successor substitution redirects discovery only
 along a chain whose generations share an owner
-(`src/pattern-index/successors.ts`). A correction whose predecessor was seeded
-by another identity declares `priorPatternId`, so the chain is stated, and the
-rule deliberately declines to follow it across the ownership boundary. Ranking
-then decides, and it favours the older entry, which is classified `proven` where
-the correction is `unproven`.
+(`packages/pattern-index/src/successors.ts`). A correction whose predecessor was
+seeded by another identity declares `priorPatternId`, so the chain is stated,
+and the rule deliberately declines to follow it across the ownership boundary.
+Ranking then decides, and it favours the older entry, which is classified
+`proven` where the correction is `unproven`.
 
 Retraction does not resolve that: it is the owner's to perform, and the older
 entry is not ours. What resolves it is index curation — hiding the superseded

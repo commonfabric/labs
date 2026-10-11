@@ -62,6 +62,7 @@ import {
   commitSnapshotShare,
   prepareSnapshotShare,
 } from "@commonfabric/runner/cfc/share-snapshot";
+import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 import {
   initializePiecesController,
   type PieceController,
@@ -411,6 +412,29 @@ function componentBinding(
     ? cellRuntime(props).getCellFromLink(link)
     : prop.resolveAsCell();
 }
+
+/**
+ * The writer `createOwnProfile` writes as, standing in for a profile's own
+ * handlers, which a `represents-principal` claim needs.
+ */
+const OWN_PROFILE_WRITER = "multi-runtime-own-profile";
+
+/**
+ * A profile labeled as representing the principal that writes it, as a Fabric
+ * profile is.
+ */
+const OWN_PROFILE_SCHEMA = {
+  type: "object",
+  properties: { name: { type: "string" } },
+  ifc: {
+    addIntegrity: [{
+      kind: "represents-principal",
+      subject: { __ctCurrentPrincipal: true },
+    }],
+    ownerPrincipal: { __ctCurrentPrincipal: true },
+    writeAuthorizedBy: [OWN_PROFILE_WRITER],
+  },
+} as never;
 
 /** The trusted host gesture used after the test confirms the exact preview. */
 function shareClick() {
@@ -947,6 +971,34 @@ const handlers: Record<
     }
     await idle();
     return cell.getAsLink();
+  },
+
+  /**
+   * Mint a profile of this session's own, holding `name`, in a space created
+   * for it that admits this session's identity alone, and answer with the
+   * link that reaches it. Its label attests this identity with
+   * `represents-principal`, as a Fabric profile's does, so a session the
+   * space refuses can't read whom it attests.
+   */
+  async createOwnProfile({ name }) {
+    const runtime = controller().runtime;
+    const space = await runtime.createSpace();
+    const tx = runtime.edit();
+    setCfcImplementationIdentity(tx, {
+      kind: "builtin",
+      builtinId: OWN_PROFILE_WRITER,
+    });
+    const profile = runtime.getCell(
+      space,
+      "own profile",
+      OWN_PROFILE_SCHEMA,
+      tx,
+    );
+    profile.set({ name } as never);
+    const { error } = await tx.commit().settled;
+    if (error) throw error;
+    await idle();
+    return profile.getAsLink();
   },
 
   /**

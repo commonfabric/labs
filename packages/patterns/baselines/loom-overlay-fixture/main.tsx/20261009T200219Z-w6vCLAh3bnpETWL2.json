@@ -1,0 +1,354 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "members": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "members"
+    ],
+    "type": "object"
+  },
+  "pattern": "loom-overlay-fixture/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "MemberEvent": {
+        "properties": {
+          "principal": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal"
+        ],
+        "type": "object"
+      },
+      "Panel": {
+        "anyOf": [
+          {
+            "properties": {
+              "addedBy": {
+                "$ref": "#/$defs/PanelAdderDid"
+              },
+              "addedByProfile": {
+                "$ref": "#/$defs/PanelAdderProfile"
+              },
+              "kind": {
+                "enum": [
+                  "piece"
+                ],
+                "type": "string"
+              },
+              "piece": {
+                "type": "unknown"
+              },
+              "titleOverride": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "piece"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "addedBy": {
+                "$ref": "#/$defs/PanelAdderDid"
+              },
+              "addedByProfile": {
+                "$ref": "#/$defs/PanelAdderProfile"
+              },
+              "content": {
+                "$ref": "#/$defs/PublishedDocument"
+              },
+              "kind": {
+                "enum": [
+                  "document"
+                ],
+                "type": "string"
+              },
+              "titleOverride": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "addedBy": {
+                "$ref": "#/$defs/PanelAdderDid"
+              },
+              "addedByProfile": {
+                "$ref": "#/$defs/PanelAdderProfile"
+              },
+              "kind": {
+                "enum": [
+                  "url"
+                ],
+                "type": "string"
+              },
+              "titleOverride": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PanelAdderDid": {
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/loom/admission.tsx",
+              "moduleIdentity": "5D_J8bVwEczYWfBlFbnJXlnuyp36VI1NiRDUAxCR2Gw",
+              "path": [
+                "admitPanel"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "PanelAdderProfile": {
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "represents-principal",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "ownerPrincipal": {
+            "__ctCurrentPrincipal": true
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/loom/admission.tsx",
+              "moduleIdentity": "5D_J8bVwEczYWfBlFbnJXlnuyp36VI1NiRDUAxCR2Gw",
+              "path": [
+                "admitPanel"
+              ]
+            }
+          }
+        },
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PanelAdmission": {
+        "properties": {
+          "as": {
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "before": {
+            "$ref": "#/$defs/Panel"
+          },
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          },
+          "piece": {
+            "type": "unknown"
+          }
+        },
+        "type": "object"
+      },
+      "PublishedChannel": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PublishedDocument": {
+        "properties": {
+          "notes": {
+            "default": "",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/$defs/PublishedSource"
+          }
+        },
+        "required": [
+          "source",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "PublishedSource": {
+        "anyOf": [
+          {
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "page-excerpt"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "channels": {
+                "items": {
+                  "$ref": "#/$defs/PublishedChannel"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "person-card"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "photo": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "channels"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addPanel": {
+        "$ref": "#/$defs/PanelAdmission",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "grant": {
+        "$ref": "#/$defs/MemberEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Grants `principal` WRITE in the Loom's space, as a trusted gesture."
+      },
+      "hidePanel": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "panels": {
+        "items": {
+          "$ref": "#/$defs/Panel"
+        },
+        "type": "array"
+      },
+      "revoke": {
+        "$ref": "#/$defs/MemberEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Revokes `principal`'s access to the Loom's space, as a trusted gesture."
+      },
+      "viewerPanels": {
+        "items": {
+          "$ref": "#/$defs/Panel"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "panels",
+      "viewerPanels",
+      "addPanel",
+      "hidePanel",
+      "grant",
+      "revoke",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

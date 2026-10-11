@@ -1,3 +1,4 @@
+import type { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import type { JSONSchema } from "@commonfabric/api";
 import type {
   CfcConfClause,
@@ -39,7 +40,6 @@ import type {
 } from "../contracts/handle-table.ts";
 import type { HarnessFabricSession } from "../fabric-session.ts";
 import type { openProbeRuntime } from "../pattern-index/probe-runtime.ts";
-import type { PatternIndexClient } from "../pattern-index/client.ts";
 import type { PatternIndexLedger } from "../pattern-index/ledger.ts";
 import type { SkillsShAcquisitionClient } from "../skills-sh/acquisition.ts";
 import type { SkillsShSearchClient } from "../skills-sh/search-client.ts";

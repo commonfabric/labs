@@ -184,10 +184,10 @@ describe("CFC standard prompt-caveat profile (B6)", () => {
     });
 
     it("the DEPLOYMENT profile never discharges material risk via bare InjectionSafe (cross-value hole)", () => {
-      // The bare-InjectionSafe material-risk discharge is sanitizer-only. At a
-      // boundary the integrity pool is the whole consumed label's join, so a
-      // benign InjectionSafe from one value must NOT clear a material-risk
-      // caveat on another. The deployment profile therefore carries no such
+      // The bare-InjectionSafe material-risk discharge is sanitizer-only.
+      // Wherever a boundary pools integrity across values, a benign
+      // InjectionSafe from one value must NOT clear a material-risk caveat on
+      // another. The deployment profile therefore carries no such
       // rule (cubic P1 on #4567): the caveat survives.
       const input = [caveat(CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened)];
       const result = evaluateExchangeRules(

@@ -126,9 +126,10 @@ export default pattern<{
       );
 
       // `mentionedBy` is read by the outer expression and was never at risk;
-      // `topic` is read only by the callback, and is the regression.
+      // `topic` is used only by the callback, and is the regression. `equals`
+      // only compares it, so it arrives as a comparable cell, as `self` does.
       expect(elementProperties(schema)).toEqual({
-        topic: { type: "unknown" },
+        topic: { type: "unknown", asCell: ["comparable"] },
         mentionedBy: { type: "unknown" },
       });
     });
@@ -139,7 +140,7 @@ export default pattern<{
       );
 
       expect(elementProperties(schema)).toEqual({
-        topic: { type: "unknown" },
+        topic: { type: "unknown", asCell: ["comparable"] },
         mentionedBy: { type: "unknown" },
       });
     });
@@ -149,7 +150,9 @@ export default pattern<{
         `table.some((row) => equals(self, row.topic))`,
       );
 
-      expect(elementProperties(schema)).toEqual({ topic: { type: "unknown" } });
+      expect(elementProperties(schema)).toEqual({
+        topic: { type: "unknown", asCell: ["comparable"] },
+      });
     });
   });
 
@@ -167,7 +170,7 @@ export default pattern<{
       // and the `indexes.findIndex(...)` argument holding it are skipped —
       // `indexes` reaches the schema only if the operand is walked.
       expect(properties.indexes?.items?.properties).toEqual({
-        topic: { type: "unknown" },
+        topic: { type: "unknown", asCell: ["comparable"] },
       });
       expect(properties.self).toEqual({
         type: "unknown",

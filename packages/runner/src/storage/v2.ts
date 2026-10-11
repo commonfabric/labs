@@ -58,6 +58,7 @@ import {
   type ScopeKeyIdentity,
   type SessionHolding,
   type SessionReadCeiling,
+  type SessionReport,
   type SessionSync,
   type SessionSyncUpsert,
   type SqliteDbRef,
@@ -717,6 +718,8 @@ const applyPendingVersion = (
     case "delete":
       return undefined;
     case "set":
+      // Deep-frozen at `#applyPending`, so this is an identity pass; the
+      // call stands for a layer minted anywhere else.
       return cloneIfNecessary(pending.value) as EntityDocument;
     case "patch": {
       // Replay the layer's OPS over the base — never combine values. The
@@ -1632,11 +1635,18 @@ export class StorageManager implements IStorageManager {
    * document, `genesis.root` as its reserved root pattern when one is given
    * (computed from the space's DID when it is a function), and
    * `genesis.spaceKind` as its declared kind when one is given. The session
-   * declares the same root and kind, which the server holds the commit to. The commit reads the document at sequence zero, so it lands
-   * only on a space with no history. The memory client resubmits the
-   * identical commit after a lost connection until the server confirms or
-   * refuses it. The key is held by nothing but this call, and is dropped when
-   * the call returns.
+   * declares the same root and kind, which the server holds the commit to.
+   * The commit reads the document at sequence zero, so it lands only on a
+   * space with no history. The memory client resubmits the identical commit
+   * after a lost connection until the server confirms or refuses it. The key
+   * is held by nothing but this call, and is dropped when the call returns;
+   * on a shared connection its authentication is released too, since a router
+   * counts each principal a connection holds against the connection.
+   *
+   * Under Mode A the ACL this commit writes need not name the space's own
+   * key, so the server revokes the creating session once the commit lands,
+   * and the `session.close` that follows is answered with a denial for a
+   * session that no longer exists. That denial is expected and ignored.
    */
   async createSpace(
     acl: ACL,
@@ -1678,7 +1688,19 @@ export class StorageManager implements IStorageManager {
         operations: [{ op: "set", id: aclId, value: { value: { ...acl } } }],
       });
     } finally {
-      await client.close();
+      try {
+        await client.close();
+      } finally {
+        // Best effort: the space exists once its genesis commits. If the
+        // release fails, the key keeps one of the shared connection's
+        // principal places until the connection ends.
+        await client.releasePrincipal?.(space).catch((error) =>
+          logger.warn("create-space-release", () => [
+            `space ${space}: releasing its key failed:`,
+            error,
+          ])
+        );
+      }
     }
     return space;
   }
@@ -3396,6 +3418,15 @@ class Provider
     );
   }
 
+  /**
+   * Sends `report` on the current replica's session, best-effort (memory-v2
+   * `04-protocol.md` §4.14); a closed provider sends nothing.
+   */
+  sendReport(report: SessionReport): void {
+    if (this.#destroyed) return;
+    void this.replica.sendReport(report);
+  }
+
   async joinPresenceRoom(
     room: string,
     observer: (event: MemoryV2Client.PresenceEvent) => void,
@@ -5014,6 +5045,16 @@ export class SpaceReplica
   ): Promise<MemoryV2Client.PresenceMembership> {
     const { session } = await this.#activeSessionHandle();
     return session.joinPresenceRoom(room, observer);
+  }
+
+  /** Sends `report` on the replica's active session, best-effort. */
+  async sendReport(report: SessionReport): Promise<void> {
+    try {
+      const { session } = await this.#activeSessionHandle();
+      await session.sendReport(report);
+    } catch {
+      // A session that cannot be reached loses only the diagnostic.
+    }
   }
 
   async #removeOperationWatch(watchId: string): Promise<void> {
@@ -8997,7 +9038,22 @@ export class SpaceReplica
     const { id, scope, ...pending } = operation;
     const record = this.#record(id, scope, identity);
     record.pending.push(
-      pendingVersion(localSeq, pending, record.confirmed.seq),
+      pendingVersion(
+        localSeq,
+        // A `set` layer's value is the transaction's working root, mutable
+        // where the transaction thawed it. The layer is materialized every
+        // time the document's confirmed version moves beneath it, and each
+        // materialization of a mutable value is a clone of the whole
+        // document; frozen once here, the value is handed back by identity
+        // for as long as the layer stands.
+        pending.op === "set"
+          ? {
+            ...pending,
+            value: cloneIfNecessary(pending.value) as EntityDocument,
+          }
+          : pending,
+        record.confirmed.seq,
+      ),
     );
   }
 

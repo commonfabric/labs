@@ -89,6 +89,20 @@ describe("ProcessModuleByteCache", () => {
     expect(cache.get(RT, "policy")).toBeUndefined();
   });
 
+  it("includes a parsed source map in the byte cap", () => {
+    // The compiler hands over the map parsed, not as text: 107 characters
+    // serialized, beside 5 of JavaScript. One such entry fits a 150-byte
+    // cap and two do not, so the second put evicts the first only if the
+    // map is counted.
+    const cache = new ProcessModuleByteCache(150);
+    const sourceMap = { version: 3, mappings: "A".repeat(80) };
+    cache.put(RT, "a", { js: "12345", sourceMap });
+    expect(cache.get(RT, "a")).toEqual({ js: "12345", sourceMap });
+    cache.put(RT, "b", { js: "67890", sourceMap });
+    expect(cache.get(RT, "a")).toBeUndefined();
+    expect(cache.get(RT, "b")).toEqual({ js: "67890", sourceMap });
+  });
+
   it("round-trips through snapshot/restore into a fresh cache", () => {
     const a = new ProcessModuleByteCache();
     a.put(RT, "x", { js: "JS_X" });

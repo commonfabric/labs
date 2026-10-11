@@ -34,6 +34,11 @@ export const controlPlaneUrl = (
   verb: string,
   space?: string,
 ): URL => {
+  // The space is one path segment, so a value that is not a DID is refused
+  // here rather than reaching the server as a different path.
+  if (space !== undefined && !isDID(space)) {
+    throw new Error(`Not a space DID: ${space}`);
+  }
   const base = space === undefined
     ? "/api/ingest-channels"
     : `/api/spaces/${space}/ingest-channels`;
@@ -48,22 +53,40 @@ export interface ChannelConfig {
 }
 
 /**
- * What a channel's writes land in: a `journal` of records in per-day
- * partition cells, which a device POSTs to, or one `latest` cell holding the
- * newest Gmail push notification.
+ * What kind of channel a registration is. A `device` channel is written by a
+ * device POSTing records with the channel's token, into journal cells under
+ * its cause prefix. A `gmail` channel is written by the server on each Gmail
+ * push notification for the mailbox bound to it, into the cell its target
+ * names. A new mint decides it: a mailbox proof and a target make a gmail
+ * channel, and a mint without them makes a device channel. A re-mint keeps
+ * the channel's kind, and one carrying neither field keeps a gmail channel's
+ * binding and target as well.
  */
-export type IngestSink = "journal" | "latest";
+export type IngestChannelKind = "device" | "gmail";
 
-/** The sinks a channel can be minted with, as `--sink` accepts them. */
-export const INGEST_SINKS: readonly IngestSink[] = ["journal", "latest"];
+/**
+ * The cell a gmail channel writes, as the parts of a link: the space, the
+ * document id, and the path within it. A mint names it as the `fcl1:` wire
+ * string `linkRefPayloadToString()` writes from these parts.
+ */
+export interface CellTarget {
+  space: string;
+  id: string;
+  path: string[];
+}
 
 export interface ChannelSummary {
   id: string;
   name: string;
   space: string;
-  causePrefix: string;
+
+  /** A device channel's cause prefix; absent on a gmail channel. */
+  causePrefix?: string;
+
+  /** A gmail channel's cell; absent on a device channel. */
+  target?: CellTarget;
   installId: string;
-  sink: IngestSink;
+  kind: IngestChannelKind;
   createdAt: string;
   enabled: boolean;
   owner?: string;
@@ -79,19 +102,37 @@ export interface ChannelSummary {
 export interface MintedChannel {
   id: string;
 
-  /** Where a device POSTs; absent for a `latest` channel, as `token` is. */
+  /** Where a device POSTs; absent for a gmail channel, as `token` is. */
   url?: string;
   space: string;
-  causePrefix: string;
+
+  /** A device channel's cause prefix; absent on a gmail channel. */
+  causePrefix?: string;
+
+  /** A gmail channel's cell; absent on a device channel. */
+  target?: CellTarget;
   installId: string;
   expiresAt?: string;
 
   /**
    * The device's bearer secret, shown ONCE; the server keeps only its hash.
-   * Absent for a `latest` channel, which no device POSTs to.
+   * Absent for a gmail channel, which no device POSTs to.
    */
   token?: string;
+
+  /** The mailbox the channel was bound to, when the mint carried a proof. */
+  emailAddress?: string;
 }
+
+/**
+ * Proof of a Gmail mailbox, carried on a mint to bind the channel to it: a
+ * Google access token that reads the mailbox, used by the server for one
+ * profile lookup and kept nowhere, or a Google ID token naming it, which
+ * grants nothing. One of the two.
+ */
+export type GmailProof =
+  | { accessToken: string; idToken?: never }
+  | { idToken: string; accessToken?: never };
 
 /**
  * Accept either a space DID or a space NAME, mirroring `cf acl`. A name is
@@ -161,7 +202,10 @@ export function mintChannel(
     causePrefix?: string;
     name?: string;
     ttlDays?: number;
-    sink?: IngestSink;
+
+    /** With `gmail`, the cell the gmail channel writes, as a wire link string. */
+    target?: string;
+    gmail?: GmailProof;
     requestId: string;
   },
 ): Promise<MintedChannel> {
@@ -211,43 +255,6 @@ export function revokeChannel(
   return call<{ id: string; revokedAt: string; revision: number }>(
     config,
     "revoke",
-    payload,
-    space,
-  );
-}
-
-/**
- * Binds channel `input.id`, which writes into `input.space`, to the Gmail
- * mailbox `input.accessToken` reads, so that each Gmail push notification for
- * the mailbox replaces the record in the channel's one cell. The channel has
- * to be a `latest` channel. The server uses the token for one profile lookup
- * and does not keep it.
- */
-export function bindGmail(
-  config: ChannelConfig,
-  input: { space: string; id: string; accessToken: string; requestId: string },
-): Promise<{ id: string; emailAddress: string }> {
-  const { space, ...payload } = input;
-  return call<{ id: string; emailAddress: string }>(
-    config,
-    "gmail-bind",
-    payload,
-    space,
-  );
-}
-
-/**
- * Unbinds channel `input.id`, which writes into `input.space`, from its Gmail
- * mailbox, if it is bound to one.
- */
-export function unbindGmail(
-  config: ChannelConfig,
-  input: { space: string; id: string; requestId: string },
-): Promise<{ id: string; unbound: boolean }> {
-  const { space, ...payload } = input;
-  return call<{ id: string; unbound: boolean }>(
-    config,
-    "gmail-unbind",
     payload,
     space,
   );

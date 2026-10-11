@@ -1743,6 +1743,38 @@ export default pattern<{ value: number }>(({ value }) => {
 Deno.test(
   "Pipeline regression: uncertain source lifts do not emit scheduler scope proof",
   async () => {
+    // A rest element takes every member the pattern does not name, which the
+    // capability analysis cannot list, so the read is a wildcard.
+    const source = `import { computed, pattern } from "commonfabric";
+
+export default pattern<{ value: Record<string, string> }>(
+  ({ value }) => {
+    const uncertain = computed(() => {
+      const { ...rest } = value;
+      return rest;
+    });
+    return { uncertain };
+  },
+);
+`;
+
+    const output = await transformSource(source, {
+      types: COMMONFABRIC_TYPES,
+    });
+    const root = parseModule(output);
+    assertEquals(
+      schedulerOptionsFor(liftCallFor(root, "uncertain"))
+        ?.completeSchedulerScopeSummary,
+      undefined,
+    );
+  },
+);
+
+Deno.test(
+  "Pipeline regression: a read through a dynamic key emits scheduler scope proof",
+  async () => {
+    // A key that can name any member reads the whole value it indexes, which
+    // the summary records, so the lift's reads are all accounted for.
     const source = `import { computed, pattern } from "commonfabric";
 
 export default pattern<{ value: Record<string, string>; key: string }>(
@@ -1760,7 +1792,7 @@ export default pattern<{ value: Record<string, string>; key: string }>(
     assertEquals(
       schedulerOptionsFor(liftCallFor(root, "dynamic"))
         ?.completeSchedulerScopeSummary,
-      undefined,
+      true,
     );
   },
 );
@@ -1774,13 +1806,13 @@ Deno.test(
 interface Input {
   departments: Writable<string[]>;
   values: Record<string, string>;
-  key: string;
 }
 
-export default pattern<Input>(({ departments, values, key }) => {
+export default pattern<Input>(({ departments, values }) => {
   const dynamicWriter = computed(() => {
     departments.set(["Bakery"]);
-    return values[key];
+    const { ...rest } = values;
+    return rest;
   });
   return { dynamicWriter };
 });

@@ -111,31 +111,31 @@ type Cell<T> = {
 };`;
 
 Deno.test(
-  "identity call on a dynamic alias widens the parameter root to wildcard",
+  "identity call on a dynamic alias reads the static prefix above the key",
   () => {
     // Branch: the fallthrough `trackReadRef(resolvedSource, { identityOnly:
-    // true })` (capability-analysis.ts ~2833-2837). Reached when an alias used
-    // as the argument of a known identity call is itself a dynamic source: the
-    // three earlier `!dynamic` guards all fall through, and because the ref is
-    // dynamic the read widens the whole parameter root to wildcard.
+    // true })`. Reached when an alias used as the argument of a known identity
+    // call is itself a dynamic source: the three earlier `!dynamic` guards all
+    // fall through, and because the ref is dynamic the read is a value read of
+    // the whole static prefix above the key rather than an identity-only one.
 
     const input = getPaths(
       analyzeNoChecker(
         `const fn = (input, k) => {
-           const v = input[k];
+           const v = input.items[k];
            navigateTo(v);
          };`,
       ),
       "input",
     );
-    assertEquals(input.wildcard, true);
-    assertEquals(input.readPaths.length, 0);
+    assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths, ["items"]);
     assertEquals(input.writePaths.length, 0);
   },
 );
 
 Deno.test(
-  "equals() on a dynamic alias also widens the parameter root to wildcard",
+  "equals() on a dynamic alias also reads the static prefix above the key",
   () => {
     const input = getPaths(
       analyzeNoChecker(
@@ -146,7 +146,8 @@ Deno.test(
       ),
       "input",
     );
-    assertEquals(input.wildcard, true);
+    assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths, [""]);
   },
 );
 

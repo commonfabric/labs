@@ -10,7 +10,7 @@ import * as handlers from "./ingest-push.handlers.ts";
 import * as routes from "./ingest-push.routes.ts";
 import { gmailPushEnabled } from "./gmail-push.config.ts";
 import { createRouter } from "@/lib/create-app.ts";
-import { ingestGate } from "@/routes/ingest-channels/gate.ts";
+import { ingestGate } from "./gate.ts";
 
 const router = createRouter();
 

@@ -236,14 +236,21 @@ under its own access. A Loom that names no room, including a root whose state
 holds no `chatRoom` field, reads the link's value as `undefined`.
 `setChatRoom({room?})` names the room, or clears it when `room` is omitted;
 sending the same event again leaves the same state. It refuses a room in another
-space. A FabriChat room's members are the principals its space's access list
-admits, so a room in the Loom's space has the Loom's members. The participants
-it shows are the profiles its space's default pattern lists, which in the Loom's
-space is this root's `participants`, a set of claims as described above, plus
-the author profile of any of its messages that records one the list leaves out.
-Whoever may change the Loom's panels may change `chatRoom`: the space's access
-list decides both. Of the root's handlers, only `setChatRoom` changes it. The
-designation is a fact about the Loom, not about its layout, so it persists
+space. `ensureChatRoom()` names a room the root creates itself, unless the Loom
+names one already, in which case it changes nothing, so sending it again, or
+from two sessions at once, leaves one room named. The room it creates is the
+space's own chat: a `FabriChatRoom` with no `about`, in the Loom's space, which
+is not the space's root and is added neither as a panel nor to `pieceRegistry`,
+so it never appears as a panel. A FabriChat room's members are the principals
+its space's access list admits, so a room in the Loom's space has the Loom's
+members. The participants it shows are the profiles its space's default pattern
+lists, which in the Loom's space is this root's `participants`, a set of claims
+as described above, plus the author profile of any of its messages that records
+one the list leaves out. Whoever may change the Loom's panels may change
+`chatRoom`, with either stream: the space's access list decides both, and
+refuses a member who holds only READ. Of the root's handlers, only `setChatRoom`
+and `ensureChatRoom` change it, and `ensureChatRoom` only while it names none.
+The designation is a fact about the Loom, not about its layout, so it persists
 through every panel change: removing the room's panels leaves it named, and
 adding one back changes nothing. A reader that needs to know whether the room is
 shown looks for a piece panel whose piece `equals()` the room. A deleted room
@@ -251,7 +258,7 @@ stays named until `setChatRoom` clears it, as any link does. The input holds the
 link in a record, `{ room? }`, because a handler's cell for a field holding a
 link writes through it, so replacing the link there would write into the room.
 
-Run and attach all eleven tests when deploying or updating source:
+Run and attach all twelve tests when deploying or updating source:
 
 ```sh
 deno task cf test packages/patterns/loom/main.test.tsx
@@ -262,6 +269,7 @@ deno task cf test packages/patterns/loom/url-view.test.tsx
 deno task cf test packages/patterns/loom/adder-profile.test.tsx
 deno task cf test packages/patterns/loom/actor-attribution.test.tsx
 deno task cf test packages/patterns/loom/chat-room.test.tsx
+deno task cf test packages/patterns/loom/ensure-chat-room.test.tsx
 deno task cf test packages/patterns/loom/retitle-retarget.test.tsx
 deno task cf test packages/patterns/loom/overlay.test.tsx
 deno task cf test packages/patterns/loom/private-panels.test.tsx
@@ -276,6 +284,7 @@ deno task cf piece new packages/patterns/loom/main.tsx \
   --test packages/patterns/loom/adder-profile.test.tsx \
   --test packages/patterns/loom/actor-attribution.test.tsx \
   --test packages/patterns/loom/chat-room.test.tsx \
+  --test packages/patterns/loom/ensure-chat-room.test.tsx \
   --test packages/patterns/loom/retitle-retarget.test.tsx \
   --test packages/patterns/loom/overlay.test.tsx \
   --test packages/patterns/loom/private-panels.test.tsx

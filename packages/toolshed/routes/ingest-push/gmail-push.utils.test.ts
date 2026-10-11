@@ -19,20 +19,21 @@ import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
-  bindMailbox,
   fetchGmailMailbox,
   getMailboxChannels,
   type GmailPushDeps,
   isPlausibleAddress,
   MailboxBindingFullError,
   mailboxKey,
+  mailboxListUpdate,
   MAX_CHANNELS_PER_MAILBOX,
   processGmailPush,
-  unbindChannel,
+  verifyGmailIdToken,
 } from "./gmail-push.utils.ts";
 import {
   channelId,
   getLastSeen,
+  getRegistration,
   type IngestRegistration,
   latestCell,
   saveRegistration,
@@ -134,7 +135,7 @@ describe("gmail-push.utils", () => {
     ...over,
   });
 
-  /** Saves a live channel writing under `causePrefix`, and returns it. */
+  /** Saves a live gmail channel writing its own cell, and returns it. */
   const channel = async (
     installId: string,
     over: Partial<IngestRegistration> = {},
@@ -143,10 +144,14 @@ describe("gmail-push.utils", () => {
       id: channelId(space, installId),
       name: installId,
       space,
-      causePrefix: `gmail-push-${installId}`,
+      target: {
+        space,
+        id: runtime.getCell(space, `gmail-push-${installId}`)
+          .getAsNormalizedFullLink().id,
+        path: [],
+      },
       installId,
-      sink: "latest",
-      secretHash: "unused",
+      kind: "gmail",
       createdBy: space,
       createdAt: "2026-09-01T00:00:00.000Z",
       enabled: true,
@@ -154,6 +159,32 @@ describe("gmail-push.utils", () => {
     };
     await saveRegistration(runtime, space, registration);
     return registration;
+  };
+
+  /**
+   * Binds `registration` to the mailbox at `address` the way a mint does:
+   * the registration gains the mailbox's key, and the channel joins the
+   * mailbox's list, in one write. Returns the registration as stored.
+   */
+  const bind = async (
+    registration: IngestRegistration,
+    address: string,
+  ): Promise<IngestRegistration> => {
+    const key = mailboxKey(address);
+    const bound = { ...registration, mailboxKey: key };
+    await saveRegistration(
+      runtime,
+      space,
+      bound,
+      undefined,
+      undefined,
+      undefined,
+      mailboxListUpdate(runtime, space, registration.id, {
+        next: key,
+        previous: registration.mailboxKey,
+      }, NOW),
+    );
+    return bound;
   };
 
   /** What a channel's cell holds. */
@@ -281,7 +312,7 @@ describe("gmail-push.utils", () => {
 
     describe("decoding", () => {
       it("acknowledges a body that is not JSON, delivering nothing", async () => {
-        await bindMailbox(runtime, space, (await channel("a")).id, MAILBOX);
+        await bind(await channel("a"), MAILBOX);
         expect(await push("not json")).toEqual({
           status: 200,
           body: { delivered: 0 },
@@ -289,7 +320,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("acknowledges a message whose data is not base64 JSON", async () => {
-        await bindMailbox(runtime, space, (await channel("a")).id, MAILBOX);
+        await bind(await channel("a"), MAILBOX);
         const body = JSON.stringify({
           message: { data: "!!!", messageId: "m-1", publishTime: PUBLISH_TIME },
         });
@@ -300,7 +331,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("acknowledges a notification whose history id is not an integer", async () => {
-        await bindMailbox(runtime, space, (await channel("a")).id, MAILBOX);
+        await bind(await channel("a"), MAILBOX);
         const result = await push(
           envelope(notification({ historyId: "12ab" })),
         );
@@ -308,7 +339,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("acknowledges a notification without an email address", async () => {
-        await bindMailbox(runtime, space, (await channel("a")).id, MAILBOX);
+        await bind(await channel("a"), MAILBOX);
         const result = await push(
           envelope(notification({ emailAddress: "no-at-sign" })),
         );
@@ -325,8 +356,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("writes the notification to the bound channel's cell", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
+        const a = await bind(await channel("a"), MAILBOX);
 
         const result = await push(envelope(notification()));
 
@@ -340,8 +370,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("records a history id given as a decimal string unchanged", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
+        const a = await bind(await channel("a"), MAILBOX);
         const big = "18446744073709551615";
 
         await push(envelope(notification({ historyId: big })));
@@ -350,8 +379,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("replaces the record when a newer history id arrives", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
+        const a = await bind(await channel("a"), MAILBOX);
         await push(envelope(notification({ historyId: 4242 })));
 
         await push(envelope(notification({ historyId: 5000 })));
@@ -360,8 +388,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("keeps the record when an older history id arrives after it", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
+        const a = await bind(await channel("a"), MAILBOX);
         await push(envelope(notification({ historyId: 4242 })));
 
         const result = await push(envelope(notification({ historyId: 4000 })));
@@ -371,8 +398,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("compares history ids as integers, not as strings", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
+        const a = await bind(await channel("a"), MAILBOX);
         await push(envelope(notification({ historyId: "900" })));
 
         await push(envelope(notification({ historyId: "1000" })));
@@ -381,10 +407,9 @@ describe("gmail-push.utils", () => {
       });
 
       it("takes the new mailbox's first notification after a rebind, whatever its history id", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
+        const a = await bind(await channel("a"), MAILBOX);
         await push(envelope(notification({ historyId: 9000 })));
-        await bindMailbox(runtime, space, a.id, "bob@example.com");
+        await bind(a, "bob@example.com");
 
         const result = await push(envelope(
           notification({ emailAddress: "bob@example.com", historyId: 100 }),
@@ -398,8 +423,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("leaves the cell as it is when the same history id is delivered again", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
+        const a = await bind(await channel("a"), MAILBOX);
         await push(envelope(notification(), { publishTime: PUBLISH_TIME }));
 
         await push(
@@ -410,8 +434,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("matches the mailbox regardless of case", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, "Alice@Example.com");
+        await bind(await channel("a"), "Alice@Example.com");
 
         const result = await push(envelope(notification()));
 
@@ -419,10 +442,8 @@ describe("gmail-push.utils", () => {
       });
 
       it("delivers to every live channel bound to the mailbox", async () => {
-        const a = await channel("a");
-        const b = await channel("b");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
-        await bindMailbox(runtime, space, b.id, MAILBOX);
+        const a = await bind(await channel("a"), MAILBOX);
+        const b = await bind(await channel("b"), MAILBOX);
 
         const result = await push(envelope(notification()));
 
@@ -431,19 +452,24 @@ describe("gmail-push.utils", () => {
         expect(await latest(b)).toMatchObject({ historyId: "4242" });
       });
 
-      it("skips a bound channel that is a journal", async () => {
-        const j = await channel("j", { sink: "journal" });
-        await bindMailbox(runtime, space, j.id, MAILBOX);
+      it("skips a bound device channel", async () => {
+        await bind(
+          await channel("j", {
+            kind: "device",
+            causePrefix: "gmail-push-j",
+            target: undefined,
+          }),
+          MAILBOX,
+        );
 
-        const result = await push(envelope(notification()));
-
-        expect(result).toEqual({ status: 200, body: { delivered: 0 } });
-        expect(await latest(j)).toBeUndefined();
+        expect(await push(envelope(notification()))).toEqual({
+          status: 200,
+          body: { delivered: 0 },
+        });
       });
 
       it("skips a bound channel that has since been revoked", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
+        const a = await bind(await channel("a"), MAILBOX);
         await saveRegistration(runtime, space, {
           ...a,
           enabled: false,
@@ -457,8 +483,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("skips a bound channel that has expired", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
+        const a = await bind(await channel("a"), MAILBOX);
         await saveRegistration(runtime, space, {
           ...a,
           expiresAt: "2026-09-30T00:00:00.000Z",
@@ -470,8 +495,7 @@ describe("gmail-push.utils", () => {
       });
 
       it("stamps the channel's last-seen time", async () => {
-        const a = await channel("a");
-        await bindMailbox(runtime, space, a.id, MAILBOX);
+        const a = await bind(await channel("a"), MAILBOX);
         expect(await getLastSeen(runtime, space, a.id)).toBeNull();
 
         await push(envelope(notification()));
@@ -481,46 +505,68 @@ describe("gmail-push.utils", () => {
     });
   });
 
-  describe("bindMailbox()", () => {
+  describe("mailboxListUpdate()", () => {
     it("moves a rebound channel off the mailbox it was bound to", async () => {
-      const a = await channel("a");
-      await bindMailbox(runtime, space, a.id, MAILBOX);
+      const a = await bind(await channel("a"), MAILBOX);
 
-      await bindMailbox(runtime, space, a.id, "bob@example.com");
+      await bind(a, "bob@example.com");
 
       expect(await getMailboxChannels(runtime, space, MAILBOX)).toEqual([]);
       expect(await getMailboxChannels(runtime, space, "bob@example.com"))
         .toEqual([a.id]);
+      expect((await getRegistration(runtime, space, a.id))?.mailboxKey)
+        .toBe(mailboxKey("bob@example.com"));
     });
 
     it("lists a channel bound twice to one mailbox once", async () => {
-      const a = await channel("a");
-      await bindMailbox(runtime, space, a.id, MAILBOX);
-      await bindMailbox(runtime, space, a.id, MAILBOX);
+      const a = await bind(await channel("a"), MAILBOX);
+      await bind(a, MAILBOX);
 
       expect(await getMailboxChannels(runtime, space, MAILBOX)).toEqual([a.id]);
     });
 
-    it("throws `MailboxBindingFullError` past the per-mailbox limit", async () => {
+    it("throws `MailboxBindingFullError` past the per-mailbox limit, writing nothing", async () => {
       for (let i = 0; i < MAX_CHANNELS_PER_MAILBOX; i++) {
-        await bindMailbox(runtime, space, (await channel(`c${i}`)).id, MAILBOX);
+        await bind(await channel(`c${i}`), MAILBOX);
       }
       const extra = await channel("extra");
 
-      await expect(bindMailbox(runtime, space, extra.id, MAILBOX)).rejects
+      await expect(bind(extra, MAILBOX)).rejects
         .toBeInstanceOf(MailboxBindingFullError);
+      expect((await getRegistration(runtime, space, extra.id))?.mailboxKey)
+        .toBeUndefined();
+      expect(await getMailboxChannels(runtime, space, MAILBOX)).not
+        .toContain(extra.id);
     });
 
-    it("frees the place of a revoked channel for a new one", async () => {
+    it("takes a channel out of its mailbox's list when given no next mailbox", async () => {
+      const a = await bind(await channel("a"), MAILBOX);
+      const b = await bind(await channel("b"), MAILBOX);
+
+      await saveRegistration(
+        runtime,
+        space,
+        { ...a, enabled: false },
+        undefined,
+        undefined,
+        undefined,
+        mailboxListUpdate(runtime, space, a.id, { previous: a.mailboxKey }),
+      );
+
+      expect(await getMailboxChannels(runtime, space, MAILBOX)).toEqual([b.id]);
+    });
+
+    it("frees the place of a retired channel for a new one", async () => {
       const bound: IngestRegistration[] = [];
       for (let i = 0; i < MAX_CHANNELS_PER_MAILBOX; i++) {
-        bound.push(await channel(`c${i}`));
-        await bindMailbox(runtime, space, bound[i].id, MAILBOX);
+        bound.push(await bind(await channel(`c${i}`), MAILBOX));
       }
+      // Retired without leaving the list, as an expiry or an operator
+      // retirement leaves a channel.
       await saveRegistration(runtime, space, { ...bound[0], enabled: false });
       const extra = await channel("extra");
 
-      await bindMailbox(runtime, space, extra.id, MAILBOX);
+      await bind(extra, MAILBOX);
 
       const ids = await getMailboxChannels(runtime, space, MAILBOX);
       expect(ids).toContain(extra.id);
@@ -528,29 +574,82 @@ describe("gmail-push.utils", () => {
     });
   });
 
-  describe("unbindChannel()", () => {
-    it("returns `false` for a channel never bound", async () => {
-      const a = await channel("a");
-      expect(await unbindChannel(runtime, space, a.id)).toBe(false);
+  describe("verifyGmailIdToken()", () => {
+    const CLIENT_ID = "123.apps.googleusercontent.com";
+    // A Gmail address, which Google is the authority on without an `hd` claim.
+    const GMAIL_MAILBOX = "alice@gmail.com";
+    const idToken = (
+      over: { claims?: Record<string, unknown>; audience?: string } = {},
+    ): Promise<string> =>
+      new SignJWT({
+        email: GMAIL_MAILBOX,
+        email_verified: true,
+        ...over.claims,
+      })
+        .setProtectedHeader({ alg: "RS256", kid: "google-1" })
+        .setIssuer("https://accounts.google.com")
+        .setAudience(over.audience ?? CLIENT_ID)
+        .setIssuedAt()
+        .setExpirationTime("1h")
+        .sign(signingKey);
+    const verify = (token: string, clientIds = [CLIENT_ID]) =>
+      verifyGmailIdToken(keys, clientIds, token);
+
+    it("returns the mailbox a token Google signed for an accepted client names", async () => {
+      expect(await verify(await idToken())).toEqual({
+        ok: true,
+        emailAddress: GMAIL_MAILBOX,
+      });
     });
 
-    it("returns `true` and removes the channel from its mailbox", async () => {
-      const a = await channel("a");
-      await bindMailbox(runtime, space, a.id, MAILBOX);
-
-      expect(await unbindChannel(runtime, space, a.id)).toBe(true);
-      expect(await getMailboxChannels(runtime, space, MAILBOX)).toEqual([]);
-      expect(await unbindChannel(runtime, space, a.id)).toBe(false);
+    it("returns `rejected` for a token minted for another client", async () => {
+      expect(await verify(await idToken({ audience: "other-client" })))
+        .toEqual({ ok: false, reason: "rejected" });
     });
 
-    it("stops delivery to the channel", async () => {
-      const a = await channel("a");
-      await bindMailbox(runtime, space, a.id, MAILBOX);
-      await unbindChannel(runtime, space, a.id);
+    it("returns the mailbox for a Workspace address whose domain the `hd` claim vouches for", async () => {
+      expect(
+        await verify(
+          await idToken({
+            claims: { email: "alice@example.com", hd: "example.com" },
+          }),
+        ),
+      ).toEqual({ ok: true, emailAddress: "alice@example.com" });
+    });
 
-      expect(await push(envelope(notification()))).toEqual({
-        status: 200,
-        body: { delivered: 0 },
+    it("returns `rejected` for a verified address outside Gmail that no `hd` claim vouches for", async () => {
+      expect(
+        await verify(
+          await idToken({
+            claims: { email: "alice@example.com" },
+          }),
+        ),
+      ).toEqual({ ok: false, reason: "rejected" });
+      expect(
+        await verify(
+          await idToken({
+            claims: { email: "alice@example.com", hd: "other.example" },
+          }),
+        ),
+      ).toEqual({ ok: false, reason: "rejected" });
+    });
+
+    it("returns `rejected` for a token whose address is not verified", async () => {
+      expect(await verify(await idToken({ claims: { email_verified: false } })))
+        .toEqual({ ok: false, reason: "rejected" });
+    });
+
+    it("returns `rejected` for a token that is not a token at all", async () => {
+      expect(await verify("not-a-jwt")).toEqual({
+        ok: false,
+        reason: "rejected",
+      });
+    });
+
+    it("returns `unsupported` when no client id is configured", async () => {
+      expect(await verify(await idToken(), [])).toEqual({
+        ok: false,
+        reason: "unsupported",
       });
     });
   });

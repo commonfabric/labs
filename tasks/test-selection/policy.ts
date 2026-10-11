@@ -122,6 +122,13 @@ export const BREADTH_SATURATION = 2;
  */
 export const ENVIRONMENTAL_MIN_SOURCES = 5;
 
+/**
+ * Identities one run must newly break, one source at one commit in one
+ * order, before its failures read as the run or the change as a whole
+ * rather than as any one test.
+ */
+export const MASS_FAILURE_MIN_IDENTITIES = 50;
+
 /** Days over which a day's failure count halves. */
 export const CHURN_HALF_LIFE_DAYS = 14;
 
@@ -691,6 +698,16 @@ export const DIALS: readonly Dial[] = [
       "`CATCH_BREADTH_WINDOW_DAYS` before it reads as the environment. Up " +
       "when a genuinely broad regression is written off; down when a " +
       "broken runner's failures still count as catches.",
+  },
+  {
+    name: "MASS_FAILURE_MIN_IDENTITIES",
+    value: MASS_FAILURE_MIN_IDENTITIES,
+    unit: "identities",
+    setBy: "chosen",
+    why: "How many identities one run must newly break before none of " +
+      "those failures is a catch. Up when a breakage that reached many " +
+      "tests still escaped the pull requests that ran some of them; down " +
+      "when one broken run still credits a catch to a whole suite.",
   },
   {
     name: "CHURN_HALF_LIFE_DAYS",

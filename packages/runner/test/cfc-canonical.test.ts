@@ -110,6 +110,7 @@ describe("canonical", () => {
       source: address("external"),
       flow: { confidentiality: [content], integrity: [] },
       consumed: { confidentiality: [], integrity: [] },
+      locations: [],
       labeledSpaces: [],
       sources: [],
     });

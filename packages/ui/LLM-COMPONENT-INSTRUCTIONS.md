@@ -221,13 +221,19 @@ await input.pressSequentially("user@example.com");
 
 **Purpose**: Range input slider **Tag**: `<cf-slider>` **Attributes**:
 
-- `value` - number
+- `value` - number; in a pattern, bind a cell with `$value`
 - `min` - number (default: 0)
 - `max` - number (default: 100)
 - `step` - number (default: 1)
 - `disabled` - boolean
-- `name` - string **Events**:
-- `cf-change` - Fired on value change with detail: `{ value }` **Example**:
+- `orientation` - `"horizontal"` | `"vertical"` **Events**:
+- `cf-input` - Fired for every move a person makes (each drag step, each key),
+  with detail: `{ value, oldValue }`
+- `cf-change` - Fired when a person commits a move: a key press at once, a drag
+  on release, with detail: `{ value, oldValue }` (`oldValue` from before the
+  drag). A key pressed during a drag is part of the drag, and commits with it.
+  Setting the value from code fires neither. Values land on stops: `min`, each
+  `step` above it, and `max` **Example**:
 
 ```html
 <cf-slider min="0" max="100" value="50" step="5"></cf-slider>

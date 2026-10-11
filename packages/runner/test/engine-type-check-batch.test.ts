@@ -82,6 +82,26 @@ describe("Engine.typeCheckBatch()", () => {
     expect(checked.fileCount).toBeGreaterThanOrEqual(3);
   });
 
+  it("reports a type error at the line its author wrote", async () => {
+    // Each program in the batch carries its own `/<id>` prefix, so the
+    // erroring program goes second to check the lookup reaches past the
+    // first.
+
+    const checked = await engine.typeCheckBatch([
+      programNamed("/one.tsx", "export default 1;"),
+      programNamed(
+        "/two.tsx",
+        "const wrong: number = 'text';\nexport default wrong;",
+      ),
+    ]);
+
+    // The batch reports this error from its type check and again from its
+    // emit, so the distinct messages are what this reads.
+    expect([
+      ...new Set(checked.diagnostics.map((diagnostic) => diagnostic.message)),
+    ]).toEqual(["1: Type 'string' is not assignable to type 'number'."]);
+  });
+
   it("charges nothing for a batch with no programs in it", async () => {
     const checked = await engine.typeCheckBatch([]);
 

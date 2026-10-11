@@ -88,7 +88,8 @@ If the server accepts the protocol, it returns:
     "sessionReadCeiling": true,
     "presenceV1": true,
     "sessionClose": true,
-    "admissionNotice": true
+    "admissionNotice": true,
+    "sessionReportV1": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -304,6 +305,14 @@ client connected to an older server, or a server connected to an older client,
 leaves a refused principal to learn of a later grant by opening the session
 again.
 
+`sessionReportV1` advertises that the server records the diagnostics a client
+reports about its own session with `session.report` (section 4.14). It is
+build-inherent and defaults to `false` when absent: a client connected to an
+older server keeps its reports to itself rather than sending a message the
+server would refuse. Only the server advertises it. A client's `hello` leaves
+it out, since an older routed host refuses a `hello` carrying a flag it does
+not know.
+
 `spaceKind` advertises that the server seals the kind a space's genesis commit
 declares, and reports it in the result of every `session.open` it admits
 (sections 4.1.2 and 4.5.1). It is build-inherent and
@@ -485,7 +494,14 @@ Rules:
   forever. A `retriable` authorization race (an expired, used, or mismatched
   challenge; a stale signed `exp`) or a transport-level disconnect can recover
   through retries on a transport that can discard its failed connection. A
-  permanent protocol-flag mismatch at `hello` ends the whole connection. See
+  `retriable` denial of a session that authenticates through `connection.auth`,
+  such as a router's while that space's toolshed is down, holds that session
+  alone: it keeps its watch intent and unconfirmed commits and retries its open
+  on the same connection with the reconnect backoff, while the connection's
+  other sessions restore. If a retry fails for a reason only a new connection
+  heals, the client discards the connection, after a backoff that grows with
+  each such restart. A permanent protocol-flag mismatch at `hello` ends the
+  whole connection. See
   [`../../features/authorization-failure-surfacing.md`](../../features/authorization-failure-surfacing.md)
   for how the client, the runner storage layer, and the CLI act on this
   classification end to end.
@@ -521,6 +537,7 @@ interface HelloMessage {
     sessionClose?: boolean;
     connectionAuth?: boolean;
     admissionNotice?: boolean;
+    sessionReportV1?: boolean;
     spaceKind?: boolean;
   };
 }
@@ -687,7 +704,9 @@ that space on this connection, and that the space's access list now grants
 of `READ`, and when an access-list change revokes a session for the same
 reason. An access-list commit that gives a recorded principal `READ` sends the
 notice to the connection the refusal was recorded on, and removes the record,
-so each refusal is told at most once. A change that leaves the principal
+so each refusal is told at most once. A grant written to the space's store by
+another process sends it at the space's next refresh turn after the server
+finds the change (see the capability cache under the ACL policy below). A change that leaves the principal
 without `READ` sends nothing, and the notice reaches no other connection.
 
 The notice is a hint and grants nothing. A client that acts on it opens the
@@ -1225,6 +1244,14 @@ refusal is permanent. One challenge accepts several keys, once each, so
 authenticating two keys needs no ordering between them. A client holding no
 usable challenge asks for one with `connection.challenge`.
 
+On direct connections the SDK shares a lease renewal's complete outcome with
+mounts for that key, including mounts arriving during the renewal's backoff.
+A retriable refusal keeps those mounts pending while the renewal retries with
+a fresh challenge. Its retry rate is independent of the number of waiting
+mounts. Permanent refusal, connection loss, client closure or failure, and a
+mount's cancellation end its wait. Canceling a mount leaves the renewal and
+other mounts running. Session restoration has its own retry policy.
+
 An authentication is a lease. It runs out at the invocation's `exp`, or an
 hour after it was accepted, whichever is sooner, and the response says
 which. From then on a `session.open` naming the principal is refused, a
@@ -1324,6 +1351,25 @@ The server's unauthenticated `writeDocument` operator path cannot create a
 fresh space or mutate the ACL document while ACL policy is active. Its access
 to ordinary documents in an already-created space remains a known deferred
 blob-authorization issue.
+
+The server caches, per space and principal, the capability the space's ACL
+resolves to. The cache is valid only for the store as it was when the entry
+was made: each space's entry records the store's SQLite `data_version`, read
+on the space's connection just before the ACL, and a cached decision is served
+only while a fresh reading matches. Otherwise the space's entries are dropped
+and the ACL is read again, on the current snapshot, before the operation is
+authorized. A commit the server makes to the ACL drops the entries itself. So
+a grant written to the space's store through another connection, by another
+process on the same host, admits its principal at that principal's next
+`session.open`, and a revocation written there refuses the principal's next
+command, without a restart. A change that lands while a request is being
+authorized is seen by the next request. When the dropped entries show the ACL
+document itself at a new revision, the space's next refresh turn also runs
+what follows an ACL commit the server makes: it revokes the sessions the
+change deauthorized, before any frame of that turn, and sends
+`session/admissible` for the principals it admits; the request that found the
+change schedules that turn. Each capability check costs one prepared pragma
+read.
 
 The challenge protects against replay of a captured signed `session.open` after
 the original WebSocket handshake has moved on.
@@ -1855,6 +1901,91 @@ rejoins every room the session was in, delivers the new snapshot — the server
 assigned a new participant id with the new connection — and republishes the
 last record at a fresh revision. A session that terminates ends its rooms with
 a `failure` event carrying the cause, and nothing follows it.
+
+## 4.14 Session Reports
+
+A session report is a diagnostic a client sends about its own session to the
+server serving the session's space, which counts it and keeps it where an
+operator reads the server's health. It rides the memory connection because every
+client already holds one, authenticated and routed to the server holding the
+space, so a report lands beside that server's commit rates for the same
+session (the health route's `commitRates` and `sessionReports`). Like a presence
+message it is not a commit, carries no `seq`, settles nothing, and is handled
+as it arrives rather than behind the ordered frame queue — which matters here,
+since the space a report describes is often the one with the deepest queue.
+The server advertises the capability as `sessionReportV1` (section 4.1.1).
+
+The one reporter is the scheduler's remote-echo breaker
+([`../../plans/scheduler-remote-echo-breaker.md`](../../plans/scheduler-remote-echo-breaker.md)):
+a `trip` says a reactive action kept rewriting a document, each time
+re-triggered by another writer's change to that same document, and that the
+client is now deferring the action's re-runs; a `clear` says how a tripped
+action ended.
+
+```typescript
+// Shown at module scope.
+
+type SpaceId = string;
+type SessionId = string;
+/** `space`, `user:<principal>`, or `session:<principal>:<session>`, each part
+ * URI-component encoded. */
+type ScopeKey = string;
+
+interface EchoBreakerReportDocument {
+  id: string;
+  /** The scope instance the action wrote, resolved. A serving runtime reports
+   * the runs it serves for many sessions on its own session, so the report
+   * names the instance rather than leaving the reporting session to stand for
+   * it. */
+  scopeKey: ScopeKey;
+}
+
+interface EchoBreakerTripReport {
+  kind: "echo-breaker";
+  event: "trip";
+  document: EchoBreakerReportDocument;
+  /** The action's scheduler id. */
+  action: string;
+}
+
+interface EchoBreakerClearReport {
+  kind: "echo-breaker";
+  event: "clear";
+  document: EchoBreakerReportDocument;
+  action: string;
+  /** Converged on the document, quiet for the breaker's reset, the action
+   * unregistered, or the pair dropped from the breaker's bounded table. */
+  reason: "convergence" | "quiet" | "retired" | "evicted";
+  /** Echoes after the trip, each of which renewed the backoff. */
+  renewals: number;
+  /** Milliseconds from the trip to the clear. */
+  trippedMs: number;
+}
+
+interface SessionReportRequest {
+  type: "session.report";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  report: EchoBreakerTripReport | EchoBreakerClearReport;
+}
+```
+
+The request receives a `response` whose `ok` is empty. It requires an open
+session for `space` on the same connection, as presence does; a session the
+connection does not hold gets a `SessionError`, and a routed connection is
+re-authorized for `READ` on the space as it is for presence. Every string
+carries at most 512 characters and no control character, since the server
+writes report text into its log; `scopeKey` is a canonical scope key; and every
+count is a non-negative integer. A report that breaks one of these is answered
+as an unparseable message. The server records only the fields defined here,
+under the session and the principal it was opened as. A report is best-effort
+on the client: it is not sent to a server that does not advertise the
+capability or while the connection is down, and a refusal is not surfaced,
+since a lost report costs only the diagnostic. `SpaceSession.sendReport(report)`
+is the client library's entry point. It cuts an over-long string to fit, and
+does not send a report the server would still refuse, since an unparseable
+message is answered under no request id.
 
 ## Routed public-stage Mode A
 

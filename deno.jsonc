@@ -28,6 +28,7 @@
     "./packages/test-support",
     "./packages/schema-generator",
     "./packages/cf-harness",
+    "./packages/pattern-index",
     "./packages/llm",
     "./packages/memory",
     "./packages/navigation",

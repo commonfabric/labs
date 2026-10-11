@@ -2,15 +2,17 @@
  * Offering a new FabriChat room through a member's share inbox. Bob starts a
  * direct chat with Alice from her participant chip, whose click names her
  * profile, which points at her private inbox; the room is offered there, in
- * the envelope a share inbox takes, and a notice is queued for her all the
- * same. A request naming a profile other than the counterpart's is refused. Each person writes their own
- * profile here, so its label names them, as a Fabric profile's does.
+ * the envelope a share inbox takes, and she is added to its participants,
+ * with no notice queued for her. A request naming a profile other than the
+ * counterpart's is refused. Each person writes their own profile here, so its
+ * label names them, as a Fabric profile's does.
  */
 import {
   action,
   assert,
   type Cell,
   currentPrincipal,
+  equals,
   handler,
   isWellFormedDID,
   multiUserTest,
@@ -47,6 +49,8 @@ import {
   type ChatManagerNotice,
   type ChatManagerProfile,
   type ChatRequestOutcome,
+  type ChatRoomLink,
+  type ProfileCell,
 } from "./schemas.tsx";
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
@@ -146,6 +150,9 @@ function profileOf(profile: unknown): Cell<ChatManagerProfile>;
 function profileOf(profile: unknown): unknown {
   return profile;
 }
+
+/** A room, as the test reads it: a link, and its participants. */
+type HeldRoom = ChatRoomLink & { participants?: ProfileCell[] };
 
 /** Whether `value` is an origin written as its own canonical origin. */
 const isOrigin = (value: string): boolean => {
@@ -275,6 +282,12 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     setup.records.messages.key(0).key("authorProfile"),
   );
   const ownProfile = profileOf(profile);
+  const held = Writable.of<{ room?: Cell<HeldRoom> }>({});
+  const action_hold = action(() =>
+    held.key("room").set(
+      requests.key("d-alice").key("entry").key("room").resolveAsCell(),
+    )
+  );
 
   return {
     [TESTS]: [
@@ -310,14 +323,26 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         },
         trustedUi: startGesture,
       },
-      // The room is created, and a notice is queued for Alice as well.
+      // The room is created, and offered to Alice, so no notice is queued
+      // for her.
       {
         assertion: assert(() =>
           setup.aliceDid.get() !== "" && manager.rooms.length === 1 &&
           manager.rooms[0]?.counterpart === setup.aliceDid.get() &&
-          notices.get().length === 1 &&
-          notices.get()[0]?.recipient === setup.aliceDid.get()
+          notices.get().length === 0
         ),
+      },
+      // Bob added her to the room's participants, beside himself, without a
+      // step of her own.
+      { action: action_hold },
+      {
+        assertion: assert(() => {
+          const participants = held.key("room").get()?.get()?.participants ??
+            [];
+          return participants.length === 2 &&
+            participants.some((known) => equals(known, aliceProfile)) &&
+            participants.some((known) => equals(known, profile));
+        }),
       },
       { label: "bob-done" },
     ],

@@ -60,6 +60,20 @@ function installBrowserGlobals(): () => void {
       appendChild() {},
     }),
     createTreeWalker: () => ({}),
+    // The page publishes its deployment, as a toolshed with MEMORY_PUBLIC_URL
+    // and sharing on serves it.
+    querySelector: (selector: string) =>
+      selector === 'meta[name="cf-deployment"]'
+        ? {
+          getAttribute: (name: string) =>
+            name === "content"
+              ? JSON.stringify({
+                memoryUrl: "https://router.root-view.test",
+                experimental: { sharedMemoryConnection: true },
+              })
+              : null,
+        }
+        : null,
   });
   setGlobal("devicePixelRatio", 1);
   setGlobal("screen", { deviceXDPI: 1, logicalXDPI: 1 });
@@ -68,6 +82,7 @@ function installBrowserGlobals(): () => void {
     protocol: "http:",
     host: "localhost:8000",
     hostname: "localhost",
+    origin: "http://localhost:8000",
     href: "http://localhost:8000/common-knowledge",
   });
 
@@ -157,6 +172,60 @@ describe("XRootView", () => {
       expect(runs).toHaveLength(1);
     } finally {
       console.error = originalError;
+      restore();
+    }
+  });
+
+  it("passes the page's memory URL and flags to RuntimeInternals", async () => {
+    const restore = installBrowserGlobals();
+    const { RuntimeInternals } = await import("@commonfabric/lib-shell");
+    const originalCreate = RuntimeInternals.create;
+    const captured: {
+      apiUrl?: URL;
+      memoryUrl?: URL;
+      sharedMemoryConnection?: boolean;
+    }[] = [];
+    RuntimeInternals.create = ((options) => {
+      captured.push({
+        apiUrl: options.apiUrl,
+        memoryUrl: options.memoryUrl,
+        sharedMemoryConnection: options.experimental?.sharedMemoryConnection,
+      });
+      return Promise.resolve({
+        runtime: () => ({
+          on: () => {},
+          off: () => {},
+          listEventAttention: () => Promise.resolve([]),
+        }),
+        dispose: () => Promise.resolve(),
+      } as unknown as Awaited<ReturnType<typeof RuntimeInternals.create>>);
+    }) as typeof RuntimeInternals.create;
+
+    try {
+      const { XRootView } = await import("../src/views/RootView.ts");
+      const view = new XRootView();
+      view.app = {
+        ...view.app,
+        identity: await Identity.fromPassphrase("root-view-memory-url-test"),
+      };
+      const task = view.accessForTestingOnly.rt;
+      task.run([view.app]);
+      await task.taskComplete;
+      expect(
+        captured.map(({ apiUrl, memoryUrl, sharedMemoryConnection }) => [
+          apiUrl?.href,
+          memoryUrl?.href,
+          sharedMemoryConnection,
+        ]),
+      ).toEqual([[
+        "http://localhost:8000/",
+        "https://router.root-view.test/",
+        // Adopted from the page: no define is set in a test run.
+        true,
+      ]]);
+    } finally {
+      RuntimeInternals.create = originalCreate;
+      delete (globalThis as { commonfabric?: unknown }).commonfabric;
       restore();
     }
   });

@@ -6,13 +6,14 @@ export {
 export { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 export { lookupSchemaDocument } from "./schema-registry.ts";
 export { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
-export { Runtime } from "./runtime.ts";
+export { FOREIGN_HOST_LIMIT, Runtime } from "./runtime.ts";
 export { ensureSESLockdown } from "./sandbox/ses-runtime.ts";
 export {
   fabricAuthorityMatchesSpaceHost,
   type FabricSpaceHostOptions,
   isLoopbackHostname,
   normalizeSpaceHost,
+  readMemoryUrl,
   spaceHostFromFabricAuthority,
   type SpaceHostRefusalReason,
   type SpaceHostRegistration,
@@ -35,12 +36,10 @@ export {
   ADOPT_SERVER_FLAGS_ENV,
   type BrowserWorkerPresetParams,
   type CfcPosture,
-  type DeployedClientExperimentalParams,
   type EnvReader,
   EXPERIMENTAL_ENV_VARS,
   EXPERIMENTAL_FLAG_AUTHORITY,
   type ExperimentalFlagAuthority,
-  experimentalOptionsForDeployedClient,
   experimentalOptionsFromEnv,
   MAX_ENFORCEMENT_CFC_OPTIONS,
   MAX_ENFORCEMENT_SINK_CEILINGS,
@@ -57,6 +56,12 @@ export {
   type UnitTestPresetParams,
   withServerExecutionDefault,
 } from "./runtime-presets.ts";
+export {
+  type DeployedClientParams,
+  type DeployedClientSettings,
+  memoryHostNote,
+  settingsForDeployedClient,
+} from "./deployment-meta.ts";
 export type {
   UnsafeHostTrust,
   UnsafeHostTrustOptions,

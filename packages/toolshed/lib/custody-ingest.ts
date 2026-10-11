@@ -219,14 +219,16 @@ export const custodyIngest = {
   },
 
   /**
-   * Durably replaces the cell's value with `value` when the cell is empty or
-   * `supersedes` says `value` is newer than what it holds, minting the mark
-   * from `value`; otherwise writes nothing and mints nothing, so a stale
-   * arrival neither changes the cell nor wakes anything watching it. The
-   * comparison runs inside the retry, against the value the transaction
-   * commits over. Returns whether `value` was written. For a cell whose value
-   * is never `undefined`, which is what lets an unwritten edit be told apart
-   * from a written one.
+   * Durably replaces the cell's value with `value`, minting the mark from it,
+   * when the cell is empty or when `supersedes(current)` returns `true`,
+   * meaning `value` is newer than the `current` value the cell holds. An
+   * empty cell is written without consulting `supersedes`. Otherwise nothing
+   * is written and no mark is minted, so a stale arrival neither changes the
+   * cell nor wakes anything watching it. The comparison runs inside the
+   * retry, against the value the transaction commits over. Returns whether
+   * `value` was written. For a cell whose value is never `undefined`: the
+   * mutator returns `undefined` to mean it wrote nothing, which a cell that
+   * can hold `undefined` could not tell apart from a write.
    */
   async replaceIfNewer<T extends object>(
     cell: Cell<T>,

@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-10-07\
-Revision: `84dad4e7a9`
+Last verified: 2026-10-09\
+Revision: `06d187bf3a`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -1061,19 +1061,24 @@ The current package provides:
   `CF_HARNESS_PATTERN_INDEX_URL` environment fallback), which needs the fabric
   session configuration: index requests are signed with the session identity
   under the CF1 first-party scheme, and an indexed pattern runs in the session's
-  space. It adds the `search_patterns` tool, which finds published patterns by
-  hashtag or free text and reports each hit's kind, evidence quality,
-  description, hashtags, usage signals, declared argument and result shapes, and
-  the `cf:pattern:<patternId>` import specifier that composes it. The shared
-  client resolves same-owner `priorPatternId` chains from the discoverable
-  catalog and places the final generation once at the earliest matching rank,
-  including replacements outside the original result limit. Penalized final
-  generations are withheld; branches or cycles fail the affected search.
-  Exact-ID reads and existing imports keep their requested generation. Every
-  nonempty search refreshes catalog membership; immutable metadata is cached per
-  client. Index-supplied inherited signals retain their predecessor, publication
-  cutoff, counts, and score, so a proven tier need not mean that the current
-  generation has run. See
+  space. The signed client, successor resolution, search request shaping,
+  feedback vocabulary and recorder, and safe status rule live in
+  [`@commonfabric/pattern-index`](../../pattern-index/README.md).
+  [`src/pattern-index/factory.ts`](../src/pattern-index/factory.ts) loads the
+  configured harness identity. Composition, the ledger, and publication gates
+  belong to cf-harness. It adds the `search_patterns` tool, which finds
+  published patterns by hashtag or free text and reports each hit's kind,
+  evidence quality, description, hashtags, usage signals, declared argument and
+  result shapes, and the `cf:pattern:<patternId>` import specifier that composes
+  it. The shared client resolves same-owner `priorPatternId` chains from the
+  discoverable catalog and places the final generation once at the earliest
+  matching rank, including replacements outside the original result limit.
+  Penalized final generations are withheld; branches or cycles fail the affected
+  search. Exact-ID reads and existing imports keep their requested generation.
+  Every nonempty search refreshes catalog membership; immutable metadata is
+  cached per client. Index-supplied inherited signals retain their predecessor,
+  publication cutoff, counts, and score, so a proven tier need not mean that the
+  current generation has run. See
   [Pattern generations in search](../README.md#pattern-generations-in-search).
   Free-text search removes stopwords, matches whole words plus light suffix
   variants, and is disjunctive: one content term may return a hit, so extra
@@ -1155,10 +1160,9 @@ The current package provides:
   failure code, because reuse travels through the index rather than through the
   parent. This is the division of labour a data question wants: the root
   orchestrates and never pays for pattern syntax or reads the data, and the
-  child computes over references it cannot read out. It runs on its own turn
-  budget of 24 rather than the default subagent cap of 8, since each
-  compile-error iteration costs a turn, and it carries a return contract — a
-  discriminated union of
+  child computes over references it cannot read out. It runs on the default
+  subagent budget of 32 turns, which a delegation expecting a long compile-error
+  loop may raise, and it carries a return contract — a discriminated union of
   `{ ok: true, resultRef, describes, hashtags?, verificationRef?, verification?: "not-checked" }`
   and `{ ok: false, code, detail?, verificationRef? }` — which is the profile's
   own rather than a default: a `pattern-author` delegation that declares a

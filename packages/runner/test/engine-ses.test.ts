@@ -533,6 +533,40 @@ describe("Engine in SES mode", () => {
     );
   });
 
+  it("throws when an exported function assigns an export after its module loaded", async () => {
+    // Stored source may still export a `let`: recompiling stored bytes only
+    // warns about one. Left `undefined` when the module loads, such an export
+    // would take one later write, and every caller after the first would read
+    // the first caller's value.
+
+    const source = [
+      "export let first: string | undefined;",
+      "export function remember(value: string): string {",
+      "  if (first === undefined) first = value;",
+      "  return first;",
+      "}",
+      "export default remember;",
+    ].join("\n");
+    const { modules, entryIdentity } = await engine
+      .compileResolvedToRecordGraph(
+        [{ name: "/main.ts", contents: source }],
+        "/main.ts",
+      );
+    const { main } = await engine.evaluateCachedModules(
+      modules.map((module) => ({
+        identity: module.identity,
+        filename: module.filename,
+        code: module.js,
+        imports: module.imports,
+      })),
+      entryIdentity,
+    );
+    const remember = main?.remember as (value: string) => string;
+
+    expect(() => remember("alice")).toThrow(/after the module/);
+    expect(() => remember("bob")).toThrow(/after the module/);
+  });
+
   it("rejects top-level IIFEs that try to hide mutable state", async () => {
     const program: RuntimeProgram = {
       main: "/main.ts",

@@ -4,8 +4,8 @@ import type {
   PatternIndexListedPattern,
   PatternIndexPattern,
   PatternIndexSearchResult,
-} from "../../src/pattern-index/client.ts";
-import { resolvePatternIndexSuccessors } from "../../src/pattern-index/successors.ts";
+} from "@commonfabric/pattern-index/client";
+import { resolvePatternIndexSuccessors } from "@commonfabric/pattern-index/successors";
 
 const pattern = (
   patternId: string,

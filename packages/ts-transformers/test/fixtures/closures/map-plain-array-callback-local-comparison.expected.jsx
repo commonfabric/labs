@@ -29,14 +29,14 @@ const __cfLift_1 = __cfHelpers.lift<{
                 type: "string"
             }
         },
-        todayDate: {
-            type: "string"
-        },
         colIdx: {
             type: "number"
+        },
+        todayDate: {
+            type: "string"
         }
     },
-    required: ["weekDates", "todayDate", "colIdx"]
+    required: ["weekDates", "colIdx", "todayDate"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);

@@ -57,34 +57,4 @@ describe("ingest-push.routes", () => {
     });
     expect(res.status).toBe(413);
   });
-
-  it("returns 401 for an unsigned `gmail-bind` request", async () => {
-    const res = await app.request(
-      `/api/spaces/${OTHER_SPACE}/ingest-channels/gmail-bind`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Forwarded-For": "10.9.0.1",
-        },
-        body: JSON.stringify({ id: "ing_x", accessToken: "t", requestId: "r" }),
-      },
-    );
-    expect(res.status).toBe(401);
-  });
-
-  it("returns 401 for an unsigned `gmail-unbind` request", async () => {
-    const res = await app.request(
-      `/api/spaces/${OTHER_SPACE}/ingest-channels/gmail-unbind`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Forwarded-For": "10.9.0.2",
-        },
-        body: JSON.stringify({ id: "ing_x", requestId: "r" }),
-      },
-    );
-    expect(res.status).toBe(401);
-  });
 });

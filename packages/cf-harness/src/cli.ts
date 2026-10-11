@@ -43,6 +43,7 @@ import {
   resolveHarnessRunPaths,
 } from "./artifacts.ts";
 import { httpOriginOf } from "./tools/handle-values.ts";
+import { errorMessage } from "./error-message.ts";
 import {
   createCliPromptSlotBinding,
   type PromptSlotRole,
@@ -108,6 +109,7 @@ export type { CfHarnessHostMountConfig, CfHarnessHostMountMode };
 import {
   CfHarnessPromptLoop,
   type CreateHarnessPromptLoopOptions,
+  DEFAULT_MAX_MODEL_TURNS,
   type HarnessPromptLoopResult,
 } from "./prompt-loop.ts";
 import { ORIENTATION_GUIDANCE } from "./orientation.ts";
@@ -181,7 +183,6 @@ import {
   harnessResumeRefusal,
 } from "./control-errors.ts";
 
-const DEFAULT_MAX_MODEL_TURNS = 8;
 const DEFAULT_ARTIFACT_DIRNAME = ".cf-harness-artifacts";
 const CLI_OUTPUT_MODES = ["operator", "batch"] as const;
 const CLI_STRING_FLAGS = [
@@ -687,7 +688,7 @@ Options:
   --no-pattern-index-publish    Read the pattern index without contributing to it: a
                                 pattern the model authors and runs is not published back
   --host-mount <spec>           Extra host bind mount (repeatable: name=<id>,source=<host>,target=<sandbox>,mode=readonly|writable)
-  --max-model-turns <n>         Maximum model turns before aborting
+  --max-model-turns <n>         Maximum model turns before aborting (default 32)
   --print-transcript            Print the final transcript JSON after the response
   --describe-capabilities       Print machine-readable capability JSON and exit
   --help                        Show this help text
@@ -2417,11 +2418,11 @@ const appendStructuredResultInstructions = (
     allowedToolIds === undefined || allowedToolIds.includes("submit_result")
   ) {
     lines.push(
-      "- Before finishing, call submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct.",
+      "- Finish by calling submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct; an accepted result ends the run.",
     );
   }
   lines.push(
-    `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place when an available tool can write it.`,
+    `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place when an available tool can write it; the run then still ends on your final response.`,
     "- The harness validates that file against the configured structured-result schema after the run.",
     "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
     "- Object schemas are closed by default: include only properties the schema declares unless it explicitly allows additional properties.",
@@ -2595,13 +2596,17 @@ export const validateCfHarnessStructuredResult = async (
   let text: string;
   try {
     text = await options.readTextFile(options.config.path);
-  } catch {
+  } catch (error) {
+    // `submit_result` writes the file only for a value it accepted, so an
+    // absent file is a run that returned no result.
     return {
       type: "cf-harness.structured-result-validation",
       status: "invalid",
       schema_digest: schemaDigest,
       result_path: options.config.path,
-      validation_error: "structured result file could not be read",
+      validation_error: error instanceof Deno.errors.NotFound
+        ? "no structured result was submitted"
+        : "structured result file could not be read",
     };
   }
   let value: unknown;
@@ -2626,13 +2631,15 @@ export const validateCfHarnessStructuredResult = async (
       schema: options.config.schema,
       value,
     });
-  } catch {
+  } catch (error) {
     return {
       type: "cf-harness.structured-result-validation",
       status: "invalid",
       schema_digest: schemaDigest,
       result_path: options.config.path,
-      validation_error: "structured result did not match the schema",
+      validation_error: `structured result did not match the schema: ${
+        errorMessage(error)
+      }`,
     };
   }
   return {

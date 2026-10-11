@@ -11,8 +11,15 @@ import env from "@/env.ts";
 import { memoryEngineStoreUrl } from "@/routes/storage/memory-store-url.ts";
 import { hostsSpaceInStore } from "@/lib/space-authority.ts";
 import { ingestServiceSpace } from "@/routes/ingest/service-space.ts";
-import { fetchGmailMailbox } from "@/routes/ingest-push/gmail-push.utils.ts";
-import { processGmailBind, processGmailUnbind } from "./gmail-binding.utils.ts";
+import {
+  fetchGmailMailbox,
+  verifyGmailIdToken,
+} from "@/routes/ingest-push/gmail-push.utils.ts";
+import {
+  gmailOAuthClientIds,
+  gmailPushEnabled,
+  googleSigningKeys,
+} from "@/routes/ingest-push/gmail-push.config.ts";
 import {
   type ControlDeps,
   processList,
@@ -21,8 +28,6 @@ import {
   processRotate,
 } from "./ingest-channels.utils.ts";
 import type {
-  GmailBindRoute,
-  GmailUnbindRoute,
   ListOwnRoute,
   ListRoute,
   MintRoute,
@@ -45,6 +50,17 @@ const deps = (logger: ControlDeps["logger"]): ControlDeps => ({
   hostsSpace,
   aclMode: env.MEMORY_ACL_MODE,
   apiUrl: env.API_URL,
+  // Absent where Gmail push is off: a mailbox nothing will ever deliver to is
+  // not worth binding, and the mint says so.
+  ...(gmailPushEnabled
+    ? {
+      gmail: {
+        fetchMailbox: fetchGmailMailbox,
+        verifyIdToken: (idToken: string) =>
+          verifyGmailIdToken(googleSigningKeys, gmailOAuthClientIds, idToken),
+      },
+    }
+    : {}),
   logger,
 });
 
@@ -100,30 +116,6 @@ export const listOwn: AppRouteHandler<ListOwnRoute> = async (c) => {
   const callerDid = c.get("verifiedUserDid");
   if (!callerDid) return c.json({ error: "Unauthorized" }, 401);
   const result = await processList(deps(c.get("logger")), callerDid, {});
-  if (result.status === 200) return c.json(result.body, 200);
-  return c.json(result.body, result.status);
-};
-
-export const gmailBind: AppRouteHandler<GmailBindRoute> = async (c) => {
-  const callerDid = c.get("verifiedUserDid");
-  if (!callerDid) return c.json({ error: "Unauthorized" }, 401);
-  const result = await processGmailBind(
-    { ...deps(c.get("logger")), fetchMailbox: fetchGmailMailbox },
-    callerDid,
-    { ...c.req.valid("json"), space: c.req.valid("param").space },
-  );
-  if (result.status === 200) return c.json(result.body, 200);
-  return c.json(result.body, result.status);
-};
-
-export const gmailUnbind: AppRouteHandler<GmailUnbindRoute> = async (c) => {
-  const callerDid = c.get("verifiedUserDid");
-  if (!callerDid) return c.json({ error: "Unauthorized" }, 401);
-  const result = await processGmailUnbind(
-    deps(c.get("logger")),
-    callerDid,
-    { ...c.req.valid("json"), space: c.req.valid("param").space },
-  );
   if (result.status === 200) return c.json(result.body, 200);
   return c.json(result.body, result.status);
 };

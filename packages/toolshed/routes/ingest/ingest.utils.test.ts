@@ -83,13 +83,25 @@ describe("ingest journal sink", () => {
     space,
     causePrefix: "location",
     installId: "install-1",
-    sink: "journal",
+    kind: "device",
     secretHash: "unused",
     createdBy: space,
     createdAt: "2026-07-01T00:00:00.000Z",
     enabled: true,
     ...overrides,
   });
+
+  /** A gmail channel whose target is the cell with cause `gmail-push`. */
+  const latestReg = (): IngestRegistration =>
+    reg({
+      causePrefix: undefined,
+      kind: "gmail",
+      target: {
+        space,
+        id: runtime.getCell(space, "gmail-push").getAsNormalizedFullLink().id,
+        path: [],
+      },
+    });
 
   it("durably appends records to a partition cell and mints the mark", async () => {
     const r = reg();
@@ -140,8 +152,17 @@ describe("ingest journal sink", () => {
     expect(cell.get()).toBeUndefined();
   });
 
+  it("a registration stored before kinds existed reads as a device channel", async () => {
+    const r = reg({ id: "ing_legacy" });
+    const { kind: _kind, ...legacy } = r;
+    await saveRegistration(runtime, space, legacy as IngestRegistration);
+
+    expect((await getRegistration(runtime, space, "ing_legacy"))?.kind)
+      .toBe("device");
+  });
+
   it("writeLatest: fills an empty cell, replaces a superseded record, and mints the mark", async () => {
-    const r = reg({ causePrefix: "gmail-push", sink: "latest" });
+    const r = latestReg();
     const newer = (
       current: Record<string, unknown>,
       next: Record<string, unknown>,
@@ -160,7 +181,7 @@ describe("ingest journal sink", () => {
   });
 
   it("writeLatest: keeps the record already there when the new one does not supersede it", async () => {
-    const r = reg({ causePrefix: "gmail-push", sink: "latest" });
+    const r = latestReg();
     const newer = (
       current: Record<string, unknown>,
       next: Record<string, unknown>,
@@ -715,13 +736,19 @@ describe("ingest journal sink", () => {
     expect(disabled.body).toEqual(unknown.body);
   });
 
-  it("processIngest: wrong-sink channel -> identical 401, no write", async () => {
+  it("processIngest: wrong-kind channel -> identical 401, no write", async () => {
     const { secret, r } = await savedReg({ id: "ing_stream" });
-    // Force a non-journal sink at rest (a future stream channel).
+    // A gmail channel's token, which nothing uses, POSTed to the data plane.
     await saveRegistration(runtime, space, {
       ...r,
-      sink: "stream",
-    } as unknown as IngestRegistration);
+      kind: "gmail",
+      causePrefix: undefined,
+      target: {
+        space,
+        id: runtime.getCell(space, "gmail-push").getAsNormalizedFullLink().id,
+        path: [],
+      },
+    });
     const res = await call("ing_stream", secret, {
       partition: "2026-07-01",
       records: [{ x: 1 }],

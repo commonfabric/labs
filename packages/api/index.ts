@@ -237,9 +237,25 @@ export type AsCellEntry =
   };
 
 export declare const SCOPE_BRAND: unique symbol;
-export type Scoped<T, Scope extends SchemaScope> = T & {
-  readonly [SCOPE_BRAND]?: Scope;
-};
+/**
+ * The brand `Scoped` intersects `T` with: the scope, beside the `null` and
+ * `undefined` `T` holds, which an intersection with the brand alone would
+ * reduce to `never`. It distributes over `T`'s members, so the intersection
+ * keeps them, and while `T` holds a type parameter it stays one deferred type,
+ * which leaves `Scoped<T, Scope>` one intersection rather than a union of them.
+ */
+type ScopeTag<T, Scope extends SchemaScope> = T extends unknown
+  ? { readonly [SCOPE_BRAND]?: Scope } | Extract<T, null | undefined>
+  : never;
+/**
+ * `T` in the scope `Scope`: `T` branded with the scope, except for `null` and
+ * `undefined`, which it holds as they are. So `PerUser<string | null>` is
+ * `(string & brand) | null`, and `PerUser<string>` is `string & brand`. The
+ * type keeps the alias it is reached by, `PerUser<…>` or an author's own
+ * `type Box<T> = PerUser<…>`, which is how a reader of a type finds the
+ * declaration it came from.
+ */
+export type Scoped<T, Scope extends SchemaScope> = T & ScopeTag<T, Scope>;
 export type PerSpace<T> = Scoped<T, "space">;
 export type PerUser<T> = Scoped<T, "user">;
 export type PerSession<T> = Scoped<T, "session">;
@@ -1328,7 +1344,9 @@ export interface IOpaqueCell<T>
     IDerivable<T>,
     IOpaquable<T> {}
 
-export interface OpaqueCell<T>
+// `out` is the variance the checker measures for this interface, as it is for
+// `Cell`, and is declared for the same reason.
+export interface OpaqueCell<out T>
   extends BrandedCell<T, "opaque">, IOpaqueCell<T> {}
 
 export declare const OpaqueCell: CellTypeConstructor<AsOpaqueCell>;
@@ -1355,7 +1373,12 @@ export interface ICell<T>
     IDerivable<T>,
     IResolvable<T, Cell<T>> {}
 
-export interface Cell<T = unknown> extends BrandedCell<T, "cell">, ICell<T> {}
+// `out` is the variance the checker measures for this interface, its methods
+// being compared bivariantly. Declared, it is read; undeclared, the first
+// expression of a compile that relates two cells has the checker measure it,
+// by comparing two instantiations of the interface member by member.
+export interface Cell<out T = unknown>
+  extends BrandedCell<T, "cell">, ICell<T> {}
 
 export declare const Cell: CellTypeConstructor<AsCell>;
 
@@ -1606,11 +1629,14 @@ export type FactoryInput<T> =
  * - UnwrapCell<any> = any
  * - UnwrapCell<unknown> = unknown (preserves unknown)
  */
+// A single conditional whose check type is `T` is a form the checker can relate
+// between two instantiations, and `OpaqueCell<out T>` depends on that: its
+// `key()` returns this type, and the declared variance is validated through
+// it. `any` needs no branch of its own. A conditional type checked on `any`
+// evaluates to the union of its branches, which here is `any`.
 export type UnwrapCell<T> =
-  // Preserve any
-  0 extends (1 & T) ? T
-    // Unwrap AnyBrandedCell
-    : T extends AnyBrandedCell<infer S> ? UnwrapCell<S>
+  // Unwrap AnyBrandedCell
+  T extends AnyBrandedCell<infer S> ? UnwrapCell<S>
     // Otherwise return as-is
     : T;
 

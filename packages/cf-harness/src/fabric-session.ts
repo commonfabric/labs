@@ -164,11 +164,18 @@ async () => {
   }
   try {
     for (const [space, host] of Object.entries(foreignSpaces)) {
-      if (
-        !isDIDKey(space) || space === pieces.getSpace() ||
-        !pieces.runtime.registerSpaceHost(space, host)
-      ) {
+      if (!isDIDKey(space) || space === pieces.getSpace()) {
         throw new Error("Foreign space host route was refused by the session");
+      }
+      // Against a deployment that publishes a memory URL, this first reads
+      // where the foreign host serves Memory; a host whose memory host
+      // cannot be learned is refused as `foreign-host-unread`.
+      const registration = await pieces.runtime.resolveSpaceHost(space, host);
+      if (!registration.accepted) {
+        throw new Error(
+          "Foreign space host route was refused by the session " +
+            `(${registration.reason})`,
+        );
       }
     }
   } catch (error) {

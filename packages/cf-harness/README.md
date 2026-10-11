@@ -1834,6 +1834,15 @@ somewhere, attached metadata accompanies it, and trusted-side code resolves it.
 They deliberately remain separate until experience supplies a concrete reason to
 unify them.
 
+### Pattern-index client
+
+The shared signed client, successor resolution, search-body composition, and
+feedback vocabulary live in
+[`@commonfabric/pattern-index`](../pattern-index/README.md). Harness
+configuration and identity loading live in `src/pattern-index/factory.ts`;
+composition, publication gates, the session ledger, probes, retrieval scoring,
+and tools remain in this package.
+
 ### Seeding the pattern index
 
 The corpus has two kinds of entry, with different purposes and evidence:
@@ -2151,17 +2160,22 @@ Unpaired work, including a tool call still running when the cancel lands, and
 process interruptions do not advance the checkpoint; their evidence remains in
 the audit trail.
 
-`finalizeOnTurnLimit` reserves the last root model turn for a partial answer
-with harness and native tools disabled. It warns two turns beforehand and
-records `budget_finalized` with a `gave-up` task outcome. Provider failures,
-blank answers, and attempted final tool calls remain failures. Root budgets
-include this final call; provider retries and child budgets are separate.
-Generated budget notices remain in events and durable run artifacts, but are
-excluded from returned transcripts and interactive checkpoints so subsequent
-user turns receive a fresh budget. They also state their turn-local scope for
-explicit artifact resume and opaque provider context that may retain them.
-`CF_HARNESS_CHAT_ARTIFACT_ROOT` supplies the Loom host's default durable run
-root, including for restored sessions without their own artifact root.
+Every run gets 32 root model turns unless its host names another budget. With a
+budget of three turns or more, two turns before the last the host tells the
+model how many remain, so it can finish rather than be cut off; a subagent's run
+is told the same against its own budget. A run that has `submit_result` is told
+to submit on the next turn; acceptance ends the run. `finalizeOnTurnLimit`
+instead reserves the last root model turn for a partial answer with harness and
+native tools disabled, warning in those terms, and records `budget_finalized`
+with a `gave-up` task outcome. Provider failures, blank answers, and attempted
+final tool calls remain failures. Root budgets include this final call; provider
+retries and child budgets are separate. Generated budget notices remain in
+events and durable run artifacts, but are excluded from returned transcripts and
+interactive checkpoints so subsequent user turns receive a fresh budget. They
+also state their turn-local scope for explicit artifact resume and opaque
+provider context that may retain them. `CF_HARNESS_CHAT_ARTIFACT_ROOT` supplies
+the Loom host's default durable run root, including for restored sessions
+without their own artifact root.
 
 Successful `assign_slug` calls also retain host-owned naming receipts: a slug
 and the piece's complete reference, including its space. A completed turn that
@@ -2247,9 +2261,16 @@ references with a JSON map from space DIDs to HTTP(S) origins, for example
 queries, and fragments are refused. The default admits no foreign spaces; `{}`
 explicitly clears an environment default. The session registers these host
 routes before returning to its callers and refuses a route that conflicts with
-its own space or an established runtime route. The same admission predicate
-governs input-cell minting, `describe_handle`, and `run_pattern` link inputs.
-Named piece attachments continue to resolve in the session's own space.
+its own space or an established runtime route. Against a deployment that
+publishes a memory URL, such as one behind a memory router, a route to the
+deployment's own API origin or memory URL is the default route, and a route to
+another deployment's origin is registered once the session has read where that
+deployment serves Memory, from its `/api/meta`: a route whose memory host cannot
+be read is refused as `foreign-host-unread`, and one past the 64 origins a
+runtime keeps as `foreign-host-limit`. A refused route makes the session fail to
+start, naming the reason. The same admission predicate governs input-cell
+minting, `describe_handle`, and `run_pattern` link inputs. Named piece
+attachments continue to resolve in the session's own space.
 
 This is trusted startup configuration, unavailable to model tool arguments and
 console task bodies. Reads use the session's configured identity and existing
@@ -2814,9 +2835,12 @@ A run configured with a schema is offered `submit_result`, and its system prompt
 asks for the result through it: the model passes the whole value as `result`,
 the harness validates it against the schema, and the host writes it to the
 structured-result path. A refused value comes back as `invalid_result` with the
-reason, and the model corrects it and submits again; a later valid submission
-replaces an earlier one. This is the way that works under every enforcement mode
-and prompt-slot role — under `enforce-strict`, a run whose prompt is bound as
+reason, and the model corrects it and submits again. An accepted value is the
+run's return: the run completes after the turn that submitted it, without asking
+the model for another, and the words the model wrote beside the call, if any,
+are its final answer. A later valid submission in that same turn replaces an
+earlier one. This is the way that works under every enforcement mode and
+prompt-slot role — under `enforce-strict`, a run whose prompt is bound as
 `context` or `quote` is refused `bash`, `edit_file`, and `write_file`, and so
 cannot write the file itself. A run that does hold such a tool may still write
 the file directly; both ways end at the same path. With `--allow-tool`, name
@@ -2835,7 +2859,9 @@ provided inline with `--structured-result-schema` or read from
 `--structured-result-schema-file`. After the run, cf-harness reads the sidecar,
 validates it with the same JSON Schema validation primitives used by subagent
 `returnSchema`, records `structured_result` in the batch metadata, and exits
-nonzero when the file is missing, invalid JSON, or schema-invalid.
+nonzero when the file is missing, invalid JSON, or schema-invalid. Its
+`validation_error` says which: a missing file reads as no structured result
+submitted, and a schema-invalid one names the field and the reason.
 
 When constraining the parent tool surface to `delegate_task`, authorize the
 child profile separately so the delegation policy transition is explicit:
@@ -3187,12 +3213,10 @@ search hit is a component to wire, not a specification to rebuild: importing it
 costs the import line, and rewriting it from its description publishes a second
 pattern doing the same job under a different id.
 
-The profile carries its own turn budget of 24, in place of the default subagent
-cap of 8. Authoring is a write, compile-error, fix loop and each iteration costs
-a turn; at the default the loop runs out before a non-trivial pattern compiles,
-and a child that ran out of turns has nothing to return. A delegation may still
-name its own `maxModelTurns`, bounded by the same maximum of 64 every profile
-is.
+The profile runs on the default subagent budget of 32 turns. Authoring is a
+write, compile-error, fix loop and each iteration costs a turn, so a delegation
+expecting a long loop may name its own `maxModelTurns`, bounded by the same
+maximum of 64 every profile is.
 
 The profile also carries a return contract, and it is the profile's rather than
 a default: a `pattern-author` delegation that declares a `returnSchema` of its

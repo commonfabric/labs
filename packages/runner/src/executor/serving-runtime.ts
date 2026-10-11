@@ -8,7 +8,12 @@
 
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
-import { type ExperimentalOptions, Runtime } from "../runtime.ts";
+import {
+  type ExperimentalOptions,
+  type ModuleByteCache,
+  Runtime,
+  type RuntimeFetch,
+} from "../runtime.ts";
 import type { ExecutorHostOptions } from "./host.ts";
 import { LoopbackStorageManager } from "./loopback-storage.ts";
 
@@ -34,10 +39,28 @@ export type ServingRuntimeFactoryOptions = {
   apiUrl: URL;
 
   /**
+   * The outbound `fetch` each serving runtime uses for its source loads and
+   * network builtins. Toolshed passes one that sends requests addressed to
+   * `apiUrl`, its public origin, to its own listener (`API_INTERNAL_URL`);
+   * `apiUrl` itself stays the public origin, since it is also what the
+   * runtime records as a space's host and compares origins against. Unset,
+   * the platform fetch.
+   */
+  fetch?: RuntimeFetch;
+
+  /**
    * Experimental flags for the serving runtimes, with
    * {@link SERVING_RUNTIME_EXPERIMENTAL} applied on top.
    */
   experimental?: ExperimentalOptions;
+
+  /**
+   * A cache of compiled module bytes every serving runtime the factory builds
+   * shares, so the root pattern a space's activation compiles is transformed
+   * and emitted once per process rather than once per space. Absent, each
+   * runtime compiles from its space's storage closure alone.
+   */
+  moduleByteCache?: ModuleByteCache;
 
   /**
    * Called with each serving runtime's storage manager before the runtime
@@ -75,6 +98,7 @@ export function servingRuntimeFactory(
     const release = options.prepareStorageManager?.(storageManager, space);
     const runtime = new Runtime({
       apiUrl: options.apiUrl,
+      ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
       storageManager,
       // The SpaceServer's own runtime (serving-loop.md §3): never the
       // speculation-overlay default. Its factory-time loads commit through
@@ -85,6 +109,9 @@ export function servingRuntimeFactory(
         ...options.experimental,
         ...SERVING_RUNTIME_EXPERIMENTAL,
       },
+      ...(options.moduleByteCache === undefined
+        ? {}
+        : { moduleByteCache: options.moduleByteCache }),
     });
     return Promise.resolve({
       runtime,

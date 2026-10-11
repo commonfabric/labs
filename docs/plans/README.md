@@ -28,6 +28,18 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
   subtrees, graph-aware policy queries, and a reader-first stored-format migration
   to bound the cost of staged reference diamonds.
+- [Release gates without an integrity union](cfc-release-gate-integrity.md)
+  keeps one consumed value's evidence from releasing another value's clause:
+  the write, sink and display gates run value-intrinsic rules at each location
+  an access consumed and the other rules over the join (§5.3, §4.6.3). What
+  remains is a specs ruling on the join within one location and the display's
+  fit of a cell's stored label.
+- [Input requirements on an endorsed computation's arguments](cfc-argument-input-requirements.md)
+  refuses a stand-in fed to code a rule endorses, by checking the integrity
+  each argument declares against the reads made through it. The declaration is
+  taken from the code's own module, not the graph's data, so a rule that guards
+  on the identity rests on it. It needs a narrow specs ruling first, and it
+  parks a per-item threshold drawn from a policy key.
 
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
   the piece the shuffle does not yet have: a shuffle inside this repository's
@@ -126,6 +138,11 @@ a record: archive it to `docs/history/plans/` following the procedure in
   link schema and the module wrapper, and triggers the cold-start repairs on a
   structural mismatch instead of the missing marker. It names putting the
   owner into a stream's address as the follow-up it is written toward.
+- [Cutting the resume pre-sync's cost](resume-presync-cost.md) removes what
+  the pre-sync repeats or does not need: a child start re-planning the
+  subtree its parent named, every plan's inputs cell re-inlining its
+  schemas, a cross-space pass that materializes every plan to find a link,
+  and a planning loop that never yields to read the answers it asked for.
 - [Pre-syncing from node plans](presync-from-node-plans.md) makes one
   derivation per pattern node serve both instantiation and the pre-sync, so a
   resume and a fresh start name exactly what each lift, handler, builtin, and
@@ -136,10 +153,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   that same document re-triggers it, and it writes again without end because
   another session is doing the same from the other side. Detection keyed per
   `(action, document)` on the self-referential, foreign-triggered, value-changing
-  write; capped exponential backoff on the re-run; a counted loud line and a
-  scheduler stat; and a two-session harness that trips the loop on purpose. The
+  write; capped exponential backoff on the re-run; a counted loud line, a
+  scheduler stat, and trips and clears reported over the memory session to the
+  health route beside the commit rates; and a two-session harness that trips
+  the loop on purpose. The
   backoff Topic 911 waits for, and the first of Topic 913's three guardrails.
-  Ships behind an experimental flag.
+  Always on, in every runtime.
 - [Memory `apply-op`](memory-apply-op.md) sequences the editor-neutral
   collaborative-field substrate, the first CodeMirror codec and editor
   integration, and the checkpoints and review gates required before a future
@@ -206,8 +225,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   one space's revision history after a write storm: materialize a `set` at
   every selected head under one `system` compaction commit, keep every head's
   address but the ACL document's, which records the compaction, drop the
-  rows behind it, hollow the payloads of commits nothing
-  references outside a retained window while keeping every commit's identity,
+  rows behind it, hollow every commit payload outside a retained window
+  except the genesis receipt's while keeping every commit's identity,
   and write the result out with `VACUUM INTO`. Options for what compaction
   means and what each breaks, the flags, the safety and rollback recipe for
   Estuary, and the server change that goes first because it keeps a future

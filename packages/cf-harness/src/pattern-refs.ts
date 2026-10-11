@@ -17,8 +17,10 @@
  * rather than leaving it to proceed without what the caller attached.
  */
 
-import type { PatternIndexClient } from "./pattern-index/client.ts";
-import { PatternIndexError } from "./pattern-index/client.ts";
+import {
+  type PatternIndexClient,
+  PatternIndexError,
+} from "@commonfabric/pattern-index/client";
 import {
   patternIndexDeclaredType,
   patternIndexImportHint,

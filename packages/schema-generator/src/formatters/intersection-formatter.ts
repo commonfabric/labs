@@ -11,6 +11,7 @@ import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import { cloneSchemaDefinition, getNativeTypeSchema } from "../type-utils.ts";
 import { isCellType } from "../typescript/cell-brand.ts";
+import { isScopeBrandMember } from "../typescript/scope-brand.ts";
 import { isCfcCarrier } from "./common-fabric-formatter.ts";
 
 const logger = getLogger("schema-generator.intersection");
@@ -55,11 +56,14 @@ export class IntersectionFormatter implements TypeFormatter {
     //   1. RequireDefaults<T> applied to non-Default types (e.g. number[] & {})
     //   2. Default<T,V> brand constituents in a union (e.g. boolean & { [DEFAULT_MARKER]: T })
     // Brand-only parts are object types with no string-keyed properties and no
-    // index signatures — they carry only symbol-keyed brand markers. A CFC
-    // metadata carrier holds no part of the value either: its labels are the
-    // CommonFabricFormatter's to read.
+    // index signatures — they carry only symbol-keyed brand markers. A scope
+    // wrapper's brand is one even where the checker defers it as a conditional
+    // type, around a type parameter. A CFC metadata carrier holds no part of
+    // the value either: its labels are the CommonFabricFormatter's to read.
     const effectiveParts = parts.filter(
-      (p) => !this.#isBrandOnlyOrEmpty(p, checker) && !isCfcCarrier(p),
+      (p) =>
+        !this.#isBrandOnlyOrEmpty(p, checker) &&
+        !isScopeBrandMember(p, checker) && !isCfcCarrier(p),
     );
 
     // If all parts were brand markers / empty / carriers, as nested CFC

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
+import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
@@ -24,7 +25,6 @@ import {
   createFabricInstantiationRecorder,
   type FabricInstantiationRecord,
 } from "../src/fabric-instantiations.ts";
-import { PatternIndexClient } from "../src/pattern-index/client.ts";
 import {
   MAX_COMPOSED_PATTERNS,
   patternIndexDependencies,

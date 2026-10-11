@@ -2,8 +2,10 @@ import { assertEquals } from "@std/assert";
 import { walk } from "@std/fs";
 
 // Invariant: no transformed output (golden) may reference a commonfabric export
-// via the inline `import("commonfabric").X` import-type form. The transformer
-// injects `import { __cfHelpers } from "commonfabric"` and re-exposes the whole
+// via an inline import type: `import("commonfabric").X`, or the
+// `import("./commonfabric").X` the printer writes when the program does not
+// declare `"commonfabric"` as an ambient module. The transformer injects
+// `import { __cfHelpers } from "commonfabric"` and re-exposes the whole
 // namespace as `__cfHelpers`, so every commonfabric type must be emitted as the
 // always-resolvable `__cfHelpers.X` qualified form. The inline import-type form
 // leaks when a synthesized type annotation (e.g. a lift's result type) bypasses
@@ -16,9 +18,9 @@ import { walk } from "@std/fs";
 // exact file:line.
 
 const FIXTURES_ROOT = new URL("./fixtures/", import.meta.url);
-const FORBIDDEN = 'import("commonfabric")';
+const FORBIDDEN = /import\("(?:\.\.?\/)*commonfabric"\)/;
 
-Deno.test('no golden output contains the inline import("commonfabric") type form', async () => {
+Deno.test("no golden output contains an inline import type of commonfabric", async () => {
   const offenders: string[] = [];
 
   for await (
@@ -30,7 +32,7 @@ Deno.test('no golden output contains the inline import("commonfabric") type form
     const content = await Deno.readTextFile(entry.path);
     const lines = content.split("\n");
     lines.forEach((line, i) => {
-      if (line.includes(FORBIDDEN)) {
+      if (FORBIDDEN.test(line)) {
         offenders.push(`${entry.path}:${i + 1}: ${line.trim()}`);
       }
     });
@@ -39,7 +41,7 @@ Deno.test('no golden output contains the inline import("commonfabric") type form
   assertEquals(
     offenders,
     [],
-    `Found ${offenders.length} inline import("commonfabric") reference(s) in ` +
+    `Found ${offenders.length} inline commonfabric import type(s) in ` +
       `golden output. These must be the canonical __cfHelpers.X form. ` +
       `Offenders:\n${offenders.join("\n")}`,
   );
