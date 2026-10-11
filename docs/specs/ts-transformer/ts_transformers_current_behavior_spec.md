@@ -504,17 +504,30 @@ every level of property/element access chains. `unwrapExpression` is applied to
 the receiver after each property/element step, so for example `(state as any)
 .foo` resolves to a read of `state.foo`. This means single casts (or
 `satisfies`/`!` wrappers) do not hide property accesses from capability
-analysis.
+analysis. The same holds where the receiver is the element a lookup finds:
+`rows.find(...)!.id` reads the found row's `id` exactly as `rows.find(...)?.id`
+does (`test/policy/capability-analysis-array-callbacks.test.ts`).
 
 When interprocedural analysis is enabled (compute-context builders like `lift`,
-`handler`), read paths discovered in helper function bodies propagate
-back to the caller's parameter summary, but the current MVP intentionally only
-does this for resolved helper bodies in the same source file. Cross-file or
-otherwise unsupported helper calls fall back to the conservative wildcard path
-instead of taking partial transitive precision. This means a `lift` callback
-that delegates to a local helper which reads `(x as any).foo` will trigger
-shrink validation on the caller's parameter type, while the same helper body in
-another file will conservatively disable shrinking for that parameter.
+and every handler's event and state parameters), the read and write paths
+discovered in helper function bodies propagate back to the caller's parameter
+summary, at the path the caller passed the argument from, but the current MVP
+intentionally only does this for resolved helper bodies in the same source
+file. Cross-file or otherwise unsupported helper calls fall back to the
+conservative wildcard path instead of taking partial transitive precision. This
+means a `lift` callback that delegates to a local helper which reads
+`(x as any).foo` will trigger shrink validation on the caller's parameter type,
+while the same helper body in another file will conservatively disable
+shrinking for that parameter. A handler that hands a state cell to a local
+helper which writes it emits that cell writable, and one whose helper only
+reads it emits it read-only (fixture `handler-schema/helper-writes-capture`).
+A helper parameter the analysis marks wildcard still reports its reads and
+writes, which the caller records at the path it passed, or at the static
+prefix of a dynamic one. The unknown access reaches only what was passed: a
+member argument such as `state.count` is kept whole while the members beside
+it narrow as their own reads say, and write-exhaustiveness is left unverified;
+a whole parameter or a dynamically keyed one is wildcarded
+(`test/policy/capability-analysis-interprocedural.test.ts`).
 
 When a wildcard parameter (one passed to an opaque/unanalyzable function like
 `console.log`) is typed `unknown`, validation emits `schema:unknown-type-access`
@@ -2144,6 +2157,14 @@ adjustments:
   function's parameter, `x[SELF]` is recorded as the path `$SELF`
   (`test/policy/capability-analysis.test.ts`, `test/pattern-input-self.test.ts`)
 - wildcard roots disable path shrinking for affected parameters/arguments
+- the cell `resolveAsCell()` returns is an alias of its receiver: a read or a
+  write through it, or through a `.key()` of it, is charged to the receiver's
+  path, so `message.resolveAsCell().key("body").set(x)` writes
+  `["message", "body"]`. The receiver itself is read in full, since the
+  resolved cell may be handed anywhere and read there, and write-exhaustiveness
+  stays unverified for what is done through it where the alias is not followed
+  (`test/policy/capability-analysis.test.ts`; fixture
+  `ast-transform/handler-nullable-cell-const`)
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather
   than a blanket root read) and suppresses the redundant blanket `.get()` read.
@@ -2241,7 +2262,12 @@ each operand of a fallback, wherever on the member spine it sits, a call on
   summary carries what the helper let leave whole, and the caller charges it to
   the argument it passed. What a helper returns counts: a function declaration,
   or a function bound to a variable or a property, hands its result straight
-  back into the caller's body, so a parameter it returns has left whole. A
+  back into the caller's body, so a parameter it returns has left whole. The
+  element a lookup finds (`find`, `findLast`, `at`) and the array of elements a
+  subset returns (`filter`, `sort`, `toSorted`, `slice`) are tracked like the
+  receiver they came from, so one that leaves whole is charged the same way:
+  a helper returning `rows.find(...)` reports the elements of `rows` as left
+  whole (`test/policy/capability-analysis-whole-value-escapes.test.ts`). A
   primitive has nothing below it to keep and is left alone. A
   value bound to a local or written into a local collection stays tracked and
   narrows as its reads say. So does a value handed on by reference, which the

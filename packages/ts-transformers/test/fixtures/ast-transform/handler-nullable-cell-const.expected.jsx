@@ -41,7 +41,7 @@ const record = handler({
         },
         out: {
             type: "unknown",
-            asCell: ["readonly"]
+            asCell: ["cell"]
         }
     },
     required: ["out"]
