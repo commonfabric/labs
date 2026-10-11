@@ -142,15 +142,6 @@ async function runRetryScenario(
       eventIds.push(append.eventId);
       return Promise.resolve({ delivered: true });
     };
-    // The stubbed append stands in for the server, which would also run the
-    // handler and push the event's consequence back; the edit waits for that
-    // consequence, so the overlay's wait stands in for it here.
-    const overlay = activeRuntime.speculationOverlay;
-    const originalWait = overlay?.waitForIntentConsequence;
-    if (overlay !== undefined) {
-      overlay.waitForIntentConsequence = () =>
-        Promise.resolve({ kind: "consequenced" });
-    }
     try {
       await controller.result.set(7, ["event"]);
       await activeRuntime.idle();
@@ -174,9 +165,6 @@ async function runRetryScenario(
       storageManager.pendingLoadGeneration = originalPendingLoadGeneration;
       storageManager.loadsSettled = originalLoadsSettled;
       replica.enqueueEventAppend = originalEnqueue;
-      if (overlay !== undefined && originalWait !== undefined) {
-        overlay.waitForIntentConsequence = originalWait;
-      }
       removeHandler();
     }
   } finally {

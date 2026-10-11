@@ -1,6 +1,8 @@
 // A stream send through `PieceController.set()` under server execution: the
-// call returns once the serving runtime's run of the handler has landed in
-// the store, so a client opened afterwards reads what that run wrote.
+// call returns with the event committed and the serving runtime's run of the
+// handler still ahead, and a read through `PieceController.get()` waits for
+// that run's consequence, so the sender and a client opened afterwards both
+// read what the served run wrote.
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -107,15 +109,14 @@ describe("piece-controller", () => {
         confirmServedInstantiate(runtime, space, receipt, aliceSigner.did()),
     });
 
-  it("returns from a stream send once the served handler run has landed in the store", async () => {
+  it("returns from a stream send ahead of the served run, which a read then waits for", async () => {
     const receipt = await instantiate();
     const sender = await clientPieces();
     const piece = await sender.get(receipt.pieceId);
     await piece.result.set({ name: "alice" }, ["setName"]);
-
-    // The send's own intent is retired: its consequence arrived here.
+    expect(await piece.result.get(["name"])).toBe("served:alice");
+    // The read returned once the event's consequence had arrived here.
     expect(sender.runtime.speculationOverlay?.pendingIntentCount).toBe(0);
-
     // A client opened afterwards reads the served run's write.
     const reader = await clientPieces();
     const later = await reader.get<{ name: string }>(receipt.pieceId);
