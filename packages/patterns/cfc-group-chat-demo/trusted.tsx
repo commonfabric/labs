@@ -18,7 +18,7 @@ import {
   activeAdminRoleForSubject,
   adminRegistryEntries,
   adminRegistryEveryoneIsAdmin,
-  type EmptyAdminRegistryValue,
+  type SeededAdminRegistryValue,
   subjectHasAdminRole,
 } from "../cfc/admin/mod.ts";
 import {
@@ -140,11 +140,16 @@ export type ChatEveryoneAdminFlag =
     >,
     readonly [typeof GROUP_CHAT_ADMIN_INTEGRITY]
   >
-  | TrustedActionWrite<
-    false,
-    typeof commitTrustedAdminToggle,
-    typeof TRUSTED_GROUP_CHAT_SET_ADMIN_ACTION,
-    typeof TRUSTED_GROUP_CHAT_ADMIN_SURFACE
+  // The `false` branch carries the endorsement too: a requirement in one
+  // branch of a union is checked whichever branch the value takes.
+  | AddIntegrity<
+    TrustedActionWrite<
+      false,
+      typeof commitTrustedAdminToggle,
+      typeof TRUSTED_GROUP_CHAT_SET_ADMIN_ACTION,
+      typeof TRUSTED_GROUP_CHAT_ADMIN_SURFACE
+    >,
+    readonly [typeof GROUP_CHAT_ADMIN_INTEGRITY]
   >;
 
 export interface ChatAdminRegistryStoredValue {
@@ -155,7 +160,7 @@ export interface ChatAdminRegistryStoredValue {
 
 export type ChatAdminRegistryValue =
   | ChatAdminRegistryStoredValue
-  | Default<EmptyAdminRegistryValue>;
+  | Default<SeededAdminRegistryValue>;
 export type ChatAdminRegistryCell = Writable<ChatAdminRegistryValue>;
 
 export type SharedRoomList = RequiresIntegrity<
@@ -176,9 +181,11 @@ export interface SharedRoomsStoredValue {
 }
 
 export type EmptySharedRoomsValue = Record<PropertyKey, never>;
+/** The seed is an empty list, so the seed write mints the list's endorsement. */
+export type SeededSharedRoomsValue = { list: [] };
 export type SharedRoomsValue =
   | SharedRoomsStoredValue
-  | Default<EmptySharedRoomsValue>;
+  | Default<SeededSharedRoomsValue>;
 export type SharedRoomsCell = Writable<SharedRoomsValue>;
 
 /**

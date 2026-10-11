@@ -29,15 +29,18 @@
  *   including a handler's `$event` payload) carries no evidence, so it never
  *   satisfies a `requiredIntegrity`.
  * - A path read and found absent from a container is a `shape` observation
- *   (§4.6.3) carrying the evidence the container holds about its own current
- *   value (`ownEvidenceAt`): never a label it inherits from an ancestor, and
- *   never a declared store policy, so neither a reference into a stamped
- *   document nor a deletion by other code can borrow its writer's stamp for
- *   an absence. A path the walk cannot descend to (past a scalar, into a
- *   missing document) carries no evidence. If a schema other than the
- *   code's own would fill an absence with a `default` the code's schema does
- *   not declare (one a reference carries, or the graph's), the code would be
- *   handed the value that schema chose, which carries no evidence either.
+ *   (§4.6.3) carrying the integrity minted for the container's own current
+ *   value (`ownEvidenceAt`): never a label it inherits from an ancestor, a
+ *   declared store policy or a derived entry, so neither a reference into a
+ *   stamped document nor a deletion by other code can borrow its writer's
+ *   stamp for an absence. A segment of a reference's own path that is not
+ *   there, a walk past a scalar, and a missing document carry no evidence. If
+ *   a schema other than the code's own would fill an absence with a `default`
+ *   the code's schema does not declare (one a reference carries, or the
+ *   graph's), the code would be handed the value that schema chose, which
+ *   carries no evidence either.
+ * - A requirement on the members of an empty container (a `*` path) observes
+ *   nothing: it constrains each member, not how many there are.
  * - A cycle of references, or a chain longer than the runtime resolves,
  *   carries no evidence. The cycle check is keyed on each reference's target,
  *   so a chain that passes one target twice on different walks is refused
@@ -369,23 +372,29 @@ const reachThroughInput = (
   });
 
   // A value read from a stored document at `location`, with `rest` of the
-  // declared path still to walk.
+  // declared path still to walk; the first `fixed` segments of `rest` are a
+  // reference's own path rather than the declared path's.
   const inDocument = (
     location: NormalizedFullLink,
     value: unknown,
     rest: readonly string[],
+    fixed: number,
     defaulting: boolean,
     chain: readonly string[],
   ): void => {
     if (isPrimitiveCellLink(value)) {
       const link = parseLink(value, location);
       if (link === undefined) withoutEvidence += 1;
-      else follow(link, rest, defaulting, chain);
+      else {follow(
+          link,
+          rest.slice(fixed),
+          defaulting,
+          chain,
+          rest.slice(0, fixed),
+        );}
       return;
     }
     if (rest.length === 0) {
-      // Absence at the end of the walk is handled by the caller, which
-      // knows the container; a value is observed whole.
       const { leaves, references } = leavesOf(value);
       if (leaves.length > 0) locations.push({ location, leaves, references });
       // A reference inside the value is followed: its target's integrity
@@ -402,43 +411,64 @@ const reachThroughInput = (
       return;
     }
     const [segment, ...remaining] = rest;
+    // A segment of a reference's own path that is not there, or a walk past
+    // a scalar: the reference or the walk chose a position no container
+    // holds, so nothing vouches for it.
     if (!isPlainContainer(value)) {
-      // Past a scalar or into nothing: the walk chose a path no container
-      // holds, so nothing vouches for it.
       withoutEvidence += 1;
       return;
     }
     if (segment === "*") {
-      const children = Object.entries(value);
-      // An empty container enumerated: absence of any member.
-      if (children.length === 0) return absentFrom(location, defaulting);
-      for (const [key, child] of children) {
-        inDocument(at(location, key), child, remaining, defaulting, chain);
+      // A requirement on the members of an empty container has no member to
+      // observe: it says nothing of how many members there are.
+      for (const [key, child] of Object.entries(value)) {
+        inDocument(
+          at(location, key),
+          child,
+          remaining,
+          Math.max(0, fixed - 1),
+          defaulting,
+          chain,
+        );
       }
       return;
     }
-    if (!Object.hasOwn(value, segment)) {
-      return absentFrom(location, defaulting);
+    const child: unknown = Object.hasOwn(value, segment)
+      ? Reflect.get(value, segment)
+      : undefined;
+    if (child === undefined) {
+      if (fixed > 0) withoutEvidence += 1;
+      else absentFrom(location, defaulting);
+      return;
     }
-    const child: unknown = Reflect.get(value, segment);
-    if (child === undefined) return absentFrom(location, defaulting);
-    inDocument(at(location, segment), child, remaining, defaulting, chain);
+    inDocument(
+      at(location, segment),
+      child,
+      remaining,
+      Math.max(0, fixed - 1),
+      defaulting,
+      chain,
+    );
   };
 
   // Reads the target's document from its root, so a reference partway along
   // the target's own path is followed like any other.
+  // `before` is a reference's own path still unwalked when this one was
+  // reached partway along it; it stays fixed, like this link's own path.
   const follow = (
     link: NormalizedFullLink,
     rest: readonly string[],
     defaulting: boolean,
     chain: readonly string[],
+    before: readonly string[] = [],
   ) => {
-    const walk = [...link.path, ...rest];
+    const own = [...link.path, ...before];
+    const walk = [...own, ...rest];
     // The link's schema describes its target, the position `rest` above
     // the declared path's end; a default it would supply there that the
     // code's schema would not is the wiring's.
     const carriesDefault = defaulting ||
-      foreignDefaultAt(link.schema, rest, codeSchema, path);
+      foreignDefaultAt(link.schema, [...before, ...rest], codeSchema, path);
     const target = addressKey({
       ...link,
       scope: normalizeCellScope(link.scope),
@@ -462,7 +492,14 @@ const reachThroughInput = (
       withoutEvidence += 1;
       return;
     }
-    inDocument(root, value, walk, carriesDefault, [...chain, target]);
+    inDocument(
+      root,
+      value,
+      walk,
+      own.length,
+      carriesDefault,
+      [...chain, target],
+    );
   };
 
   // A value the binding holds at the declared path: its references are

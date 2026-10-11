@@ -141,6 +141,12 @@ export const coarsenNullable = lift(
       : "hidden",
 );
 
+/** A count of entries, each of which must carry the owner's stamp. */
+export const countStamped = lift(
+  (args: { ids: RequiresIntegrity<string, readonly ["owner-gate"]>[] }): string =>
+    String(args?.ids?.length ?? 0),
+);
+
 /** Other code's computation over the owner's gate. */
 export const reopen = lift((gate: Gate): Gate => ({ always: gate?.always ?? false }));
 
@@ -241,6 +247,7 @@ interface Input {
     Default<{ fix: Fix; gate: Gate }, { fix: { lat: 0 }; gate: { always: false } }>
   >;
   bare: Writable<Default<{ fix: Fix }, { fix: { lat: 51.6 } }>>;
+  ids: Writable<Default<string[], []>>;
   settings: Writable<Default<OwnerSettings, { fix: { lat: 0 } }>>;
   ownerLog: Writable<Default<string, "">>;
   forgedLog: Writable<Default<string, "">>;
@@ -258,6 +265,7 @@ export default pattern<Input>(
     view,
     wrap,
     bare,
+    ids,
     settings,
     ownerLog,
     forgedLog,
@@ -284,12 +292,19 @@ const GATE_OUTPUTS = `
     derivedRun: coarsen({ fix, gate: reopen(gate as any) as any }),
     nullableRun: coarsenNullable({ fix, gate: standIn as any }),
     bareRun: coarsenOptional(bare as any),
-    settingsRun: coarsenOptional(settings as any),
     settingsFixRun: coarsenOptional(settings.key("nested") as any),
+    inventedRun: coarsenOptional({ fix, gate: gate.key("x") as any }),
+    countRun: countStamped({ ids: ids as any }),
     openGate: openGate({ gate }),
     forge: forge({ standIn }),
     assemble: assemble({ view, fix }),
     wrapView: wrapView({ wrap, view }),
+    saveSettings: saveSettings({ settings }),
+    saveSettingsWithGate: saveSettingsWithGate({ settings }),`;
+
+// Only the lift over the owner's settings, so its refusals are its own.
+const SETTINGS_OUTPUTS = `
+    settingsRun: coarsenOptional(settings as any),
     saveSettings: saveSettings({ settings }),
     saveSettingsWithGate: saveSettingsWithGate({ settings }),
     dropGate: dropGate({ settings }),`;
@@ -493,7 +508,7 @@ describe("cfc node input requirements", () => {
     });
 
     it("runs on a gate found absent from settings the owner wrote", async () => {
-      await run(GATE_OUTPUTS, async (send, read) => {
+      await run(SETTINGS_OUTPUTS, async (send, read) => {
         await send("saveSettings");
         expect((await read()).settingsRun).toBe("hidden");
       });
@@ -509,14 +524,30 @@ describe("cfc node input requirements", () => {
       });
     });
 
+    // A reference's own path that leads nowhere is the reference's choice,
+    // not an absence the owner's container vouches for.
+    it("refuses a gate reached through a path the reference invented", async () => {
+      await run(GATE_OUTPUTS, async (send, read) => {
+        await send("openGate");
+        expect((await read()).inventedRun).toBeUndefined();
+      });
+    });
+
+    // A requirement on each entry says nothing of how many there are.
+    it("runs on an empty list whose entries each require a stamp", async () => {
+      await run(GATE_OUTPUTS, async (_send, read) => {
+        expect((await read()).countRun).toBe("0");
+      });
+    });
+
     // Nor can other code launder an absence by deleting the owner's gate:
     // the container's evidence is then the deleter's.
     it("refuses a gate other code deleted from the owner's settings", async () => {
-      await run(GATE_OUTPUTS, async (send, read) => {
+      await run(SETTINGS_OUTPUTS, async (send, read) => {
         await send("saveSettingsWithGate");
         expect((await read()).settingsRun).toBe("near 52");
         const before = failedAt("/gate").length;
-        await send("dropGate");
+        expect(await send("dropGate")).toBeUndefined();
         // Refused: the result keeps the run before the deletion.
         expect((await read()).settingsRun).toBe("near 52");
         expect(failedAt("/gate").length).toBeGreaterThan(before);

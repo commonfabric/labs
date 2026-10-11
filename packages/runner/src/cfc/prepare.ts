@@ -6851,10 +6851,11 @@ export const consumedIntegrityAt = (
 
 /**
  * The evidence a container at `address` carries about its own current value:
- * the integrity of the entries at exactly its path that bind the value now
- * there (derived, structure and minted entries), never one inherited from an
- * ancestor, and never a declared store policy, which outlives the value it
- * was declared over. A path found absent from the container is observed with
+ * the integrity minted for the value now at exactly its path, which a write
+ * below it by another writer withdraws. Never a label inherited from an
+ * ancestor, never a declared store policy, which outlives the value it was
+ * declared over, and never a derived entry, whose hereditary atoms a write
+ * below the path does not clear. A path found absent from the container is observed with
  * this evidence (§4.6.3's `shape`): the writer of the container's current
  * value is who left the path out.
  */
@@ -6874,8 +6875,7 @@ export const ownEvidenceAt = (
   const path = canonicalizeLogicalPath(address.path);
   const at = pathKey(path);
   const entries = metadata.labelMap.entries.filter((entry) =>
-    pathKey(entry.path) === at && bindsCurrentValueEvidence(entry) &&
-    isWitnessEvidence(entry)
+    pathKey(entry.path) === at && entry.origin === MINTED_ORIGIN
   ).map(asWitnessEvidence);
   return labelForEntriesAtPath(entries, path)?.integrity ?? [];
 };

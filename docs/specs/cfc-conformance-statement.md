@@ -446,10 +446,13 @@ commit under the enforcing modes. What each observation carries:
   included, carries no evidence;
 - a path read and found absent is a `shape` observation (§4.6.3) carrying the
   evidence its container holds about its own current value (`ownEvidenceAt`
-  in `cfc/prepare.ts`: derived, structure and minted entries at exactly the
-  container's path), never a label inherited from an ancestor and never a
-  declared store policy; a path past a scalar or into a missing document
-  carries none;
+  in `cfc/prepare.ts`: the integrity minted at exactly the container's path,
+  which another writer's write below it withdraws), never a label inherited
+  from an ancestor, a declared store policy or a derived entry; a segment of a
+  reference's own path that is not there, a path past a scalar, and a missing
+  document carry none;
+- a requirement on the members of an empty container (a `*` path) observes
+  nothing: it constrains each member and says nothing of how many there are;
 - a `default` that a schema other than the code's own would supply at an
   absent path (one a reference carries, or the graph's) and that the code's
   schema would not supply the same way carries none;
@@ -491,10 +494,20 @@ the log and the reach can go.
   input schema declares `requiredIntegrity`.
 - Choosing which stamped value to bind is not ruled out: a binding may point
   an input at any value carrying the required evidence, an older one or one
-  from another item included. Binding two inputs to one item is what
+  from another item included. The same holds of absence: a binding may point
+  at any container that carries the evidence and lacks the path, so code that
+  reads an absent input as permission (an empty roster as "everyone is an
+  admin", say) relies on the container being the one it expects. Patterns
+  seed such inputs with an empty value, so the input is present and stamped. Binding two inputs to one item is what
   instance-bound integrity (`scope.valueRef`, §4.5.1, §8.10.4) is for.
 - A `requiredIntegrity` inside an `anyOf` or `oneOf` branch is applied
   whichever branch the value takes, an over-taint; §4.2.1.1 keeps such
   declarations outside the normalized profile.
+- An empty container read at a path with a requirement on its members is not
+  held to that requirement, although §8.10.3 has an ancestor read consume its
+  descendants: an under-taint confined to the container's emptiness.
+- A document seeded before its pattern seeded an empty roster (`{}` rather
+  than `{ admins: [] }`) reads as an absent roster with no evidence, and its
+  nodes are refused until the owner writes the roster once: an over-taint.
 - The cycle check keys on each reference's target, so a chain that passes one
   target twice on different walks is refused, an over-taint.
