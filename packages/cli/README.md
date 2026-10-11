@@ -1803,13 +1803,13 @@ demand inputs beyond the selected output. Missing-path diagnostics can require a
 broader root read.
 
 With server execution on, a read first waits until the serving runtime has
-reacted to every commit at or below the server's head as it stands when the read
-begins. The serving runtime runs the handlers and derives what a read returns. A
-`cf set` that sends an event returns with the event committed and that run still
-ahead, and a `cf call` returns that way under `--no-wait`, so the wait is what
-makes a `cf get` that follows one, from the same process or another, read what
-the run stored. With server execution off, this runtime runs what it reads, and
-no such wait occurs.
+reacted to every authored commit at or below the server's head as it stands when
+the read begins. The serving runtime runs the handlers and derives what a read
+returns. A `cf set` that sends an event returns with the event committed and
+that run still ahead, and a `cf call` returns that way under `--no-wait`, so the
+wait is what makes a `cf get` that follows one, from the same process or
+another, read what the run stored. With server execution off, this runtime runs
+what it reads, and no such wait occurs.
 
 `cf piece call` writes them **past the `--` that closes the callable's
 section**. The callable name opens that section, so everything between the two
