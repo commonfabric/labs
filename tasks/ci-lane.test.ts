@@ -3625,22 +3625,14 @@ describe("reading a batch's records against what it was asked to run", () => {
       const dir = await Deno.makeTempDir({ prefix: "lane-registrations-" });
       const file = "glaze.test.ts";
       try {
+        // The `.git` marker is what the preload climbs to for the root its
+        // file names are relative to. The file runs under this tree's own
+        // config, since Deno keys its emit cache on the config it resolves:
+        // compiled under any other, the preload's modules would replace
+        // the emit the lane's coverage report reads them back from. The
+        // lockfile is a copy, so the run writes nothing into this tree.
         await Deno.mkdir(`${dir}/.git`);
-        await Deno.writeTextFile(
-          `${dir}/deno.json`,
-          JSON.stringify({
-            imports: {
-              "@std/path": "jsr:@std/path@^1.1.6",
-              "@std/testing": "jsr:@std/testing@^1.0.19",
-              "@std/testing/bdd": new URL(
-                "../packages/test-support/src/records/bdd.ts",
-                import.meta.url,
-              ).href,
-              "@std/testing/bdd/real": "jsr:@std/testing@^1.0.19/bdd",
-              "@std/ulid": "jsr:@std/ulid@^1.0.0",
-            },
-          }),
-        );
+        await Deno.copyFile(`${REPOSITORY}/deno.lock`, `${dir}/deno.lock`);
         await Deno.writeTextFile(
           `${dir}/${file}`,
           `import { describe, it } from "@std/testing/bdd";
@@ -3674,7 +3666,13 @@ describe("glaze", () => {
                   '"$@" >/dev/null 2>&1',
                   "sh",
                   ...denoTestCommand(
-                    ["--allow-read", "--allow-write", "--allow-env"],
+                    [
+                      "--allow-read",
+                      "--allow-write",
+                      "--allow-env",
+                      `--config=${REPOSITORY}/deno.jsonc`,
+                      `--lock=${dir}/deno.lock`,
+                    ],
                     context,
                     junit,
                     [file],
@@ -3683,9 +3681,7 @@ describe("glaze", () => {
                 cwd: dir,
                 // A lane running this file hands it a skip list of its
                 // own, which this run must not read, and a coverage
-                // directory. Deno keys its emit cache on the config it
-                // resolves, so a profile written under this tree's config
-                // is one the lane's report cannot read back.
+                // directory, whose measured set this run is no part of.
                 env: {
                   CF_TEST_SKIP_LIST: "",
                   DENO_COVERAGE_DIR: `${dir}/coverage`,
