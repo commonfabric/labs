@@ -1352,6 +1352,20 @@ export async function processPullQueuedEventDuringExecute(
   const queuedEvent = state.eventQueue[0];
   if (!queuedEvent) return;
 
+  {
+    const diag = queuedEvent as unknown as { __diagLast?: string };
+    const origin = queuedEvent.originTx === undefined
+      ? "none"
+      : `${state.lineageStatus(queuedEvent.originTx)}/same=${
+        state.getOriginLocalSeq(queuedEvent.originTx, queuedEvent.eventLink.space) !== undefined
+      }`;
+    const line = `origin=${origin} handlerLoad=${queuedEvent.handlerLoadPending === true} readiness=${queuedEvent.retryReadinessPending === true} loadParked=${state.isHeadEventLoadParked(queuedEvent)} notBefore=${queuedEvent.notBefore !== undefined} q=${state.eventQueue.length}`;
+    if (diag.__diagLast !== line) {
+      diag.__diagLast = line;
+      console.warn(`[diag-head] ${queuedEvent.id} ${line}`);
+    }
+  }
+
   if (queuedEvent.originTx !== undefined) {
     const originStatus = state.lineageStatus(queuedEvent.originTx);
     const sameSpace = state.getOriginLocalSeq(

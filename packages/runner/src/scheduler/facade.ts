@@ -3746,6 +3746,7 @@ export class Scheduler {
   }
 
   #releaseHeadEventLoadPark(eventId: string): void {
+    console.warn(`[diag-park] release ${eventId} slot=${this.#headEventLoadPark?.eventId ?? "none"} head=${this.#eventQueue[0]?.id ?? "none"}`);
     if (this.#headEventLoadPark?.eventId !== eventId) return;
     if (this.#headEventLoadParkHistory?.eventId !== eventId) {
       this.#headEventLoadParkHistory = { eventId, generations: new Map() };
@@ -3875,6 +3876,7 @@ export class Scheduler {
       servedOutcome?: ServedEventFailureOutcome;
     } = {},
   ): void {
+    console.warn(`[diag-drop] ${event.id} ${reason.slice(0, 160)}`);
     if (this.#headEventLoadPark?.eventId === event.id) {
       this.#headEventLoadPark = null;
     }
