@@ -100,7 +100,7 @@ import {
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
 import { entityKindOfIdString } from "@commonfabric/runner/entity-kind";
-import { waitForSettled } from "@commonfabric/runner/executor/watermark";
+import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import {
@@ -5441,11 +5441,11 @@ async function loadPieceForRead(
 }
 
 /**
- * Waits, under server execution, until the space's watermark covers the
- * server's head as of now, so a read that follows a send, from this process
- * or another, reads what the serving runtime stored for it. Resolves at once
- * in the OFF arm, where this runtime runs what it reads, and against a server
- * that reports no head.
+ * Waits, under server execution, until the serving runtime has reacted to
+ * every authored commit at or below the server's head as of now, so a read
+ * that follows a send, from this process or another, reads what the serving
+ * runtime stored for it. Resolves at once in the OFF arm, where this runtime
+ * runs what it reads, and against a server that reports no head.
  */
 async function waitForServedHead(pieces: PiecesController): Promise<void> {
   if (pieces.runtime.experimental.serverExecution !== true) return;
@@ -5453,7 +5453,7 @@ async function waitForServedHead(pieces: PiecesController): Promise<void> {
   const head = await pieces.runtime.storageManager.open(space)
     .serverHeadSeq?.();
   if (head === undefined) return;
-  await waitForSettled(pieces.runtime, space, head);
+  await waitForSettledThroughHead(pieces.runtime, space, head);
 }
 
 export async function getCellValue(

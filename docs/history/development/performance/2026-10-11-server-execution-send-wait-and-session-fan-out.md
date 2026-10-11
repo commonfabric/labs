@@ -111,12 +111,16 @@ three per topic.
   its terminal consequence before reading, so a caller that sent and then
   reads sees what the served run stored. `piece-controller-served-send.test.ts`
   pins both halves.
-- `cf get` waits, under server execution, for the space's watermark to cover
-  the server's head as of the read, through a new `serverHeadSeq()` on the
-  storage provider (the ordered round trip `pullToServerHead()` already made,
-  now returning the sequence it learns). A `cf get` in a fresh process after a
-  `cf set` or `cf call` in another therefore reads what the serving runtime
-  stored.
+- `cf get` waits, under server execution, until the serving runtime has
+  reacted to every authored commit at or below the server's head as of the
+  read, through a new `serverHeadSeq()` on the storage provider (the ordered
+  round trip `pullToServerHead()` already made, now returning the sequence it
+  learns) and `waitForSettledThroughHead`, which treats a head that is the
+  loop's own watermark write as covered: the loop keeps its bookkeeping
+  commits above W, so on a quiet space W rests one or more below the head and
+  a wait on `W ≥ head` alone would never resolve. A `cf get` in a fresh
+  process after a `cf set` or `cf call` in another therefore reads what the
+  serving runtime stored.
 - `Runtime.trackEventIntent()` installs the overlay when a fire is the first
   thing a runtime does. Tracking went through the lazily created overlay
   before, so a runtime whose first act was a send counted no intent, and a
