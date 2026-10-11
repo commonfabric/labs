@@ -1567,6 +1567,9 @@ export class V2StorageTransaction implements IStorageTransaction {
               scope,
               patches: [...mergeable.ops, ...(patch?.patches ?? [])],
               value: doc.current.value,
+              ...(patch?.diffBase === undefined
+                ? {}
+                : { diffBase: patch.diffBase }),
             });
             continue;
           }
@@ -3715,7 +3718,19 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
     assertNoIndexedArrayStructuralOps(patches);
 
-    return { op: "patch", id, type, scope, patches, value: doc.current.value };
+    return {
+      op: "patch",
+      id,
+      type,
+      scope,
+      patches,
+      value: doc.current.value,
+      // Only a positional op means something relative to the document it was
+      // diffed from; every other op re-folds over any base as it stands.
+      ...(patches.some((patch) => patch.op === "splice")
+        ? { diffBase: base }
+        : {}),
+    };
   }
 
   /**

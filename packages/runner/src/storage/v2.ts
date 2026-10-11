@@ -4,6 +4,7 @@ import {
   hashStringOf,
   isKeyableObjectOrArray,
   taggedHashStringOf,
+  valueEqual,
 } from "@commonfabric/data-model";
 import {
   hasDataUriScheme,
@@ -87,7 +88,7 @@ import {
   applyPatchToDocument,
   PatchApplyError,
 } from "../../../memory/v2/patch.ts";
-import { encodePointer } from "../../../memory/v2/path.ts";
+import { encodePointer, parsePointer } from "../../../memory/v2/path.ts";
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import type { Cancel } from "../cancel.ts";
 import {
@@ -192,6 +193,7 @@ import {
   getTransactionWriteAttempts,
 } from "./transaction-inspection.ts";
 import { toTransactionDocumentValue } from "./v2-document.ts";
+import { readValueAtPath } from "./v2-path.ts";
 import {
   createStorageAddressResolver,
   RemoteSessionFactory,
@@ -504,6 +506,9 @@ const documentOperationsOf = (
           scope: operation.scope,
           patches: operation.patches,
           value: toExplicitDocument(operation.value),
+          ...(operation.diffBase === undefined
+            ? {}
+            : { diffBase: toExplicitDocument(operation.diffBase) }),
         }
         : {
           op: "set" as const,
@@ -577,6 +582,8 @@ type PendingVersion =
       op: "patch";
       patches: PatchOp[];
       value: EntityDocument;
+      /** The document `patches` were diffed against, where they splice. */
+      diffBase?: EntityDocument;
     }
     | {
       localSeq: number;
@@ -684,7 +691,12 @@ const pendingVersion = (
   localSeq: number,
   operation:
     | { op: "set"; value: EntityDocument }
-    | { op: "patch"; patches: PatchOp[]; value: EntityDocument }
+    | {
+      op: "patch";
+      patches: PatchOp[];
+      value: EntityDocument;
+      diffBase?: EntityDocument;
+    }
     | { op: "delete" },
   baseSeq: number,
 ): PendingVersion => ({ localSeq, baseSeq, ...operation });
@@ -709,6 +721,31 @@ const transactionValueForVersion = (
   return version.transactionValue;
 };
 
+/**
+ * Whether each `splice` in a layer would land on the array it was diffed
+ * from. A splice names positions: the diff's tail splice adds at the array's
+ * old length. Replayed over an array another writer has since changed, it
+ * says something its writer never wrote; where that writer appended the same
+ * tail, the tail is appended twice. The server refuses such a commit, since
+ * the write read the array it diffed (and an identity commit is accepted
+ * only when its ops are idempotent on the stored value). A blind UI write
+ * reads no value, so the server takes its splice where it stands; the layer
+ * renders without it here all the same, until the accept brings the stored
+ * value.
+ */
+const splicesLandOnTheirDiffBase = (
+  base: EntityDocument | undefined,
+  patches: readonly PatchOp[],
+  diffBase: EntityDocument,
+): boolean =>
+  patches.every((patch) => {
+    if (patch.op !== "splice") return true;
+    const path = parsePointer(patch.path);
+    const now = readValueAtPath(base, path);
+    const then = readValueAtPath(diffBase, path);
+    return now === then || valueEqual(now, then);
+  });
+
 const applyPendingVersion = (
   base: EntityDocument | undefined,
   pending: PendingVersion,
@@ -731,6 +768,25 @@ const applyPendingVersion = (
       // mirroring the server's mergeable disposition, and the ops can only
       // express this layer's own writes, so a dropped sibling's data is
       // unrepresentable in the result (CT-1872 1a).
+      //
+      // A positional op is the exception to re-folding: over an array that
+      // moved since its diff, the layer renders without it, as an
+      // inapplicable layer does below, until the verdict that refuses it.
+      if (
+        pending.diffBase !== undefined &&
+        !splicesLandOnTheirDiffBase(base, pending.patches, pending.diffBase)
+      ) {
+        pendingPatchLogger.debug("pending-replay-skip", () => [
+          "pending patch layer skipped: a splice's array moved since its diff",
+          {
+            space: logContext.space,
+            id: logContext.id,
+            scope: normalizeCellScope(logContext.scope),
+            localSeq: pending.localSeq,
+          },
+        ]);
+        return base;
+      }
       try {
         return applyPatchToDocument(
           base,
@@ -3829,6 +3885,7 @@ type NativeCommitOperation =
     scope?: CellScope;
     patches: PatchOp[];
     value: EntityDocument;
+    diffBase?: EntityDocument;
   }
   | { op: "delete"; id: URI; scope?: CellScope };
 
