@@ -1271,12 +1271,12 @@ export class StorageManager implements IStorageManager {
    * `#loadCrossings`): one kick per manager, in flight or landed. */
   readonly #crossingKicks = new Set<string>();
 
-  /** The crossing loads in flight, by their pending-load key, with the
-   * address each names (IStorageManager.pendingCrossingLoadAddresses). */
+  /** The crossing loads in flight, by their pending-load key: the address
+   * each names (IStorageManager.pendingCrossingLoadAddresses) and how many
+   * loads of it — one per selector — have yet to settle. */
   readonly #pendingCrossingLoads = new Map<string, {
-    space: MemorySpace;
-    scope: CellScope;
-    id: URI;
+    address: { space: MemorySpace; scope: CellScope; id: URI };
+    count: number;
   }>();
 
   /**
@@ -2754,7 +2754,9 @@ export class StorageManager implements IStorageManager {
     scope: CellScope;
     id: URI;
   }[] {
-    return [...this.#pendingCrossingLoads.values()];
+    return [...this.#pendingCrossingLoads.values()].map(
+      (entry) => entry.address,
+    );
   }
 
   /**
@@ -2787,11 +2789,13 @@ export class StorageManager implements IStorageManager {
       this.#crossingKicks.add(key);
       const address = { space, scope, id };
       const releaseLoad = this.#registerPendingLoad(address);
-      // One ledger entry per target: two selectors over one document are
-      // one document to wait for.
+      // One ledger entry per target, however many selectors load it: the
+      // entry stays while any of them is in flight.
       const ledgerKey = entityKey(address, this.scopeKeyIdentity());
-      const alreadyPending = this.#pendingCrossingLoads.has(ledgerKey);
-      if (!alreadyPending) this.#pendingCrossingLoads.set(ledgerKey, address);
+      const entry = this.#pendingCrossingLoads.get(ledgerKey) ??
+        { address, count: 0 };
+      entry.count++;
+      this.#pendingCrossingLoads.set(ledgerKey, entry);
       const load = (async () => {
         let loadFailure: unknown;
         try {
@@ -2810,9 +2814,8 @@ export class StorageManager implements IStorageManager {
         } finally {
           if (loadFailure !== undefined) this.#crossingKicks.delete(key);
           releaseLoad(loadFailure);
-          if (!alreadyPending && !this.#pendingLoads.has(ledgerKey)) {
-            this.#pendingCrossingLoads.delete(ledgerKey);
-          }
+          entry.count--;
+          if (entry.count === 0) this.#pendingCrossingLoads.delete(ledgerKey);
         }
       })();
       this.trackUntilSettled(load);
