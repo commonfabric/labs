@@ -1036,24 +1036,15 @@ export const DEFAULT_CFC_DECLARED_MONOTONICITY_MODE:
   CfcDeclaredMonotonicityMode = "off";
 
 /**
- * The input requirements a lift's code declares on its arguments (spec
- * §8.10.3, `docs/plans/cfc-argument-input-requirements.md`): `off` = not
- * checked; `observe` = checked before the body runs, each failure a
- * diagnostic, and nothing the attempt does changes; `enforce` = each failure
- * is a prepare reason, which rejects the commit under the enforcing modes.
+ * A node input requirement (§8.10.3) a node's attempt failed, recorded by the
+ * runner before the node's code runs and turned into a reason by the
+ * boundary pass.
  */
-export type CfcArgumentInputRequirementsMode = "off" | "observe" | "enforce";
-
-export const DEFAULT_CFC_ARGUMENT_INPUT_REQUIREMENTS_MODE:
-  CfcArgumentInputRequirementsMode = "off";
-
-/** A failed argument input requirement, recorded for the boundary pass. */
 export type CfcArgumentInputRefusal = {
   readonly reason: string;
   /**
    * Whether the failure is a verdict on the data (see `verdict-reason.ts`).
-   * A reference that reached no value may only not have synced yet, so that
-   * failure stays retryable.
+   * A read the runner could not make yet stays retryable.
    */
   readonly verdict: boolean;
 };
@@ -1088,7 +1079,6 @@ export type CfcTxState = {
   policyEvaluationMode: CfcPolicyEvaluationMode;
   labelMetadataProtectionMode: CfcLabelMetadataProtectionMode;
   declaredMonotonicityMode: CfcDeclaredMonotonicityMode;
-  argumentInputRequirementsMode: CfcArgumentInputRequirementsMode;
   // The one sanctioned per-tx exemption from the declared-monotonicity gate
   // (§8.12.7 route 2b seam). Absent = gate applies. Set only through the
   // privileged `setCfcDeclaredWideningExemption` (trusted-builtin identity),
@@ -1202,10 +1192,9 @@ export type CfcTxState = {
   // reserved `grant:cfc:` documents outside the trusted policy-writer path
   // (`writeCfcGrant`) are recorded here too — same S18 class, same reasons.
   unprivilegedSystemWrites: string[];
-  // Argument input requirements a lift's code declares that this attempt's
-  // arguments failed (§8.10.3), recorded by the runner before the body runs
-  // under `cfcArgumentInputRequirements: "enforce"`. prepareBoundaryCommit
-  // turns each into a reason.
+  // Input requirements a node's code declares that this attempt's inputs
+  // failed (§8.9, §8.10.3), recorded by the runner before the code runs.
+  // prepareBoundaryCommit turns each into a reason.
   argumentInputRefusals: CfcArgumentInputRefusal[];
   // Grant documents consulted by policyState-guarded boundary evaluation in
   // this transaction (§8.12.7 route 2a), recorded by the runner-side grant

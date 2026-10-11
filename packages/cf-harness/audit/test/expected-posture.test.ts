@@ -185,38 +185,6 @@ describe("the expected-posture spec", () => {
       expect(fields).not.toContain("enforcementMode");
     });
 
-    it("holds the argument input requirements dial to its floor", () => {
-      const spec = parseExpectedPosture({
-        argumentInputRequirements: "observe",
-      });
-      expect(postureMismatches(spec, MAX_ENFORCEMENT_RECORD)).toEqual([]);
-      expect(
-        postureMismatches(
-          parseExpectedPosture({ argumentInputRequirements: "enforce" }),
-          MAX_ENFORCEMENT_RECORD,
-        ),
-      ).toEqual([{
-        field: "argumentInputRequirements",
-        expected: "enforce or stricter",
-        found: "observe",
-      }]);
-    });
-
-    it("reports a dial a record written before it existed does not carry", () => {
-      // What JSON hands back for a record published before the dial existed.
-      const { argumentInputRequirements: _, ...older } = MAX_ENFORCEMENT_RECORD;
-      const spec = parseExpectedPosture({
-        argumentInputRequirements: "observe",
-      });
-      expect(
-        postureMismatches(spec, older as typeof MAX_ENFORCEMENT_RECORD),
-      ).toEqual([{
-        field: "argumentInputRequirements",
-        expected: "observe or stricter",
-        found: "absent",
-      }]);
-    });
-
     it("finds nothing wrong with a record stricter than the rung a spec names", () => {
       // A rung field is a floor, so the bundle's `persist` satisfies a spec
       // naming `observe`, and a record below the floor is what fails.

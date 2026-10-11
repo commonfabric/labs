@@ -53,7 +53,6 @@ import {
   type SinkMaxConfidentiality,
 } from "./sink-inventory.ts";
 import type {
-  CfcArgumentInputRequirementsMode,
   CfcContentAddressedLabels,
   CfcDeclaredMonotonicityMode,
   CfcDecomposedEnvelopes,
@@ -141,7 +140,6 @@ export interface CfcPostureReport {
   readonly policyEvaluation: CfcDialReport;
   readonly labelMetadataProtection: CfcDialReport;
   readonly declaredMonotonicity: CfcDialReport;
-  readonly argumentInputRequirements: CfcDialReport;
 
   /** Digest of the deployment's policy snapshot; `null` when none is configured. */
   readonly policyDigest: string | null;
@@ -169,7 +167,6 @@ export interface CfcPostureSource {
   readonly cfcPolicyEvaluation: CfcPolicyEvaluationMode;
   readonly cfcLabelMetadataProtection: CfcLabelMetadataProtectionMode;
   readonly cfcDeclaredMonotonicity: CfcDeclaredMonotonicityMode;
-  readonly cfcArgumentInputRequirements: CfcArgumentInputRequirementsMode;
   readonly cfcPolicySnapshot: PolicySnapshot | undefined;
   readonly cfcSinkMaxConfidentiality: SinkMaxConfidentiality;
 }
@@ -217,15 +214,6 @@ const DECLARED_MONOTONICITY_DECIDES: Record<
   off: "nothing; a declared-monotonicity violation is not checked",
   observe: "nothing; a monotonicity violation is a diagnostic",
   enforce: "the declared monotonicity of the written value",
-};
-
-const ARGUMENT_INPUT_REQUIREMENTS_DECIDES: Record<
-  CfcArgumentInputRequirementsMode,
-  string
-> = {
-  off: "nothing; a lift's argument input requirements are not checked",
-  observe: "nothing; a failed argument input requirement is a diagnostic",
-  enforce: "the integrity of what a lift reads through each argument",
 };
 
 /** A rung whose findings change no outcome. */
@@ -304,13 +292,12 @@ export interface ResolvedCfcDials {
   readonly cfcPolicyEvaluation: CfcPolicyEvaluationMode;
   readonly cfcLabelMetadataProtection: CfcLabelMetadataProtectionMode;
   readonly cfcDeclaredMonotonicity: CfcDeclaredMonotonicityMode;
-  readonly cfcArgumentInputRequirements: CfcArgumentInputRequirementsMode;
 }
 
 /**
  * What each dial resolves to when a construction leaves it unset.
  *
- * The Runtime's defaults, in one place, rather than one `??` arm per dial inside a
+ * The Runtime's defaults, in one place, rather than nine `??` arms inside a
  * constructor no other host can reach. `DEFAULT_CFC_*` in `types.ts` are not
  * these: those are the per-transaction floors an unconfigured transaction
  * carries, which is a different question with a different answer.
@@ -325,7 +312,6 @@ export const RUNTIME_CFC_DIAL_DEFAULTS: ResolvedCfcDials = Object.freeze({
   cfcPolicyEvaluation: "enforce",
   cfcLabelMetadataProtection: "enforce",
   cfcDeclaredMonotonicity: "observe",
-  cfcArgumentInputRequirements: "observe",
 });
 
 /** A dial whose values are the named rungs of a ladder. */
@@ -359,9 +345,6 @@ export const CFC_DIAL_LADDERS = Object.freeze({
   cfcPolicyEvaluation: Object.freeze(POLICY_EVALUATION_DECIDES),
   cfcLabelMetadataProtection: Object.freeze(LABEL_METADATA_DECIDES),
   cfcDeclaredMonotonicity: Object.freeze(DECLARED_MONOTONICITY_DECIDES),
-  cfcArgumentInputRequirements: Object.freeze(
-    ARGUMENT_INPUT_REQUIREMENTS_DECIDES,
-  ),
 }) satisfies { [K in LadderDial]: Record<ResolvedCfcDials[K], string> };
 
 /**
@@ -467,10 +450,6 @@ export const resolveCfcDials = (
     "cfcDeclaredMonotonicity",
     options.cfcDeclaredMonotonicity,
   ),
-  cfcArgumentInputRequirements: resolveRung(
-    "cfcArgumentInputRequirements",
-    options.cfcArgumentInputRequirements,
-  ),
 });
 
 /** The values of a record, whichever way its provenance was arrived at. */
@@ -505,10 +484,6 @@ const buildReport = (
   declaredMonotonicity: dial(
     source.cfcDeclaredMonotonicity,
     DECLARED_MONOTONICITY_DECIDES[source.cfcDeclaredMonotonicity],
-  ),
-  argumentInputRequirements: dial(
-    source.cfcArgumentInputRequirements,
-    ARGUMENT_INPUT_REQUIREMENTS_DECIDES[source.cfcArgumentInputRequirements],
   ),
   policyDigest: source.cfcPolicySnapshot?.digest ?? null,
   sinks: sinkReports(source.cfcSinkMaxConfidentiality),

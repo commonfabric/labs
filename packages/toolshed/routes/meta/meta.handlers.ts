@@ -73,7 +73,6 @@ export const MetaResponseSchema = z.object({
     policyEvaluation: CfcDialSchema,
     labelMetadataProtection: CfcDialSchema,
     declaredMonotonicity: CfcDialSchema,
-    argumentInputRequirements: CfcDialSchema,
     policyDigest: z.string().nullable(),
     sinks: z.array(z.union([
       z.object({ sink: z.string(), ceiling: z.array(z.unknown()).readonly() }),

@@ -71,13 +71,15 @@ Under [the correspondence procedure](../development/cfc-spec-correspondence.md):
      requirements and cannot remove one.
 2. **An identity guard resting on bound requirements needs specs#51's §8.7.2
    paragraph to allow it.** A comment on specs#51 proposes the wording.
-3. **The check itself is a conforming implementation** of §8.10.3 once
-   question 1 is ruled. It has landed for verified lifts under a `SPEC-PENDING`
-   marker naming commonfabric/specs#62, at `observe`
-   (`cfc/argument-input-requirements.ts`). Before it, `verifyInputRequirements`
+3. **The check itself is a conforming implementation** of §8.9 ("Input
+   contract checks … MUST be enforced before commit", for every node) and
+   §8.10.3, so it runs at the strict default with no dial: it only refuses
+   more. Only which schema's requirements apply is marked `SPEC-PENDING`
+   (commonfabric/specs#62). It covers lifts, computed nodes and handlers
+   (`cfc/node-input-requirements.ts`). Before it, `verifyInputRequirements`
    walked only the schemas of write targets (the kernel manifest still marks
-   row 8.10.3 `missing` until the re-pin), so a `RequiresIntegrity` on a lift
-   argument was accepted and ignored.
+   row 8.10.3 `missing` until the re-pin), so a `RequiresIntegrity` on a
+   node's input was accepted and ignored.
 4. **How reads are attributed to arguments is a host arrangement.** So is the
    handling of substituted defaults, dropped reads and assembled objects below.
    The conformance statement records each.
@@ -159,30 +161,28 @@ These rules follow from §8.10.3, and the conformance statement records them:
   set: the first skips public locations, and the second drops `cid:`
   documents and a document's own members.
 - **A read the flow join drops counts as unlabeled** when it carries a value.
-- **Absence is no observation**, as in §8.10.3's handler check: no document,
-  a missing field or an empty container consumes nothing. A `default` that a
-  schema other than the code's (one a reference carries, or the graph's where
-  it is not the code's) would supply there counts as a value written in the
-  wiring, so it fails; a default in the code's own schema is the code's choice.
-- **A reference on the way to a declared path is followed** (§8.2.4 puts the
-  reference's integrity in the dereference's). A reference inside the value
-  reached is checked where it is held, without link-carried evidence copied
-  from its target. An object assembled from references to stamped records
-  therefore passes; the stricter reading is the specs ruling's option D.
-- **The binding document's slots and object structure are exempt**, as
-  dereference plumbing (§8.2.4). A scalar the binding document holds at or
-  below a declared path is a public read.
+- **A path read and found absent is a `shape` observation** (§4.6.3) of the
+  position it is absent from, labeled as that position is: absent from
+  settings the owner wrote, it carries the owner's stamp; absent from a
+  document no one stamped, it carries nothing. A `default` that a schema other
+  than the code's (one a reference carries, or the graph's where it is not the
+  code's) would supply there is a value written in the wiring and fails.
+- **A reference supplies its target's integrity; its slot contributes
+  confidentiality only** (§8.2.4, as the dereference join does). References
+  on the way to a declared path and inside the value reached are followed; a
+  reference's confidentiality is never removed, and it is not checked here.
+- **A value the binding document holds itself is a public read**; the
+  binding's references are followed like any other.
 
 ### The check
 
-A failed requirement refuses the action's commit. A new dial, registered in
-[`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md), rolls the
-check out through `off`, `observe` and `enforce`. Some existing lifts read
-cells whose types carry a write-side `RequiresIntegrity`, and their argument
-schemas carry it with them. A run of the pattern suite at `observe` lists what
-the check would refuse. That list is the first deliverable, and it matters
-under any option. Refusal reasons keep one spelling across the dial's
-positions.
+A failed requirement refuses the node's commit, at the strict default and
+with no dial: the check only refuses more, which
+[the correspondence procedure](../development/cfc-spec-correspondence.md)
+(step 4) allows marked code to do. Some existing patterns read cells whose
+types carry a `RequiresIntegrity`, and their nodes' schemas carry it with
+them; the full CI run measures which of them the check refuses, and each is
+fixed to satisfy its declaration.
 
 ### A rule over two inputs
 
@@ -253,49 +253,32 @@ keeps a fixed threshold:
     holds of the honest run.
   - A comment on specs#51 proposing that §8.7.2 admit an identity guard over
     requirements the identity binds.
-- [ ] **Spike.**
-  - [x] Choose the attribution mechanism. Neither of the two above: the check
-        follows the lift's binding to what the code can reach at each declared
-        path, before the body runs (`cfc/argument-input-requirements.ts`). It
-        reads no log and no memo, so lazy materialization and memoized hops
-        cannot hide a read, and a `Cell`-typed argument is covered by what it
-        reaches. Every reference on the way to a declared path is followed,
-        one partway along a reference's own path included; a reference inside
-        the value reached is checked where it is held, without link-carried
-        evidence copied from its target. Every leaf of a reached value is an
-        observation, unlabeled ones public. Absence (no document, a missing
-        field, an empty container) is no observation, as in the handler
-        check, rather than the public read the list below assumed for a
-        substituted default.
-  - [x] Bind the argument schema to the resolved artifact. The requirements
-        are those of the artifact a `$implRef` resolves to, together with the
-        graph's own, so a graph can add a requirement and cannot remove one;
-        an `$implRef` resolved only through the engine's index, whose code
-        schema is unknown, is refused.
-  - Find out how trigger reads and handler state bindings attribute.
-- [ ] **The check**, under a `SPEC-PENDING` marker at `observe`. Landed for
-      verified lifts behind `cfcArgumentInputRequirements`; handlers,
-      builtins and `maxConfidentiality` on arguments are not checked yet. Deliberately unlike the list below, the binding's own object
-      structure and a document of references at a declared path are plumbing
-      the check passes through rather than refuses outright; the specs ruling
-      lists the stricter reading as an option.
-  - Unit tests, each refused except the first:
-    - an honest pair passes;
-    - a stand-in at either argument;
-    - a literal in the wiring;
-    - a substituted default;
-    - (passes, as landed: references are plumbing) an argument assembled in
-      the wiring around references, or in a document of references;
-    - a graph built as data that carries a weaker schema;
-    - a `Cell`-typed argument;
-    - two arguments wired to one document;
-    - a read served from each memo.
-  - Run the pattern suite at `observe` and list what the check would refuse.
+- [x] **Spike.**
+  - Attribution: the check follows the node's binding to what its code can
+    reach at each declared path, before the code runs. This is a host
+    arrangement that over-taints, recorded in the
+    [conformance statement](../specs/cfc-conformance-statement.md) with the
+    read-log gaps it stands in for (lazy materialization, memoized hops,
+    `Cell`-typed inputs read later), each a follow-up.
+  - The schema bound to the identity: the artifact indexed under the
+    identity the run is stamped with, together with the graph's own schema;
+    an identity with no indexed artifact is refused.
+- [x] **The check**, enforced at the default, for lifts, computed nodes and
+      handlers, with one `SPEC-PENDING` marker on the identity binding.
+      `maxConfidentiality` on inputs and builtins' inputs are recorded gaps.
+  - Tests (`cfc-node-input-requirements.test.ts`): §10's `to_city` first (a
+    measured location passes; a shifted or forged one is refused), then a
+    window gate (a viewer's assembly, a literal in the wiring, a gate other
+    code wrote or computed, a reference cycle, an absent gate where no stamp
+    vouches for it are refused; the owner's gate, and a gate absent from
+    settings the owner wrote, pass), and a handler.
+  - Measure the pattern suite through CI and fix each refused pattern.
 - [ ] **After the ruling.**
-  - Move to `enforce` and remove the marker.
+  - Remove the marker.
   - Note in the kernel manifest that `verifyInputRequirements` also walks
     argument schemas.
-  - Update the [conformance statement](../specs/cfc-conformance-statement.md).
+  - Update the [conformance statement](../specs/cfc-conformance-statement.md)
+    when the read-log gaps close.
 - [ ] **Builtin input requirements** for `policySecretHash`, with labs#8557.
 - [ ] **Documents.**
   - Update [input witnesses](../specs/cfc-transformed-by-input-witnesses.md)

@@ -63,7 +63,6 @@ import {
   buildCfcPolicySnapshot,
   buildCfcReadCeiling,
   buildCfcTrustConfig,
-  type CfcArgumentInputRequirementsMode,
   type CfcConfClause,
   type CfcContentAddressedLabels,
   type CfcDeclaredMonotonicityMode,
@@ -781,18 +780,6 @@ export interface RuntimeOptions {
   cfcDeclaredMonotonicity?: CfcDeclaredMonotonicityMode;
 
   /**
-   * The input requirements a lift's code declares on its arguments (CFC
-   * §8.10.3; docs/plans/cfc-argument-input-requirements.md). Defaults to
-   * `observe`: before a lift's body runs, every value it can reach through an
-   * argument that declares `requiredIntegrity` is checked against the
-   * declaration, public values and values written in the wiring included,
-   * and each failure is a diagnostic; the attempt is otherwise unchanged.
-   * `enforce` records each failure as a prepare reason, which rejects the
-   * commit under the enforcing enforcement modes. `off` checks nothing.
-   */
-  cfcArgumentInputRequirements?: CfcArgumentInputRequirementsMode;
-
-  /**
    * Per-prepare D4 write-prefix precision counters (value-level provenance
    * Stage 0 — docs/specs/cfc-value-level-provenance.md §6, SC-24). Defaults
    * to `false`: the prepare gate then skips all measurement, paying a single
@@ -956,12 +943,6 @@ export interface CfcRuntimeStats {
   /** Structured refusal details recorded across transaction prepares. */
   refusalDetailsRecorded: number;
 
-  /**
-   * Lift arguments that failed an input requirement their code declares
-   * (§8.10.3), under `observe` as under `enforce`.
-   */
-  argumentInputRefusals: number;
-
   /** Full consumed-label collections, including sink and host release checks. */
   consumedLabelWalks: number;
 
@@ -1032,7 +1013,6 @@ const initialCfcRuntimeStats = (): CfcRuntimeStats => ({
   dereferenceTracesRecorded: 0,
   dereferenceTracesMax: 0,
   refusalDetailsRecorded: 0,
-  argumentInputRefusals: 0,
   consumedLabelWalks: 0,
   overlapWildcardQueries: 0,
   overlapConcreteQueries: 0,
@@ -1313,7 +1293,6 @@ export class Runtime {
   readonly cfcPolicyEvaluation: CfcPolicyEvaluationMode;
   readonly cfcLabelMetadataProtection: CfcLabelMetadataProtectionMode;
   readonly cfcDeclaredMonotonicity: CfcDeclaredMonotonicityMode;
-  readonly cfcArgumentInputRequirements: CfcArgumentInputRequirementsMode;
   readonly cfcPrefixProvenanceStats: boolean;
   readonly cfcSinkMaxConfidentiality: SinkMaxConfidentiality;
 
@@ -2076,7 +2055,6 @@ export class Runtime {
       this.cfcPolicyEvaluation = dials.cfcPolicyEvaluation;
       this.cfcLabelMetadataProtection = dials.cfcLabelMetadataProtection;
       this.cfcDeclaredMonotonicity = dials.cfcDeclaredMonotonicity;
-      this.cfcArgumentInputRequirements = dials.cfcArgumentInputRequirements;
       this.cfcPrefixProvenanceStats = options.cfcPrefixProvenanceStats ?? false;
       this.#cfcInstrumentation = this.#buildCfcInstrumentation();
       // Deep-freeze: the ceiling is CFC enforcement config, so a caller must not
@@ -2686,9 +2664,6 @@ export class Runtime {
     wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
     wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
     wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
-    wrapped.setCfcArgumentInputRequirementsMode(
-      this.cfcArgumentInputRequirements,
-    );
     wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
     wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
     wrapped.setCfcTrustConfig(this.cfcTrustConfig);
@@ -2754,9 +2729,6 @@ export class Runtime {
       },
       onRefusalDetail: () => {
         this.#cfcStats.refusalDetailsRecorded += 1;
-      },
-      onArgumentInputRefusal: () => {
-        this.#cfcStats.argumentInputRefusals += 1;
       },
       onPreparationWork: (kind, count) => {
         this.#cfcStats[kind] += count;

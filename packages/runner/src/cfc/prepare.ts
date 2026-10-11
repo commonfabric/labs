@@ -6803,8 +6803,8 @@ export const cfcFloorTrustContext = (
  * reference's holder gave it. `address.path` is a payload path, as a link's
  * is.
  *
- * For the argument input requirements of a lift (§8.10.3), whose
- * observations are made by following the lift's binding rather than read
+ * For a node's input requirements (§8.9, §8.10.3), whose
+ * observations are made by following the node's binding rather than read
  * from the log.
  */
 export const consumedIntegrityAt = (
@@ -10776,8 +10776,8 @@ export function* prepareBoundaryCommitSteps(
       ),
     );
   }
-  // The argument input requirements a lift's code declares, checked by the
-  // runner before the body ran (§8.10.3; `cfc/argument-input-requirements.ts`).
+  // The input requirements a node's code declares, checked by the runner
+  // before the code ran (§8.9, §8.10.3; `cfc/node-input-requirements.ts`).
   for (const refusal of state.argumentInputRefusals) {
     reasons.push(
       refusal.verdict ? verdictReason(refusal.reason) : refusal.reason,

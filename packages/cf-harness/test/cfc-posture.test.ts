@@ -240,21 +240,6 @@ describe("cfc-posture", () => {
     ) =>
       renderCfcPostureReport(harnessFabricSessionPosture(posture)).join("\n");
 
-    it("renders the argument input requirements dial", () => {
-      expect(rendered(SESSION)).toContain("argument requirements");
-    });
-
-    it("renders a record written before that dial existed without it", () => {
-      // What JSON hands back for a record published before the dial existed.
-      const { argumentInputRequirements: _, ...older } =
-        harnessFabricSessionPosture(SESSION);
-      const lines = renderCfcPostureReport(
-        older as ReturnType<typeof harnessFabricSessionPosture>,
-      );
-      expect(lines.join("\n")).not.toContain("argument requirements");
-      expect(lines.join("\n")).toContain("declared monotonicity");
-    });
-
     it("says a projected record is not an attestation", () => {
       expect(rendered(SESSION)).toContain("not what one attested");
     });

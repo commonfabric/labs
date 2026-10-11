@@ -422,3 +422,57 @@ are the designs.
   disclosure residuals of the metadata channel; the specification's own
   alternative, treating the metadata as visible to the destination's readers,
   is what the runtime does for the fields it leaves public.
+
+## Node input requirements (§8.9, §8.10.3)
+
+Not one of §18.6.4's eight items, but a check §8.9 requires of every node
+("Input contract checks … MUST be enforced before commit") and §8.10.3
+defines, so its arrangement and gaps are recorded here.
+
+**What the runtime does.** Before a lift's, a computed node's or a handler's
+code runs, `#checkInputRequirements` in `runner.ts` resolves the
+`requiredIntegrity` declarations of the node's input schema and
+`argumentInputRefusals` in `cfc/node-input-requirements.ts` checks each
+against what the node's binding reaches at the declared path, coherently
+(`cfcIntegritySatisfiesFloorCoherently`, the predicate the write gate uses).
+Each failure is recorded on the transaction (`recordCfcArgumentInputRefusal`)
+and becomes a prepare reason, so it refuses the commit under the enforcing
+modes. A reference supplies its target's integrity and its slot contributes
+confidentiality only (§8.2.4, as the dereference join does); a value written
+in the binding itself carries no evidence; a path read and found absent is a
+`shape` observation (§4.6.3) of the position it is absent from; every leaf of
+a reached value is an observation, an unlabeled one carrying no integrity.
+For verified code the requirements are those of the schema bound to the code
+identity that ran, together with the graph's own, which may add requirements
+and cannot remove one: that is the one point under a `SPEC-PENDING` marker
+(commonfabric/specs#62).
+
+**A host arrangement, with direction.** The observations are found by
+following the node's binding to everything its code can reach at each
+declared path, under verifier-internal reads (§18.6.2), rather than taken from
+the attempt's read log, as §8.10.3 has it. The reach is a superset of what the
+code reads, so it over-taints: it can refuse an input the code would not have
+read. It stands in for three gaps in the read log, each a follow-up:
+
+- a lazily materialized argument logs only what the body touches, so a
+  declared path the body reads later, or not at all, has no logged read when
+  the gate runs;
+- a link resolution served from the snapshot memo, or a hop served from
+  `traverseDAG`'s memo, logs no read for that hop;
+- a `Cell`-typed input logs the reads the body makes through it later, after
+  the point where the check runs.
+
+When the log records each of these, the check can take its observations from
+the log and the reach can go.
+
+**Known gaps, with direction.**
+
+- `maxConfidentiality` declared on a node's input is not checked: an
+  under-taint for code that relies on such a ceiling.
+- The inputs of builtins are not checked: an under-taint for a builtin whose
+  input schema declares `requiredIntegrity`.
+- A `requiredIntegrity` inside an `anyOf` or `oneOf` branch is applied
+  whichever branch the value takes, an over-taint; §4.2.1.1 keeps such
+  declarations outside the normalized profile.
+- A verified identity whose artifact is not indexed is refused with a
+  retryable reason, an over-taint until the artifact is indexed.

@@ -1,30 +1,44 @@
 /**
- * Input requirements on a lift's arguments (spec §8.10.3). A lift's code that
- * declares `requiredIntegrity` on an argument admits only an argument carrying
- * that integrity, however the graph that runs it was wired: every value read
- * through the argument is checked, a public value included, and a value the
- * wiring wrote itself carries no evidence. The plan is
- * `docs/plans/cfc-argument-input-requirements.md`.
+ * Input requirements of a node's code (spec §8.9, §8.10.3): `requiredIntegrity`
+ * a lift's, a computed node's or a handler's code declares on its input is
+ * checked against every value the node's attempt reads there, public values
+ * included, before the attempt commits. §8.9 holds every node to its input
+ * contract ("MUST be enforced before commit"), §4.6.1 gives a node its input
+ * cells, and §3.8.4 and §10's `to_city()` are the reason: trusted code that
+ * requires integrity on its input refuses a value untrusted code computed or
+ * chose. Requirements on confidentiality (`maxConfidentiality`) and the
+ * inputs of builtins are not checked here yet; the conformance statement
+ * records both.
  *
- * The observations are found by following the lift's binding to the values
- * its code can reach at each declared path, rather than from the read log, so
- * they do not depend on which paths a lazily materialized argument happened to
- * touch, nor on reads a memo served; the reach can only be wider than what the
- * code read. Every reference on the way to a declared path, including one
- * partway along a reference's own path, is followed to its target. A
- * reference held deeper, inside the value reached, is checked where it is
- * held, on the label its holder gave it: by §8.2.4 a dereference's integrity
- * includes the reference's, so that is the stricter side, and evidence copied
- * onto the reference from its target (a link-carried entry, §8.2.5) does not
- * count for it.
+ * Which schema's requirements apply is the one point the specification does
+ * not yet settle: here, the schema bound to the code identity that ran, to
+ * which a graph's schema can add requirements and from which it can remove
+ * none (marked pending its ruling, commonfabric/specs#62, in the runner,
+ * where the schemas are resolved).
  *
- * Absence is not an observation, as in §8.10.3's own check: a declared path
- * where no value is reached (no document, a missing field, an empty
- * container) consumes nothing, and the code sees no value there. The
- * exception is an absence a schema other than the code's own could fill with
- * a `default` — one a reference on the way carries, or the graph's when it
- * differs from the code's: the code would be handed the value that schema
- * chose, which is a value written in the wiring.
+ * How the reads are found is a host arrangement, recorded in
+ * `docs/specs/cfc-conformance-statement.md`: the runner follows the node's
+ * binding to everything its code can reach at each declared path before the
+ * code runs, rather than reading the attempt's log, because the log misses
+ * reads a lazily materialized argument makes later, hops a memo served, and
+ * reads through a `Cell` the code holds. The reach is a superset of what the
+ * code reads, so it can only refuse more.
+ *
+ * What each observation carries:
+ * - A reference is followed to its target, which supplies the observation's
+ *   integrity. The slot that holds a reference contributes confidentiality
+ *   only (§8.2.4), so it is not an integrity observation here; evidence
+ *   copied onto a reference from its target (§8.2.5) never counts.
+ * - A value written in the node's binding itself (a literal in the wiring)
+ *   carries no evidence.
+ * - A path that is read and found absent is a `shape` observation (§4.6.3)
+ *   of the position it is absent from, labeled as that position is. If a
+ *   schema other than the code's own (one a reference carries, or the
+ *   graph's where it is not the code's) would fill it with a `default`, the
+ *   code would be handed the value that schema chose, which carries no
+ *   evidence either.
+ * - A cycle of references, or a chain longer than the runtime resolves,
+ *   reaches no value the code is handed and carries no evidence.
  */
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
@@ -51,14 +65,14 @@ import { cfcFloorTrustContext, consumedIntegrityAt } from "./prepare.ts";
 import { cfcSchemaEntries } from "./schema-label-view.ts";
 import type { CfcArgumentInputRefusal } from "./types.ts";
 
-/** One argument path whose value must carry `requiredIntegrity`. */
+/** One input path whose value must carry `requiredIntegrity`. */
 export type ArgumentRequirement = {
   readonly path: readonly string[];
   readonly requiredIntegrity: readonly CfcAtom[];
 };
 
 /**
- * Every integrity requirement `schemas` declare on an argument: one schema
+ * Every integrity requirement `schemas` declare on a node's input: one schema
  * cannot remove a requirement another declares. A requirement inside an
  * `anyOf` branch is kept whichever branch the value takes, which refuses more
  * than the branch would (§8.10 leaves branch-local obligations outside the
@@ -84,10 +98,10 @@ export const argumentIntegrityRequirements = (
   return requirements;
 };
 
-/** A lift's argument requirements, as the runner resolves them. */
+/** A node's input requirements, as the runner resolves them. */
 export type ArgumentRequirementResolution = {
   readonly requirements: ArgumentRequirement[];
-  /** Whether the code's own argument schema was found. */
+  /** Whether the schema bound to the code identity was found. */
   readonly codeSchema: boolean;
   /**
    * The schema the graph carries for the node when it is not the code's own,
@@ -186,80 +200,71 @@ export const schemaDefaultsAt = (
   return childSchemas(node, segment).some((child) => inner(child, rest));
 };
 
-/** What a lift's binding gives one declared argument path. */
-type ArgumentReach = {
+/** What a node's binding gives one declared input path. */
+type InputReach = {
   /**
-   * Where each value reached through a reference sits, read whole, with the
-   * value's leaf positions relative to it.
+   * Each position an observation was made at, with the leaf positions
+   * observed below it (`[[]]` for the position itself).
    */
   readonly locations: {
     location: NormalizedFullLink;
     leaves: (readonly string[])[];
   }[];
-  /**
-   * How many values carry no evidence: those the binding holds itself, and
-   * each absence a schema other than the code's could fill with a `default`.
-   */
+  /** How many observations carry no evidence (see the module comment). */
   readonly inWiring: number;
 };
 
-/**
- * The leaf positions of a value read from a document, relative to it: each
- * scalar, each special value (bytes, an instance), and each reference slot,
- * which is checked where it is held. An empty plain container has none: like
- * an absent value, it shows nothing.
- */
-const leafPaths = (value: unknown): (readonly string[])[] =>
-  isPrimitiveCellLink(value) || !isPlainContainer(value)
-    ? [[]]
-    : Object.entries(value).flatMap(([key, child]) =>
-      leafPaths(child).map((leaf) => [key, ...leaf])
-    );
-
-/** Calls `visit` for the child or children `segment` names, `absent` if none. */
-const descend = (
+/** A value's leaf positions relative to it, and the references it holds. */
+const leavesOf = (
   value: unknown,
-  segment: string,
-  visit: (child: unknown, key: string) => void,
-  absent: () => void,
-): void => {
-  // A special value has no members the code could reach by path.
-  if (!isPlainContainer(value)) return absent();
-  if (segment === "*") {
-    for (const [key, child] of Object.entries(value)) visit(child, key);
-    return;
+  at: readonly string[] = [],
+  out: { leaves: (readonly string[])[]; references: (readonly string[])[] } = {
+    leaves: [],
+    references: [],
+  },
+): typeof out => {
+  if (isPrimitiveCellLink(value)) {
+    out.references.push(at);
+  } else if (!isPlainContainer(value) || Object.keys(value).length === 0) {
+    // A scalar, a special value (bytes, an instance) or an empty container:
+    // an observation of the position itself.
+    out.leaves.push(at);
+  } else {
+    for (const [key, child] of Object.entries(value)) {
+      leavesOf(child, [...at, key], out);
+    }
   }
-  if (!Object.hasOwn(value, segment)) return absent();
-  const child: unknown = Reflect.get(value, segment);
-  visit(child, segment);
+  return out;
 };
 
 /**
- * Follows `binding` to what its code can reach at `path`. The binding's own
- * reference slots, and the objects it builds around them, are plumbing; a
- * scalar it holds at or below `path` is a value written in the wiring.
+ * Follows `binding` to what its code can reach at `path`, recording each
+ * observation. The reads go through `tx` under `meta`.
  */
-const reachThroughArgument = (
+const reachThroughInput = (
   tx: IExtendedStorageTransaction,
   binding: unknown,
   base: NormalizedFullLink,
   path: readonly string[],
   meta: Metadata,
   foreignSchema: JSONSchema | undefined,
-): ArgumentReach => {
-  const locations: ArgumentReach["locations"] = [];
+): InputReach => {
+  const locations: InputReach["locations"] = [];
   let inWiring = 0;
   const followed = new Set<string>();
-  // The graph's own schema, where it is not the code's, could fill an absence
-  // anywhere it declares a `default` at or around the declared path.
   const graphDefaults = schemaDefaultsAt(foreignSchema, path);
 
-  // Absence is no observation, unless a schema the code did not declare —
-  // the graph's, or one a reference on the way carries — could hand the code
-  // a `default` there instead: that value is the wiring's.
-  const absent = (defaulting: boolean) => {
+  // A position read and found absent: a `shape` observation of it, unless a
+  // schema not the code's would hand the code a default there.
+  const absentAt = (location: NormalizedFullLink, defaulting: boolean) => {
     if (defaulting) inWiring += 1;
+    else locations.push({ location, leaves: [[]] });
   };
+
+  const at = (location: NormalizedFullLink, key: string) => ({
+    ...location,
+    path: [...location.path, key],
+  });
 
   // A value read from a stored document at `location`, with `rest` of the
   // declared path still to walk.
@@ -274,25 +279,45 @@ const reachThroughArgument = (
       return follow(parseLink(value, location), rest, defaulting, chain);
     }
     if (rest.length === 0) {
-      if (value === undefined) return absent(defaulting);
-      const leaves = leafPaths(value);
+      if (value === undefined) return absentAt(location, defaulting);
+      const { leaves, references } = leavesOf(value);
       if (leaves.length > 0) locations.push({ location, leaves });
+      // A reference inside the value is followed: its target's integrity
+      // is what the code is handed (the slot adds confidentiality only).
+      for (const reference of references) {
+        const slot = { ...location, path: [...location.path, ...reference] };
+        const held: unknown = reference.reduce<unknown>(
+          (inner, key) =>
+            isObjectOrArray(inner) ? Reflect.get(inner, key) : undefined,
+          value,
+        );
+        const link = parseLink(held, slot);
+        if (link !== undefined) follow(link, [], defaulting, chain);
+      }
       return;
     }
     const [segment, ...remaining] = rest;
-    descend(
-      value,
-      segment,
-      (child, key) =>
-        inDocument(
-          { ...location, path: [...location.path, key] },
-          child,
-          remaining,
-          defaulting,
-          chain,
-        ),
-      () => absent(defaulting),
-    );
+    if (!isPlainContainer(value)) {
+      // Nothing to descend into: the position is read and the path absent.
+      return absentAt(
+        segment === "*" ? location : at(location, segment),
+        defaulting,
+      );
+    }
+    if (segment === "*") {
+      const children = Object.entries(value);
+      // An empty container enumerated: an observation of the container.
+      if (children.length === 0) return absentAt(location, defaulting);
+      for (const [key, child] of children) {
+        inDocument(at(location, key), child, remaining, defaulting, chain);
+      }
+      return;
+    }
+    if (!Object.hasOwn(value, segment)) {
+      return absentAt(at(location, segment), defaulting);
+    }
+    const child: unknown = Reflect.get(value, segment);
+    inDocument(at(location, segment), child, remaining, defaulting, chain);
   };
 
   // Reads the target's document from its root, so a reference partway along
@@ -307,10 +332,6 @@ const reachThroughArgument = (
     // The link's schema describes its target, so a `default` in it at or
     // around the rest of the walk is one the code could be handed.
     const carriesDefault = defaulting || schemaDefaultsAt(link.schema, rest);
-    // A reference this chain already passed through, or a chain longer than
-    // the runtime itself resolves, never reaches a value the code is
-    // handed; whatever it would show is not evidence, so it counts as the
-    // wiring's rather than as absence.
     const target = addressKey({
       ...link,
       scope: normalizeCellScope(link.scope),
@@ -321,12 +342,12 @@ const reachThroughArgument = (
       inWiring += 1;
       return;
     }
-    // The same target, walk and default exposure observe the same values:
-    // once is enough. A walk that could be defaulted is not one that could
-    // not, since only it turns absence into a value of the wiring's.
+    // The same target, walk and default exposure observe the same values.
     const key = JSON.stringify([target, rest, carriesDefault]);
     if (followed.has(key)) return;
     followed.add(key);
+    // The verifier's own read (§8.10.1, §18.6.2): marked by `meta`, so it
+    // enters no consumed set; the observation it supports is recorded above.
     const root = { ...link, path: [] };
     inDocument(
       root,
@@ -338,16 +359,16 @@ const reachThroughArgument = (
   };
 
   // A value the binding holds at the declared path: its references are
-  // followed, and every scalar in it is the wiring's own.
+  // followed, and every other value in it is the wiring's own.
   const heldAtPath = (value: unknown): void => {
     if (isCellLink(value)) {
       return follow(parseLink(value, base), [], graphDefaults, []);
     }
-    if (isPlainContainer(value)) {
+    if (isPlainContainer(value) && Object.keys(value).length > 0) {
       for (const child of Object.values(value)) heldAtPath(child);
       return;
     }
-    if (value !== undefined) inWiring += 1;
+    inWiring += 1;
   };
 
   const inBinding = (value: unknown, rest: readonly string[]): void => {
@@ -356,12 +377,21 @@ const reachThroughArgument = (
     }
     if (rest.length === 0) return heldAtPath(value);
     const [segment, ...remaining] = rest;
-    descend(
-      value,
-      segment,
-      (child) => inBinding(child, remaining),
-      () => absent(graphDefaults),
-    );
+    if (!isPlainContainer(value)) {
+      // The wiring left the path out: the code is handed nothing it chose.
+      inWiring += 1;
+      return;
+    }
+    const children = segment === "*"
+      ? Object.values(value)
+      : Object.hasOwn(value, segment)
+      ? [Reflect.get(value, segment)]
+      : [];
+    if (children.length === 0) {
+      inWiring += 1;
+      return;
+    }
+    for (const child of children) inBinding(child, remaining);
   };
 
   inBinding(binding, path);
@@ -369,10 +399,10 @@ const reachThroughArgument = (
 };
 
 /**
- * The argument input requirements `requirements` that the lift `code`, bound
+ * The input requirements `requirements` that the node running `code`, bound
  * by `binding`, fails, each as a refusal. Reads go through `tx` under `meta`,
- * which marks them as the verifier's own (§8.10.1), so they are not consumed
- * inputs of anything else in the transaction.
+ * which marks them as the verifier's own (§8.10.1, §18.6.2), so they are not
+ * consumed inputs of anything else in the transaction.
  *
  * Labels are the stored ones, so the check is made before the transaction
  * writes: a transaction that has written may have changed a value whose label
@@ -390,14 +420,14 @@ export const argumentInputRefusals = (
   if (requirements.length === 0) return [];
   if (tx.hasWrites()) {
     return [{
-      reason: `argument requiredIntegrity of ${code} checked after a write`,
+      reason: `input requiredIntegrity of ${code} checked after a write`,
       verdict: false,
     }];
   }
   const trust = cfcFloorTrustContext(tx);
   const refusals: CfcArgumentInputRefusal[] = [];
   for (const requirement of requirements) {
-    const reach = reachThroughArgument(
+    const reach = reachThroughInput(
       tx,
       binding,
       base,
@@ -411,7 +441,6 @@ export const argumentInputRefusals = (
       ),
       ...Array.from({ length: reach.inWiring }, (): readonly CfcAtom[] => []),
     ];
-    // SPEC-PENDING https://github.com/commonfabric/specs/pull/62
     if (
       cfcIntegritySatisfiesFloorCoherently(
         observations,
@@ -422,7 +451,7 @@ export const argumentInputRefusals = (
       continue;
     }
     refusals.push({
-      reason: `argument requiredIntegrity failed at /${
+      reason: `input requiredIntegrity failed at /${
         requirement.path.join("/")
       } of ${code}`,
       verdict: true,

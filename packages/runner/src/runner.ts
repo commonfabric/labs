@@ -85,7 +85,7 @@ import {
   argumentInputRefusals,
   argumentIntegrityRequirements,
   type ArgumentRequirementResolution,
-} from "./cfc/argument-input-requirements.ts";
+} from "./cfc/node-input-requirements.ts";
 import {
   recordNewDocumentProtectedDefaults,
   recordNewProtectedDefaults,
@@ -212,7 +212,6 @@ import {
   machineryRead,
   markDurableReadTx,
   schedulerDependencyRead,
-  stableInternalVerifierRead,
 } from "./storage/reactivity-log.ts";
 import {
   isCfcEnforcementRejection,
@@ -10668,20 +10667,28 @@ export class Runner {
   }
 
   /**
-   * The integrity requirements of a verified lift (§8.10.3): those of the
-   * argument schema the artifact its running identity names declares — the
-   * identity its outputs are stamped with, not whatever module carried the
-   * function here — together with those of the schema the graph carries for
-   * the node, which can add a requirement and cannot remove one. `codeSchema`
-   * is false when no artifact is indexed under that identity, so the code's
-   * own schema is unknown. `foreignSchema` is the graph's schema when it is
-   * not the code's: a `default` in it would hand the code a value the graph
-   * chose where the binding reaches none.
+   * The integrity requirements of a node's code on its input (§8.9, §8.10.3).
+   * For verified code they are those of the schema bound to the identity that
+   * ran — the artifact indexed under the identity its outputs are stamped
+   * with, not whatever module carried the function here — together with those
+   * of the schema the graph carries for the node, which can add a requirement
+   * and cannot remove one. Code with no verified identity has no other schema
+   * than the graph's. `codeSchema` is false when no artifact is indexed under
+   * a verified identity, so the code's own schema is unknown. `foreignSchema`
+   * is the graph's schema when it is not the code's: a `default` in it would
+   * hand the code a value the graph chose.
    */
-  #argumentRequirements(
-    identity: Extract<ImplementationIdentity, { kind: "verified" }>,
+  #inputRequirements(
+    identity: ImplementationIdentity | undefined,
     graphSchema: JSONSchema | undefined,
   ): ArgumentRequirementResolution {
+    if (identity?.kind !== "verified") {
+      return {
+        requirements: argumentIntegrityRequirements([graphSchema]),
+        codeSchema: true,
+        foreignSchema: undefined,
+      };
+    }
     const artifact: unknown =
       identity.moduleIdentity === undefined || identity.symbol === undefined
         ? undefined
@@ -10694,6 +10701,7 @@ export class Runner {
     }
     const declared: unknown = Reflect.get(artifact, "argumentSchema");
     const codeSchema = isSubschema(declared) ? declared : undefined;
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/62
     return {
       requirements: argumentIntegrityRequirements([codeSchema, graphSchema]),
       codeSchema: true,
@@ -10704,18 +10712,15 @@ export class Runner {
   }
 
   /**
-   * Checks a verified lift's argument input requirements before its body
-   * runs, and records each failure on `tx` for its dial
-   * (`recordCfcArgumentInputRefusal`). Under `observe` the check reads
-   * through a transaction of its own that writes nothing, which is then discarded, so
-   * the attempt's reads, commit preconditions, read scope and local-read
-   * basis are exactly what they would have been; an error there is only a
-   * diagnostic. Under `enforce` it reads through `tx` as the verifier's own
-   * reads, which the scheduler still sees, and a read it cannot make refuses
-   * the commit: retryably when the
-   * input is not available yet, terminally otherwise.
+   * Checks a node's input requirements before its code runs, and records each
+   * failure on `tx` for the boundary pass, which refuses the commit under the
+   * enforcing modes. The reads are the verifier's own (§8.10.1, §18.6.2):
+   * marked so they enter no consumed set, while the scheduler still sees them,
+   * so a refused lift runs again when what the check read changes. A read the
+   * check cannot make refuses the commit: retryably when the input is not
+   * available yet, terminally otherwise.
    */
-  #checkArgumentInputRequirements(
+  #checkInputRequirements(
     tx: IExtendedStorageTransaction,
     identity: ImplementationIdentity | undefined,
     binding: unknown,
@@ -10723,71 +10728,37 @@ export class Runner {
     graphSchema: JSONSchema | undefined,
     resolved: Map<string, ArgumentRequirementResolution>,
   ): void {
-    const mode = tx.getCfcState().argumentInputRequirementsMode;
-    if (mode === "off" || identity?.kind !== "verified") return;
-    const code = `${identity.moduleIdentity ?? "?"}:${identity.symbol ?? "?"}`;
-    let argument = resolved.get(code);
-    if (argument === undefined) {
-      argument = this.#argumentRequirements(identity, graphSchema);
+    const code = identity?.kind === "verified"
+      ? `${identity.moduleIdentity ?? "?"}:${identity.symbol ?? "?"}`
+      : "unverified code";
+    let inputs = resolved.get(code);
+    if (inputs === undefined) {
+      inputs = this.#inputRequirements(identity, graphSchema);
       // Only a found artifact is remembered: one not indexed yet may be later.
-      if (argument.codeSchema) resolved.set(code, argument);
+      if (inputs.codeSchema) resolved.set(code, inputs);
     }
-    if (!argument.codeSchema) {
+    if (!inputs.codeSchema) {
       tx.recordCfcArgumentInputRefusal({
-        reason: `argument schema of ${code} is not available`,
+        reason: `input schema of ${code} is not available`,
         verdict: false,
       });
       return;
     }
-    if (argument.requirements.length === 0) return;
-    const base = inputsCell.getAsNormalizedFullLink();
-    if (mode === "observe") {
-      // Owned rather than `readTx()`'s, so it can be discarded; it writes
-      // nothing. It reads the replica's current state, not this attempt's
-      // view, which only a diagnostic can afford.
-      const readTx = this.#runtime.edit();
-      try {
-        for (
-          const refusal of argumentInputRefusals(
-            readTx,
-            code,
-            binding,
-            base,
-            argument.requirements,
-            stableInternalVerifierRead,
-            argument.foreignSchema,
-          )
-        ) {
-          tx.recordCfcArgumentInputRefusal(refusal);
-        }
-      } catch (error) {
-        tx.noteCfcDiagnostic(
-          `argument-input-requirements(observe): ${code} not checked: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      } finally {
-        readTx.abort();
-      }
-      return;
-    }
+    if (inputs.requirements.length === 0) return;
     let refusals;
     try {
       refusals = argumentInputRefusals(
         tx,
         code,
         binding,
-        base,
-        argument.requirements,
-        // Not hidden from scheduling: a refused lift runs again when what
-        // the check read changes, so repairing an argument the body never
-        // reaches still reruns it.
+        inputsCell.getAsNormalizedFullLink(),
+        inputs.requirements,
         internalVerifierRead,
-        argument.foreignSchema,
+        inputs.foreignSchema,
       );
     } catch (error) {
       refusals = [{
-        reason: `argument requiredIntegrity of ${code} not checked: ${
+        reason: `input requiredIntegrity of ${code} not checked: ${
           error instanceof Error ? error.message : String(error)
         }`,
         verdict: !(error instanceof LocalReadUnavailable),
@@ -11534,6 +11505,12 @@ export class Runner {
     // handler because the bindings are fixed for the node, so the reduction
     // runs once rather than per event.
     const causalInputs = causalFormOfBinding(inputs) as Record<string, any>;
+    // The input requirements of each identity this handler runs under,
+    // resolved on its first run.
+    const inputRequirements = new Map<
+      string,
+      ArgumentRequirementResolution
+    >();
 
     const handlerResultCell = schedulerRehydration.viewLocalOnly
       ? resultCell.withTx()
@@ -11608,6 +11585,16 @@ export class Runner {
           eventInputs,
           undefined,
           tx,
+        );
+        // Before the body, while the transaction has written nothing, as for
+        // a lift: the event and the state the handler is bound to.
+        this.#checkInputRequirements(
+          tx,
+          policyFacingIdentity,
+          eventInputs,
+          inputsCell,
+          module.argumentSchema,
+          inputRequirements,
         );
         logger.timeStart("stream", "readInputs");
         const { argument, isValidArgument } = (() => {
@@ -11895,9 +11882,9 @@ export class Runner {
       byScope: new Map(),
     };
     let previouslyInvalidArgument = false;
-    // The argument requirements of each identity this node runs under,
+    // The input requirements of each identity this node runs under,
     // resolved on its first run.
-    const argumentRequirements = new Map<
+    const inputRequirements = new Map<
       string,
       ArgumentRequirementResolution
     >();
@@ -11984,13 +11971,13 @@ export class Runner {
         // stored labels the check reads are the ones the arguments carry, and
         // before the read scope is reset, so what it reads cannot move where
         // the result is placed.
-        this.#checkArgumentInputRequirements(
+        this.#checkInputRequirements(
           tx,
           policyFacingIdentity,
           inputs,
           inputsCell,
           module.argumentSchema,
-          argumentRequirements,
+          inputRequirements,
         );
         tx.resetNarrowestReadScope();
         // A lift reads its argument, and reads through it while it runs. Both

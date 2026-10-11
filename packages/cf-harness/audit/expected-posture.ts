@@ -33,7 +33,6 @@ export interface ExpectedPosture {
   policyEvaluation?: string;
   labelMetadataProtection?: string;
   declaredMonotonicity?: string;
-  argumentInputRequirements?: string;
   triggerReadGating?: boolean;
   decomposedEnvelopes?: boolean;
   contentAddressedLabels?: boolean;
@@ -66,7 +65,6 @@ const RUNG_FIELDS = [
   "policyEvaluation",
   "labelMetadataProtection",
   "declaredMonotonicity",
-  "argumentInputRequirements",
 ] as const;
 
 /** The runtime dial each of those fields reports. */
@@ -77,7 +75,6 @@ const RUNG_FIELD_DIALS = {
   policyEvaluation: "cfcPolicyEvaluation",
   labelMetadataProtection: "cfcLabelMetadataProtection",
   declaredMonotonicity: "cfcDeclaredMonotonicity",
-  argumentInputRequirements: "cfcArgumentInputRequirements",
 } as const satisfies Record<
   typeof RUNG_FIELDS[number],
   keyof typeof CFC_DIAL_LADDERS
@@ -262,18 +259,7 @@ export const postureMismatches = (
     const expected = spec[field];
     if (expected === undefined) continue;
     const rungs = rungLadder(field);
-    // A record written before a dial existed carries no field for it, which
-    // satisfies no floor.
-    const dial: CfcPostureReport[typeof field] | undefined = record[field];
-    if (dial === undefined) {
-      mismatches.push({
-        field,
-        expected: `${expected} or stricter`,
-        found: "absent",
-      });
-      continue;
-    }
-    const found = dial.rung;
+    const found = record[field].rung;
     if (rungs.indexOf(found) < rungs.indexOf(expected)) {
       mismatches.push({ field, expected: `${expected} or stricter`, found });
     }
