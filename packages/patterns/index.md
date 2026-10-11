@@ -126,7 +126,8 @@ private visitor recommendations), `router/`, `scoped-group-chat/`,
 `scoped-user-directory/`, `scrabble/`, `shared-note/` (a shared Markdown
 document whose live cursors carry each viewer's profile name),
 `shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
-`weekly-calendar/`.
+`weekly-calendar/`, `wordsearch/` (a word search maker: form, puzzle, and a PDF
+of the puzzle and its answer key).
 
 Connector-owned patterns live with their connector families: the
 [agent debug view](../connectors/agents/debug-view/README.md) and
@@ -736,6 +737,71 @@ interface Output {
     endTime: string;
   }>;
   setTitle: Stream<{ newTitle: string }>;
+}
+```
+
+## `wordsearch/main.tsx`
+
+Word Search Maker: a form for a title, a word list (one per line), the grid size
+and the directions words may run, beside the puzzle it makes. Composes
+`wordsearch/wordsearch.tsx`.
+
+**Keywords:** word search, puzzle, generator, printable, pdf, form
+
+### Input Schema
+
+```ts
+interface WordSearchMakerInput {
+  title?: Writable<string | Default<"Word Search">>;
+  wordText?: Writable<
+    string | Default<"apple\nbanana\ncherry\ngrape\nlemon\nmango\npeach">
+  >;
+  rows?: Writable<number | Default<12>>;
+  cols?: Writable<number | Default<12>>;
+  diagonals?: Writable<boolean | Default<false>>;
+  backwards?: Writable<boolean | Default<false>>;
+  seed?: Writable<number | Default<1>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface WordSearchMakerOutput {
+  puzzle: WordSearch; // from wordsearch/generator.ts
+}
+```
+
+## `wordsearch/wordsearch.tsx`
+
+A word search puzzle from a list of words: the grid, the words to find, an
+answers switch, Shuffle, and a PDF download of the puzzle and its answer key.
+Every hidden word appears exactly once; words left out are named with why.
+
+**Keywords:** word search, puzzle, grid, answer key, pdf, shuffle
+
+### Input Schema
+
+```ts
+interface WordSearchInput {
+  title?: string | Default<"Word Search">;
+  words?: string[] | Default<[]>;
+  rows?: number | Default<12>;
+  cols?: number | Default<12>;
+  diagonals?: boolean | Default<false>;
+  backwards?: boolean | Default<false>;
+  seed?: Writable<number | Default<1>>;
+  showAnswers?: PerSession<Writable<boolean | Default<false>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface WordSearchOutput {
+  puzzle: WordSearch;
+  pdf: string;
+  shuffle: Stream<void>;
 }
 ```
 

@@ -223,11 +223,11 @@ deployment refuses it. A deployment Google cannot reach takes the pull
 variant above instead, with a relay of its own.
 
 Bindings do not cross deployments either. A binding lives in the registry of
-the deployment that handled the `gmail-bind`, and a push is delivered against
-the bindings of the deployment that received it. So the steps under
+the deployment that handled the mint, and a push is delivered against the
+bindings of the deployment that received it. So the steps under
 [Binding a mailbox](#binding-a-mailbox) run once per deployment, each against
 that deployment: a space the user owns there, the WRITE grant for that
-deployment's identity, a `latest` channel, and a bind. A syncer bound to one
+deployment's identity, and a mint carrying the mailbox proof. A syncer bound to one
 toolshed does only its own; two syncers on one machine, each pointed at a
 different toolshed, each bind the same mailbox on their own. A deployment
 holding no binding for a mailbox acknowledges its notifications with
@@ -237,14 +237,25 @@ The watch is set once for the mailbox, whichever deployment or syncer sets
 it, since it names the topic and not a receiver. Renewing it from more than
 one place is harmless.
 
-Only the push path has to face the internet. Mint and bind are called by
-the syncer on the user's machine, with the user's own signing key, so they
-need only the reach the syncer already has to its toolshed, a private
-network included. Where a deployment sits behind something that admits
-public traffic by path, the rule to open is `/api/spaces/*/ingest-push/*`
-and nothing wider: the push route refuses everything without a token Google
-signed, and the control plane and data plane gain nothing from being
-reachable from outside.
+Gmail push uses two of toolshed's routes, and only one of them has to face
+the internet. The push route, `POST /api/spaces/:space/ingest-push/gmail`, is
+what Pub/Sub calls, and it refuses everything without a token Google signed.
+The channel verbs under `/api/spaces/:space/ingest-channels/` (mint, list,
+rotate, revoke) and `POST /api/ingest-channels/list` are called by the syncer
+on the user's machine, with the user's own signing key, so they need only the
+reach the syncer already has to its toolshed, a private network included.
+Where a deployment sits behind something that admits public traffic by path,
+Gmail push needs `/api/spaces/*/ingest-push/*` open and nothing else for its
+own sake.
+
+A third route is not Gmail push's and must not be closed on its account:
+`POST /api/ingest/:id`, and the newer spelling `POST /api/spaces/:space/ingest/:id`
+that mint has printed since 2026-10-08, where the holder of a device channel
+posts records with the channel's bearer token. The location beacon on a phone
+posts there, from wherever the phone is; its code lives in another
+repository and was paired against the older spelling, so it most likely still
+uses `POST /api/ingest/:id`. A rule narrowed for Gmail push leaves whatever
+that route has today in place, under both spellings.
 
 ## The OAuth client and a Gmail token
 
@@ -262,15 +273,17 @@ opens:
    download its JSON. `installed.client_id` and `installed.client_secret` in
    that file are `<client id>` and `<client secret>`.
 
-The one scope needed is `https://www.googleapis.com/auth/gmail.readonly`. It
-covers the profile lookup that binding makes and the `users.watch` call.
+The scope needed is `https://www.googleapis.com/auth/gmail.readonly`, which
+covers the profile lookup that an access-token proof makes and the
+`users.watch` call. Adding `openid` makes the code exchange return an ID
+token beside the access token, which can prove the mailbox instead.
 
 A Desktop client signs in through a loopback redirect: Google sends the
 browser back to a `localhost` address with a one-time code in the query
 string. Open this in a browser, signed in as the mailbox's account:
 
 ```text
-https://accounts.google.com/o/oauth2/auth?client_id=<client id>&redirect_uri=http://localhost:8765&response_type=code&scope=https://www.googleapis.com/auth/gmail.readonly&access_type=offline&prompt=consent
+https://accounts.google.com/o/oauth2/auth?client_id=<client id>&redirect_uri=http://localhost:8765&response_type=code&scope=openid%20https://www.googleapis.com/auth/gmail.readonly&access_type=offline&prompt=consent
 ```
 
 After consent the browser lands on an address beginning
@@ -307,23 +320,22 @@ those into variables too, or run it from a file kept outside the repository.
 
 ## Toolshed settings
 
-Two environment variables on the deployment, described in
-[`CONFIGURATION.md`](../development/CONFIGURATION.md):
+One environment variable on the deployment, and a second for ID-token
+proofs, described in [`CONFIGURATION.md`](../development/CONFIGURATION.md):
 
 | Variable | Value |
 | --- | --- |
 | `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | `<account>` |
-| `INGEST_SELF_SERVE_ENABLED` | `true`, which mounts the control plane that binding sits on |
+| `INGEST_GMAIL_OAUTH_CLIENT_IDS` | `<client id>`, to accept an ID token from that client as the mailbox proof. Unset, only an access token proves a mailbox. |
 
 The audience needs no setting: it defaults to `<service space>`. A deployment
 that wants another sets `INGEST_GMAIL_PUSH_AUDIENCE`. The audience is compared
 as a string and does not have to resolve.
 
 For a hosted deployment these are set where that deployment's environment is
-managed, which is outside this repository. A request to
-`POST /api/ingest-channels/list` that returns 404 means
-`INGEST_SELF_SERVE_ENABLED` is off; 401 means it is on and the request was
-unsigned.
+managed, which is outside this repository. An unsigned request to
+`POST /api/ingest-channels/list` returns 401 on any deployment, which is the
+quick check that the control plane is reachable.
 
 ## Binding a mailbox
 
@@ -348,17 +360,32 @@ is refused, with an error that names the same DID and says to grant it WRITE:
 cf acl set <deployment did> WRITE --space <space>
 ```
 
-Mint a channel with the `latest` sink into the space, then bind it to the
-mailbox. The bind command reads the Gmail access token from
+Mint a gmail channel into the space, naming the cell the notifications are
+written to and carrying the Gmail access token as proof of the mailbox; the
+mint binds the channel to it. `<target>` is a cell reference in `<space>`,
+such as `/of:fid1:…/inbox`; a document id that nothing else in the space
+uses is the caller's to choose. The command reads the token from
 `CF_GMAIL_ACCESS_TOKEN`:
 
 ```bash
-cf ingest mint --space <space> --install-id <install id> --cause-prefix gmail-push --sink latest
-CF_GMAIL_ACCESS_TOKEN="$GMAIL_ACCESS_TOKEN" cf ingest gmail-bind <channel>
+CF_GMAIL_ACCESS_TOKEN="$GMAIL_ACCESS_TOKEN" cf ingest mint --space <space> --install-id <install id> --target <target>
 ```
 
-`gmail-bind` prints the address it bound, which is the one Gmail reports for
-the token.
+It prints the mailbox it bound, which is the one Gmail reports for the
+token, and the target as a reference the command reads back. `<install id>`
+names the subscription within the space, one per mailbox, and the same id
+mints the same channel again on a retry or renewal; a second mailbox gets a
+second install id and, unless their notifications are meant to share a
+cell, a second target:
+
+```bash
+CF_GMAIL_ACCESS_TOKEN="$PERSONAL_TOKEN" cf ingest mint --space <space> --install-id gmail-personal --target /of:fid1:…personal
+CF_GMAIL_ACCESS_TOKEN="$WORK_TOKEN" cf ingest mint --space <space> --install-id gmail-work --target /of:fid1:…work
+```
+
+A consent that returned a Google ID token can pass that instead, as
+`CF_GMAIL_ID_TOKEN`, on a deployment whose `INGEST_GMAIL_OAUTH_CLIENT_IDS`
+names the consent's client.
 
 ## Setting the watch
 
@@ -428,8 +455,8 @@ curl -s -X POST -H "Authorization: Bearer <gcloud token>" -H "Content-Type: appl
 - Toolshed's response to a delivery is `{"delivered": 1}` for a bound mailbox
   with one live channel, and `{"delivered": 0}` for a mailbox nobody bound.
 - `cf ingest ls` shows the channel's LAST SEEN time moving with each delivery.
-- The notification lands in the cell `gmail-push` in `<space>`, where
-  `gmail-push` is the channel's cause prefix, replacing the one before it.
+- The notification lands in the cell `<target>` names in `<space>`,
+  replacing the one before it.
 - The history id in the cell is enough to fetch what changed. This lists what
   arrived in the inbox since an earlier id:
 

@@ -255,6 +255,10 @@ function findCapabilitySummaryForParameter(
     ? analyzeFunctionCapabilities(fn, {
       checker: options.checker,
       typeRegistry: context?.state.typeRegistry,
+      // A call into a helper the same file declares is followed, so a cell
+      // handed to one is charged what the helper does with it, a write there
+      // included.
+      interprocedural: true,
       includeNestedCallbacks: true,
       summaryCache: context
         ? capabilitySummaryMemoFor(context).nested

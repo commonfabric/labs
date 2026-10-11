@@ -1,0 +1,167 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "backwards": {
+        "asCell": [
+          "cell"
+        ],
+        "default": false,
+        "type": "boolean"
+      },
+      "cols": {
+        "asCell": [
+          "cell"
+        ],
+        "default": 12,
+        "type": "number"
+      },
+      "diagonals": {
+        "asCell": [
+          "cell"
+        ],
+        "default": false,
+        "type": "boolean"
+      },
+      "rows": {
+        "asCell": [
+          "cell"
+        ],
+        "default": 12,
+        "type": "number"
+      },
+      "seed": {
+        "asCell": [
+          "cell"
+        ],
+        "default": 1,
+        "type": "number"
+      },
+      "title": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "Word Search",
+        "type": "string"
+      },
+      "wordText": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "apple\nbanana\ncherry\ngrape\nlemon\nmango\npeach",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "wordsearch/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Placement": {
+        "properties": {
+          "col": {
+            "type": "number"
+          },
+          "dCol": {
+            "type": "number"
+          },
+          "dRow": {
+            "type": "number"
+          },
+          "label": {
+            "description": "The word as it was written, for the list a solver reads.",
+            "type": "string"
+          },
+          "row": {
+            "type": "number"
+          },
+          "word": {
+            "description": "The letters in the grid, from `normalizeWord`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "word",
+          "label",
+          "row",
+          "col",
+          "dRow",
+          "dCol"
+        ],
+        "type": "object"
+      },
+      "Skipped": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "`too-short`: fewer than `MIN_WORD_LENGTH` letters A–Z after normalizing.\n`no-room`: no run of the grid could take it without repeating a word.",
+            "enum": [
+              "too-short",
+              "no-room"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WordSearch": {
+        "properties": {
+          "cols": {
+            "type": "number"
+          },
+          "grid": {
+            "description": "One string of `cols` letters per row.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "placements": {
+            "items": {
+              "$ref": "#/$defs/Placement"
+            },
+            "type": "array"
+          },
+          "rows": {
+            "type": "number"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/Skipped"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows",
+          "cols",
+          "grid",
+          "placements",
+          "skipped"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "puzzle": {
+        "$ref": "#/$defs/WordSearch"
+      }
+    },
+    "required": [
+      "puzzle",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

@@ -1132,6 +1132,69 @@ Deno.test(
 );
 
 Deno.test(
+  "Capability analysis charges a write through a resolved cell to its receiver",
+  () => {
+    const { program, sourceFile } = createProgramWithFiles({
+      "/test.ts": `
+        import type { Cell } from "commonfabric";
+
+        type Message = { body: string; sentAt: number };
+
+        const fn = (
+          _event: unknown,
+          { message }: { message: Cell<Message> },
+        ) => {
+          const target = message.resolveAsCell();
+          target.key("body").set("edited");
+        };
+      `,
+      "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+    });
+    const summary = analyzeFunctionCapabilities(
+      findArrowByVariableName(sourceFile, "fn"),
+      { checker: program.getTypeChecker() },
+    );
+    const state = getPaths(summary, "__param1");
+
+    assert(state.writePaths.includes("message.body"));
+    assert(state.fullShapePaths.includes("message"));
+  },
+);
+
+Deno.test(
+  "Capability analysis keeps a resolved cell's receiver whole beside a narrower read",
+  () => {
+    // `sentAt` is read on the receiver and `body` through the resolved cell;
+    // the receiver must keep `body`.
+    const { program, sourceFile } = createProgramWithFiles({
+      "/test.ts": `
+        import type { Cell } from "commonfabric";
+
+        type Message = { body: string; sentAt: number };
+
+        const fn = (
+          _event: unknown,
+          { message }: { message: Cell<Message> },
+        ) => {
+          const target = message.resolveAsCell();
+          return target.get().body + String(message.get().sentAt);
+        };
+      `,
+      "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+    });
+    const summary = analyzeFunctionCapabilities(
+      findArrowByVariableName(sourceFile, "fn"),
+      { checker: program.getTypeChecker() },
+    );
+    const state = getPaths(summary, "__param1");
+
+    assert(state.readPaths.includes("message.body"));
+    assert(state.fullShapePaths.includes("message"));
+    assertEquals(state.writePaths.length, 0);
+  },
+);
+
+Deno.test(
   "Capability analysis ignores imported Writable type names from other libraries",
   () => {
     const { program, sourceFile } = createProgramWithFiles({

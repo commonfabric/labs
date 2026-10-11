@@ -235,6 +235,16 @@ const ARRAY_IDENTITY_WRITER_METHODS = new Set([
   ...mergeableMethods("array-identity-writer"),
 ]);
 const ARRAY_IDENTITY_PRESERVING_CHAIN_METHODS = new Set(["slice"]);
+/**
+ * Array methods whose result is an array of the receiver's own elements, so
+ * the result aliases the receiver.
+ */
+const ELEMENT_SUBSET_METHODS = new Set(["filter", "sort", "toSorted", "slice"]);
+/**
+ * Array methods whose result is one of the receiver's elements, so the result
+ * aliases an element of the receiver.
+ */
+const ELEMENT_LOOKUP_METHODS = new Set(["find", "findLast", "at"]);
 // The mergeable tail-append ops: the catalog methods that commit as a mergeable
 // `append`, which drops the op's own array read from conflict detection. A
 // handler that also reads the same collection then has a fragile read-then-push
@@ -2620,16 +2630,20 @@ export function analyzeFunctionCapabilities(
         ts.isPropertyAccessExpression(current) ||
         ts.isElementAccessExpression(current)
       ) {
+        // The receiver is read through the wrappers that do not change its
+        // value, so `rows.find(...)!.id` reads the found row's `id` exactly as
+        // `rows.find(...)?.id` does.
+        const receiver = unwrapExpression(current.expression);
         const innerBinding = resolveBinding(current.expression) ??
-          (ts.isCallExpression(current.expression)
-            ? buildAliasBindingFromExpression(current.expression)
+          (ts.isCallExpression(receiver)
+            ? buildAliasBindingFromExpression(receiver)
             : undefined);
         const key = ts.isPropertyAccessExpression(current)
           ? current.name.text
           : getStaticElementKey(current.argumentExpression, checker);
         if (innerBinding && key !== undefined) {
-          if (ts.isCallExpression(current.expression)) {
-            pendingResolvedGetCalls?.push(current.expression);
+          if (ts.isCallExpression(receiver)) {
+            pendingResolvedGetCalls?.push(receiver);
           }
           return resolveShapePath(innerBinding, [key]);
         }
@@ -2639,8 +2653,8 @@ export function analyzeFunctionCapabilities(
           innerBinding && key === undefined &&
           isSourceRefBinding(innerBinding)
         ) {
-          if (ts.isCallExpression(current.expression)) {
-            pendingResolvedGetCalls?.push(current.expression);
+          if (ts.isCallExpression(receiver)) {
+            pendingResolvedGetCalls?.push(receiver);
           }
           const prefix = materializeSourceRef(innerBinding);
           return { root: prefix.root, path: prefix.path, dynamic: true };
@@ -2663,6 +2677,14 @@ export function analyzeFunctionCapabilities(
         const receiverBinding = resolveBinding(current.expression.expression);
         if (receiverBinding && isSourceRefBinding(receiverBinding)) {
           if (methodName === "get" && current.arguments.length === 0) {
+            return receiverBinding;
+          }
+          // The cell `resolveAsCell()` hands back is the receiver's, followed
+          // to its target, so what is done through it is done to the
+          // receiver. The call itself is charged where it is visited.
+          if (
+            methodName === "resolveAsCell" && current.arguments.length === 0
+          ) {
             return receiverBinding;
           }
           if (methodName === "key") {
@@ -2745,17 +2767,15 @@ export function analyzeFunctionCapabilities(
         const receiverExpr = current.expression.expression;
         const methodName = getCallMethodName(current.expression);
         if (
-          receiverExpr &&
-          (methodName === "filter" || methodName === "sort" ||
-            methodName === "toSorted" || methodName === "slice")
+          receiverExpr && methodName !== undefined &&
+          ELEMENT_SUBSET_METHODS.has(methodName)
         ) {
           return resolveBinding(receiverExpr);
         }
 
         if (
-          receiverExpr &&
-          (methodName === "find" || methodName === "findLast" ||
-            methodName === "at")
+          receiverExpr && methodName !== undefined &&
+          ELEMENT_LOOKUP_METHODS.has(methodName)
         ) {
           const binding = resolveArrayElementBinding(receiverExpr);
           if (binding && isSourceRefBinding(binding)) {
@@ -3172,10 +3192,15 @@ export function analyzeFunctionCapabilities(
         return undefined;
       }
 
+      // The callee is analyzed in the caller's mode: a caller that sees into
+      // its own nested callbacks must see into the callee's too, or what the
+      // callee does in one goes uncharged. Each summary cache is handed
+      // analyses of one mode only.
       return analyzeFunctionCapabilities(declaration, {
         checker,
         typeRegistry,
         interprocedural: true,
+        includeNestedCallbacks,
         summaryCache,
         inProgress,
       });
@@ -3955,6 +3980,23 @@ export function analyzeFunctionCapabilities(
           recordLocalMapSet(localReceiverName, node.arguments[1]);
         }
 
+        // An element a lookup finds, or the array of elements a subset
+        // returns, is a tracked value like the receiver it came from. Leaving
+        // the function whole — returned to a caller, handed to a callee with
+        // no summary — it is read in full where it lands, as a tracked
+        // identifier is. Read where it stands, it is charged by the member
+        // read that consumes it.
+        if (
+          localMethodName !== undefined &&
+          (ELEMENT_LOOKUP_METHODS.has(localMethodName) ||
+            ELEMENT_SUBSET_METHODS.has(localMethodName))
+        ) {
+          const derived = buildAliasBindingFromExpression(node);
+          if (derived && isSourceRefBinding(derived) && escapesWhole(node)) {
+            trackEscapeRef(materializeSourceRef(derived));
+          }
+        }
+
         const identityEqualsCall = isKnownIdentityEqualsCall(node, checker);
         const identityArgumentCall = isKnownIdentityArgumentCall(node, checker);
         const capabilityHandledArgs = new Set<number>();
@@ -3974,12 +4016,37 @@ export function analyzeFunctionCapabilities(
             capabilityHandledArgs.add(index);
             summaryHandledArgumentUses.add(argument);
 
-            if (source.dynamic || paramSummary.wildcard) {
-              markWildcard(source.root, source.path);
-              continue;
-            }
             if (paramSummary.hasUnverifiedCellUse) {
               markUnverifiedCellUse(source.root);
+            }
+            if (source.dynamic || paramSummary.wildcard) {
+              if (source.dynamic || source.path.length === 0) {
+                markWildcard(source.root, source.path);
+              } else {
+                // The callee's unknown access reaches only the value passed,
+                // not the members beside it: that value is read whole, its
+                // siblings narrow as their own reads say, and what the
+                // callee may write through it stays unverified.
+                trackEscapeRef(source);
+                markUnverifiedCellUse(source.root);
+              }
+              // A wildcard hides which members the callee touches, not that
+              // it reads or writes the argument. Its reads and writes still
+              // land on the argument, at the static prefix where the
+              // argument's own key is dynamic.
+              const at = (path: readonly string[]): SourceRef =>
+                source.dynamic ? source : {
+                  root: source.root,
+                  path: [...source.path, ...path],
+                  dynamic: false,
+                };
+              for (const readPath of paramSummary.readPaths) {
+                trackReadRef(at(readPath));
+              }
+              for (const writePath of paramSummary.writePaths) {
+                trackWriteRef(at(writePath));
+              }
+              continue;
             }
 
             for (const readPath of paramSummary.readPaths) {
@@ -4104,6 +4171,17 @@ export function analyzeFunctionCapabilities(
               } else {
                 trackReadRef(receiver);
               }
+            } else if (methodName === "resolveAsCell") {
+              // Resolving reads the receiver's links. The resolved cell may be
+              // handed anywhere and read there, so the receiver is kept whole;
+              // what may be written through it where the alias is not followed
+              // stays unverified. Reads and writes through the alias are
+              // charged where they occur.
+              if (!checker || isCellLikeExpression(receiverExpression)) {
+                markUnverifiedCellUse(receiver.root);
+              }
+              trackReadRef(receiver);
+              trackFullShapeReadRef(receiver);
             } else if (methodName === "elementById") {
               // Addresses a separately derived entity; attribute the access
               // conservatively to the whole array root.

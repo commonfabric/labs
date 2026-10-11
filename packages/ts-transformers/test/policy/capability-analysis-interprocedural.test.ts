@@ -136,6 +136,99 @@ Deno.test(
 );
 
 Deno.test(
+  "interprocedural helper keeps the reads and writes of a parameter it also hands to an unknown callee",
+  () => {
+    // `audit` has no body to analyze, so the helper's parameter is a
+    // wildcard. The caller still learns that the helper reads and writes it.
+    const input = getPaths(
+      analyze(`${CELL}
+        type ReadCell<T> = Cell<T> & { get(): T };
+        declare function audit(value: unknown): void;
+        const helper = (v: ReadCell<number>) => {
+          const current = v.get();
+          audit(current);
+          v.set(current + 1);
+        };
+        const fn = (input: ReadCell<number>) => { helper(input); };`),
+      "input",
+    );
+
+    assertEquals(input.wildcard, true);
+    assertEquals(input.capability, "writable");
+    assert(input.readPaths.includes(""));
+    assert(input.writePaths.includes(""));
+  },
+);
+
+Deno.test(
+  "interprocedural helper analyzed with nested callbacks charges what its closures do",
+  () => {
+    // A caller that sees into its own nested callbacks sees into the
+    // helper's: `body` is read, and `note` written, only inside closures the
+    // helper declares.
+    const { program, sourceFile } = createProgram(`${CELL}
+      type ReadCell<T> = Cell<T> & { get(): T };
+      const helper = (
+        message: ReadCell<{ body: string; sentAt: number }>,
+        note: ReadCell<string>,
+      ) => {
+        const body = () => message.get().body;
+        const mark = () => note.set("seen");
+        mark();
+        return String(message.get().sentAt) + body();
+      };
+      const fn = (input: {
+        message: ReadCell<{ body: string; sentAt: number }>;
+        note: ReadCell<string>;
+      }) => helper(input.message, input.note);`);
+    const summary = analyzeFunctionCapabilities(findArrow(sourceFile, "fn"), {
+      checker: program.getTypeChecker(),
+      interprocedural: true,
+      includeNestedCallbacks: true,
+    });
+    const input = getPaths(summary, "input");
+
+    assert(input.readPaths.includes("message.body"));
+    assert(input.readPaths.includes("message.sentAt"));
+    assert(input.writePaths.includes("note"));
+  },
+);
+
+Deno.test(
+  "interprocedural wildcard on a member argument keeps that member whole and its siblings narrow",
+  () => {
+    // The helper's unknown access reaches only `input.count`, so `input` is
+    // not wildcarded: `count` is kept whole and written, and `label` narrows
+    // to the member the body reads.
+    const summary = analyze(`${CELL}
+      type ReadCell<T> = Cell<T> & { get(): T };
+      declare function audit(value: unknown): void;
+      const helper = (v: ReadCell<number>) => {
+        const current = v.get();
+        audit(current);
+        v.set(current + 1);
+      };
+      const fn = (
+        input: { count: ReadCell<number>; label: { text: string; color: string } },
+      ) => {
+        helper(input.count);
+        return input.label.text;
+      };`);
+    const input = getPaths(summary, "input");
+    const param = summary.params.find((entry) => entry.name === "input")!;
+
+    assertEquals(input.wildcard, false);
+    assert(input.writePaths.includes("count"));
+    assert(input.readPaths.includes("label.text"));
+    assertEquals(input.readPaths.includes("label"), false);
+    assert(
+      (param.fullShapePaths ?? []).some((path) => path.join(".") === "count"),
+    );
+    assertEquals(param.hasUnverifiedCellUse, true);
+  },
+);
+
+Deno.test(
   "interprocedural helper that reads a parameter field propagates the read path",
   () => {
     const input = getPaths(

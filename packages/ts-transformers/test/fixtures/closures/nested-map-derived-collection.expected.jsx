@@ -57,24 +57,18 @@ const __cfLift_1 = __cfHelpers.lift<{
         votes: {
             type: "array",
             items: {
-                $ref: "#/$defs/Vote"
+                type: "object",
+                properties: {
+                    voterName: {
+                        type: "string"
+                    }
+                },
+                required: ["voterName"]
             }
         }
     },
     required: ["options", "votes"],
     $defs: {
-        Vote: {
-            type: "object",
-            properties: {
-                optionId: {
-                    type: "string"
-                },
-                voterName: {
-                    type: "string"
-                }
-            },
-            required: ["optionId", "voterName"]
-        },
         Option: {
             type: "object",
             properties: {
@@ -131,33 +125,30 @@ const __cfLift_2 = __cfHelpers.lift<{
         ranked: {
             type: "array",
             items: {
-                $ref: "#/$defs/OptionTally"
+                type: "object",
+                properties: {
+                    option: {
+                        $ref: "#/$defs/Option"
+                    },
+                    voters: {
+                        type: "array",
+                        items: {
+                            type: "object",
+                            properties: {
+                                name: {
+                                    type: "string"
+                                }
+                            },
+                            required: ["name"]
+                        }
+                    }
+                },
+                required: ["option", "voters"]
             }
         }
     },
     required: ["ranked"],
     $defs: {
-        OptionTally: {
-            type: "object",
-            properties: {
-                option: {
-                    $ref: "#/$defs/Option"
-                },
-                voters: {
-                    type: "array",
-                    items: {
-                        type: "object",
-                        properties: {
-                            name: {
-                                type: "string"
-                            }
-                        },
-                        required: ["name"]
-                    }
-                }
-            },
-            required: ["option", "voters"]
-        },
         Option: {
             type: "object",
             properties: {

@@ -5,6 +5,8 @@ import { fromFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { shuffleNotice } from "@commonfabric/test-support/shuffle";
 import {
+  NAME_MAP_PREFIX,
+  NAME_MAP_SUFFIX,
   type TestIdentity,
   testIdentityKey,
   type TestRecord,
@@ -72,10 +74,11 @@ import {
   type PricedManifest,
   standIn,
 } from "./test-selection/census.ts";
-import type {
-  CommandContext,
-  Suite,
-  UnitRequest,
+import {
+  type CommandContext,
+  denoTestCommand,
+  type Suite,
+  type UnitRequest,
 } from "./test-topology/suite.ts";
 import {
   plan,
@@ -3323,6 +3326,7 @@ describe("reading a batch's records against what it was asked to run", () => {
       gating: [],
       excused: [],
       unaccounted: [],
+      absent: [],
       failedUnits: [],
     });
   });
@@ -3434,6 +3438,7 @@ describe("reading a batch's records against what it was asked to run", () => {
             gating: [],
             excused: ["unit\tbakery\tflaky"],
             unaccounted: [],
+            absent: [],
             failedUnits: [],
           },
           excusing,
@@ -3466,6 +3471,7 @@ describe("reading a batch's records against what it was asked to run", () => {
           gating: ["unit\tbakery\tglaze > burns"],
           excused: ["unit\tbakery\tflaky"],
           unaccounted: ["unit\tbakery\tglaze > sets"],
+          absent: ["unit\tbakery\tglaze > cools"],
           failedUnits: [UNIT],
         },
         false,
@@ -3480,6 +3486,7 @@ describe("reading a batch's records against what it was asked to run", () => {
         "unit\tbakery\tglaze > burns",
         "unit\tbakery\tflaky",
         "unit\tbakery\tglaze > sets",
+        "unit\tbakery\tglaze > cools",
         UNIT,
       ]
     ) {
@@ -3500,6 +3507,7 @@ describe("reading a batch's records against what it was asked to run", () => {
           gating: [],
           excused: [],
           unaccounted: [],
+          absent: [],
           failedUnits: [UNIT],
         },
         true,
@@ -3522,6 +3530,211 @@ describe("reading a batch's records against what it was asked to run", () => {
       new Set(),
     );
     expect(found.unaccounted).toEqual([]);
+  });
+
+  describe("an identity no record accounts for, read against what its unit registered", () => {
+    const key = (n: string) => testIdentityKey({ k: "unit", s: "bakery", n });
+
+    /** What the batch found for `name`, given its unit's registrations. */
+    function reading(name: string, registered: readonly string[] | undefined) {
+      return accountFor(
+        batch(),
+        asked(name),
+        [record("glaze > sets", "pass")],
+        new Set(),
+        registered === undefined
+          ? new Map()
+          : new Map([[UNIT, new Set(registered)]]),
+      );
+    }
+
+    it("sets it apart as absent where its unit registered no test by that name", () => {
+      // The manifest carries a test the tree does not hold, renamed since
+      // or only ever run on a branch. No run of this tree records it.
+      const found = reading("glaze > cools", ["glaze", "glaze > sets"]);
+      expect([found.unaccounted, found.absent]).toEqual([
+        [],
+        [key("glaze > cools")],
+      ]);
+    });
+
+    it("keeps it unaccounted for where its unit registered it", () => {
+      // The tree holds the test and nothing recorded it, which is what an
+      // invocation that stopped part way through leaves.
+      const found = reading("glaze > cools", [
+        "glaze",
+        "glaze > sets",
+        "glaze > cools",
+      ]);
+      expect([found.unaccounted, found.absent]).toEqual([
+        [key("glaze > cools")],
+        [],
+      ]);
+    });
+
+    it("keeps it unaccounted for where its unit registered nothing", () => {
+      // A process that never unloaded wrote no registrations, and a suite
+      // without the preload writes none at all.
+      const found = reading("glaze > cools", undefined);
+      expect([found.unaccounted, found.absent]).toEqual([
+        [key("glaze > cools")],
+        [],
+      ]);
+    });
+
+    it("keeps a describe unaccounted for where its unit registered a test inside it", () => {
+      // Registrations hold each leaf's whole chain and not the describes
+      // along it, so a nested describe is known by the leaves inside it.
+      const found = reading("glaze > icing", [
+        "glaze",
+        "glaze > sets",
+        "glaze > icing > sets",
+      ]);
+      expect([found.unaccounted, found.absent]).toEqual([
+        [key("glaze > icing")],
+        [],
+      ]);
+    });
+
+    it("keeps a leaf unaccounted for where its unit registered its describe and no leaf at all", () => {
+      // A process whose bdd re-export recorded no leaves registered each
+      // outermost describe and nothing beneath it, which says nothing
+      // about any leaf.
+      const found = reading("glaze > cools", ["glaze"]);
+      expect([found.unaccounted, found.absent]).toEqual([
+        [key("glaze > cools")],
+        [],
+      ]);
+    });
+
+    it("sets a leaf apart as absent where its unit never registered its outermost describe", () => {
+      const found = reading("glaze > cools", ["proof", "proof > rises"]);
+      expect([found.unaccounted, found.absent]).toEqual([
+        [],
+        [key("glaze > cools")],
+      ]);
+    });
+
+    it("keeps a step unaccounted for beneath a test its unit registered", async () => {
+      // A test names its steps as its body runs, and the registration
+      // preload sees only the test. Here the first step is withheld as
+      // flaky and fails, the test returns before the second, and the
+      // second is still in the tree. A real `deno test` under the real
+      // preload is what decides what the name map holds, so the run is
+      // one; a sibling the tree does not hold is asked for beside it.
+      const dir = await Deno.makeTempDir({ prefix: "lane-registrations-" });
+      const file = "glaze.test.ts";
+      try {
+        // The `.git` marker is what the preload climbs to for the root its
+        // file names are relative to. The file runs under this tree's own
+        // config, since Deno keys its emit cache on the config it resolves:
+        // compiled under any other, the preload's modules would replace
+        // the emit the lane's coverage report reads them back from. The
+        // lockfile is a copy, so the run writes nothing into this tree.
+        await Deno.mkdir(`${dir}/.git`);
+        await Deno.copyFile(`${REPOSITORY}/deno.lock`, `${dir}/deno.lock`);
+        await Deno.writeTextFile(
+          `${dir}/${file}`,
+          `import { describe, it } from "@std/testing/bdd";
+describe("glaze", () => {
+  it("sets", async (t) => {
+    const completed = await t.step("first", () => {
+      throw new Error("flaky first step");
+    });
+    if (!completed) return;
+    await t.step("second", () => {});
+  });
+});
+`,
+        );
+        const real = {
+          suite: suite({
+            id: "workspace-unit",
+            units: [file],
+            locate: (record) =>
+              record.test.s === "bakery" && record.file === file
+                ? { level: "unit" as const, unit: file }
+                : undefined,
+            command: (_units, context) => {
+              const junit = `${context.outputDir}/report.xml`;
+              return Promise.resolve([{
+                // The run fails on purpose, and what it prints would read
+                // in this suite's log as a failure of its own.
+                command: [
+                  "sh",
+                  "-c",
+                  '"$@" >/dev/null 2>&1',
+                  "sh",
+                  ...denoTestCommand(
+                    [
+                      "--allow-read",
+                      "--allow-write",
+                      "--allow-env",
+                      `--config=${REPOSITORY}/deno.jsonc`,
+                      `--lock=${dir}/deno.lock`,
+                    ],
+                    context,
+                    junit,
+                    [file],
+                  ),
+                ],
+                cwd: dir,
+                // A lane running this file hands it a skip list of its
+                // own, which this run must not read, and a coverage
+                // directory, whose measured set this run is no part of.
+                env: {
+                  CF_TEST_SKIP_LIST: "",
+                  DENO_COVERAGE_DIR: `${dir}/coverage`,
+                },
+                junit: [{ path: junit, kind: "unit", scope: "bakery" }],
+              }]);
+            },
+          }),
+          units: [{ unit: file, skip: [] }],
+          runs: new Map([[file, 1]]),
+          projected: 0,
+        };
+        const log = console.log;
+        console.log = () => {};
+        let result;
+        try {
+          result = await runBatch(
+            real,
+            { root: dir } as LaneOptions,
+            dir,
+            undefined,
+            {},
+          );
+        } finally {
+          console.log = log;
+        }
+        const asking = (n: string) =>
+          asked(n).map((selection) => ({
+            ...selection,
+            entry: { ...selection.entry, unit: file },
+          }));
+        const found = accountFor(
+          real,
+          [
+            ...asking("glaze > sets > first"),
+            ...asking("glaze > sets > second"),
+            ...asking("glaze > cools"),
+          ],
+          [...result.records, ...result.passedOver],
+          new Set([key("glaze > sets > first")]),
+          result.registered,
+        );
+        expect(found).toEqual({
+          gating: [],
+          excused: [key("glaze > sets > first")],
+          unaccounted: [key("glaze > sets > second")],
+          absent: [key("glaze > cools")],
+          failedUnits: [file],
+        });
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
   });
 });
 
@@ -3999,6 +4212,60 @@ describe("what a lane does with the batches it was given", () => {
     expect(ok).toBe(false);
     // So nothing says the run did not fail for it.
     expect(excusedIn(measured)).toEqual([]);
+  });
+
+  describe("an excused failure beside an identity its unit's registrations speak to", () => {
+    /**
+     * The manifest that withholds the one identity as flaky, and asks for
+     * another in the same unit that nothing records.
+     */
+    function askingForCools(): Manifest {
+      const manifest = withholding();
+      manifest.entries.push({
+        ...manifest.entries[0]!,
+        test: { k: "unit", s: "bakery", n: "glaze > cools" },
+        flakeRate: 0,
+      });
+      return manifest;
+    }
+
+    /**
+     * Writes the name map a test process of the unit leaves as it
+     * unloads, holding `names`, and then exits as a failing run does.
+     */
+    function registering(names: readonly string[]): string {
+      const map = { names: Object.fromEntries(names.map((n) => [n, UNIT])) };
+      return `Deno.writeTextFileSync(
+         \`\${dir}/${NAME_MAP_PREFIX}\${crypto.randomUUID()}${NAME_MAP_SUFFIX}\`,
+         ${JSON.stringify(JSON.stringify(map))},
+       );
+       Deno.exit(1);`;
+    }
+
+    it("stays green where the unit registered no test by that name", async () => {
+      // The manifest carries a test the tree does not hold, renamed since
+      // or only ever run on a branch, and no run of this tree records it.
+      const { ok, measured } = await run(
+        recording(registering(["glaze", "glaze > sets"]), "fail"),
+        { full: true, manifest: askingForCools() },
+      );
+      expect(ok).toBe(true);
+      expect(excusedIn(measured)).toEqual([glaze]);
+    });
+
+    it("fails where the unit registered that test and nothing recorded it", async () => {
+      // The tree holds the test, so the invocation that recorded the
+      // withheld failure stopped before it.
+      const { ok, measured } = await run(
+        recording(
+          registering(["glaze", "glaze > sets", "glaze > cools"]),
+          "fail",
+        ),
+        { full: true, manifest: askingForCools() },
+      );
+      expect(ok).toBe(false);
+      expect(excusedIn(measured)).toEqual([]);
+    });
   });
 
   it("fails when a unit it was asked to run recorded nothing", async () => {

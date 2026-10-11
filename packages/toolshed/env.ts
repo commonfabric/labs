@@ -355,29 +355,20 @@ export const EnvSchema = z.object({
   // channels leaves them behind, since nothing reads the registry it left.
   INGEST_SERVICE_SPACE: z.string().default(""),
 
-  // Mounts the self-serve ingest-channel control plane
-  // (POST /api/spaces/:space/ingest-channels/*, and POST
-  // /api/ingest-channels/list). OFF by default and deliberately so.
-  //
-  // Minting issues a durable, operator-backed append capability into a user's
-  // space, and it is only as trustworthy as the claim "this DID owns that
-  // space". A legacy named space's key derives from a public passphrase, so
-  // anyone who could reach a deployment could have granted themselves OWNER on
-  // one, and such a grant outlives the random keys new spaces get. On a
-  // deployment others could reach, review the space ACLs before turning this
-  // on; see docs/features/self-serve-ingest-channels.md.
-  INGEST_SELF_SERVE_ENABLED: boolFlag(),
-
   // Gmail push ingest: POST /api/spaces/:space/ingest-push/gmail, which Cloud
-  // Pub/Sub calls with each Gmail `users.watch` notification, and the
-  // gmail-bind and gmail-unbind verbs of the ingest-channel control plane. On
-  // only when a service account is set. The service accounts,
+  // Pub/Sub calls with each Gmail `users.watch` notification, and the mailbox
+  // proof a mint on the ingest-channel control plane may carry. On only when
+  // a service account is set. The service accounts,
   // comma-separated, are the ones a push token may be signed for. The
   // audience is the one the push subscriptions are configured to put on
   // their OIDC tokens; unset, it is the DID of the space the ingest registry
   // is kept in. See docs/features/gmail-push-ingest.md.
   INGEST_GMAIL_PUSH_AUDIENCE: z.string().default(""),
   INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS: z.string().default(""),
+  // The OAuth client ids, comma-separated, whose Google ID tokens a mint may
+  // present as proof of a mailbox, in place of an access token. Unset, only
+  // an access token proves a mailbox.
+  INGEST_GMAIL_OAUTH_CLIENT_IDS: z.string().default(""),
 
   // Comma-separated DIDs with implicit OWNER on every space (e.g. the
   // background service operator identity).
