@@ -3117,6 +3117,42 @@ describe("memory-v2-stacked-commit", () => {
       }
     });
 
+    it("releases caught-up waits and stale floors when the sync consumer is lost", async () => {
+      const harness = await markerHarness();
+      try {
+        expect(
+          await harness.replica.pull([[
+            { id: DOCS.A, type: DOCUMENT_MIME },
+            undefined,
+          ]]),
+        ).toEqual({ ok: {} });
+        const replica = harness.replica.accessForTestingOnly;
+        const reading = {
+          localSeq: 50,
+          reads: {
+            confirmed: [{ id: DOCS.A, path: toDocumentPath([]), seq: 0 }],
+            pending: [],
+          },
+          operations: [],
+        };
+        replica.recordStaleFloor(reading, 50);
+        expect(replica.preemptThreshold(reading)).toBe(50);
+        let released = false;
+        const wait = replica.waitForCaughtUpLocalSeq(50).then(() => {
+          released = true;
+        });
+        await clock.settle();
+        expect(released, "the wait holds while the channel is open")
+          .toBe(false);
+
+        harness.transport.emitRevoked();
+        await wait;
+        expect(replica.preemptThreshold(reading)).toBeUndefined();
+      } finally {
+        await harness.close();
+      }
+    });
+
     it("applies a verdict immediately against a server without `verdictCatchUpMarkers`", async () => {
       // The DEFAULT harness transport models exactly this old server, so the
       // legacy path is what every other fixture in this file exercises; this
@@ -3779,6 +3815,12 @@ describe("memory-v2-stacked-commit", () => {
       const previousLevel = storageLogger.level;
       storageLogger.level = "debug";
       try {
+        expect(
+          await harness.replica.pull([[
+            { id: DOCS.A, type: DOCUMENT_MIME },
+            undefined,
+          ]]),
+        ).toEqual({ ok: {} });
         const replica = harness.replica.accessForTestingOnly;
         replica.recordStaleFloor({
           localSeq: 50,

@@ -630,10 +630,18 @@ describe("Memory v2 storage notifications", () => {
     );
   });
 
+  it("resolves a caught-up wait at once on a replica with no watch view", async () => {
+    const provider = storageManager.open(space);
+    const replica = provider.replica as SpaceReplica;
+
+    await replica.accessForTestingOnly.waitForCaughtUpLocalSeq(3);
+  });
+
   it("rejects pending caught-up waiters when storage closes", async () => {
     const provider = storageManager.open(space);
     const replica = provider.replica as SpaceReplica;
     const harness = replica.accessForTestingOnly;
+    await provider.sync(`of:caught-up-close-${Date.now()}` as URI);
 
     const readyAtTwo = harness.waitForCaughtUpLocalSeq(2);
     const readyAtThree = harness.waitForCaughtUpLocalSeq(3);
@@ -771,11 +779,12 @@ describe("Memory v2 storage notifications", () => {
     await testStorageManager.closeNow();
   });
 
-  it("admission control records, thresholds, and prunes a stale floor", () => {
+  it("admission control records, thresholds, and prunes a stale floor", async () => {
     const provider = storageManager.open(space);
     const replica = provider.replica as SpaceReplica;
     const admission = replica.accessForTestingOnly;
     const uri = `of:admission-floor-${Date.now()}` as URI;
+    await provider.sync(uri);
     const reading: ClientCommit = {
       localSeq: 9,
       reads: {
@@ -804,9 +813,27 @@ describe("Memory v2 storage notifications", () => {
     expect(admission.preemptThreshold(reading)).toBeUndefined();
   });
 
+  it("admission control records no stale floor on a replica with no watch view", () => {
+    const provider = storageManager.open(space);
+    const admission = (provider.replica as SpaceReplica).accessForTestingOnly;
+    const uri = `of:admission-unwatched-${Date.now()}` as URI;
+    const reading: ClientCommit = {
+      localSeq: 9,
+      reads: {
+        confirmed: [{ id: uri, path: toDocumentPath([]), seq: 0 }],
+        pending: [],
+      },
+      operations: [{ op: "set", id: uri, value: { value: { v: 2 } } }],
+    };
+
+    admission.recordStaleFloor(reading, 7);
+    expect(admission.preemptThreshold(reading)).toBeUndefined();
+  });
+
   it("reset rejects caught-up waiters from the previous replica epoch", async () => {
     const provider = storageManager.open(space);
     const replica = provider.replica as SpaceReplica;
+    await provider.sync(`of:caught-up-reset-${Date.now()}` as URI);
 
     const wait = replica.accessForTestingOnly.waitForCaughtUpLocalSeq(3);
     replica.reset();
@@ -828,6 +855,7 @@ describe("Memory v2 storage notifications", () => {
         accessForTestingOnly: SpaceReplica["accessForTestingOnly"];
       };
       const uri = `of:admission-preempt-${Date.now()}` as URI;
+      await provider.sync(uri);
 
       // Simulate a prior conflict that marked uri stale until caughtUpLocalSeq>=5.
       replica.accessForTestingOnly.recordStaleFloor({
