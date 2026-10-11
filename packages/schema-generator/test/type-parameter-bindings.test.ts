@@ -22,6 +22,9 @@ async function memberOf(code: string) {
     cyclicNames: new Set(),
     definitions: {},
     emittedRefs: new Set(),
+    mergedIntersectionNames: new Map(),
+    nameAnonymousDefinition: () => "AnonymousType_1",
+    anyValuesBesideUnwritten: [],
     definitionStack: new Set(),
     inProgressNames: new Set(),
     boundTypeParameters: {

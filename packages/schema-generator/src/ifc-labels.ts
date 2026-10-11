@@ -15,6 +15,13 @@
  * well as its own. Resolving a reference lets each keyword beside it replace
  * the definition's, and `ifc` is one keyword, so a label left out there is a
  * label the resolved schema does not have.
+ *
+ * Where a value holds data of a declaration's only in part, as a member of an
+ * intersection may, the labels divide by where they belong. A restriction
+ * belongs wherever that data may be; evidence (`EVIDENCE_LABELS`) only where
+ * it must be, so evidence is dropped, not combined, where the value is not
+ * provably that declaration's: beside `any` (`labelsBesideAnyValue()`), and
+ * on members another declaration holds.
  */
 
 import type {
@@ -33,6 +40,67 @@ import { dedupeByValueEqual } from "./value-equality.ts";
 type IfcLabels = Readonly<Record<string, unknown>>;
 
 const LOCAL_DEFINITION_PREFIX = "#/$defs/";
+
+/**
+ * The labels that are evidence a value carries, which a part of a value may
+ * carry only where it provably came from the policy's payload. Every other
+ * label restricts what may happen to the value or is a claim the runtime
+ * verifies at the write, and is safe wherever the payload's data may be.
+ */
+export const EVIDENCE_LABELS: ReadonlySet<string> = new Set([
+  "integrity",
+  "addIntegrity",
+]);
+
+/**
+ * The keywords a schema accepting any value may carry: what it states about
+ * the whole value (`scope`, `default`), its labels, and its documentation.
+ */
+const BESIDE_ANY_VALUE: ReadonlySet<string> = new Set([
+  "ifc",
+  "scope",
+  "default",
+  "description",
+  "tags",
+  "deprecated",
+  "$comment",
+]);
+
+/**
+ * `labels` divided into the restrictions among them and the evidence
+ * (`EVIDENCE_LABELS`), each `undefined` where there is none.
+ */
+export const restrictionsAndEvidence = (
+  labels: IfcLabels,
+): {
+  readonly restrictions?: Record<string, unknown>;
+  readonly evidence?: Record<string, unknown>;
+} => {
+  const restrictions: Record<string, unknown> = {};
+  const evidence: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(labels)) {
+    (EVIDENCE_LABELS.has(key) ? evidence : restrictions)[key] = value;
+  }
+  return {
+    ...(Object.keys(restrictions).length > 0 ? { restrictions } : {}),
+    ...(Object.keys(evidence).length > 0 ? { evidence } : {}),
+  };
+};
+
+/** Whether `schema` accepts any value, whatever it states beside that. */
+export const acceptsAnyValue = (schema: MutableJSONSchema): boolean =>
+  schema === true ||
+  (isObjectOrArray(schema) && !Array.isArray(schema) &&
+    Object.keys(schema).every((key) => BESIDE_ANY_VALUE.has(key)));
+
+/** Whether `schema` accepts no value, whatever it states beside that. */
+export const acceptsNoValue = (schema: MutableJSONSchema): boolean =>
+  schema === false ||
+  (isObjectOrArray(schema) && !Array.isArray(schema) &&
+    schema.not === true &&
+    Object.keys(schema).every((key) =>
+      key === "not" || BESIDE_ANY_VALUE.has(key)
+    ));
 
 /**
  * The labels of one value that `inner` and then `outer` both declared:
@@ -262,4 +330,98 @@ export const stateReferencedIfcLabels = (schema: MutableJSONSchema): void => {
     }, { includeDefs: true, includeUnused: true });
   };
   visit(schema);
+};
+
+/**
+ * The labels an intersection keeps of `constituents` where the checker gives
+ * it `any`, combined, or `undefined` where it keeps none. A constituent that
+ * itself accepts any value is the whole value, and keeps every label it
+ * states. Of any other, the value may hold that constituent's data anywhere
+ * and is not provably its value: its restrictions, wherever in its value they
+ * are written and through the definitions in `definitions` its references
+ * reach, go on the whole value, and its evidence (`EVIDENCE_LABELS`) goes
+ * nowhere. A definition a reference names that `definitions` does not hold
+ * yet, as one still being generated does not, is added to `unwritten`.
+ */
+export const labelsBesideAnyValue = (
+  constituents: readonly MutableJSONSchema[],
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+  unwritten?: Set<string>,
+): Record<string, unknown> | undefined => {
+  let kept: Record<string, unknown> | undefined;
+  const keep = (labels: IfcLabels) => {
+    if (Object.keys(labels).length > 0) {
+      kept = combineIfcLabels(kept ?? {}, labels);
+    }
+  };
+  for (const constituent of constituents) {
+    if (acceptsAnyValue(constituent)) {
+      if (isObjectOrArray(constituent) && isObjectOrArray(constituent.ifc)) {
+        keep(constituent.ifc);
+      }
+      continue;
+    }
+    const visited = new Set<MutableJSONSchema>();
+    const visit = (node: MutableJSONSchema): void => {
+      if (!isObjectOrArray(node) || visited.has(node)) return;
+      visited.add(node);
+      if (isObjectOrArray(node.ifc)) {
+        keep(restrictionsAndEvidence(node.ifc).restrictions ?? {});
+      }
+      if (
+        typeof node.$ref === "string" &&
+        node.$ref.startsWith(LOCAL_DEFINITION_PREFIX)
+      ) {
+        const name = node.$ref.slice(LOCAL_DEFINITION_PREFIX.length);
+        const definition = definitions[name];
+        if (definition !== undefined) visit(definition);
+        else unwritten?.add(name);
+      }
+      forEachSubschema(node, (child) => {
+        visit(child as MutableJSONSchema);
+        return false;
+      }, { includeUnused: true });
+    };
+    visit(constituent);
+  }
+  return kept;
+};
+
+/**
+ * A value an intersection the checker gives `any` settled to, which met
+ * definitions not yet written (`unwritten`) in `definitions`, and the labels
+ * it kept (`labelsBesideAnyValue()`).
+ */
+export type AnyValueBesideUnwritten = {
+  readonly definitions: Readonly<Record<string, MutableJSONSchema>>;
+  readonly unwritten: readonly string[];
+  readonly kept: IfcLabels | undefined;
+};
+
+/**
+ * Refuses a value in `values` that kept fewer restrictions than the
+ * definitions it met before they were written state now that they are: a
+ * reference met inside its own definition, as recursion meets it, names a
+ * definition whose labels could not be read there.
+ */
+export const assertAnyValuesKeptLabels = (
+  values: readonly AnyValueBesideUnwritten[],
+): void => {
+  for (const { definitions, unwritten, kept } of values) {
+    for (const name of unwritten) {
+      const stated = labelsBesideAnyValue(
+        [{ $ref: `${LOCAL_DEFINITION_PREFIX}${name}` }],
+        definitions,
+      );
+      if (stated !== undefined && !holdsIfcLabels(kept ?? {}, stated)) {
+        throw new Error(
+          `A value intersected with \`any\` keeps the labels of what it is ` +
+            `intersected with, but it meets \`${name}\` inside the ` +
+            `definition of \`${name}\`, where those labels cannot be read ` +
+            `yet. Declare that value without \`any\`, or with the labels ` +
+            `\`${name}\` states.`,
+        );
+      }
+    }
+  }
 };

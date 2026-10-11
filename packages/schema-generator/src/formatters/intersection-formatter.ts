@@ -1,22 +1,197 @@
 import type {
   MutableJSONSchema,
   MutableJSONSchemaObj,
+  SchemaScope,
 } from "@commonfabric/api";
+import type { FabricValue } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
 
 import { attachDocTags, extractDocFromType } from "../doc-utils.ts";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
+import { labelsBesideAnyValue } from "../ifc-labels.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
-import { cloneSchemaDefinition, getNativeTypeSchema } from "../type-utils.ts";
+import { withOriginOf } from "../schema-origins.ts";
+import { dedupeByValueEqual } from "../value-equality.ts";
+import {
+  cloneSchemaDefinition,
+  getNativeTypeSchema,
+  safeGetPropertyType,
+} from "../type-utils.ts";
 import { isCellType } from "../typescript/cell-brand.ts";
 import { isScopeBrandMember } from "../typescript/scope-brand.ts";
-import { isCfcCarrier } from "./common-fabric-formatter.ts";
+import {
+  isCfcCarrier,
+  scopeOfScopeWrapper,
+} from "./common-fabric-formatter.ts";
+import { classifyCallableProperty } from "./object-formatter.ts";
 
 const logger = getLogger("schema-generator.intersection");
 const DOC_CONFLICT_COMMENT =
   "Conflicting docs across intersection constituents; using first";
+
+/**
+ * The error for a property that members of an intersection declare in
+ * different scopes, `scopes`: one value is stored in one scope.
+ */
+export function propertyScopesError(
+  key: string,
+  scopes: readonly string[],
+): Error {
+  return new Error(
+    `The property \`${key}\` is declared in scope \`${scopes[0]}\` by one ` +
+      `member of an intersection and in scope \`${scopes[1]}\` by another. ` +
+      `A value is stored in one scope, so declare \`${key}\` in the same ` +
+      `scope wherever it is declared.`,
+  );
+}
+
+/** A part of an intersection that declares a property, and its schema there. */
+type PropertyDeclaration = {
+  readonly part: ts.Type;
+  readonly schema: MutableJSONSchema;
+};
+
+/**
+ * The JSDoc an intersection's constituents carry: the first doc of each that
+ * has one, the names of those, and the names of the rest.
+ */
+type ConstituentDocs = {
+  readonly docTexts: string[];
+  readonly documentedSources: string[];
+  readonly missingSources: string[];
+};
+
+/** The keywords a declaration's JSDoc writes into its property's schema. */
+const DOC_KEYWORDS = ["description", "tags", "deprecated"] as const;
+
+/** The description a schema carries, if any. */
+function descriptionOf(schema: MutableJSONSchema): string | undefined {
+  return isObjectOrArray(schema) && typeof schema.description === "string"
+    ? schema.description
+    : undefined;
+}
+
+/**
+ * `value` with the documentation `documented` carries in place of its own:
+ * the description and the tags drawn from it, where `documented` has a
+ * description, and the deprecation mark, where it has one.
+ */
+function documentedAs(
+  value: MutableJSONSchemaObj,
+  documented: MutableJSONSchemaObj,
+): MutableJSONSchemaObj {
+  const schema: Record<string, unknown> = { ...value };
+  if (typeof documented.description === "string") {
+    delete schema.tags;
+    schema.description = documented.description;
+    if (documented.tags !== undefined) schema.tags = documented.tags;
+  }
+  if (documented.deprecated !== undefined) {
+    schema.deprecated = documented.deprecated;
+  }
+  return schema as MutableJSONSchemaObj;
+}
+
+/**
+ * `schema` without the keywords its declaration's JSDoc writes, or `schema`
+ * itself where it carries none of them.
+ */
+export function withoutDocumentation(
+  schema: MutableJSONSchema,
+): MutableJSONSchema {
+  if (
+    !isObjectOrArray(schema) ||
+    !DOC_KEYWORDS.some((keyword) => keyword in schema)
+  ) {
+    return schema;
+  }
+  const { description: _, tags: __, deprecated: ___, ...rest } = schema;
+  return rest;
+}
+
+/**
+ * The schema of `key`, a property several constituents of an intersection
+ * declare with the schemas `declared`, in constituent order, given `value`,
+ * the schema of the property's type in the intersection — the intersection
+ * of the declared types — which may be one of `declared`. The first
+ * declaration's documentation replaces the value's own where it has any. A
+ * later declaration whose description differs from the first's is noted in
+ * a `$comment`, unless the value carries one. A copy made to document the
+ * value keeps the origin recorded for it (`withOriginOf()`).
+ */
+export function sharedPropertySchema(
+  key: string,
+  value: MutableJSONSchema,
+  declared: readonly MutableJSONSchema[],
+  context: GenerationContext,
+): MutableJSONSchema {
+  const [first, ...later] = declared;
+  const description = descriptionOf(first!);
+  const conflicting = description !== undefined &&
+    later.some((schema) => {
+      const other = descriptionOf(schema);
+      return other !== undefined && other !== description;
+    });
+  if (conflicting) {
+    logger.warn(
+      "schema-gen",
+      () => `Intersection doc conflict for '${key}'; using first`,
+    );
+  }
+  if (!isObjectOrArray(value)) return value;
+  // A first declaration accepting anything or nothing makes the value do the
+  // same, so a documented value has a first declaration that is an object.
+  const documented = value === first || !isObjectOrArray(first)
+    ? value
+    : documentedAs(value, first);
+  return withOriginOf(
+    conflicting && typeof documented.$comment !== "string"
+      ? { ...documented, $comment: DOC_CONFLICT_COMMENT }
+      : documented,
+    value,
+    context,
+  );
+}
+
+/**
+ * The schema of an intersection the checker gives `any`, of constituents
+ * with these schemas: any value, with the labels kept of them
+ * (`labelsBesideAnyValue()`), and the scope they are declared in and the
+ * default they agree on (`stated`). `any` keeps nothing of a constituent
+ * beside it, so a restriction or a scope stated there would otherwise fail
+ * open. A definition met before it is written is checked once generation is
+ * done (`anyValuesBesideUnwritten`).
+ */
+export function anyValueSchema(
+  constituents: readonly MutableJSONSchema[],
+  stated: {
+    readonly scope?: SchemaScope | undefined;
+    readonly default?: MutableJSONSchemaObj["default"] | undefined;
+  },
+  context: GenerationContext,
+): MutableJSONSchema {
+  const unwritten = new Set<string>();
+  const labels = labelsBesideAnyValue(
+    constituents,
+    context.definitions,
+    unwritten,
+  );
+  if (unwritten.size > 0) {
+    context.anyValuesBesideUnwritten.push({
+      definitions: context.definitions,
+      unwritten: [...unwritten],
+      kept: labels,
+    });
+  }
+  const schema: MutableJSONSchemaObj = {
+    ...(labels !== undefined ? { ifc: labels } : {}),
+    ...(stated.scope !== undefined ? { scope: stated.scope } : {}),
+    ...(stated.default !== undefined ? { default: stated.default } : {}),
+  };
+  return Object.keys(schema).length > 0 ? schema : true;
+}
 
 export class IntersectionFormatter implements TypeFormatter {
   #schemaGenerator: SchemaGenerator;
@@ -76,6 +251,23 @@ export class IntersectionFormatter implements TypeFormatter {
       return this.#schemaGenerator.formatChildType(partsToProcess[0]!, context);
     }
 
+    // An intersection of arrays is an array of the values each of them holds,
+    // whose type the checker gives as the intersection's number index: the
+    // intersection of their element types.
+    // Its constituents' JSDoc is documented as a merged object's.
+    if (partsToProcess.every((part) => checker.isArrayType(part))) {
+      return this.#applyIntersectionDocs({
+        schema: {
+          type: "array",
+          items: this.#schemaGenerator.formatChildType(
+            checker.getIndexTypeOfType(type, ts.IndexKind.Number)!,
+            context,
+          ),
+        },
+        ...this.#constituentDocs(partsToProcess, checker),
+      });
+    }
+
     const failureReason = this.#validateIntersectionParts(
       partsToProcess,
       checker,
@@ -96,7 +288,7 @@ export class IntersectionFormatter implements TypeFormatter {
       return schema;
     }
 
-    const merged = this.#mergeIntersectionParts(partsToProcess, context);
+    const merged = this.#mergeIntersectionParts(partsToProcess, type, context);
     return this.#applyIntersectionDocs(merged);
   }
 
@@ -151,20 +343,10 @@ export class IntersectionFormatter implements TypeFormatter {
         return "non-object constituent";
       }
 
-      try {
-        const stringIndex = checker.getIndexTypeOfType(
-          part,
-          ts.IndexKind.String,
-        );
-        const numberIndex = checker.getIndexTypeOfType(
-          part,
-          ts.IndexKind.Number,
-        );
-        if (stringIndex || numberIndex) {
-          return "index signature on constituent";
-        }
-      } catch (error) {
-        return `checker error while validating intersection: ${error}`;
+      // An array, whose items no object member can hold, is refused beside
+      // an object; any other index signature merges with the members.
+      if (checker.isArrayType(part) || checker.isTupleType(part)) {
+        return "index signature on constituent";
       }
     }
 
@@ -173,63 +355,23 @@ export class IntersectionFormatter implements TypeFormatter {
 
   #mergeIntersectionParts(
     parts: readonly ts.Type[],
+    intersection: ts.Type,
     context: GenerationContext,
-  ): {
-    schema: MutableJSONSchemaObj;
-    docTexts: string[];
-    documentedSources: string[];
-    missingSources: string[];
-  } {
-    const mergedProps: Record<string, MutableJSONSchema> = {};
+  ): { schema: MutableJSONSchemaObj } & ConstituentDocs {
+    const checker = context.typeChecker;
+    const declarations = new Map<string, PropertyDeclaration[]>();
     const requiredSet = new Set<string>();
 
-    const docTexts: string[] = [];
-    const documentedSources: string[] = [];
-    const missingSources: string[] = [];
-
     for (const part of parts) {
-      const docInfo = extractDocFromType(part, context.typeChecker);
-      if (docInfo.firstDoc) {
-        docTexts.push(docInfo.firstDoc);
-        documentedSources.push(docInfo.typeName);
-      } else {
-        missingSources.push(docInfo.typeName);
-      }
-
       const schema = this.#schemaGenerator.formatChildType(part, context);
       const objSchema = this.#resolveObjectSchema(schema, context);
       if (!objSchema) continue;
 
       if (objSchema.properties) {
         for (const [key, value] of Object.entries(objSchema.properties)) {
-          const existing = mergedProps[key];
-          if (existing) {
-            if (isObjectOrArray(existing) && isObjectOrArray(value)) {
-              const aDesc = typeof existing.description === "string"
-                ? existing.description as string
-                : undefined;
-              const bDesc = typeof value.description === "string"
-                ? value.description as string
-                : undefined;
-              if (aDesc && bDesc && aDesc !== bDesc) {
-                const priorComment = typeof existing.$comment === "string"
-                  ? existing.$comment as string
-                  : undefined;
-                (existing as Record<string, unknown>).$comment = priorComment ??
-                  DOC_CONFLICT_COMMENT;
-                logger.warn(
-                  "schema-gen",
-                  () => `Intersection doc conflict for '${key}'; using first`,
-                );
-              }
-            }
-            logger.debug(
-              "schema-gen",
-              () => `Intersection kept first definition for '${key}'`,
-            );
-            continue;
-          }
-          mergedProps[key] = value;
+          const declared = declarations.get(key);
+          if (declared) declared.push({ part, schema: value });
+          else declarations.set(key, [{ part, schema: value }]);
         }
       }
 
@@ -240,16 +382,150 @@ export class IntersectionFormatter implements TypeFormatter {
       }
     }
 
+    const mergedProps: Record<string, MutableJSONSchema> = {};
+    for (const [key, declared] of declarations) {
+      mergedProps[key] = declared.length === 1
+        ? declared[0]!.schema
+        : this.#sharedPropertySchema(key, declared, intersection, context);
+    }
+
     const result: MutableJSONSchemaObj = {
       type: "object",
       properties: mergedProps,
     };
 
+    // The keys no member names hold the intersection's index type, as one
+    // object type declaring all of these members and index signatures would:
+    // a member keeps the type its own declarations give it, as the checker
+    // reads it.
+    const indexType = checker.getIndexTypeOfType(
+      intersection,
+      ts.IndexKind.String,
+    ) ?? checker.getIndexTypeOfType(intersection, ts.IndexKind.Number);
+    if (indexType) {
+      result.additionalProperties = this.#schemaGenerator.formatChildType(
+        indexType,
+        context,
+      );
+    }
+
     if (requiredSet.size > 0) {
       result.required = Array.from(requiredSet);
     }
 
-    return { schema: result, docTexts, documentedSources, missingSources };
+    return {
+      schema: result,
+      ...this.#constituentDocs(parts, context.typeChecker),
+    };
+  }
+
+  /** The JSDoc `parts`, an intersection's constituents, carry. */
+  #constituentDocs(
+    parts: readonly ts.Type[],
+    checker: ts.TypeChecker,
+  ): ConstituentDocs {
+    const docs: ConstituentDocs = {
+      docTexts: [],
+      documentedSources: [],
+      missingSources: [],
+    };
+    for (const part of parts) {
+      const docInfo = extractDocFromType(part, checker);
+      if (docInfo.firstDoc) {
+        docs.docTexts.push(docInfo.firstDoc);
+        docs.documentedSources.push(docInfo.typeName);
+      } else {
+        docs.missingSources.push(docInfo.typeName);
+      }
+    }
+    return docs;
+  }
+
+  /**
+   * The schema of `key`, a property several parts of `intersection` declare
+   * (`declared`, in part order): the schema of the type the checker gives the
+   * property, which is the intersection of the declared types, documented as
+   * `sharedPropertySchema()` says. Where one declaration's type is that very
+   * type, the schema is that declaration's, read through the node it is
+   * written with. Any other type is formatted as the property's, so what the
+   * checker keeps of each declaration, a scope wrapper's brand and a CFC
+   * carrier among it, is read from the type, whichever declaration wrote it.
+   * `any` keeps nothing of the declarations beside it, so a property the
+   * checker gives `any` keeps what `anyValueSchema()` says of their schemas.
+   * Declarations in different scopes are refused (`propertyScopesError()`),
+   * except where the schema declares no scope.
+   */
+  #sharedPropertySchema(
+    key: string,
+    declared: readonly PropertyDeclaration[],
+    intersection: ts.Type,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    const checker = context.typeChecker;
+    const schemas = declared.map(({ schema }) => schema);
+    // A property one part declares is a property of the intersection.
+    const property = checker.getPropertyOfType(intersection, key)!;
+    const type = checker.getTypeOfSymbol(property);
+    const types = declared.map(({ part }) =>
+      checker.getTypeOfSymbol(checker.getPropertyOfType(part, key)!)
+    );
+    // A declaration's scope is read from the brand on its type, or from its
+    // schema, which alone keeps it where the type is `any`.
+    const scopes = context.declaresNoScope ? [] : [
+      ...new Set(
+        types.flatMap((declaredType, index) => {
+          const schema = schemas[index];
+          const scope = scopeOfScopeWrapper(declaredType, checker) ??
+            (isObjectOrArray(schema)
+              ? schema.scope as SchemaScope | undefined
+              : undefined);
+          return scope ? [scope] : [];
+        }),
+      ),
+    ];
+    if (scopes.length > 1) throw propertyScopesError(key, scopes);
+    if ((type.flags & ts.TypeFlags.Any) !== 0) {
+      const defaults = dedupeByValueEqual(
+        schemas.flatMap((schema) =>
+          isObjectOrArray(schema) && schema.default !== undefined
+            ? [schema.default as FabricValue]
+            : []
+        ),
+      );
+      return sharedPropertySchema(
+        key,
+        anyValueSchema(schemas, {
+          scope: scopes[0],
+          ...(defaults.length === 1
+            ? { default: defaults[0] as MutableJSONSchemaObj["default"] }
+            : {}),
+        }, context),
+        schemas,
+        context,
+      );
+    }
+    const own = types.indexOf(type);
+    if (own !== -1) {
+      return sharedPropertySchema(key, schemas[own]!, schemas, context);
+    }
+
+    // Every declaration has a schema, so each is a data property or a
+    // callable returning a wrapper, and the intersection's call signatures,
+    // if it has any, are those callables'.
+    const valueType = safeGetPropertyType(property, intersection, checker);
+    const callable = classifyCallableProperty(
+      valueType,
+      checker,
+      context.boundTypeParameters,
+    );
+    return sharedPropertySchema(
+      key,
+      callable?.kind === "wrapper"
+        ? callable.schema
+        : this.#schemaGenerator.formatChildType(valueType, context),
+      schemas,
+      context,
+    );
   }
 
   #isObjectSchema(
@@ -282,12 +558,7 @@ export class IntersectionFormatter implements TypeFormatter {
   }
 
   #applyIntersectionDocs(
-    data: {
-      schema: MutableJSONSchemaObj;
-      docTexts: string[];
-      documentedSources: string[];
-      missingSources: string[];
-    },
+    data: { schema: MutableJSONSchemaObj } & ConstituentDocs,
   ): MutableJSONSchemaObj {
     const { schema, docTexts, documentedSources, missingSources } = data;
     if (!isObjectOrArray(schema)) return schema;

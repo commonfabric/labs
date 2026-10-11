@@ -6,6 +6,8 @@ import type {
 } from "@commonfabric/api";
 import { type Mutable } from "@commonfabric/utils/types";
 
+import type { AnyValueBesideUnwritten } from "./ifc-labels.ts";
+
 /**
  * JSON Schema object type - mutable version of the Common Fabric JSONSchema interface
  */
@@ -158,6 +160,33 @@ export interface GenerationContext {
     | { kind: "void" }
     | { kind: "intersection" | "union"; parts: () => MutableJSONSchema[] }
   >;
+
+  /**
+   * A number for each record of `schemaOrigins` that a merge's key has met,
+   * so equal schemas that came from different types key different merges
+   * (`withOriginsNumbered()`).
+   */
+  originNumbers?: Map<object, number>;
+
+  /**
+   * The name of each intersection the node path met again inside itself while
+   * merging it, by the key `mergeParts()` gives the merge: the merge is
+   * written as a definition of that name, and each meeting as a reference.
+   */
+  mergedIntersectionNames: Map<string, string>;
+
+  /**
+   * A fresh name for an anonymous definition, `AnonymousType_` and a count
+   * the generator keeps for every name it gives one.
+   */
+  nameAnonymousDefinition: () => string;
+
+  /**
+   * Each value an intersection the checker gives `any` settled to that met a
+   * definition still being generated, checked once generation is done
+   * (`assertAnyValuesKeptLabels()`).
+   */
+  anyValuesBesideUnwritten: AnyValueBesideUnwritten[];
 
   // Stack state (push/pop during recursion)
 

@@ -17,7 +17,7 @@ interface Item {
 interface ListState {
     items: Cell<Item[]>;
 }
-// Index signature will prevent safe merge
+// The index signature merges beside the members of `ListState`.
 type Indexed = {
     [k: string]: unknown;
 };
@@ -31,17 +31,39 @@ const removeItem = handler({
     required: ["key"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
-    additionalProperties: true,
-    $comment: "Unsupported intersection pattern: index signature on constituent"
+    properties: {
+        items: {
+            type: "array",
+            items: {
+                $ref: "#/$defs/Item"
+            },
+            asCell: ["cell"]
+        }
+    },
+    additionalProperties: {
+        type: "unknown"
+    },
+    required: ["items"],
+    $defs: {
+        Item: {
+            type: "object",
+            properties: {
+                text: {
+                    type: "string"
+                }
+            },
+            required: ["text"]
+        }
+    }
 } as const satisfies __cfHelpers.JSONSchema, (event, state) => {
     state.items.get();
     state[event.key];
 });
-// FIXTURE: unsupported-intersection-index
-// Verifies: dynamic key access keeps index-signature intersections open-ended
-//   handler<{key:string}, ListState & Indexed>() → context: { additionalProperties: true, $comment: "Unsupported intersection..." }
-// Context: negative test -- without the dynamic key read, shrinking can safely
-//   keep only `items`. This fixture forces the truly open-ended fallback path.
+// FIXTURE: intersection-index-signature
+// Verifies: an intersection with an index signature merges into one open object
+//   handler<{key:string}, ListState & Indexed>() → context: { properties: { items }, additionalProperties: { type: "unknown" } }
+// Context: the dynamic key read keeps the index signature's values beside
+//   `items`; without it, shrinking can safely keep only `items`.
 export { removeItem };
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }

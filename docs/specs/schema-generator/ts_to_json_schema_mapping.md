@@ -156,32 +156,73 @@ policies, so compilation must refuse the schema.
 
 An intersection node is settled the way the checker settles the type, each
 constituent read through its reference, and what remains is merged as
-`IntersectionFormatter` merges: identical constituents fold; `never` leaves
-`false`; `any` makes the whole accept anything unless the constituents beside
+`IntersectionFormatter` merges: identical constituents fold; a constituent
+accepting nothing (`never`) is what the whole accepts, with the labels it
+states; `any` makes the whole accept anything unless the constituents beside
 it that are no union already contradict each other, which is as far as the
-checker looks before `any` wins; otherwise a union constituent distributes
-and every combination of arms is settled on its own; `unknown` is the
-identity; an empty object part drops out and takes `null` and `undefined`
-with it, as `T & {}` does; primitives are narrowed or found disjoint wherever
-they sit, `"a" & string` being `"a"` and `string & number` nothing; `null` or
-`undefined` beside an object leaves nothing; and a constituent that merge
-refuses — a non-object, or one with an index signature, which an array is —
-yields the same unsupported-pattern fallback the type path emits. Where a
+checker looks before `any` wins, and the whole then keeps what the type path
+keeps of a property the checker gives `any` (§9) — a whole intersection
+keeps it on this path alone, as the checker hands the type path `any`
+itself, which holds nothing of the constituents beside it; a constituent
+whose value, with its labels and whole-value keywords set aside, is `{}` or
+`{ not: true }` is read as `any` or `never`; otherwise a union constituent
+distributes and every combination of arms is settled on its own; `unknown`
+is the identity; an empty object part drops out and takes `null` and
+`undefined` with it, as `T & {}` does; primitives are narrowed or found
+disjoint wherever they sit, `"a" & string` being `"a"` and `string & number`
+nothing; `null` or `undefined` beside an object or a cell leaves nothing; a
+cell among the constituents is the value, the first cell's, with the cap any
+of them puts on its handle, as the checker reads a value of intersected
+cells, so `Cell<unknown> & { y: number }` is that cell; arrays merge into an
+array of the intersection of their items; an index signature merges with the
+members, its values the `additionalProperties` of the merged object, the
+intersection of every part's, while a member keeps what its own declarations
+give it, as the checker reads a member of an intersection; and a constituent
+that merge refuses — a non-object, or an array beside an object — yields the
+same unsupported-pattern fallback the type path emits. Object parts merge
+into one object, and a property several of them declare is settled the same
+way from the schemas its declarations give it, documented as the type path
+documents it (§9) and refused where its declarations are in different
+scopes. The keywords JSDoc writes are set aside while those schemas are
+settled, and an optional declaration admits `undefined` beside one that
+requires the property. What a constituent states besides which values it
+holds is set aside while the values are settled and stated of what they
+settle to, as the type path reads it from the checker's type: its scope and
+its default belong to the whole value, so two scopes refuse the
+intersection, as a scope wrapper nested in another with no cell between
+them, and defaults that differ leave none; its labels are placed as the type
+path places a CFC carrier's (§11): a restriction goes on the members of the
+result it declares, or on the whole result where it declares all of them or
+none, and evidence (`integrity`, `addIntegrity`) goes on the whole result
+only where the labeled constituent holds all of its data, every member any
+constituent declares, its items where one is an array, and the values under
+keys no member names where one has an index signature, and otherwise on the
+members it declares, as data another constituent holds may be data the
+labeled one never established; a union's restrictions go on the members any
+of its arms declares, and its evidence on the members of the arm the value
+is. A keyword written beside a reference is read in place of the
+definition's, through a chain of references, except its labels, which join
+the definition's. A merge met again inside itself, as the members of two
+recursive definitions meet, is written where it starts and as a definition
+named as the type path names a recursive type (`AnonymousType_N`), and each
+meeting inside it is a reference to that definition; merges are told apart
+by their schemas together with the origins recorded in them (below), so
+equal schemas that came from different types are different merges. Where a
 schema alone no longer says what its type was, the generation context
 records where it came from (`schemaOrigins`): `void` lowers to the opaque
 marker `OpaqueCell<any>` also lowers to, and reduces as `undefined` does
 beside another primitive (`undefined & void` is `undefined`, `string & void`
-nothing) while the wrapper, having no primitive domain, is refused by a
-merge as a non-object constituent; an unsupported-pattern fallback keeps the
-constituents behind it, so a nested or named intersection is reopened when
-an enclosing one reduces it (`(string & Brand) & number` is nothing); and a
-union whose arms fold to one schema — `void | OpaqueCell<any>`, or two
-branded primitives with the same fallback — keeps every arm, so an
-intersection reading the survivor still distributes over them (an arm
-accepting nothing is no arm, and is neither counted nor kept). Schemas with
-recorded union or intersection constituents are deduplicated by identity:
-equal fallback schemas can hide disjoint source types, so separate folded
-unions remain separate constraints in an enclosing intersection.
+nothing), while the wrapper is a cell, the value beside any other part; an
+unsupported-pattern fallback keeps the constituents behind it, so a nested
+or named intersection is reopened when an enclosing one reduces it
+(`(string & Brand) & number` is nothing); and a union whose arms fold to one
+schema — `void | OpaqueCell<any>`, or two branded primitives with the same
+fallback — keeps every arm, so an intersection reading the survivor still
+distributes over them, and the labels the survivor states are that union's
+(an arm accepting nothing is no arm, and is neither counted nor kept).
+Schemas with recorded union or intersection constituents are deduplicated by
+identity: equal fallback schemas can hide disjoint source types, so separate
+folded unions remain separate constraints in an enclosing intersection.
 
 `readonly` marks mutability and contributes no JSON Schema keyword. A
 synthetic `readonly T[]` therefore has the same schema as its wrapped `T[]`.
@@ -943,14 +984,83 @@ Default paths of §7:
   metadata carriers, whose labels §11 reads, are filtered before validation;
   a single survivor delegates directly, and where none survives the full set
   is merged.
-- Unsupported shapes — non-object constituent, constituent with an index
-  signature, or a checker error — produce a **permissive fallback, not a
-  throw**: `{ type: "object", additionalProperties: true, $comment:
-  "Unsupported intersection pattern: <reason>" }`.
-- Property merge is **first-wins** (no schema merging); conflicting property
-  descriptions keep the first + `$comment` + logger warning;
-  `required` is unioned; `$ref` constituents resolve
-  through `context.definitions`.
+- An intersection of arrays is an array of the values every one of them
+  holds: its `items` are the schema of the intersection's number index, the
+  intersection of the element types, so `unknown[] & readonly string[]` is
+  `string[]`'s schema. Its constituents' JSDoc documents it as it documents
+  a merged object (below). Tested: intersection-formatter.test.ts.
+- An index signature merges with the members, as one object type declaring all
+  of the constituents' members and index signatures would: the keys no member
+  names hold the intersection's index type, which the checker gives as the
+  intersection of the constituents' (`additionalProperties`), and a member
+  keeps the type its own declarations give it, as the checker reads `T["x"]`
+  of an intersection. `{ x: unknown; y: string } & Record<string, string>`
+  gives `{ properties: { x: { type: "unknown" }, y: { type: "string" } },
+  additionalProperties: { type: "string" } }`, and labels follow the members
+  and index values they are written on (§11). Tested:
+  intersection-formatter.test.ts, intersection-provenance.test.ts.
+- Unsupported shapes — a non-object constituent, or an array or tuple beside
+  an object, whose items no member can hold — produce a **permissive
+  fallback, not a throw**: `{ type: "object", additionalProperties: true,
+  $comment: "Unsupported intersection pattern: <reason>" }`.
+- A property several constituents declare takes the schema of its type in
+  the intersection, which the checker gives as the intersection of the
+  declared types: `{ a: unknown } & { a: string }` and
+  `{ a: string | number } & { a: string }`, in either order, give `a` the
+  schema of `string`, `{ a: string } & { a: number }` gives it `false`, and
+  `{ a: unknown[] } & { a: string[] }` gives it `string[]`'s. Where one
+  declaration's type is that very type, the property takes that
+  declaration's schema, read through the node it is written with. Any other
+  type is formatted as the property's, so what the checker keeps of every
+  declaration is read from the type, whichever declaration wrote it: a scope
+  wrapper's brand, as in `{ a: X } & { a: PerUser<X> }`, scoped to the user
+  in either order (§10); a CFC carrier, whose labels go on the members of
+  the payload it was written around (§11); and a `Default` brand.
+  `{ a: { x: string } } & { a: { y: number } }` merges the two objects, and a
+  callable keeps its wrapper marker.
+- A property whose declarations are in different scopes, a cell's cap
+  counting as its scope, is refused, as one value is stored in one scope:
+  `{ a: PerUser<X> } & { a: PerSpace<X> }` throws "The property `a` is
+  declared in scope `user` by one member of an intersection and in scope
+  `space` by another. A value is stored in one scope, so declare `a` in the
+  same scope wherever it is declared." Where the schema declares no scope, as
+  an inferred lift result's does (§10), the declarations' scopes are not
+  read, and a value two scope wrappers brand is read as its payload.
+- Where the checker gives the property `any`, which holds nothing of the
+  declarations beside the one that declares `any`, the property accepts any
+  value and keeps what would otherwise fail open. It keeps the scope a
+  declaration states, read from its type's brand or, where its type is `any`,
+  from its schema, a cell's cap counting as its scope. It keeps every
+  restriction a declaration states anywhere in its value, through its
+  references, on the whole value, which may hold that declaration's data
+  anywhere: every `ifc` key but the evidence keys `integrity` and
+  `addIntegrity`. Evidence goes only where the declaration's payload must be
+  (§11), so it is kept of a declaration that declares `any` itself, whose
+  payload is the whole value, and of no other, as `any` does not make the
+  value that declaration's payload.
+  `{ a: Confidential<{ x: string }, L> } & { a: any }` gives `a`
+  `{ ifc: { confidentiality: L } }`, `{ a: PerUser<string> } & { a: any }`
+  gives it `{ scope: "user" }`, `{ a: Integrity<string, I> } & { a: any }`
+  gives it `true`, and `{ a: Integrity<any, I> } & { a: string }` gives it
+  `{ ifc: { integrity: I } }`. A declaration accepting nothing (`never`)
+  leaves the property that declaration's schema, labels included. The default
+  the declarations agree on is kept as well. Where `any` meets a reference to
+  a definition still being generated, as a recursive type's own member does,
+  that definition's labels cannot be read there; once generation is done, a
+  value that kept fewer of them than the definition states is refused ("A
+  value intersected with `any` keeps the labels of what it is intersected
+  with, but it meets `Node` inside the definition of `Node`, where those
+  labels cannot be read yet."), and a declaration of `any` stating them is
+  kept.
+- The property's description, the tags drawn from it, and its deprecation
+  mark are the first declaration's where it has them, and otherwise those of
+  the schema it takes. A later declaration's differing description is noted
+  in a `$comment` ("Conflicting docs across intersection constituents; using
+  first") and a logger warning. `required` is unioned, as a property any
+  constituent requires is required; `$ref` constituents resolve through
+  `context.definitions`. Tested: intersection-formatter.test.ts,
+  intersection-provenance.test.ts, the descriptions-intersection-conflict
+  fixture.
 - Constituent-level JSDoc joins with `\n\n` plus provenance `$comment`s ("Docs
   inherited from intersection constituents." / "Sources: …" / "Missing docs
   for: …") (descriptions-intersection-* fixtures ×7).
@@ -1255,12 +1365,20 @@ Mechanics:
     whose carrier did not come from the type it maps over.
   - A label reaching every member lands on the whole value, and one reaching
     none lands nowhere. A union payload's members are those of each
-    alternative.
+    alternative. A value with an index signature its payload does not have
+    holds data under keys no member names, which evidence never reaches, so
+    evidence reaching every named member lands on those members, not the whole
+    value:
+    `{ x: string } & Integrity<{ x: string }, L> & Record<string, unknown>`
+    labels `x` alone. A value whose schema has no members to place labels on,
+    as an unsupported-pattern fallback, takes a restriction whole and evidence
+    that reaches only some of its data nowhere.
   - A payload whose type lists no members, such as `{}` or `unknown`, may
     hold data under any key, so a restriction labels the whole value. Its
     evidence labels the whole value only where nothing writes over members
     and the value holds nothing besides: `Integrity<{}, L>` carries `L`, but
-    `{ ...tagged, name }` and `{ name } & Integrity<{}, L>` do not.
+    `{ ...tagged, name }`, `{ name } & Integrity<{}, L>` and
+    `Record<string, number> & Integrity<unknown, L>` do not.
   - A primitive, alone or beside carriers and brands, is all the data its
     value holds, so a payload that is or includes a primitive labels such a
     value whole: `Integrity<string, L>`, and the `string` alternative of
