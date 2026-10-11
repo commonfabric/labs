@@ -1291,10 +1291,15 @@ export class SchemaGenerator {
       options?.printedFrom,
     );
     if (readInPlace) {
+      // A print whose annotation names a value binding is read as that
+      // annotation spells it, as a member's is (`formatChildType()`).
+      const spelledBy = typeNode && schemaHints?.get(typeNode)?.spelledBy;
+      const spelling = spelledBy &&
+        this.#spelling(readInPlace, spelledBy, checker);
       return this.#generateSchemaInternal(
         readInPlace,
         checker,
-        undefined,
+        spelling,
         typeRegistry,
         options,
         schemaHints,

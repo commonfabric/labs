@@ -1723,7 +1723,8 @@ to the node alone. A `cfcUiContract` lookup tries the node and
 `schema-generator.ts` and `object-formatter.ts`); an `items` lookup reads the
 current hint node (`common-fabric-formatter.ts`); a `narrowedFrom` lookup reads
 the node, and the node inside its parentheses (`schema-generator.ts`); a
-`spelledBy` lookup reads the node (`formatChildType` in
+`spelledBy` lookup reads the node, wherever a member or a printed generation
+root is formatted (`formatChildType` and `#generateSchemaInternal` in
 `schema-generator.ts`).
 
 - **`items: false`** — array-typed wrapper contents collapse to
@@ -1802,6 +1803,17 @@ the node, and the node inside its parentheses (`schema-generator.ts`); a
     by the type at hand.
 
   The node's own hints still apply.
+
+  The object formatter applies the same rule where it has no node for a
+  member: a member of an object literal, read from its type, is read at the
+  annotation of the binding or member its value reads, written `p: a`,
+  `p: x.a` or `{ a }`, where that annotation denotes the member's type and
+  names a value binding (`readBindingAnnotation` in
+  `src/typescript/value-annotation.ts`, called from `object-formatter.ts`). A
+  callback's inferred result is a print of such a type, so a result written
+  `{ whole: a }` keeps the policy `a`'s annotation names. A value any other
+  expression writes, such as an element of an array literal, has no binding
+  to read, and is read by its type.
 
 ## 14. Options
 

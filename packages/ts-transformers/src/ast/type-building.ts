@@ -8,11 +8,16 @@ import {
   scopePayloadType,
 } from "@commonfabric/schema-generator/scope-brand";
 import {
-  denotesSameType,
   readAuthoredTypeNodeOnce,
-  readMemberAnnotation,
   unwrapTypeParentheses,
 } from "@commonfabric/schema-generator/type-node";
+import {
+  declaredTypeNode,
+  destructuredSourceProperty,
+  namesValueBinding,
+  readBindingAnnotation,
+  readValueSymbol,
+} from "@commonfabric/schema-generator/value-annotation";
 import type { CrossStageState, TransformationContext } from "../core/mod.ts";
 import type { CaptureTreeNode } from "../utils/capture-tree.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
@@ -867,49 +872,6 @@ function destructuredLiteralValue(
     : undefined;
 }
 
-/**
- * Whether authored type syntax names a value binding (`typeof handler`)
- * instead of just a shape: in the node itself, in anything it holds, or in a
- * type alias or interface it refers to by name, through any import binding.
- * A generic alias is read without substituting its parameters, since the
- * question is only whether a `typeof` is written anywhere the reference
- * reaches; the reference's own arguments are read as the nodes it holds.
- *
- * Only declarations in authored modules are followed. A writer binding names
- * a value in authored code, so an alias that carries one is authored too, and
- * a declaration file's `typeof` (a brand key, say) names no writer.
- */
-export function namesValueBinding(
-  node: ts.Node,
-  checker: ts.TypeChecker,
-  seen = new Set<ts.Node>(),
-): boolean {
-  if (ts.isTypeQueryNode(node)) return true;
-  if (ts.isTypeReferenceNode(node)) {
-    const name = ts.isIdentifier(node.typeName)
-      ? node.typeName
-      : node.typeName.right;
-    let symbol = checker.getSymbolAtLocation(name);
-    if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
-      symbol = checker.getAliasedSymbol(symbol);
-    }
-    for (const declaration of symbol?.declarations ?? []) {
-      if (
-        !(ts.isTypeAliasDeclaration(declaration) ||
-          ts.isInterfaceDeclaration(declaration)) ||
-        declaration.getSourceFile().isDeclarationFile ||
-        seen.has(declaration)
-      ) continue;
-      seen.add(declaration);
-      if (namesValueBinding(declaration, checker, seen)) return true;
-    }
-  }
-  return ts.forEachChild(
-    node,
-    (child) => namesValueBinding(child, checker, seen) || undefined,
-  ) === true;
-}
-
 export function getDeclaredTypeNodeForBindingElement(
   declaration: ts.BindingElement,
   checker: ts.TypeChecker,
@@ -1613,82 +1575,6 @@ function describeCapture(expression: ts.Expression, fallback: string): string {
 }
 
 /**
- * The symbol of the value `identifier` reads. Written as a shorthand property
- * (`{ x }`), the identifier's own symbol is the property of the object literal
- * it writes, which declares nothing about the value; the value's symbol is the
- * binding `x` names.
- */
-function readValueSymbol(
-  identifier: ts.Identifier,
-  checker: ts.TypeChecker,
-): ts.Symbol | undefined {
-  const symbol = checker.getSymbolAtLocation(identifier);
-  return symbol?.valueDeclaration &&
-      ts.isShorthandPropertyAssignment(symbol.valueDeclaration)
-    ? checker.getShorthandAssignmentValueSymbol(symbol.valueDeclaration) ??
-      symbol
-    : symbol;
-}
-
-/**
- * The property of a destructured aggregate that `identifier`, a binding the
- * destructuring declares, reads, or `undefined` for any other identifier. A
- * `{ x }` shorthand resolves to a value symbol, and the binding element keeps
- * none of the property's own flags, so what the property declares is read
- * from the aggregate's type. For a renamed binding (`{ source: local }`) the
- * property is the SOURCE one. The source key may be an identifier, string, or
- * numeric literal (`{ "k": local }`, `{ 0: local }`). A computed key
- * (`{ [expr]: local }`) is not statically resolvable, and a rest binding
- * (`{ ...local }`) reads no one property, so neither names one.
- */
-function destructuredSourceProperty(
-  identifier: ts.Identifier,
-  localName: string,
-  checker: ts.TypeChecker,
-): ts.Symbol | undefined {
-  const binding = readValueSymbol(identifier, checker)?.valueDeclaration;
-  if (
-    !binding || !ts.isBindingElement(binding) ||
-    !ts.isObjectBindingPattern(binding.parent)
-  ) {
-    return undefined;
-  }
-  const host = binding.parent.parent;
-  const aggregateType = ts.isParameter(host)
-    ? checker.getTypeAtLocation(host)
-    : ts.isVariableDeclaration(host) && host.initializer
-    ? checker.getTypeAtLocation(host.initializer)
-    : undefined;
-  const key = binding.propertyName;
-  const sourceName = !key
-    ? binding.dotDotDotToken ? undefined : localName
-    : ts.isIdentifier(key) || ts.isStringLiteralLike(key) ||
-        ts.isNumericLiteral(key)
-    ? key.text
-    : undefined;
-  return sourceName === undefined
-    ? undefined
-    : aggregateType?.getProperty(sourceName);
-}
-
-/**
- * The node `symbol`'s declaration writes its type with, where it writes one:
- * the node schema generation reads a property through.
- */
-function declaredTypeNode(
-  symbol: ts.Symbol | undefined,
-): ts.TypeNode | undefined {
-  const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
-  return declaration &&
-      (ts.isPropertySignature(declaration) ||
-        ts.isPropertyDeclaration(declaration) ||
-        ts.isParameter(declaration) ||
-        ts.isVariableDeclaration(declaration))
-    ? declaration.type
-    : undefined;
-}
-
-/**
  * Builds TypeScript type elements from a capture tree structure.
  * Works for both nested properties within a tree node and root-level entries.
  * Recursively builds nested type literals for hierarchical captures.
@@ -1747,16 +1633,9 @@ export function buildTypeElementsFromCaptureTree(
       // annotation of the member or binding the leaf reads names one, the
       // print is read as that annotation.
       const printedType = context.state.printedFrom(typeNode);
-      const annotation = declaring && printedType &&
-        (readMemberAnnotation(declaring, printedType, checker) ??
-          (declared &&
-              denotesSameType(
-                checker.getTypeFromTypeNode(declared),
-                printedType,
-              )
-            ? declared
-            : undefined));
-      if (annotation && namesValueBinding(annotation, checker)) {
+      const annotation = printedType &&
+        readBindingAnnotation(declaring, printedType, checker);
+      if (annotation) {
         context.state.recordSchemaHint(typeNode, { spelledBy: annotation });
       }
 

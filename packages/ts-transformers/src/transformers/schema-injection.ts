@@ -1,5 +1,6 @@
 import { isInternalMemberName } from "@commonfabric/schema-generator/property-name";
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
+import { namesValueBinding } from "@commonfabric/schema-generator/value-annotation";
 import { FUNCTION_HARDENING_HELPER_NAME } from "@commonfabric/utils/sandbox-contract";
 import ts from "typescript";
 
@@ -34,7 +35,6 @@ import {
   createRegisteredTypeLiteral,
   getConstructedCellTypeNode,
   getPreservedTypeForBindingElement,
-  namesValueBinding,
   type PreservedBindingType,
   reportUnknownReactiveType,
   typeToTypeNodeWithRegistry,
