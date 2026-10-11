@@ -24,11 +24,17 @@ runtimes share one compiled-module byte cache).
 
 #8660 was reverted by #8673. With it, main's CI was red on two lanes:
 
-- **Server-execution lane.** `fabrichat spaces across runtimes` and
-  `Home catalog revisions across execution modes`. Under server execution a
-  stream send returned after the client's speculative run and its event's
-  commit, ahead of the serving runtime's run of the handler. Both files pass on
-  this box with and without the change; the window shows on CI's runners.
+- **Server-execution lane.** The revert names `fabrichat spaces across
+  runtimes` and `Home catalog revisions across execution modes`. The job logs,
+  read afterwards, show the fabrichat tests passing in every run that ran
+  them, and one failure of the Home catalog test in 1 of 6 runs: a receipt
+  read through `sendEvent` and `receipt.pull()` returning before the receipt
+  was written, a path `PieceController.set()` does not reach. Both files pass
+  on this box with and without the change. The reading of a send that returned
+  ahead of the serving runtime's run, which the re-landing below was built on,
+  is not what the logs show;
+  [the 2026-10-11 record](2026-10-11-server-execution-send-wait-and-session-fan-out.md)
+  carries the log evidence.
 - **Default lane.** `Topics board demo > opens a topic from its card, follows
   its backlink, and adds a comment the thread shows`, timing out on the
   backlink to the citing topic. The seed stopped deriving each topic's

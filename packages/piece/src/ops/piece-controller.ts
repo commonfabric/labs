@@ -3224,6 +3224,10 @@ class PiecePropIo implements PieceCellIo {
       | undefined;
 
     const { ok, error } = await pieces.runtime.editWithRetry((tx) => {
+      // Each attempt decides afresh what it wrote: a retry can resolve the
+      // same path to a durable destination where the attempt before it found
+      // a stream.
+      sentEvent = false;
       // Resolve the target from the piece metadata inside every retry. A
       // concurrent setsrc may replace the argument link/schema after this
       // write starts; reusing a cell captured before the retry would then
