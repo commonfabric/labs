@@ -2527,9 +2527,11 @@ export class StorageManager implements IStorageManager {
     }
     entry.count++;
     this.#pendingLoads.set(key, entry);
+    console.warn(`[diag-load] reg ${key} gen=${entry.generation} count=${entry.count}`);
     return (failure?: unknown) => {
       entry.failure ??= failure;
       entry.count--;
+      console.warn(`[diag-load] rel ${key} gen=${entry.generation} count=${entry.count} failure=${failure === undefined ? "none" : String((failure as { name?: string })?.name ?? failure)}`);
       if (entry.count > 0) return;
       this.#pendingLoads.delete(key);
       if (entry.failure === undefined) {
@@ -6488,8 +6490,11 @@ export class SpaceReplica
     type: "pull" | "integrate" = "pull",
   ): Promise<Result<Unit, PullError>> {
     const refreshStart = performance.now();
+    const diagId = Math.random().toString(36).slice(2, 8);
     try {
+      console.warn(`[diag-refresh] ${diagId} start ${this.#space} type=${type}`);
       let { session } = await this.#activeSessionHandle();
+      console.warn(`[diag-refresh] ${diagId} session ${this.#space}`);
       // Per-session (no global): mirror the storage setting onto the session so
       // its watch-mutation family (set + add) uses the ordered-issue concurrent
       // path. Idempotent; cheap to re-assert each refresh. Optional-chained so
@@ -6569,8 +6574,11 @@ export class SpaceReplica
       const watchAddStart = performance.now();
       let mutation: MemoryV2Client.WatchMutationResult;
       try {
+        console.warn(`[diag-refresh] ${diagId} watchAdd ${this.#space} n=${watches.length} ids=${watches.map((w) => w.id.slice(0, 60)).join(",")}`);
         mutation = await session.watchAddSync(watches);
+        console.warn(`[diag-refresh] ${diagId} watchAdded ${this.#space}`);
       } catch (error) {
+        console.warn(`[diag-refresh] ${diagId} watchAdd-threw ${this.#space} ${String(error)}`);
         // An ACL verdict can terminate the session while this request is in
         // flight, and the request may be the only load the space sees, so its
         // failure is what consumes the remount. The request is made once more
