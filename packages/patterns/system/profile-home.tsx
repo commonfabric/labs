@@ -847,10 +847,16 @@ function isCanonicalVerifiedIdentity(
 // already bears the required Loom integrity atom. The handler may inspect the
 // value to reject malformed producer output, but stores/removes the exact cell
 // reference so its integrity provenance is preserved end to end.
+//
+// Its state is the list it collects into, declared without the per-entry
+// requirement: the handler only appends incoming cells (each checked on the
+// event) and removes them, and the list's stored schema keeps the floor on
+// every entry written. Requiring the entries on its own input would hold the
+// empty list the profile starts with to evidence only a builtin can mint.
 const publishVerifiedIdentities = handler<
   MutateVerifiedIdentitiesEvent,
   {
-    verifiedIdentities: Writable<VerifiedExternalIdentityCell[]>;
+    verifiedIdentities: Writable<Cell<ExternalIdentityAssertion>[]>;
     mode: "publish" | "revoke";
   }
 >((event, state) => {

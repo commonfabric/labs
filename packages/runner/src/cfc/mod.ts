@@ -68,6 +68,7 @@ export type {
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
   CfcMetadata,
+  CfcNodeInputRefusal,
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcPrepareState,

@@ -1036,6 +1036,20 @@ export const DEFAULT_CFC_DECLARED_MONOTONICITY_MODE:
   CfcDeclaredMonotonicityMode = "off";
 
 /**
+ * A node input requirement (§8.10.3) a node's attempt failed, recorded by the
+ * runner before the node's code runs and turned into a reason by the
+ * boundary pass.
+ */
+export type CfcNodeInputRefusal = {
+  readonly reason: string;
+  /**
+   * Whether the failure is a verdict on the data (see `verdict-reason.ts`).
+   * A read the runner could not make yet stays retryable.
+   */
+  readonly verdict: boolean;
+};
+
+/**
  * Per-transaction privileged marker exempting exactly ONE (doc, path,
  * clauseDigest) triple from the declared-monotonicity gate (the seam for the
  * §8.12.7 route 2b declassification event; docs/specs/
@@ -1178,6 +1192,10 @@ export type CfcTxState = {
   // reserved `grant:cfc:` documents outside the trusted policy-writer path
   // (`writeCfcGrant`) are recorded here too — same S18 class, same reasons.
   unprivilegedSystemWrites: string[];
+  // Input requirements a node's code declares that this attempt's inputs
+  // failed (§8.9, §8.10.3), recorded by the runner before the code runs.
+  // prepareBoundaryCommit turns each into a reason.
+  nodeInputRefusals: CfcNodeInputRefusal[];
   // Grant documents consulted by policyState-guarded boundary evaluation in
   // this transaction (§8.12.7 route 2a), recorded by the runner-side grant
   // resolver, deduplicated by address. Folded into PreparedDigestInput.

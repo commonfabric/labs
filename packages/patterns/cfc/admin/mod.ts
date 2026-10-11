@@ -23,6 +23,14 @@ export interface AdminRegistryStoredValue<Role> {
 }
 
 export type EmptyAdminRegistryValue = Record<PropertyKey, never>;
+
+/**
+ * The registry a pattern seeds: an empty roster rather than no roster. A node
+ * that requires the roster's integrity reads the roster itself, so the seed
+ * write is what mints the roster's endorsement; a registry with no roster
+ * would leave nothing to read but an absence no one vouched for.
+ */
+export type SeededAdminRegistryValue = { admins: [] };
 export type AdminRegistryValue<Role> =
   | AdminRegistryStoredValue<Role>
   | Default<EmptyAdminRegistryValue>;

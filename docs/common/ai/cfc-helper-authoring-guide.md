@@ -395,7 +395,7 @@ import {
 import {
   adminRegistryEntries,
   type AdminRoleAssignment,
-  type EmptyAdminRegistryValue,
+  type SeededAdminRegistryValue,
   subjectHasAdminRole,
 } from "../cfc/admin/mod.ts";
 
@@ -423,9 +423,11 @@ type ProjectAdminList = RequiresIntegrity<
 interface ProjectAdminRegistryStoredValue {
   readonly admins?: ProjectAdminList;
 }
+// Seeded with the roster present and empty, so the setup write mints the
+// roster's atom and the first admin's handler reads a stamped roster.
 type ProjectAdminRegistry =
   | ProjectAdminRegistryStoredValue
-  | Default<EmptyAdminRegistryValue>;
+  | Default<SeededAdminRegistryValue>;
 
 // The switch that reveals the admin controls is a plain boolean any viewer may
 // set for themselves, so it carries no integrity. Give it one and every
@@ -467,7 +469,7 @@ Promote only registry-neutral behavior. Keep local actions like "make parking
 captain", "grant room moderator", or "assign project owner" beside the owning
 pattern, because those actions define domain policy.
 
-The five rules that make a floored registry work, and the failure each one
+The six rules that make a floored registry work, and the failure each one
 produces when it is broken, are in `packages/patterns/cfc/README.md` under
 "Floor An Admin Registry". The parking coordinator, the lobby, the lot watch
 and the group-chat demo have each had to be repaired for breaking one of them,

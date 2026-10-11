@@ -75,6 +75,7 @@ import type {
   CfcGrantWriteInput,
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
+  CfcNodeInputRefusal,
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcRefusalDetail,
@@ -2171,6 +2172,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * threading metadata through intermediate APIs.
    */
   runWithAmbientReadMeta<T>(meta: Metadata, fn: () => T): T;
+
+  /**
+   * Records an input requirement this attempt failed (§8.10.3), which the
+   * boundary pass turns into a reason, and marks the transaction CFC-relevant
+   * so that pass runs.
+   */
+  recordCfcNodeInputRefusal(refusal: CfcNodeInputRefusal): void;
 
   markCfcRelevant(reason?: string): void;
   invalidateCfc(reason: string): void;

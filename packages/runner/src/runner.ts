@@ -18,6 +18,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { getLogger } from "@commonfabric/utils/logger";
 
 import {
+  LocalReadUnavailable,
   requireLocalReadCondition,
   restrictToLocalReads,
   usesLocalReads,
@@ -80,6 +81,11 @@ import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
+import {
+  nodeInputRefusals,
+  type NodeInputResolution,
+  resolveNodeInputRequirements,
+} from "./cfc/node-input-requirements.ts";
 import {
   recordNewDocumentProtectedDefaults,
   recordNewProtectedDefaults,
@@ -198,6 +204,7 @@ import {
   type URI,
 } from "./storage/interface.ts";
 import {
+  internalVerifierRead,
   isDurableReadTx,
   machineryRead,
   markDurableReadTx,
@@ -10656,6 +10663,62 @@ export class Runner {
     });
   }
 
+  /**
+   * Checks a node's input requirements (§8.9, §8.10.3,
+   * `cfc/node-input-requirements.ts`) before its code runs, and records each
+   * failure on `tx` for the boundary pass, which refuses the commit under the
+   * enforcing modes. The reads are the verifier's own (§8.10.1, §18.6.2):
+   * marked so they enter no consumed set, while the scheduler still sees them,
+   * so a refused lift runs again when what the check read changes. A read the
+   * check cannot make refuses the commit: retryably when the input is not
+   * available yet, terminally otherwise.
+   */
+  #checkInputRequirements(
+    tx: IExtendedStorageTransaction,
+    identity: ImplementationIdentity | undefined,
+    binding: unknown,
+    inputsCell: Cell<any>,
+    graphSchema: JSONSchema | undefined,
+    resolved: Map<string, NodeInputResolution>,
+  ): void {
+    const code = identity?.kind === "verified"
+      ? `${identity.moduleIdentity ?? "?"}:${identity.symbol ?? "?"}`
+      : "unverified code";
+    let resolution = resolved.get(code);
+    if (resolution === undefined) {
+      resolution = resolveNodeInputRequirements(
+        identity,
+        graphSchema,
+        (moduleIdentity, symbol) =>
+          this.#runtime.patternManager.artifactFromIdentitySync(
+            moduleIdentity,
+            symbol,
+          ),
+      );
+      // An artifact not indexed yet may be on a later run.
+      if (resolution.codeSchemaKnown) resolved.set(code, resolution);
+    }
+    let refusals;
+    try {
+      refusals = nodeInputRefusals(
+        tx,
+        code,
+        binding,
+        inputsCell.getAsNormalizedFullLink(),
+        resolution,
+        internalVerifierRead,
+      );
+    } catch (error) {
+      refusals = [{
+        reason: `input requiredIntegrity of ${code} not checked: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        verdict: !(error instanceof LocalReadUnavailable),
+      }];
+    }
+    for (const refusal of refusals) tx.recordCfcNodeInputRefusal(refusal);
+  }
+
   #readJavaScriptArgument(
     module: Module,
     inputsCell: Cell<any>,
@@ -11394,6 +11457,12 @@ export class Runner {
     // handler because the bindings are fixed for the node, so the reduction
     // runs once rather than per event.
     const causalInputs = causalFormOfBinding(inputs) as Record<string, any>;
+    // The input requirements of each identity this handler runs under,
+    // resolved on its first run.
+    const inputRequirements = new Map<
+      string,
+      NodeInputResolution
+    >();
 
     const handlerResultCell = schedulerRehydration.viewLocalOnly
       ? resultCell.withTx()
@@ -11468,6 +11537,18 @@ export class Runner {
           eventInputs,
           undefined,
           tx,
+        );
+        // Before the body, while the transaction has written nothing, as for
+        // a lift: the state the handler is bound to, under `$ctx`, and the
+        // event, under `$event`, whose payload is a value in the wiring and
+        // so never satisfies a `requiredIntegrity`.
+        this.#checkInputRequirements(
+          tx,
+          policyFacingIdentity,
+          eventInputs,
+          inputsCell,
+          module.argumentSchema,
+          inputRequirements,
         );
         logger.timeStart("stream", "readInputs");
         const { argument, isValidArgument } = (() => {
@@ -11755,6 +11836,12 @@ export class Runner {
       byScope: new Map(),
     };
     let previouslyInvalidArgument = false;
+    // The input requirements of each identity this node runs under,
+    // resolved on its first run.
+    const inputRequirements = new Map<
+      string,
+      NodeInputResolution
+    >();
     const fnSource = fn.toString();
     // See the handler's counterpart above: what names the node, reduced once
     // here rather than on every action invocation.
@@ -11834,6 +11921,18 @@ export class Runner {
       let postRun: ((result: any) => any) | undefined;
       try {
         logger.timeStart("action", "readInputs");
+        // Before the body, while the transaction has written nothing, so the
+        // stored labels the check reads are the ones the arguments carry, and
+        // before the read scope is reset, so what it reads cannot move where
+        // the result is placed.
+        this.#checkInputRequirements(
+          tx,
+          policyFacingIdentity,
+          inputs,
+          inputsCell,
+          module.argumentSchema,
+          inputRequirements,
+        );
         tx.resetNarrowestReadScope();
         // A lift reads its argument, and reads through it while it runs. Both
         // go lazily: the body materializes the paths it touches and nothing
