@@ -330,9 +330,11 @@ export class CellController<T> implements ReactiveController {
    * `compute` is handed what the controller reads as, which is `undefined`
    * for a cell that holds nothing where the controller has no empty value of
    * its own. A value equal to the current one is not written. Settles in its
-   * turn, once the value is computed, or once the update is passed over;
-   * rejects when `compute` throws, which on a plain value throws at once,
-   * and when `onChange` throws, once the write has gone ahead.
+   * turn, once the value is computed, or once the update is passed over.
+   * On a cell, it rejects when `compute` throws, and when `onChange` throws,
+   * once the write has gone ahead; on a plain value, `compute`'s failure
+   * throws from `updateValue()` itself, and `onChange`'s as {@link setValue}'s
+   * does.
    *
    * @throws On a cell, when the component writes through a custom
    *   `setValue`, whose writes the controller cannot put in the cell's order.
