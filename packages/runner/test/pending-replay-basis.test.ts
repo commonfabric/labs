@@ -211,8 +211,10 @@ describe("pending replay basis", () => {
     it("shows the confirmed list, without its own write, until the server refuses it", async () => {
       const seed = rtA.edit();
       cellOf(rtA).withTx(seed).set(["m0", "m1"]);
-      expect((await seed.commit({ holdSyncedUntilCovered: false }).verdict)
-        .error).toBeUndefined();
+      expect(
+        (await seed.commit({ holdSyncedUntilCovered: false }).verdict)
+          .error,
+      ).toBeUndefined();
       await cellOf(rtB).sync();
       await deliverToB();
       expect(cellOf(rtB).get()).toEqual(["m0", "m1"]);
@@ -258,8 +260,10 @@ describe("pending replay basis", () => {
     it("shows its own write over the confirmed record, and the server accepts it", async () => {
       const seed = rtA.edit();
       cellOf(rtA).withTx(seed).set({ list: ["m0", "m1"], note: "a" });
-      expect((await seed.commit({ holdSyncedUntilCovered: false }).verdict)
-        .error).toBeUndefined();
+      expect(
+        (await seed.commit({ holdSyncedUntilCovered: false }).verdict)
+          .error,
+      ).toBeUndefined();
       await cellOf(rtB).sync();
       await deliverToB();
 
@@ -280,8 +284,10 @@ describe("pending replay basis", () => {
       const seqBeforePeer = confirmedSeqInB(id);
       const txA = rtA.edit();
       cellOf(rtA).withTx(txA).key("note").set("b");
-      expect((await txA.commit({ holdSyncedUntilCovered: false }).verdict)
-        .error).toBeUndefined();
+      expect(
+        (await txA.commit({ holdSyncedUntilCovered: false }).verdict)
+          .error,
+      ).toBeUndefined();
       await deliverToB();
       expect(confirmedSeqInB(id)).toBeGreaterThan(seqBeforePeer);
       expect(cellOf(rtB).get()).toEqual({
@@ -308,8 +314,10 @@ describe("pending replay basis", () => {
     it("shows the peer's element and its own appended after it, and the server accepts it", async () => {
       const seed = rtA.edit();
       cellOf(rtA).withTx(seed).set(["m0", "m1"]);
-      expect((await seed.commit({ holdSyncedUntilCovered: false }).verdict)
-        .error).toBeUndefined();
+      expect(
+        (await seed.commit({ holdSyncedUntilCovered: false }).verdict)
+          .error,
+      ).toBeUndefined();
       await cellOf(rtB).sync();
       await deliverToB();
 
@@ -328,8 +336,10 @@ describe("pending replay basis", () => {
 
       const txA = rtA.edit();
       cellOf(rtA).withTx(txA).push("a");
-      expect((await txA.commit({ holdSyncedUntilCovered: false }).verdict)
-        .error).toBeUndefined();
+      expect(
+        (await txA.commit({ holdSyncedUntilCovered: false }).verdict)
+          .error,
+      ).toBeUndefined();
       await deliverToB();
       expect(cellOf(rtB).get()).toEqual(["m0", "m1", "a", "b"]);
 

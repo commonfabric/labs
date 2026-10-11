@@ -119,7 +119,9 @@ re-enumerating the ops:
 
 The client's optimistic pending replay derives no paths: it applies a pending
 layer's ops to the delivered base through the shared `applyPatchToDocument`
-(`memory/v2/patch.ts`), skipping the whole layer when its ops cannot apply.
+(`memory/v2/patch.ts`), skipping the whole layer when its ops cannot apply, and
+when a delivered base shows that the layer's commit read the document on a
+basis a later write has changed (`03-commit-model.md` §3.3.3).
 
 ### 2. Mergeable-op descriptors — `packages/runner/src/storage/mergeable-ops.ts`
 
