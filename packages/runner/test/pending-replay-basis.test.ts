@@ -247,6 +247,49 @@ describe("pending replay basis", () => {
     });
   });
 
+  describe("a positional write whose basis a peer's write has moved to another tail", () => {
+    // Both runtimes grow the same two-element list by one element, from what
+    // they read, but by different elements: each commits a splice at index 2
+    // carrying a read of the list, and the peer's lands first.
+    const cellOf = (runtime: Runtime) =>
+      runtime.getCell<string[]>(space, "differing", listSchema);
+
+    const append = (runtime: Runtime, item: string) => {
+      const tx = runtime.edit();
+      const cell = cellOf(runtime).withTx(tx);
+      cell.set([...cell.get(), item]);
+      return tx.commit({ holdSyncedUntilCovered: false }).verdict;
+    };
+
+    it("shows the peer's list, without its own element, until the server refuses it", async () => {
+      const seed = rtA.edit();
+      cellOf(rtA).withTx(seed).set(["m0", "m1"]);
+      expect(
+        (await seed.commit({ holdSyncedUntilCovered: false }).verdict)
+          .error,
+      ).toBeUndefined();
+      await cellOf(rtB).sync();
+      await deliverToB();
+
+      transportB.hold();
+      const verdictB = append(rtB, "m2");
+      await clock.settle();
+      expect(cellOf(rtB).get()).toEqual(["m0", "m1", "m2"]);
+
+      const id = cellOf(rtB).getAsNormalizedFullLink().id;
+      const seqBeforePeer = confirmedSeqInB(id);
+      expect((await append(rtA, "m2x")).error).toBeUndefined();
+      await deliverToB();
+      expect(confirmedSeqInB(id)).toBeGreaterThan(seqBeforePeer);
+      expect(cellOf(rtB).get()).toEqual(["m0", "m1", "m2x"]);
+
+      await transportB.release();
+      expect((await verdictB).error?.name).toBe("ConflictError");
+      await deliverToB();
+      expect(cellOf(rtB).get()).toEqual(["m0", "m1", "m2x"]);
+    });
+  });
+
   describe("a replace whose basis a peer's write has moved", () => {
     // B rewrites a field from the value it read, which commits a `replace`
     // carrying a read of that field; the peer writes the same field first.

@@ -138,9 +138,12 @@ describe("memory-v2-pending-splice-intended-array", () => {
     expect(verdicts).toEqual(["ok", "ok", "ConflictError"]);
   });
 
-  it("shows the list it computed, then the store's, when the other session's tail differs", async () => {
+  it("shows the store's list once the other session's differing tail lands", async () => {
     // The view never shows the foreign tail with this session's appended
-    // after it: that list no writer wrote.
+    // after it: that list no writer wrote. Nor does it go on showing the list
+    // this session computed once the foreign tail lands, since that frame
+    // proves this session's read of the list stale and the server refuses
+    // the write.
     const doc = "intended-differs";
     const a = connect();
     const b = connect();
@@ -154,7 +157,7 @@ describe("memory-v2-pending-splice-intended-array", () => {
     heldIds.clear();
     expect((await append(a, doc, "x")).error).toBeUndefined();
     await flush();
-    expect(list.get()).toEqual(["e1", "e2", "e3"]);
+    expect(list.get()).toEqual(["e1", "e2", "x"]);
 
     release.resolve();
     expect(errorNameOf(await bVerdict)).toBe("ConflictError");

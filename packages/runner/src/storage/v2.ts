@@ -582,8 +582,8 @@ type PendingVersion =
     /**
      * The recursive confirmed reads the entry's commit made of this document
      * at `baseSeq`, where the confirmed version there was the store's own
-     * document. Absent on a sealed commit's entry, on an entry holding a
-     * `splice`, and wherever the commit made no such read.
+     * document. Absent on a sealed commit's entry, and wherever the commit
+     * made no such read.
      */
     basisReads?: readonly BasisRead[];
 
@@ -827,7 +827,8 @@ const transactionValueForVersion = (
  * other op replays as it stands too: the mergeable ones mean "add to
  * whatever is there", and a foreign write must show through them. A splice
  * whose path the computed document does not hold is left as it is, for the
- * apply to refuse.
+ * apply to refuse. A layer a delivered version has superseded is not shown
+ * at all (`skipsPendingVersion`).
  */
 const displayedPatches = (
   pending: Extract<PendingVersion, { op: "patch" }>,
@@ -9522,11 +9523,7 @@ export class SpaceReplica
           ? { ...pending, intended }
           : pending,
         record.confirmed.seq,
-        // A write holding a `splice` is left to `displayedPatches` until its
-        // verdict, whatever its reads say.
-        confirmedReads === undefined ||
-          (pending.op === "patch" &&
-            pending.patches.some((patch) => patch.op === "splice"))
+        confirmedReads === undefined
           ? undefined
           : basisReadsOf(record.confirmed, confirmedReads),
       ),
