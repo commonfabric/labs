@@ -663,6 +663,45 @@ export default pattern(() => {
     );
   });
 
+  it("wraps a pattern factory output a `const` binds in `nameInstance` with the binding's name", async () => {
+    const source = `
+import { pattern, Writable } from "commonfabric";
+
+const Child = pattern<{ value: number }>(() => {
+  return { value: Writable.of(1) };
+});
+
+export default pattern(() => {
+  const child = Child({ value: Writable.of(2) });
+  const other = Child({ value: Writable.of(3) });
+  const [unbound] = [Child({ value: Writable.of(4) })];
+  return { child, views: [other, unbound] };
+});
+`;
+
+    const output = await transformFiles({
+      "/main.tsx": source,
+    }, {
+      types: COMMONFABRIC_TYPES,
+    });
+    const root = parseModule(output["/main.tsx"]!);
+
+    const named = callsNamed(root, "nameInstance").map((call) => {
+      const [instance, name] = call.arguments;
+      return {
+        instance: ts.isCallExpression(instance) &&
+            ts.isIdentifier(instance.expression)
+          ? instance.expression.text
+          : undefined,
+        name: ts.isStringLiteral(name) ? name.text : undefined,
+      };
+    });
+    assertEquals(named, [
+      { instance: "Child", name: "child" },
+      { instance: "Child", name: "other" },
+    ]);
+  });
+
   it("does not re-root pattern factory identifiers in tool descriptors", async () => {
     const source = `
 import { BuiltInLLMTool, pattern, patternTool } from "commonfabric";

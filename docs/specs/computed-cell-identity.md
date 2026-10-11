@@ -86,10 +86,14 @@ changes, and only for entities whose ids carry the computed scheme.
 ### Internal cell identity
 
 The pattern builder assigns each internal root cell a `partialCause` —
-the cell's declared name, or an anonymous `{ $generated: N }` counter, with
-`$kind: "stream"` mixed in for stream cells
-(`packages/runner/src/builder/pattern.ts`). At instantiation the runner
-mints the entity id from the piece's result cell and that partial cause:
+the cell's declared name, the instance name of a named sub-pattern instance,
+or an anonymous `{ $generated: N }` counter, with `$kind: "stream"` mixed in
+for stream cells (`packages/runner/src/builder/pattern.ts`). The counter
+numbers anonymous roots in the order the builder's walk reaches them, which
+is the pattern's inputs and then its result, `[UI]` tree included, so a
+`{ $generated: N }` cause moves when a cell is added ahead of it anywhere in
+that walk. At instantiation the runner mints the entity id from the piece's
+result cell and that partial cause:
 
 ```ts
 // Shown for illustration only.
@@ -109,6 +113,104 @@ scheme onto the tagged hash — historically always `of:`.
 The manifest of materialized internal cells is stored in result-cell
 metadata and matched by partial cause plus kind
 (`packages/runner/src/runner.ts`, `materializeDerivedInternalCells`).
+
+### Sub-pattern instance identity
+
+A sub-pattern instance runs under a child result cell minted from the
+instance's output spot, `{ resultFor: <spot> }`, and the spot is the
+parent's internal cell for the instance's partial cause. Everything the child
+holds hangs off that result cell, so the partial cause is the child's
+identity.
+
+An instance bound to a `const` is a **named instance**. The transformer wraps
+it in `__cfHelpers.nameInstance(Child(...), "child")`
+(`docs/specs/ts-transformer/ts_transformers_current_behavior_spec.md` §13.2),
+and the builder takes that name as the instance's partial cause,
+`{ $generated: "instance", name: "child" }`, wherever no result key, node
+input or authored `.for()` names it already. The name sits under the
+reserved `$generated` key, so no authored cause can equal it. An instance
+name given to more than one root in a pattern names none of them, and each
+keeps a positional cause. A named instance's child stays where it is however
+its siblings are rearranged, and moves only when the instance is renamed.
+
+A named instance also records, as its descriptor's `legacyPartialCause`, the
+`{ $generated: N }` it would take without its name. It still consumes that
+number, so every other anonymous root keeps the number it would have without
+instance names.
+
+A parent set up under a pattern that did not name an instance holds that
+instance's child at the positional spot. The first setup under a pattern that
+names it carries the child over (`planInstanceCarryOver`), taking the first of
+these that applies:
+
+1. Where the pattern the parent last set up, which `patternSetupIdentity`
+   names, is loaded, the child is the one at the `legacyPartialCause` that
+   pattern gives the same instance name. This is exact.
+2. Otherwise, it is the one set-up child, among the positional spots the
+   parent's manifest records, whose `patternIdentity` is the instance's own
+   child pattern identity. This is exact too. More than one such child, or one
+   that two instances would each take, goes on to the next step.
+3. Otherwise, it is the child at the instance's own `legacyPartialCause`,
+   which is where the child runs with no instance names, unless the parent
+   shows the children have moved spots: that child carries an instance name
+   stamp, or it runs a pattern identity other than the instance's own while
+   another sub-pattern node sets up the identity it runs, or a child of the
+   instance's own identity runs at another positional spot the manifest
+   records.
+4. Otherwise nothing is carried over. The instance starts fresh, and the setup
+   logs `instance-carry-over` naming it, its positional cause and the child
+   left set up there, if any.
+
+A child is carried over by one instance at most. A start's pre-sync loads the
+previous pattern by identity first. The carried child's link is recorded by
+instance name in the parent's `instanceChildren` meta, and binding the
+instance reads it there on every later start, so carrying a child over is a
+one-time transition for each deployed parent.
+
+Step 3 is what a parent does with no instance names at all, short of a sign
+that its children moved, so carrying a child over is never worse than running
+positionally. It is exact wherever the previous pattern builds or an identity
+matches. The corner left is a parent with no setup marker, or whose stored
+source no longer compiles, whose children's pattern identities all changed,
+and whose children moved in the same update. There a child can take another's
+state, as it does with no instance names; the vintage gate catches it loudly
+where a schema then refuses the stored argument.
+
+A named instance stamps its name on the child it sets up, in the child's
+`instanceName` meta. A child is refused (`refuseDisplacedChild`), with an
+error naming both pattern identities, where it would set up:
+
+- over a child stamped with another instance's name, for a named instance or
+  for a positional spot;
+- over a child another instance carries, recorded in the parent's
+  `instanceChildren`, for a named instance or for a positional spot, whatever
+  the two pattern identities;
+- at a positional spot, over a stored child of another pattern identity, when
+  a child of the incoming identity runs at another positional spot of the
+  parent;
+- at a positional spot, over a stored child of another pattern identity, when
+  another positional spot of the pattern sets up the stored identity.
+
+The last two see a shift between positional children, which carry no instance
+names. A stored child of a different identity with none of those signs is
+taken for the same child under a newer version of its own source, since a
+child's identity changes whenever its own source does, so none of the
+refusals blocks an ordinary update of a child's source. Where a pre-fix
+child's identity changed in the same update, the movement checks have nothing
+to judge by and let the setup through.
+
+What this leaves open:
+
+- Anonymous roots other than named instances stay positional: an instance not
+  bound to a `const`, a `.map()` output and the element children under it.
+  When such a root moves to a number nothing held, its children are minted
+  afresh and the old ones are orphaned with no refusal, since nothing sets up
+  over them.
+- A runtime change to how a pattern lowers, which adds or removes an
+  anonymous root, renumbers positional roots with no change to the pattern's
+  source. A named instance is immune to that; carrying its child over in step
+  1 relies on the previous pattern compiling under today's runtime to the
+  numbering it was deployed with.
 
 ### Transaction provenance
 
@@ -423,7 +525,8 @@ partial-cause matching materializes the new cell and drops the stale entry
 naturally.
 
 Internal-cell identity is already refactor-fragile — anonymous cells re-mint
-on reorder via the `$generated` counter, named cells on rename — so kind
+when a cell is added ahead of them in the builder's walk, named cells and
+named sub-pattern instances on rename — so kind
 flips add a trigger to an existing hazard class (durable cross-piece links
 pointing at an orphaned entity), not a new class. The flipped classifier
 polarity widens the set of cells that flip when a pattern edit adds or

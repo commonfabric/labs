@@ -67,11 +67,11 @@ const EntryRow = pattern((input) => ({
 } as const satisfies __cfHelpers.JSONSchema);
 const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
-    const row = EntryRow({
+    const row = __cfHelpers.nameInstance(EntryRow({
         piece: entry.key("piece"),
         name: entry.key("name"),
         backlinks: entry.key("backlinks"),
-    });
+    }), "row");
     return {
         ui: row.key(__cfHelpers.UI),
         n: row.key(__cfHelpers.NAME),
