@@ -192,6 +192,68 @@ describe("cf space compact", () => {
   });
 });
 
+describe("cf space compact on a legacy store", () => {
+  /** The schema from before the per-scope and current-op migrations: no
+   * scope_key on revision, snapshot or head, no op on head, and no branch
+   * or op_* tables at all. The inspector's opener shims the columns; the
+   * planner reads absent tables as empty. */
+  function legacyStore(path: string): void {
+    const db = new Database(path, { create: true });
+    db.exec(`
+CREATE TABLE "commit" (
+  seq INTEGER NOT NULL PRIMARY KEY, branch TEXT NOT NULL DEFAULT '',
+  session_id TEXT NOT NULL, local_seq INTEGER NOT NULL,
+  original JSON NOT NULL, resolution JSON NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE revision (
+  branch TEXT NOT NULL DEFAULT '', id TEXT NOT NULL, seq INTEGER NOT NULL,
+  op_index INTEGER NOT NULL, op TEXT NOT NULL, data JSON, commit_seq INTEGER NOT NULL,
+  PRIMARY KEY (branch, id, seq, op_index)
+);
+CREATE TABLE head (
+  branch TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL,
+  op_index INTEGER NOT NULL, PRIMARY KEY (branch, id)
+);
+CREATE TABLE snapshot (
+  branch TEXT NOT NULL DEFAULT '', id TEXT NOT NULL, seq INTEGER NOT NULL,
+  value JSON NOT NULL, PRIMARY KEY (branch, id, seq)
+);
+INSERT INTO "commit" (seq, session_id, local_seq, original, resolution) VALUES
+  (1, 's', 1, '{}', '{}'), (2, 's', 2, '{}', '{}'), (3, 's', 3, '{}', '{}');
+INSERT INTO revision (id, seq, op_index, op, data, commit_seq) VALUES
+  ('computed:x', 1, 0, 'set', '{"value":{"n":0}}', 1),
+  ('computed:x', 2, 0, 'patch', '[{"op":"replace","path":"/value/n","value":1}]', 2),
+  ('computed:x', 3, 0, 'patch', '[{"op":"replace","path":"/value/n","value":2}]', 3);
+INSERT INTO head (branch, id, seq, op_index) VALUES ('', 'computed:x', 3, 0);
+`);
+    db.close();
+  }
+
+  it("plans against a store from before the scope_key migration", async () => {
+    const root = await Deno.makeTempDir({ prefix: "cf-space-compact-legacy-" });
+    try {
+      const store = `${root}/legacy.sqlite`;
+      legacyStore(store);
+      const planned = await cf(
+        `space compact ${store} --documents computed: --dry-run --json`,
+      );
+      expect(planned.code).toBe(0);
+      const report = JSON.parse(planned.stdout.join("\n"));
+      expect(report.instances).toEqual({
+        matched: 1,
+        truncated: 1,
+        materialized: 1,
+        headOpChanges: 1,
+      });
+      expect(report.revisions.rowsDeleted).toBe(2);
+      expect(report.preconditions.opTableRows).toBe(0);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+});
+
 describe("cf space", () => {
   it("runs the rehearsal loop: clone, attempt, verify, reset", async () => {
     await withFixture(async ({ snapshot, clone }) => {

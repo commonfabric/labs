@@ -242,17 +242,35 @@ export const planCompaction = (
   );
   const keepLast = cut.keepLast ?? 0;
 
-  const branches = db.prepare(
-    `SELECT name FROM branch WHERE name <> '' AND status <> 'deleted'`,
-  ).all<{ name: string }>().map((row) => row.name);
+  // A store the current server has opened carries every table below; one it
+  // has not — a snapshot from before a migration — may lack some, and reads
+  // as if they were empty rather than failing the dry run on a table it was
+  // never going to touch.
+  const tableExists = (table: string): boolean =>
+    db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`)
+      .get(table) !== undefined;
+  const countOf = (table: string): number =>
+    tableExists(table)
+      ? db.prepare(`SELECT count(*) AS n FROM "${table}"`).get<{ n: number }>()!
+        .n
+      : 0;
+  const branches = tableExists("branch")
+    ? db.prepare(
+      `SELECT name FROM branch WHERE name <> '' AND status <> 'deleted'`,
+    ).all<{ name: string }>().map((row) => row.name)
+    : [];
   const genesisPresent =
     db.prepare(`SELECT 1 FROM "commit" WHERE seq = 1`).get() !== undefined;
   const foreignKeyViolations =
     db.prepare(`PRAGMA foreign_key_check`).all().length;
-  const opTableRows = db.prepare(
-    `SELECT (SELECT count(*) FROM op_field_epoch) + (SELECT count(*) FROM op_submission) +
-            (SELECT count(*) FROM op_integrated) + (SELECT count(*) FROM op_checkpoint) AS n`,
-  ).get<{ n: number }>()!.n;
+  const opTables = [
+    "op_field_epoch",
+    "op_submission",
+    "op_integrated",
+    "op_checkpoint",
+  ];
+  const opTableRows = opTables.reduce((sum, table) => sum + countOf(table), 0);
+  const hasSnapshots = tableExists("snapshot");
 
   const instances = {
     matched: 0,
@@ -266,11 +284,13 @@ export const planCompaction = (
   // A total is summed as REAL: the driver hands back an INTEGER column as a
   // 32-bit value, which a store's bytes exceed.
   const snapshotsBelow = db.prepare(
-    `SELECT count(*) AS n, CAST(COALESCE(sum(${
-      BYTES_OF("value")
-    }), 0) AS REAL) AS bytes
-     FROM snapshot
-     WHERE branch = '' AND id = ? AND scope_key = ? AND seq <= ?`,
+    hasSnapshots
+      ? `SELECT count(*) AS n, CAST(COALESCE(sum(${
+        BYTES_OF("value")
+      }), 0) AS REAL) AS bytes
+         FROM snapshot
+         WHERE branch = '' AND id = ? AND scope_key = ? AND seq <= ?`
+      : `SELECT 0 AS n, 0.0 AS bytes WHERE ? IS NULL AND ? IS NULL AND ? IS NULL`,
   );
 
   const finishInstance = (rows: RevisionRow[]): void => {
@@ -286,11 +306,13 @@ export const planCompaction = (
     if (deleted.length === 0) return;
     const head = rows[0];
     const boundary = rows[boundaryIndex];
-    const snapshotRow = snapshotsBelow.get<{ n: number; bytes: number }>(
-      head.id,
-      head.scope_key,
-      boundary.seq,
-    )!;
+    const snapshotRow = hasSnapshots
+      ? snapshotsBelow.get<{ n: number; bytes: number }>(
+        head.id,
+        head.scope_key,
+        boundary.seq,
+      )!
+      : { n: 0, bytes: 0 };
     const plan: InstancePlan = {
       id: head.id,
       scopeKey: head.scope_key,
@@ -370,10 +392,11 @@ export const planCompaction = (
          AND h.seq = r.seq AND h.op_index = r.op_index
      ),
      opref AS (
-       SELECT commit_seq AS seq FROM op_submission
-       UNION SELECT commit_seq FROM op_integrated
-       UNION SELECT commit_seq FROM op_checkpoint
-       UNION SELECT commit_seq FROM op_field_epoch
+       ${
+      opTables.filter(tableExists).map((table) =>
+        `SELECT commit_seq AS seq FROM "${table}"`
+      ).join(" UNION ") || "SELECT NULL AS seq WHERE 0"
+    }
      )
      SELECT
        CASE
