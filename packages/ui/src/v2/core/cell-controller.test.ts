@@ -104,6 +104,17 @@ describe("createMockCellHandle", () => {
     expect(parent.get()).toEqual(["x", "Y", "z"]);
   });
 
+  it("holdWrites() keeps a child's write from its parent until released", () => {
+    const cell = createMockCellHandle({ name: "before" });
+    const release = holdWrites(cell);
+
+    void cell.key("name").set("after");
+    expect(cell.get()).toEqual({ name: "before" });
+
+    release();
+    expect(cell.get()).toEqual({ name: "after" });
+  });
+
   it("pushUpdate() simulates backend-pushed value change", () => {
     const cell = createMockCellHandle("original");
     const received: (string | undefined)[] = [];
@@ -1699,7 +1710,7 @@ describe("CellController — writes land in the order they were made", () => {
     );
   });
 
-  it("still writes a toggle whose onChange throws", async () => {
+  it("still writes a toggle whose onChange throws, and hands the failure to its caller", async () => {
     const ctrl = new BooleanCellController(createMockHost(), {
       onChange: (value) => {
         if (value) throw new Error("listener failed");
@@ -1708,14 +1719,8 @@ describe("CellController — writes land in the order they were made", () => {
     const cell = createMockCellHandle(false);
     ctrl.bind(cell);
 
-    const logged = console.error;
-    console.error = () => {};
-    try {
-      await ctrl.toggle();
-      await settleWrites();
-    } finally {
-      console.error = logged;
-    }
+    await expect(ctrl.toggle()).rejects.toThrow("listener failed");
+    await settleWrites();
 
     expect(values(cell)).toEqual([true]);
   });

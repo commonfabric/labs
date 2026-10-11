@@ -187,13 +187,18 @@ function createMockConnection(
       if (data.type === "cell:set" || data.type === "cell:push") {
         network.writes.push(data);
       }
+      if (data.type === "cell:set" && network.writesHeld) {
+        // Held, the write reaches no other handle until it is taken.
+        const { cell, value } = data;
+        return new Promise((answer) =>
+          network.heldWrites.push(() => {
+            if (cell && value !== undefined) network.handleCellSet(cell, value);
+            answer({});
+          })
+        );
+      }
       if (data.type === "cell:set" && data.cell && data.value !== undefined) {
         network.handleCellSet(data.cell, data.value);
-      }
-      if (data.type === "cell:set" && network.writesHeld) {
-        return new Promise((answer) =>
-          network.heldWrites.push(() => answer({}))
-        );
       }
       if (data.type === "cell:resolveAsCell" && data.cell) {
         return Promise.resolve({ cell: network.resolveRef(data.cell) } as any);

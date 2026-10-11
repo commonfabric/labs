@@ -1,8 +1,9 @@
 import { numberSchema, pieceListSchema } from "@commonfabric/runner/schemas";
-import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
+import { CellHandle, isCellHandle } from "@commonfabric/runtime-client";
 import { css, html, PropertyValues } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
+import { valueForDisplay } from "../../core/value-for-display.ts";
 import {
   createArrayCellController,
   createCellController,
@@ -223,6 +224,10 @@ export class CFPicker extends BaseElement {
 
   private _indexCellController = createCellController<number>(this, {
     timing: { strategy: "immediate" },
+    // A cell holding nothing selects the first item, so a pick of it moves
+    // nothing.
+    getValue: (value) =>
+      (value instanceof CellHandle ? valueForDisplay(value) : value) ?? 0,
     onChange: (newIndex) => {
       this.emit("cf-change", {
         index: newIndex,

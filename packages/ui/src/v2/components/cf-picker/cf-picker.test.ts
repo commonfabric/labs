@@ -339,6 +339,19 @@ describe("CFPicker stepping", () => {
     expect(writesSent(selectedIndex).map((write) => write.value)).toEqual([1]);
   });
 
+  it("writes nothing for a pick of the first item on a cell holding nothing", async () => {
+    // Nothing selected shows the first item.
+    const selectedIndex = createMockCellHandle<number>();
+    const element = pickerAt(selectedIndex);
+
+    element._selectIndex(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    element._selectIndex(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(writesSent(selectedIndex).map((write) => write.value)).toEqual([1]);
+  });
+
   it("writes nothing while the worker refuses the selection's read", () => {
     const selectedIndex = createMockCellHandle(1);
     const element = pickerAt(selectedIndex);

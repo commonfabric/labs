@@ -139,8 +139,9 @@ export class CellController<T> implements ReactiveController {
    * Counts the writes asked of this controller in the bound cell's order,
    * every one of which goes through {@link _askWrite}; a child's write, in
    * an order of its own, is not one. A computed write whose turn comes after a
-   * later one was asked for is made, and neither shown nor announced: the
-   * later write's value stands, as the handle's generations have it.
+   * later one was asked for is made, and the controller neither shows nor
+   * announces it: the later write's value stands, as the handle's
+   * generations have it.
    */
   private _writesAsked = 0;
 
@@ -318,8 +319,10 @@ export class CellController<T> implements ReactiveController {
    * timing included, and before those asked for after it. A write asked for
    * while it waits on the worker so lands after it, as the person made them.
    * Its value shows, and `onChange` hears of it, in that turn: at once where
-   * nothing waits, else once what was asked for before it is done, unless a
-   * write asked of this controller after it has shown its own value by then.
+   * nothing waits, else once what was asked for before it is done. Where a
+   * write was asked of this controller after it, by its turn, the controller
+   * neither shows nor announces it: its echo from the worker is then a
+   * delivery like any other, until the later write's turn.
    * One asked for on a cell no longer bound when its turn comes is made
    * there, where it was asked for, and this controller shows and announces
    * nothing of it.
@@ -328,7 +331,8 @@ export class CellController<T> implements ReactiveController {
    * for a cell that holds nothing where the controller has no empty value of
    * its own. A value equal to the current one is not written. Settles in its
    * turn, once the value is computed, or once the update is passed over;
-   * rejects when `compute` throws, which on a plain value throws at once.
+   * rejects when `compute` throws, which on a plain value throws at once,
+   * and when `onChange` throws, once the write has gone ahead.
    *
    * @throws On a cell, when the component writes through a custom
    *   `setValue`, whose writes the controller cannot put in the cell's order.
@@ -363,9 +367,12 @@ export class CellController<T> implements ReactiveController {
       computing = true;
       const next = compute(current);
       computing = false;
-      turn.resolve();
-      if (deepValueEqual(next, current)) return held as T;
+      if (deepValueEqual(next, current)) {
+        turn.resolve();
+        return held as T;
+      }
       if (epoch !== this._bindEpoch || asked !== this._writesAsked) {
+        turn.resolve();
         return next;
       }
       this._beginLocalEdit(next);
@@ -374,9 +381,11 @@ export class CellController<T> implements ReactiveController {
       inFlight = true;
       try {
         this.options.onChange(next, current as T);
+        turn.resolve();
       } catch (error) {
-        // The write goes ahead, as it would had it been made first.
-        console.error("[CellController] onChange failed:", error);
+        // The write goes ahead, as setValue's is made before its onChange
+        // runs; the failure is the caller's, as it is there.
+        turn.reject(error);
       }
       return next;
     }).then(
