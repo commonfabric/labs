@@ -710,15 +710,21 @@ describe("private inbox across runtimes", () => {
     // offer's `id`, `from` and `space`, as a loom sender does.
     await offer("read back");
 
-    const offers = (await sender.read(["offers"], {
-      piece: inbox,
-    })) as ReadOffer[];
-    expect(
-      offers.some((each) =>
+    // The inbox lives in the owner's space. The sender's replica already
+    // holds a copy of it that its subscription keeps current, so the read
+    // answers from that copy, and the row appears once the delivery has
+    // reached it rather than on the first read after the owner saw it.
+    const readsBack = async () => {
+      const offers = (await sender.read(["offers"], {
+        piece: inbox,
+      })) as ReadOffer[];
+      return offers.some((each) =>
         each.id === "read back" && each.from === sender.identity.did() &&
         each.space === harness.spaceDid
-      ),
-    ).toBe(true);
+      );
+    };
+    await harness.settleUntil(readsBack);
+    expect(await readsBack()).toBe(true);
   });
 
   it("refuses a stranger's served copy of the offers", {
