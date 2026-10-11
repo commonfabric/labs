@@ -633,9 +633,17 @@ export class CellHandle<T = unknown> {
       queues.set(key, queue);
     }
     const previous = queue.tail;
-    const result = previous
-      ? previous.then(() => operation(queue))
-      : operation(queue);
+    // With nothing ahead of it, the operation starts at once, but only after
+    // it holds the queue: an operation asked for while it runs, as a
+    // subscriber its publication reaches may ask for one, waits behind it.
+    let result: Promise<R>;
+    let started: PromiseWithResolvers<R> | undefined;
+    if (previous) {
+      result = previous.then(() => operation(queue));
+    } else {
+      started = Promise.withResolvers<R>();
+      result = started.promise;
+    }
     const tail = result.then(() => {}, () => {});
     queue.tail = tail;
     void tail.then(() => {
@@ -644,6 +652,15 @@ export class CellHandle<T = unknown> {
         if (queues.size === 0) operationQueues.delete(this.#rt);
       }
     });
+    if (started) {
+      try {
+        started.resolve(operation(queue));
+      } catch (error) {
+        // Thrown at once, as before the queue was held; the queue goes on.
+        started.reject(error);
+        throw error;
+      }
+    }
     return result;
   }
 

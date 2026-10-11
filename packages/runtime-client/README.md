@@ -58,14 +58,16 @@ type-check until it says how it stands.
 
 A cell's reads and writes through one runtime client run in the order they were
 asked for, through whichever handle on the cell and path: `sync()`, `pull()`,
-`set()`, `setStrict()`, `push()`, `initialize()`, `send()` and `update()` share
-one queue, and each request goes to the worker once the one before it has been
-answered. `set()` shows its value at once and sends it in its turn.
-`update(updater)` computes a write in its turn, from the value the operations
-before it left, reading the cell first where the handle holds nothing, so a
-write asked for after it lands after it. Its write is a blind overwrite, as
-`set()`'s is, not an atomic read-modify-write; `push()` appends as the worker
-merges.
+`set()`, `setStrict()`, `push()`, `initialize()`, `send()`, `sendStrict()`,
+`sendReviewed()` and `update()` share one queue, and each request goes to the
+worker once the one before it has been answered. `set()` shows its value at once
+and sends it in its turn. `update(updater)` computes a write in its turn, from
+the value the operations queued before it left, or else what its handle holds,
+reading the cell first where the handle holds nothing. A write asked for after
+it lands after it. A write another handle made that has already settled counts
+only once its update reaches this handle, so an update can compute from a value
+that write has since replaced. Its write is a blind overwrite, as `set()`'s is,
+not an atomic read-modify-write; `push()` appends as the worker merges.
 
 ## Observing authorship
 

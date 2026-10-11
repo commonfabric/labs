@@ -3532,6 +3532,19 @@ describe("cell-handle", () => {
       expect(fake.written()).toEqual([10, 11]);
     });
 
+    it("lands a write a subscriber asks for as it shows the update's value after it", async () => {
+      const fake = worker(5, false);
+      const cell = new CellHandle<number>(fake.runtime, ref, { value: 5 });
+      cell.subscribe((value) => {
+        if (value === 6) void cell.set(100);
+      }, { onRefused: () => {} });
+
+      await cell.update((n) => (n ?? 0) + 1);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(fake.written()).toEqual([6, 100]);
+    });
+
     it("writes nothing for a value equal to the current one", async () => {
       const fake = worker(5);
       const cell = new CellHandle<number>(fake.runtime, ref, { value: 5 });
