@@ -844,7 +844,8 @@ function typeParametersWritten(
  * The type parameters of `constructed` that an argument `construction` passes
  * may infer: those the type of the constructor parameter it is passed to
  * names. A constructor `constructed` inherits gives its parameters' types in
- * terms of another class, so any of its own may be inferred there.
+ * terms of another class, and a spread argument may pass any parameter, so
+ * with either any of its own may be inferred.
  */
 function typeParametersInferred(
   constructed: ts.ClassLikeDeclaration,
@@ -858,7 +859,7 @@ function typeParametersInferred(
   const declaration = checker.getResolvedSignature(construction)?.declaration;
   if (
     !declaration || ts.isJSDocSignature(declaration) ||
-    declaration.parent !== constructed
+    declaration.parent !== constructed || passed.some(ts.isSpreadElement)
   ) {
     return new Set(own);
   }
@@ -1250,18 +1251,8 @@ function callbackPositions(
   if (!callback) {
     // A function the trace cannot follow, reassigned or read from an object,
     // returns what its type does, which any function in its place must.
-    const [signature] = expression
-      ? scope.checker.getTypeAtLocation(expression).getCallSignatures()
-      : [];
-    const reading = newReading();
-    return signature
-      ? returnProvenance(signature, scope.checker, reading) ??
-        readType(
-          scope.checker.getReturnTypeOfSignature(signature),
-          scope.checker,
-          "inferred",
-          reading,
-        )
+    return expression
+      ? functionProvenance(expression, scope.checker, newReading())
       : false;
   }
   if (scope.tracing.has(callback)) return false;
@@ -1494,6 +1485,7 @@ function newReading(): TypeReading {
     read: { written: new Map(), field: new Map(), inferred: new Map() },
     reachedOpen: Infinity,
     tracing: new Set(),
+    bound: new Map(),
   };
 }
 
@@ -1527,6 +1519,9 @@ interface TypeReading {
    * one. Reaching one again keeps the read from being reused.
    */
   readonly tracing: Set<ts.Node>;
+
+  /** The provenance of the arguments the parameters being read hold. */
+  readonly bound: Map<ts.Symbol, DeclaredPositions>;
 }
 
 //
@@ -1626,10 +1621,15 @@ function typeProvenance(
     const type = checker.getTypeAtLocation(expression);
     // A part read whole whose type is `unknown` declares nothing.
     if ((type.flags & ts.TypeFlags.Unknown) !== 0) return false;
+    // A member read by its name or by a literal key; any other key may read
+    // any part.
     const name = ts.isPropertyAccessExpression(expression)
       ? expression.name
-      : expression.argumentExpression;
-    if (writesOwnType(checker.getSymbolAtLocation(name), checker)) {
+      : ts.isStringLiteralLike(expression.argumentExpression) ||
+          ts.isNumericLiteral(expression.argumentExpression)
+      ? expression.argumentExpression
+      : undefined;
+    if (name && writesOwnType(checker.getSymbolAtLocation(name), checker)) {
       return readType(type, checker, "written", reading);
     }
     // A part whose type the object's type gives takes the object's
@@ -1642,7 +1642,7 @@ function typeProvenance(
     return eitherDeclares(
       readType(type, checker, "inferred", reading),
       element ??
-        (ts.isIdentifier(name) || ts.isStringLiteralLike(name)
+        (name
           ? below(object, name.text)
           : typeof object === "boolean"
           ? object
@@ -1685,7 +1685,12 @@ function callProvenance(
     );
   }
   const signature = checker.getResolvedSignature(call);
-  const returned = returnProvenance(signature, checker, reading);
+  const returned = returnProvenance(
+    signature,
+    checker,
+    reading,
+    ts.isCallExpression(call) ? call : undefined,
+  );
   const declaration = signature?.declaration;
   return returned !== undefined && ts.isCallExpression(call) && declaration &&
       !ts.isJSDocSignature(declaration) && declaration.type &&
@@ -1707,13 +1712,15 @@ function callProvenance(
  * The provenance of what a function with `signature` returns: the return type
  * its declaration writes, read as written unless it names a type parameter,
  * whose argument may have been inferred, or, where that type is inferred,
- * what the declaration's body returns. `undefined` where the declaration
- * says neither.
+ * what the declaration's body returns, with each parameter `call` passes an
+ * argument to holding that argument. `undefined` where the declaration says
+ * neither.
  */
 function returnProvenance(
   signature: ts.Signature | undefined,
   checker: ts.TypeChecker,
   reading: TypeReading,
+  call?: ts.CallExpression,
 ): DeclaredPositions | undefined {
   const declaration = signature?.declaration;
   if (!signature || !declaration || ts.isJSDocSignature(declaration)) {
@@ -1732,9 +1739,49 @@ function returnProvenance(
     ? traceProvenance(
       declaration,
       reading,
-      () => returnsProvenance(body, checker, reading),
+      () =>
+        withArguments(
+          declaration,
+          call,
+          checker,
+          reading,
+          () => returnsProvenance(body, checker, reading),
+        ),
     )
     : undefined;
+}
+
+/**
+ * What `read` gives with each parameter of `declaration` that `call` passes
+ * an argument to, and that nothing reassigns, holding that argument's
+ * provenance. A spread argument ends the parameters bound. A read never
+ * re-enters the declaration it is reading, so no parameter is bound twice at
+ * once.
+ */
+function withArguments(
+  declaration: ts.SignatureDeclaration,
+  call: ts.CallExpression | undefined,
+  checker: ts.TypeChecker,
+  reading: TypeReading,
+  read: () => DeclaredPositions,
+): DeclaredPositions {
+  const bound: ts.Symbol[] = [];
+  for (const [index, argument] of (call?.arguments ?? []).entries()) {
+    const parameter = declaration.parameters[index];
+    if (!parameter || ts.isSpreadElement(argument)) break;
+    const symbol = ts.isIdentifier(parameter.name)
+      ? checker.getSymbolAtLocation(parameter.name)
+      : undefined;
+    if (symbol && !parameter.dotDotDotToken && !reassigned(symbol, checker)) {
+      reading.bound.set(symbol, typeProvenance(argument, checker, reading));
+      bound.push(symbol);
+    }
+  }
+  try {
+    return read();
+  } finally {
+    for (const symbol of bound) reading.bound.delete(symbol);
+  }
 }
 
 /**
@@ -1767,23 +1814,37 @@ function inferredFromProvenance(
       return;
     }
     const [callback] = type.getCallSignatures();
-    const fn = callback &&
-        checker.getReturnTypeOfSignature(callback) === returned
-      ? resolveCallback(argument, checker)
-      : undefined;
-    const body = fn && "body" in fn ? fn.body : undefined;
-    if (fn && body) {
+    if (callback && checker.getReturnTypeOfSignature(callback) === returned) {
       from = alternatives(
         from ?? true,
-        traceProvenance(
-          fn,
-          reading,
-          () => returnsProvenance(body, checker, reading),
-        ),
+        functionProvenance(argument, checker, reading),
       );
     }
   });
   return from ?? false;
+}
+
+/**
+ * The provenance of what the function `expression` denotes returns, read
+ * through its type's signature as `returnProvenance()` reads one, or from
+ * what `writtenPositions()` reads of the type it returns.
+ */
+function functionProvenance(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  reading: TypeReading,
+): DeclaredPositions {
+  const [signature] = checker.getTypeAtLocation(expression)
+    .getCallSignatures();
+  return signature
+    ? returnProvenance(signature, checker, reading) ??
+      readType(
+        checker.getReturnTypeOfSignature(signature),
+        checker,
+        "inferred",
+        reading,
+      )
+    : false;
 }
 
 /** The provenance of what every return of `body` returns, as alternatives. */
@@ -1827,6 +1888,13 @@ function symbolProvenance(
   // A binding whose type is `unknown` holds a whole value of no known type,
   // which declares nothing, whatever field it was first read from.
   if ((type.flags & ts.TypeFlags.Unknown) !== 0) return own;
+  // A parameter holding a call's argument takes its provenance, which holds
+  // only for that call, so nothing read with it is kept for reuse.
+  const argument = reading.bound.get(resolved);
+  if (argument !== undefined) {
+    reading.reachedOpen = -1;
+    return eitherDeclares(own, argument);
+  }
   if (ts.isVariableDeclaration(declaration) && declaration.initializer) {
     const initializer = declaration.initializer;
     return eitherDeclares(

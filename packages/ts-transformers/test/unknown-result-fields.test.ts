@@ -499,6 +499,27 @@ function labeled<T>(x: T, label = ""): T {
   void label;
   return x;
 }
+function passOn<T>(x: T) {
+  return x;
+}
+function boxOn<T>(x: T) {
+  return { inner: x };
+}
+function boxVia<T>(x: T) {
+  const local = { inner: x };
+  return local;
+}
+function swap<T>(x: T, y: T) {
+  x = y;
+  return x;
+}
+function apply<T>(fn: () => T): T {
+  return fn();
+}
+function maker(): Note<unknown> {
+  return { ref: op() };
+}
+const makers = { maker };
 class Maker { make() { return { held: makeNote() }; } }
 class Box<T> { constructor(public ref: T) {} }
 class Defaulted<T = unknown> { ref!: T; }
@@ -545,11 +566,12 @@ export default pattern(() => {
       const recast = { note: wrap(op()) as Note<unknown> };
       const lifted = { r: makeNote().ref };
       const inferred = { note: wrap(op()) };
+      const pair = { a: boxVia(makeNote()), b: boxVia(wrap(op())) };
       return {
         wrapped, listed, bagged, boxed, defaulted, helped, made, identified,
         annotated, typed, reassigned, chosen, fallback, grouped, checked,
         counted, kept, accessor, passed, constant, shelved, local, recast,
-        lifted, inferred,
+        lifted, inferred, pair,
       };
     }),
     heldDerived,
@@ -559,13 +581,24 @@ export default pattern(() => {
     inlineIdentity: identity(makeNote()),
     inlineInferred: wrap(op()),
     boxInferred: new Box(op()),
+    passedOn: passOn(makeNote()),
+    boxedOn: boxOn(makeNote()),
+    passedInferred: passOn(wrap(op())),
+    swapped: swap(makeNote(), wrap(op())),
+    applied: apply(maker),
+    appliedMember: apply(makers.maker),
+    appliedInferred: apply(() => wrap(op())),
   };
 });`),
       ).toEqual([[
         "result.lifted.r",
         "result.inferred.note.ref",
+        "result.pair.b.inner.ref",
         "inlineInferred.ref",
         "boxInferred.ref",
+        "passedInferred.ref",
+        "swapped.ref",
+        "appliedInferred.ref",
       ]]);
     });
 
@@ -1058,6 +1091,18 @@ export default pattern<{ pairs: [number, unknown][] }>(({ pairs }) => ({
       expect(
         await reportedPaths(`function op(): unknown { return 1; }
 function note(): { ref: unknown } { return { ref: 1 }; }
+const key = "item";
+function pickItem() {
+  const held = { item: { ref: op() } };
+  return held[key];
+}
+interface Note<T> { ref: T }
+function makeNote(): Note<unknown> { return { ref: 1 }; }
+function wrap<T>(v: T): Note<T> { return { ref: v }; }
+function pickNamed() {
+  const held = { a: makeNote(), b: wrap(op()) };
+  return held["a"];
+}
 export default pattern<{ k: "a" | "b" }>(({ k }) => ({
   result: computed(() => ({
     first: [note().ref][0],
@@ -1065,8 +1110,31 @@ export default pattern<{ k: "a" | "b" }>(({ k }) => ({
     other: { "[]": note().ref, a: note().ref, b: op() }["b"],
     dynamic: { a: note().ref, b: op() }[k],
   })),
+  aliased: computed(() => {
+    const held = { item: { ref: op() } };
+    const picked = held[key];
+    return picked;
+  }),
+  either: computed(() => {
+    const held = { a: { ref: op() }, b: note() };
+    const picked = held[k];
+    return picked;
+  }),
+  literal: computed(() => {
+    const held = { a: note(), b: { ref: op() } };
+    const picked = held["a"];
+    return picked;
+  }),
+  helped: pickItem(),
+  named: pickNamed(),
 }));`),
-      ).toEqual([["result.other", "result.dynamic"]]);
+      ).toEqual([[
+        "result.other",
+        "result.dynamic",
+        "aliased.ref",
+        "either.ref",
+        "helped.ref",
+      ]]);
     });
 
     it("reports a member read by name that a value may hold under a key the trace cannot name, unless a name written after that key replaces it", async () => {
@@ -1154,6 +1222,10 @@ class Base<V> {
   constructor(public held: V) {}
 }
 class Derived<T = unknown> extends Base<T> {}
+class Spread<T = unknown> {
+  constructor(public name: string, public ref: T) {}
+}
+const spreadArgs: [string, unknown] = ["x", op()];
 export default pattern(() => ({
   inferred: new Inferred(),
   written: new Written(2),
@@ -1174,6 +1246,7 @@ export default pattern(() => ({
   shaped: new Shaped(),
   linked: new Linked(op()),
   derived: new Derived(op()),
+  spread: new Spread(...spreadArgs),
 }));`),
       ).toEqual([[
         "inferred.ref",
@@ -1183,6 +1256,7 @@ export default pattern(() => ({
         "linked.second",
         "linked.first",
         "derived.held",
+        "spread.ref",
       ]]);
     });
 

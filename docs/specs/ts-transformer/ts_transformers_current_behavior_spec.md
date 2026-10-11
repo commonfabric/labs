@@ -882,12 +882,13 @@ not known, and declares nothing. So these are declared:
   property, a parameter property, or a getter's return type; a type naming a
   type parameter counts only when every parameter it names is fixed in writing,
   by the construction's type arguments, by its default where no argument the
-  construction passes can infer it, or by the `extends` clause above, whichever
-  fixes it, followed through a constructor's aliases and class expressions, and
-  a default counts only when every parameter it names is fixed so. A field whose
-  type is inferred, from its initializer or through a parameter nothing writes,
-  declares what its initializer's type does by provenance, and otherwise only
-  what its type's written parts do
+  construction passes can infer it, which a spread argument or an inherited
+  constructor may, or by the `extends` clause above, whichever fixes it,
+  followed through a constructor's aliases and class expressions, and a default
+  counts only when every parameter it names is fixed so. A field whose type is
+  inferred, from its initializer or through a parameter nothing writes, declares
+  what its initializer's type does by provenance, and otherwise only what its
+  type's written parts do
 - what a value's own type declares by its provenance, however the value was
   made: the type's written parts, each member, and each index signature, whose
   declaration writes its type without naming a type parameter declaring what
@@ -897,9 +898,12 @@ not known, and declares nothing. So these are declared:
   written return type, a construction's written or defaulted type arguments, an
   annotation. A type inferred from something else is read from that: a literal's
   from its parts, a binding's from its initializer, a call's whose return type
-  is inferred from what the function's body returns, and a call's whose written
+  is inferred from what the function's body returns, each parameter holding the
+  argument passed to it unless the body reassigns it, and a call's whose written
   return type is a type parameter from the arguments it is inferred from, one
-  passed for a parameter of that type or a callback returning it
+  passed for a parameter of that type, or a callback returning it, read through
+  the callback's own signature. A part read by a key that is not a literal may
+  be any part
 - another pattern's result, which passed this check in its own compile; a
   cell; a literal, a function, or JSX
 
