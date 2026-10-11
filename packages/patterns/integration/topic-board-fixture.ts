@@ -315,6 +315,15 @@ export async function seedTopicBoard(
 
     const demand = options.demand ?? "index";
     releaseBoard = demandTopicBoard(board, demand);
+    // Who derives what a topic publishes decides what the seed reads. With
+    // client execution the seed's runtime is the only runtime running the
+    // board and its topics, so what it never reads is never derived, and a
+    // board opened elsewhere would find no published summaries and an empty
+    // crossref table. Under server execution the serving runtime derives a
+    // published value when a reader demands it, so the seed sends its events
+    // and reads none of it: every read here would be demand for the serving
+    // runtime to derive, and a wait for it to do so, per topic.
+    const served = cc.runtime.experimental.serverExecution === true;
 
     const topics: SeededTopic[] = [];
     // The created pieces themselves, because a mention is a reference: the
@@ -340,23 +349,31 @@ export async function seedTopicBoard(
         ]);
       }
       // What a topic publishes — its summary, and the mentions the board's
-      // pivot joins over — is derived by a running topic, and the seed's
-      // runtime is the one running it: a reader that opens another topic
-      // reads this one's published result and runs nothing of it. One read
-      // of the topic's result derives all of it, once per topic rather than
-      // once per write. The result includes the topic's backlinks, which read
-      // the board's crossref table, so this read still grows with the board.
-      await created.result.get();
+      // pivot joins over — is derived by a running topic: a reader that opens
+      // another topic reads this one's published result and runs nothing of
+      // it. One read of the topic's result derives all of it, once per topic
+      // rather than once per write. The result includes the topic's
+      // backlinks, which read the board's crossref table, so this read still
+      // grows with the board.
+      if (!served) await created.result.get();
       pieces.push(created);
       topics.push({ fid: created.id, title });
       options.onTopic?.(index);
     }
-    // The board's crossref pivot is what every topic reads its backlinks
-    // from, and a reader that opens one topic runs that topic, not the board.
-    // Derived here once, over the seeded board, so the table a reader finds
-    // is the one these references make; per write it would be rebuilt as
-    // many times as there are topics.
-    await board.result.get(["crossrefs"]);
+    if (served) {
+      // A send returns with its event committed and the served run of the
+      // handler ahead. The board is handed on once every event sent above
+      // has its consequence stored, which is one wait at the end rather than
+      // one per send.
+      await cc.runtime.speculationOverlay?.waitForIntentQuiescence();
+    } else {
+      // The board's crossref pivot is what every topic reads its backlinks
+      // from, and a reader that opens one topic runs that topic, not the
+      // board. Derived here once, over the seeded board, so the table a
+      // reader finds is the one these references make; per write it would be
+      // rebuilt as many times as there are topics.
+      await board.result.get(["crossrefs"]);
+    }
 
     return {
       spaceDid,
