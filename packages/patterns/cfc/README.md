@@ -108,7 +108,7 @@ it cannot work.
 ## Floor An Admin Registry
 
 A `requiredIntegrity` floor is a requirement on the value being written, and the
-runtime also screens the reads that fed that write. Five rules follow, and each
+runtime also screens the reads that fed that write. Six rules follow, and each
 fails in its own way. Break one of the first two and the floor is unsatisfiable:
 the runtime refuses every write to the path the floor was meant to guard. Break
 the third and a write that lands a fresh value still goes through, while one
@@ -116,7 +116,8 @@ that moves a value already stored there is refused. Break the fourth and the
 writes go through, endorsed by something the user granted themselves — the
 protection is there and it admits the wrong writer. Break the fifth and the
 registry ends up holding authority that nobody can exercise and nobody can
-repair.
+repair. Break the sixth and nothing can read the registry at all, the handler
+that would add the first admin included.
 
 **Mint on the path the floor sits on.** The floor asks what the value at that
 exact path carries. `AddIntegrity` on an array's items endorses the items; it
@@ -163,6 +164,20 @@ and a presence test on it always passes: gate on a name string, which is
 honestly `""` when nothing resolved. And pin the terminal cell with
 `resolveAsCell()` before storing one, or what gets stored is "whoever the reader
 resolves".
+
+**Seed the roster present and stamped.** Code that requires the roster's
+integrity reads the roster, and a roster that is not there, or an empty list
+whose seed carries no stamp, is read with no evidence and refused (CFC §8.10.3
+checks every consumed read, and a seed is initialization, which vouches for
+nothing on the code's behalf, §8.15.4). So give the registry a `Default` that
+holds the roster, empty — `Default<SeededAdminRegistryValue>`, `{ admins: [] }`
+— under the `AddIntegrity` of the first rule: the setup write that seeds it
+mints the atom, and the first admin's handler reads a stamped empty roster. A
+`Default<{}>` with the roster left out fails this rule. The same holds of any
+list a node requires on its entries: seed it under the `AddIntegrity` its
+requirement names, or, where only a builtin can mint that atom, do not require
+the entries on the state of the code that collects them — require them on what
+arrives, and let the stored floor guard what lands.
 
 Two of these describe this runtime rather than the CFC specification, and an
 author who goes looking for them in the specification will not find them. The
