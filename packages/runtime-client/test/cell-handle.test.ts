@@ -3397,6 +3397,7 @@ describe("cell-handle", () => {
      */
     const worker = (stored: number | undefined, held = true) => {
       const requests: { type: RequestType; value?: unknown }[] = [];
+      const handles: CellHandle<number>[] = [];
       const reads = Promise.withResolvers<
         { value: number | undefined } | { refused: typeof refusal }
       >();
@@ -3414,11 +3415,17 @@ describe("cell-handle", () => {
         },
         subscribe: () => Promise.resolve(),
         unsubscribe: () => Promise.resolve(),
-        peersOf: () => [],
+        peersOf: (handle: CellHandle<number>) =>
+          handles.filter((other) => other !== handle),
         signal: { aborted: false },
       };
       return {
         runtime: { [$conn]: () => connection } as unknown as RuntimeClient,
+        /** Makes `handle` a peer of the others this worker was given. */
+        subscribed: (handle: CellHandle<number>) => {
+          handles.push(handle);
+          return handle;
+        },
         requests,
         answerReads: reads.resolve,
         written: () =>
@@ -3565,24 +3572,78 @@ describe("cell-handle", () => {
       expect(fake.requests).toEqual([]);
     });
 
-    it("rejects an updater that throws, or returns a promise, and the writes after it go on", async () => {
-      // The later set shows its value at once, so an update behind it reads
-      // the cell rather than compute from that.
+    it("rejects an updater that throws, and the writes after it go on", async () => {
       const fake = worker(5, false);
       const cell = new CellHandle<number>(fake.runtime, ref, { value: 5 });
 
       const throwing = cell.update(() => {
         throw new Error("no value from here");
       });
-      const promising = cell.update(() =>
-        Promise.resolve(6) as unknown as number
-      );
       const setting = cell.set(7);
 
       await expect(throwing).rejects.toThrow("no value from here");
-      await expect(promising).rejects.toThrow(TypeError);
       await setting;
       expect(fake.written()).toEqual([7]);
+    });
+
+    it("writes nothing when the cell's read is refused while its own read is on the way", async () => {
+      const fake = worker(50);
+      const cell = new CellHandle<number>(fake.runtime, ref);
+
+      const updating = cell.update((n) => (n ?? 0) + 1);
+      cell[$onCellRefused](refusal);
+      fake.answerReads({ value: 50 });
+
+      await expect(updating).rejects.toThrow(CellReadRefusedError);
+      expect(fake.written()).toEqual([]);
+    });
+
+    it("shows what a read it overtook found, where it writes nothing", async () => {
+      const fake = worker(50);
+      const cell = new CellHandle<number>(fake.runtime, ref, { value: 5 });
+
+      const reading = cell.pull();
+      const updating = cell.update((n) => n ?? 0);
+      fake.answerReads({ value: 50 });
+      await Promise.all([reading, updating]);
+
+      expect(fake.written()).toEqual([]);
+      expect(cell.get()).toBe(50);
+    });
+
+    it("reads the cell, rather than compute from a write asked for after it", async () => {
+      // The send leaves the queue holding no value, so the update has only
+      // the handle's own value, which the later set already replaced.
+      const fake = worker(50);
+      const cell = new CellHandle<number>(fake.runtime, ref, { value: 5 });
+
+      const sending = cell.send(0);
+      const updating = cell.update((n) => (n ?? 0) + 1);
+      const setting = cell.set(30);
+      fake.answerReads({ value: 50 });
+      await Promise.all([sending, updating, setting]);
+
+      expect(fake.written()).toEqual([51, 30]);
+    });
+
+    it("leaves a write another handle asked for after it showing there", async () => {
+      const fake = worker(50);
+      // The stepping handle has read nothing, so the update reads the cell,
+      // and the answer goes to the other handles on it.
+      const stepping = fake.subscribed(
+        new CellHandle<number>(fake.runtime, ref),
+      );
+      const clicking = fake.subscribed(
+        new CellHandle<number>(fake.runtime, ref, { value: 5 }),
+      );
+
+      const sending = stepping.send(0);
+      const updating = stepping.update((n) => (n ?? 0) + 1);
+      const setting = clicking.set(30);
+      fake.answerReads({ value: 50 });
+      await Promise.all([sending, updating, setting]);
+
+      expect(clicking.get()).toBe(30);
     });
   });
 });

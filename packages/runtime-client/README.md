@@ -39,11 +39,11 @@ refusal carries nothing of the cell, and is never an empty value, so a read the
 host could not make never reads as a cell that holds nothing.
 
 A handle holds a refusal in place of a value. `refusal` and `lastRead()` report
-it; `get()` throws `CellReadRefusedError`; `sync()`, `pull()` and `initialize()`
-reject with it. A subscriber hears each refusal through the `onRefused` option
-of `subscribe()`, which runs at once for a handle already refused, and its value
-callback never receives one. The next admitted value, or a value the host
-writes, ends the refusal.
+it; `get()` throws `CellReadRefusedError`; `sync()`, `pull()`, `initialize()`
+and `update()` reject with it. A subscriber hears each refusal through the
+`onRefused` option of `subscribe()`, which runs at once for a handle already
+refused, and its value callback never receives one. The next admitted value, or
+a value the host writes, ends the refusal.
 
 The worker builds its gate with no display ceiling, so it refuses no read.
 
@@ -53,6 +53,19 @@ rendered, carrying no cell value, a reference, a trusted operation, or ungated.
 The answers of the channels marked as decided carry a mark only the gate gives
 them, and a type-level check holds the tables to it, so a new channel fails to
 type-check until it says how it stands.
+
+## The order of a cell's operations
+
+A cell's reads and writes through one runtime client run in the order they were
+asked for, through whichever handle on the cell and path: `sync()`, `pull()`,
+`set()`, `setStrict()`, `push()`, `initialize()`, `send()` and `update()` share
+one queue, and each request goes to the worker once the one before it has been
+answered. `set()` shows its value at once and sends it in its turn.
+`update(updater)` computes a write in its turn, from the value the operations
+before it left, reading the cell first where the handle holds nothing, so a
+write asked for after it lands after it. Its write is a blind overwrite, as
+`set()`'s is, not an atomic read-modify-write; `push()` appends as the worker
+merges.
 
 ## Observing authorship
 
