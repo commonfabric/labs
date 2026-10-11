@@ -179,6 +179,30 @@ export default pattern<{
     });
   });
 
+  describe("a member read through the element a lookup finds", () => {
+    for (
+      const [form, body] of [
+        [
+          "optional",
+          "table.find((row) => equals(self, row.topic))?.mentionedBy",
+        ],
+        [
+          "non-null",
+          "table.find((row) => equals(self, row.topic))!.mentionedBy",
+        ],
+      ]
+    ) {
+      it(`reaches the input schema through the ${form} access`, async () => {
+        const schema = await liftInputSchema(body);
+
+        expect(elementProperties(schema)).toEqual({
+          topic: { type: "unknown", asCell: ["comparable"] },
+          mentionedBy: { type: "unknown" },
+        });
+      });
+    }
+  });
+
   describe("a captured parameter read only inside an array-method callback", () => {
     it("carries the `comparable` cell annotation `equals` needs", async () => {
       const schema = await liftInputSchema(

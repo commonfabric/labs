@@ -18,9 +18,8 @@ const addPanel = handler<
   panels.set([...list, panel]);
 });
 
-function keep(value: unknown): boolean {
-  return value !== undefined;
-}
+// Declared without a body, so the analysis has no summary of what it reads.
+declare function keep(value: unknown): boolean;
 
 type PanelEvent = { panel: Writable<Panel> };
 type PanelState = { panels: Writable<Writable<Panel>[]> };

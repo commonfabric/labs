@@ -50,7 +50,13 @@ const __cfLift_1 = __cfHelpers.lift<{
                 emails: {
                     type: "array",
                     items: {
-                        $ref: "#/$defs/Email"
+                        type: "object",
+                        properties: {
+                            id: {
+                                type: "string"
+                            }
+                        },
+                        required: ["id"]
                     }
                 },
                 prompt: {
@@ -60,21 +66,7 @@ const __cfLift_1 = __cfHelpers.lift<{
             required: ["emails", "prompt"]
         }
     },
-    required: ["state"],
-    $defs: {
-        Email: {
-            type: "object",
-            properties: {
-                id: {
-                    type: "string"
-                },
-                content: {
-                    type: "string"
-                }
-            },
-            required: ["id", "content"]
-        }
-    }
+    required: ["state"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "array",
     items: {
