@@ -374,4 +374,48 @@ describe("mergeSchemaDefaults", () => {
     expect(mergeSchemaDefaults(value, extractDefaultValues(schema), schema))
       .toBe(value);
   });
+
+  it("fills two absent properties of identical schemas with two lists", () => {
+    const list: JSONSchema = {
+      type: "array",
+      items: { type: "string" },
+      default: [],
+    };
+    const schema: JSONSchema = {
+      type: "object",
+      properties: { first: list, second: list },
+    };
+    const result = mergeSchemaDefaults<{ first?: string[]; second?: string[] }>(
+      {},
+      extractDefaultValues(schema),
+      schema,
+    );
+
+    expect(result).toEqual({ first: [], second: [] });
+    expect(result.first).not.toBe(result.second);
+  });
+
+  it("fills the absent list of each array element with a list of its own", () => {
+    const schema: JSONSchema = {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          tags: { type: "array", items: { type: "string" }, default: [] },
+        },
+      },
+    };
+    const result = mergeSchemaDefaults<{ name: string; tags?: string[] }[]>(
+      [{ name: "a" }, { name: "b" }],
+      extractDefaultValues(schema),
+      schema,
+    );
+
+    expect(result).toEqual([
+      { name: "a", tags: [] },
+      { name: "b", tags: [] },
+    ]);
+    expect(result[0].tags).not.toBe(result[1].tags);
+  });
 });

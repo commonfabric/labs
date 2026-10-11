@@ -175,4 +175,51 @@ describe("argument-default-seed", () => {
       );
     });
   }
+
+  it("seeds two argument slots of identical schemas as two lists, so a write to one leaves the other empty", async () => {
+    const compiled = await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+          import { Default, handler, pattern, Writable } from "commonfabric";
+          const add = handler<{ item: string }, { list: Writable<string[]> }>(
+            (event, { list }) => list.push(event.item),
+          );
+          export default pattern<{
+            first: Writable<Default<string[], []>>;
+            second: Writable<Default<string[], []>>;
+          }>(({ first, second }) => ({
+            first,
+            second,
+            addFirst: add({ list: first }),
+          }));
+        `,
+      }],
+    });
+    type Twins = {
+      first: string[];
+      second: string[];
+      addFirst: { item: string };
+    };
+    const tx = runtime.edit();
+    const result = runtime.run(
+      tx,
+      compiled,
+      {},
+      runtime.getCell<Twins>(space, "twins", compiled.resultSchema, tx),
+    );
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const cancel = result.sink(() => {});
+    await runtime.idle();
+
+    result.key("addFirst").send({ item: "a" });
+    await runtime.idle();
+    await manager.synced();
+
+    expect(await result.key("first").pull()).toEqual(["a"]);
+    expect(await result.key("second").pull()).toEqual([]);
+    cancel();
+  });
 });
