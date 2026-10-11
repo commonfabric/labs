@@ -138,12 +138,53 @@ wall time of the whole seed process against a fresh toolshed. "main" is
 | 30 topics | 45.1 s | 27.3 s | 61.8 s | 59.5 s |
 | 100 topics | 235.4 s | 81.8 s | 342.2 s | 322.9 s |
 
-{{SEED_COMMENTARY}}
+With client execution the change is the 2.9x at 100 topics #8660 bought
+before: a send no longer pulls the whole result root. Under server execution
+the seed is 4% faster at 30 topics and 6% at 100, which is the surprise this
+section is about: the client stopped waiting on the serving runtime, and the
+seed barely moved.
+
+A probe that mirrors the seed loop and times each step says where the time
+went. ON, 30 topics, nothing else on the box: setup 21.9 s, the loop 36.6 s,
+of which the `addTopic` sends were 35.5 s, the index-row waits 0.1 s, the
+six mention sends 0.9 s, and the one wait at the end 0.2 s. So the row wait
+is answered from speculation, the end wait finds nothing outstanding, and the
+whole loop is the send itself: 0.7 s per topic at the start, rising to 1.9 s
+by the thirtieth, with `pendingIntentCount` 0 the moment each send returned.
+
+Splitting the send into its three steps (15 topics, both arms, taken with a
+type check running on the same box, so the absolute numbers are inflated and
+the ratio is the reading):
+
+| step of one `addTopic` send | OFF | ON |
+| --- | --- | --- |
+| `editWithRetry` (the event is queued) | 1 to 2 ms | 1 to 5 ms |
+| `runtime.idle()` (the speculative handler run) | 260 to 400 ms | 330 to 720 ms |
+| `synced()` (the append acknowledged) | 130 to 320 ms | 250 to 650 ms |
+| whole send | 440 to 670 ms | 690 to 1020 ms |
+
+The client's timing rows over those runs name the difference: 124 watch adds
+at 53 ms each OFF, 107 at 263 ms each ON (28.9 s of a 43.5 s run); the
+handler's speculative run 116 ms OFF against 147 ms ON. The client's own work
+is the same in both arms. What grows under server execution is every round
+trip to the toolshed: a schema watch and a commit acknowledgment each wait
+behind the serving loop, which runs in the same process on the same thread
+and, for this seed, is never idle (247 waves for 30 topics, 185 of them cut by
+the 100 ms deadline). The seed is paced by the server after all, not through
+a wait the client chose but through the latency of every message it sends.
+
+The other half of a 30-topic ON run is its first 22 to 27 s, before the first
+topic: `executor/wave/root-ensure` ran 4 times at 6.7 s each on the serving
+side, and the seed's own client spent 20.6 s in
+`ensureDefaultPattern.compilePattern` (two `compileToRecordGraph` calls at
+11.5 s, 14.2 s of it reading the compile cache). The OFF arm's setup was 13 s
+on the same box. Neither is per topic, and together they are 45% of the
+30-topic ON run.
 
 ## What the architecture promises, against what the loop does
 
 The spec's claim is that one committing runtime per space is the fast design
-for multiplayer (server-side-execution/README.md §1). Three things in the
+for multiplayer (server-side-execution/README.md §1). Four things in the
 measurements above stand between the loop and that claim, in the order they
 cost:
 
@@ -163,10 +204,18 @@ cost:
    `MultiRuntimeHarness` has no way to turn it on, so the probe above could not
    measure it. Giving the harness that knob and re-running the 5x5 probe is
    the next measurement.
-3. **Waves are deadline-cut, not quiescence-bound.** 76 of 78 burst waves hit
+3. **The serving loop shares its thread with the memory server.** While a
+   wave derives, every client round trip to that toolshed waits: the seed's
+   watch adds went from 53 ms to 263 ms and its commit acknowledgments from
+   130 to 320 ms to 250 to 650 ms. A client that waits on nothing the server
+   computes is still paced by the server through the latency of each
+   message. Moving the serving loop off the request thread, or bounding how
+   long a wave holds it, is what makes a fire-and-forget send cost what a
+   send costs.
+4. **Waves are deadline-cut, not quiescence-bound.** 76 of 78 burst waves hit
    the 100 ms deadline, each paying a commit, a publish and a refresh pass.
    The earlier record measured the deadline's share at 15 to 20% of a burst;
-   it is the smallest of the three.
+   it is the smallest of the four.
 
 ## How the numbers were taken
 
@@ -183,3 +232,9 @@ cost:
   measured commit with `MEMORY_DIR` on a fresh directory and
   `EXPERIMENTAL_SERVER_EXECUTION` set for both processes, timed end to end
   around the seed process, one run per cell, OFF then ON, main then branch.
+- **Seed phases:** a scratch script that mirrors `seedTopicBoard` step for
+  step against the same kind of toolshed, timing each step per topic; with
+  `DECOMPOSE=1` it makes the `addTopic` send as its three calls
+  (`editWithRetry`, `runtime.idle()`, `synced()`) and times each, and at the
+  end prints the client's `getTimingStatsBreakdown()` rows and the serving
+  loop's counters from `/api/health/stats`.
