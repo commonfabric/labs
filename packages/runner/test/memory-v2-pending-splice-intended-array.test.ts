@@ -226,6 +226,88 @@ describe("memory-v2-pending-splice-intended-array", () => {
     expect(count.get()).toBe(4);
   });
 
+  describe("a splice whose commit read the array only partly", () => {
+    // B reads part of the list, then writes index 2, which commits a tail
+    // splice. A replaces element 1 in place, which B's read does not
+    // overlap, so the server accepts both and applies B's splice where it
+    // stands. A read of one element, or of the list's shape, does not cover
+    // the array's values, so the view replays the splice where it stands
+    // too, and a transaction reading the list through it commits what the
+    // store will hold.
+
+    const runCase = async (
+      doc: string,
+      readPart: (
+        tx: ReturnType<Runtime["edit"]>,
+        address: ReturnType<typeof toMemorySpaceAddress>,
+      ) => void,
+    ) => {
+      const a = connect();
+      const b = connect();
+      await seed(a, doc, ["e1", "e2"]);
+      const { list, cancel } = await watched(b, doc);
+      const joined = b.runtime.getCell<string>(space, `${doc}-joined`, {
+        type: "string",
+      });
+      await joined.sync();
+      await flush();
+
+      heldIds.add(list.getAsNormalizedFullLink().id);
+      const partial = b.runtime.edit();
+      const address = toMemorySpaceAddress(list.getAsNormalizedFullLink());
+      readPart(partial, address);
+      partial.writeOrThrow({ ...address, path: ["value", "2"] }, "e3");
+      const partialVerdict = partial.commit({ holdSyncedUntilCovered: false })
+        .verdict;
+      await held.promise;
+
+      heldIds.clear();
+      const replace = a.runtime.edit();
+      a.runtime.getCell<string[]>(space, doc, listSchema, replace).key(1)
+        .set("x");
+      expect(
+        (await replace.commit({ holdSyncedUntilCovered: false }).verdict)
+          .error,
+      ).toBeUndefined();
+      await flush();
+      expect(list.get()).toEqual(["e1", "x", "e3"]);
+
+      const dependent = b.runtime.edit();
+      const observed = b.runtime.getCell<string[]>(
+        space,
+        doc,
+        listSchema,
+        dependent,
+      ).get();
+      joined.withTx(dependent).set(observed.join("|"));
+      const dependentVerdict = dependent.commit({
+        holdSyncedUntilCovered: false,
+      }).verdict;
+
+      release.resolve();
+      expect((await partialVerdict).error).toBeUndefined();
+      expect((await dependentVerdict).error).toBeUndefined();
+      await flush();
+      await b.storage.synced();
+      cancel();
+
+      expect(list.get()).toEqual(["e1", "x", "e3"]);
+      expect(joined.get()).toBe("e1|x|e3");
+    };
+
+    it("replays it where it stands when the commit read one element", async () => {
+      await runCase("intended-element-read", (tx, address) => {
+        tx.readOrThrow({ ...address, path: ["value", "0"] });
+      });
+    });
+
+    it("replays it where it stands when the commit read only the list's shape", async () => {
+      await runCase("intended-shape-read", (tx, address) => {
+        tx.readOrThrow({ ...address, path: ["value"] }, { nonRecursive: true });
+      });
+    });
+  });
+
   it("shows a stacked pair as the second computed it, then the store's list", async () => {
     const doc = "intended-stack";
     const a = connect();
