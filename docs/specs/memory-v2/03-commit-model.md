@@ -67,14 +67,18 @@ waiting for server confirmation.
 
 ### 3.3.1 Confirmed State
 
-The confirmed tier contains server-acknowledged state:
+The confirmed tier normally contains server-acknowledged state:
 
 - the latest integrated entity values
 - the canonical `seq` for those visible values
 - any external changes incorporated from session sync frames
 
-Confirmed state is authoritative. It represents the client's last known
-consistent server view.
+An ordinary confirmed record represents the client's last known server
+revision. Section 3.8.3 defines an exception: the replica may retain a refused
+derived write in this tier, marked `localFold`, without advancing its `seq`.
+That record's value is local computation, not server-acknowledged content;
+its `seq` identifies the durable base it was computed over. The marker does
+not turn the refused commit into an accepted one.
 
 ### 3.3.2 Pending State
 
@@ -92,8 +96,9 @@ Each pending commit has:
 ### 3.3.3 Reading Across Tiers
 
 When a client reads an entity, it MUST check pending state first, newest to
-oldest, then fall back to confirmed state. This ensures pipelined transactions
-see their own optimistic writes.
+oldest, then fall back to confirmed state, including any local fold held
+there. This ensures pipelined transactions see their own optimistic writes.
+A local fold remains visible after its refused pending layer is removed.
 
 ```text
 Read(entity, path):
@@ -105,10 +110,10 @@ Read(entity, path):
 ### 3.3.4 Single-Snapshot Rule
 
 A commit's read set MUST describe one coherent client view: confirmed bases
-from one integrated prefix of the space's history plus the session's own
-pending stack, never a mixture of states observed before and after unrelated
-incoming changes. This is what makes the submitted `reads.confirmed[].seq`
-values meaningful.
+from one integrated prefix of the space's history, any local folds over
+those bases, and the session's own pending stack, never a mixture of states
+observed before and after unrelated incoming changes. This is what makes the
+submitted `reads.confirmed[].seq` values meaningful.
 
 A client satisfies the rule in either of two ways:
 
@@ -122,10 +127,12 @@ A client satisfies the rule in either of two ways:
   read set is exported from, rejecting the transaction locally — before it
   reaches the wire, for its caller to re-run — when any value differs from
   its snapshot. The read set then names the seqs of the local state at build
-  time, and the check has established that every read's content is the
-  content at those seqs. The check has to be immediate: a transaction closed
-  as one commit per space builds each space's read set after awaiting the
-  earlier spaces' round trips, so it re-checks each later space's documents
+  time, and the check has established that every read still has the local
+  content from which that read set is built. For a local fold, the named seq
+  is its durable base, not a claim that the server held the folded value.
+  The check has to be immediate: a transaction closed as one commit per
+  space builds each space's read set after awaiting the earlier spaces' round
+  trips, so it re-checks each later space's documents
   right before building that space's read set.
 
 The runner takes the checking form: `claim()` in
@@ -683,7 +690,8 @@ On reconnect:
 1. the client resumes the logical session and reports the highest canonical
    `seenSeq` it has fully integrated, along with the latest `sessionToken` —
    and, where both peers advertise `sessionHoldings`, the documents its
-   replica holds at their confirmed seqs (04-protocol.md section 4.1.2)
+   replica absorbed at their delivered seqs (04-protocol.md section 4.1.2),
+   excluding local promotions and folds from the declaration
 2. the client replays retained unacknowledged commits for that session
 3. the server deduplicates by `(sessionId, localSeq)`
 4. the client re-establishes its watch set and receives session-scoped catch-up
@@ -746,6 +754,19 @@ that replica alone.
 
 Event handlers are not folded. Their writes are acts rather than derivations,
 and a refusal of one is reverted and reported.
+
+A read of a folded value can feed a later computation or event handler.
+Its confirmed read names the durable base's `seq`; it does not name the
+refused commit as a pending dependency or prove that the local value ever
+existed on the server. This is the local-input exception to
+[INV-1](09-invariants.md#inv-1--read-coherence-no-phantom-no-missed-write).
+The whole-document read above guards publication of a folded write target;
+it does not persist a folded document merely because another write read it.
+
+The bounded [local-fold model](tla/README.md#model-local-folds) checks fold
+eligibility, frame replacement, and subsequent whole-document publication.
+Its bounds exclude composition with multiple pending layers and documents;
+the pending-stack model's durable-read proof does not cover local folds.
 
 ## 3.9 Commit Ordering
 
