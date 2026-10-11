@@ -5318,7 +5318,6 @@ describe("a pending tail splice whose array moved under it", () => {
   // server refuses the stale splice).
   const growTo = (
     harness: Harness,
-    before: RootValue,
     after: RootValue,
     tail: string[],
   ) =>
@@ -5363,7 +5362,6 @@ describe("a pending tail splice whose array moved under it", () => {
       });
       const splice = growTo(
         harness,
-        { items: ["a", "b"] },
         { items: ["a", "b", "c"] },
         ["c"],
       );
@@ -5411,7 +5409,6 @@ describe("a pending tail splice whose array moved under it", () => {
       });
       const splice = growTo(
         harness,
-        { items: ["a", "b"] },
         { items: ["a", "b", "c"] },
         ["c"],
       );
@@ -5446,7 +5443,6 @@ describe("a pending tail splice whose array moved under it", () => {
       });
       const splice = growTo(
         harness,
-        { items: ["a", "b"], other: 0 },
         { items: ["a", "b", "c"], other: 0 },
         ["c"],
       );
