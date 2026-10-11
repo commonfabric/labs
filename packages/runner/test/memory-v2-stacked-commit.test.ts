@@ -5307,3 +5307,161 @@ describe("memory-v2-stacked-commit", () => {
     });
   });
 });
+
+describe("a pending tail splice whose array moved under it", () => {
+  // A diffed array write that grows a list sends `splice` at the list's old
+  // length, carrying the document it diffed (`diffBase`), as the transaction
+  // builds it. Two runtimes running one piece write the same derived list:
+  // when the other's identical write lands first, its frame moves the
+  // confirmed list under this replica's pending splice. Replayed there, the
+  // splice would show the tail twice, a list the store never holds (the
+  // server refuses the stale splice).
+  const growTo = (
+    harness: Harness,
+    after: RootValue,
+    tail: string[],
+  ) =>
+    harness.replica.commitNative(
+      {
+        operations: [{
+          op: "patch",
+          id: DOCS.A,
+          type: DOCUMENT_MIME,
+          patches: [{
+            op: "splice",
+            path: "/value/items",
+            index: 2,
+            remove: 0,
+            add: tail,
+          }],
+          value: { value: after },
+        }],
+      },
+      undefined,
+      { resolveAt: "verdict" },
+    );
+
+  // A frame reaches only a document the replica watches.
+  const watch = async (harness: Harness) =>
+    expect(
+      await harness.replica.pull([[
+        { id: DOCS.A, type: DOCUMENT_MIME },
+        undefined,
+      ]]),
+    ).toEqual({ ok: {} });
+
+  it("shows the list without it until the verdict refuses it", async () => {
+    const harness = await createHarness();
+    const responseGate = Promise.withResolvers<void>();
+    try {
+      await seedAccepted(harness, DOCS.A, { items: ["a", "b"] });
+      await watch(harness);
+      harness.model.setOutcome(2, {
+        kind: "rejectConflict",
+        responseGate: responseGate.promise,
+      });
+      const splice = growTo(
+        harness,
+        { items: ["a", "b", "c"] },
+        ["c"],
+      );
+      expectVisible(harness, { A: { items: ["a", "b", "c"] } });
+
+      harness.pushSync({
+        upserts: [{
+          id: DOCS.A,
+          seq: currentSeq(harness, DOCS.A) + 1,
+          value: { items: ["a", "b", "c"] },
+        }],
+      });
+      await clock.settle();
+      expectVisible(harness, { A: { items: ["a", "b", "c"] } });
+
+      responseGate.resolve();
+      await expectConflict(splice);
+      expectVisible(harness, { A: { items: ["a", "b", "c"] } });
+    } finally {
+      responseGate.resolve();
+      await harness.close();
+    }
+  });
+
+  it("promotes it as the store applied it when the verdict accepts", async () => {
+    // A write that read no value (a blind UI write) is accepted over the
+    // moved array: the store applies the splice where it stands, and the
+    // replica's confirmed value must be the store's.
+    const harness = await createHarness();
+    const responseGate = Promise.withResolvers<void>();
+    try {
+      await seedAccepted(harness, DOCS.A, { items: ["a", "b"] });
+      await watch(harness);
+      harness.model.setOutcome(2, {
+        kind: "accept",
+        responseGate: responseGate.promise,
+        remoteInterleave: {
+          label: "foreign",
+          operations: [{
+            op: "set",
+            id: DOCS.A,
+            value: { items: ["a", "b", "x"] },
+          }],
+        },
+      });
+      const splice = growTo(
+        harness,
+        { items: ["a", "b", "c"] },
+        ["c"],
+      );
+      harness.pushSync({
+        upserts: [{
+          id: DOCS.A,
+          seq: currentSeq(harness, DOCS.A) + 1,
+          value: { items: ["a", "b", "x"] },
+        }],
+      });
+      await clock.settle();
+      expectVisible(harness, { A: { items: ["a", "b", "x"] } });
+
+      responseGate.resolve();
+      await expectResultOk(splice);
+      expectVisible(harness, { A: { items: ["a", "b", "c", "x"] } });
+    } finally {
+      responseGate.resolve();
+      await harness.close();
+    }
+  });
+
+  it("keeps it over a frame that left its array alone", async () => {
+    const harness = await createHarness();
+    const responseGate = Promise.withResolvers<void>();
+    try {
+      await seedAccepted(harness, DOCS.A, { items: ["a", "b"], other: 0 });
+      await watch(harness);
+      harness.model.setOutcome(2, {
+        kind: "accept",
+        responseGate: responseGate.promise,
+      });
+      const splice = growTo(
+        harness,
+        { items: ["a", "b", "c"], other: 0 },
+        ["c"],
+      );
+
+      harness.pushSync({
+        upserts: [{
+          id: DOCS.A,
+          seq: currentSeq(harness, DOCS.A) + 1,
+          value: { items: ["a", "b"], other: 1 },
+        }],
+      });
+      await clock.settle();
+      expectVisible(harness, { A: { items: ["a", "b", "c"], other: 1 } });
+
+      responseGate.resolve();
+      await expectResultOk(splice);
+    } finally {
+      responseGate.resolve();
+      await harness.close();
+    }
+  });
+});

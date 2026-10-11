@@ -102,6 +102,16 @@ Read(entity, path):
   3. Otherwise read from confirmed state
 ```
 
+A document's pending layer whose ops cannot mean what they meant against the
+confirmed state now beneath it is left out of that document's view, every op in
+it, until its verdict: a patch whose
+ops do not apply there, and a `splice` whose array has changed length since
+the transaction diffed it (the diff emits only tail splices, whose positions
+count from the array's old length; §6.3 of
+[01-data-model.md](./01-data-model.md)). The server refuses such a commit
+whenever the write read the value it replaced; when it accepts one anyway, the
+confirmed state takes the write as the store applied it.
+
 ### 3.3.4 Single-Snapshot Rule
 
 A commit's read set MUST describe one coherent client view: confirmed bases

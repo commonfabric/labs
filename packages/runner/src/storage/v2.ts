@@ -87,7 +87,7 @@ import {
   applyPatchToDocument,
   PatchApplyError,
 } from "../../../memory/v2/patch.ts";
-import { encodePointer } from "../../../memory/v2/path.ts";
+import { encodePointer, parsePointer } from "../../../memory/v2/path.ts";
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import type { Cancel } from "../cancel.ts";
 import {
@@ -192,6 +192,7 @@ import {
   getTransactionWriteAttempts,
 } from "./transaction-inspection.ts";
 import { toTransactionDocumentValue } from "./v2-document.ts";
+import { readValueAtPath } from "./v2-path.ts";
 import {
   createStorageAddressResolver,
   RemoteSessionFactory,
@@ -577,6 +578,8 @@ type PendingVersion =
       op: "patch";
       patches: PatchOp[];
       value: EntityDocument;
+      /** Set once the store accepted the layer: replay its ops as they stand. */
+      accepted?: true;
     }
     | {
       localSeq: number;
@@ -684,7 +687,11 @@ const pendingVersion = (
   localSeq: number,
   operation:
     | { op: "set"; value: EntityDocument }
-    | { op: "patch"; patches: PatchOp[]; value: EntityDocument }
+    | {
+      op: "patch";
+      patches: PatchOp[];
+      value: EntityDocument;
+    }
     | { op: "delete" },
   baseSeq: number,
 ): PendingVersion => ({ localSeq, baseSeq, ...operation });
@@ -709,6 +716,31 @@ const transactionValueForVersion = (
   return version.transactionValue;
 };
 
+/**
+ * Whether each `splice` in a layer still lands where it was computed to. The
+ * diff emits only tail splices (`buildArrayPatchCandidates`: a grown array
+ * adds at its old length, a shrunk one removes from its new length), so
+ * `index + remove` is the length of the array the splice was diffed from.
+ * Replayed over an array another writer has since grown or shrunk, the splice
+ * says something its writer never wrote; where that writer appended the same
+ * tail, the tail is appended twice. The server refuses the whole commit,
+ * since the write read the array it diffed (and an identity commit is
+ * accepted only when its ops are idempotent on the stored value), so until
+ * the verdict the whole layer, every op in it, is left out of the document's
+ * view. A write that read no value (a blind UI write) is the exception: the
+ * server applies its splice where it stands, and the accept promotes the
+ * layer as the store applied it (`#confirmPending`).
+ */
+const tailSplicesFitTheirArrays = (
+  base: EntityDocument | undefined,
+  patches: readonly PatchOp[],
+): boolean =>
+  patches.every((patch) => {
+    if (patch.op !== "splice") return true;
+    const now = readValueAtPath(base, parsePointer(patch.path));
+    return Array.isArray(now) && now.length === patch.index + patch.remove;
+  });
+
 const applyPendingVersion = (
   base: EntityDocument | undefined,
   pending: PendingVersion,
@@ -731,6 +763,25 @@ const applyPendingVersion = (
       // mirroring the server's mergeable disposition, and the ops can only
       // express this layer's own writes, so a dropped sibling's data is
       // unrepresentable in the result (CT-1872 1a).
+      //
+      // A positional op is the exception to re-folding: over an array whose
+      // length moved since its diff, the whole layer is left out, as an
+      // inapplicable layer does below, until its verdict.
+      if (
+        pending.accepted !== true &&
+        !tailSplicesFitTheirArrays(base, pending.patches)
+      ) {
+        pendingPatchLogger.debug("pending-replay-skip", () => [
+          "pending patch layer skipped: a splice's array changed length since its diff",
+          {
+            space: logContext.space,
+            id: logContext.id,
+            scope: normalizeCellScope(logContext.scope),
+            localSeq: pending.localSeq,
+          },
+        ]);
+        return base;
+      }
       try {
         return applyPatchToDocument(
           base,
@@ -9258,6 +9309,23 @@ export class SpaceReplica
       }
       const firstPendingIndex = pendingIndexes[0]!;
       const lastPendingIndex = pendingIndexes[pendingIndexes.length - 1]!;
+      // The verdict is in: the store applied these ops where they stand, so a
+      // splice held out of the view while its array had moved
+      // (`tailSplicesFitTheirArrays`) promotes with the rest of them.
+      if (
+        pendingIndexes.some((index) => {
+          const entry = record.pending[index]!;
+          return entry.op === "patch" &&
+            entry.patches.some((patch) => patch.op === "splice");
+        })
+      ) {
+        record.pending = record.pending.map((entry) =>
+          entry.localSeq === localSeq && entry.op === "patch"
+            ? { ...entry, accepted: true }
+            : entry
+        );
+        dropMaterializedSuffix(record, firstPendingIndex);
+      }
       const pending = record.pending[lastPendingIndex]!;
       const previousConfirmed = record.confirmed;
       let promoted: ConfirmedVersion | undefined;
