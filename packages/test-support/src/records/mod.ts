@@ -85,6 +85,7 @@ export {
   NAME_SEPARATOR,
   parseSkipList,
   readNameMaps,
+  readRegistrations,
   repositoryPathOf,
   repositoryRootOf,
   serializeSkipList,

@@ -233,6 +233,56 @@ export async function readNameMaps(
   const ranIn = options.ranIn?.replace(/\/$/, "");
   const names = new Map<string, string>();
   const ambiguous = new Set<string>();
+  for (const map of await nameMapsIn(spool)) {
+    for (const [name, file] of Object.entries(map.names)) {
+      if (typeof file !== "string" || file.length === 0) continue;
+      if (!inScope(map.dir, file, ranIn)) continue;
+      const known = names.get(name);
+      if (known === undefined) {
+        names.set(name, file);
+        continue;
+      }
+      if (known !== file) ambiguous.add(name);
+    }
+  }
+  for (const name of ambiguous) names.delete(name);
+  return names;
+}
+
+/**
+ * The names each test file registered, by repository-relative file, from
+ * every name map a spool holds. A test process writes its map as it
+ * unloads, after its file's module has registered everything it holds, so
+ * a file named here is one whose process got that far, and the names
+ * under it are every name that process registered: each `Deno.test`, and
+ * each leaf's whole chain where the bdd re-export recorded leaves. A file
+ * whose process registered nothing, or never unloaded, is not named, and
+ * nothing here says what it holds.
+ *
+ * A name two files both registered stays under each of them. Which file
+ * holds a test is not the question this answers, so nothing is ambiguous.
+ */
+export async function readRegistrations(
+  spool: string,
+): Promise<Map<string, Set<string>>> {
+  const registered = new Map<string, Set<string>>();
+  for (const map of await nameMapsIn(spool)) {
+    for (const [name, file] of Object.entries(map.names)) {
+      if (typeof file !== "string" || file.length === 0) continue;
+      const names = registered.get(file);
+      if (names === undefined) registered.set(file, new Set([name]));
+      else names.add(name);
+    }
+  }
+  return registered;
+}
+
+/**
+ * Every name map a spool holds, in the order of their names. One that
+ * cannot be read or is not a map is left out: a name map is metadata, and
+ * its absence costs what its reader would have learned from it.
+ */
+async function nameMapsIn(spool: string): Promise<ParsedNameMap[]> {
   let entries: string[] = [];
   try {
     for await (const entry of Deno.readDir(spool)) {
@@ -247,6 +297,7 @@ export async function readNameMaps(
     entries = [];
   }
   entries.sort();
+  const maps: ParsedNameMap[] = [];
   for (const entry of entries) {
     let parsed: unknown;
     try {
@@ -255,20 +306,9 @@ export async function readNameMaps(
       continue;
     }
     const map = asNameMap(parsed);
-    if (map === undefined) continue;
-    for (const [name, file] of Object.entries(map.names)) {
-      if (typeof file !== "string" || file.length === 0) continue;
-      if (!inScope(map.dir, file, ranIn)) continue;
-      const known = names.get(name);
-      if (known === undefined) {
-        names.set(name, file);
-        continue;
-      }
-      if (known !== file) ambiguous.add(name);
-    }
+    if (map !== undefined) maps.push(map);
   }
-  for (const name of ambiguous) names.delete(name);
-  return names;
+  return maps;
 }
 
 /** Serializes a skip list for the file the environment points at. */
