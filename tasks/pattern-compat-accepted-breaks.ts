@@ -1071,4 +1071,22 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a manager's index entry now types `revision`, and a refused outcome `code`, which the recorded outcomes left open; no stored request outcome holds either",
     record: "docs/history/fabrichat-index-revision-break.md",
   },
+  {
+    // A manager's room link gained `roster`, the profiles of those who joined
+    // the room, each a link, from which the manager derives its `people`. The
+    // recorded link left it open, so a stored outcome admitted any `roster`;
+    // the candidate types it. A link is always to a room output, which has no
+    // `roster` or has a list of profile links.
+    pattern: "fabrichat/manager.tsx",
+    baselines: [
+      "20261008T225324Z-Oj3DbCTq-94tEYN3",
+      "20261009T161813Z-r7DggcJdZ7FzrPCR",
+      "20261009T210116Z-99YN5H9jf2UFET6M",
+      "20261010T083035Z-Mp5ZALK-A2rUfm_u",
+    ],
+    paths: ["argument.requests.*"],
+    reason:
+      "a manager's room link now types the room's `roster`, which the recorded link left open; every stored room link is to a room output with no `roster` or with a list of profile links, which the new type admits",
+    record: "docs/history/fabrichat-room-link-roster-break.md",
+  },
 ];

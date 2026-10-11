@@ -34,10 +34,14 @@ interface ChatManagerOutput {
     recipient: string;
   }[];
 
+  /** The people this user's rooms list, by principal. */
+  people: Record<string, Cell<ChatProfile>[]>;
+
   openDirect: Stream<{ requestId: string; counterpart: string }>;
   createGroup: Stream<{
     requestId: string;
     members: string[];
+    profiles?: Cell<ChatProfile>[];
     title: string;
     joinableByLink?: boolean;
   }>;
@@ -87,14 +91,16 @@ each other member: it offers them the room through their share inbox when the
 request names their profile and the profile points at one (see
 [offers](#offers)), and otherwise produces a **notice**, saying which room they
 have been admitted to and by whom (see
-[delivering notices](#delivering-notices)).
+[delivering notices](#delivering-notices)). A client finds the profiles of the
+people this user already shares a room with in `people`, so a new room can name
+each of them by profile.
 
 ## Views
 
 The manager offers its facts and streams as a `[VIEWS]` group, `chats`, for
-hosts that draw natively: `rooms`, `direct`, `requests`, and `outgoingNotices`,
-and every stream below. A native client drives the manager through that group as
-it drives a room through the room's `room` group (see
+hosts that draw natively: `rooms`, `direct`, `requests`, `outgoingNotices`, and
+`people`, and every stream below. A native client drives the manager through
+that group as it drives a room through the room's `room` group (see
 [`clients.md`](clients.md#showing-a-room)).
 
 ## Scopes
@@ -104,11 +110,16 @@ Everything a manager stores is `PerSpace` in the user's home space (see
 user, so `PerSpace` there means one instance for that user, which is why nothing
 it stores needs to be `PerUser` or `PerSession`.
 
-`rooms` is derived per session all the same. Each room in it is read under the
-reader's own access, so a manager more than one principal reads, as one outside
-a home space can be, lists different rooms to a principal a room's space refuses
-than to its members. Stored once for every reader, a value readers derive
-differently is one their runtimes overwrite without end.
+`rooms` is derived per session all the same, and so is `people`, which is drawn
+from it, though each room's `roster` is shared by everyone the room's space
+admits: a profile lives in its owner's own space, and attests no principal to a
+reader that space refuses, so two readers can key the same roster differently.
+Each room in it is read under the reader's own access, so a manager more than
+one principal reads, as one outside a home space can be, lists different rooms
+to a principal a room's space refuses than to its members. Stored once for every
+reader, a value readers derive differently is one their runtimes overwrite
+without end. A stream reads neither: a request names a room's members by
+principal or by profile itself.
 
 ## Facts
 
@@ -139,6 +150,18 @@ differently is one their runtimes overwrite without end.
   existing room, but a `createGroup` creates another.
 - **`outgoingNotices`** holds each notice this user's requests have produced,
   until a client reports it delivered.
+- **`people`** holds the people this user shares a room with: for each
+  principal, the profiles attesting it, read from the roster of each room in
+  `rooms` (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)) and keyed by each
+  profile's own `represents-principal` label, never by what a roster claims
+  about it. Each profile is listed once, in the order the rooms list them:
+  newest room first, and within a room in its roster's order. So a person's
+  first profile is a fixed choice for a given list of rooms. A profile that
+  attests no principal, or a DID no principal can have, or one whose label the
+  reader can't read, names no one and is left out, and so are this user's own
+  profiles. Like a roster, it is a claim, not an access list: a client uses
+  it to offer the people to name a new room's members by, through
+  `createGroup`'s `profiles`.
 
 ## Streams
 
@@ -163,16 +186,16 @@ These rules hold for every stream:
 - An admitted request missing a key its stream needs is refused, with a reason
   that says which, rather than ignored.
 - Every stream changes only this user's own manager, except `openDirect` and
-  `createGroup`, which also create a room and grant other people access to it,
-  and `openDirect`, which can also offer the room to the other person, and add
-  them to its participants.
+  `createGroup`, which also create a room, grant other people access to it, and
+  can offer it to the people the request names by profile, and add them to its
+  participants.
   `openDirect`, `createGroup` and `accept` also add this user to the room's
   participants, which anyone the room's space admits may do.
 
 | Stream | Reviewed surface | Effect |
 | --- | --- | --- |
 | [`openDirect`](#opendirectrequestid-string-counterpart-string-profile-cellchatprofile) | `ChatStartSurface` | the direct room with `counterpart`, found or created |
-| [`createGroup`](#creategrouprequestid-string-members-string-title-string-joinablebylink-boolean) | `ChatStartSurface` | a new group room |
+| [`createGroup`](#creategrouprequestid-string-members-string-profiles-cellchatprofile-title-string-joinablebylink-boolean) | `ChatStartSurface` | a new group room |
 | [`accept`](#acceptrequestid-string-room-cellchatroomoutput-counterpart-string-keeparchived-boolean) | none | an entry for a room this user has been admitted to |
 | [`forget`](#forgetrequestid-string-room-cellchatroomoutput-revision-string) | none | the entry removed from `rooms`; the room itself is untouched |
 | [`delivered`](#deliveredrequestid-string-id-string) | none | the notice removed from `outgoingNotices` |
@@ -212,7 +235,7 @@ outward act when it creates a room.
 It is the only way a direct room is created, which is what keeps one person's
 conversation from splitting.
 
-### `createGroup(requestId: string, members: string[], title: string, joinableByLink?: boolean)`
+### `createGroup(requestId: string, members: string[], profiles?: Cell<ChatProfile>[], title: string, joinableByLink?: boolean)`
 
 - `requestId: string` — Chosen by the sender, and unique among its requests. The
   outcome is recorded under it in `requests`, and sending the same event again
@@ -221,6 +244,12 @@ conversation from splitting.
   each a principal's. Duplicates, and this user's own DID, are ignored. It may
   be empty, which creates a group room of one, and people can be added later
   from the room's add control.
+- `profiles?: Cell<ChatProfile>[]` — The profiles of more people to admit, as
+  `people` lists them. Each names the principal its `represents-principal`
+  label attests, who is admitted as a member, and the room is offered to them
+  through the share inbox the profile points at (see [offers](#offers)). A
+  person named by more than one profile is offered the room through the first.
+  This user's own profiles are ignored.
 - `title: string` — The room's title, which every member sees. Must not be
   empty.
 - `joinableByLink?: boolean` — Whether the room admits anyone who has its
@@ -235,10 +264,12 @@ Creates a group room. This is an outward act: it grants other people access.
 - **Admitted:** as a trusted gesture on `ChatStartSurface`.
 - **Effect:** always creates a new space, with a new room as its root, even
   when another group room has the same members. Grants each member access,
-  produces a notice for each, and records the entry in `rooms`; adding this
-  user to the new room's participants follows.
+  offers the room to each member `profiles` names and adds their profile to the
+  room's participants, produces a notice for each other member, and records the
+  entry in `rooms`; adding this user to the new room's participants follows.
 - **Outcome:** `done` with the entry, or `refused` if `title` is empty,
-  `members` is absent, or a member is not a principal's DID.
+  `members` is absent, a member is not a principal's DID, or a profile in
+  `profiles` attests no principal.
 
 ### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string, keepArchived?: boolean)`
 
@@ -363,9 +394,9 @@ direct room's `counterpart` against that label before it sends `accept`.
 
 ## Offers
 
-When a request names a member's profile, as `openDirect`'s `profile` does, the
-manager offers the new room to that member through the share inbox the
-profile's `inbox` points at
+When a request names a member's profile, as `openDirect`'s `profile` and
+`createGroup`'s `profiles` do, the manager offers the new room to that member
+through the share inbox the profile's `inbox` points at
 ([`private-inbox.md`](../../features/private-inbox.md)), once, after the room is
 created, and adds the profile to the room's participants, through the room's
 `addParticipant`, without a step of the member's own. A profile that points at
@@ -374,7 +405,12 @@ no inbox is offered nothing. The offer is the envelope a share inbox takes:
 - `kind` — `fabrichat-room`.
 - `id` — the request's `requestId`. The inbox keeps one offer per sender and
   `id`.
-- `space` — the DID of the room's space.
+- `space` — the DID of the room's space. For a group joinable by its link, the
+  space's DID is all a principal needs to read and write the room, so an offer
+  of one exposes it to whoever can read the inbox it lands in. While server
+  execution is off that can be any principal: the inbox's space admits
+  everyone, and only an honest runtime keeps to the label on its offers (see
+  [the private inbox](../../features/private-inbox.md#what-the-offers-carry)).
 - `host` and `ownerOrigin` — the origin of the host serving the manager, which
   serves the room's space too.
 - `title` — a group room's title, or empty for a direct room.

@@ -31,7 +31,11 @@ a room to anyone its space doesn't admit.
   the root's `addPiece`, which shows it as a panel.
 - **The people a client offers** when starting a conversation from a social
   space are that space's participants, as claims, until it offers a member set
-  (see [social spaces](README.md#social-spaces)).
+  (see [social spaces](README.md#social-spaces)). When starting a group from
+  the person's chats, they are the manager's `people`, the profiles of those
+  the person shares a room with, by the principal each attests. A client names
+  each person picked there by profile, in `createGroup`'s `profiles`, so the
+  manager offers them the room.
 - **A notice** says the person has been admitted to a room. Its claim of who
   sent it is unauthenticated. Before sending `accept` for a direct room, a
   client MUST read the principal the room's `about.record` is labeled
