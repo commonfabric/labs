@@ -195,6 +195,21 @@ describe("IntersectionFormatter", () => {
         additionalProperties: { type: "string" },
       });
     });
+
+    it("returns an array for records indexed by number alone", async () => {
+      // The generator gives `Record<number, T>` an array's schema, so an
+      // intersection of such records is the intersection of those arrays.
+
+      const { type, checker } = await getTypeFromCode(
+        `type Result = Record<number, string> & Record<number, "a" | "b">;`,
+        "Result",
+      );
+
+      expect(transformer.generateSchema(type, checker)).toEqual({
+        type: "array",
+        items: { enum: ["a", "b"] },
+      });
+    });
   });
 
   describe("unsupported intersections", () => {
@@ -212,6 +227,37 @@ describe("IntersectionFormatter", () => {
       expect(schema.type).toBe("object");
       expect(schema.additionalProperties).toBe(true);
       expect(schema.$comment).toContain("index signature on constituent");
+    });
+
+    it("returns the fallback for a record indexed by number alone beside an object", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type Result = { name: string } & Record<number, string>;`,
+        "Result",
+      );
+
+      expect(transformer.generateSchema(type, checker)).toEqual({
+        type: "object",
+        additionalProperties: true,
+        $comment:
+          "Unsupported intersection pattern: index signature on constituent",
+      });
+    });
+
+    it("returns the fallback for an object indexed by number alone beside another", async () => {
+      // Its schema is an array's, which holds no member `x`, so a merge would
+      // lose `x`.
+
+      const { type, checker } = await getTypeFromCode(
+        `type Result = { x: string; [n: number]: string } & { y: string };`,
+        "Result",
+      );
+
+      expect(transformer.generateSchema(type, checker)).toEqual({
+        type: "object",
+        additionalProperties: true,
+        $comment:
+          "Unsupported intersection pattern: index signature on constituent",
+      });
     });
 
     it("should reject intersection with non-object types", async () => {

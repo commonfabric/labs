@@ -817,6 +817,164 @@ describe("SchemaGenerator", () => {
         }),
       ],
       [
+        "keeps evidence off a record a numeric index signature does not hold",
+        `
+          type M1 = { a: Record<string, unknown> };
+          type M2 = {
+            a: Cfc<Record<number, string>, { integrity: readonly ["v"] }>;
+          };
+        `,
+        propertyA({
+          type: "object",
+          additionalProperties: true,
+          $comment:
+            "Unsupported intersection pattern: index signature on constituent",
+        }),
+      ],
+      [
+        "keeps added integrity off a record a numeric index signature does not hold",
+        `
+          type M1 = { a: Record<string, unknown> };
+          type M2 = {
+            a: Cfc<Record<number, string>, { addIntegrity: readonly ["v"] }>;
+          };
+        `,
+        propertyA({
+          type: "object",
+          additionalProperties: true,
+          $comment:
+            "Unsupported intersection pattern: index signature on constituent",
+        }),
+      ],
+      [
+        "keeps evidence off a record a template-literal index signature does not hold",
+        `
+          type M1 = { a: Record<string, unknown> };
+          type M2 = {
+            a: Cfc<Record<\`foo-\${string}\`, string>, {
+              integrity: readonly ["v"];
+            }>;
+          };
+        `,
+        propertyA({
+          type: "object",
+          properties: {},
+          additionalProperties: { type: "unknown" },
+        }),
+      ],
+      [
+        "keeps evidence on a record whose string index signature holds a template-literal one's keys",
+        `
+          type M1 = {
+            a: Cfc<Record<string, string>, { integrity: readonly ["v"] }>;
+          };
+          type M2 = { a: Record<\`foo-\${string}\`, string> };
+        `,
+        propertyA({
+          type: "object",
+          properties: {},
+          additionalProperties: { type: "string" },
+          ifc: { integrity: ["v"] },
+        }),
+      ],
+      [
+        "keeps evidence on a record whose string index signature holds a numeric one's keys",
+        `
+          type M1 = {
+            a: Cfc<Record<string, string>, { integrity: readonly ["v"] }>;
+          };
+          type M2 = { a: { [key: string]: string; [index: number]: "n" } };
+        `,
+        propertyA({
+          type: "object",
+          properties: {},
+          additionalProperties: { type: "string" },
+          ifc: { integrity: ["v"] },
+        }),
+      ],
+      [
+        "keeps evidence on a record beside a symbol-keyed index signature",
+        `
+          type M1 = {
+            a: Cfc<Record<string, string>, { integrity: readonly ["v"] }>;
+          };
+          type M2 = { a: { [key: symbol]: string } };
+        `,
+        propertyA({
+          type: "object",
+          properties: {},
+          additionalProperties: { type: "string" },
+          ifc: { integrity: ["v"] },
+        }),
+      ],
+      [
+        "keeps evidence on an array that records indexed by number alone merge to",
+        `
+          type M1 = {
+            a: Cfc<Record<number, string>, { integrity: readonly ["v"] }>;
+          };
+          type M2 = { a: Record<number, "a" | "b"> };
+        `,
+        propertyA({
+          type: "array",
+          items: { enum: ["a", "b"] },
+          ifc: { integrity: ["v"] },
+        }),
+      ],
+      [
+        "keeps a union's evidence on the arm whose index signature holds the value's keys",
+        `
+          type M1 = { a: Record<string, unknown> };
+          type M2 = {
+            a: Cfc<Record<string, string> | { x: string }, {
+              integrity: readonly ["v"];
+            }>;
+          };
+        `,
+        propertyA({
+          anyOf: [
+            {
+              type: "object",
+              properties: {},
+              additionalProperties: { type: "string" },
+              ifc: { integrity: ["v"] },
+            },
+            {
+              type: "object",
+              properties: { x: { type: "string", ifc: { integrity: ["v"] } } },
+              required: ["x"],
+              additionalProperties: { type: "unknown" },
+            },
+          ],
+        }),
+      ],
+      [
+        "keeps a union's restriction on every arm beside a record",
+        `
+          type M1 = { a: Record<string, unknown> };
+          type M2 = {
+            a: Confidential<Record<string, string> | { x: string }, readonly ["s"]>;
+          };
+        `,
+        propertyA({
+          anyOf: [
+            {
+              type: "object",
+              properties: {},
+              additionalProperties: { type: "string" },
+              ifc: labelS,
+            },
+            {
+              type: "object",
+              properties: { x: { type: "string" } },
+              required: ["x"],
+              additionalProperties: { type: "unknown" },
+              ifc: labelS,
+            },
+          ],
+        }),
+      ],
+      [
         "keeps a union's evidence on the members of the arm the value is",
         `
           type M1 = { a: { z: number } };

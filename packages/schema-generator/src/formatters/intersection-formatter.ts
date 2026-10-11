@@ -16,6 +16,7 @@ import { withOriginOf } from "../schema-origins.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import {
   cloneSchemaDefinition,
+  getArrayElementInfo,
   getNativeTypeSchema,
   safeGetPropertyType,
 } from "../type-utils.ts";
@@ -251,11 +252,16 @@ export class IntersectionFormatter implements TypeFormatter {
       return this.#schemaGenerator.formatChildType(partsToProcess[0]!, context);
     }
 
-    // An intersection of arrays is an array of the values each of them holds,
-    // whose type the checker gives as the intersection's number index: the
-    // intersection of their element types.
+    // An intersection of parts the generator gives an array's schema, as it
+    // gives `Record<number, T>` one, is an array of the values each of them
+    // holds, whose type the checker gives as the intersection's number index:
+    // the intersection of their element types.
     // Its constituents' JSDoc is documented as a merged object's.
-    if (partsToProcess.every((part) => checker.isArrayType(part))) {
+    if (
+      partsToProcess.every((part) =>
+        getArrayElementInfo(part, checker) !== undefined
+      )
+    ) {
       return this.#applyIntersectionDocs({
         schema: {
           type: "array",
@@ -343,9 +349,15 @@ export class IntersectionFormatter implements TypeFormatter {
         return "non-object constituent";
       }
 
-      // An array, whose items no object member can hold, is refused beside
-      // an object; any other index signature merges with the members.
-      if (checker.isArrayType(part) || checker.isTupleType(part)) {
+      // A part indexed by number alone, as an array, a tuple, a typed array
+      // or `Record<number, T>` is, has no object schema to merge: the
+      // generator gives it an array's or its native type's, whose items no
+      // object member can hold. A string index signature merges with the
+      // members.
+      if (
+        checker.getIndexTypeOfType(part, ts.IndexKind.Number) !== undefined &&
+        checker.getIndexTypeOfType(part, ts.IndexKind.String) === undefined
+      ) {
         return "index signature on constituent";
       }
     }
@@ -394,14 +406,16 @@ export class IntersectionFormatter implements TypeFormatter {
       properties: mergedProps,
     };
 
-    // The keys no member names hold the intersection's index type, as one
-    // object type declaring all of these members and index signatures would:
-    // a member keeps the type its own declarations give it, as the checker
-    // reads it.
+    // The keys no member names hold the intersection's string index type, as
+    // one object type declaring all of these members and index signatures
+    // would: a member keeps the type its own declarations give it, as the
+    // checker reads it. No part is indexed by number alone
+    // (`#validateIntersectionParts()`), so a number index has a string index
+    // beside it.
     const indexType = checker.getIndexTypeOfType(
       intersection,
       ts.IndexKind.String,
-    ) ?? checker.getIndexTypeOfType(intersection, ts.IndexKind.Number);
+    );
     if (indexType) {
       result.additionalProperties = this.#schemaGenerator.formatChildType(
         indexType,

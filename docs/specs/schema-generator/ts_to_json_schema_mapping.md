@@ -1083,23 +1083,27 @@ Default paths of §7:
   metadata carriers, whose labels §11 reads, are filtered before validation;
   a single survivor delegates directly, and where none survives the full set
   is merged.
-- An intersection of arrays is an array of the values every one of them
+- An intersection of parts the generator gives an array's schema, arrays and
+  `Record<number, T>` among them, is an array of the values every one of them
   holds: its `items` are the schema of the intersection's number index, the
   intersection of the element types, so `unknown[] & readonly string[]` is
   `string[]`'s schema. Its constituents' JSDoc documents it as it documents
   a merged object (below). Tested: intersection-formatter.test.ts.
-- An index signature merges with the members, as one object type declaring all
-  of the constituents' members and index signatures would: the keys no member
-  names hold the intersection's index type, which the checker gives as the
-  intersection of the constituents' (`additionalProperties`), and a member
-  keeps the type its own declarations give it, as the checker reads `T["x"]`
-  of an intersection. `{ x: unknown; y: string } & Record<string, string>`
-  gives `{ properties: { x: { type: "unknown" }, y: { type: "string" } },
+- A string index signature merges with the members, as one object type
+  declaring all of the constituents' members and index signatures would: the
+  keys no member names hold the intersection's string index type, which the
+  checker gives as the intersection of the constituents'
+  (`additionalProperties`), and a member keeps the type its own declarations
+  give it, as the checker reads `T["x"]` of an intersection.
+  `{ x: unknown; y: string } & Record<string, string>` gives
+  `{ properties: { x: { type: "unknown" }, y: { type: "string" } },
   additionalProperties: { type: "string" } }`, and labels follow the members
   and index values they are written on (§11). Tested:
   intersection-formatter.test.ts, intersection-provenance.test.ts.
-- Unsupported shapes — a non-object constituent, or an array or tuple beside
-  an object, whose items no member can hold — produce a **permissive
+- Unsupported shapes — a non-object constituent, or a constituent indexed by
+  number alone beside an object, as an array, a tuple, a typed array or
+  `Record<number, T>` is, which the generator gives an array's or its native
+  type's schema, whose items no member can hold — produce a **permissive
   fallback, not a throw**: `{ type: "object", additionalProperties: true,
   $comment: "Unsupported intersection pattern: <reason>" }`.
 - A property several constituents declare takes the schema of its type in
@@ -1465,14 +1469,26 @@ Mechanics:
     whose carrier did not come from the type it maps over.
   - A label reaching every member lands on the whole value, and one reaching
     none lands nowhere. A union payload's members are those of each
-    alternative. A value with an index signature its payload does not have
-    holds data under keys no member names, which evidence never reaches, so
-    evidence reaching every named member lands on those members, not the whole
-    value:
+    alternative. A value with an index signature that no index signature of
+    its payload applies to every key of holds data under keys no member names,
+    which evidence never reaches, so evidence reaching every named member lands
+    on those members, not the whole value:
     `{ x: string } & Integrity<{ x: string }, L> & Record<string, unknown>`
-    labels `x` alone. A value whose schema has no members to place labels on,
-    as an unsupported-pattern fallback, takes a restriction whole and evidence
-    that reaches only some of its data nowhere.
+    labels `x` alone. A `string`-keyed index signature applies to numeric keys
+    too, while one keyed by `number` or by a template literal applies to only
+    some of a `string` key's, so `Integrity<Record<number, string>, L>` or
+    `` Integrity<Record<`foo-${string}`, string>, L> `` beside
+    `Record<string, unknown>` lends no evidence to the other keys. An index
+    signature keyed by symbols holds no data a schema holds. A value of a union
+    payload is one of its alternatives: where the value holds one of them as a
+    part, as each arm the checker distributes an intersection over the union
+    into does, evidence reaches that alternative's data alone, while a
+    restriction still reaches wherever any alternative's may be. So
+    `Integrity<Record<string, string> | { x: string }, L> & Record<string,
+    unknown>` labels its first arm whole and `x` alone in its second. A value
+    whose schema has no members to place labels on, as an unsupported-pattern
+    fallback, takes a restriction whole and evidence that reaches only some of
+    its data nowhere.
   - A payload whose type lists no members, such as `{}` or `unknown`, may
     hold data under any key, so a restriction labels the whole value. Its
     evidence labels the whole value only where nothing writes over members

@@ -723,8 +723,33 @@ const holdsCarriersUnwritten = (
  * Which members of a value of `type` a policy whose payload is `of` reaches:
  * those that may hold the payload's data, where a restriction belongs, and
  * those that must, where evidence belongs. `all` stands for the whole value.
+ * A value of a union payload is one of its alternatives. Where `type` holds
+ * one of them as a part, as each arm the checker distributes an intersection
+ * over that union into does, the data that must be the payload's is that
+ * alternative's, while the data that may be is still any alternative's.
  */
 const payloadReach = (
+  type: ts.Type,
+  of: ts.Type | undefined,
+  checker: ts.TypeChecker,
+): { may: readonly string[] | "all"; must: readonly string[] | "all" } => {
+  const reach = reachOfPayload(type, of, checker);
+  const held = of?.isUnion()
+    ? of.types.filter((alternative) =>
+      partsOf(alternative).every((part) => partsOf(type).includes(part))
+    )
+    : [];
+  return held.length === 1
+    ? { may: reach.may, must: reachOfPayload(type, held[0], checker).must }
+    : reach;
+};
+
+/** The parts of `type`: those of an intersection, or `type` itself. */
+const partsOf = (type: ts.Type): readonly ts.Type[] =>
+  type.isIntersection() ? type.types : [type];
+
+/** Helper for `payloadReach()`, for a payload read as a whole. */
+const reachOfPayload = (
   type: ts.Type,
   of: ts.Type | undefined,
   checker: ts.TypeChecker,
@@ -745,25 +770,35 @@ const payloadReach = (
     return { may: "all", must: "all" };
   }
   const payloadMembers = dataMemberDeclarations(of, checker);
-  const indexed = alternativesOf(of).some((alternative) =>
-    checker.getIndexInfosOfType(alternative).length > 0
+  const payloadIndexes = alternativesOf(of).flatMap((alternative) =>
+    checker.getIndexInfosOfType(alternative)
   );
+  const indexed = payloadIndexes.length > 0;
   const valueMembers = [...dataMemberDeclarations(type, checker)];
   const unwritten = holdsCarriersUnwritten(type, checker);
   // A value an object part of which has an index signature holds data under
-  // keys no member names, which is the payload's only where the payload has
-  // an index signature too. A primitive's own index, as `string`'s by
-  // position, names no data of its own, nor does a `never`-valued one.
-  const holdsUnnamed = !indexed &&
-    alternativesOf(type).some((alternative) =>
-      (alternative.isIntersection() ? alternative.types : [alternative]).some(
-        (part) =>
-          (part.flags & PRIMITIVE_TYPE_FLAGS) === 0 &&
-          checker.getIndexInfosOfType(part).some((info) =>
-            (info.type.flags & ts.TypeFlags.Never) === 0
-          ),
-      )
+  // keys no member names, which is the payload's only where an index
+  // signature of the payload applies to every one of those keys: one keyed by
+  // `string` applies to numeric keys too, while one keyed by `number` or by a
+  // template literal applies to only some of a `string` key's. A primitive's
+  // own index, as `string`'s by position, names no data of its own, nor does
+  // a `never`-valued one, nor one keyed by symbols, which no schema holds.
+  const payloadKeys = (key: ts.Type) =>
+    payloadIndexes.some(({ keyType }) =>
+      checker.isTypeAssignableTo(key, keyType) ||
+      ((keyType.flags & ts.TypeFlags.String) !== 0 &&
+        (key.flags & ts.TypeFlags.NumberLike) !== 0)
     );
+  const holdsUnnamed = alternativesOf(type).some((alternative) =>
+    partsOf(alternative).some((part) =>
+      (part.flags & PRIMITIVE_TYPE_FLAGS) === 0 &&
+      checker.getIndexInfosOfType(part).some((info) =>
+        (info.type.flags & ts.TypeFlags.Never) === 0 &&
+        (info.keyType.flags & ts.TypeFlags.ESSymbolLike) === 0 &&
+        !payloadKeys(info.keyType)
+      )
+    )
+  );
   // A payload whose type lists no members, such as `{}` or `unknown`: its
   // data may be under any key, and is the whole value only where nothing
   // writes over the value's members and the value holds nothing besides.
@@ -778,7 +813,7 @@ const payloadReach = (
   if (valueMembers.length === 0) {
     const whole = payloadMembers.size === 0;
     return {
-      may: whole ? "all" : [],
+      may: whole || indexed ? "all" : [],
       must: whole && unwritten && !holdsUnnamed ? "all" : [],
     };
   }
