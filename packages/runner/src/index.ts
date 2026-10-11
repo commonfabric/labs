@@ -205,9 +205,11 @@ export {
 export * from "./pattern-manager.ts";
 export {
   createSpaceRootIfAbsent,
+  DEFAULT_APP_PATTERN_ORIGIN,
   DEFAULT_APP_PATTERN_SOURCE,
   ensureSpaceRootPattern,
   type EnsureSpaceRootResult,
+  HOME_PATTERN_ORIGIN,
   HOME_PATTERN_SOURCE,
   patternSourceUrl,
   resolveSpaceRootPattern,
@@ -231,10 +233,15 @@ export {
 export {
   classifyPieceOriginString,
   type PieceOriginKind as PieceOriginClassification,
+  type SystemPieceOrigin,
 } from "./piece-origin-kind.ts";
 export {
   type ReconcileOutcome,
+  type ReconcileResult,
   SourceReconciler,
+  type SourceRefusal,
+  type SystemSourceCandidate,
+  type UnreachableSource,
 } from "./source-reconciler.ts";
 export {
   applyPieceSourceTransition,

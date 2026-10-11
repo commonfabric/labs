@@ -4,6 +4,7 @@ import { stub } from "@std/testing/mock";
 import { createSession, Identity } from "@commonfabric/identity";
 import {
   getPatternIdentityRef,
+  resolveEntryIdentity,
   Runtime,
   type RuntimeProgram,
 } from "@commonfabric/runner";
@@ -202,12 +203,20 @@ export default pattern<{seed?: ${seedType}}>(() => {
     const piece = await pieces.create(program("old", "string"), { input: {} });
     const previous = getPatternIdentityRef(piece.getCell())!;
     const candidate = program("confirmed", "number");
-    using _fetch = stub(globalThis, "fetch", () =>
-      Promise.resolve(
-        new Response(candidate.files[0].contents, {
-          headers: { "content-type": "text/typescript-jsx" },
-        }),
-      ));
+    // Serves the candidate, and answers `?identity` with the identity a host
+    // advertises for it.
+    using _fetch = stub(globalThis, "fetch", async (input) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      return new Response(
+        url.searchParams.has("identity")
+          ? await resolveEntryIdentity(
+            candidate.main,
+            () => Promise.resolve(candidate.files[0].contents),
+          )
+          : candidate.files[0].contents,
+        { headers: { "content-type": "text/typescript-jsx" } },
+      );
+    });
     const action = {
       kind: "repoint" as const,
       url: "system:confirm-authority.tsx",

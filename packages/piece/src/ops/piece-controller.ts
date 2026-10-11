@@ -89,8 +89,11 @@ import { isCfcMigrationRejection } from "./cfc-migration-rejection.ts";
 import { assertPieceInputPath } from "./piece-input-path.ts";
 import {
   acceptEnteredOrigin,
+  PieceOriginRefusedError,
+  PieceOriginUnreachableError,
   qualifyFabricOrigin,
   readPieceOrigin,
+  type ResolvedPieceOriginSource,
   resolvePieceOriginSource,
 } from "./piece-origin.ts";
 import type { PiecesController } from "./pieces-controller.ts";
@@ -4448,7 +4451,6 @@ export class PieceController<T = unknown> {
           ? { allowUnavailable: true }
           : {},
       );
-      let program: RuntimeProgram;
       let origin: string | null;
       let operation: PieceSourceTransition["operation"];
       let selectedRevisionId: string | undefined;
@@ -4464,7 +4466,10 @@ export class PieceController<T = unknown> {
             `source revision ${selected.revisionId} is not available`,
           );
         }
-        program = { ...retained, mainExport: selected.pattern.symbol };
+        candidate = await compileProgram(this.#pieces, {
+          ...retained,
+          mainExport: selected.pattern.symbol,
+        });
         origin = null;
         operation = "revert";
         selectedRevisionId = selected.revisionId;
@@ -4502,30 +4507,40 @@ export class PieceController<T = unknown> {
           symbol = previousRef.symbol;
           operation = "repoint";
         }
+        let resolved: ResolvedPieceOriginSource;
         try {
-          const resolved = await resolvePieceOriginSource(
+          resolved = await resolvePieceOriginSource(
             this.#pieces.runtime,
             this.#pieces.getSpace(),
             origin,
             symbol,
             { self: { space: this.#pieces.getSpace(), pieceId: this.id } },
           );
-          program = resolved.program;
         } catch (error) {
           // Only for `adopt`: the other two are being pointed at an origin the
           // piece does not follow yet, and an outcome recorded against one
           // would describe a relationship it does not have.
           if (action.kind === "adopt") {
-            await this.#recordReconciliation(expected, origin, {
-              outcome: "unreachable",
-              detail: pieceSourceErrorMessage(error),
-            });
+            await this.#recordReconciliation(
+              expected,
+              origin,
+              error instanceof PieceOriginRefusedError
+                ? error.refusal
+                : error instanceof PieceOriginUnreachableError
+                ? error.unreachable
+                : {
+                  outcome: "unreachable",
+                  detail: pieceSourceErrorMessage(error),
+                },
+            );
           }
           throw error;
         }
+        candidate = "compiled" in resolved
+          ? resolved.compiled
+          : await compileProgram(this.#pieces, resolved.program);
       }
 
-      candidate = await compileProgram(this.#pieces, program);
       const candidateRef = this.#pieces.runtime.patternManager
         .getArtifactEntryRef(candidate);
       if (candidateRef === undefined) {

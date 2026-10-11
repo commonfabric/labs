@@ -59,6 +59,7 @@ import {
   PatternSetupPostCommitError,
   type PieceSourceTransition,
   preparePieceSourceTransitionBaseline,
+  type ReconcileResult,
   Runtime,
   runtimePresets,
   RuntimeProgram,
@@ -67,6 +68,7 @@ import {
   setPatternRepository,
   setPatternSource,
   settingsForDeployedClient,
+  type SourceRefusal,
   type SpaceCellContents,
   SpaceNotFoundError,
 } from "@commonfabric/runner";
@@ -101,6 +103,7 @@ import { pieceId } from "../piece-id.ts";
 // importers.
 import {
   DEFAULT_APP_PATTERN_SOURCE,
+  deriveSystemPatternOrigin,
   deriveSystemPatternSource,
   HOME_PATTERN_SOURCE,
   patternSourceUrl,
@@ -147,6 +150,15 @@ export type PieceOpen = { reconcile: boolean; start: boolean };
 const normalizePieceOpen = (open: boolean | PieceOpen): PieceOpen =>
   typeof open === "boolean" ? { reconcile: open, start: open } : open;
 
+/**
+ * What opening a piece found on the way, for a caller that acts on it when the
+ * start fails.
+ */
+type PieceOpenReport = {
+  /** What following the piece's origin came to, when the open followed it. */
+  followed?: ReconcileResult;
+};
+
 // Timing stats record even while the logger is disabled, so every phase is
 // visible in the load summaries (browser worker included, where the
 // CF_CLI_TRACE_TIMINGS console path cannot run) as `piece/phase/<label>`.
@@ -155,6 +167,9 @@ const pieceUpdateLogger = getLogger("piece.update", {
   enabled: true,
   level: "warn",
 });
+
+/** The export of its space's official system source that a space root runs. */
+const ROLL_FORWARD_EXPORT = "default";
 
 async function timePiecePhase<T>(
   label: string,
@@ -619,14 +634,17 @@ export class PiecesController<T = unknown> {
     ) {
       return undefined;
     }
+    const opened: PieceOpenReport = {};
     try {
       return await timePiecePhase(
         `getDefaultPattern.get(reconcile=${reconcile},start=${start})`,
         () =>
-          this.getPieceCell(
+          this.#getPieceCell<NameSchema>(
             defaultPattern,
             { reconcile, start },
             nameSchema,
+            undefined,
+            opened,
           ),
       );
     } catch (error) {
@@ -634,36 +652,41 @@ export class PiecesController<T = unknown> {
       // listings, `cf piece ls`, FUSE, the shell's list cells all resolve the
       // root HERE. Opening it already reconciled it against its origin, so a
       // start that still failed is not out of date; the one remaining rescue
-      // is for a root that records no origin at all, that its creator's
-      // pattern did not place (no `inSpace()` call placed it, and its own
-      // label says it represents no principal), and whose stored pattern this
-      // runtime cannot load. Roll that one forward to the space's official
-      // system root and retry the start ONCE. Every other failure rethrows
-      // untouched.
+      // is for a root that records no origin or the official system source,
+      // that its creator's pattern did not place (no `inSpace()` call placed
+      // it, and its own label says it represents no principal), and whose
+      // stored pattern this runtime cannot load. Roll that one forward to the
+      // space's official system root and retry the start ONCE. Every other
+      // failure rethrows untouched.
       if (!start) throw error;
-      let healed: Cell<NameSchema>;
+      let root: Cell<NameSchema>;
+      let pinnedRef: { identity: string; symbol: string } | undefined;
       try {
-        const root = await this.getPieceCell(defaultPattern, false, nameSchema);
-        const pinnedRef = getPatternIdentityRef(root);
-        if (pinnedRef === undefined || !this.#rootNeedsRollForward(root)) {
-          throw error;
-        }
+        root = await this.getPieceCell(defaultPattern, false, nameSchema);
+        pinnedRef = getPatternIdentityRef(root);
         if (
+          pinnedRef === undefined || !this.#rootNeedsRollForward(root) ||
           await this.runtime.patternManager.loadPatternByIdentity(
-            pinnedRef.identity,
-            pinnedRef.symbol,
-            this.#space,
-          ) !== undefined
+              pinnedRef.identity,
+              pinnedRef.symbol,
+              this.#space,
+            ) !== undefined
         ) throw error;
-        healed = await this.#healDefaultRootByRollForward(
-          root,
-          pinnedRef,
-          error,
-          "unloadable",
-        );
       } catch {
+        // A check that throws says nothing about whether the root's pattern is
+        // gone, so the caller sees the start failure, as for a root the rescue
+        // does not cover.
         throw error;
       }
+      // A roll-forward that does not happen says why, and carries the start
+      // failure in its message.
+      const healed = await this.#healDefaultRootByRollForward(
+        root,
+        pinnedRef,
+        error,
+        "unloadable",
+        opened.followed,
+      );
       pieceUpdateLogger.warn("default-root-healed-on-load-failure", () => [
         "getDefaultPattern: start failed, the root rolled forward to the",
         `space's official system root; retrying start once (${this.#space})`,
@@ -982,6 +1005,20 @@ export class PiecesController<T = unknown> {
     asSchema?: JSONSchema,
     scope?: CellScope,
   ): Promise<Cell<T>> {
+    return await this.#getPieceCell<T>(id, open, asSchema, scope);
+  }
+
+  /**
+   * Helper for {@link getPieceCell}, which also fills in `report` with what
+   * opening the piece found before any failure to start it.
+   */
+  async #getPieceCell<T>(
+    id: string | Cell<unknown>,
+    open: boolean | PieceOpen,
+    asSchema: JSONSchema | undefined,
+    scope: CellScope | undefined,
+    report: PieceOpenReport = {},
+  ): Promise<Cell<T>> {
     const { reconcile, start } = normalizePieceOpen(open);
     // Get the piece cell
     const addressed: Cell<unknown> = isCell(id)
@@ -1024,6 +1061,7 @@ export class PiecesController<T = unknown> {
         "get.reconcileSource",
         () => reconcilePieceSource(this.runtime, piece),
       );
+      report.followed = outcome;
       if (outcome === "updated") {
         // The transition committed through a transaction view, and the caller
         // may have handed us a cell bound to a read transaction older than it.
@@ -2533,8 +2571,9 @@ export class PiecesController<T = unknown> {
     reconcileBeforeStart: boolean,
   ): Promise<PieceController<NameSchema>> {
     let rootToStart = root;
+    let followed: ReconcileResult | undefined;
     if (reconcileBeforeStart) {
-      const outcome = await timePiecePhase(
+      followed = await timePiecePhase(
         "ensureDefaultPattern.reconcileSource",
         () => reconcilePieceSource(this.runtime, root),
       );
@@ -2548,7 +2587,7 @@ export class PiecesController<T = unknown> {
       // pattern. A root the origin did not confirm may be pinned to a pattern
       // that is simply wrong for it, and re-staging that one buys nothing the
       // repair below cannot do with the failure in hand.
-      if (outcome === "current" || outcome === "migrated") {
+      if (followed === "current" || followed === "migrated") {
         rootToStart = await this.#restageRootSetupIfStale(rootToStart);
       }
     }
@@ -2633,6 +2672,7 @@ export class PiecesController<T = unknown> {
             ref,
             startError,
             "unloadable",
+            followed,
           ),
         );
       }
@@ -2739,6 +2779,8 @@ export class PiecesController<T = unknown> {
           rootToStart,
           ref,
           repairError,
+          "unrunnable",
+          followed,
         );
       }
     }
@@ -2853,7 +2895,8 @@ export class PiecesController<T = unknown> {
    *      committed, the reused doc materialized against it.
    *   2. A single CLEAR error naming WHY — the pinned pattern's migration
    *      failure and where the roll-forward stopped (compile, identity, swap,
-   *      or the official pattern's own materialize).
+   *      the official pattern's own materialize, or any other failure on the
+   *      way, which it carries as its cause).
    *
    * On atomicity: the identity swap and the materialize are two commits, not
    * one (runSynced owns its own setup transaction and asserts the identity is
@@ -2866,18 +2909,26 @@ export class PiecesController<T = unknown> {
    *
    * Returns the healed root cell so the caller starts/returns the swapped-in
    * pattern rather than the stale pinned view.
+   *
+   * `followed` is what following the root's origin came to in the caller's
+   * lookup, when it followed it. A refusal there of the official source, for
+   * the export the roll-forward takes and at the identity the host still
+   * advertises, is the answer, and the source is not downloaded and compiled
+   * again to reach it.
    */
   async #healDefaultRootByRollForward(
     rootToStart: Cell<NameSchema>,
     pinnedRef: { identity: string; symbol: string },
     migrationError: unknown,
-    reason: "unloadable" | "unrunnable" = "unrunnable",
+    reason: "unloadable" | "unrunnable",
+    followed: ReconcileResult | undefined,
   ): Promise<Cell<NameSchema>> {
     const runtime = this.runtime;
     const space = this.getSpace();
-    // Reuse the canonical official-URL derivation (home.tsx for the home DID,
-    // default-app.tsx otherwise) — never hard-code home here.
-    const officialUrlPath = deriveSystemPatternSource(space, runtime);
+    // Reuse the canonical official-origin derivation (home.tsx for the home
+    // DID, default-app.tsx otherwise) — never hard-code home here.
+    const official = deriveSystemPatternOrigin(space, runtime);
+    const officialUrlPath = official.ref;
     const msg = (error: unknown) =>
       error instanceof Error ? error.message : String(error);
     // Name the check that actually refused. Two signals escalate to this heal —
@@ -2888,209 +2939,214 @@ export class PiecesController<T = unknown> {
       : isStoredArgumentSchemaRefusal(migrationError)
       ? "could not read its stored argument"
       : "failed CFC migration";
-    const clearError = (reason: string, cause: unknown) =>
-      new Error(
+    // Each way the roll-forward stops is reported by one of these, which
+    // names the start failure that called for it.
+    const ownErrors = new WeakSet<Error>();
+    const clearError = (reason: string, cause: unknown) => {
+      const error = new Error(
         `default-root heal failed for ${space}: pinned pattern ` +
           `${pinnedRef.identity}#${pinnedRef.symbol} ${pinnedFailure} ` +
           `(${msg(migrationError)}) and roll-forward to official ` +
           `${officialUrlPath} ${reason}`,
         { cause },
       );
+      ownErrors.add(error);
+      return error;
+    };
 
-    // Fetch + compile the official source.
-    // Force ETag revalidation (`cache: "no-cache"`): the roll-forward exists to
-    // ESCAPE a stale pinned pattern, so compiling a stale HTTP-cached source
-    // would defeat the heal — it could "roll forward" to the same aged bytes.
-    // A 304 still reuses unchanged bytes; we just never trust the cache blind.
-    const revalidatingFetch: typeof globalThis.fetch = (input, init) =>
-      runtime.fetch(input, { ...init, cache: "no-cache" });
-    // Resolve against the host that actually SERVES this space, not the global
-    // apiUrl. A mapped space is served by its own host (`mappedHostFor`); the
-    // system pattern must be fetched and compiled from there, or a mapped space
-    // could roll forward onto the WRONG host's system pattern.
-    const officialUrl = patternSourceUrl(
-      officialUrlPath,
-      runtime.hostForSpace(space),
-    );
-    let officialPattern;
-    let officialRef;
     try {
-      const resolved = await runtime.harness.resolve(
-        new HttpProgramResolver(officialUrl.href, revalidatingFetch),
+      // A client whose runtime compiles the official source differently from
+      // the host's, or that fetches it while the host is part-way through a
+      // deployment, can reach an identity the host does not advertise. A root
+      // moved there would be moved back by the next client that agrees with the
+      // host, so the roll-forward takes only the identity the origin
+      // advertises, or nothing, and says what would end its refusal.
+      const refused = (refusal: SourceRefusal) =>
+        clearError(
+          `was refused (${refusal.detail}); ` +
+            (refusal.reason === "identity-mismatch"
+              ? "if the origin's host is part-way through a deployment, this " +
+                "lasts until it finishes; otherwise until this client runs " +
+                "the same version as the host"
+              : "the source the host advertises does not compile on this " +
+                "runtime, which lasts until the host serves other source, " +
+                "or until this client runs the same version as the host"),
+          migrationError,
+        );
+      const candidate = await runtime.sourceReconciler.compileSystemSource(
+        space,
+        official,
+        ROLL_FORWARD_EXPORT,
+        typeof followed === "string" ? undefined : followed,
       );
-      officialPattern = await runtime.patternManager.compilePattern(
-        // Default-root routes select the official `default` export.
-        { ...resolved, mainExport: "default" },
-        { space },
-      );
-      officialRef = runtime.patternManager.getArtifactEntryRef(officialPattern);
-    } catch (compileError) {
-      // Chain the ACTUAL compile failure as `cause` (not the migration error):
-      // the migration reason is already named in the message, and the compile
-      // stack is the new information here.
-      throw clearError(
-        `could not be compiled (${msg(compileError)})`,
-        compileError,
-      );
-    }
-    if (officialRef === undefined) {
-      throw clearError("did not yield an entry identity", migrationError);
-    }
-    // Already current: the pinned pattern IS the official entry (same identity
-    // AND symbol) but failed for some other reason. Re-materializing the exact
-    // same entry would fail identically, so do not loop — surface the clear
-    // error now. Compare BOTH identity and symbol: a root pinned to the current
-    // artifact under an obsolete/other symbol (e.g. a persisted export that is
-    // no longer `default`) is NOT already-official — rolling it forward to the
-    // official `default` entry is exactly the recovery, so it must not
-    // short-circuit here.
-    const alreadyOfficial = officialRef.identity === pinnedRef.identity &&
-      officialRef.symbol === pinnedRef.symbol;
-    if (alreadyOfficial && reason === "unrunnable") {
-      // The pinned pattern LOADED and its setup was refused. Materializing the
-      // same entry again refuses identically, so do not loop — surface the
-      // clear error now. A root that could not be loaded is a different case:
-      // compiling the official source has just made its artifact available, so
-      // the materialize below is the repair.
-      throw clearError(
-        `is already the pinned entry ${officialRef.identity}#` +
-          `${officialRef.symbol}, so this cannot be repaired by rolling ` +
-          `forward`,
-        migrationError,
-      );
-    }
+      if (candidate.outcome === "unreachable") {
+        throw clearError(
+          `could not be resolved (${candidate.detail})`,
+          migrationError,
+        );
+      }
+      if (candidate.outcome === "refused") throw refused(candidate);
+      const { pattern: officialPattern, ref: officialRef } = candidate;
 
-    // Atomic swap: record the displaced pinned ref for recovery, move
-    // patternIdentity to the official entry, stamp official provenance. One
-    // tx — it commits together or aborts, leaving the root untouched.
-    //
-    // Precondition guard (fail-closed): re-read the root's identity INSIDE the
-    // transaction and proceed only if it still equals the pinned ref we
-    // diagnosed. `editWithRetry` reruns this callback against fresh state on
-    // conflict, so without the guard a concurrent repoint (another boot's
-    // heal, a source transition) that already moved the root would be blindly
-    // clobbered by our stale `officialRef`. Returning `false` before anything
-    // is staged commits a transaction with no writes; `result.ok === false`
-    // (no error) then means "superseded".
-    if (alreadyOfficial) {
-      // Nothing to swap: the root already names the entry the official source
-      // compiles to, and that source has just been compiled into this space.
-      // Materializing it over the document is the whole repair.
-      return await this.#materializeHealedRoot(
+      // Already current: the pinned pattern IS the official entry (same identity
+      // AND symbol) but failed for some other reason. Re-materializing the exact
+      // same entry would fail identically, so do not loop — surface the clear
+      // error now. Compare BOTH identity and symbol: a root pinned to the current
+      // artifact under an obsolete/other symbol (e.g. a persisted export that is
+      // no longer `default`) is NOT already-official — rolling it forward to the
+      // official `default` entry is exactly the recovery, so it must not
+      // short-circuit here.
+      const alreadyOfficial = officialRef.identity === pinnedRef.identity &&
+        officialRef.symbol === pinnedRef.symbol;
+      if (alreadyOfficial && reason === "unrunnable") {
+        // The pinned pattern LOADED and its setup was refused. Materializing the
+        // same entry again refuses identically, so do not loop — surface the
+        // clear error now. A root that could not be loaded is a different case:
+        // compiling the official source has just made its artifact available, so
+        // the materialize below is the repair.
+        throw clearError(
+          `is already the pinned entry ${officialRef.identity}#` +
+            `${officialRef.symbol}, so this cannot be repaired by rolling ` +
+            `forward`,
+          migrationError,
+        );
+      }
+
+      // Atomic swap: record the displaced pinned ref for recovery, move
+      // patternIdentity to the official entry, stamp official provenance. One
+      // tx — it commits together or aborts, leaving the root untouched.
+      //
+      // Precondition guard (fail-closed): re-read the root's identity INSIDE the
+      // transaction and proceed only if it still equals the pinned ref we
+      // diagnosed. `editWithRetry` reruns this callback against fresh state on
+      // conflict, so without the guard a concurrent repoint (another boot's
+      // heal, a source transition) that already moved the root would be blindly
+      // clobbered by our stale `officialRef`. Returning `false` before anything
+      // is staged commits a transaction with no writes; `result.ok === false`
+      // (no error) then means "superseded".
+      if (alreadyOfficial) {
+        // Nothing to swap: the root already names the entry the official source
+        // compiles to, and that source has just been compiled into this space.
+        // Materializing it over the document is the whole repair.
+        return await this.#materializeHealedRoot(
+          rootToStart,
+          officialPattern,
+          officialRef,
+          clearError,
+        );
+      }
+
+      const sourceSnapshot = getPieceSourceSnapshot(rootToStart);
+      if (sourceSnapshot === undefined) {
+        throw clearError("has no source state to update", migrationError);
+      }
+      const baseline = await preparePieceSourceTransitionBaseline(
+        runtime,
         rootToStart,
+        sourceSnapshot,
+        { allowUnavailable: true },
+      );
+      const sourceTransition: PieceSourceTransition = {
+        revisionId: crypto.randomUUID(),
+        baseline,
+        timestamp: Date.now(),
+        operation: "origin-update",
+        origin: officialUrlPath,
+        expected: sourceSnapshot,
+      };
+      const swapResult = await runtime.editWithRetry((tx) => {
+        const rootTx = rootToStart.withTx(tx);
+        const currentRef = getPatternIdentityRef(rootTx);
+        if (
+          currentRef?.identity !== pinnedRef.identity ||
+          currentRef?.symbol !== pinnedRef.symbol
+        ) {
+          return false;
+        }
+        applyPieceSourceTransition(
+          runtime,
+          rootToStart,
+          tx,
+          officialRef,
+          sourceTransition,
+        );
+        // A keyless displaced identity must never land durably (L3(a)):
+        // `displacedPattern` exists for recovery, recovery to a
+        // session-synthetic identity is impossible by construction, and the
+        // absent record is the honest one — the same gate
+        // `applyPieceSourceTransition`'s unavailable arm applies to ITS stamp
+        // four lines up. Reachable with a keyless `pinnedRef` when a legacy
+        // orphan pointer coincides with a start failure on a default root.
+        if (!PatternManager.isKeylessPatternIdentity(pinnedRef.identity)) {
+          rootTx.setMetaRaw("displacedPattern", {
+            identity: pinnedRef.identity,
+            symbol: pinnedRef.symbol,
+            displacedAt: sourceTransition.timestamp,
+          }, rawMetaWriteAuthorization);
+        }
+        rootTx.setMetaRaw(
+          "patternIdentity",
+          officialRef,
+          rawMetaWriteAuthorization,
+        );
+        return true;
+      });
+      if (swapResult.error) {
+        // Chain the actual commit failure as `cause` (the migration reason is
+        // already in the message).
+        throw clearError(
+          `identity swap could not commit (${msg(swapResult.error)})`,
+          swapResult.error,
+        );
+      }
+      if (!swapResult.ok) {
+        // The root was repointed by a concurrent heal between the failed repair
+        // and this swap. We must NOT overwrite the newer identity (the whole
+        // point of the precondition) — but we also must NOT return it as a
+        // success: this is the cold-start path, so the caller does not start or
+        // materialize what we hand back, and the concurrent heal may still be
+        // mid-flight (the repoint commits BEFORE its own materialize). Claiming
+        // success here would surface an unstarted, un-setup root. Fail closed
+        // with a clear, accurate error; nothing was overwritten, and the next
+        // boot observes the settled root and starts/repairs it through the
+        // ordinary path.
+        pieceUpdateLogger.warn(
+          "default-root-roll-forward-superseded",
+          () => [
+            "startEnsuredDefaultPattern: root identity changed before roll-forward;",
+            `leaving concurrent heal in place for ${space}`,
+          ],
+        );
+        throw clearError(
+          "was superseded by a concurrent heal (the root identity changed " +
+            "before the swap); left in place for the next boot to start",
+          migrationError,
+        );
+      }
+
+      // Re-resolve so the materialize observes the committed patternIdentity
+      // (the caller's cell is a pre-swap transaction view), then materialize the
+      // OFFICIAL pattern.
+      const swappedRoot = await this.#materializeHealedRoot(
+        await this.getDefaultPattern(false) ?? rootToStart,
         officialPattern,
         officialRef,
         clearError,
       );
-    }
 
-    const sourceSnapshot = getPieceSourceSnapshot(rootToStart);
-    if (sourceSnapshot === undefined) {
-      throw clearError("has no source state to update", migrationError);
-    }
-    const baseline = await preparePieceSourceTransitionBaseline(
-      runtime,
-      rootToStart,
-      sourceSnapshot,
-      { allowUnavailable: true },
-    );
-    const sourceTransition: PieceSourceTransition = {
-      revisionId: crypto.randomUUID(),
-      baseline,
-      timestamp: Date.now(),
-      operation: "origin-update",
-      origin: officialUrlPath,
-      expected: sourceSnapshot,
-    };
-    const swapResult = await runtime.editWithRetry((tx) => {
-      const rootTx = rootToStart.withTx(tx);
-      const currentRef = getPatternIdentityRef(rootTx);
-      if (
-        currentRef?.identity !== pinnedRef.identity ||
-        currentRef?.symbol !== pinnedRef.symbol
-      ) {
-        return false;
-      }
-      applyPieceSourceTransition(
-        runtime,
-        rootToStart,
-        tx,
-        officialRef,
-        sourceTransition,
-      );
-      // A keyless displaced identity must never land durably (L3(a)):
-      // `displacedPattern` exists for recovery, recovery to a
-      // session-synthetic identity is impossible by construction, and the
-      // absent record is the honest one — the same gate
-      // `applyPieceSourceTransition`'s unavailable arm applies to ITS stamp
-      // four lines up. Reachable with a keyless `pinnedRef` when a legacy
-      // orphan pointer coincides with a start failure on a default root.
-      if (!PatternManager.isKeylessPatternIdentity(pinnedRef.identity)) {
-        rootTx.setMetaRaw("displacedPattern", {
-          identity: pinnedRef.identity,
-          symbol: pinnedRef.symbol,
-          displacedAt: sourceTransition.timestamp,
-        }, rawMetaWriteAuthorization);
-      }
-      rootTx.setMetaRaw(
-        "patternIdentity",
-        officialRef,
-        rawMetaWriteAuthorization,
-      );
-      return true;
-    });
-    if (swapResult.error) {
-      // Chain the actual commit failure as `cause` (the migration reason is
-      // already in the message).
-      throw clearError(
-        `identity swap could not commit (${msg(swapResult.error)})`,
-        swapResult.error,
-      );
-    }
-    if (!swapResult.ok) {
-      // The root was repointed by a concurrent heal between the failed repair
-      // and this swap. We must NOT overwrite the newer identity (the whole
-      // point of the precondition) — but we also must NOT return it as a
-      // success: this is the cold-start path, so the caller does not start or
-      // materialize what we hand back, and the concurrent heal may still be
-      // mid-flight (the repoint commits BEFORE its own materialize). Claiming
-      // success here would surface an unstarted, un-setup root. Fail closed
-      // with a clear, accurate error; nothing was overwritten, and the next
-      // boot observes the settled root and starts/repairs it through the
-      // ordinary path.
       pieceUpdateLogger.warn(
-        "default-root-roll-forward-superseded",
+        "default-root-rolled-forward",
         () => [
-          "startEnsuredDefaultPattern: root identity changed before roll-forward;",
-          `leaving concurrent heal in place for ${space}`,
+          "startEnsuredDefaultPattern: healed by roll-forward to official",
+          `${pinnedRef.identity}#${pinnedRef.symbol} ->`,
+          `${officialRef.identity}#${officialRef.symbol}`,
         ],
       );
-      throw clearError(
-        "was superseded by a concurrent heal (the root identity changed " +
-          "before the swap); left in place for the next boot to start",
-        migrationError,
-      );
+      return swappedRoot;
+    } catch (error) {
+      if (error instanceof Error && ownErrors.has(error)) throw error;
+      throw clearError(`stopped (${msg(error)})`, error);
     }
-
-    // Re-resolve so the materialize observes the committed patternIdentity
-    // (the caller's cell is a pre-swap transaction view), then materialize the
-    // OFFICIAL pattern.
-    const swappedRoot = await this.#materializeHealedRoot(
-      await this.getDefaultPattern(false) ?? rootToStart,
-      officialPattern,
-      officialRef,
-      clearError,
-    );
-
-    pieceUpdateLogger.warn(
-      "default-root-rolled-forward",
-      () => [
-        "startEnsuredDefaultPattern: healed by roll-forward to official",
-        `${pinnedRef.identity}#${pinnedRef.symbol} ->`,
-        `${officialRef.identity}#${officialRef.symbol}`,
-      ],
-    );
-    return swappedRoot;
   }
 
   /**

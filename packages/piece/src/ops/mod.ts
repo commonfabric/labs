@@ -108,6 +108,8 @@ export {
   type PieceOrigin,
   PieceOriginError,
   type PieceOriginKind,
+  PieceOriginRefusedError,
+  PieceOriginUnreachableError,
   type PieceSourceRevisionSource,
   type PieceSourceRevisionState,
   type PieceSourceState,

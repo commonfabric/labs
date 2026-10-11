@@ -44,6 +44,12 @@ export type PieceOriginKind =
   | { kind: "unusable"; reason: string };
 
 /**
+ * A `system:` origin: the one kind whose host advertises, through the
+ * `?identity` route, the identity of the source it serves.
+ */
+export type SystemPieceOrigin = Extract<PieceOriginKind, { kind: "system" }>;
+
+/**
  * Classify a recorded origin string.
  *
  * `host` is the origin of the host serving the piece's space, used only to

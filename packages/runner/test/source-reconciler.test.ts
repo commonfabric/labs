@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { spy } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 
 import { defer, type Deferred } from "@commonfabric/utils/defer";
@@ -25,10 +25,13 @@ import {
   type RuntimeFetch,
   type RuntimeProgram,
   setPatternSource,
+  type SourceRefusal,
   systemPatternSource,
+  type SystemPieceOrigin,
 } from "../src/index.ts";
 import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { PatternCoverageCollector } from "../src/pattern-coverage.ts";
 
 const signer = await Identity.fromPassphrase("piece source reconciliation");
 const PARENT_PATH = "/api/patterns/system/reconcile-parent.tsx";
@@ -37,6 +40,11 @@ const PARENT_PATH = "/api/patterns/system/reconcile-parent.tsx";
 const PARENT_SOURCE = systemPatternSource("system/reconcile-parent.tsx");
 const SOURCE_PATH = "/api/patterns/system/reconcile-target.tsx";
 const SYMBOL = "TrackedPattern";
+const PARENT_ORIGIN: SystemPieceOrigin = {
+  kind: "system",
+  ref: PARENT_SOURCE,
+  route: PARENT_PATH,
+};
 
 const parentSource = [
   `import { ${SYMBOL} } from "./reconcile-target.tsx";`,
@@ -121,18 +129,25 @@ describe("piece source reconciliation", () => {
     await runtime?.dispose();
   });
 
-  function createRuntime(fetch: RuntimeFetch): Runtime {
+  function createRuntime(
+    fetch: RuntimeFetch,
+    options: { patternCoverage?: PatternCoverageCollector } = {},
+  ): Runtime {
     runtime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
       fetch,
+      ...options,
     });
     return runtime;
   }
 
   /** A piece running v1 of the tracked pattern, with no origin yet. */
-  async function preparePiece(fetch: RuntimeFetch) {
-    createRuntime(fetch);
+  async function preparePiece(
+    fetch: RuntimeFetch,
+    options: { patternCoverage?: PatternCoverageCollector } = {},
+  ) {
+    createRuntime(fetch, options);
     const space = signer.did();
     const initialIdentity = await identityFor(source("v1"));
     const initial = await runtime.patternManager.compilePattern(
@@ -341,8 +356,15 @@ describe("piece source reconciliation", () => {
           await runtime.setup(undefined, initial, {}, piece);
           const originalRef = getPatternIdentityRef(piece)!;
           await stampSource(piece, PARENT_SOURCE);
-          expect(await reconcile(piece)).toBe(
-            mode === "entry-only host" ? "unavailable" : mode,
+          // A host that drops the roots advertises the entry alone, which is
+          // not the identity this client compiles with its roots attached.
+          expect(await reconcile(piece)).toEqual(
+            mode === "entry-only host"
+              ? expect.objectContaining({
+                outcome: "refused",
+                reason: "identity-mismatch",
+              })
+              : mode,
           );
           const currentRef = getPatternIdentityRef(piece)!;
           if (mode !== "updated") expect(currentRef).toEqual(originalRef);
@@ -471,26 +493,30 @@ describe("piece source reconciliation", () => {
       expect(fetched).toEqual([PARENT_PATH, SOURCE_PATH]);
     });
 
-    it("keeps the running source when the candidate compiles to no identity", async () => {
-      // Nothing can point a piece at source that has no identity to point at,
-      // so a candidate the compiler produces without one is refused rather
-      // than adopted under whatever the piece already records.
-      const v2Identity = await identityFor(source("v2"));
+    it("keeps the running source when the export it runs is not a pattern", async () => {
+      // Nothing can point a piece at source that has no identity to point at.
+      // An export that is not a pattern the runtime built has none, and it is
+      // the same export every time this source is offered.
+      const notAPattern = `export const ${SYMBOL} = { marker: "v2" };\n`;
+      const advertised = await identityFor(notAPattern);
       const piece = await preparePiece(
-        servingFetch(() => v2Identity, () => source("v2")),
+        servingFetch(() => advertised, () => notAPattern),
       );
       const originalRef = getPatternIdentityRef(piece);
       await stampSource(piece, PARENT_SOURCE);
 
-      const manager = runtime.patternManager;
-      const entryRef = manager.getArtifactEntryRef.bind(manager);
-      manager.getArtifactEntryRef = () => undefined;
-      try {
-        expect(await reconcile(piece)).toBe("unavailable");
-      } finally {
-        manager.getArtifactEntryRef = entryRef;
-      }
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
+
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "source-invalid",
+        offered: { identity: advertised, symbol: SYMBOL },
+      });
+      // Plain text, which is how the panel shows it.
+      expect(getPieceReconciliation(piece)?.detail).toBe(
+        `the source's ${SYMBOL} export is not a pattern`,
+      );
     });
 
     it("records the pattern it displaced when its source is gone", async () => {
@@ -539,6 +565,7 @@ describe("piece source reconciliation", () => {
 
     it("keeps the running source when the served source does not compile to the identity it advertises", async () => {
       const v2Identity = await identityFor(source("v2"));
+      const v3Identity = await identityFor(source("v3"));
       // Advertises v2 while serving v3: the source is not what the origin says
       // it is, so nothing about it can be trusted.
       const piece = await preparePiece(
@@ -547,8 +574,18 @@ describe("piece source reconciliation", () => {
       const originalRef = getPatternIdentityRef(piece);
       await stampSource(piece, PARENT_SOURCE);
 
-      expect(await reconcile(piece)).toBe("unavailable");
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "identity-mismatch",
+        origin: PARENT_SOURCE,
+        offered: { identity: v2Identity, symbol: SYMBOL },
+      });
+      // Both identities, so a reader can tell which side moved.
+      const detail = getPieceReconciliation(piece)?.detail;
+      expect(detail).toContain(v3Identity);
+      expect(detail).toContain(v2Identity);
     });
 
     it("keeps the running source when the identity route names no identity", async () => {
@@ -712,7 +749,7 @@ describe("piece source reconciliation", () => {
       const origin = `cf:pattern:${changedRef.identity}`;
       await stampSource(piece, origin);
 
-      expect(await reconcile(piece)).toBe("incompatible");
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
 
       // A refusal leaves no revision, so without this record it would look
       // exactly like a piece running what its origin offers.
@@ -743,6 +780,184 @@ describe("piece source reconciliation", () => {
         origin: PARENT_SOURCE,
         detail: "connection refused",
       });
+    });
+
+    it("records source that does not compile as refused", async () => {
+      // Source this runtime cannot compile gets the same answer every time it
+      // is offered, so it must not read as an origin that may yet come back.
+      const uncompilable = [
+        "import { pattern } from 'commonfabric';",
+        `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string }>(() => ({ marker: notDeclaredAnywhere }));`,
+        "",
+      ].join("\n");
+      const advertised = await identityFor(uncompilable);
+      const piece = await preparePiece(
+        servingFetch(() => advertised, () => uncompilable),
+      );
+      const originalRef = getPatternIdentityRef(piece);
+      await stampSource(piece, PARENT_SOURCE);
+
+      const outcome = await reconcile(piece);
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "source-invalid",
+        origin: PARENT_SOURCE,
+        offered: { identity: advertised, symbol: SYMBOL },
+      });
+      // What the compiler said is the detail the record keeps.
+      expect(getPieceReconciliation(piece)?.detail).toContain(
+        "notDeclaredAnywhere",
+      );
+      expect(outcome).toMatchObject({ outcome: "refused" });
+      expect(getPatternIdentityRef(piece)).toEqual(originalRef);
+    });
+
+    it("records modules that do not compile together, and are not the advertised source, as an identity mismatch", async () => {
+      // The entry still imports an export its module no longer has, as when a
+      // host part-way through a deployment serves the two from different
+      // revisions. That is not the source the origin advertises, whatever the
+      // compiler says about it.
+      const renamed = [
+        "import { computed, pattern } from 'commonfabric';",
+        `export const Renamed = pattern<Record<string, never>, { marker: string }>(() => ({ marker: computed(() => "v2") }));`,
+        "",
+      ].join("\n");
+      const advertised = await identityFor(source("v2"));
+      const served = await identityFor(renamed);
+      const piece = await preparePiece(
+        servingFetch(() => advertised, () => renamed),
+      );
+      const originalRef = getPatternIdentityRef(piece);
+      await stampSource(piece, PARENT_SOURCE);
+
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
+
+      expect(getPatternIdentityRef(piece)).toEqual(originalRef);
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "identity-mismatch",
+        offered: { identity: advertised, symbol: SYMBOL },
+      });
+      const detail = getPieceReconciliation(piece)?.detail;
+      expect(detail).toContain(served);
+      expect(detail).toContain(advertised);
+    });
+
+    it("records source that uses a name the compiler reserves as refused", async () => {
+      // Rejected before the compiler proper runs, and as surely every time.
+      const reserved = `const __cfHelpers = "taken";\n${source("v2")}`;
+      const advertised = await identityFor(reserved);
+      const piece = await preparePiece(
+        servingFetch(() => advertised, () => reserved),
+      );
+      await stampSource(piece, PARENT_SOURCE);
+
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "source-invalid",
+        offered: { identity: advertised, symbol: SYMBOL },
+      });
+      expect(getPieceReconciliation(piece)?.detail).toContain("__cfHelpers");
+    });
+
+    it("records source that lacks the export the piece runs as refused", async () => {
+      // The parent compiles, and exports the pattern only as its default.
+      const parentWithoutSymbol = [
+        `import { ${SYMBOL} } from "./reconcile-target.tsx";`,
+        `export default ${SYMBOL};`,
+        "",
+      ].join("\n");
+      const files = new Map([
+        [PARENT_PATH, parentWithoutSymbol],
+        [SOURCE_PATH, source("v2")],
+      ]);
+      const read = (name: string) =>
+        files.has(name)
+          ? Promise.resolve(files.get(name)!)
+          : Promise.reject(new Error(`not found: ${name}`));
+      const advertised = await resolveEntryIdentity(PARENT_PATH, read);
+      const piece = await preparePiece((input) => {
+        const url = new URL(
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+            ? input.href
+            : input,
+        );
+        const body = url.searchParams.has("identity")
+          ? advertised
+          : files.get(url.pathname);
+        return Promise.resolve(
+          new Response(body ?? "not found", { status: body ? 200 : 404 }),
+        );
+      });
+      await stampSource(piece, PARENT_SOURCE);
+
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "source-invalid",
+        offered: { identity: advertised, symbol: SYMBOL },
+      });
+      expect(getPieceReconciliation(piece)?.detail).toContain(
+        `No "${SYMBOL}" export`,
+      );
+    });
+
+    it("records a compile that runs a coverage collector and fails as unreachable", async () => {
+      // A collector the runtime supplies runs inside the compile, and what it
+      // throws there reads as the compile's own failure, so a failure says
+      // nothing certain about the source.
+      const uncompilable = [
+        "import { pattern } from 'commonfabric';",
+        `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string }>(() => ({ marker: notDeclaredAnywhere }));`,
+        "",
+      ].join("\n");
+      const advertised = await identityFor(uncompilable);
+      const piece = await preparePiece(
+        servingFetch(() => advertised, () => uncompilable),
+        { patternCoverage: new PatternCoverageCollector() },
+      );
+      await stampSource(piece, PARENT_SOURCE);
+
+      expect(await reconcile(piece)).toBe("unavailable");
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "unreachable",
+        origin: PARENT_SOURCE,
+      });
+      expect(getPieceReconciliation(piece)?.reason).toBeUndefined();
+    });
+
+    it("records a compile that failed for a reason other than the source as unreachable", async () => {
+      // Only the compiler's verdict on the source itself is the same every
+      // time. A compile stack that would not load says nothing about the
+      // source, so the origin may yet be followed.
+      const v2Identity = await identityFor(source("v2"));
+      const piece = await preparePiece(
+        servingFetch(() => v2Identity, () => source("v2")),
+      );
+      await stampSource(piece, PARENT_SOURCE);
+      const compile = stub(
+        runtime.patternManager,
+        "compilePattern",
+        () => Promise.reject(new Error("the compiler stack did not load")),
+      );
+      try {
+        expect(await reconcile(piece)).toBe("unavailable");
+      } finally {
+        compile.restore();
+      }
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "unreachable",
+        origin: PARENT_SOURCE,
+      });
+      expect(getPieceReconciliation(piece)?.reason).toBeUndefined();
     });
 
     it("settles on a failure that arrives without a message", async () => {
@@ -1094,7 +1309,7 @@ describe("piece source reconciliation", () => {
       const changedRef = runtime.patternManager.getArtifactEntryRef(changed)!;
       await stampSource(piece, `cf:pattern:${changedRef.identity}`);
 
-      expect(await reconcile(piece)).toBe("incompatible");
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
       expect(getPieceSourceRevisions(piece)).toEqual([]);
     });
@@ -1112,7 +1327,7 @@ describe("piece source reconciliation", () => {
       const grownRef = runtime.patternManager.getArtifactEntryRef(grown)!;
       await stampSource(piece, `cf:pattern:${grownRef.identity}`);
 
-      expect(await reconcile(piece)).toBe("incompatible");
+      expect(await reconcile(piece)).toMatchObject({ outcome: "refused" });
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
     });
 
@@ -1234,6 +1449,297 @@ describe("piece source reconciliation", () => {
         expect(getPatternIdentityRef(piece)).toEqual(originalRef);
         expect(getPatternSource(piece)).toBe(origin);
       }
+    });
+  });
+
+  describe("compileSystemSource()", () => {
+    function compile(symbol = SYMBOL, refused?: SourceRefusal) {
+      return runtime.sourceReconciler.compileSystemSource(
+        signer.did(),
+        PARENT_ORIGIN,
+        symbol,
+        refused,
+      );
+    }
+
+    it("returns the pattern its source compiles to, held to the advertised identity", async () => {
+      const v2Identity = await identityFor(source("v2"));
+      createRuntime(servingFetch(() => v2Identity, () => source("v2")));
+
+      expect(await compile()).toMatchObject({
+        outcome: "compiled",
+        ref: { identity: v2Identity, symbol: SYMBOL },
+      });
+    });
+
+    it("returns a refusal for source that does not compile to the identity its origin advertises", async () => {
+      const v2Identity = await identityFor(source("v2"));
+      const v3Identity = await identityFor(source("v3"));
+      createRuntime(servingFetch(() => v2Identity, () => source("v3")));
+
+      expect(await compile()).toMatchObject({
+        outcome: "refused",
+        reason: "identity-mismatch",
+        offered: { identity: v2Identity, symbol: SYMBOL },
+        detail: expect.stringContaining(v3Identity),
+      });
+    });
+
+    it("returns a `source-invalid` refusal for an export the source does not have", async () => {
+      const v2Identity = await identityFor(source("v2"));
+      createRuntime(servingFetch(() => v2Identity, () => source("v2")));
+
+      expect(await compile("NotExported")).toMatchObject({
+        outcome: "refused",
+        reason: "source-invalid",
+        offered: { identity: v2Identity, symbol: "NotExported" },
+      });
+    });
+
+    /**
+     * Serves an entry whose two exports are different patterns, so which
+     * export a call selected shows in the pattern it returns, and returns the
+     * identity it advertises for it. `onIdentity` runs as each request for
+     * that identity arrives, and a download of the entry waits for
+     * `downloadable`.
+     */
+    async function serveTwoExports(
+      onIdentity: () => void = () => {},
+      downloadable: Promise<void> = Promise.resolve(),
+    ): Promise<string> {
+      const entry = [
+        "import { computed, pattern } from 'commonfabric';",
+        `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string }>(() => ({ marker: computed(() => "tracked") }));`,
+        `export default pattern<Record<string, never>, { marker: string }>(() => ({ marker: computed(() => "default") }));`,
+        "",
+      ].join("\n");
+      const advertised = await resolveEntryIdentity(
+        PARENT_PATH,
+        (name) =>
+          name === PARENT_PATH
+            ? Promise.resolve(entry)
+            : Promise.reject(new Error(`not found: ${name}`)),
+      );
+      createRuntime(async (input) => {
+        const url = new URL(
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+            ? input.href
+            : input,
+        );
+        if (url.pathname !== PARENT_PATH) {
+          return new Response("not found", { status: 404 });
+        }
+        if (url.searchParams.has("identity")) {
+          onIdentity();
+          return new Response(advertised);
+        }
+        await downloadable;
+        return new Response(entry);
+      });
+      return advertised;
+    }
+
+    it("compiles an export rather than returning the pattern kept for another", async () => {
+      const advertised = await serveTwoExports();
+
+      const tracked = await compile(SYMBOL);
+      const other = await compile("default");
+
+      expect(tracked).toMatchObject({
+        outcome: "compiled",
+        ref: { identity: advertised, symbol: SYMBOL },
+      });
+      expect(other).toMatchObject({
+        outcome: "compiled",
+        ref: { identity: advertised, symbol: "default" },
+      });
+    });
+
+    it("compiles each export for concurrent calls that select different ones", async () => {
+      // Both calls are held at the source download until both have asked for
+      // the advertised identity, so they reach the compile together.
+      const bothIdentities = defer<void>();
+      let identities = 0;
+      const advertised = await serveTwoExports(() => {
+        if (++identities === 2) bothIdentities.resolve();
+      }, bothIdentities.promise);
+      try {
+        const [tracked, other] = await Promise.all([
+          compile(SYMBOL),
+          compile("default"),
+        ]);
+
+        expect(tracked).toMatchObject({
+          outcome: "compiled",
+          ref: { identity: advertised, symbol: SYMBOL },
+        });
+        expect(other).toMatchObject({
+          outcome: "compiled",
+          ref: { identity: advertised, symbol: "default" },
+        });
+      } finally {
+        bothIdentities.resolve();
+      }
+    });
+
+    describe("given a refusal it already holds", () => {
+      // What following the origin has just returned, in the same lookup.
+
+      let v2Identity: string;
+      let downloads: string[];
+
+      beforeEach(async () => {
+        v2Identity = await identityFor(source("v2"));
+        downloads = [];
+        createRuntime(
+          servingFetch(() => v2Identity, () => source("v2"), (url) => {
+            if (!url.searchParams.has("identity")) downloads.push(url.pathname);
+          }),
+        );
+      });
+
+      /** A refusal of `symbol` at `identity`, for `reason`. */
+      function refusal(
+        identity: string,
+        symbol: string,
+        reason: SourceRefusal["reason"] = "identity-mismatch",
+      ): SourceRefusal {
+        return {
+          outcome: "refused",
+          reason,
+          detail: "refused while following the origin",
+          offered: { identity, symbol },
+        };
+      }
+
+      it("returns it without downloading the source while the host advertises the identity it names", async () => {
+        const held = refusal(v2Identity, SYMBOL);
+
+        expect(await compile(SYMBOL, held)).toEqual(held);
+        expect(downloads).toEqual([]);
+      });
+
+      it("compiles the source when the host advertises another identity", async () => {
+        const held = refusal(
+          "an-identity-the-host-no-longer-advertises",
+          SYMBOL,
+        );
+
+        expect(await compile(SYMBOL, held)).toMatchObject({
+          outcome: "compiled",
+          ref: { identity: v2Identity, symbol: SYMBOL },
+        });
+        expect(downloads).not.toEqual([]);
+      });
+
+      it("compiles the source when the refusal is of another export", async () => {
+        const held = refusal(v2Identity, "default");
+
+        expect(await compile(SYMBOL, held)).toMatchObject({
+          outcome: "compiled",
+          ref: { identity: v2Identity, symbol: SYMBOL },
+        });
+      });
+
+      it("compiles the source when the refusal is of a kind a compile does not make", async () => {
+        const held = refusal(v2Identity, SYMBOL, "incompatible-schema");
+
+        expect(await compile(SYMBOL, held)).toMatchObject({
+          outcome: "compiled",
+          ref: { identity: v2Identity, symbol: SYMBOL },
+        });
+      });
+    });
+
+    it("returns unreachable, naming what was advertised, when the source cannot be downloaded", async () => {
+      // The identity route answers and the module it names does not, which
+      // may come back.
+      const v2Identity = await identityFor(source("v2"));
+      const serving = servingFetch(() => v2Identity, () => source("v2"));
+      createRuntime((input, init) => {
+        const url = new URL(
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+            ? input.href
+            : input,
+        );
+        return url.pathname === SOURCE_PATH
+          ? Promise.resolve(new Response("unavailable", { status: 503 }))
+          : serving(input, init);
+      });
+
+      expect(await compile()).toMatchObject({
+        outcome: "unreachable",
+        offered: { identity: v2Identity, symbol: SYMBOL },
+      });
+    });
+
+    it("returns unreachable, naming what was advertised, when the compile fails for a reason other than the source", async () => {
+      const v2Identity = await identityFor(source("v2"));
+      createRuntime(servingFetch(() => v2Identity, () => source("v2")));
+      using _compile = stub(
+        runtime.patternManager,
+        "compilePattern",
+        () => Promise.reject(new Error("the compiler stack did not load")),
+      );
+
+      expect(await compile()).toEqual({
+        outcome: "unreachable",
+        detail: "the compiler stack did not load",
+        offered: { identity: v2Identity, symbol: SYMBOL },
+      });
+    });
+
+    it("returns unreachable, with what went wrong, when the identity route's answer cannot be read", async () => {
+      createRuntime((input) => {
+        const url = new URL(
+          input instanceof Request
+            ? input.url
+            : input instanceof URL
+            ? input.href
+            : input,
+        );
+        if (!url.searchParams.has("identity")) {
+          return Promise.resolve(new Response("not found", { status: 404 }));
+        }
+        // An answer whose body fails partway, as one does when the connection
+        // drops while it is being read.
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.error(new Error("the connection dropped"));
+          },
+        });
+        return Promise.resolve(new Response(body));
+      });
+
+      expect(await compile()).toEqual({
+        outcome: "unreachable",
+        detail: "the connection dropped",
+      });
+    });
+
+    it("returns unreachable when the runtime stops before the origin answers", async () => {
+      identityGate = defer();
+      const requested = defer();
+      createRuntime(async () => {
+        requested.resolve();
+        await identityGate!.promise;
+        return new Response("not reached", { status: 503 });
+      });
+
+      const compiling = compile();
+      await requested.promise;
+      const disposing = runtime.sourceReconciler.dispose();
+      identityGate.resolve();
+      await disposing;
+
+      expect(await compiling).toEqual({
+        outcome: "unreachable",
+        detail: "the runtime stopped before the origin answered",
+      });
     });
   });
 

@@ -44,6 +44,10 @@ import {
   resolveSystemPatternSource,
   systemPatternSource,
 } from "./pattern-source-scheme.ts";
+import {
+  classifyPieceOriginString,
+  type SystemPieceOrigin,
+} from "./piece-origin-kind.ts";
 import { getPatternIdentityRef, setPatternSource } from "./runner.ts";
 import type { Runtime, RuntimeFetch, SpaceCellContents } from "./runtime.ts";
 import { type NameSchema, nameSchema } from "./schemas.ts";
@@ -58,16 +62,39 @@ const logger = getLogger("runner.space-root-ensure", {
   level: "warn",
 });
 
-// The system space-root pattern refs, served as raw TSX by the toolshed
-// patterns route and addressed by `system:` ref (pattern-source-scheme.ts
-// has why the scheme, rather than the route path it expands to, is what a
-// piece stores). Moved here from packages/piece/src/system-pattern-url.ts
-// (which re-exports them) so the ensure core and the controller share one
-// definition.
-export const HOME_PATTERN_SOURCE = systemPatternSource("system/home.tsx");
-export const DEFAULT_APP_PATTERN_SOURCE = systemPatternSource(
+/**
+ * The `system:` origin of the home space's root pattern, which the toolshed
+ * patterns route serves as raw TSX. A piece records the origin's `system:` ref
+ * rather than the route path it expands to; `pattern-source-scheme.ts` says
+ * why.
+ */
+export const HOME_PATTERN_ORIGIN = systemRootOrigin("system/home.tsx");
+
+/** Like {@link HOME_PATTERN_ORIGIN}, for the root of any space but home. */
+export const DEFAULT_APP_PATTERN_ORIGIN = systemRootOrigin(
   "system/default-app.tsx",
 );
+
+/** The `system:` ref a root running {@link HOME_PATTERN_ORIGIN} records. */
+export const HOME_PATTERN_SOURCE = HOME_PATTERN_ORIGIN.ref;
+
+/**
+ * The `system:` ref a root running {@link DEFAULT_APP_PATTERN_ORIGIN} records.
+ */
+export const DEFAULT_APP_PATTERN_SOURCE = DEFAULT_APP_PATTERN_ORIGIN.ref;
+
+/**
+ * The `system:` origin naming `path` under the patterns route. Throws for a
+ * path no `system:` ref can name, which for the constants above is a mistake
+ * in this file.
+ */
+function systemRootOrigin(path: string): SystemPieceOrigin {
+  const origin = classifyPieceOriginString(systemPatternSource(path));
+  if (origin.kind !== "system") {
+    throw new Error(`\`${path}\` is not a file a \`system:\` ref can name`);
+  }
+  return origin;
+}
 
 /**
  * The error opening a DID reports when the DID has no history: no space

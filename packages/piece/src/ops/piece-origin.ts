@@ -22,12 +22,16 @@ import {
   NAME,
   normalizePatternSource,
   parseFabricRef,
+  type Pattern,
   type PieceReconciliation,
-  type ReconcileOutcome,
+  type ReconcileResult,
   resolveSystemPatternSource,
   type Runtime,
   type RuntimeProgram,
+  type SourceRefusal,
   spaceHostFromFabricAuthority,
+  type SystemPieceOrigin,
+  type UnreachableSource,
 } from "@commonfabric/runner";
 import {
   entityKindOfIdString,
@@ -35,7 +39,6 @@ import {
   uriSchemeForEntityKind,
 } from "@commonfabric/runner/entity-kind";
 import { nameSchema } from "@commonfabric/runner/schemas";
-import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
@@ -140,14 +143,61 @@ export interface PieceSourceRevisionState {
 export function reconcilePieceSource(
   runtime: Runtime,
   piece: Cell<unknown>,
-): Promise<ReconcileOutcome> {
+): Promise<ReconcileResult> {
   return runtime.sourceReconciler.reconcile(piece);
 }
 
+/** An error saying an origin could not be resolved, and why. */
 export class PieceOriginError extends Error {
+  /** Constructs an instance which says `message`. */
   constructor(message: string) {
     super(message);
     this.name = "PieceOriginError";
+  }
+}
+
+/**
+ * An error saying the source an origin offers was refused, as following that
+ * origin refuses it: it is not the source the origin advertises, or it is and
+ * does not compile to a pattern. `.refusal` says which, as a reconciliation
+ * records it.
+ */
+export class PieceOriginRefusedError extends PieceOriginError {
+  #refusal: SourceRefusal;
+
+  /** Constructs an instance which reports `refusal`. */
+  constructor(refusal: SourceRefusal) {
+    super(refusal.detail);
+    this.#refusal = refusal;
+    this.name = "PieceOriginRefusedError";
+  }
+
+  /** The refusal, as a reconciliation records it. */
+  get refusal(): SourceRefusal {
+    return this.#refusal;
+  }
+}
+
+/**
+ * An error saying the source an origin offers could not be had this time: the
+ * origin could not be reached, or its source could not be downloaded or
+ * compiled for a reason that may not recur. `.unreachable` is what a
+ * reconciliation records for it, which names the export the origin offered
+ * once it has advertised an identity.
+ */
+export class PieceOriginUnreachableError extends PieceOriginError {
+  #unreachable: UnreachableSource;
+
+  /** Constructs an instance which reports `unreachable`. */
+  constructor(unreachable: UnreachableSource) {
+    super(unreachable.detail);
+    this.#unreachable = unreachable;
+    this.name = "PieceOriginUnreachableError";
+  }
+
+  /** Why the source could not be had, as a reconciliation records it. */
+  get unreachable(): UnreachableSource {
+    return this.#unreachable;
   }
 }
 
@@ -159,10 +209,27 @@ function pinnedPatternIdentity(ref: FabricRef): string | undefined {
     : undefined;
 }
 
-export interface ResolvedPieceOriginSource {
-  program: RuntimeProgram;
-  pattern: { identity?: string; symbol: string };
-}
+/** The source an origin offers now, and the export a transition selects. */
+export type ResolvedPieceOriginSource =
+  /** A fabric origin's source, for the caller to compile into the space. */
+  | {
+    /** The authored program, with the export the transition selects. */
+    program: RuntimeProgram;
+
+    /** That export, under the identity the origin names for its source. */
+    pattern: { identity: string; symbol: string };
+  }
+  /**
+   * A `system:` origin's source, already compiled into the destination space
+   * and held to the identity its host advertises.
+   */
+  | {
+    /** The pattern the selected export compiled to in the space. */
+    compiled: Pattern;
+
+    /** The compiled pattern's entry ref, under the advertised identity. */
+    pattern: { identity: string; symbol: string };
+  };
 
 type StableFabricRef = FabricRef & {
   ref: Extract<FabricRef["ref"], { kind: "uri" }>;
@@ -183,6 +250,11 @@ export function qualifyFabricOrigin(
  * Resolves an origin now, returning the authored program and selected export a
  * repoint transition should apply.
  *
+ * A `system:` origin's source is compiled here, as following that origin
+ * compiles it, and is held to the same check: source that following would
+ * refuse throws {@link PieceOriginRefusedError}, and source that cannot be had
+ * this time throws {@link PieceOriginUnreachableError}.
+ *
  * `self` names the piece the origin is being resolved for. A mutable fabric
  * origin naming that piece is rejected: a piece that follows itself supplies
  * its own next source, and there is no source outside it for either end of
@@ -195,25 +267,23 @@ export async function resolvePieceOriginSource(
   historicalSymbol: string,
   options: { self?: { space: MemorySpace; pieceId: string } } = {},
 ): Promise<ResolvedPieceOriginSource> {
-  const origin = classifyOrigin(runtime, destinationSpace, recorded);
-  if (origin.kind === "system") {
-    const program = await runtime.harness.resolve(
-      new HttpProgramResolver(
-        origin.url,
-        (input, init) =>
-          runtime.fetch(input, {
-            ...init,
-            cache: "no-cache",
-          }),
-      ),
+  const classified = classifyOriginSource(runtime, destinationSpace, recorded);
+  if ("system" in classified) {
+    const candidate = await runtime.sourceReconciler.compileSystemSource(
+      destinationSpace,
+      classified.system,
+      historicalSymbol,
     );
-    return {
-      program: { ...program, mainExport: historicalSymbol },
-      pattern: { symbol: historicalSymbol },
-    };
+    if (candidate.outcome === "refused") {
+      throw new PieceOriginRefusedError(candidate);
+    }
+    if (candidate.outcome === "unreachable") {
+      throw new PieceOriginUnreachableError(candidate);
+    }
+    return { compiled: candidate.pattern, pattern: candidate.ref };
   }
 
-  const ref = parseFabricRef(origin.url)!;
+  const { origin, fabric: ref } = classified;
   if (ref.subpath !== undefined) {
     throw new PieceOriginError("piece source subpaths are not supported");
   }
@@ -336,6 +406,24 @@ export function classifyOrigin(
   space: MemorySpace,
   recorded: string,
 ): PieceOrigin {
+  return classifyOriginSource(runtime, space, recorded).origin;
+}
+
+/**
+ * An origin as {@link classifyOrigin} reports it, beside what resolving it
+ * starts from: the `system:` origin reconciliation follows, or the fabric
+ * reference the URL parsed to.
+ */
+type ClassifiedOrigin =
+  | { origin: PieceOrigin; system: SystemPieceOrigin }
+  | { origin: PieceOrigin; fabric: FabricRef };
+
+/** {@link classifyOrigin}, keeping what classifying `recorded` parsed. */
+function classifyOriginSource(
+  runtime: Runtime,
+  space: MemorySpace,
+  recorded: string,
+): ClassifiedOrigin {
   const source = recorded.trim();
   if (source.length === 0) {
     throw new PieceOriginError("origin is empty");
@@ -357,10 +445,13 @@ export function classifyOrigin(
   }
   if (ref !== undefined) {
     return {
-      url: source,
-      kind: pinnedPatternIdentity(ref) === undefined
-        ? "fabric-piece"
-        : "fabric-pattern",
+      origin: {
+        url: source,
+        kind: pinnedPatternIdentity(ref) === undefined
+          ? "fabric-piece"
+          : "fabric-pattern",
+      },
+      fabric: ref,
     };
   }
 
@@ -372,6 +463,7 @@ export function classifyOrigin(
     return systemOrigin(
       new URL(systemRoute, runtime.hostForSpace(space)),
       source,
+      { kind: "system", ref: source, route: systemRoute },
     );
   }
 
@@ -401,12 +493,18 @@ export function classifyOrigin(
     // site returns for it. `normalizePatternSource` yields the `system:` ref
     // when the path names such a file and the input unchanged when it does
     // not, which is the same test reconciliation applies before rewriting it.
-    if (normalizePatternSource(source, host) === source) {
+    const followed = normalizePatternSource(source, host);
+    const route = resolveSystemPatternSource(followed);
+    if (route === undefined) {
       throw new PieceOriginError(
         `${source} addresses nothing under the patterns route`,
       );
     }
-    return systemOrigin(resolved, source);
+    return systemOrigin(resolved, source, {
+      kind: "system",
+      ref: followed,
+      route,
+    });
   }
 
   // The reasons below match `classifyPieceOriginString` word for word. The two
@@ -427,8 +525,10 @@ export function classifyOrigin(
   // space is the same file a `system:` ref names, and reconciliation rewrites
   // it to that ref. It has to classify as followable here too, or the panel
   // would call an origin unusable that reconciliation goes on following.
-  if (normalizePatternSource(source, runtime.hostForSpace(space)) !== source) {
-    return systemOrigin(url, source);
+  const followed = normalizePatternSource(source, runtime.hostForSpace(space));
+  const route = resolveSystemPatternSource(followed);
+  if (route !== undefined) {
+    return systemOrigin(url, source, { kind: "system", ref: followed, route });
   }
 
   // Anything else absolute names an endpoint outside this deployment. A piece
@@ -444,13 +544,20 @@ export function classifyOrigin(
  * string whenever canonicalizing changed it — a `system:` ref, and the rooted
  * path that is the spelling those carried before the scheme existed. The panel
  * shows the recorded form beside the canonical one, so what a piece stores
- * stays visible.
+ * stays visible. `system` is that origin as reconciliation follows it.
  */
-function systemOrigin(url: URL, recorded: string): PieceOrigin {
+function systemOrigin(
+  url: URL,
+  recorded: string,
+  system: SystemPieceOrigin,
+): ClassifiedOrigin {
   return {
-    url: url.href,
-    kind: "system",
-    ...(url.href === recorded ? {} : { recorded }),
+    origin: {
+      url: url.href,
+      kind: "system",
+      ...(url.href === recorded ? {} : { recorded }),
+    },
+    system,
   };
 }
 
