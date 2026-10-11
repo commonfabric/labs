@@ -1024,3 +1024,76 @@ Deno.test("memory v2 server: an identical direct re-write fans out nothing", asy
   await server.flushSessions([space]);
   assertEquals(committerMessages.length, 0);
 });
+
+Deno.test("memory v2 server: a failed send forgets the frame's crossings, so the recomputed frame carries them again", async () => {
+  const context = await setup({
+    subscriptionRefreshDelayMs: 60_000,
+    store: "memory://verdict-catchup-crossings-rollback",
+  });
+  const { server, space, committer, committerMessages, committerSessionId } =
+    context;
+  const leafSchema = {
+    type: "object",
+    properties: { name: { type: "string" } },
+  };
+
+  // A watch whose schema follows `next`, added before the document exists.
+  await committer.receive(encodeMemoryBoundary({
+    type: "session.watch.add",
+    requestId: "watch-x",
+    space,
+    sessionId: committerSessionId,
+    watches: [{
+      id: "x",
+      kind: "graph",
+      query: {
+        roots: [{
+          id: "of:doc:x",
+          selector: {
+            path: [],
+            schema: { type: "object", properties: { next: leafSchema } },
+          },
+        }],
+      },
+    }],
+  }));
+  assertResponse(shiftMessage(committerMessages));
+  // The document arrives with a link into another space: the refresh that
+  // delivers it reports the crossing on the same frame.
+  await server.writeDocument(space, "of:doc:x", {
+    next: {
+      "/": { "link@1": { space: "did:key:z6Mk-verdict-far", id: "of:far" } },
+    },
+  });
+
+  const originalPush = committerMessages.push.bind(committerMessages);
+  let failNextEffect = true;
+  committerMessages.push = ((message: ServerMessage) => {
+    if (failNextEffect && message.type === "session/effect") {
+      failNextEffect = false;
+      throw new Error("synthetic send failure");
+    }
+    return originalPush(message);
+  }) as typeof committerMessages.push;
+  await server.flushSessions([space]);
+  assertEquals(committerMessages.length, 0);
+
+  // The lost frame had marked the crossing delivered; rollback forgot it,
+  // so the recomputed frame tells the client of it after all.
+  await server.flushSessions([space]);
+  const sync = assertEffect(shiftMessage(committerMessages))
+    .effect as SessionSync;
+  assertEquals(
+    sync.upserts.map((upsert) => upsert.id).toSorted(),
+    ["of:doc:b", "of:doc:x"],
+  );
+  // Both peers advertise the schema table, so the crossing's schema rides
+  // the frame's table as a reference, like a link's.
+  assertEquals(
+    sync.crossings?.map(({ space, id, path }) => ({ space, id, path })),
+    [{ space: "did:key:z6Mk-verdict-far", id: "of:far", path: [] }],
+  );
+  const carried = sync.crossings?.[0].schema as unknown;
+  assertEquals(typeof carried, "string");
+  assertEquals((carried as string).startsWith("schema-ref@2:"), true);
+});

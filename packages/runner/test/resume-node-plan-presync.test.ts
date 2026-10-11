@@ -782,7 +782,7 @@ describe("resume node plan pre-sync", () => {
     expect(commitConflictCount()).toBe(before);
   });
 
-  it("reads again only the plans whose reads left a load pending", async () => {
+  it("finds a plan's far document local from the server's crossing, reading no plan", async () => {
     const txP = rt1.edit();
     const leafDoc = rt1.getCell<{ name?: string }>(
       spaceP,
@@ -814,14 +814,15 @@ describe("resume node plan pre-sync", () => {
       { def: top },
       "one crossing parent",
     );
-    // The first round reads every plan; the one plan whose read dead-ended
-    // on the far document is read once more after that load lands, and
-    // the three whose reads completed are not.
+    // The frame that answered the plan's sync named the link into the other
+    // space, and the sync loaded the far document from there before it
+    // resolved: the pass had no plan left to read.
     const stats = getTimingStatsBreakdown() as Record<
       string,
       Record<string, { count: number }>
     >;
-    expect(stats.runner?.["start/resumeCrossSpaceRead"]?.count).toBe(5);
+    expect(stats.runner?.["start/resumeCrossSpaceRead"]?.count ?? 0).toBe(0);
+    expect(localOnB(leafDoc, spaceP)).toBe(true);
     await rt2.idle();
     expect(resumed.key("label").get()).toBe("n:Ada");
     expect(resumed.key("a").get()).toBe("a:1");
@@ -1065,14 +1066,29 @@ describe("resume node plan pre-sync", () => {
         DEEP_READ_PROGRAM,
         { space },
       );
-      const resumed = await createAndResume(
-        DEEP_READ_PROGRAM,
-        { def: top },
+      // The piece is set up on runtime 1 and only its result document is
+      // local on runtime 2: the pre-sync below is the first on that
+      // replica, so the frame answering its plan's sync is the one that
+      // reports the link into the other space.
+      const tx1b = rt1.edit();
+      const resultCell1 = rt1.getCell<Record<string, unknown>>(
+        space,
         "principal-only family",
+        undefined,
+        tx1b,
       );
-      await rt2.idle();
-      await managerB.synced();
-      await rt2.idle();
+      // deno-lint-ignore no-explicit-any
+      const r1 = rt1.run(tx1b, compiled as any, { def: top }, resultCell1);
+      rt1.prepareTxForCommit(tx1b);
+      expect((await tx1b.commit().settled).error).toBeUndefined();
+      await r1.pull();
+      await rt1.idle();
+      await rt1.patternManager.flushCompileCacheWrites();
+      await rt1.storageManager.synced();
+      const resumed = rt2.getCellFromLink<Record<string, unknown>>(
+        r1.getAsNormalizedFullLink(),
+      );
+      await resumed.sync();
 
       const identity = { principal: signer.did() };
       const tx = rt2.edit();

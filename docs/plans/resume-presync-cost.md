@@ -131,14 +131,23 @@ Exit: a schema is recomposed once per reference per registry epoch.
 - [x] The field check: `start/syncCellsForRunningPattern` on the room from
       80 to 32, `resumeCellSync` spans from 4,877 to 502, the rendering
       unchanged.
-- [ ] The 31 holds left are all on per-user instances (`scope: user`) of
-      documents the replica holds as space instances — the viewer's
-      per-user cells the chips receive — which no store holds for a viewer
-      who has not written one, and which nothing in the pre-sync requests.
-      They are the same defect in a fourth shape, and the general fix is
-      the one `docs/plans/presync-from-node-plans.md` stage 5 owes: the gate
-      asks the plans what a name-sync would deliver and probes that, instead
-      of walking the argument.
+- [x] The holds left after that were on per-user instances (`scope: user`)
+      of documents — a viewer's per-user cells the chips receive — which no
+      store holds for a viewer who has not written one, and which a
+      name-sync could not deliver. The gate no longer walks the argument of
+      an instance the resume pre-sync planned under the same pattern
+      (`Runner.#presyncNamedInstances`, the first part of
+      `docs/plans/presync-from-node-plans.md` stage 5): the pre-sync's
+      plans are the plans a name-sync would build. A tree whose rows
+      receive a link to a document nothing has written resumes with one
+      name-sync (`packages/runner/test/resume-presync-plan-count.test.ts`).
+- [x] The field check again: `start/syncCellsForRunningPattern` on the
+      room from 32 to 2, `resumeCellSync` spans from 502 to 204,
+      `resumeCrossSpaceRead` spans from 2,586 to 101, and the render's user
+      CPU from 37–45 s to 17 s on the same machine at the same load, the
+      rendering unchanged. The pre-sync no longer appears among the
+      profile's top inclusive frames; pattern compilation and the render's
+      sinks do.
 
 Exit: a child's start names its family only when something a name-sync
 could deliver is missing.
@@ -154,15 +163,23 @@ could deliver is missing.
 - [x] Test, red first: four lifts of which one reads through a link into a
       second space cost five reads
       (`packages/runner/test/resume-node-plan-presync.test.ts`).
-- [ ] The first round still materializes every plan under its read schema
-      to find the crossings: on the room, 2,586 `resumeCrossSpaceRead`
-      spans over 32 families and 28 settles, nearly all of them the first
-      round, and `validateAndTransform` under `#syncCrossSpaceReads` is
-      still about a quarter of the profile. A walk over links under the
-      schema, with no `validateAndTransform`, no freeze and no hash, would
-      replace that read for the plans that cross nothing; the server could
-      also report the links its walk stopped at. Either is the next step
-      here.
+- [x] The server reports the links its walk follows out of the space in
+      the frame that answers the watch (`crossings` on the session sync
+      payload, `docs/specs/memory-v2/04-protocol.md`, advertised as
+      `syncCrossingsV1`), each as the target-rooted path and schema the
+      read needed, the way the walk already shapes a same-space miss. The
+      storage manager kicks a load for each from the target space and lists
+      it while in flight, and the pre-sync awaits those loads by document,
+      through their own frames' crossings in turn, instead of reading its
+      plans to find them (`followsCrossings`); against an older server it
+      reads as before. The first round had materialized every plan under
+      its read schema to find the crossings: on the room, 101
+      `resumeCrossSpaceRead` spans after stage 2's second part, 2,586
+      before it, and `validateAndTransform` under `#syncCrossSpaceReads`
+      a quarter of the profile then.
+- [ ] The field check: `resumeCrossSpaceRead` absent from the room's
+      profile, the far documents local, the rendering unchanged. The
+      deployed server has to advertise the capability first.
 
 Exit: the cross-space pass costs in proportion to the links that cross.
 

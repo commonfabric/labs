@@ -164,6 +164,7 @@ const flags = new Set([
   "commitPreconditions",
   "applyOp",
   "syncSchemaTableV2",
+  "syncCrossingsV1",
   "messageCompressionV1",
   "sqliteCommitRowLabelEval",
   "sqliteQueryReader",

@@ -2238,6 +2238,21 @@ export class Runner {
   >(RESULT_SHORTCUT_LIMIT);
 
   /**
+   * The nested instances a resume pre-sync of this runner has planned and
+   * named, by family key, each with the identity key of the pattern it was
+   * planned under. A pre-sync plans each nested instance's nodes against
+   * its stored argument and names what they read, so a name-sync of that
+   * instance under the same pattern would make the same requests and
+   * deliver nothing more; the gate before such an instance's own start
+   * probes its owned cells, which a seed may still be owed, and skips the
+   * argument walk. Bounded like `#locallyPreparedResults`: a missing entry
+   * costs a walk, never a wrong verdict.
+   */
+  readonly #presyncNamedInstances = new BoundedKeyMap<string, string>(
+    RESULT_SHORTCUT_LIMIT,
+  );
+
+  /**
    * Observer of every node plan the resume pre-sync builds, by the piece
    * planned and the node, for a test counting plans against the tree's
    * `(instance, node)` pairs; `node` is the plan of one of the pattern's
@@ -6451,6 +6466,7 @@ export class Runner {
     return this.#familyAbsent(
         resolved.pattern,
         entryKey,
+        key,
         argument,
         argumentLink,
         resultCell,
@@ -6532,11 +6548,16 @@ export class Runner {
    * or of a sub-piece it instantiates. The store delivers none of these with
    * the result document; a run that reads one absent commits against a
    * document the store holds and is refused, so a caller that finds one
-   * absent names the family before it runs.
+   * absent names the family before it runs. For the family `familyKey`
+   * names, when a pre-sync of this runner planned it under this pattern
+   * (`#presyncNamedInstances`), the argument's links are not walked: that
+   * pre-sync named what the nodes read through them, and a name-sync here
+   * would ask for the same documents again.
    */
   #familyAbsent(
     pattern: Pattern,
     entryKey: string,
+    familyKey: string,
     argument: unknown,
     argumentLink: NormalizedFullLink,
     resultCell: Cell<any>,
@@ -6584,14 +6605,57 @@ export class Runner {
       return true;
     };
     if (!present(argumentLink)) return hold("the argument document");
-    // What the run reads through the argument: every document the caller's
-    // argument and the stored argument link to, followed through the
-    // targets those links resolve into — a coordinator's element link is a
-    // chain of redirects, and setup reads each hop. Bounded by depth, by a
-    // document being probed once, and by the probe budget.
-    // Presence is a fact about a document, probed once; what a link reaches
-    // depends on its path, so two links into one document at different
-    // paths are each walked.
+    if (this.#presyncNamedInstances.get(familyKey) !== entryKey) {
+      if (
+        this.#argumentLinksAbsent(
+          argument,
+          argumentLink,
+          resultCell,
+          readTx,
+          present,
+        )
+      ) {
+        return hold("a document the argument links to");
+      }
+    }
+    // The owned cells the run reads: the pattern's derived internal cells
+    // and, through each nested sub-pattern's result spot, those of the
+    // sub-pieces the run instantiates — the same walk the resume pre-sync
+    // syncs by name.
+    const owned: Cell<any>[] = [];
+    this.#collectResumeOwnedCells(
+      pattern,
+      cell,
+      owned,
+      new Set(),
+      readTx,
+    );
+    for (const ownedCell of owned) {
+      if (!present(ownedCell.getAsNormalizedFullLink())) {
+        return hold("an owned cell");
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether a document the run reads through its argument is absent from
+   * this replica: every document the caller's `argument` and the stored
+   * argument at `argumentLink` link to, followed through the targets those
+   * links resolve into — a coordinator's element link is a chain of
+   * redirects, and setup reads each hop — each probed through `present`.
+   * Bounded by depth, by a document being probed once, and by the probe
+   * budget `present` enforces. Presence is a fact about a document, probed
+   * once; what a link reaches depends on its path, so two links into one
+   * document at different paths are each walked.
+   */
+  #argumentLinksAbsent(
+    argument: unknown,
+    argumentLink: NormalizedFullLink,
+    resultCell: Cell<any>,
+    readTx: IExtendedStorageTransaction,
+    present: (link: NormalizedFullLink) => boolean,
+  ): boolean {
     const probed = new Set<string>();
     const walked = new Set<string>();
     const linksAbsent = (value: unknown, depth: number): boolean => {
@@ -6648,44 +6712,20 @@ export class Runner {
       }
       return false;
     };
-    if (linksAbsent(argument, 4)) {
-      return hold("a document the caller's argument links to");
-    }
-    if (
-      linksAbsent(
-        readTx.readOrThrow(
-          {
-            space: argumentLink.space,
-            id: argumentLink.id,
-            path: ["value"],
-            ...(argumentLink.scope !== undefined &&
-              { scope: argumentLink.scope }),
-          },
-          { meta: ignoreReadForScheduling },
-        ),
-        4,
-      )
-    ) {
-      return hold("a document the stored argument links to");
-    }
-    // The owned cells the run reads: the pattern's derived internal cells
-    // and, through each nested sub-pattern's result spot, those of the
-    // sub-pieces the run instantiates — the same walk the resume pre-sync
-    // syncs by name.
-    const owned: Cell<any>[] = [];
-    this.#collectResumeOwnedCells(
-      pattern,
-      cell,
-      owned,
-      new Set(),
-      readTx,
+    if (linksAbsent(argument, 4)) return true;
+    return linksAbsent(
+      readTx.readOrThrow(
+        {
+          space: argumentLink.space,
+          id: argumentLink.id,
+          path: ["value"],
+          ...(argumentLink.scope !== undefined &&
+            { scope: argumentLink.scope }),
+        },
+        { meta: ignoreReadForScheduling },
+      ),
+      4,
     );
-    for (const ownedCell of owned) {
-      if (!present(ownedCell.getAsNormalizedFullLink())) {
-        return hold("an owned cell");
-      }
-    }
-    return false;
   }
 
   /**
@@ -8811,9 +8851,10 @@ export class Runner {
     pattern: Pattern,
     resultCell: Cell<any>,
     argumentLink: NormalizedFullLink,
-  ): { cells: Cell<any>[]; plans: NodePlan[] } {
+  ): { cells: Cell<any>[]; plans: NodePlan[]; skipped: number } {
     const cells: Cell<any>[] = [];
     const plans: NodePlan[] = [];
+    let skipped = 0;
     for (const node of pattern.nodes) {
       let plan: NodePlan | undefined;
       try {
@@ -8830,6 +8871,7 @@ export class Runner {
           "skipping a node whose bindings did not unwrap",
           error,
         ]);
+        skipped++;
         continue;
       }
       if (plan === undefined) continue;
@@ -8853,7 +8895,7 @@ export class Runner {
         cells.push(this.#runtime.getCellFromLink(link));
       }
     }
-    return { cells, plans };
+    return { cells, plans, skipped };
   }
 
   /**
@@ -8876,19 +8918,24 @@ export class Runner {
   /**
    * Names what the plans' reads reach in other spaces. The server's query
    * walk delivers what a plan's selector reaches within its space and stops
-   * at a link into another, so after the plan syncs land this reads each
-   * plan's inputs under its read schema through a read transaction of the
-   * plan's own: a read that dead-ends on such a link kicks that document's
-   * load. Pending loads for documents a plan's read reached are awaited
-   * before that plan is read again, which reaches one space further; a
-   * plan whose read left no load pending is done. Each round awaits only
-   * loads no earlier round awaited, by document, so a link whose target
-   * never arrives, kicked again by every read, ends the pass rather than
-   * extending it, and a round whose reads leave no new load pending ends
-   * it. The manager's settled
-   * pool is not what is awaited: on a client it holds the runtime's other
-   * work, sinks' first loads and coordinators' republishes among it, which
-   * a resume must not wait behind.
+   * at a link into another. A server that reports those links
+   * (`followsCrossings`) has the storage manager kick each target's load
+   * as the frame arrives, so for a plan in such a space this awaits the
+   * crossing loads in flight, by document and only those the family's
+   * identity can resolve, and asks again once they settle, since a
+   * crossing's own frame can report crossings. For a plan in a space whose
+   * server does not, this reads the plan's inputs under its read schema
+   * through a read transaction of the plan's own after its sync lands: a
+   * read that dead-ends on such a link kicks that document's load. Pending
+   * loads for documents a plan's read reached are awaited before that plan
+   * is read again, which reaches one space further; a plan whose read left
+   * no load pending is done. Either way each round awaits only loads no
+   * earlier round awaited, by document, so a link whose target never
+   * arrives, kicked again by every read, ends the pass rather than
+   * extending it, and a round that leaves no new load pending ends it.
+   * The manager's settled pool is not what is awaited: on a client it
+   * holds the runtime's other work, sinks' first loads and coordinators'
+   * republishes among it, which a resume must not wait behind.
    */
   async #syncCrossSpaceReads(
     plans: readonly NodePlan[],
@@ -8903,10 +8950,41 @@ export class Runner {
       schema: JSONSchema;
     };
     let remaining: PlanRead[] = [];
+    let followed = false;
     for (const plan of plans) {
       if (plan.kind === "pattern") continue;
+      if (manager.followsCrossings?.(plan.inputsCell.space) === true) {
+        followed = true;
+        continue;
+      }
       const schema = this.#planReadSchema(plan);
       if (schema !== undefined) remaining.push({ plan, schema });
+    }
+    const settle = async (keys: Iterable<string>): Promise<void> => {
+      const settleStart = performance.now();
+      try {
+        await manager.loadsSettled!([...keys]);
+      } catch (error) {
+        // A load that failed leaves its document absent; the next round
+        // reads past it, and the run reads the same absence.
+        logger.debug("resume-pre-sync", () => [
+          "a load a cross-space read kicked did not land",
+          error,
+        ]);
+      }
+      logger.time(settleStart, "start", "resumeCrossSpaceSettle");
+    };
+    while (followed && manager.pendingCrossingLoadAddresses !== undefined) {
+      const keys: string[] = [];
+      for (const address of manager.pendingCrossingLoadAddresses()) {
+        if (!canResolveScopeKey(address.scope, readIdentity)) continue;
+        const key = entityKey(address, this.#runtime.scopeKeyIdentity);
+        if (awaited.has(key)) continue;
+        awaited.add(key);
+        keys.push(key);
+      }
+      if (keys.length === 0) break;
+      await settle(keys);
     }
     for (;;) {
       // Each plan reads in a transaction of its own, so the loads its read
@@ -8950,18 +9028,7 @@ export class Runner {
       if (keys.size === 0) return;
       for (const key of keys) awaited.add(key);
       remaining = next;
-      const settleStart = performance.now();
-      try {
-        await manager.loadsSettled([...keys]);
-      } catch (error) {
-        // A load that failed leaves its document absent; the next round
-        // reads past it, and the run reads the same absence.
-        logger.debug("resume-pre-sync", () => [
-          "a load a cross-space read kicked did not land",
-          error,
-        ]);
-      }
-      logger.time(settleStart, "start", "resumeCrossSpaceSettle");
+      await settle(keys);
     }
   }
 
@@ -9002,6 +9069,13 @@ export class Runner {
     while (pending.size > 0) {
       const cells: Cell<any>[] = [];
       const plans: NodePlan[] = [];
+      // The instances with a stored setup this round plans whole, by family
+      // key and the pattern planned under, recorded once everything the
+      // round names has landed. An instance with a node the pre-sync could
+      // not plan, or a round with a sync that failed, is not recorded: its
+      // own start then walks its argument as before.
+      const planned: [familyKey: string, entryKey: string][] = [];
+      let syncFailed = false;
       const planTx = this.#runtime.edit();
       if (identity !== undefined) planTx.tx.scopeKeyIdentity = identity;
       try {
@@ -9015,14 +9089,26 @@ export class Runner {
             );
           if (argumentLink === undefined) continue;
           pending.delete(key);
-          const planned = this.#cellsPatternNodes(
+          const nodes = this.#cellsPatternNodes(
             planTx,
             pattern,
             resultCell,
             argumentLink,
           );
-          for (const cell of planned.cells) cells.push(cell);
-          for (const plan of planned.plans) plans.push(plan);
+          for (const cell of nodes.cells) cells.push(cell);
+          for (const plan of nodes.plans) plans.push(plan);
+          // The policy manifests the instance's pattern names, as the root
+          // wave names the root pattern's.
+          for (const digest of modulePolicyDigestsOf(pattern)) {
+            cells.push(
+              this.#runtime.getCellFromEntityId(
+                resultCell.space,
+                cfcPolicyManifestDocId(digest),
+                [],
+                CFC_POLICY_MANIFEST_DOC_SCHEMA,
+              ),
+            );
+          }
           if (argumentMetaLink !== undefined) {
             cells.push(
               this.#runtime.getCellFromLink({
@@ -9030,6 +9116,12 @@ export class Runner {
                 schema: undefined,
               }),
             );
+            if (nodes.skipped === 0) {
+              planned.push([
+                this.#getFamilyKey(resultCell, identity),
+                patternIdentityKey(this.#entryRefForPattern(pattern)),
+              ]);
+            }
           }
         }
       } finally {
@@ -9041,6 +9133,7 @@ export class Runner {
         cells,
         (cell) =>
           this.#syncFamilyCell(cell, identity).catch((error) => {
+            syncFailed = true;
             logger.warn("resume-pre-sync", () => [
               "instance node sync failed; resuming without it",
               error,
@@ -9049,6 +9142,11 @@ export class Runner {
       );
       logger.time(waveStart, "start", "resumeInstanceNodeSyncWave");
       await this.#syncCrossSpaceReads(plans, identity);
+      if (!syncFailed) {
+        for (const [familyKey, entryKey] of planned) {
+          this.#presyncNamedInstances.set(familyKey, entryKey);
+        }
+      }
     }
   }
 
@@ -9829,6 +9927,7 @@ export class Runner {
     // canceled
     this.#resultPatternCache.clear();
     this.#locallyPreparedResults.clear();
+    this.#presyncNamedInstances.clear();
     this.#locallyStoppedResults.clear();
     this.#locallyCommittedHandlerResultStarts.clear();
     this.#startGenerationByDoc.clear();

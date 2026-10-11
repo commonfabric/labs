@@ -167,6 +167,7 @@ describe("memory v2 flags", () => {
       connectionAuth: true,
       admissionNotice: true,
       routedAuthV1: false,
+      syncCrossingsV1: true,
       syncSchemaTableV2: false,
     });
 
@@ -200,6 +201,7 @@ describe("memory v2 flags", () => {
       connectionAuth: true,
       admissionNotice: true,
       routedAuthV1: false,
+      syncCrossingsV1: true,
       syncSchemaTableV2: true,
     });
 
@@ -235,6 +237,7 @@ describe("memory v2 flags", () => {
         connectionAuth: true,
         admissionNotice: true,
         routedAuthV1: false,
+        syncCrossingsV1: false,
       },
       {
         modernCellRep: true,
@@ -264,6 +267,7 @@ describe("memory v2 flags", () => {
         connectionAuth: false,
         admissionNotice: false,
         routedAuthV1: false,
+        syncCrossingsV1: false,
       },
     ));
   });
@@ -371,6 +375,7 @@ describe("parseMemoryProtocolFlags", () => {
       connectionAuth: false,
       admissionNotice: false,
       routedAuthV1: false,
+      syncCrossingsV1: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
       genesisRoot: false,
@@ -397,6 +402,7 @@ describe("parseMemoryProtocolFlags", () => {
       connectionAuth: false,
       admissionNotice: false,
       routedAuthV1: false,
+      syncCrossingsV1: false,
     });
   });
 
@@ -430,6 +436,7 @@ describe("parseMemoryProtocolFlags", () => {
         connectionAuth: false,
         admissionNotice: false,
         routedAuthV1: false,
+        syncCrossingsV1: false,
       },
     );
   });
@@ -449,6 +456,19 @@ describe("parseMemoryProtocolFlags", () => {
     assertEquals(
       parseMemoryProtocolFlags({ operationCodecs: ["missing"] }),
       null,
+    );
+  });
+
+  it("accepts the syncCrossingsV1 capability key", () => {
+    assertEquals(parseMemoryProtocolFlags({})?.syncCrossingsV1, false);
+    assertEquals(
+      parseMemoryProtocolFlags({ syncCrossingsV1: true })?.syncCrossingsV1,
+      true,
+    );
+    assertEquals(parseMemoryProtocolFlags({ syncCrossingsV1: "true" }), null);
+    assertEquals(
+      wireMemoryProtocolFlags(getMemoryProtocolFlags()).syncCrossingsV1,
+      true,
     );
   });
 
@@ -475,6 +495,7 @@ describe("parseMemoryProtocolFlags", () => {
         connectionAuth: false,
         admissionNotice: false,
         routedAuthV1: false,
+        syncCrossingsV1: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
         pendingReadStacks: false,
@@ -514,6 +535,7 @@ describe("parseMemoryProtocolFlags", () => {
         connectionAuth: false,
         admissionNotice: false,
         routedAuthV1: false,
+        syncCrossingsV1: false,
       },
     );
   });
@@ -548,6 +570,7 @@ describe("parseMemoryProtocolFlags", () => {
         connectionAuth: false,
         admissionNotice: false,
         routedAuthV1: false,
+        syncCrossingsV1: false,
       },
     );
   });
@@ -590,6 +613,7 @@ describe("parseMemoryProtocolFlags", () => {
         connectionAuth: false,
         admissionNotice: false,
         routedAuthV1: false,
+        syncCrossingsV1: false,
       },
     );
   });
@@ -625,6 +649,7 @@ describe("parseMemoryProtocolFlags", () => {
         connectionAuth: false,
         admissionNotice: false,
         routedAuthV1: false,
+        syncCrossingsV1: false,
       },
     );
   });
@@ -657,6 +682,7 @@ describe("parseMemoryProtocolFlags", () => {
         connectionAuth: false,
         admissionNotice: false,
         routedAuthV1: false,
+        syncCrossingsV1: false,
       },
     );
   });
@@ -675,6 +701,7 @@ describe("parseMemoryProtocolFlags", () => {
         connectionAuth: false,
         admissionNotice: false,
         routedAuthV1: false,
+        syncCrossingsV1: false,
       }),
       {
         genesisRoot: false,
@@ -701,6 +728,7 @@ describe("parseMemoryProtocolFlags", () => {
         connectionAuth: false,
         admissionNotice: false,
         routedAuthV1: false,
+        syncCrossingsV1: false,
       },
     );
   });

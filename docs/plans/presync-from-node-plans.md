@@ -140,26 +140,38 @@ therefore collapses to the same call over the inputs with the event folded
 in; its handle collection goes.
 
 Cross-space targets past the first hop are the one thing the server walk
-cannot deliver, since its query is per space. A read that dead-ends on a link
-into another space kicks a load there (`ensureLinkedDocLoaded`), and that
-load is the subscription: the storage manager opens the space and tracks the
-load. The pre-sync uses exactly that: after a wave's plan syncs land, it
-reads each plan's inputs under its read schema through a read transaction of
-the plan's own, awaits the loads pending after those reads by document
-(`loadsSettled` over `pendingLoadAddresses`), and reads again — only the
-plans whose reads left a load pending — until a round leaves no load pending
-that an earlier round did not await (`#syncCrossSpaceReads`). The read's own
-traversal decides what is missing, so no second walk exists. The
-pass awaits loads, never the storage manager's settled pool: on a client that
-pool holds the runtime's other work, and a resume that waited for it would
-wait behind sinks and coordinators that never go quiet. Awaiting each
-document once is also what ends the pass for a link whose target never
-arrives or whose space denies the read, since every read kicks such a load
-again. The pass is
-owed rather than optional: a space the transaction only read enters no
-commit's basis, so a cold cross-space read costs no conflict, but an action
-that destructures the cold value throws instead of re-running, and the home
-profile flow reads profile documents in their own spaces that way.
+cannot deliver, since its query is per space. The walk reports them instead:
+a link it follows into another space is a crossing on the frame that answers
+the watch (`SessionSync.crossings`, `docs/specs/memory-v2/04-protocol.md`),
+carrying the target and the target-rooted path and schema the read needed.
+The storage manager kicks a load for each from the target space under that
+selector, registered as a pending load and listed while it is in flight
+(`pendingCrossingLoadAddresses`), and the pre-sync awaits those loads by
+document, the ones its identity can resolve, asking again once they settle,
+since a crossing's own frame can report crossings in turn; a target the
+client cannot load, for want of access say, stays absent, and a read of it
+reads that absence as it would have before. The sync itself never waits for
+them: it may hold the one watch refresh in flight, and a crossing's load can
+report a crossing back into its space. Against a server that does not
+advertise `syncCrossingsV1` (`followsCrossings`), the pre-sync falls back to
+reading:
+after a wave's plan syncs land, it reads each plan's inputs under its read
+schema through a read transaction of the plan's own, awaits the loads
+pending after those reads by document (`loadsSettled` over
+`pendingLoadAddresses`), and reads again — only the plans whose reads left a
+load pending — until a round leaves no load pending that an earlier round
+did not await (`#syncCrossSpaceReads`). A read that dead-ends on a link into
+another space kicks a load there (`ensureLinkedDocLoaded`), and that load is
+the subscription. The pass awaits loads, never the storage manager's settled
+pool: on a client that pool holds the runtime's other work, and a resume
+that waited for it would wait behind sinks and coordinators that never go
+quiet. Awaiting each document once is also what ends the pass for a link
+whose target never arrives or whose space denies the read, since every read
+kicks such a load again. Naming the far documents is owed rather than
+optional: a space the transaction only read enters no commit's basis, so a
+cold cross-space read costs no conflict, but an action that destructures the
+cold value throws instead of re-running, and the home profile flow reads
+profile documents in their own spaces that way.
 
 One correction on the way: `#collectLinkedCellSyncs` syncs a first-hop link
 under `link.schema ?? schema`, the link's declared schema before the
@@ -398,13 +410,26 @@ Exit: no resumed action's first run is released by a timer.
 
 ### Stage 5. The gates ask the plans
 
-- [ ] Replace the raw four-hop scan in `#familyAbsent` with a coverage
-      check of each node plan's selector against the storage manager's
-      sync-request index, and `#swapReadsAbsent` likewise. The probe budget
-      goes with the scan.
-- [ ] Test: the existing `piece-named-before-start.test.ts` cases pass
-      unchanged, and a case where the raw scan over-held (a link in the
-      argument no body reads) no longer holds.
+- [x] A nested instance the resume pre-sync planned under a pattern is
+      recorded by family key (`Runner.#presyncNamedInstances`), once the
+      wave that named what its plans read has landed. The gate before that
+      instance's own start, asked under the same pattern, skips the
+      argument walk: the pre-sync's plans are the plans a name-sync would
+      build, so a name-sync could request nothing the pre-sync did not. The
+      owned cells are still probed, since an absent one is owed a seed. The
+      instance wave also names the policy manifests each nested pattern
+      declares, as the root wave names the root's.
+- [x] Test: a tree whose rows receive, through the root's argument, a link
+      to a document nothing has written resumes with one name-sync
+      (`packages/runner/test/resume-presync-plan-count.test.ts`); the
+      `packages/runner/test/piece-named-before-start.test.ts` cases pass
+      unchanged.
+- [ ] A start no pre-sync planned — a caller's `run()` over a piece set up
+      elsewhere — still walks the argument's redirect chains under the probe
+      budget (`#argumentLinksAbsent`). Replace that walk with a coverage
+      check of the start's own node plans against the storage manager's
+      sync-request index, and `#swapReadsAbsent` likewise; the budget goes
+      with the walk.
 
 Exit: `NAMING_PROBE_BUDGET` is either gone or justified by a measurement in
 the pull request.

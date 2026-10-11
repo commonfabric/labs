@@ -910,7 +910,7 @@ describe("piece-named-before-start", () => {
     expect(spent[0].parts[1]).toMatchObject({
       resultCell: cardB.getAsNormalizedFullLink().id,
       budget: 1,
-      stage: "a document the caller's argument links to",
+      stage: "a document the argument links to",
     });
     // Landed: a later run under the same pattern is not held, and spends no
     // probes to find that out.

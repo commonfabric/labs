@@ -682,6 +682,9 @@ describe("v2 query evaluation cache", () => {
       missed: new Map(),
       missedBy: new Map(),
       missesOf: new Map(),
+      crossings: new Map(),
+      crossedBy: new Map(),
+      crossingsOf: new Map(),
       entities: new Map(),
       memo: new Map(),
       manager: {

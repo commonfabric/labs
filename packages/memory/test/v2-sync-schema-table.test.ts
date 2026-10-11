@@ -1468,3 +1468,78 @@ Deno.test("sync schema table compresses boolean link schemas", () => {
     true,
   );
 });
+
+Deno.test("sync schema table interns a crossing's schema and expands it again", () => {
+  const schema: JSONSchema = {
+    type: "object",
+    properties: { name: { type: "string" } },
+  };
+  const sync: SessionSync = {
+    type: "sync",
+    fromSeq: 0,
+    toSeq: 1,
+    upserts: [{
+      branch: "",
+      id: "of:crossing-source",
+      scope: "space",
+      seq: 1,
+      doc: {
+        value: {
+          next: linkRefFrom({
+            space: "did:key:z6Mk-far",
+            id: "of:far",
+            path: [],
+            schema,
+          }),
+        },
+      },
+    }],
+    removes: [],
+    crossings: [{ space: "did:key:z6Mk-far", id: "of:far", path: [], schema }],
+  };
+
+  const compressed = compressSessionSyncSchemas(sync);
+  const compressedCrossing = (compressed.crossings ?? [])[0];
+  assertExists(compressedCrossing);
+  assert(
+    typeof compressedCrossing.schema === "string",
+    "a crossing's schema should travel as a table reference",
+  );
+  assertEquals(
+    Object.keys((compressed as { schemaTable?: object }).schemaTable ?? {})
+      .length,
+    1,
+  );
+  assertEquals(expandSessionSyncSchemas(compressed), sync);
+});
+
+Deno.test("sync schema table refuses a crossing's table reference with no table to resolve it", () => {
+  const sync: SessionSync = {
+    type: "sync",
+    fromSeq: 0,
+    toSeq: 1,
+    upserts: [],
+    removes: [],
+    crossings: [{
+      space: "did:key:z6Mk-far",
+      id: "of:far",
+      path: [],
+      schema: "schema-ref@2:fid1:missing" as unknown as JSONSchema,
+    }],
+  };
+  assertThrows(
+    () => expandSessionSyncSchemas(sync),
+    Error,
+    "Invalid sync schema table reference",
+  );
+  const inline: SessionSync = {
+    ...sync,
+    crossings: [{
+      space: "did:key:z6Mk-far",
+      id: "of:far",
+      path: [],
+      schema: { type: "object" },
+    }],
+  };
+  assertEquals(expandSessionSyncSchemas(inline), inline);
+});

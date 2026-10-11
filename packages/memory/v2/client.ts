@@ -4559,6 +4559,7 @@ const isResponse = (message: unknown): message is ResponseMessage<unknown> => {
 
 const isEmptySync = (sync: SessionSync): boolean =>
   sync.upserts.length === 0 && sync.removes.length === 0 &&
+  (sync.crossings?.length ?? 0) === 0 &&
   (sync.operationFields?.length ?? 0) === 0 && sync.viewPlans === undefined;
 
 const isSessionRevokedError = (error: unknown): boolean =>
