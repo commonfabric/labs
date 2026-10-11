@@ -152,6 +152,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "how many local jobs one runner runs at once; a count",
   ],
   ["submission-after-seq", "a revision sequence number"],
+  ["before-seq", "a revision sequence number"],
+  ["before", "a timestamp"],
+  ["keep-last", "a row count"],
+  ["keep-payloads", "a duration"],
   // Identifiers the caller brings from outside, or coins.
   ["did", "a DID, pasted from elsewhere"],
   ["as", "a DID whose view to approximate, pasted from elsewhere"],

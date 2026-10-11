@@ -296,6 +296,7 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf space clone --to ", "dirs", undefined],
   ["cf space clone x --from ", "files", undefined],
   ["cf space verify ", "dirs", undefined],
+  ["cf space compact ", "files", "*.sqlite"],
   ["cf space reset ", "dirs", undefined],
   ["cf inspect spaces --dir ", "dirs", undefined],
   ["cf profile repair-root --from-snapshot ", "dirs", undefined],
@@ -436,7 +437,8 @@ Deno.test("provider keys report which commands each option provider answers on",
   assertEquals(options.get("cell"), null);
   assertEquals(options.get("from"), ["space clone"]);
   assertEquals(options.get("to"), ["space clone"]);
-  assertEquals(options.get("scope"), ["wish"]);
+  assertEquals(options.get("scope"), ["wish", "space compact"]);
+  assertEquals(options.get("documents"), ["space compact"]);
   assertEquals(options.get("list"), ["piece survey", "piece repair"]);
   assertEquals(options.get("diff"), ["piece survey"]);
   // Both projection flags answer on `get` alone. On `call` and `exec` they
@@ -1520,4 +1522,25 @@ Deno.test("live candidates preserve qualified space, user scope, and nested path
     await Deno.remove(keyPath);
     resetProcessDeployment();
   }
+});
+
+Deno.test("space compact: --scope and --documents offer the store's vocabulary", async () => {
+  // `--scope` means a scope KIND here and a search scope on `wish`; the same
+  // option name answers differently by command, which is what the provider's
+  // command scoping is for. `--documents` offers the three id namespaces a
+  // store holds; a longer prefix is typed past them.
+  assertEquals(
+    (await liveCandidates(lineFor("cf space compact x --scope ")))
+      .candidates.map((candidate) => candidate.value).sort(),
+    ["session", "space", "user"],
+  );
+  assertEquals(
+    (await liveCandidates(lineFor("cf space compact x --documents ")))
+      .candidates.map((candidate) => candidate.value).sort(),
+    ["cid:", "computed:", "of:"],
+  );
+  const wish = (await liveCandidates(lineFor("cf wish --scope ")))
+    .candidates.map((candidate) => candidate.value);
+  assert(wish.includes("~"), `wish keeps its own scope vocabulary: ${wish}`);
+  assert(!wish.includes("session"), "a scope kind is not a wish scope");
 });

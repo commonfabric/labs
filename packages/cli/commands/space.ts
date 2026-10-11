@@ -30,6 +30,11 @@
 import { Command, ValidationError } from "@cliffy/command";
 import { configuredStorePath } from "@commonfabric/memory/v2/storage-path";
 import {
+  formatCompactionReport,
+  planCompaction,
+} from "@commonfabric/memory/v2/compact";
+import type { CellScope } from "@commonfabric/memory/v2";
+import {
   clonePaths,
   contentFingerprint,
   createClone,
@@ -242,6 +247,35 @@ function exclusionNote(u: VerifyResult["uncertainty"]): string {
       /^⚠ /gm,
       "⚠ in the BASELINE: ",
     );
+}
+
+/** `--scope` as a scope kind, or a validation error naming the three. */
+function parseScope(value: string | undefined): CellScope | undefined {
+  if (value === undefined) return undefined;
+  if (value === "space" || value === "user" || value === "session") {
+    return value;
+  }
+  throw new ValidationError(
+    `--scope takes space, user or session, not ${value}`,
+  );
+}
+
+/** A duration such as `24h`, `7d`, `30m`, `90s` or `500ms`, in milliseconds. */
+function parseDuration(value: string): number {
+  const match = /^(\d+)(ms|s|m|h|d)$/.exec(value);
+  if (match === null) {
+    throw new ValidationError(
+      `--keep-payloads takes a number and a unit (ms, s, m, h, d), not ${value}`,
+    );
+  }
+  const unit = {
+    ms: 1,
+    s: 1000,
+    m: 60_000,
+    h: 3_600_000,
+    d: 86_400_000,
+  }[match[2]]!;
+  return Number(match[1]) * unit;
 }
 
 export const space = new Command()
@@ -492,6 +526,100 @@ export const space = new Command()
       });
     } finally {
       db.close();
+    }
+  })
+  /* space compact */
+  .command(
+    "compact <store:string>",
+    "Plan the compaction of a space store's history: the rows and payloads a " +
+      "run would remove, computed without writing. Only --dry-run exists " +
+      "until the write path lands (docs/plans/compact-space.md, stage 4).",
+  )
+  .option(
+    "--documents <prefix:string>",
+    "Instances whose id starts with the prefix (of:, computed:, cid:). " +
+      "Repeatable. The ACL document is never selected.",
+    { collect: true },
+  )
+  .option(
+    "--scope <scope:string>",
+    "Restrict the selection to one scope kind: space, user or session.",
+  )
+  .option(
+    "--before-seq <seq:integer>",
+    "Rows below this seq are candidates; the oldest kept row becomes the base.",
+  )
+  .option(
+    "--before <timestamp:string>",
+    "The same, as a UTC timestamp in the store's own format " +
+      "(YYYY-MM-DD HH:MM:SS, no other spelling), resolved to the newest " +
+      "commit created before it.",
+  )
+  .option(
+    "--keep-last <n:integer>",
+    "Keep the newest n rows of every instance.",
+  )
+  .option(
+    "--keep-payloads <duration:string>",
+    "Commits created within this window of the newest commit keep their " +
+      "payload: a number and a unit, such as 24h, 7d or 30m.",
+    { default: "24h" },
+  )
+  .option("--dry-run", "Compute and report; write nothing. Required for now.")
+  .action((options, store) => {
+    if (!options.dryRun) {
+      throw new ValidationError(
+        "cf space compact writes nothing yet: pass --dry-run for the report. " +
+          "The write path is stage 4 of docs/plans/compact-space.md.",
+      );
+    }
+    const prefixes = options.documents ?? [];
+    if (prefixes.length === 0) {
+      throw new ValidationError(
+        "--documents <prefix> names what to compact (of:, computed:, cid:); " +
+          "there is no implicit everything.",
+      );
+    }
+    const scope = parseScope(options.scope);
+    const keepPayloadsMs = parseDuration(options.keepPayloads);
+    try {
+      Deno.statSync(store);
+    } catch {
+      throw new ValidationError(`no store at ${store}`);
+    }
+    // The inspector's read-only opener, which also shims `scope_key` onto a
+    // store from before that column existed, so the planner's reads of it
+    // hold on every store the server ever wrote.
+    const space = openSpace(store);
+    try {
+      let report;
+      try {
+        report = planCompaction(space.db, {
+          selection: { prefixes, ...(scope === undefined ? {} : { scope }) },
+          cut: {
+            ...(options.beforeSeq === undefined
+              ? {}
+              : { beforeSeq: options.beforeSeq }),
+            ...(options.before === undefined ? {} : { before: options.before }),
+            ...(options.keepLast === undefined
+              ? {}
+              : { keepLast: options.keepLast }),
+          },
+          keepPayloadsMs,
+        });
+      } catch (error) {
+        // The planner refuses an option it cannot read as intended, by name;
+        // that is a usage error here.
+        if (error instanceof TypeError) {
+          throw new ValidationError(error.message);
+        }
+        throw error;
+      }
+      out(!!options.json, report, () => {
+        console.log(formatCompactionReport(report));
+      });
+    } finally {
+      space.close();
     }
   })
   /* space create */
