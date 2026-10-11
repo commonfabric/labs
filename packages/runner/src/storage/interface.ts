@@ -874,6 +874,15 @@ export interface IStorageProvider {
    */
   pullToServerHead?(): Promise<void>;
 
+  /**
+   * The server's commit sequence for this space as of one ordered round
+   * trip, which applies every frame the server had published before it, as
+   * `pullToServerHead` does. It is the sequence a space's watermark is held
+   * against to know the serving runtime has reacted to everything committed
+   * so far.
+   */
+  serverHeadSeq?(): Promise<number>;
+
   /** List live space-scoped entity identifiers without loading their values. */
   listEntityIds?(): Promise<string[] | undefined>;
 

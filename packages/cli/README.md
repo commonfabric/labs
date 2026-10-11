@@ -1802,6 +1802,14 @@ queries and their reactive updates, to settle before reading. Its execution can
 demand inputs beyond the selected output. Missing-path diagnostics can require a
 broader root read.
 
+With server execution on, a read first waits for the space's watermark to cover
+the server's head as it stands when the read begins. The serving runtime runs
+the handlers and derives what a read returns, and a `cf set` or `cf call` that
+sends an event returns with the event committed and that run still ahead, so the
+wait is what makes a `cf get` that follows one, from the same process or
+another, read what the run stored. With server execution off, this runtime runs
+what it reads, and no such wait occurs.
+
 `cf piece call` writes them **past the `--` that closes the callable's
 section**. The callable name opens that section, so everything between the two
 belongs to the verb, and a projection reaches the read step by stepping past the
