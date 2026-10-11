@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { spy } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 
 import { defer, type Deferred } from "@commonfabric/utils/defer";
@@ -742,6 +742,56 @@ describe("piece source reconciliation", () => {
         outcome: "unreachable",
         origin: PARENT_SOURCE,
         detail: "connection refused",
+      });
+    });
+
+    it("records why the write that adopts the origin's source did not commit", async () => {
+      // The origin answered and its source compiled, so a record saying only
+      // that it could not be reached would point a reader at the network. The
+      // commit's own reason is what says where the update stopped.
+      const demanding = sourceWithRequiredInput("v2");
+      const demandingIdentity = await identityFor(demanding);
+      const piece = await preparePiece(
+        servingFetch(() => demandingIdentity, () => demanding),
+      );
+      await stampSource(piece, PARENT_SOURCE);
+
+      expect(await reconcile(piece)).toBe("unavailable");
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "unreachable",
+        origin: PARENT_SOURCE,
+        offered: { identity: demandingIdentity, symbol: SYMBOL },
+      });
+      expect(getPieceReconciliation(piece)?.detail).toContain(
+        "updated arguments do not match the candidate schema",
+      );
+    });
+
+    it("records that the piece changed while its write was being prepared", async () => {
+      // A stored argument that moves between the snapshot and the commit
+      // declines the write, which the store never sees.
+      const v2Identity = await identityFor(source("v2"));
+      const piece = await preparePiece(
+        servingFetch(() => v2Identity, () => source("v2")),
+      );
+      await stampSource(piece, PARENT_SOURCE);
+      const moved = stub(
+        runtime,
+        "syncStoredSetupArgument",
+        () => Promise.resolve(() => false),
+      );
+      try {
+        expect(await reconcile(piece)).toBe("unavailable");
+      } finally {
+        moved.restore();
+      }
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "unreachable",
+        origin: PARENT_SOURCE,
+        offered: { identity: v2Identity, symbol: SYMBOL },
+        detail: "the piece changed while its write was being prepared",
       });
     });
 

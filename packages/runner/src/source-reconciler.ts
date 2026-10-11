@@ -69,14 +69,17 @@ import { fabricAuthorityMatchesSpaceHost } from "./space-host.ts";
 import type { MemorySpace } from "./storage/interface.ts";
 
 /**
- * What went wrong, as a reason a record can carry. Falls back through the
- * error's name to a fixed phrase, because an empty one is dropped when the
- * record is read and would make an unchanging failure rewrite itself forever.
+ * What went wrong, as a reason a record can carry: a thrown error, or the
+ * rejection a commit returns, which has an error's name and message without
+ * being one. Falls back through the error's name to a fixed phrase, because an
+ * empty one is dropped when the record is read and would make an unchanging
+ * failure rewrite itself forever.
  */
 function reconciliationDetail(error: unknown): string {
-  if (error instanceof Error) {
-    if (error.message.length > 0) return error.message;
-    if (error.name.length > 0) return error.name;
+  if (error instanceof Error || isObjectNotArray(error)) {
+    const { message, name } = error;
+    if (typeof message === "string" && message.length > 0) return message;
+    if (typeof name === "string" && name.length > 0) return name;
   } else {
     const described = String(error);
     if (described.length > 0) return described;
@@ -103,8 +106,9 @@ const logger = getLogger("runner.source-reconcile", {
  * - `incompatible`: the origin offered source that cannot replace what the
  *   piece runs, and its owner has not said to take it anyway.
  * - `unavailable`: the origin's current source could not be adopted this
- *   time — it could not be reached, or the piece changed underneath the
- *   attempt and the write it was going to make no longer describes it.
+ *   time — it could not be reached, the write that adopts it did not commit,
+ *   or the piece changed underneath the attempt and the write it was going to
+ *   make no longer describes it.
  */
 export type ReconcileOutcome =
   | "detached"
@@ -1244,7 +1248,7 @@ export class SourceReconciler {
     // loaded replaces the document the store holds, so they are named too,
     // with what the candidate's nodes read, each under its reader's schema.
     await runtime.runner.syncStoredPieceCells(resultCell, candidate);
-    const committed = await this.#commit(resultCell, state, signal, (tx) => {
+    const failure = await this.#commit(resultCell, state, signal, (tx) => {
       if (!argumentUnchanged(resultCell.withTx(tx))) return false;
       if (sourceUpdate !== undefined) {
         runtime.patternManager.stageSourceUpdate(
@@ -1273,7 +1277,9 @@ export class SourceReconciler {
       });
       return true;
     }, sourceUpdate);
-    return committed ? "updated" : "unavailable";
+    if (failure === undefined) return "updated";
+    state.detail = failure;
+    return "unavailable";
   }
 
   /**
@@ -1341,7 +1347,7 @@ export class SourceReconciler {
       origin: ref,
       expected: state.snapshot,
     };
-    const committed = await this.#commit(
+    const failure = await this.#commit(
       resultCell,
       state,
       undefined,
@@ -1356,13 +1362,19 @@ export class SourceReconciler {
         return true;
       },
     );
-    return committed ? "migrated" : "unavailable";
+    if (failure === undefined) return "migrated";
+    state.detail = failure;
+    return "unavailable";
   }
 
   /**
    * Apply a write under the state this reconciliation read. Every attempt
    * re-checks that state, so a concurrent edit, detach, or repoint is never
    * overwritten by a decision taken before it.
+   *
+   * Returns `undefined` once the write commits, and otherwise why it did not,
+   * as a reason a record can carry: the error that stopped the commit, or the
+   * piece having changed under the write.
    */
   async #commit(
     resultCell: Cell<unknown>,
@@ -1370,7 +1382,7 @@ export class SourceReconciler {
     signal: AbortSignal | undefined,
     write: (tx: Parameters<typeof applyPieceSourceTransition>[2]) => boolean,
     sourceUpdate?: PreparedSourceUpdate,
-  ): Promise<boolean> {
+  ): Promise<string | undefined> {
     const runtime = this.#runtime;
     const result = await runtime.editWithRetry(
       (tx) => {
@@ -1405,16 +1417,18 @@ export class SourceReconciler {
       undefined,
       { sourceUpdate },
     );
-    if (signal?.aborted) return false;
+    if (signal?.aborted) return "the reconciliation was stopped";
     if (result.error) {
       logger.warn("reconcile-commit-failed", () => [
         "source reconciliation could not commit",
         state.space,
         result.error,
       ]);
-      return false;
+      return reconciliationDetail(result.error);
     }
-    return result.ok === true;
+    return result.ok === true
+      ? undefined
+      : "the piece changed while its write was being prepared";
   }
 
   /**
