@@ -144,7 +144,7 @@ export const coarsenNullable = lift(
 /** A count of entries, each of which must carry the owner's stamp. */
 export const countStamped = lift(
   (args: { ids: RequiresIntegrity<string, readonly ["owner-gate"]>[] }): string =>
-    String(args?.ids?.length ?? 0),
+    String((args?.ids ?? []).filter((id) => id.length > 0).length),
 );
 
 /** Other code's computation over the owner's gate. */
@@ -248,6 +248,9 @@ interface Input {
   >;
   bare: Writable<Default<{ fix: Fix }, { fix: { lat: 51.6 } }>>;
   ids: Writable<Default<string[], []>>;
+  stampedIds: Writable<
+    Default<AddIntegrity<string[], readonly ["owner-gate"]>, []>
+  >;
   settings: Writable<Default<OwnerSettings, { fix: { lat: 0 } }>>;
   ownerLog: Writable<Default<string, "">>;
   forgedLog: Writable<Default<string, "">>;
@@ -266,6 +269,7 @@ export default pattern<Input>(
     wrap,
     bare,
     ids,
+    stampedIds,
     settings,
     ownerLog,
     forgedLog,
@@ -295,6 +299,7 @@ const GATE_OUTPUTS = `
     settingsFixRun: coarsenOptional(settings.key("nested") as any),
     inventedRun: coarsenOptional({ fix, gate: gate.key("x") as any }),
     countRun: countStamped({ ids: ids as any }),
+    stampedCountRun: countStamped({ ids: stampedIds as any }),
     openGate: openGate({ gate }),
     forge: forge({ standIn }),
     assemble: assemble({ view, fix }),
@@ -533,10 +538,14 @@ describe("cfc node input requirements", () => {
       });
     });
 
-    // A requirement on each entry says nothing of how many there are.
-    it("runs on an empty list whose entries each require a stamp", async () => {
+    // An empty list is the absence of any entry: the seed has to be written
+    // with the evidence its entries require, as a pattern's setup does when
+    // the list's type mints it.
+    it("refuses an empty list no stamp vouches for, and runs on a stamped seed", async () => {
       await run(GATE_OUTPUTS, async (_send, read) => {
-        expect((await read()).countRun).toBe("0");
+        const outputs = await read();
+        expect(outputs.countRun).toBeUndefined();
+        expect(outputs.stampedCountRun).toBe("0");
       });
     });
 

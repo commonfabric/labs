@@ -39,8 +39,9 @@
  *   the code's schema does not declare (one a reference carries, or the
  *   graph's), the code would be handed the value that schema chose, which
  *   carries no evidence either.
- * - A requirement on the members of an empty container (a `*` path) observes
- *   nothing: it constrains each member, not how many there are.
+ * - An empty container whose members carry a requirement (a `*` path) is the
+ *   absence of any member, observed the same way: a seed the code requires
+ *   evidence on has to be written with it.
  * - A cycle of references, or a chain longer than the runtime resolves,
  *   carries no evidence. The cycle check is keyed on each reference's target,
  *   so a chain that passes one target twice on different walks is refused
@@ -419,9 +420,11 @@ const reachThroughInput = (
       return;
     }
     if (segment === "*") {
-      // A requirement on the members of an empty container has no member to
-      // observe: it says nothing of how many members there are.
-      for (const [key, child] of Object.entries(value)) {
+      const members = Object.entries(value);
+      // An empty container enumerated: the absence of any member, observed
+      // with the container's own evidence, as a missing key is.
+      if (members.length === 0) return absentFrom(location, defaulting);
+      for (const [key, child] of members) {
         inDocument(
           at(location, key),
           child,

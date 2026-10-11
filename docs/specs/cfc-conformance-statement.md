@@ -451,8 +451,9 @@ commit under the enforcing modes. What each observation carries:
   from an ancestor, a declared store policy or a derived entry; a segment of a
   reference's own path that is not there, a path past a scalar, and a missing
   document carry none;
-- a requirement on the members of an empty container (a `*` path) observes
-  nothing: it constrains each member and says nothing of how many there are;
+- an empty container whose members carry a requirement is the absence of any
+  member, observed the same way, so a seed the code requires evidence on is
+  written with that evidence;
 - a `default` that a schema other than the code's own would supply at an
   absent path (one a reference carries, or the graph's) and that the code's
   schema would not supply the same way carries none;
@@ -503,9 +504,6 @@ the log and the reach can go.
 - A `requiredIntegrity` inside an `anyOf` or `oneOf` branch is applied
   whichever branch the value takes, an over-taint; §4.2.1.1 keeps such
   declarations outside the normalized profile.
-- An empty container read at a path with a requirement on its members is not
-  held to that requirement, although §8.10.3 has an ancestor read consume its
-  descendants: an under-taint confined to the container's emptiness.
 - A document seeded before its pattern seeded an empty roster (`{}` rather
   than `{ admins: [] }`) reads as an absent roster with no evidence, and its
   nodes are refused until the owner writes the roster once: an over-taint.
