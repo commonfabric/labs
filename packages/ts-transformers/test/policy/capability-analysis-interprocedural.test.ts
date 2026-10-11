@@ -161,6 +161,40 @@ Deno.test(
 );
 
 Deno.test(
+  "interprocedural helper analyzed with nested callbacks charges what its closures do",
+  () => {
+    // A caller that sees into its own nested callbacks sees into the
+    // helper's: `body` is read, and `note` written, only inside closures the
+    // helper declares.
+    const { program, sourceFile } = createProgram(`${CELL}
+      type ReadCell<T> = Cell<T> & { get(): T };
+      const helper = (
+        message: ReadCell<{ body: string; sentAt: number }>,
+        note: ReadCell<string>,
+      ) => {
+        const body = () => message.get().body;
+        const mark = () => note.set("seen");
+        mark();
+        return String(message.get().sentAt) + body();
+      };
+      const fn = (input: {
+        message: ReadCell<{ body: string; sentAt: number }>;
+        note: ReadCell<string>;
+      }) => helper(input.message, input.note);`);
+    const summary = analyzeFunctionCapabilities(findArrow(sourceFile, "fn"), {
+      checker: program.getTypeChecker(),
+      interprocedural: true,
+      includeNestedCallbacks: true,
+    });
+    const input = getPaths(summary, "input");
+
+    assert(input.readPaths.includes("message.body"));
+    assert(input.readPaths.includes("message.sentAt"));
+    assert(input.writePaths.includes("note"));
+  },
+);
+
+Deno.test(
   "interprocedural wildcard on a member argument keeps that member whole and its siblings narrow",
   () => {
     // The helper's unknown access reaches only `input.count`, so `input` is

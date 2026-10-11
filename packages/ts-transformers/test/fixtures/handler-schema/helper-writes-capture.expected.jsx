@@ -28,6 +28,25 @@ function currentOf(count: Count): number {
     return count.get();
 }
 __cfHardenFn(currentOf);
+type Message = {
+    body: string;
+    sentAt: number;
+};
+function describe(message: Writable<Message>): string {
+    const body = () => message.get().body;
+    return String(message.get().sentAt) + body();
+}
+__cfHardenFn(describe);
+function describeInline(message: Writable<Message>): string {
+    return String(message.get().sentAt) + (() => message.get().body)();
+}
+__cfHardenFn(describeInline);
+function editLater(message: Writable<Message>, text: string): () => void {
+    const edit = () => message.key("body").set(text);
+    edit();
+    return edit;
+}
+__cfHardenFn(editLater);
 const viaHelper = handler({
     asCell: ["opaque"]
 } as const satisfies __cfHelpers.JSONSchema, {
@@ -88,6 +107,104 @@ const viaReadingHelper = handler({
 } as const satisfies __cfHelpers.JSONSchema, (_, { count, out }) => {
     out.set(currentOf(count));
 });
+const viaNestedRead = handler({
+    asCell: ["opaque"]
+} as const satisfies __cfHelpers.JSONSchema, {
+    type: "object",
+    properties: {
+        message: {
+            $ref: "#/$defs/Message",
+            asCell: ["readonly"]
+        },
+        out: {
+            type: "string",
+            asCell: ["writeonly"]
+        }
+    },
+    required: ["message", "out"],
+    $defs: {
+        Message: {
+            type: "object",
+            properties: {
+                body: {
+                    type: "string"
+                },
+                sentAt: {
+                    type: "number"
+                }
+            },
+            required: ["body", "sentAt"]
+        }
+    }
+} as const satisfies __cfHelpers.JSONSchema, (_, { message, out }) => {
+    out.set(describe(message));
+});
+const viaInlineRead = handler({
+    asCell: ["opaque"]
+} as const satisfies __cfHelpers.JSONSchema, {
+    type: "object",
+    properties: {
+        message: {
+            $ref: "#/$defs/Message",
+            asCell: ["readonly"]
+        },
+        out: {
+            type: "string",
+            asCell: ["writeonly"]
+        }
+    },
+    required: ["message", "out"],
+    $defs: {
+        Message: {
+            type: "object",
+            properties: {
+                body: {
+                    type: "string"
+                },
+                sentAt: {
+                    type: "number"
+                }
+            },
+            required: ["body", "sentAt"]
+        }
+    }
+} as const satisfies __cfHelpers.JSONSchema, (_, { message, out }) => {
+    out.set(describeInline(message));
+});
+const viaNestedWrite = handler({
+    type: "object",
+    properties: {
+        text: {
+            type: "string"
+        }
+    },
+    required: ["text"]
+} as const satisfies __cfHelpers.JSONSchema, {
+    type: "object",
+    properties: {
+        message: {
+            $ref: "#/$defs/Message",
+            asCell: ["cell"]
+        }
+    },
+    required: ["message"],
+    $defs: {
+        Message: {
+            type: "object",
+            properties: {
+                body: {
+                    type: "string"
+                },
+                sentAt: {
+                    type: "number"
+                }
+            },
+            required: ["body", "sentAt"]
+        }
+    }
+} as const satisfies __cfHelpers.JSONSchema, ({ text }, { message }) => {
+    editLater(message, text);
+});
 // FIXTURE: helper-writes-capture
 // Verifies: a handler's state capture handed to a helper the same file
 // declares is charged what the helper does with it
@@ -96,7 +213,11 @@ const viaReadingHelper = handler({
 //                        the value to a function with no body to analyze;
 //                        label beside it still narrows to the `text` it reads
 //   currentOf(count)   → count: asCell ["readonly"] (only read there)
-export { viaAuditedHelper, viaHelper, viaReadingHelper };
+//   describe(message)  → message keeps `body`, read in a closure the helper
+//                        declares, beside `sentAt`
+//   describeInline     → the same through an immediately invoked arrow
+//   editLater(message) → message: asCell ["cell"], written in a closure
+export { viaAuditedHelper, viaHelper, viaInlineRead, viaNestedRead, viaNestedWrite, viaReadingHelper, };
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);

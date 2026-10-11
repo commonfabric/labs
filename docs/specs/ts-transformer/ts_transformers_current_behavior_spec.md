@@ -518,9 +518,13 @@ conservative wildcard path instead of taking partial transitive precision. This
 means a `lift` callback that delegates to a local helper which reads
 `(x as any).foo` will trigger shrink validation on the caller's parameter type,
 while the same helper body in another file will conservatively disable
-shrinking for that parameter. A handler that hands a state cell to a local
-helper which writes it emits that cell writable, and one whose helper only
-reads it emits it read-only (fixture `handler-schema/helper-writes-capture`).
+shrinking for that parameter. A helper is analyzed in its caller's mode, so a
+handler's analysis, which sees into the callbacks nested in its body, sees into
+the helper's too: a read or write inside a closure the helper declares, or an
+arrow it invokes on the spot, is charged like one in the helper's body. A
+handler that hands a state cell to a local helper which writes it emits that
+cell writable, and one whose helper only reads it emits it read-only (fixture
+`handler-schema/helper-writes-capture`).
 A helper parameter the analysis marks wildcard still reports its reads and
 writes, which the caller records at the path it passed, or at the static
 prefix of a dynamic one. The unknown access reaches only what was passed: a

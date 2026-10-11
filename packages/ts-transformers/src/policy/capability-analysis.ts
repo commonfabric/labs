@@ -3192,10 +3192,15 @@ export function analyzeFunctionCapabilities(
         return undefined;
       }
 
+      // The callee is analyzed in the caller's mode: a caller that sees into
+      // its own nested callbacks must see into the callee's too, or what the
+      // callee does in one goes uncharged. Each summary cache is handed
+      // analyses of one mode only.
       return analyzeFunctionCapabilities(declaration, {
         checker,
         typeRegistry,
         interprocedural: true,
+        includeNestedCallbacks,
         summaryCache,
         inProgress,
       });
