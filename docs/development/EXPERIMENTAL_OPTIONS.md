@@ -1321,7 +1321,10 @@ the per-epic implementation notes).
   the identifiers the commit read or wrote, so the floor it recorded was
   spurious and pre-empted commits on evidence it did not have. Anyone
   re-measuring `preempt` is measuring against a smaller and more accurate set of
-  floors than the numbers below were taken on.
+  floors than the numbers below were taken on. A floor clears only when a
+  catch-up marker reaches the replica, so a replica records floors only while
+  it holds a subscribed watch view, and drops them all when that view's
+  consumer ends or its session is replaced.
 - **Current default and planned end state.** `off` by default. `preempt` was
   measured net-negative on the lunch-poll workload (it pre-empted commits that
   would have succeeded). The code comment warns not to enable it without

@@ -278,9 +278,17 @@ describe("read-repair: stale read after cross-replica conflict", () => {
     // gate opens, with no frame left for B's replica to wait on.
     await server.flushSessions([space]);
     await clock.settle();
+    expect(promiseSettled, "commit promise settles once the session catches up")
+      .toBe(true);
     const resB = await commitP;
     expect(resB.error?.name).toBe("ConflictError");
-    expect(await rtB.awaitCommitRetryReadiness(resB.error)).toEqual([]);
+    let pullFailures: unknown;
+    rtB.awaitCommitRetryReadiness(resB.error).then((failures) => {
+      pullFailures = failures;
+    });
+    await clock.settle();
+    expect(pullFailures, "the retry gate opens and pulls the conflict")
+      .toEqual([]);
     expect(rtB.getCell<{ v: string }>(space, CAUSE, undefined).get())
       .toEqual({ v: "v0" });
   });

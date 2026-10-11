@@ -634,7 +634,12 @@ describe("Memory v2 storage notifications", () => {
     const provider = storageManager.open(space);
     const replica = provider.replica as SpaceReplica;
 
-    await replica.accessForTestingOnly.waitForCaughtUpLocalSeq(3);
+    let resolved = false;
+    replica.accessForTestingOnly.waitForCaughtUpLocalSeq(3).then(() => {
+      resolved = true;
+    }, () => {});
+    await clock.settle();
+    expect(resolved).toBe(true);
   });
 
   it("rejects pending caught-up waiters when storage closes", async () => {
@@ -813,7 +818,7 @@ describe("Memory v2 storage notifications", () => {
     expect(admission.preemptThreshold(reading)).toBeUndefined();
   });
 
-  it("admission control records no stale floor on a replica with no watch view", () => {
+  it("records no admission stale floor on a replica with no watch view", () => {
     const provider = storageManager.open(space);
     const admission = (provider.replica as SpaceReplica).accessForTestingOnly;
     const uri = `of:admission-unwatched-${Date.now()}` as URI;

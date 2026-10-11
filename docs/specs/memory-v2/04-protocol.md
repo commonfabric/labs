@@ -1696,9 +1696,10 @@ view — so no frame stream to order against) also applies immediately.
 The same client holds a conflict rejection only until its session receives the
 covering marker, since no frame can repair a replica that consumes none. The
 repair frame delivers only watched documents (`03-commit-model.md` §3.6.4), so
-a retry pulls the documents the conflict names. A sync consumer that ends
-releases everything still waiting on a marker: parked accepts apply, and held
-rejections proceed.
+a retry pulls the documents the conflict names. A sync consumer that ends, or
+a session that is replaced, releases what the client holds on its own replica
+for a marker: parked accepts apply, and a held rejection is left waiting on its
+session alone.
 
 ## 4.12 Mapping from Current Implementation
 
