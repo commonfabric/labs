@@ -2338,6 +2338,19 @@ export class SchemaGenerator {
   }
 
   /**
+   * The schema of `key`, a property several parts of an intersection declare
+   * (`declared`, in part order), settled from the schemas the parts give it,
+   * as the node-based analysis settles one (`sharedPropertyOf()`).
+   */
+  public sharedPropertyOfSchemas(
+    key: string,
+    declared: readonly PartProperty[],
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    return sharedPropertyOf(key, declared, context);
+  }
+
+  /**
    * Formats `type` with `read`, the reading of an alias chain of `kind` entered
    * from `entry`, where the checker instantiates `instantiated`: a written reference
    * to the chain, or, for a chain reached with none, as through an index

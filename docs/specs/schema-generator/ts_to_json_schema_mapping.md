@@ -1121,6 +1121,16 @@ Default paths of §7:
   the payload it was written around (§11); and a `Default` brand.
   `{ a: { x: string } } & { a: { y: number } }` merges the two objects, and a
   callable keeps its wrapper marker.
+- A writer is the one label a type cannot carry: only a `typeof` node names
+  it (§11). A property whose type carries a writer policy is settled from
+  the schemas its declarations give it, each read through the node it is
+  written with, as the node-based path settles one (§2). Read from the type
+  alone, the writer would go unread, and with it every label beside it, since
+  a value's carriers are read in full or not at all. So
+  `{ a: WriteAuthorizedBy<{ x: string }, typeof save> } &
+  { a: { x: string; y: number } }`, in either order, gives `a` the members
+  `x` and `y` with the writer on `x`, as a restriction goes on the members its
+  declaration names, and labels written beside the writer go there with it.
 - A property whose declarations are in different scopes, a cell's cap
   counting as its scope, is refused, as one value is stored in one scope:
   `{ a: PerUser<X> } & { a: PerSpace<X> }` throws "The property `a` is

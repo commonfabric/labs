@@ -22,6 +22,7 @@ import {
 } from "../type-utils.ts";
 import { isCellType } from "../typescript/cell-brand.ts";
 import { isScopeBrandMember } from "../typescript/scope-brand.ts";
+import { carriesWriterPolicy } from "../typescript/writer-policy.ts";
 import {
   isCfcCarrier,
   scopeOfScopeWrapper,
@@ -48,10 +49,14 @@ export function propertyScopesError(
   );
 }
 
-/** A part of an intersection that declares a property, and its schema there. */
+/**
+ * A part of an intersection that declares a property, its schema there, and
+ * whether the part requires it.
+ */
 type PropertyDeclaration = {
   readonly part: ts.Type;
   readonly schema: MutableJSONSchema;
+  readonly required: boolean;
 };
 
 /**
@@ -381,9 +386,15 @@ export class IntersectionFormatter implements TypeFormatter {
 
       if (objSchema.properties) {
         for (const [key, value] of Object.entries(objSchema.properties)) {
+          const declaration = {
+            part,
+            schema: value,
+            required: Array.isArray(objSchema.required) &&
+              objSchema.required.includes(key),
+          };
           const declared = declarations.get(key);
-          if (declared) declared.push({ part, schema: value });
-          else declarations.set(key, [{ part, schema: value }]);
+          if (declared) declared.push(declaration);
+          else declarations.set(key, [declaration]);
         }
       }
 
@@ -466,8 +477,13 @@ export class IntersectionFormatter implements TypeFormatter {
    * carrier among it, is read from the type, whichever declaration wrote it.
    * `any` keeps nothing of the declarations beside it, so a property the
    * checker gives `any` keeps what `anyValueSchema()` says of their schemas.
-   * Declarations in different scopes are refused (`propertyScopesError()`),
-   * except where the schema declares no scope.
+   * Only a `typeof` node names a writer, so a writer policy the property's
+   * type carries goes unread there, and every label beside it with it; a
+   * property whose type carries one is settled from the declarations' schemas,
+   * each read through the node it is written with, as the node-based analysis
+   * settles one (`SchemaGenerator.sharedPropertyOfSchemas()`). Declarations in
+   * different scopes are refused (`propertyScopesError()`), except where the
+   * schema declares no scope.
    */
   #sharedPropertySchema(
     key: string,
@@ -521,6 +537,13 @@ export class IntersectionFormatter implements TypeFormatter {
     const own = types.indexOf(type);
     if (own !== -1) {
       return sharedPropertySchema(key, schemas[own]!, schemas, context);
+    }
+    if (carriesWriterPolicy(type, checker)) {
+      return this.#schemaGenerator.sharedPropertyOfSchemas(
+        key,
+        declared,
+        context,
+      );
     }
 
     // Every declaration has a schema, so each is a data property or a
