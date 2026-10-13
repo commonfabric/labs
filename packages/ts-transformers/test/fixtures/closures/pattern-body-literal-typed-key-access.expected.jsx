@@ -87,7 +87,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema);
 const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
-    const inner = Row({ piece: entry.key("piece") });
+    const inner = __cfHelpers.nameInstance(Row({ piece: entry.key("piece") }), "inner");
     return { direct: inner.key(KEY) };
 }, {
     type: "object",
@@ -119,7 +119,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
-    const inner = Row({ piece: entry.key("piece") });
+    const inner = __cfHelpers.nameInstance(Row({ piece: entry.key("piece") }), "inner");
     return <span>{inner.key(KEY)}</span>;
 }, {
     type: "object",
@@ -173,7 +173,7 @@ export default pattern((__cf_pattern_input) => {
     const piece = __cf_pattern_input.key("piece");
     const field = __cf_pattern_input.key("field");
     const entries = __cf_pattern_input.key("entries");
-    const row = Row({ piece });
+    const row = __cfHelpers.nameInstance(Row({ piece }), "row");
     return {
         direct: row.key(KEY),
         chosen: __cfLift_1({

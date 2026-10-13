@@ -73,7 +73,7 @@ const EntryRow = pattern((input) => ({
 } as const satisfies __cfHelpers.JSONSchema);
 const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     const entry = __cf_pattern_input.key("element");
-    const row = EntryRow({ piece: entry.key("piece") });
+    const row = __cfHelpers.nameInstance(EntryRow({ piece: entry.key("piece") }), "row");
     return {
         views: row.key(__cfHelpers.VIEWS),
         inner: row.key(__cfHelpers.VIEWS, "row"),

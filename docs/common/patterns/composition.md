@@ -219,24 +219,40 @@ the pattern's state with it. See
 
 ## A Sub-Pattern Instance Is Known by Its Position
 
-A sub-pattern instance that no result key or `.for()` names, such as an inline
-`{ItemCard({ item })}`, is known by its position: the builder numbers such
-instances in the order it walks the pattern's inputs and then its result, `[UI]`
-tree included, and an instance's state belongs to its number. A sub-pattern
-added ahead of others moves each later one onto the number, and so the state, of
-the one before it. An update that does this to a deployed piece's own pattern is
-refused before its setup commits anything, wherever the piece's children show
-they have moved: the piece keeps its state and the pattern it ran before, and it
-does not start in a new session until it is pointed back at a pattern that is
-not refused. The check leaves out an instance that is its space's root, and one
-placed in a space of its own with `.inSpace()` that is managed there
-independently, so an update is not refused on account of either. Nor is a
-sub-pattern's own update checked when its parent's update brings it, nor a
-pattern a `computed` returns in place of another, so their instances can still
-move onto each other's state. Add a sub-pattern after every existing one in that
-order, or name it with a result key, so that it takes a number nothing held.
-Where an instance's own source also changed in the same update, the refusal
-cannot tell that it moved, and the instances can run on each other's state.
+A sub-pattern instance that no `const`, result key or `.for()` names, such as an
+inline `{ItemCard({ item })}`, is known by its position: the builder numbers
+such instances in the order it walks the pattern's inputs and then its result,
+`[UI]` tree included, and an instance's state belongs to its number. A
+sub-pattern added ahead of others moves each later one onto the number, and so
+the state, of the one before it. An update that does this to a deployed piece's
+own pattern is refused before its setup commits anything, wherever the piece's
+children show they have moved: the piece keeps its state and the pattern it ran
+before, and it does not start in a new session until it is pointed back at a
+pattern that is not refused. The check leaves out an instance that is its
+space's root, and one placed in a space of its own with `.inSpace()` that is
+managed there independently, so an update is not refused on account of either.
+Nor is a sub-pattern's own update checked when its parent's update brings it,
+nor a pattern a `computed` returns in place of another, so their instances can
+still move onto each other's state. Add a sub-pattern after every existing one
+in that order, or name it with a result key, so that it takes a number nothing
+held. Where an instance's own source also changed in the same update, the
+refusal cannot tell that it moved, and the instances can run on each other's
+state.
+
+## A Sub-Pattern Bound to a `const` Is Known by Its Name
+
+A sub-pattern instance bound to a `const` keeps its state under that name,
+wherever it sits in the pattern and whatever is added around it, provided no
+other instance in the pattern is bound to the same name; instances that share
+one are known by their positions. Renaming the `const` starts the instance
+fresh: its state stays with the old name, which nothing reaches any more, and
+the update logs `instance-carry-over`. Bind a sub-pattern that holds state to a
+`const` in an update that changes nothing else around it: that update keeps the
+inline instance's state. Deleting an inline instance and adding a `const`
+instance of the same pattern in the same update hands the deleted one's state
+to the new one, where the new one takes its place among that pattern's
+instances. Reordering instances of one pattern in the same update matches them
+by order, so each takes the state of the one whose place it takes.
 
 ## See Also
 

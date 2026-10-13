@@ -169,7 +169,7 @@ const __cfLift_3 = __cfHelpers.lift<{
 // stay out of every input schema
 export default pattern((__cf_pattern_input) => {
     const piece = __cf_pattern_input.key("piece");
-    const row = Row({ piece });
+    const row = __cfHelpers.nameInstance(Row({ piece }), "row");
     return {
         shout: __cfLift_1({ row: row }).for(["__patternResult", "shout"], true),
         unrendered: __cfLift_2({ row: row }).for(["__patternResult", "unrendered"], true),

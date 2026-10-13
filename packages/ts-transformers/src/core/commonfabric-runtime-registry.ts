@@ -134,6 +134,16 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // `nameInstance` gives a sub-pattern instance bound to a `const` its
+  // instance name and returns the instance unchanged.
+  // ReactiveVariableForTransformer emits the calls; authored code does not.
+  // The instance it hands back is the pattern call's own result, so the call
+  // originates nothing reactive of its own and is a plain call.
+  {
+    exportName: "nameInstance",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   {
     exportName: "render",
     category: "builder",

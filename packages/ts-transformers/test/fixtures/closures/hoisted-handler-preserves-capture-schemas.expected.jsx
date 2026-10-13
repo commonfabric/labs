@@ -154,7 +154,7 @@ const __cfHandler_2 = __cfHelpers.handler({
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, ({ label }, { self, items }) => {
-    const newItem = Item({ id: 0, label, parent: self } as any);
+    const newItem = __cfHelpers.nameInstance(Item({ id: 0, label, parent: self } as any), "newItem");
     items.push(newItem as any);
     return newItem;
 });

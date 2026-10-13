@@ -439,11 +439,14 @@ const Home = pattern(
     // Child components
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
-    // Its panel renders after every other panel. A panel inserted ahead of an
-    // existing one shifts the positions of a deployed Home's existing
-    // children, so each child's update runs on the stored state of the child
-    // that held its position before, and a stored slot the child's argument
-    // schema refuses is dropped with a `setup-stored-slot-dropped` warning.
+    // Its panel renders after every other panel. Home's children are named
+    // instances, so a Home set up under instance names keeps each child
+    // wherever its panel sits. A Home whose stored state carries no setup
+    // marker, and whose children's sources have changed since it was set up,
+    // finds its children by position instead, so a panel inserted ahead of an
+    // existing one moves them. Their updates then run on each other's stored
+    // state, and a stored slot a child's schema refuses is dropped, with a
+    // `setup-stored-slot-dropped` warning.
     const chatManager = FabriChatManager({ sharedSpaceCatalog: catalog });
     const ensurePrivateInboxStream = ensurePrivateInbox({
       privateInbox,

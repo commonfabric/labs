@@ -98,7 +98,7 @@ const Row = pattern((input) => {
 // map-pattern-factory-result-key-access; the two contexts lower alike
 export default pattern((__cf_pattern_input) => {
     const piece = __cf_pattern_input.key("piece");
-    const row = Row({ piece });
+    const row = __cfHelpers.nameInstance(Row({ piece }), "row");
     return {
         [NAME]: row.key(__cfHelpers.NAME),
         [VIEWS]: row.key(__cfHelpers.VIEWS),
