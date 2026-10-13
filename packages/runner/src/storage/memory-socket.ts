@@ -23,6 +23,9 @@ export interface MemorySocket {
   /** WebSocket connection state. */
   readonly readyState: number;
 
+  /** Bytes queued by a native WebSocket, when exposed by the backend. */
+  readonly bufferedAmount?: number;
+
   /** Registers a listener using WebSocket event names. */
   addEventListener<K extends keyof MemorySocketEvents>(
     type: K,

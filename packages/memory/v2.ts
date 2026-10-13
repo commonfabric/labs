@@ -1182,6 +1182,12 @@ export type MemoryProtocolFlags = {
   /** Hash-keyed per-frame schema table. */
   syncSchemaTableV2: boolean;
 
+  /** Per-sync label/path tables, enabled only when both peers advertise it. */
+  readonly syncLabelTableV1: boolean;
+
+  /** Request/acknowledgment label/path tables, enabled by both peers' offers. */
+  readonly commitLabelTableV1: boolean;
+
   /**
    * Server capability: a session sync payload carries the links the
    * server's walk followed out of the space (`SessionSync.crossings`),
@@ -1363,6 +1369,10 @@ export type WireMemoryProtocolFlags = {
   applyOp?: boolean;
   operationCodecs?: readonly string[];
   syncSchemaTableV2?: boolean;
+  readonly syncLabelTableV1?: boolean;
+
+  /** Optional advertisement of commit request/acknowledgment metadata tables. */
+  readonly commitLabelTableV1?: boolean;
   syncCrossingsV1?: boolean;
   messageCompressionV1?: boolean;
   sqliteCommitRowLabelEval?: boolean;
@@ -2606,6 +2616,8 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   sessionReportV1: true,
   routedAuthV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
+  syncLabelTableV1: true,
+  commitLabelTableV1: true,
   // Build-inherent: this build's query walk reports the links it follows
   // out of a space, and its session frames carry them.
   syncCrossingsV1: true,
@@ -2699,6 +2711,20 @@ export const parseMemoryProtocolFlags = (
   if (
     syncSchemaTableV2 !== undefined &&
     typeof syncSchemaTableV2 !== "boolean"
+  ) {
+    return null;
+  }
+
+  const syncLabelTableV1 = value.syncLabelTableV1;
+  if (
+    syncLabelTableV1 !== undefined && typeof syncLabelTableV1 !== "boolean"
+  ) {
+    return null;
+  }
+
+  const commitLabelTableV1 = value.commitLabelTableV1;
+  if (
+    commitLabelTableV1 !== undefined && typeof commitLabelTableV1 !== "boolean"
   ) {
     return null;
   }
@@ -2829,6 +2855,8 @@ export const parseMemoryProtocolFlags = (
       ? {}
       : { operationCodecs: [...operationCodecs].sort() as string[] }),
     syncSchemaTableV2: syncSchemaTableV2 === true,
+    syncLabelTableV1: syncLabelTableV1 === true,
+    commitLabelTableV1: commitLabelTableV1 === true,
     messageCompressionV1: messageCompressionV1 === true,
     // Absent (an older peer) parses to false: the capability must be
     // POSITIVELY advertised for the runner to relax its write gate.
@@ -2896,6 +2924,8 @@ export const wireMemoryProtocolFlags = (
     ? {}
     : { operationCodecs: flags.operationCodecs }),
   syncSchemaTableV2: flags.syncSchemaTableV2,
+  syncLabelTableV1: flags.syncLabelTableV1,
+  commitLabelTableV1: flags.commitLabelTableV1,
   messageCompressionV1: flags.messageCompressionV1,
   sqliteCommitRowLabelEval: flags.sqliteCommitRowLabelEval,
   sqliteQueryReader: flags.sqliteQueryReader,

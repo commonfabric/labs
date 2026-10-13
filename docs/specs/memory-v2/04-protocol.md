@@ -56,6 +56,8 @@ The client MUST declare its protocol version in the first WebSocket message:
     "stableExpressionResultIds": true,
     "messageCompressionV1": true,
     "syncSchemaTableV2": true,
+    "syncLabelTableV1": true,
+    "commitLabelTableV1": true,
     "verdictCatchUpMarkers": true,
     "entityIdListing": true,
     "entityIdPagination": true,
@@ -81,6 +83,8 @@ If the server accepts the protocol, it returns:
     "stableExpressionResultIds": true,
     "messageCompressionV1": true,
     "syncSchemaTableV2": true,
+    "syncLabelTableV1": true,
+    "commitLabelTableV1": true,
     "verdictCatchUpMarkers": true,
     "entityIdListing": true,
     "entityIdPagination": true,
@@ -236,6 +240,20 @@ in [Session Sync Payload](#423-session-sync-payload). It defaults to `false`
 when absent. The server sends compact sync payloads only when both peers
 advertise the capability; otherwise it sends the historical fully expanded
 shape.
+
+`syncLabelTableV1` advertises per-sync label and label-path tables, independently
+of schema tables and message compression. It is a build capability, always
+advertised by this build, and defaults to `false` when absent. The server
+compacts labels and paths only
+when both peers advertise it. A client refuses a sync carrying either table or
+indexed metadata unless the connection negotiated the capability.
+
+`commitLabelTableV1` independently advertises label and label-path tables for
+client `transact` requests and server transaction acknowledgments. This build
+advertises `true`; omission means `false`. Both peers must advertise it before
+either endpoint compacts transaction metadata.
+`syncLabelTableV1` authorizes only server sync encoding and does not authorize
+compact commits. See [commit metadata encoding](#negotiated-commit-metadata-encoding).
 
 `syncCrossingsV1` is a server capability: its session sync payloads carry
 `crossings`, the links its schema traversals followed out of the space, as
@@ -547,6 +565,8 @@ interface HelloMessage {
     stableExpressionResultIds?: boolean;
     messageCompressionV1?: boolean;
     syncSchemaTableV2?: boolean;
+    syncLabelTableV1?: boolean;
+    commitLabelTableV1?: boolean;
     syncCrossingsV1?: boolean;
     entityIdListing?: boolean;
     entityIdPagination?: boolean;
@@ -897,6 +917,80 @@ whose resulting stored document uses that prefix as an opaque schema string in
 a recognized schema position; ordinary strings in other document positions are
 unaffected.
 
+#### Negotiated label-table encoding
+
+When both peers advertise `syncLabelTableV1`, a `SessionSync` in
+`response.ok.sync` or `session/effect.effect` may carry dense `labelTable` and
+`labelPathTable` arrays. Only `upserts[].doc.cfc.labelMap.entries[]` uses these
+tables: a `.label` object or `.path` array may be replaced with its nonnegative
+integer index into the corresponding table. Each table is selected independently
+when it saves bytes. Canonical content hashes deduplicate equal labels and paths
+internally; the wire carries only indices and one copy of each selected value.
+
+Inline, nonindexed CFC metadata is preserved unchanged for semantic readers,
+including malformed metadata and `cfc: null` (no stored policy). The codec
+validates dictionary contents and indexed references, not inline CFC semantics.
+A number in a whole entry's `label` or `path` field is reserved as a dictionary
+reference, even when the sibling field is missing or an envelope version is
+unsupported. This also applies to numeric entry keys in a malformed `entries`
+record. Missing tables and invalid indices are rejected; numeric values inside
+labels, path components, or application data are not whole-field references.
+
+For example, these two entries refer to the same label and path:
+
+```json
+{
+  "type": "sync",
+  "fromSeq": 10,
+  "toSeq": 11,
+  "upserts": [{
+    "branch": "",
+    "id": "of:donuts",
+    "seq": 11,
+    "doc": {
+      "value": { "flavor": "chocolate" },
+      "cfc": {
+        "version": 1,
+        "schemaHash": "fid1:...",
+        "labelMap": {
+          "version": 1,
+          "entries": [
+            { "path": 0, "label": 0 },
+            { "path": 0, "origin": "derived", "label": 0 }
+          ]
+        }
+      }
+    }
+  }],
+  "removes": [],
+  "labelTable": [{ "confidentiality": [], "integrity": [] }],
+  "labelPathTable": [["flavor"]]
+}
+```
+
+Both tables belong to this sync alone. The server compacts labels and paths
+before schemas. The client expands schemas first, then labels and paths, before
+delivering the sync to session consumers. It removes both metadata tables and
+restores exact labels, paths, and ordering. Invalid table contents and invalid or
+out-of-range indices reject the frame. One shared 16 MiB expansion budget counts
+the cumulative canonical encoded label and path bytes referenced by the sync,
+including the codec tag at each occurrence. Schemas nested inside label links
+are complete before this accounting. This encoding changes neither stored
+documents nor CFC policy decisions.
+
+A client that cannot decode or expand a server frame discards that connection:
+skipping an effect would let a later sequence acknowledge state the client never
+received. The failed frame reaches no session consumer and receives no
+acknowledgment. A reconnectable transport resets its connection, fences queued
+frames from it, and restores sessions from their last applied state. A transport
+that cannot reset terminates its sessions with the receive error. Recovery
+declares the replica provider's holdings, or the local watch view's holdings when
+there is no provider. The server's delivery cache is not a valid baseline for a
+frame the client could not apply. A server without `sessionHoldings`, or a view
+of explicit scope instances without a provider, terminates the affected session
+instead. An invalid handshake fails the connection attempt before sessions are
+admitted.
+
 ### 4.2.4 Batching
 
 The current JSON wire format does not define a separate batch envelope. Clients
@@ -953,6 +1047,79 @@ Path conventions on the wire:
   have no server sequence and do not participate in conflict validation.
 - query selectors remain value-relative and are re-rooted by the shared
   traversal layer.
+
+#### Negotiated commit metadata encoding
+
+When both peers advertise `commitLabelTableV1`, a `transact` may carry dense
+`commit.labelTable` and `commit.labelPathTable` arrays. Each table is local to
+that commit and selected independently when interning saves bytes. Nonnegative
+integer references replace only labels and paths in actual CFC metadata carried
+by set operations or supported patch payloads at their document-relative metadata
+positions. Patch payloads include newly supplied and compared values; patch
+pointers, order and indices retain their meaning.
+Application values, reads, preconditions and unrelated operation payloads retain
+their original representation. Metadata-looking application objects do not
+become reference positions merely because they have `label` or `path` keys.
+
+As with sync tables, nonindexed inline metadata, including malformed CFC
+subtrees and `cfc: null`, reaches semantic CFC readers unchanged. Such a subtree
+does not prevent compression of eligible metadata elsewhere in the commit.
+Dictionary contents, including unused slots, and indexed references remain
+codec-validated. A numeric whole entry `label` or `path` is a reserved reference
+even under an unsupported version, with a missing sibling field, or at a numeric
+key in a malformed `entries` record; it must resolve through the corresponding
+commit dictionary. This rule also applies at document-rooted patch positions.
+
+The client compacts a temporary outgoing message before Fabric encoding and
+transport byte/node validation. It retains the original inline commit for
+pending requests, conflict handling and reconnect replay. Each send uses the
+current connection's negotiation; a replacement connection without the
+capability receives the inline representation even for a retained commit.
+
+The server performs bounded wire decoding, then expands negotiated metadata
+before validating the request's commit shape or running CFC and storage checks.
+Unnegotiated tables or indexed metadata, malformed table contents, missing or
+out-of-range references, and expansion beyond the codec's shared 16 MiB
+referenced-label/path byte budget reject the request before commit application.
+That budget counts cumulative canonical encoded label and path bytes at every
+reference, including the codec tag. Expansion removes the tables and restores
+exact metadata; internal and stored commits use the inline representation.
+
+The same capability permits tables at `response.ok.labelTable` and
+`response.ok.labelPathTable` in transaction acknowledgments. These dictionaries
+replace only metadata labels and paths in set revisions' `.document.cfc` and
+patch revisions' `.patches` operands at document-rooted metadata positions. Delete
+revisions carry no metadata payload. Revision identifiers, sequence numbers,
+operation indices, patch order and pointers, and application values retain their
+meaning. Each acknowledgment has its own 16 MiB cumulative
+referenced-label/path expansion budget, independent of the request's budget.
+Dictionary labels must be self-contained: reserved schema references are rejected
+even in unused slots. Sync schema tables do not supply schemas to acknowledgment
+label tables. Nonindexed inline CFC metadata is preserved for semantic readers,
+including malformed subtrees and `cfc: null`; the numeric-reference rules above
+apply independently of sibling fields and envelope versions.
+
+The server compacts a temporary response in the connection's send path before
+wire encoding and byte/node validation. Normal accepts and exact replay results,
+including commits resent after session resumption, use the current connection's
+capability. Stored results and original commits remain inline; a replacement
+connection without the capability receives inline acknowledgments.
+
+The client expands acknowledgment metadata before resolving the request or
+delivering revisions to commit consumers and replica caches. It rejects
+unnegotiated tables or references and malformed or over-budget encodings through
+the same connection-discard and recovery path as invalid sync metadata. Send
+preparation runs sync and acknowledgment label transforms before schema
+compression; receive preparation expands schemas before either label transform.
+Sync and acknowledgment dictionaries have separate contexts, and
+`syncLabelTableV1` does not authorize acknowledgment tables.
+
+Routed transport validates the compact frame's structural bounds and routing
+fields and forwards its original payload to the Memory endpoint. It neither
+expands commit metadata nor re-encodes an expanded body through the transport's
+node limit. The generic signed effective-capability descriptor includes this
+boolean under the same client/public-offer intersection as other encodings;
+original client flags retain their existing authentication bindings.
 
 ### 4.3.2 `query` — Deferred In This Pass
 
@@ -2044,3 +2211,12 @@ The opt-in router path uses the dedicated [Mode A contract](routed-mode-a.md):
 router-audience client signatures, attested issuance and exact-byte receipt,
 single-use socket-bound tickets, durable replay custody and independent toolshed
 ACL/ownership checks. Direct Memory hosts keep the protocol described above.
+
+Private router-to-toolshed requests additionally use
+[header admission](routed-mode-a.md#private-request-body-admission): a consecutive
+per-socket request ordinal and an exact 16-byte binary `mri\x01` grant bind each
+body to reserved endpoint input capacity before any body or completion record
+is sent. Public upload and private response headers carry no request ordinal.
+The private `routerRequestAdmission` capability is required on authenticated
+peers and excluded from public and effective Memory flags. It changes neither
+logical Memory messages nor public `mrt\x01` framing and `mrc\x01` upload credits.
