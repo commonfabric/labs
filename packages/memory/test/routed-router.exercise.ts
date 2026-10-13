@@ -338,8 +338,12 @@ class Toolshed {
   #failure?: Error;
   #output?: Promise<void>;
   constructor(readonly index: number) {}
-  /** Starts a fixture at the requested representation and endpoint capability. */
-  async start(modern = modernCellRep, omitSyncLabelTableV1 = false) {
+  /** Starts a fixture with the requested wire mode, capabilities and slot cap. */
+  async start(
+    modern = modernCellRep,
+    omitSyncLabelTableV1 = false,
+    frameSlots?: number | null,
+  ) {
     const i = this.index;
     const config = `${root}/toolshed-${i}.json`;
     Deno.writeTextFileSync(
@@ -357,6 +361,7 @@ class Toolshed {
         modernCellRep: modern,
         omitSyncLabelTableV1,
         omitCommitLabelTableV1: omitSyncLabelTableV1,
+        ...(frameSlots === undefined ? {} : { frameSlots }),
       }),
     );
     this.child = new Deno.Command(Deno.execPath(), {
@@ -2834,6 +2839,7 @@ finally:
     try {
       expect(legacy.hello.routerTransport).toBe(1);
       expect(legacy.hello.routerUploadWindow).toBe(262_144);
+      expect(legacy.hello.routerFrameSlots).toBe(ROUTED_FRAME_SLOTS);
       legacy.ws.send('fvj1:{"type":"router.transport","version":1}');
       await legacy.authenticate(alice, 300, true);
       const opened = await legacy.request({
@@ -2973,6 +2979,7 @@ finally:
     const observeRequests = (
       connection: ReturnType<typeof socketFactory>,
       observe: (message: Record<string, unknown>, bytes: number) => void,
+      frameSlots: number | null = ROUTED_FRAME_SLOTS,
     ) => {
       const assembler = new RouterAssembler();
       return {
@@ -2984,7 +2991,7 @@ finally:
           if (payload !== undefined) {
             assert(typeof payload === "string");
             observe(
-              decodeRoutedFrame(payload, false, ROUTED_FRAME_SLOTS).body,
+              decodeRoutedFrame(payload, false, frameSlots).body,
               new TextEncoder().encode(payload).length,
             );
           }
@@ -3904,7 +3911,10 @@ finally:
     );
 
     /** Opens an SDK peer while retaining public requests and raw responses. */
-    const labelReader = async (source: string) => {
+    const observedPeer = async (
+      source: string,
+      frameSlots: number | null = ROUTED_FRAME_SLOTS,
+    ) => {
       const messages: Record<string, unknown>[] = [];
       const hellos: Record<string, unknown>[] = [];
       const requests: Record<string, unknown>[] = [];
@@ -3920,7 +3930,7 @@ finally:
             connection.socket.on("message", (bytes, binary) => {
               if (!binary) {
                 messages.push(
-                  decodeRoutedFrame(bytes.toString(), false, ROUTED_FRAME_SLOTS)
+                  decodeRoutedFrame(bytes.toString(), false, frameSlots)
                     .body,
                 );
               }
@@ -3933,7 +3943,7 @@ finally:
                 }
                 hellos.push(message);
               }
-            });
+            }, frameSlots);
           },
         ),
       });
@@ -3942,7 +3952,7 @@ finally:
 
     /** Checks a fresh session's wire encoding and the SDK's expanded watch. */
     const readLabels = async (
-      reader: Awaited<ReturnType<typeof labelReader>>,
+      reader: Awaited<ReturnType<typeof observedPeer>>,
       index: number,
       compact: boolean,
       seed = false,
@@ -4016,11 +4026,133 @@ finally:
       }
     };
 
+    // Each phase configures both endpoints and the real router. The SDK must
+    // learn its cap from the public hello; the observer only records the wire.
+    try {
+      for (const [index, frameSlots] of [175_000, null].entries()) {
+        Deno.writeTextFileSync(
+          activeConfigPath,
+          JSON.stringify({
+            ...priorConfig,
+            max_frame_slots: frameSlots,
+          }),
+        );
+        for (const shed of toolsheds) {
+          await shed.stop();
+          await shed.start(modernCellRep, false, frameSlots);
+        }
+        await restartRouter();
+        await Promise.all(
+          toolsheds.map((shed) => shed.command({ linked: true })),
+        );
+        const peer = await observedPeer(`127.0.0.${60 + index}`, frameSlots);
+        try {
+          expect(peer.messages.find((message) => message.type === "hello.ok"))
+            .toHaveProperty("routerFrameSlots", frameSlots);
+          const session = await peer.client.mount(spaces[0], {}, {
+            did: alice.did(),
+            authorizeConnection: (context) =>
+              createSignedConnectionAuth(alice, context),
+            authorizeSessionOpen: () => {
+              throw new Error("Expected routed connection authorization");
+            },
+          });
+          const id = `of:frame-slots-${index}`;
+          const document = {
+            value: Array.from({ length: 160_000 }, (_, value) => value),
+          };
+          const applied = await session.transact({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{ op: "set", id, value: document }],
+          });
+          expect(applied.revisions).toHaveLength(1);
+          expect(applied.revisions[0].id).toBe(id);
+          expectCanonicalEqual(
+            applied.revisions[0].document,
+            document,
+            "slot-cap commit acknowledgement",
+          );
+          const request = peer.requests.find((message) =>
+            message.type === "transact"
+          );
+          assert(request);
+          const acknowledgement = peer.messages.find((message) =>
+            message.type === "response" &&
+            message.requestId === request.requestId
+          );
+          assert(acknowledgement);
+          expect(acknowledgement.error).toBeUndefined();
+          expect(countValues(request)).toBeGreaterThan(ROUTED_FRAME_SLOTS);
+          expect(countValues(acknowledgement)).toBeGreaterThan(
+            ROUTED_FRAME_SLOTS,
+          );
+
+          const { view, sync } = await session.watchSetSync([{
+            id: "large-slot-watch",
+            kind: "graph",
+            query: { roots: [{ id, selector: { path: [], schema: false } }] },
+          }]);
+          expect(view.entities).toHaveLength(1);
+          expect(view.entities[0].id).toBe(id);
+          expectCanonicalEqual(
+            view.entities[0].document,
+            document,
+            "slot-cap watched document",
+          );
+          expect(sync.upserts).toHaveLength(1);
+          expectCanonicalEqual(
+            sync.upserts[0].doc,
+            document,
+            "slot-cap sync document",
+          );
+          const response = peer.messages.find((message) =>
+            message.type === "response" && isPlainObject(message.ok) &&
+            isPlainObject(message.ok.sync)
+          );
+          assert(response);
+          expect(countValues(response)).toBeGreaterThan(ROUTED_FRAME_SLOTS);
+          expect(peer.sockets).toHaveLength(1);
+          expect(peer.sockets[0].readyState).toBe(WebSocket.OPEN);
+          console.log(JSON.stringify({
+            routerFrameSlots: frameSlots,
+            requestSlots: countValues(request),
+            acknowledgementSlots: countValues(acknowledgement),
+            syncSlots: countValues(response),
+          }));
+          await session.close();
+          pass(
+            `the router advertises a ${frameSlots} slot cap and the SDK commits, acknowledges and syncs 160,000 values with exact content on one socket`,
+          );
+        } finally {
+          await peer.client.close();
+        }
+      }
+    } finally {
+      Deno.writeTextFileSync(activeConfigPath, priorConfigText);
+      for (const shed of toolsheds) {
+        await shed.stop();
+        await shed.start();
+      }
+      await restartRouter();
+    }
+    const defaultSlots = await new Client("127.0.0.62").start();
+    try {
+      expect(defaultSlots.hello.routerFrameSlots).toBe(ROUTED_FRAME_SLOTS);
+      expect(Deno.readTextFileSync(activeConfigPath)).toBe(priorConfigText);
+    } finally {
+      defaultSlots.close();
+      await defaultSlots.closed.promise;
+    }
+    pass(
+      "omitting the router slot cap restores its advertised 150,000 default",
+    );
+
     await toolsheds[1].stop();
     await toolsheds[1].start(modernCellRep, true);
     await restartRouter();
     await toolsheds[1].command({ linked: true });
-    const mixed = await labelReader("127.0.0.51");
+    const mixed = await observedPeer("127.0.0.51");
     try {
       expect(mixed.client.serverFlags?.syncLabelTableV1).toBe(false);
       await readLabels(mixed, 0, false);
@@ -4043,7 +4175,7 @@ finally:
       expect(mixed.sockets).toEqual([socket]);
       expect(socket.readyState).toBe(WebSocket.OPEN);
 
-      const fresh = await labelReader("127.0.0.52");
+      const fresh = await observedPeer("127.0.0.52");
       try {
         expect(fresh.client.serverFlags?.syncLabelTableV1).toBe(false);
         await readLabels(fresh, 1, false);
@@ -4059,7 +4191,7 @@ finally:
     // The router's startup snapshot governs new public connections too.
     // Both readers are closed before a restart takes the upgraded snapshot.
     await restartRouter();
-    const upgraded = await labelReader("127.0.0.53");
+    const upgraded = await observedPeer("127.0.0.53");
     try {
       expect(upgraded.client.serverFlags?.syncLabelTableV1).toBe(true);
       await readLabels(upgraded, 1, true);

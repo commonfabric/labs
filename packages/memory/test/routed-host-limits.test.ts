@@ -11,7 +11,6 @@ describe("routed-host-limits", () => {
   it("uses defaults for omitted fields and preserves explicit disabled quotas", () => {
     expect(routedHostLimits()).toEqual(DEFAULT_ROUTED_HOST_LIMITS);
     for (const key of Object.keys(DEFAULT_ROUTED_HOST_LIMITS)) {
-      if (key === "frameSlots") continue;
       expect(routedHostLimitsFor({ [key]: null }, 1)).toEqual({
         ...DEFAULT_ROUTED_HOST_LIMITS,
         [key]: null,
@@ -85,9 +84,6 @@ describe("routed-host-limits", () => {
         );
       }
     }
-    expect(() => routedHostLimits({ frameSlots: null })).toThrow(
-      "invalid routed limit: frameSlots",
-    );
     expect(() => routedHostLimits({ unknownQuota: null })).toThrow(
       "invalid routed limit: unknownQuota",
     );

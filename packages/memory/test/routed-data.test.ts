@@ -760,9 +760,7 @@ describe("routed session reports", () => {
 
 describe("optional routed host quotas", () => {
   const disabled = routedHostLimits(Object.fromEntries(
-    Object.entries(DEFAULT_ROUTED_HOST_LIMITS).map((
-      [key, value],
-    ) => [key, key === "frameSlots" ? value : null]),
+    Object.keys(DEFAULT_ROUTED_HOST_LIMITS).map((key) => [key, null]),
   ));
   const watches = (length: number) =>
     Array.from({ length }, (_, i) => ({
@@ -1805,6 +1803,50 @@ Deno.test("the toolshed admits a frame at its configured slot cap and closes on 
     f.socket.receive(transact("over", 65));
     await f.socket.closed.promise;
     assertEquals(f.link.readyState, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("the toolshed accepts and acknowledges a large commit with a null slot cap", async () => {
+  const f = await fixture("disabled-frame-slots", {
+    limits: { frameSlots: null },
+  });
+  try {
+    const session = await f.open();
+    const values = Array.from({ length: 160_000 }, (_, index) => index);
+    const payload = `fvj1:${
+      JSON.stringify({
+        type: "transact",
+        requestId: "large-commit",
+        space: f.space.did(),
+        sessionId: session.sessionId,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{ op: "set", id: "of:large", value: { value: values } }],
+        },
+      })
+    }`;
+    expect(() => decodeRoutedFrame(payload, false, FRAME_SLOTS)).toThrow();
+    const records = routerRecords(
+      routerRoute(decodeRoutedFrame(payload, false, null).body),
+      payload,
+    );
+    await f.socket.header(decodeRouterHeader(records.next().value!));
+    for (const record of records) f.socket.deliver(record);
+    for (;;) {
+      const response =
+        decodeRoutedFrame(await f.socket.take(), true, null).body;
+      if (response.requestId !== "large-commit") continue;
+      expect(response.error).toBeUndefined();
+      expect(response.ok).toMatchObject({
+        revisions: [{ id: "of:large", document: { value: values } }],
+      });
+      break;
+    }
+    expect(f.socket.readyState).toBe(1);
+    expect(f.link.readyState).toBe(1);
   } finally {
     await f.close();
   }
@@ -4361,7 +4403,10 @@ describe("routed close diagnostics", () => {
 
   for (const count of [12, 300]) {
     it(`measures bounded canonical field and sync sizes across \`${count}\` documents`, async () => {
-      const f = await fixture(`output-sizes-${count}`);
+      // Diagnostics keep their scan bound even with value counting disabled.
+      const f = await fixture(`output-sizes-${count}`, {
+        limits: { frameSlots: count === 300 ? null : FRAME_SLOTS },
+      });
       const lines: string[] = [];
       using _info = stub(console, "info", (line: unknown) => {
         lines.push(String(line));

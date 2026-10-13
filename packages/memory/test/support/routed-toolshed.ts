@@ -42,6 +42,9 @@ export interface RoutedToolshedFixture {
 
   /** Models an endpoint build that does not advertise commit-table support. */
   omitCommitLabelTableV1?: boolean;
+
+  /** Frame value-count cap; omission keeps the default, `null` disables it. */
+  frameSlots?: number | null;
 }
 
 /** Builds counters for one deliberately blocked backend transaction burst. */
@@ -203,7 +206,12 @@ export async function startRoutedToolshed(config: RoutedToolshedFixture) {
     deployment: "local-mode-a",
     epochs,
     ownership,
-    limits: { watchesPerSession: 1024 },
+    limits: {
+      watchesPerSession: 1024,
+      ...(config.frameSlots === undefined
+        ? {}
+        : { frameSlots: config.frameSlots }),
+    },
     routers: new Map([[config.router, new Set(["127.0.0.1"])]]),
   });
   const linked = Promise.withResolvers<void>();

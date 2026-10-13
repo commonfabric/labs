@@ -47,13 +47,10 @@ const logger = getLogger("storage.v2.remote", {
 });
 
 /**
- * JSON values in one routed frame this SDK sends or accepts, counted as the
- * router counts them: one per value, keys free. It matches the router's
- * default `max_frame_slots` and the toolshed's default `limits.frameSlots`,
- * and must not exceed the deployment's router/toolshed cap: the router and
- * the toolshed close the socket a larger frame arrives on, so the SDK refuses
- * one here, compressed or raw, before it is sent, and closes on receiving one.
- * The SDK does not learn the deployment's cap.
+ * Default JSON value count for routed frames when the server omits
+ * `routerFrameSlots`. Values count as the router counts them: one per value,
+ * keys free. A negotiated positive integer replaces this bound, and `null`
+ * disables slot counting while retaining the other routed frame checks.
  */
 export const ROUTED_FRAME_SLOTS = 150_000;
 
@@ -73,8 +70,11 @@ type RouterUploadCredits = {
 };
 
 /** A raw routed frame, checked as its receiver checks it before it is sent. */
-function checkedRoutedText(payload: string): string {
-  decodeRoutedFrame(payload, false, ROUTED_FRAME_SLOTS);
+function checkedRoutedText(
+  payload: string,
+  frameSlots: number | null = ROUTED_FRAME_SLOTS,
+): string {
+  decodeRoutedFrame(payload, false, frameSlots);
   return payload;
 }
 
@@ -283,6 +283,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
   #receiveCompressionEnabled = false;
   #sendCompressionEnabled = false;
   #routedMessages = false;
+  #routedFrameSlots: number | null = ROUTED_FRAME_SLOTS;
   #routerStreaming = false;
   #uploadCredits: RouterUploadCredits | undefined;
   #sending: Promise<void> = Promise.resolve();
@@ -323,14 +324,26 @@ export class WebSocketTransport implements MemoryClient.Transport {
   /**
    * Selects routed framing after a pinned hello. A supported upload window
    * enables peer credit for every logical message after the text selection.
+   * `frameSlots` defaults to `ROUTED_FRAME_SLOTS`; `null` disables slot counting.
+   * Throws if a supplied bound is not a positive safe integer or `null`.
    */
   setRoutedMessagesEnabled(
     enabled: boolean,
     transportVersion?: number,
     uploadWindow?: number,
+    frameSlots?: number | null,
   ): void {
+    if (
+      frameSlots !== undefined && frameSlots !== null &&
+      (!Number.isSafeInteger(frameSlots) || frameSlots <= 0)
+    ) {
+      throw new TypeError("Invalid routed frame slot limit");
+    }
     this.#clearUploadCredits(new Error("Router transport selection changed"));
     this.#routedMessages = enabled;
+    this.#routedFrameSlots = enabled && frameSlots !== undefined
+      ? frameSlots
+      : ROUTED_FRAME_SLOTS;
     this.#routerStreaming = false;
     if (enabled && transportVersion === 1) {
       if (
@@ -392,23 +405,24 @@ export class WebSocketTransport implements MemoryClient.Transport {
     const opening = this.#open();
     const compressionEnabled = this.#sendCompressionEnabled;
     const routed = this.#routedMessages;
+    const frameSlots = this.#routedFrameSlots;
     const streaming = this.#routerStreaming;
     const credits = this.#uploadCredits;
     const send = this.#sending.then(async () => {
       const connection = await opening;
       const decoded = streaming
-        ? decodeRoutedFrame(payload, false, ROUTED_FRAME_SLOTS)
+        ? decodeRoutedFrame(payload, false, frameSlots)
         : undefined;
       const control = decoded !== undefined &&
         isRouterControl(decoded.body.type);
       const frame = compressionEnabled && !streaming
         ? routed
-          ? encodeRoutedFrame(payload, ROUTED_FRAME_SLOTS)
+          ? encodeRoutedFrame(payload, frameSlots)
           : await encodeCompressedMemoryMessage(payload)
         : streaming
         ? payload
         : routed
-        ? checkedRoutedText(payload)
+        ? checkedRoutedText(payload, frameSlots)
         : payload;
       if (this.#socket !== connection.socket) {
         throw MemoryClient.connectionError(
@@ -475,6 +489,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
     this.#receiveCompressionEnabled = false;
     this.#sendCompressionEnabled = false;
     this.#routedMessages = false;
+    this.#routedFrameSlots = ROUTED_FRAME_SLOTS;
     this.#routerStreaming = false;
     this.#clearUploadCredits(error);
     this.#rejectCompressionRequests(error);
@@ -499,6 +514,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
       this.#receiveCompressionEnabled = false;
       this.#sendCompressionEnabled = false;
       this.#routedMessages = false;
+      this.#routedFrameSlots = ROUTED_FRAME_SLOTS;
       this.#routerStreaming = false;
       let opened = false;
       socket.addEventListener("open", () => {
@@ -536,7 +552,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
               const decoded = decodeRoutedFrame(
                 routedFrame,
                 this.#receiveCompressionEnabled,
-                ROUTED_FRAME_SLOTS,
+                this.#routedFrameSlots,
               );
               if (this.#socket !== socket) return;
               if (decoded.body.type === "router.credit") {
@@ -629,7 +645,9 @@ export class WebSocketTransport implements MemoryClient.Transport {
             this.#detachSocket(error);
             this.#closeReceiver(error);
             if (socket.readyState === WebSocket.OPEN) {
-              socket.close(1007, error.message);
+              // Native clients permit only `1000` or application close codes
+              // (`3000`–`4999`), so decode failures use application code `4007`.
+              socket.close(4007, error.message);
             }
           }
         });

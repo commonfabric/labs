@@ -462,14 +462,15 @@ type OutputSizeBreakdown = {
 /**
  * Measures disjoint result fields and sync contributions only after refusal.
  * Each category retains eight entries. Frames above the raw limit are skipped;
- * at most min(frameSlots, 256) entries and two raw limits of encoded bytes are
- * processed. A final encode can add at most one frame's worth of work. Standalone
- * encodings include their own format prefix, so these are not additive wire sizes.
+ * at most `min(frameSlots ?? 256, 256)` entries and two raw limits of encoded
+ * bytes are processed. A final encode can add at most one frame's worth of work.
+ * Standalone encodings include their own format prefix, so these are not additive
+ * wire sizes.
  */
 function outputSizeBreakdown(
   message: ServerMessage | MemoryCompressionControlMessage,
   frameBytes: number,
-  frameSlots: number,
+  frameSlots: number | null,
 ): OutputSizeBreakdown {
   if (frameBytes > ROUTED_RAW_LIMIT) return { status: "frame-too-large" };
   try {
@@ -479,7 +480,7 @@ function outputSizeBreakdown(
     let scannedEntries = 0;
     let encodedBytes = 0;
     let truncated = false;
-    const entryLimit = Math.min(frameSlots, 256);
+    const entryLimit = Math.min(frameSlots ?? 256, 256);
 
     /** Checks the remaining measurement budget and marks an incomplete scan. */
     const available = (): boolean => {
@@ -728,7 +729,7 @@ type Accepted = {
  * router; "router" counts everything one router link carries, and
  * "toolshed" everything this toolshed admits from every router. Watches and
  * holdings are summed over sessions. Each quota accepts `null` to disable
- * it independently; `frameSlots` is a required structural parser bound.
+ * it independently, including the frame's JSON value count.
  */
 export interface RoutedHostLimits {
   /** Client contexts on one router link; at least the router's workers. */
@@ -797,12 +798,11 @@ export interface RoutedHostLimits {
    * JSON values in one frame a data socket receives, counted as the router
    * counts them: one per value, keys free. A frame over it closes the
    * socket. Must equal the router's `max_frame_slots` (a check for the infra
-   * preflight, beside the limits it compares already), and a client's
-   * `ROUTED_FRAME_SLOTS` must not exceed it. Sized by the deployment's
-   * largest sync frame against the router worker's memory, not by this
-   * toolshed.
+   * preflight). The router advertises it as `routerFrameSlots` in `hello.ok`
+   * so clients apply the deployment's cap. `null` disables value counting;
+   * byte, nesting and unambiguous-JSON checks remain active.
    */
-  frameSlots: number;
+  frameSlots: number | null;
 }
 
 /** Numeric defaults for every quota and structural frame bound. */
@@ -846,7 +846,7 @@ export const DEFAULT_ROUTED_HOST_LIMITS: RoutedHostDefaults = {
 
 /**
  * Applies partial overrides to the defaults. Quotas accept `null` to disable
- * enforcement; `frameSlots` must remain a positive safe integer. Enabled
+ * enforcement; enabled values must be positive safe integers. Enabled
  * per-context, per-router and per-toolshed limits nest, one session's
  * watch IDs fit its context's, a context's proofs cover its principal
  * history and a renewal for each active principal, and a link's contexts
@@ -865,7 +865,7 @@ export function routedHostLimits(
   const limits: RoutedHostLimits = { ...DEFAULT_ROUTED_HOST_LIMITS };
   for (const [key, value] of Object.entries(overrides)) {
     if (!isLimitKey(key)) requireLimit(false, key);
-    else if (value === null && key !== "frameSlots") limits[key] = null;
+    else if (value === null) limits[key] = null;
     else if (
       typeof value === "number" && Number.isSafeInteger(value) && value > 0
     ) limits[key] = value;

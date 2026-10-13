@@ -6,6 +6,7 @@ import {
   decodeRoutedFrame,
   encodeRoutedFrame,
   parseRoutedJson,
+  ROUTED_RAW_LIMIT,
   routedFlags,
 } from "../v2/routed-parser.ts";
 import { DEFAULT_ROUTED_HOST_LIMITS } from "../v2/routed-host.ts";
@@ -95,6 +96,39 @@ describe("routed untrusted parsers", () => {
       .toBeDefined();
     expect(() => parseRoutedJson("[".repeat(65) + "0" + "]".repeat(65), SLOTS))
       .toThrow();
+  });
+  it("disables only the value-count check for a null slot cap", () => {
+    const payload = routedFrameOf(231_438);
+    expect(() => decodeRoutedFrame(payload, false, 150_000)).toThrow();
+    expect(decodeRoutedFrame(payload, false, null).payload).toBe(payload);
+    const compressed = encodeRoutedFrame(payload, null);
+    expect(compressed).toBeInstanceOf(Uint8Array);
+    expect(decodeRoutedFrame(compressed, true, null).payload).toBe(payload);
+    expect(() => decodeRoutedFrame(compressed, true, 150_000)).toThrow();
+    for (
+      const malformed of [
+        '{"a":1,"a":2}',
+        '{"a":1,"\\u0061":2}',
+        '{"__proto__":{}}',
+        '{"constructor":1}',
+        '{"prototype":1}',
+        '"\\ud800"',
+        '{"x":1e999}',
+        "[".repeat(65) + "0" + "]".repeat(65),
+      ]
+    ) {
+      expect(() => parseRoutedJson(malformed, null)).toThrow();
+    }
+    const oversized = 'fvj1:{"type":"response","ok":"' +
+      "x".repeat(ROUTED_RAW_LIMIT) + '"}';
+    expect(() => decodeRoutedFrame(oversized, false, null)).toThrow();
+    expect(() =>
+      decodeRoutedFrame(
+        'fvj1:{"type":"response","space":"not-a-did"}',
+        false,
+        null,
+      )
+    ).toThrow();
   });
   it("applies the sender's and the receiver's slot cap to a whole frame", () => {
     const cap = 2000;

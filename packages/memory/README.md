@@ -170,8 +170,12 @@ proof, request, space, context, ticket and socket quotas. `spacesPerContext`
 defaults to 1,200 distinct spaces over a context's lifetime;
 `sessionsPerContext` independently bounds simultaneous sessions.
 `viewsPerSession` defaults to 64 and `holdingsPerSession` to 8,192. `frameSlots`
-remains a positive structural parser bound and cannot be disabled. Disabling
-quotas retains authorization, ownership fencing and replay checks. The
+defaults to 150,000 JSON values; `null` disables value counting. The router
+advertises the matching deployment value in `hello.ok.routerFrameSlots`, which
+clients apply to sends and receives until the connection changes. An omitted
+hello field retains the 150,000 default. Disabling quotas retains byte and depth
+bounds, unambiguous JSON validation, authorization, ownership fencing and replay
+checks. The
 [Mode A specification](../../docs/specs/memory-v2/routed-mode-a.md#toolshed-deployment-inputs)
 describes deployment configuration and validation.
 
@@ -209,12 +213,12 @@ documents/schema-table entries using the canonical Memory encoder. It keeps
 eight largest measured entries per category, recording paths, document IDs and
 standalone encoded byte sizes (including each encoding's format prefix), never
 values. These sizes are not additive wire contributions. The scan inspects at
-most `min(frameSlots, 256)` entries and stops after two raw-message limits of
-measured bytes; the final encode can cost one additional frame. Frames above the
-8 MiB raw-message limit are skipped. `truncated` marks incomplete scans, so a
-largest entry is largest among those inspected. `unavailable` preserves the
-original refusal when independent encoding fails. Queued bodies have source
-attribution only; size breakdowns describe the refused message.
+most `min(frameSlots ?? 256, 256)` entries and stops after two raw-message
+limits of measured bytes; the final encode can cost one additional frame. Frames
+above the 8 MiB raw-message limit are skipped. `truncated` marks incomplete
+scans, so a largest entry is largest among those inspected. `unavailable`
+preserves the original refusal when independent encoding fails. Queued bodies
+have source attribution only; size breakdowns describe the refused message.
 
 ## Layout
 

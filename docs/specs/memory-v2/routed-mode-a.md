@@ -13,6 +13,14 @@ clients use its `hello`, `connection.challenge`, `connection.auth`,
 - `hello.ok` advertises `routedAuthV1:true` and provides router DID audience,
   deployment, random hex challenge and expiry in `sessionOpen`. The SDK pins
   those connection values across later toolshed `session.open` responses.
+- The optional public `hello.ok.routerFrameSlots` advertises the deployment's
+  JSON value-count cap: `null` disables counting, and a positive JavaScript safe
+  integer sets a custom cap. An absent field uses 150,000 for peers that omit
+  it. The SDK learns the cap from each hello and applies it to both sent and
+  received routed frames, including compressed and streamed messages. Closing
+  or resetting the transport restores the default; a replacement connection
+  learns its own cap. Byte, nesting, duplicate-key and DID checks remain active
+  when counting is disabled.
 - `connection.auth` carries `{statement: BASE64URL}`: an unpadded canonical
   base64url signed `mra1` record. Its principal, command, audience, protocol,
   deployment, challenge, issue time and expiry all participate in the signature.
@@ -545,19 +553,18 @@ serves no toolshed HTTP API. Routing headers reject duplicate JSON keys,
 ambiguous security tags, invalid UTF-8/DIDs and unsupported versions. Endpoints
 validate complete application bodies, including compressed envelope hints and
 gzip expansion/CRC/member checks when applicable. A decoded application's
-JSON is at most 64 levels deep and at most `limits.frameSlots` values, counted
-as the router counts them: one slot per value, whether scalar, object or array,
-with keys free. The default, 150,000, is the router's default `max_frame_slots`,
-sized from the largest measured sync frame (119,720 slots) against the router
-worker's memory on whole-envelope paths. The router enforces this cap on complete
-public envelopes; opaque streamed bodies are checked at the toolshed and SDK.
-The SDK refuses to send one and closes on receiving one. Endpoint exposure is
-also bounded by the byte caps (8 MiB raw, 16 MiB expanded, 4 MiB queued per
-data socket). A whole-space sync still exceeds any per-frame cap (the largest
-rehearsal stores are 7 to 29 million slots as one frame) and needs chunking
-(infra#244). Context, principal, router and toolshed quotas cover sessions,
-watches and holdings; resource bounds and exact values are in the infra router
-README.
+JSON is at most 64 levels deep. When `limits.frameSlots` is enabled, it also
+bounds the number of values, counted as the router counts them: one slot per
+value, whether scalar, object or array, with keys free. The default, 150,000,
+matches the router's default `max_frame_slots`; `null` disables value counting.
+The router enforces the enabled cap on complete public envelopes; opaque
+streamed bodies are checked at the toolshed and SDK. The SDK refuses to send a
+frame exceeding the advertised cap and closes on receiving one. Endpoint
+exposure is also bounded by the byte caps (8 MiB raw, 16 MiB expanded, 4 MiB
+queued per data socket), including when value counting is disabled. A
+whole-space sync can exceed these byte bounds and needs chunking (infra#244).
+Context, principal, router and toolshed quotas cover sessions, watches and
+holdings; resource bounds and exact values are in the infra router README.
 
 ## Toolshed deployment inputs
 
@@ -575,8 +582,10 @@ simultaneous sessions and open reservations. Closing a session frees session
 capacity but leaves its space authorized and counted. Either quota can be
 disabled independently; omitting `spacesPerContext` retains its own default
 regardless of the configured session quota.
-`frameSlots` is a structural parser bound: it requires a positive safe integer
-and cannot be disabled. The `limits` object itself cannot be `null`.
+`frameSlots` follows the same rule: omission uses 150,000, `null` disables value
+counting, and a positive safe integer sets the cap. Disabling it skips the slot
+counter while preserving byte, nesting, duplicate-key and DID checks. The
+`limits` object itself cannot be `null`.
 
 Enabled nested limits must be ordered from context to router to toolshed, a
 context's proofs must cover its principal history and a renewal for each active
@@ -598,15 +607,16 @@ host validates watch mutations and forwards them to the backend without building
 watch-ID sets or reserving mirrored mutations. The backend still maintains the
 functional watches and views that deliver data to sessions.
 
-For a quota-free rehearsal, set every quota in both the router and toolshed
-policy to `null`, retaining their structural frame bounds. Changing only the
+For a quota-free rehearsal, set every quota, including `max_frame_slots` and
+`frameSlots`, in both the router and toolshed policy to `null`. Byte, nesting and
+unambiguous-JSON bounds remain active. Changing only the
 router leaves the toolshed's independently enforced defaults in effect. Config
 changes take effect when the host restarts.
 Two limits are ones the router must match rather than cover, each a check for
 the infra preflight beside the limits it compares already. One is
-`max_frame_slots == frameSlots`; the SDK sends and accepts at most
-`ROUTED_FRAME_SLOTS` (150,000), which must not exceed either. The other is
-`max_watches_per_session == watchesPerSession`, the watch IDs one session may
+`max_frame_slots == frameSlots`, including `null`; the router advertises this
+value as `routerFrameSlots` and the SDK applies it in both directions. The other
+is `max_watches_per_session == watchesPerSession`, the watch IDs one session may
 hold, default 2,048, which may not exceed `watchesPerContext` when both are
 enabled. Matching a disabled watch quota means `null` on both sides. The two are
 sized together: a session is restored by one `session.watch.set` that names
@@ -614,8 +624,8 @@ its whole watch set, so that many watches must fit one frame together with
 their selectors, views and holdings. The count limit does not enforce this
 aggregate size: incremental adds can create a set too large to restore, causing
 reconnect attempts to fail. Size the limit against the workload's complete
-restore frame. Raising server caps beyond 150,000 also requires changing the
-SDK ceiling. A frame's `watches` have no count
+restore frame. Clients that do not learn `routerFrameSlots` retain their own
+150,000-slot ceiling. A frame's `watches` have no count
 bound of their own. The infra router README's capacity section has the
 arithmetic and maps each limit to the router's.
 

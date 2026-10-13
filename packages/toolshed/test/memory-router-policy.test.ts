@@ -130,6 +130,8 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
     assertEquals(policy.config.limits.frameSlots, 150_000);
     write({ ...config, limits: { frameSlots: 64 } });
     assertEquals(new MemoryRouterPolicy(path).config.limits.frameSlots, 64);
+    write({ ...config, limits: { frameSlots: null } });
+    expect(new MemoryRouterPolicy(path).config.limits.frameSlots).toBeNull();
     write({ ...config, limits: { frameSlots: 0 } });
     assertThrows(
       () => new MemoryRouterPolicy(path),
@@ -166,7 +168,6 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
       const limits of [
         { unknownLimit: 1 },
         { sockets: 0 },
-        { frameSlots: null },
         { viewsPerSession: false },
         { holdingsPerSession: 1.5 },
         { sessionsPerContext: "5" },

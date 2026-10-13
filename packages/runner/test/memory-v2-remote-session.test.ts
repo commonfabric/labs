@@ -10,7 +10,10 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import { DEFAULT_ROUTED_HOST_LIMITS } from "@commonfabric/memory/v2/routed-host";
-import { decodeRoutedFrame } from "@commonfabric/memory/v2/routed-parser";
+import {
+  decodeRoutedFrame,
+  encodeRoutedFrame,
+} from "@commonfabric/memory/v2/routed-parser";
 import {
   ROUTER_CHUNK_BYTES,
   RouterAssembler,
@@ -1628,6 +1631,158 @@ describe("WebSocketTransport failure signaling", () => {
         expect(await closed.promise).toBeInstanceOf(Error);
         expect(activeSocket.readyState).toBe(DrivableWebSocket.CLOSED);
         expect(received).toHaveLength(1);
+      } finally {
+        await transport.close();
+      }
+    });
+  });
+
+  for (const mode of ["raw", "compressed", "streamed", "credited"]) {
+    for (const limit of [null, 1_000]) {
+      it(`uses the negotiated ${String(limit)} slot limit for ${mode} sends and receives`, async () => {
+        await withTransport(async (transport, socket) => {
+          try {
+            const opening = transport.send("hello");
+            const active = socket();
+            active.openConnection();
+            await opening;
+            const streaming = mode === "streamed" || mode === "credited";
+            transport.setRoutedMessagesEnabled(
+              true,
+              streaming ? 1 : undefined,
+              mode === "credited" ? 262_144 : undefined,
+              limit,
+            );
+            transport.setMessageCompressionEnabled(mode === "compressed");
+            if (streaming) await active.whenSent(2);
+            if (mode === "credited") {
+              active.onSend = (record) =>
+                active.receive(creditFrame(requireRecord(record).length));
+            }
+            const sentBefore = active.sent.length;
+            const payload = routedFrameOf(
+              limit === null ? ROUTED_FRAME_SLOTS + 1 : limit,
+            );
+            await transport.send(payload);
+            let receivedFrame: MemoryMessageFrame = payload;
+            if (streaming) {
+              const assembler = new RouterAssembler();
+              let result;
+              for (const record of active.sent.slice(sentBefore)) {
+                result = assembler.receive(requireRecord(record));
+              }
+              expect(result?.payload).toBe(payload);
+            } else {
+              const sent = active.sent[sentBefore];
+              receivedFrame = sent;
+              if (mode === "compressed") {
+                expect(receivedFrame).toBeInstanceOf(Uint8Array);
+              }
+              expect(
+                decodeRoutedFrame(
+                  sent,
+                  mode === "compressed",
+                  limit,
+                ).payload,
+              ).toBe(payload);
+            }
+            const delivered = Promise.withResolvers<string>();
+            transport.setReceiver(delivered.resolve);
+            active.receive(receivedFrame);
+            expect(await delivered.promise).toBe(payload);
+
+            if (limit !== null) {
+              const over = routedFrameOf(limit + 1);
+              const sentCount = active.sent.length;
+              await expect(transport.send(over)).rejects.toThrow(
+                "Routed memory request denied",
+              );
+              expect(active.sent).toHaveLength(sentCount);
+              const closed = Promise.withResolvers<Error | undefined>();
+              transport.setCloseReceiver(closed.resolve);
+              active.receive(
+                mode === "compressed" ? encodeRoutedFrame(over, null) : over,
+              );
+              expect(await closed.promise).toMatchObject({
+                cause: { message: "Routed memory request denied" },
+              });
+              expect(active.readyState).toBe(WebSocket.CLOSED);
+            }
+          } finally {
+            await transport.close();
+          }
+        });
+      });
+    }
+  }
+
+  for (const transition of ["disabled", "omitted", "reset", "peer-close"]) {
+    it(`restores the default slot bound after the ${transition} transition from null`, async () => {
+      await withTransport(async (transport, socket) => {
+        try {
+          const opening = transport.send("hello");
+          socket().openConnection();
+          await opening;
+          transport.setRoutedMessagesEnabled(true, undefined, undefined, null);
+          const over = routedFrameOf(ROUTED_FRAME_SLOTS + 1);
+          await transport.send(over);
+          if (transition === "disabled") {
+            transport.setRoutedMessagesEnabled(false);
+          } else if (transition === "reset" || transition === "peer-close") {
+            const previous = socket();
+            if (transition === "reset") transport.reset();
+            else previous.close();
+            const reopening = transport.send("hello");
+            expect(socket()).not.toBe(previous);
+            socket().openConnection();
+            await reopening;
+          }
+          transport.setRoutedMessagesEnabled(true);
+          await transport.send(routedFrameOf(ROUTED_FRAME_SLOTS));
+          const sentCount = socket().sent.length;
+          await expect(transport.send(over)).rejects.toThrow(
+            "Routed memory request denied",
+          );
+          expect(socket().sent).toHaveLength(sentCount);
+        } finally {
+          await transport.close();
+        }
+      });
+    });
+  }
+
+  it("throws on invalid directly supplied slot limits without changing the selection", async () => {
+    await withTransport(async (transport, socket) => {
+      try {
+        const opening = transport.send("hello");
+        socket().openConnection();
+        await opening;
+        transport.setRoutedMessagesEnabled(true, undefined, undefined, null);
+        for (
+          const invalid of [
+            false,
+            true,
+            0,
+            -1,
+            1.5,
+            NaN,
+            Infinity,
+            2 ** 53,
+            "150000",
+            {},
+            [],
+          ]
+        ) {
+          expect(() =>
+            Reflect.apply(transport.setRoutedMessagesEnabled, transport, [
+              true,
+              undefined,
+              undefined,
+              invalid,
+            ])
+          ).toThrow(TypeError);
+        }
+        await transport.send(routedFrameOf(ROUTED_FRAME_SLOTS + 1));
       } finally {
         await transport.close();
       }
