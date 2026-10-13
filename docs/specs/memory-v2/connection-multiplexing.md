@@ -356,15 +356,18 @@ sessions only after its transport closes.
 The router opens an upstream connection to a toolshed the first time the
 client names a space that toolshed owns.
 
-- `hello`: the router answers the client itself, advertising the flags that
-  every toolshed it routes to supports, and sends the client's own negotiated
-  flags upstream, unchanged, in the `hello` of each upstream connection. The
-  toolshed admits sessions by what that `hello` declares, so what it admits
-  is the client, not the router: a client without `stableExpressionResultIds`
-  is refused upstream exactly as it would be directly. A router that cannot
-  forward a client's flags exactly refuses the client. The router stage
-  requires the client's `connectionAuth` and routed-auth support; older clients
-  using signed `session.open` are not routed under this contract.
+- `hello`: the router advertises its frozen startup intersection of compatible
+  toolshed capabilities. Private `router.hello` carries the original client
+  flags unchanged in `memoryFlags` and their intersection with that public
+  snapshot in `negotiatedMemoryFlags`. The link agent signs both canonical
+  hashes in `rdb1`; the toolshed validates the exact selected descriptor and
+  uses it for the backend Memory `hello`. `router.ready` must acknowledge
+  `routerEncodingNegotiation: true` and echo that descriptor exactly. See
+  [the binding contract](routed-mode-a.md#canonical-binary-records) for field
+  order and rejection before ticket consumption or backend replacement. The
+  toolshed still refuses a client without `stableExpressionResultIds`. The
+  router stage requires the client's `connectionAuth` and routed-auth support;
+  older clients using signed `session.open` are not routed under this contract.
 - Authentication metadata: the client pins the router audience and deployment
   identifier from the router's `hello.ok`. With `connectionAuth`, it ignores
   the toolshed's `sessionOpen` metadata in a forwarded `session.open` response
@@ -383,7 +386,9 @@ client names a space that toolshed owns.
   client authenticated, forwarded as section 5.1 describes.
 - Request ids are unique within one client connection, so they pass through
   unchanged, and every server push names its session.
-- Compression is negotiated separately on each hop.
+- Encoding capabilities, including compression and sync tables, cannot exceed
+  the signed selection from the public handshake. Endpoint upgrades cannot
+  enable an unadvertised capability until the router restarts.
 - Ordering and back pressure are what they are today: each upstream connection
   serves one client.
 - Before `session/detached` exists, the router closes the client connection
@@ -411,7 +416,8 @@ The minimum constraints for that review are:
   collide across clients. The toolshed scopes each request ID by client ID;
   the multiplexer does not rewrite payloads.
 - **Per-connection flags move to the session.** `stableExpressionResultIds`
-  admission and the `syncSchemaTableV2` encoding are negotiated per connection.
+  admission and the `syncSchemaTableV2` and `syncLabelTableV1` encodings are
+  negotiated per connection.
   Clients of different builds share one upstream connection, so their
   negotiated flags move into each client's `session.open` admission state.
 - **Detach on client loss.** A client that disconnects from the router no

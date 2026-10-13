@@ -1,4 +1,4 @@
-import { hashOf } from "@commonfabric/data-model";
+import { debugStr, hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { type MemorySpace, type Signer } from "@commonfabric/memory/interface";
 import {
@@ -26,6 +26,12 @@ import {
   decodeRoutedFrame,
   encodeRoutedFrame,
 } from "@commonfabric/memory/v2/routed-parser";
+import {
+  isRouterControl,
+  ROUTER_CHUNK_BYTES,
+  routerRecords,
+  routerRoute,
+} from "@commonfabric/memory/v2/router-protocol";
 import { getLogger } from "@commonfabric/utils/logger";
 import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
 import {
@@ -50,6 +56,21 @@ const logger = getLogger("storage.v2.remote", {
  * The SDK does not learn the deployment's cap.
  */
 export const ROUTED_FRAME_SLOTS = 150_000;
+
+/** Largest supported public upload credit window, in on-wire record bytes. */
+const ROUTER_UPLOAD_WINDOW = 262_144;
+
+/** Credit accounting for one selection on one socket. */
+type RouterUploadCredits = {
+  /** Maximum bytes sent without an acknowledgement. */
+  window: number;
+
+  /** Record bytes sent but not yet acknowledged by the peer. */
+  outstanding: number;
+
+  /** Current send's wait for enough credit to write its next record. */
+  waiter?: PromiseWithResolvers<void>;
+};
 
 /** A raw routed frame, checked as its receiver checks it before it is sent. */
 function checkedRoutedText(payload: string): string {
@@ -262,6 +283,8 @@ export class WebSocketTransport implements MemoryClient.Transport {
   #receiveCompressionEnabled = false;
   #sendCompressionEnabled = false;
   #routedMessages = false;
+  #routerStreaming = false;
+  #uploadCredits: RouterUploadCredits | undefined;
   #sending: Promise<void> = Promise.resolve();
   #receiving: Promise<void> = Promise.resolve();
 
@@ -284,6 +307,11 @@ export class WebSocketTransport implements MemoryClient.Transport {
       typeof DecompressionStream === "function";
   }
 
+  /** Support for separately negotiated bounded router transport records. */
+  get supportsRouterStreaming(): boolean {
+    return true;
+  }
+
   setReceiver(receiver: (payload: string) => void): void {
     this.#receiver = receiver;
   }
@@ -292,9 +320,47 @@ export class WebSocketTransport implements MemoryClient.Transport {
     this.#closeReceiver = receiver;
   }
 
-  /** Selects the router frame codec after a pinned routed hello. */
-  setRoutedMessagesEnabled(enabled: boolean): void {
+  /**
+   * Selects routed framing after a pinned hello. A supported upload window
+   * enables peer credit for every logical message after the text selection.
+   */
+  setRoutedMessagesEnabled(
+    enabled: boolean,
+    transportVersion?: number,
+    uploadWindow?: number,
+  ): void {
+    this.#clearUploadCredits(new Error("Router transport selection changed"));
     this.#routedMessages = enabled;
+    this.#routerStreaming = false;
+    if (enabled && transportVersion === 1) {
+      if (
+        typeof uploadWindow === "number" &&
+        Number.isSafeInteger(uploadWindow) &&
+        uploadWindow >= ROUTER_CHUNK_BYTES + 5 &&
+        uploadWindow <= ROUTER_UPLOAD_WINDOW
+      ) {
+        this.#uploadCredits = { window: uploadWindow, outstanding: 0 };
+      }
+      // Selection shares the send queue so no streamed body can overtake it.
+      // It is a text write, independent of the mode selected for later sends.
+      const opening = this.#open();
+      const selection = this.#uploadCredits === undefined
+        ? 'fvj1:{"type":"router.transport","version":1}'
+        : 'fvj1:{"type":"router.transport","version":1,"uploadCredits":true}';
+      const send = this.#sending.then(async () => {
+        const connection = await opening;
+        if (this.#socket !== connection.socket) {
+          throw MemoryClient.connectionError(
+            "Memory websocket changed before transport selection",
+          );
+        }
+        await this.#write(connection, selection);
+      });
+      // `#write()` reports a failure on the current socket. A stale selection
+      // must not report a second loss against its replacement.
+      this.#sending = send.catch(() => {});
+      this.#routerStreaming = true;
+    }
   }
 
   /** @inheritDoc */
@@ -326,12 +392,21 @@ export class WebSocketTransport implements MemoryClient.Transport {
     const opening = this.#open();
     const compressionEnabled = this.#sendCompressionEnabled;
     const routed = this.#routedMessages;
+    const streaming = this.#routerStreaming;
+    const credits = this.#uploadCredits;
     const send = this.#sending.then(async () => {
       const connection = await opening;
-      const frame = compressionEnabled
+      const decoded = streaming
+        ? decodeRoutedFrame(payload, false, ROUTED_FRAME_SLOTS)
+        : undefined;
+      const control = decoded !== undefined &&
+        isRouterControl(decoded.body.type);
+      const frame = compressionEnabled && !streaming
         ? routed
           ? encodeRoutedFrame(payload, ROUTED_FRAME_SLOTS)
           : await encodeCompressedMemoryMessage(payload)
+        : streaming
+        ? payload
         : routed
         ? checkedRoutedText(payload)
         : payload;
@@ -340,7 +415,18 @@ export class WebSocketTransport implements MemoryClient.Transport {
           "Memory websocket changed before send",
         );
       }
-      await this.#write(connection, frame);
+      if (decoded !== undefined && (!control || credits !== undefined)) {
+        for (const record of routerRecords(routerRoute(decoded.body), frame)) {
+          if (this.#socket !== connection.socket) {
+            throw MemoryClient.connectionError(
+              "Memory websocket changed during send",
+            );
+          }
+          await this.#write(connection, record, credits);
+        }
+      } else {
+        await this.#write(connection, frame);
+      }
     });
     this.#sending = send.catch(() => {});
     await send;
@@ -389,6 +475,8 @@ export class WebSocketTransport implements MemoryClient.Transport {
     this.#receiveCompressionEnabled = false;
     this.#sendCompressionEnabled = false;
     this.#routedMessages = false;
+    this.#routerStreaming = false;
+    this.#clearUploadCredits(error);
     this.#rejectCompressionRequests(error);
     return socket;
   }
@@ -411,6 +499,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
       this.#receiveCompressionEnabled = false;
       this.#sendCompressionEnabled = false;
       this.#routedMessages = false;
+      this.#routerStreaming = false;
       let opened = false;
       socket.addEventListener("open", () => {
         opened = true;
@@ -434,11 +523,26 @@ export class WebSocketTransport implements MemoryClient.Transport {
                 : frame instanceof ArrayBuffer
                 ? new Uint8Array(frame)
                 : frame;
-              payload = decodeRoutedFrame(
+              if (this.#socket !== socket) return;
+              if (
+                this.#uploadCredits !== undefined &&
+                typeof routedFrame !== "string"
+              ) {
+                // Credited connections reserve binary public frames for the
+                // router. Private upstream responses must have text headers.
+                this.#acceptUploadCredit(routedFrame);
+                return;
+              }
+              const decoded = decodeRoutedFrame(
                 routedFrame,
                 this.#receiveCompressionEnabled,
                 ROUTED_FRAME_SLOTS,
-              ).payload;
+              );
+              if (this.#socket !== socket) return;
+              if (decoded.body.type === "router.credit") {
+                throw new Error("Unexpected text router credit");
+              }
+              payload = decoded.payload;
             } else if (this.#receiveCompressionEnabled) {
               payload = await decodeCompressedMemoryMessage(frame);
             } else {
@@ -473,16 +577,56 @@ export class WebSocketTransport implements MemoryClient.Transport {
             logger.time(receiverStart, "receive", "dispatchPayload");
           } catch (cause) {
             if (this.#socket !== socket) return;
+            // Error-level records expose decode failures to console capture.
+            // Text lengths count UTF-16 code units; binary lengths count bytes.
+            // Error names/messages are capped at 50/500 characters, and only
+            // the immediate error cause is included.
+            try {
+              logger.error("receive-decode-failure", () => [
+                JSON.stringify({
+                  errorName: cause instanceof Error
+                    ? debugStr`$short${cause.name}`
+                    : typeof cause,
+                  errorMessage: cause instanceof Error
+                    ? debugStr`$long${cause.message}`
+                    : debugStr`$long${cause}`,
+                  causeName:
+                    cause instanceof Error && cause.cause instanceof Error
+                      ? debugStr`$short${cause.cause.name}`
+                      : undefined,
+                  causeMessage:
+                    cause instanceof Error && cause.cause instanceof Error
+                      ? debugStr`$long${cause.cause.message}`
+                      : undefined,
+                  frameType: typeof frame === "string"
+                    ? "string"
+                    : frame instanceof Blob
+                    ? "Blob"
+                    : frame instanceof ArrayBuffer
+                    ? "ArrayBuffer"
+                    : ArrayBuffer.isView(frame)
+                    ? "ArrayBufferView"
+                    : typeof frame,
+                  frameCodeUnits: typeof frame === "string"
+                    ? frame.length
+                    : undefined,
+                  frameBytes: frame instanceof Blob
+                    ? frame.size
+                    : frame instanceof ArrayBuffer || ArrayBuffer.isView(frame)
+                    ? frame.byteLength
+                    : undefined,
+                  routed: this.#routedMessages,
+                  compressionEnabled: this.#receiveCompressionEnabled,
+                }),
+              ]);
+            } catch {
+              // Diagnostics cannot prevent detaching and closing this socket.
+            }
             const error = new Error(
               "Unable to decode compressed memory websocket message",
               { cause },
             );
-            this.#socket = null;
-            this.#connection = null;
-            this.#compressionNegotiated = false;
-            this.#receiveCompressionEnabled = false;
-            this.#sendCompressionEnabled = false;
-            this.#rejectCompressionRequests(error);
+            this.#detachSocket(error);
             this.#closeReceiver(error);
             if (socket.readyState === WebSocket.OPEN) {
               socket.close(1007, error.message);
@@ -494,12 +638,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
       socket.addEventListener("close", () => {
         const isCurrentSocket = this.#socket === socket;
         if (isCurrentSocket) {
-          this.#socket = null;
-          this.#connection = null;
-          this.#compressionNegotiated = false;
-          this.#receiveCompressionEnabled = false;
-          this.#sendCompressionEnabled = false;
-          this.#rejectCompressionRequests(
+          this.#detachSocket(
             new Error("Memory websocket transport closed"),
           );
         }
@@ -523,12 +662,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
           ? event.error
           : new Error("memory websocket transport error");
         if (isCurrentSocket) {
-          this.#socket = null;
-          this.#connection = null;
-          this.#compressionNegotiated = false;
-          this.#receiveCompressionEnabled = false;
-          this.#sendCompressionEnabled = false;
-          this.#rejectCompressionRequests(
+          this.#detachSocket(
             new Error("Memory websocket transport failed"),
           );
         }
@@ -548,12 +682,25 @@ export class WebSocketTransport implements MemoryClient.Transport {
     return await this.#opening;
   }
 
-  /** Sends one inspectable control frame after every earlier application send. */
+  /** Sends a compression control after every earlier application send. */
   async #sendCompressionControl(enabled: boolean): Promise<boolean> {
     const requestId = crypto.randomUUID();
     const response = Promise.withResolvers<boolean>();
     void response.promise.catch(() => {});
     this.#compressionRequests.set(requestId, response);
+    if (this.#uploadCredits !== undefined) {
+      try {
+        await this.send(encodeMemoryBoundary({
+          type: "memory.compression",
+          requestId,
+          enabled,
+        }));
+        return await response.promise;
+      } catch (cause) {
+        this.#compressionRequests.delete(requestId);
+        throw cause;
+      }
+    }
     const opening = this.#open();
     const send = this.#sending.then(async () => {
       const connection = await opening;
@@ -599,8 +746,38 @@ export class WebSocketTransport implements MemoryClient.Transport {
   async #write(
     connection: MemorySocketConnection,
     frame: EncodedMemoryMessage,
+    credits?: RouterUploadCredits,
   ): Promise<void> {
     try {
+      if (credits !== undefined) {
+        if (typeof frame === "string" || frame.length > credits.window) {
+          throw new Error("Router upload record exceeds credit window");
+        }
+        for (;;) {
+          if (
+            this.#socket !== connection.socket ||
+            this.#uploadCredits !== credits
+          ) {
+            throw MemoryClient.connectionError(
+              "Memory websocket changed while waiting for router credit",
+            );
+          }
+          if (credits.outstanding + frame.length <= credits.window) break;
+          credits.waiter ??= Promise.withResolvers<void>();
+          await credits.waiter.promise;
+        }
+        // Charge before sending: even a synchronous peer reply must be bounded
+        // by bytes already submitted on this connection.
+        credits.outstanding += frame.length;
+      }
+      if (this.#routerStreaming) {
+        const bytes = typeof frame === "string"
+          ? new TextEncoder().encode(frame).length
+          : frame.length;
+        if ((connection.socket.bufferedAmount ?? 0) + bytes > 4 * 1024 * 1024) {
+          throw new Error("Router socket output limit");
+        }
+      }
       await connection.send(frame);
     } catch (cause) {
       const { socket } = connection;
@@ -626,6 +803,35 @@ export class WebSocketTransport implements MemoryClient.Transport {
       }
       throw error;
     }
+  }
+
+  /** Accepts additive credit only for outstanding bytes on this selection. */
+  #acceptUploadCredit(frame: Uint8Array): void {
+    if (
+      frame.length !== 8 || frame[0] !== 0x6d || frame[1] !== 0x72 ||
+      frame[2] !== 0x63 || frame[3] !== 0x01
+    ) {
+      throw new Error("Invalid router upload credit");
+    }
+    const credits = this.#uploadCredits;
+    const bytes = new DataView(frame.buffer, frame.byteOffset, frame.byteLength)
+      .getUint32(4, false);
+    if (
+      credits === undefined || bytes === 0 || bytes > credits.outstanding
+    ) {
+      throw new Error("Invalid router upload credit");
+    }
+    credits.outstanding -= bytes;
+    const waiter = credits.waiter;
+    credits.waiter = undefined;
+    waiter?.resolve();
+  }
+
+  /** Rejects the blocked upload and discards this connection's credit. */
+  #clearUploadCredits(error: Error): void {
+    const credits = this.#uploadCredits;
+    this.#uploadCredits = undefined;
+    credits?.waiter?.reject(MemoryClient.connectionError(error.message, error));
   }
 
   /** Rejects control requests which cannot receive an acknowledgement. */

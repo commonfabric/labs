@@ -214,6 +214,12 @@ import { assertReadOnly } from "./sqlite/guard.ts";
 import { ReadConnectionPool } from "./sqlite/read-pool.ts";
 import type { TableSchema } from "./sqlite/schema.ts";
 import { resolveSpaceStoreUrl } from "./storage-path.ts";
+import { compressServerMessageLabels } from "./sync-label-table.ts";
+import {
+  compressServerMessageCommitLabels,
+  expandClientMessageLabels,
+  hasClientMessageLabelMetadata,
+} from "./commit-label-table.ts";
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 import {
@@ -1065,6 +1071,8 @@ class Connection {
   #ready = false;
   #closed = false;
   #syncSchemaTable = false;
+  #syncLabelTable = false;
+  #commitLabelTable = false;
   #stableExpressionResultIds = false;
   #admissionNotice = false;
   #elidedVerdicts = false;
@@ -1122,10 +1130,26 @@ class Connection {
   #send(message: ServerMessage): void {
     if (message.type === "response") this.#answered.add(message.requestId);
     try {
+      let prepared = message;
+      if (this.#syncLabelTable) {
+        const labelStart = performance.now();
+        prepared = compressServerMessageLabels(prepared);
+        timing.time(labelStart, "memory", "response", "prepareLabels");
+      }
+      if (this.#commitLabelTable) {
+        const commitLabelStart = performance.now();
+        prepared = compressServerMessageCommitLabels(prepared);
+        timing.time(
+          commitLabelStart,
+          "memory",
+          "response",
+          "prepareCommitLabels",
+        );
+      }
       const schemaStart = performance.now();
-      const prepared = this.#syncSchemaTable
-        ? compressServerMessageSchemas(message)
-        : message;
+      if (this.#syncSchemaTable) {
+        prepared = compressServerMessageSchemas(prepared);
+      }
       timing.time(schemaStart, "memory", "response", "prepareSchemas");
       const sendStart = performance.now();
       this.#sendRaw(prepared);
@@ -1469,7 +1493,9 @@ class Connection {
   }
 
   async receive(payload: string): Promise<void> {
-    const parsed = parseClientMessage(payload);
+    const parsed = parseClientMessage(payload, {
+      commitLabelTableV1: this.#commitLabelTable,
+    });
     // A presence message or a session report is handled as it is handed
     // over, not behind the frames already queued here: it carries no seq and
     // settles nothing, and the space a report describes is often the one
@@ -1797,6 +1823,10 @@ class Connection {
         serverFlags?.elidedVerdicts === true;
       this.#syncSchemaTable = clientFlags?.syncSchemaTableV2 === true &&
         serverFlags?.syncSchemaTableV2 === true;
+      this.#syncLabelTable = clientFlags?.syncLabelTableV1 === true &&
+        serverFlags?.syncLabelTableV1 === true;
+      this.#commitLabelTable = clientFlags?.commitLabelTableV1 === true &&
+        serverFlags?.commitLabelTableV1 === true;
       this.#ready = true;
       return;
     }
@@ -9931,14 +9961,21 @@ export type OversizedClientMessage = {
 /**
  * Decodes and validates one message from a client. Returns `null` for a
  * message that is malformed, or that is refused for its size without carrying
- * a request id to answer it on.
+ * a request id to answer it on. Negotiated commit metadata expands after bounded
+ * wire decoding and before request-shape validation or downstream CFC checks.
  */
 export const parseClientMessage = (
   payload: string,
+  options: { commitLabelTableV1?: boolean } = {},
 ): ClientMessage | OversizedClientMessage | null => {
   let parsed: FabricValue;
   try {
     parsed = decodeMemoryBoundary(payload);
+    if (options.commitLabelTableV1 === true) {
+      parsed = expandClientMessageLabels(parsed);
+    } else if (hasClientMessageLabelMetadata(parsed)) {
+      return null;
+    }
   } catch (error) {
     if (error instanceof SlotLimitError) {
       const requestId = error.rootScalar("requestId");

@@ -152,55 +152,24 @@ export function routedIdentifier(value: unknown): asserts value is string {
   );
 }
 
-// The router's `scripts/flags.py`, in the infra repository, reads this
-// declaration by its text and compares it with the router's allowlist, so it
-// must stay a plain list of double-quoted names.
-const flags = new Set([
-  "genesisRoot",
-  "spaceKind",
-  "serverExecution",
-  "modernCellRep",
-  "stableExpressionResultIds",
-  "commitPreconditions",
-  "applyOp",
-  "syncSchemaTableV2",
-  "syncCrossingsV1",
-  "messageCompressionV1",
-  "sqliteCommitRowLabelEval",
-  "sqliteQueryReader",
-  "pendingReadStacks",
-  "verdictCatchUpMarkers",
-  "entityIdListing",
-  "entityIdPagination",
-  "entityIdLookup",
-  "sessionHoldings",
-  "viewScopedReplicationV1",
-  "sessionReadCeiling",
-  "presenceV1",
-  "sessionReportV1",
-  "sessionClose",
-  "connectionAuth",
-  "admissionNotice",
-  "elidedVerdicts",
-  "routedAuthV1",
-]);
-
 /** Canonical client flag bytes bound to the toolshed ticket. */
 export function routedFlags(value: unknown, requireAuth = true): Uint8Array {
   const record = routedObject(value);
-  requireRouted(Object.keys(record).length <= flags.size + 1);
+  requireRouted(Object.keys(record).length <= 64);
   for (const [key, field] of Object.entries(record)) {
-    if (key === "operationCodecs") {
+    requireRouted(/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(key));
+    if (Array.isArray(field)) {
       requireRouted(
-        Array.isArray(field) && field.length <= 1 &&
-          field.every((codec) => codec === "codemirror-changeset@1"),
+        field.length <= 16 && new Set(field).size === field.length &&
+          field.every((codec) =>
+            typeof codec === "string" && /^[A-Za-z0-9_.@/-]{1,128}$/.test(codec)
+          ),
       );
-    } else requireRouted(flags.has(key) && typeof field === "boolean");
+    } else requireRouted(typeof field === "boolean");
   }
   if (requireAuth) {
     requireRouted(
       [
-        "stableExpressionResultIds",
         "connectionAuth",
         "routedAuthV1",
       ].every((key) => record[key] === true),
@@ -224,12 +193,14 @@ export interface RoutedFrame {
 
 /**
  * Checks a text frame of at most `maxSlots` JSON values and compares an
- * optional binary routing hint.
+ * optional binary routing hint. `maxHoldings` bounds declared holdings;
+ * `null` disables that quota while retaining the frame's structural bounds.
  */
 export function parseRoutedText(
   payload: string,
   maxSlots: number,
   hint?: string,
+  maxHoldings: number | null = ROUTED_HOLDINGS_LIMIT,
 ): RoutedFrame {
   requireRouted(
     payload.startsWith("fvj1:") &&
@@ -263,7 +234,11 @@ export function parseRoutedText(
     const holdings = body.holdings;
     requireRouted(
       (Array.isArray(holdings) || isPlainObject(holdings)) &&
-        Object.keys(holdings).length <= ROUTED_HOLDINGS_LIMIT,
+        (maxHoldings === null ||
+          (Array.isArray(holdings)
+              ? holdings.length
+              : Object.keys(holdings).length) <=
+            maxHoldings),
     );
   }
   return {
@@ -277,15 +252,17 @@ export function parseRoutedText(
  * Decodes one gzip member, enforcing header, expansion, size and JSON bounds.
  * `maxSlots` is the receiver's frame cap: the toolshed's `limits.frameSlots`
  * or the SDK's `ROUTED_FRAME_SLOTS`.
+ * `maxHoldings` is the receiver's holdings quota, or `null` to disable it.
  */
 export function decodeRoutedFrame(
   frame: string | Uint8Array,
   compression: boolean,
   maxSlots: number,
+  maxHoldings: number | null = ROUTED_HOLDINGS_LIMIT,
 ): RoutedFrame {
   if (typeof frame === "string") {
     requireRouted(encoder.encode(frame).length <= ROUTED_RAW_LIMIT);
-    return parseRoutedText(frame, maxSlots);
+    return parseRoutedText(frame, maxSlots, undefined, maxHoldings);
   }
   requireRouted(
     compression && frame.length <= ROUTED_RAW_LIMIT && frame.length >= 12 &&
@@ -339,7 +316,7 @@ export function decodeRoutedFrame(
     trailer.getUint32(4, true) === bytes.length &&
       trailer.getUint32(0, true) === gzipCrc32(bytes),
   );
-  return parseRoutedText(decoder.decode(bytes), maxSlots, hint);
+  return parseRoutedText(decoder.decode(bytes), maxSlots, hint, maxHoldings);
 }
 
 /**

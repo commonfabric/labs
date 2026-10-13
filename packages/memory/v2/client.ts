@@ -61,6 +61,11 @@ import {
   type WatchSetResult,
   type WatchSpec,
 } from "../v2.ts";
+import {
+  compressClientMessageLabels,
+  expandServerMessageCommitLabels,
+  hasServerMessageCommitLabelMetadata,
+} from "./commit-label-table.ts";
 import type { AppliedCommit } from "./engine.ts";
 import { logIncomingFrame, logOutgoingFrame } from "./frame-log.ts";
 import { memoryMessageFrameBytes } from "./message-compression.ts";
@@ -72,6 +77,10 @@ import {
 } from "./presence.ts";
 import type { Server } from "./server.ts";
 import { parseSessionReport } from "./session-reports.ts";
+import {
+  expandServerMessageLabels,
+  hasServerMessageLabelMetadata,
+} from "./sync-label-table.ts";
 import { containsReservedSchemaRefSubstring } from "./sync-schema-ref.ts";
 import { expandServerMessageSchemas } from "./sync-schema-table.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
@@ -112,6 +121,9 @@ export type Transport = {
   /** Whether this transport can exchange negotiated compression envelopes. */
   readonly supportsMessageCompression?: boolean;
 
+  /** Whether bounded routed transport records can be sent. */
+  readonly supportsRouterStreaming?: boolean;
+
   /**
    * Hands `payload` to the connection, opening one first when there is none.
    *
@@ -147,8 +159,16 @@ export type Transport = {
   /** Enables compression after a successful capability handshake. */
   setMessageCompressionEnabled?(enabled: boolean): void;
 
-  /** Selects bounded version-2 envelopes after routed authentication negotiation. */
-  setRoutedMessagesEnabled?(enabled: boolean): void;
+  /**
+   * Selects routed envelopes and optional streaming after authentication
+   * negotiation. `uploadWindow` advertises peer credit in on-wire record bytes;
+   * the transport selects credits only when it supports the advertised window.
+   */
+  setRoutedMessagesEnabled?(
+    enabled: boolean,
+    transportVersion?: number,
+    uploadWindow?: number,
+  ): void;
 
   /**
    * Resolves once every server frame this transport held at the call has been
@@ -538,9 +558,13 @@ export class Client {
   #pending = new Map<string, PromiseWithResolvers<unknown>>();
   #spaces = new Set<SpaceSession>();
   #nextRequest = 1;
-  #helloPending: PromiseWithResolvers<void> | null = null;
+  #helloPending:
+    | (PromiseWithResolvers<void> & { receiveError?: Error })
+    | null = null;
   #sessionOpenAuthContext: SessionOpenAuthContext | null = null;
   #serverFlags: MemoryProtocolFlags | null = null;
+  #syncLabelTable = false;
+  #commitLabelTable = false;
 
   /**
    * Per key, the `connection.auth` it made on the current connection,
@@ -706,9 +730,11 @@ export class Client {
     this.#endRenewals(new Error("memory client closed"));
     this.#endHeldMounts(new Error("memory client closed"));
     this.#rejectPending(new Error("memory client closed"));
+    // Session background sends may be waiting for peer upload credit. Closing
+    // the transport rejects those waits before session teardown awaits them.
+    await this.#transport.close();
     await Promise.all([...this.#spaces].map((space) => space.close()));
     this.#spaces.clear();
-    await this.#transport.close();
     await this.#reconnecting?.catch(() => undefined);
   }
 
@@ -791,15 +817,26 @@ export class Client {
     if (options.whileConnected === true && !this.#connected) {
       throw connectionLostWhileRestoring();
     }
-    await this.#ensureConnected();
-    // `ensureConnected()` is async even when the transport is already live, so
-    // close() can run while this request is suspended there. Recheck before
-    // registering the request; otherwise it can miss close()'s rejectPending()
-    // sweep and wait forever for a response on the closed transport.
+    const epoch = await this.#ensureConnected();
+    // Readiness can change across the await even for an already-live transport.
+    // Reject before encoding or registration so this request uses neither stale
+    // negotiation nor a pending slot created after the discard's rejection sweep.
     if (this.#closed) {
       throw new Error("memory client is closed");
     }
+    if (this.#fatalError !== null) throw this.#fatalError;
+    if (this.#staleSince(epoch)) {
+      throw connectionError(
+        "Memory connection changed before request encoding",
+      );
+    }
     const requestId = message.requestId as string;
+    // Retained requests stay inline so replay uses the next connection's
+    // negotiation. Compact only the value handed to the transport encoder.
+    const prepared = this.#commitLabelTable
+      ? compressClientMessageLabels(message)
+      : message;
+    const encoded = encodeMemoryBoundary(prepared);
     const pending = Promise.withResolvers<unknown>();
     // The rejection handler below only attaches after the transport send
     // completes, and send suspends across event-loop turns on any real
@@ -809,7 +846,6 @@ export class Client {
     // observes the rejection.
     pending.promise.catch(() => {});
     this.#pending.set(requestId, pending);
-    const encoded = encodeMemoryBoundary(message);
     logOutgoingFrame(message, memoryMessageFrameBytes(encoded));
     await this.#transport.send(encoded);
     const result = await pending.promise as ResponseMessage<Result>;
@@ -1104,9 +1140,8 @@ export class Client {
   }
 
   /**
-   * Whether a signature begun under connection `epoch` is over a challenge
-   * of a connection that is gone: the connection dropped, or a new one
-   * replaced it, while the signing ran.
+   * Whether work begun under connection `epoch` belongs to a connection that
+   * dropped or was replaced while the work was suspended.
    */
   #staleSince(epoch: number): boolean {
     return !this.#connected || this.#connectionEpoch !== epoch;
@@ -1624,9 +1659,8 @@ export class Client {
   }
 
   /**
-   * Discards the connection for a held session whose retried restore failed
-   * with `error`, a reason only a new connection heals, as the reconnect loop
-   * does when a restore fails: every session restores again on the next
+   * Discards the connection after a receive failure or a held session's
+   * retried restore fails with `error`: every session restores on the next
    * connection, after a backoff that grows with each restart until no
    * session is held.
    *
@@ -1663,6 +1697,8 @@ export class Client {
 
   async #hello(): Promise<void> {
     this.#endRenewals();
+    this.#syncLabelTable = false;
+    this.#commitLabelTable = false;
     this.#transport.setMessageCompressionEnabled?.(false);
     this.#connectionEpoch += 1;
     this.#authenticated.clear();
@@ -1676,7 +1712,8 @@ export class Client {
     // own, as stale, and the restores that follow this handshake must not
     // wait behind them.
     this.#signedOpens = Promise.resolve();
-    const ack = Promise.withResolvers<void>();
+    const ack: PromiseWithResolvers<void> & { receiveError?: Error } = Promise
+      .withResolvers<void>();
     this.#helloPending = ack;
     // `sessionReportV1` is the server's capability alone: the client reads it
     // from `hello.ok` and never offers it, since an older routed host refuses
@@ -1697,6 +1734,9 @@ export class Client {
       const encoded = encodeMemoryBoundary(hello);
       logOutgoingFrame(hello, memoryMessageFrameBytes(encoded));
       await Promise.all([this.#transport.send(encoded), ack.promise]);
+      // A synchronous transport can deliver another frame after `hello.ok`
+      // settles `ack`, before its send finishes. That failure still wins.
+      if (ack.receiveError !== undefined) throw ack.receiveError;
       this.#connected = true;
       this.#noteStateChange();
     } finally {
@@ -1705,12 +1745,24 @@ export class Client {
   }
 
   #onMessage(payload: string): void {
+    if (
+      this.#closed || this.#fatalError !== null ||
+      (!this.#connected && this.#helloPending === null)
+    ) return;
     let message: unknown;
     try {
       const decodeStart = performance.now();
       message = decodeTrustedMemoryBoundary(payload);
       logger.time(decodeStart, "receive", "decodeBoundary");
       logIncomingFrame(message, memoryMessageFrameBytes(payload));
+      if (!this.#syncLabelTable && hasServerMessageLabelMetadata(message)) {
+        throw protocolError("Unnegotiated `syncLabelTableV1` metadata");
+      }
+      if (
+        !this.#commitLabelTable && hasServerMessageCommitLabelMetadata(message)
+      ) {
+        throw protocolError("Unnegotiated `commitLabelTableV1` metadata");
+      }
       // A frame whose raw text lacks every reserved reference prefix cannot
       // carry a schema reference (strings serialize verbatim — see the note
       // on encodeMemoryBoundary), so the expansion walk over its upserts is
@@ -1720,15 +1772,35 @@ export class Client {
         message = expandServerMessageSchemas(message);
         logger.time(schemaExpansionStart, "receive", "schemaExpansion");
       }
+      // Label/path expansion accounts for complete metadata, including schemas
+      // carried by nested links, against its logical expansion limit.
+      if (this.#syncLabelTable) {
+        const labelExpansionStart = performance.now();
+        message = expandServerMessageLabels(message);
+        logger.time(labelExpansionStart, "receive", "labelExpansion");
+      }
+      if (this.#commitLabelTable) {
+        const commitLabelExpansionStart = performance.now();
+        message = expandServerMessageCommitLabels(message);
+        logger.time(
+          commitLabelExpansionStart,
+          "receive",
+          "commitLabelExpansion",
+        );
+      }
     } catch (cause) {
       const error = new Error("Unable to parse memory server message", {
         cause,
       });
       error.name = "InvalidMessageError";
       if (this.#helloPending !== null) {
+        this.#helloPending.receiveError = error;
         this.#helloPending.reject(error);
       } else {
-        this.#rejectPending(error);
+        // Dropping one effect would let a later effect advance past an update
+        // the replica never applied. Restore against what each session holds.
+        for (const session of this.#spaces) session.invalidateDelivery(error);
+        this.restartConnection(error);
       }
       return;
     }
@@ -1791,12 +1863,22 @@ export class Client {
           );
           return;
         }
-        this.#transport.setRoutedMessagesEnabled?.(routed);
+        this.#transport.setRoutedMessagesEnabled?.(
+          routed,
+          this.#transport.supportsRouterStreaming
+            ? helloOk.routerTransport
+            : undefined,
+          helloOk.routerUploadWindow,
+        );
         this.#transport.setMessageCompressionEnabled?.(
           expectedFlags.messageCompressionV1 &&
             this.#transport.supportsMessageCompression === true &&
             helloOk.flags.messageCompressionV1,
         );
+        this.#syncLabelTable = expectedFlags.syncLabelTableV1 &&
+          helloOk.flags.syncLabelTableV1;
+        this.#commitLabelTable = expectedFlags.commitLabelTableV1 &&
+          helloOk.flags.commitLabelTableV1;
         this.#helloPending.resolve();
         return;
       }
@@ -1930,7 +2012,8 @@ export class Client {
     return `req:${this.#nextRequest++}`;
   }
 
-  async #ensureConnected(): Promise<void> {
+  /** Returns the observed connection epoch for post-await readiness checks. */
+  async #ensureConnected(): Promise<number> {
     if (this.#closed) {
       throw new Error("memory client is closed");
     }
@@ -1938,7 +2021,7 @@ export class Client {
       throw this.#fatalError;
     }
     if (this.#connected) {
-      return;
+      return this.#connectionEpoch;
     }
     await this.#reconnect();
     // #reconnect() resolves without connecting when it gives up on a permanent
@@ -1946,6 +2029,7 @@ export class Client {
     if (this.#fatalError) {
       throw this.#fatalError;
     }
+    return this.#connectionEpoch;
   }
 
   #onClose(error?: Error): void {
@@ -2035,8 +2119,30 @@ export class Client {
   /**
    * Helper for the reconnect loop and `restartConnection()`, which discards
    * the connection after `err` and reports whether a reconnect can follow.
+   * Each discard logs the original error and its immediate error cause with
+   * names capped at 50 characters and messages at 500, plus connection counts.
    */
   #discardConnection(err: Error): boolean {
+    try {
+      logger.error("connection-discard", () => [
+        JSON.stringify({
+          errorName: debugStr`$short${err.name}`,
+          errorMessage: debugStr`$long${err.message}`,
+          causeName: err.cause instanceof Error
+            ? debugStr`$short${err.cause.name}`
+            : undefined,
+          causeMessage: err.cause instanceof Error
+            ? debugStr`$long${err.cause.message}`
+            : undefined,
+          connected: this.#connected,
+          connectionEpoch: this.#connectionEpoch,
+          sessionCount: this.#spaces.size,
+          pendingRequestCount: this.#pending.size,
+        }),
+      ]);
+    } catch {
+      // Diagnostic getters and console sinks can throw; cleanup must proceed.
+    }
     this.#connected = false;
     this.#endRenewals(toConnectionError(err));
     this.#noteStateChange();
@@ -2121,6 +2227,8 @@ export class Client {
 }
 
 export class SpaceSession {
+  /** Receive failure requiring an explicit client-owned restoration baseline. */
+  #invalidDelivery: Error | undefined;
   #outstandingCommits = new Map<number, OutstandingCommit>();
   #watchSpecs: WatchSpec[] = [];
   #viewInterests: ViewInterest[] = [];
@@ -3011,23 +3119,22 @@ export class SpaceSession {
     await this.#restoreComplete?.promise;
   }
 
+  /** Requires the next restore to use the replica's actual holdings. */
+  invalidateDelivery(error: Error): void {
+    this.#invalidDelivery = error;
+  }
+
   async restore(): Promise<void> {
     if (this.#closed) {
       return;
     }
     if (
-      this.holdingsProvider !== undefined &&
+      (this.holdingsProvider !== undefined ||
+        this.#invalidDelivery !== undefined) &&
       this.#client.serverFlags?.sessionHoldings !== true
     ) {
-      // A consumer that installed a holdings provider relies on the
-      // declaration for reconnect correctness: without it, a resume is
-      // diffed against the server's memory of the session — which can
-      // elide a document the replica lost — and a re-establishment
-      // re-downloads the whole union. Against a server that cannot take
-      // the declaration, restoring would silently reintroduce both, so
-      // the session fails here, loudly, with the cause. The initial
-      // connection is unaffected: nothing was held, so nothing needed
-      // declaring.
+      // Replica-owned holdings and receive failures require a client-owned
+      // baseline: the server may have recorded an unapplied frame as delivered.
       this.#terminateSession(
         new Error(
           "memory session cannot be restored: the server does not " +
@@ -3035,6 +3142,16 @@ export class SpaceSession {
             "holdings cannot be the reconnect's delivery base",
         ),
       );
+      return;
+    }
+    // A `SessionHolding` cannot name explicit scope instances. Such a view
+    // needs its replica's provider to supply a representable recovery baseline.
+    if (
+      this.#invalidDelivery !== undefined &&
+      this.holdingsProvider === undefined &&
+      this.#watchView?.entities.some((entity) => entity.scopeKey !== undefined)
+    ) {
+      this.#terminateSession(this.#invalidDelivery);
       return;
     }
     if (this.#restoreComplete === undefined) {
@@ -3052,6 +3169,7 @@ export class SpaceSession {
       for (const observer of this.#viewCapabilityLostObservers) observer();
     }
     const run = ++this.#restoreRun;
+    const invalidDelivery = this.#invalidDelivery;
     this.#cancelHeldRestore();
     this.#restoring = true;
     this.#readyOnConnection = false;
@@ -3142,6 +3260,9 @@ export class SpaceSession {
       }
       this.#rejoinPresenceRooms();
       await Promise.all(replayTasks);
+      if (
+        this.#client.isConnected() && this.#invalidDelivery === invalidDelivery
+      ) this.#invalidDelivery = undefined;
       this.#restoreComplete?.resolve();
       this.#restoreComplete = undefined;
       this.#heldRestores = 0;
@@ -3862,7 +3983,19 @@ export class SpaceSession {
 
   /** The consumer's current delivery base for reconnects and view changes. */
   #declaredHoldings(): SessionHolding[] | undefined {
-    return this.holdingsProvider?.();
+    const holdings = this.holdingsProvider?.();
+    if (holdings !== undefined || this.#invalidDelivery === undefined) {
+      return holdings;
+    }
+    // A server may have recorded a malformed frame as delivered. The local
+    // view, not that delivery cache, defines the baseline for its replacement.
+    return this.#watchView?.entities.map((entity) => ({
+      id: entity.id,
+      scope: entity.scope,
+      branch: entity.branch,
+      seq: entity.seq,
+      ...(entity.document === null ? { deleted: true as const } : {}),
+    })) ?? [];
   }
 
   async #reopen(): Promise<SessionOpenResult> {
@@ -4526,6 +4659,8 @@ const parseHelloOk = (
 ): {
   flags: MemoryProtocolFlags;
   sessionOpen?: unknown;
+  routerTransport?: number;
+  routerUploadWindow?: number;
 } | null => {
   if (!isPlainObject(message)) {
     return null;
@@ -4537,7 +4672,17 @@ const parseHelloOk = (
   if (parsed === null) {
     return null;
   }
-  return { flags: parsed, sessionOpen: message.sessionOpen };
+  if (message.routerTransport !== undefined && message.routerTransport !== 1) {
+    return null;
+  }
+  return {
+    flags: parsed,
+    sessionOpen: message.sessionOpen,
+    ...(message.routerTransport === 1 ? { routerTransport: 1 } : {}),
+    ...(typeof message.routerUploadWindow === "number"
+      ? { routerUploadWindow: message.routerUploadWindow }
+      : {}),
+  };
 };
 
 const isSessionEffect = (

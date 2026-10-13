@@ -100,6 +100,31 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
     assertEquals(sized.config.limits.contextsPerLink, 4000);
     assertEquals(sized.config.limits.sockets, 9000);
     assertEquals(sized.config.limits.sessionsPerContext, 1200);
+    expect(sized.config.limits.spacesPerContext).toBe(1200);
+    write({
+      ...config,
+      limits: {
+        contextsPerLink: null,
+        sockets: 2,
+        tickets: 1,
+        sessionsPerContext: null,
+        spacesPerContext: null,
+        sessionsPerRouter: 2,
+        viewsPerSession: null,
+        holdingsPerSession: 9000,
+      },
+    });
+    expect(new MemoryRouterPolicy(path).config.limits).toMatchObject({
+      contextsPerLink: null,
+      sockets: 2,
+      tickets: 1,
+      sessionsPerContext: null,
+      spacesPerContext: null,
+      sessionsPerRouter: 2,
+      viewsPerSession: null,
+      holdingsPerSession: 9000,
+      frameSlots: 150_000,
+    });
     // The frame slot cap is config too, defaulting to the router's
     // `max_frame_slots`, and is named when it fails.
     assertEquals(policy.config.limits.frameSlots, 150_000);
@@ -141,11 +166,15 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
       const limits of [
         { unknownLimit: 1 },
         { sockets: 0 },
+        { frameSlots: null },
+        { viewsPerSession: false },
+        { holdingsPerSession: 1.5 },
         { sessionsPerContext: "5" },
         { sessionsPerContext: 5000, sessionsPerRouter: 4096 },
         { contextsPerLink: 4000, sockets: 9000 },
         { contextsPerLink: 2048, sockets: 2048 },
         [],
+        null,
       ]
     ) {
       write({ ...config, limits });

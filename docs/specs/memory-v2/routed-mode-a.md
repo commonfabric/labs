@@ -19,9 +19,41 @@ clients use its `hello`, `connection.challenge`, `connection.auth`,
 - Routed binary compression uses `mcmp` version 2, a big-endian expanded length,
   two-byte space-hint length, canonical DID bytes and one minimal gzip member.
   Version 1 has no routing hint and is refused. Uncompressed `fvj1` text still
-  uses the Fabric codec after strict JSON validation. Compression is negotiated
-  per hop: the router compresses frames to a client that negotiated it, and
-  router-to-toolshed data sockets stay uncompressed.
+  uses the Fabric codec after strict JSON validation. Legacy public uploads may
+  use this encoding. Streamed uploads and private responses currently use plain
+  UTF-8 bodies; the router does not compress or decompress private responses.
+- The router offers `routerTransport:1` and `routerUploadWindow:262144` in
+  `hello.ok`. A supporting client selects
+  `fvj1:{"type":"router.transport","version":1,"uploadCredits":true}` as text
+  before authentication, on the same ordered send queue as its requests. Every
+  subsequent logical Memory upload, including authentication, compression
+  controls, session opens and watch mutations, uses the bounded `mrt1` records
+  described below. The router assembles controls completely and applies their
+  byte, slot and admission limits before processing them; ordinary data is
+  forwarded incrementally.
+- The upload window counts complete on-wire record bytes, including the header,
+  each chunk's five-byte prefix and the completion record. The client charges
+  each record before sending it and waits for enough credit for the entire next
+  record. The router returns additive binary acknowledgements for accepted
+  record bytes, possibly coalesced. Each is exactly eight bytes: magic
+  `6d 72 63 01` (`mrc` followed by byte `01`), then a four-byte unsigned
+  big-endian grant. The grant must be positive and no greater than the client's
+  outstanding sent bytes. Unsolicited or invalid grants close the connection.
+  Text `router.credit` messages cannot grant credit and close the connection.
+  On credited public connections, the router rejects every private upstream
+  header with `binary:true` before emitting public fragments. This reserves
+  binary public frames for router credit, so opaque text response bodies cannot
+  impersonate it. The SDK consumes binary credit before Memory or compression
+  decoding and accepts windows
+  from 32,773 through 262,144 bytes. Credit acknowledges receipt, not Memory
+  execution, and provides the event that permits a browser's native send queue
+  to drain. The SDK retains its separate 4 MiB native queue cap. Closing,
+  resetting or replacing the socket rejects blocked uploads and discards credit;
+  grants and writes never transfer to a replacement connection.
+- Initial client hellos remain compatible with routers that do not offer
+  streaming. A streaming router without a supported upload window is selected
+  with `fvj1:{"type":"router.transport","version":1}`. That mode streams ordinary
+  data and sends controls as complete public envelopes, with the same limits.
 - The router pings a quiet client and closes the connection when no frame
   answers, so a vanished client releases its worker.
 
@@ -62,7 +94,7 @@ exists or what its ACL grants; without an `unlisted` rule it also shows that a
 DID is listed while its toolshed is down.
 
 A failed data handshake is retriable on the same connection only before the
-link agent issues its signed `mdb1` binding. The worker then releases its broker
+link agent issues its signed `rdb1` binding. The worker then releases its broker
 assignment through the acknowledged internal rollback described below. Once a
 binding has been issued, a failed hello or transport closes the public
 connection: the signature may already have redeemed its single-use ticket, so
@@ -188,9 +220,9 @@ are refused. No field accepts a Fabric tagged-value interpretation.
 | `mrc1` signed by router   | deployment text, router text, epoch ID, context ID, challenge, issued time, expires time                                                     |
 | `mrr1` signed by router   | SHA-256 of signed issuance, principal text, SHA-256 of exact signed statement, received time                                                 |
 | `mrp1`                    | statement blob, signed issuance blob, signed receipt blob                                                                                    |
-| `mlh1` signed by toolshed | toolshed DID text, nonce, issued time, supported flags blob                                                                                  |
-| `mlc1` signed by router   | deployment text, router DID text, toolshed DID text, epoch ID, nonce                                                                         |
-| `mlo1`                    | authenticated-link acknowledgement; no fields                                                                                                |
+| `rph1` signed by toolshed | toolshed DID text, nonce, issued time, supported flags blob including required private `routerEncodingNegotiation: true` and `routerRequestAdmission: true` |
+| `rpc1` signed by router | deployment text, router DID text, toolshed DID text, epoch ID, nonce, one byte `0x01` asserting request-admission support |
+| `rpo1` | authenticated private protocol v1 acknowledgement; no fields |
 | `mlq1`                    | strictly increasing sequence time, operation byte, payload blob                                                                              |
 | `mls1`                    | sequence time, status byte (`0` success), payload blob                                                                                       |
 | `mat1`, operation 1       | context ID, actual client flags blob, space DID text, ownership epoch time; returns ticket                                                   |
@@ -199,17 +231,213 @@ are refused. No field accepts a Fabric tagged-value interpretation.
 | `mrl1`, operation 4       | context ID, principal text; releases new-open authority                                                                                      |
 | `mas1`, operation 5       | context ID, space DID text, ownership epoch time                                                                                             |
 | `mvp1`, operation 6       | context ID, actual client flags blob, proof blob; verifies initial auth without space admission                                              |
-| `mdh1` signed by toolshed | toolshed DID text, data-socket nonce, issued time                                                                                            |
-| `mdb1` signed by router   | router DID text, deployment text, toolshed DID text, epoch ID, context ID, ticket, socket nonce, socket-issued time, SHA-256 of actual flags |
+| `rdh1` signed by toolshed | toolshed DID text, data-socket nonce, issued time |
+| `rdb1` signed by router | router DID text, deployment text, toolshed DID text, epoch ID, context ID, ticket, socket nonce, socket-issued time, SHA-256 of canonical original client flags, SHA-256 of canonical `negotiatedMemoryFlags` |
 
 The authenticated TLS link accepts only an allowlisted router key and network
 peer. A single-use 15-second ticket is owned by that link epoch and context. The
-data socket first receives `mdh1`; the worker obtains `mdb1` over its own agent
-capability, then sends `hello` with `routerTicket` hex and `routerBinding`
-base64url. The toolshed rechecks the live ticket after signature verification
-and atomically consumes it. Client flags are canonical sorted JSON, with exactly
-the client's negotiated values. A ticket confers no principal or space authority
-by itself. Link control is never accepted on a data socket.
+data socket first receives `rdh1`; the worker obtains `rdb1` over its own agent
+capability, then sends plain JSON `router.hello` with `version:1`, the original
+client's `memoryFlags`, a separate `negotiatedMemoryFlags` descriptor,
+`routerRequestAdmission: true`, `routerTicket` hex and `routerBinding` base64url.
+Both flag hashes in `rdb1` are
+mandatory, in the order above: the original-flag hash precedes the selected
+descriptor's hash, followed by the signature. Each hashes compact UTF-8 JSON
+with lexicographically sorted object keys and array members in their declared
+order. The selected descriptor's string sets retain public-offer order.
+
+The toolshed validates the descriptors and both signed hashes before binding
+the data socket, consuming its ticket, or replacing an existing backend. After
+signature verification yields, it rechecks the live ticket and endpoint support
+before atomically consuming the ticket. Missing descriptors or hashes, a
+selected capability outside the client or endpoint offer, a cell-mode mismatch,
+private flags in the selected descriptor, or a hash mismatch reject the data
+handshake without replacing the backend. A ticket confers no principal or space
+authority by itself. Link control is never accepted on a data socket.
+
+### Private transport version and streaming records
+
+The signed `rph1`, `rpc1`, `rdh1` and `rdb1` domains select private router
+protocol version 1 independently of the Memory API. Unsupported domains fail
+before authentication or ticket redemption. The binary, router-signed `rpc1`
+record includes exactly one request-admission byte, `0x01`, immediately after
+the nonce and before its signature. It is a required assertion, not a bitmask.
+The host requires that byte and end-of-record before registering the control
+link or replacing its predecessor; a missing, different or extra byte is
+refused. The `rpo1` acknowledgment remains exactly four ASCII bytes.
+
+A successful data handshake returns
+plain JSON `router.ready` with `version:1`, the endpoint's `memoryFlags`,
+`routerEncodingNegotiation: true`, `routerRequestAdmission: true`, and an exact
+echo of `negotiatedMemoryFlags`. The host requires
+`routerRequestAdmission: true` in the private `router.hello` as well.
+The router requires the acknowledgment and exact descriptor equality before
+using the data socket; a different subset or superset is refused. It also checks
+that the endpoint's flags still support the frozen public offer.
+Memory incompatibility rejects that data connection without invalidating an
+otherwise transport-compatible private control link.
+
+The link agent checks authenticated Memory capabilities before issuing a ticket
+or binding. An incompatible endpoint receives a retriable admission refusal;
+sessions on compatible endpoints of that public connection remain usable. At
+startup, only endpoints whose signed `rph1` descriptor includes both
+`routerEncodingNegotiation: true` and `routerRequestAdmission: true` and matches
+the deployment's cell mode
+contribute to the public snapshot. The link lifecycle remains active while
+waiting for one to become available. This snapshot is fixed for the router
+process's lifetime. A replacement endpoint must support every advertised true
+boolean and string-set member, at the same cell mode. Additional support cannot
+expand the snapshot: a capability advertised as false, or omitted, remains
+unavailable even for new public connections until the router restarts.
+
+Capability descriptors contain bounded boolean values or sets of string names.
+Their public intersection uses logical AND and set intersection, including names
+the router has never seen. `modernCellRep` is a wire mode and must match the
+deployment; absence means false and a present value must be boolean.
+`serverExecution` (the posture described below) and the private
+`routerEncodingNegotiation` and `routerRequestAdmission` flags are excluded from
+the public offer and selected descriptor. Unknown well-formed capabilities do
+not require a router release.
+
+For each client, `negotiatedMemoryFlags` is the intersection of its original
+flags and that frozen public offer: booleans use logical AND, and string sets
+retain common members in public-offer order. The link agent computes this
+descriptor independently of the worker and signs its hash in `rdb1`. The
+toolshed checks that the selection is supported by the original client and its
+own authenticated offer, verifies the exact signed selection, and uses it for
+the backend Memory `hello` and encoding decisions, including schema/label tables
+and message compression. A worker cannot substitute another supported subset:
+subset validation establishes support, while the signature binds the precise
+selection authorized by the link agent's frozen offer. An endpoint upgrade
+therefore cannot silently enable a codec the public handshake did not offer.
+
+Original client flags remain unchanged in context state, `mat1` tickets and
+`mvp1` proof validation. Client statements, issuances, receipts and proof records
+keep their existing bindings. Deploy the router and private toolshed peers with
+this contract together. A toolshed lacking either required signed-link flag
+contributes no public capabilities and receives no data ticket; admission is
+refused retriably as `upstream-unavailable`. A router without the signed `rpc1`
+request-admission byte cannot register a control link. A supporting endpoint
+refuses a data hello without the separate selected descriptor, both signed
+hashes, or the request-admission assertion.
+Private transport version 1, public `mrt\x01` streaming, binary `mrc\x01` upload
+credits and the signed `mrc1` challenge issuance format keep their existing
+framing.
+
+Every data record is one complete binary WebSocket message. It starts with bytes
+`6d 72 74 01` and a one-byte kind:
+
+- `0`: a UTF-8 JSON header `{bytes,binary,route}`, at most 4,096 bytes including
+  the prefix. `bytes` declares the exact encoded body length; `binary` identifies
+  its public WebSocket representation. `route` carries message kind, applicable
+  request/space/session/principal identifiers, response error presence, and an
+  assigned session ID when applicable. It contains no application document data.
+  Private request headers additionally require `requestOrdinal`, as specified
+  below. Public upload headers and private response headers must not carry it.
+- `1`: one nonempty opaque chunk, at most 32 KiB after the five-byte prefix.
+- `2`: an empty completion record, valid only after exactly `bytes` body bytes.
+
+There is one active body per source socket, with at most 512 data records. The router verifies routing bindings
+before forwarding a chunk. Private responses become public WebSocket fragments;
+the final `FIN` is withheld until valid completion. Private admission grants may
+interleave between response records and are consumed by the router; only
+WebSocket control frames may interleave with the resulting public fragments.
+Other upstreams pause while one owns public message output; local
+responses wait in a bounded queue. Blocked output stops source reads and resumes
+on writable readiness. A truncated, malformed or lost source closes the affected
+connection; the router never replays a partially forwarded mutation.
+
+Streamed public requests use these same records. For ordinary data, the router
+reserves request capacity from the header before reading its body and forwards
+each chunk to the selected toolshed. Credited uploads carry controls in these
+records too; the router assembles them, checks that their routing projection
+matches the header, then parses and admits the complete control. A refused
+request's body is discarded within its declared bound. Held controls cannot
+interleave an admitted upload. The toolshed reserves
+its assembly budget and grants private request admission before the router sends
+body bytes, requires completion,
+validates the payload, and compares its routing projection with the header before
+backend execution. Endpoint-generated response headers come from the same
+structured message as the payload. Application decoding belongs to the endpoints.
+
+### Private request-body admission
+
+Every private request's `mrt\x01` header carries a router-assigned
+`requestOrdinal`. It is a safe integer starting at `1` on each data socket and
+increasing by exactly one through `2^53 - 1`, without wrapping. Ordinals belong
+to that socket, not to a session, a request ID, or a replacement connection.
+The router sends the header, then sends neither a body chunk nor the completion
+record until the endpoint grants that exact request. This applies to ordinary
+streamed requests, buffered admission controls and legacy public envelopes
+forwarded over the private socket. Public upload headers do not supply ordinals.
+
+The endpoint reserves the declared body bytes against its 4 MiB pending-input
+budget before allocating the body. If existing requests leave insufficient
+capacity, it retains at most one header, bounded by 4,096 bytes including the
+record prefix, without allocating its body. A body larger than the total budget
+is refused. Releasing a request's reservation in its finalizer reconsiders the
+waiting header; capacity is signaled by that release, not inferred from spare
+TCP buffering or a larger queue cap.
+
+Once reserved, the endpoint sends one binary WebSocket admission message of
+exactly 16 bytes:
+
+| Offset | Width | Value |
+| --- | --- | --- |
+| 0 | 4 bytes | `6d 72 69 01` (`mri\x01`) |
+| 4 | 4 bytes | unsigned big-endian declared body byte count |
+| 8 | 8 bytes | unsigned big-endian `requestOrdinal` |
+
+Both count and ordinal must equal the outstanding header's values. The ordinal
+must also be in the safe-integer range above. The host enables body reception
+only after the admission message's successful socket-write callback. Admission
+reserves input capacity; it does not acknowledge execution or replenish public
+upload credit. Public `mrc\x01` credit retains its independent record-byte
+accounting and format.
+
+The endpoint sender has one bounded admission-control slot, serialized with
+response-record writes. A grant may appear between private response records;
+the router intercepts it before response assembly and public-output ownership
+checks, never forwarding it to the public client. Sending or completing a grant
+does not release retained logical response-body bytes or complete a response's
+output-drain wait. A response already owning public output can finish while an
+upload waits for admission. A blocked public downstream may delay a grant: the
+router preserves its bounded output ownership and does not read arbitrarily
+ahead to find one.
+
+A wrong or reused ordinal, duplicate or unsolicited grant, mismatched byte
+count, malformed record, second waiting header, or body/end record received
+before admission completes closes the affected connection. Close, cancellation
+and write failure discard the waiting header and pending grant and release each
+owned input reservation exactly once. Late callbacks cannot grant a request on
+a closed or replacement socket.
+
+### Endpoint buffering and dispatch
+
+Private sockets enforce the 32 KiB plus five-byte record limit at WebSocket
+assembly, not just after decoding. Endpoints retain complete logical bodies under
+the existing message and queue bounds. Toolshed output waits for each record's
+socket write callback. Negotiated public uploads wait for the peer's byte credit
+before each record. Browser output also has a bounded native `bufferedAmount`
+admission check; exhaustion terminates the connection rather than polling for
+drain. Session-open and watch-control payloads require full router parsing;
+ordinary streamed requests and private responses do not.
+
+Toolshed request dispatch and decoding, including host refusals, wait until the
+bounded sender retains zero logical output bytes. That wait resolves only after
+the completion-record socket callbacks have released the bodies. One cancellable
+Node `setImmediate` separates completed backend request turns so I/O callbacks
+can run. While output is pending, the input socket pauses at body boundaries;
+an already admitted partial body completes with its assembly reservation held.
+Already-buffered receiver events remain subject to the hard input bounds. Close
+cancels both the output wait and the scheduled turn. This pacing covers
+request-driven production. Unsolicited effects, presence and revocation remain
+bounded output producers that close the connection on output exhaustion.
+
+Whole-envelope forwarding also drains one record at a time. A blocked private
+socket retains one body cursor and pauses public reads and held-request dispatch
+until writable readiness resumes it. This preserves admission at the logical
+message's byte limit while bounding socket-buffer growth to one record at a time.
 
 The router accepts the toolshed's `serverExecution` flag but omits it from
 the client handshake. Execution posture is therefore unknown on a routed
@@ -313,17 +541,18 @@ uses section 5.2's permitted whole-public-connection close on upstream loss.
 
 The private listener uses TLS 1.3 and bounded `ws` framing before application
 parsing. It exposes only `/memory/router-link` and `/memory/router-data`, and
-serves no toolshed HTTP API. Both boundaries reject duplicate JSON keys,
-ambiguous security tags, invalid UTF-8/DIDs, unknown critical flags, unsupported
-versions, mismatched hints and gzip expansion/CRC/member violations. A frame's
+serves no toolshed HTTP API. Routing headers reject duplicate JSON keys,
+ambiguous security tags, invalid UTF-8/DIDs and unsupported versions. Endpoints
+validate complete application bodies, including compressed envelope hints and
+gzip expansion/CRC/member checks when applicable. A decoded application's
 JSON is at most 64 levels deep and at most `limits.frameSlots` values, counted
 as the router counts them: one slot per value, whether scalar, object or array,
 with keys free. The default, 150,000, is the router's default `max_frame_slots`,
 sized from the largest measured sync frame (119,720 slots) against the router
-worker's memory. The router and the toolshed close the socket a frame over the
-cap arrives on; the SDK refuses to send one and closes on receiving one. The
-slot cap exists for the router worker's memory; a toolshed's own exposure to one
-frame is bounded by the byte caps (8 MiB raw, 16 MiB expanded, 4 MiB queued per
+worker's memory on whole-envelope paths. The router enforces this cap on complete
+public envelopes; opaque streamed bodies are checked at the toolshed and SDK.
+The SDK refuses to send one and closes on receiving one. Endpoint exposure is
+also bounded by the byte caps (8 MiB raw, 16 MiB expanded, 4 MiB queued per
 data socket). A whole-space sync still exceeds any per-frame cap (the largest
 rehearsal stores are 7 to 29 million slots as one frame) and needs chunking
 (infra#244). Context, principal, router and toolshed quotas cover sessions,
@@ -336,18 +565,50 @@ README.
 deployment, private bind hostname/port, certificate/key paths, shared
 authoritative directory, durable epoch ledger and per-router DID/network-peer
 allowlists. An optional `limits` object sets the toolshed's capacity
-(`RoutedHostLimits` in `routed-host.ts`); absent fields take defaults sized for
-the proof of concept. The values must be positive integers that nest from
-context to router to toolshed, a context's proofs must cover its principal
-history and a renewal for each active principal, and every allowed router's
-contexts must fit the sockets and tickets at once (`routedHostLimitsFor`); a
-limit that fails, or one the toolshed does not know, is named in the error.
+(`RoutedHostLimits` in `routed-host.ts`). Omitted fields retain their defaults;
+an explicit `null` disables that quota, and a positive safe integer supplies a
+custom bound. Every quota is independently configurable, including
+`viewsPerSession` (default 64) and `holdingsPerSession` (default 8,192).
+`spacesPerContext` (default 1,200) bounds distinct spaces authorized over the
+context's lifetime, independently of `sessionsPerContext`, which bounds
+simultaneous sessions and open reservations. Closing a session frees session
+capacity but leaves its space authorized and counted. Either quota can be
+disabled independently; omitting `spacesPerContext` retains its own default
+regardless of the configured session quota.
+`frameSlots` is a structural parser bound: it requires a positive safe integer
+and cannot be disabled. The `limits` object itself cannot be `null`.
+
+Enabled nested limits must be ordered from context to router to toolshed, a
+context's proofs must cover its principal history and a renewal for each active
+principal, and every allowed router's contexts must fit the sockets and tickets
+at once (`routedHostLimitsFor`). A comparison involving a disabled quota is
+skipped: disabling a per-context quota while keeping an aggregate quota finite
+is valid, and the aggregate still refuses excess usage. A malformed or unknown
+limit is named in the startup error. When all aggregate scopes for sessions,
+watches or holdings are disabled, that family's aggregate counters are skipped.
+When all three families are disabled, usage reservations and aggregate maps are
+also skipped. Sessions, principals, tickets, replay protection, ownership epochs
+and other authorization state remain active.
+
+Watch IDs are mirrored only when an aggregate watch quota or
+`watchesPerSession` needs them. View counts are mirrored only for an aggregate
+watch quota or `viewsPerSession`, and holdings counts only for an aggregate
+holdings quota or `holdingsPerSession`. With all these consumers disabled, the
+host validates watch mutations and forwards them to the backend without building
+watch-ID sets or reserving mirrored mutations. The backend still maintains the
+functional watches and views that deliver data to sessions.
+
+For a quota-free rehearsal, set every quota in both the router and toolshed
+policy to `null`, retaining their structural frame bounds. Changing only the
+router leaves the toolshed's independently enforced defaults in effect. Config
+changes take effect when the host restarts.
 Two limits are ones the router must match rather than cover, each a check for
 the infra preflight beside the limits it compares already. One is
 `max_frame_slots == frameSlots`; the SDK sends and accepts at most
 `ROUTED_FRAME_SLOTS` (150,000), which must not exceed either. The other is
 `max_watches_per_session == watchesPerSession`, the watch IDs one session may
-hold, default 2,048, which may not exceed `watchesPerContext`. The two are
+hold, default 2,048, which may not exceed `watchesPerContext` when both are
+enabled. Matching a disabled watch quota means `null` on both sides. The two are
 sized together: a session is restored by one `session.watch.set` that names
 its whole watch set, so that many watches must fit one frame together with
 their selectors, views and holdings. The count limit does not enforce this
@@ -365,15 +626,16 @@ marked `retriable`, so the client holds the session and tries again; a request
 for a session the toolshed revoked, or a principal it released, after the
 router forwarded it is denied for good, as is a watch mutation, a set or an
 add, that would leave a session with more than `watchesPerSession` watch IDs
-or 64 views (`frame-limit`).
+or `viewsPerSession` views (`frame-limit`), when the respective quota is enabled.
 Each is logged in the toolshed's own journal, never the router's, as a
 `routed-memory-verdict` with verdict `request-refused` and reason
 `session-limit`, `watch-limit`, `holdings-limit`, `frame-limit`,
 `principal-expired`, `session-not-held` or `principal-not-held`. A frame that
-itself names more than 8,192 holdings is malformed, and so is a request whose
+itself names more than the enabled `holdingsPerSession` quota is malformed,
+and so is a request whose
 `watches`, `holdings` or `views` is not a JSON list. Such a
 request is not answered: it closes the socket, as the router closes the
-client's connection on one. The SDK therefore declares at most 8,192 holdings
+client's connection on one. The SDK declares at most 8,192 holdings
 on a routed connection. A session that holds more declares the first 8,192,
 and the server delivers the documents left out a second time, since a document
 a session does not declare is one it is sent again. Two limits follow for such
@@ -383,10 +645,45 @@ client keeps the value it last had for it until the document is watched again.
 And the documents left out all come back in one response frame, which must fit
 the 4 MiB the toolshed queues to a data socket; a response past that closes the
 socket.
+
+Each context closes with one `routed-memory-verdict` event whose verdict is
+`context-closed` and whose `reason` retains the first socket failure through
+cleanup. An `output-limit` failure adds an `outputLimit` object captured at the
+failed send, before socket accounting can change during close:
+
+- `frameBytes`: the attempted message's encoded payload size, in UTF-8 bytes
+  for text or byte-array length for binary.
+- `bufferedBytes`: the larger of retained logical output bytes and npm `ws`'s
+  `bufferedAmount`. Control sockets use `bufferedAmount` alone. Socket writable
+  bytes can include framing.
+- `limitBytes`: the 4 MiB bound on their sum; equality is admitted.
+- `endpoint`: `data` or `control`. A control-link failure carries its snapshot
+  into each context it closes, unless that context already has a socket failure.
+- `classification`: `single-message` when `frameBytes > limitBytes`, otherwise
+  `queued-output`.
+- `messageType`: the structured Memory message kind when available at the
+  sender; omitted for binary control records and data greetings.
+- `diagnostics`: for structured data output, separate socket and retained-body
+  bytes, queue depth, lifetime body/record counters, active-body written progress,
+  queue/callback ages, and bounded source attribution. Its sixteen-entry history
+  records enqueues and high-water progress without payloads. At 2 MiB retained
+  output a single `setImmediate` marker measures event-loop opportunity; recovery
+  to 1 MiB or close cancels it. It changes neither admission nor write scheduling.
+  Failure-only canonical size measurements retain eight result fields, documents
+  and schema-table entries per category, with explicit scan bounds and truncation.
+  The [memory package diagnostics reference](../../../packages/memory/README.md#routed-transport-and-quotas)
+  defines the fields and measurement limits.
+
+The snapshot contains no payload or error text. Data messages use uncompressed
+private-hop payload bytes; the router forwards their encoding unchanged.
+Buffered bytes describe local output buffering, not browser processing or
+acknowledgment.
+An earlier non-output failure keeps its reason and has no `outputLimit` object.
+
 A proof is refused with verdict `proof-denied` and reason `proof-limit`,
 `principal-limit` or `principal-history-limit`, and the refusal closes its
-context, which ends the client's connection. The proofs live contexts hold are
-bounded by the routers, `contextsPerLink` and `proofsPerContext`. An earlier
+context, which ends the client's connection. When enabled, `contextsPerLink`
+and `proofsPerContext` bound the proofs live contexts hold per router. An earlier
 toolshed's ledger also held `claim` lines; this one drops them when it loads,
 and an earlier toolshed reads this one's `epoch`, `retire` and `revoke` lines,
 so rolling either way needs no change to the file: every toolshed bounds the

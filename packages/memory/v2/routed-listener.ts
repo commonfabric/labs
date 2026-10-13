@@ -6,7 +6,7 @@ import { createServer } from "node:https";
 import { WebSocketServer } from "ws";
 
 import type { RoutedMemoryHost } from "./routed-host.ts";
-import { ROUTED_RAW_LIMIT } from "./routed-parser.ts";
+import { ROUTER_CHUNK_BYTES } from "./router-protocol.ts";
 
 /** Tracked private endpoint settings; key bytes come from managed credentials. */
 export interface RoutedListenerOptions {
@@ -39,7 +39,7 @@ export async function listenRoutedMemory(
   server.maxConnections = 512;
   const framingOptions = {
     noServer: true,
-    maxPayload: ROUTED_RAW_LIMIT,
+    maxPayload: ROUTER_CHUNK_BYTES + 5,
     maxFragments: 512,
     perMessageDeflate: false,
     clientTracking: true,

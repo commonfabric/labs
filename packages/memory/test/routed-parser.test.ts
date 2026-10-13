@@ -261,9 +261,8 @@ describe("routed untrusted parsers", () => {
       const invalid of [
         { ...flags, connectionAuth: false },
         { ...flags, routedAuthV1: false },
-        { ...flags, stableExpressionResultIds: false },
         { ...flags, modernCellRep: "true" },
-        { ...flags, arbitraryFutureAuthority: true },
+        { ...flags, arbitraryFutureAuthority: 42 },
         { ...flags, "/tag": true },
       ]
     ) expect(() => routedFlags(invalid)).toThrow();

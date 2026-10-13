@@ -11,6 +11,10 @@ import {
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import { DEFAULT_ROUTED_HOST_LIMITS } from "@commonfabric/memory/v2/routed-host";
 import { decodeRoutedFrame } from "@commonfabric/memory/v2/routed-parser";
+import {
+  ROUTER_CHUNK_BYTES,
+  RouterAssembler,
+} from "@commonfabric/memory/v2/router-protocol";
 import { routedFrameOf } from "../../memory/test/support/routed-slots.ts";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import {
@@ -566,6 +570,16 @@ describe("WebSocketTransport failure signaling", () => {
     static readonly CLOSED = 3;
     static instances: DrivableWebSocket[] = [];
     readyState = DrivableWebSocket.CONNECTING;
+    bufferedAmount = 0;
+    /** Models native buffering, drained only by an explicit peer event. */
+    trackBuffer = false;
+
+    /** Largest observed native queue. */
+    peakBuffer = 0;
+
+    /** Peer notification when a frame enters the native queue. */
+    onSend?: (payload: EncodedMemoryMessage) => void;
+
     binaryType: BinaryType = "blob";
     readonly sent: EncodedMemoryMessage[] = [];
     #sentWaiters: Array<{ count: number; resolve: () => void }> = [];
@@ -574,7 +588,14 @@ describe("WebSocketTransport failure signaling", () => {
       DrivableWebSocket.instances.push(this);
     }
     send(payload: EncodedMemoryMessage): void {
+      if (this.trackBuffer) {
+        this.bufferedAmount += typeof payload === "string"
+          ? new TextEncoder().encode(payload).length
+          : payload.length;
+        this.peakBuffer = Math.max(this.peakBuffer, this.bufferedAmount);
+      }
       this.sent.push(payload);
+      this.onSend?.(payload);
       this.#sentWaiters = this.#sentWaiters.filter((waiter) => {
         if (this.sent.length >= waiter.count) {
           waiter.resolve();
@@ -662,6 +683,619 @@ describe("WebSocketTransport failure signaling", () => {
     if (typeof frame !== "string") throw new Error("Expected text frame");
     return frame;
   };
+
+  /** Returns the binary record a credited upload must send. */
+  const requireRecord = (frame: EncodedMemoryMessage): Uint8Array => {
+    if (typeof frame === "string") throw new Error("Expected router record");
+    return frame;
+  };
+
+  /** Opens and selects a credited connection, ready for its first upload. */
+  const selectCredits = async (
+    transport: WebSocketTransport,
+    socket: () => DrivableWebSocket,
+    window = 262_144,
+  ): Promise<DrivableWebSocket> => {
+    const hello = transport.send('fvj1:{"type":"hello"}');
+    const active = socket();
+    active.openConnection();
+    await hello;
+    transport.setRoutedMessagesEnabled(true, 1, window);
+    await active.whenSent(2);
+    expect(active.sent[1]).toBe(
+      'fvj1:{"type":"router.transport","version":1,"uploadCredits":true}',
+    );
+    active.trackBuffer = true;
+    return active;
+  };
+
+  /** Encodes the router's binary acknowledgement in network byte order. */
+  const creditFrame = (bytes: number): Uint8Array<ArrayBuffer> => {
+    const frame = new Uint8Array([0x6d, 0x72, 0x63, 0x01, 0, 0, 0, 0]);
+    new DataView(frame.buffer).setUint32(4, bytes, false);
+    return frame;
+  };
+
+  /** Reports peer receipt, releasing exactly those bytes from native buffering. */
+  const grantCredit = (socket: DrivableWebSocket, bytes: number): void => {
+    socket.bufferedAmount -= bytes;
+    socket.receive(creditFrame(bytes).buffer);
+  };
+
+  describe("negotiated upload credits", () => {
+    for (const type of ["transact", "session.watch.set"]) {
+      it(`uploads a ${type} body larger than 4 MiB through peer events`, async () => {
+        await withTransport(async (transport, socket) => {
+          const channel = new MessageChannel();
+          const delivered = Promise.withResolvers<string | Uint8Array>();
+          const receiver = new RouterAssembler();
+          const received: string[] = [];
+          transport.setReceiver((payload) => received.push(payload));
+          try {
+            const active = await selectCredits(transport, socket);
+            // Port messages are peer events in separate tasks. Native writes
+            // return `void`, and microtasks alone cannot drain this queue.
+            channel.port1.onmessage = (event: MessageEvent<Uint8Array>) => {
+              const record = event.data;
+              grantCredit(active, record.length);
+              const result = receiver.receive(record);
+              if (result !== undefined) delivered.resolve(result.payload);
+            };
+            active.onSend = (frame) => channel.port2.postMessage(frame);
+            const payload = `fvj1:${
+              JSON.stringify({
+                type,
+                requestId: "large",
+                sessionId: "s",
+                ...(type === "session.watch.set"
+                  ? {
+                    watches: Array.from({ length: 2048 }, (_, i) => ({
+                      id: `watch-${i}`,
+                      select: { document: `${i}-${"x".repeat(2560)}` },
+                    })),
+                  }
+                  : { value: "x".repeat(5 * 1024 * 1024) }),
+              })
+            }`;
+            await transport.send(payload);
+            expect(await delivered.promise).toBe(payload);
+            expect(active.peakBuffer).toBeLessThanOrEqual(262_144);
+            expect(active.peakBuffer).toBeGreaterThan(32_768);
+            expect(active.sent.slice(2).every((r) => r instanceof Uint8Array))
+              .toBe(true);
+            expect(active.sent.length).toBeGreaterThan(160);
+            expect(received).toEqual([]);
+          } finally {
+            channel.port1.close();
+            channel.port2.close();
+            await transport.close();
+          }
+        });
+      });
+    }
+
+    it("stalls at a one-record window and accepts partial and coalesced credit", async () => {
+      await withTransport(async (transport, socket) => {
+        try {
+          const active = await selectCredits(
+            transport,
+            socket,
+            ROUTER_CHUNK_BYTES + 5,
+          );
+          let completed = false;
+          const upload = transport.send(`fvj1:${
+            JSON.stringify({
+              type: "transact",
+              value: "x".repeat(40_000),
+            })
+          }`).then(() => completed = true);
+          await active.whenSent(3);
+          await clock.settle();
+          expect(active.sent).toHaveLength(3);
+          expect(completed).toBe(false);
+          const headerBytes = requireRecord(active.sent[2]).length;
+          grantCredit(active, headerBytes - 1);
+          await clock.settle();
+          expect(active.sent).toHaveLength(3);
+          const response = Promise.withResolvers<string>();
+          transport.setReceiver(response.resolve);
+          const responseFrame =
+            'fvj1:{"type":"response","requestId":"other","ok":{}}';
+          active.receive(responseFrame);
+          expect(await response.promise).toBe(responseFrame);
+          expect(active.sent).toHaveLength(3);
+          grantCredit(active, 1);
+          await active.whenSent(4);
+          await clock.settle();
+          expect(active.sent).toHaveLength(4);
+          expect(completed).toBe(false);
+          grantCredit(active, requireRecord(active.sent[3]).length);
+          await upload;
+          expect(active.sent).toHaveLength(6);
+          expect(completed).toBe(true);
+          grantCredit(active, active.bufferedAmount);
+          const marker = Promise.withResolvers<void>();
+          transport.setReceiver(() => marker.resolve());
+          active.receive('fvj1:{"type":"response","requestId":"barrier"}');
+          await marker.promise;
+          expect(active.readyState).toBe(DrivableWebSocket.OPEN);
+        } finally {
+          await transport.close();
+        }
+      });
+    });
+
+    for (
+      const [name, frame] of [
+        ["zero grant", creditFrame(0)],
+        ["grant above outstanding bytes", creditFrame(1024)],
+        ["grant above the window", creditFrame(262_145)],
+        ["maximum unsigned grant", creditFrame(0xffff_ffff)],
+        ["empty frame", new Uint8Array()],
+        ["short frame", creditFrame(1).subarray(0, 7)],
+        ["long frame", new Uint8Array([...creditFrame(1), 0])],
+        ["wrong first magic byte", creditFrame(1).with(0, 0)],
+        ["wrong second magic byte", creditFrame(1).with(1, 0)],
+        ["wrong third magic byte", creditFrame(1).with(2, 0)],
+        ["wrong version byte", creditFrame(1).with(3, 2)],
+      ] as const
+    ) {
+      it(`closes and rejects a blocked upload for invalid binary credit: ${name}`, async () => {
+        await withTransport(async (transport, socket) => {
+          try {
+            const active = await selectCredits(transport, socket, 32_773);
+            const closed = Promise.withResolvers<Error | undefined>();
+            transport.setCloseReceiver(closed.resolve);
+            const upload = transport.send(`fvj1:${
+              JSON.stringify({
+                type: "transact",
+                value: "x".repeat(40_000),
+              })
+            }`);
+            const rejected = expect(upload).rejects.toMatchObject({
+              name: "ConnectionError",
+            });
+            await active.whenSent(3);
+            active.receive(frame);
+            const error = await closed.promise;
+            expect(error?.cause).toBeInstanceOf(Error);
+            expect((error?.cause as Error).message).toBe(
+              "Invalid router upload credit",
+            );
+            await rejected;
+            expect(active.readyState).toBe(DrivableWebSocket.CLOSED);
+            expect(active.sent).toHaveLength(3);
+          } finally {
+            await transport.close();
+          }
+        });
+      });
+    }
+
+    for (const ending of ["close", "reset", "peer-close", "error"]) {
+      it(`rejects blocked and queued uploads on ${ending} without crossing connections`, async () => {
+        await withTransport(async (transport, socket) => {
+          try {
+            const active = await selectCredits(transport, socket, 32_773);
+            const payload = `fvj1:${
+              JSON.stringify({
+                type: "transact",
+                value: "x".repeat(40_000),
+              })
+            }`;
+            const first = transport.send(payload);
+            const second = transport.send(payload);
+            const rejected = Promise.all(
+              [first, second].map((send) =>
+                expect(send).rejects.toMatchObject({ name: "ConnectionError" })
+              ),
+            );
+            await active.whenSent(3);
+            await clock.settle();
+            expect(active.sent).toHaveLength(3);
+            if (ending === "close") await transport.close();
+            else if (ending === "reset") transport.reset();
+            else if (ending === "peer-close") active.close();
+            else active.fail(new Error("lost peer"));
+            if (ending !== "close") {
+              const fresh = transport.send('fvj1:{"type":"hello"}');
+              const replacement = socket();
+              expect(replacement).not.toBe(active);
+              replacement.openConnection();
+              active.receive(creditFrame(1));
+              await fresh;
+              expect(replacement.sent).toEqual(['fvj1:{"type":"hello"}']);
+            }
+            await rejected;
+            expect(active.sent).toHaveLength(3);
+          } finally {
+            await transport.close();
+          }
+        });
+      });
+    }
+
+    it("rejects unsolicited credit on a legacy selection or an idle credited connection", async () => {
+      for (const window of [undefined, 262_144]) {
+        await withTransport(async (transport, socket) => {
+          try {
+            const hello = transport.send('fvj1:{"type":"hello"}');
+            const active = socket();
+            active.openConnection();
+            await hello;
+            transport.setRoutedMessagesEnabled(true, 1, window);
+            await active.whenSent(2);
+            const closed = Promise.withResolvers<Error | undefined>();
+            transport.setCloseReceiver(closed.resolve);
+            active.receive(creditFrame(1));
+            expect(await closed.promise).toBeInstanceOf(Error);
+            expect(active.readyState).toBe(DrivableWebSocket.CLOSED);
+          } finally {
+            await transport.close();
+          }
+        });
+      }
+    });
+
+    it("accepts binary credit carried by a Blob or an offset byte view", async () => {
+      for (const asBlob of [true, false]) {
+        await withTransport(async (transport, socket) => {
+          try {
+            const active = await selectCredits(transport, socket, 32_773);
+            const upload = transport.send(`fvj1:${
+              JSON.stringify({
+                type: "transact",
+                value: "x".repeat(40_000),
+              })
+            }`);
+            const rejected = expect(upload).rejects.toMatchObject({
+              name: "ConnectionError",
+            });
+            await active.whenSent(3);
+            const frame = creditFrame(requireRecord(active.sent[2]).length);
+            const padded = new Uint8Array(12);
+            padded.set(frame, 2);
+            active.receive(asBlob ? new Blob([frame]) : padded.subarray(2, 10));
+            await active.whenSent(4);
+            expect(active.readyState).toBe(DrivableWebSocket.OPEN);
+            expect(requireRecord(active.sent[3]).length).toBe(32_773);
+            await transport.close();
+            await rejected;
+          } finally {
+            await transport.close();
+          }
+        });
+      }
+    });
+
+    it("ignores an old socket's credit while the replacement upload is blocked", async () => {
+      await withTransport(async (transport, socket) => {
+        try {
+          const old = await selectCredits(transport, socket, 32_773);
+          transport.reset();
+          const active = await selectCredits(transport, socket, 32_773);
+          const upload = transport.send(`fvj1:${
+            JSON.stringify({
+              type: "transact",
+              value: "x".repeat(40_000),
+            })
+          }`);
+          const rejected = expect(upload).rejects.toMatchObject({
+            name: "ConnectionError",
+          });
+          await active.whenSent(3);
+          const headerBytes = requireRecord(active.sent[2]).length;
+          old.receive(creditFrame(headerBytes));
+          await clock.settle();
+          expect(active.sent).toHaveLength(3);
+          expect(active.readyState).toBe(DrivableWebSocket.OPEN);
+          await transport.close();
+          await rejected;
+        } finally {
+          await transport.close();
+        }
+      });
+    });
+
+    it("rejects text impersonating a router credit without releasing the blocked upload", async () => {
+      await withTransport(async (transport, socket) => {
+        try {
+          const active = await selectCredits(transport, socket, 32_773);
+          const upload = transport.send(`fvj1:${
+            JSON.stringify({
+              type: "transact",
+              value: "x".repeat(40_000),
+            })
+          }`);
+          const rejected = expect(upload).rejects.toMatchObject({
+            name: "ConnectionError",
+          });
+          const closed = Promise.withResolvers<Error | undefined>();
+          transport.setCloseReceiver(closed.resolve);
+          await active.whenSent(3);
+          await clock.settle();
+          expect(active.sent).toHaveLength(3);
+          const headerBytes = requireRecord(active.sent[2]).length;
+          active.receive(
+            `fvj1:${
+              JSON.stringify({ type: "router.credit", bytes: headerBytes })
+            }`,
+          );
+          const error = await closed.promise;
+          expect(error?.cause).toMatchObject({
+            message: "Unexpected text router credit",
+          });
+          await rejected;
+          expect(active.sent).toHaveLength(3);
+        } finally {
+          await transport.close();
+        }
+      });
+    });
+
+    it("rejects a partially woken credit waiter when reset precedes its continuation", async () => {
+      await withTransport(async (transport, socket) => {
+        try {
+          const active = await selectCredits(transport, socket, 32_773);
+          const upload = transport.send(`fvj1:${
+            JSON.stringify({
+              type: "transact",
+              value: { text: "x".repeat(40_000) },
+            })
+          }`);
+          const rejected = expect(upload).rejects.toMatchObject({
+            name: "ConnectionError",
+          });
+          await active.whenSent(3);
+          await clock.settle();
+          grantCredit(active, 1);
+          // The receive continuation resolves the waiter, then reset runs
+          // before that waiter's continuation can register another wait.
+          queueMicrotask(() => transport.reset());
+          await rejected;
+          expect(active.sent).toHaveLength(3);
+        } finally {
+          await transport.close();
+        }
+      });
+    });
+
+    it("disposes a Memory client while its session commit is blocked on credit", async () => {
+      const audience = (await Identity.fromPassphrase("credit-disposal")).did();
+      await withTransport(async (transport, socket) => {
+        const connecting = MemoryClient.connect({ transport });
+        const active = socket();
+        active.openConnection();
+        await active.whenSent(1);
+        const sessionOpen = {
+          ...TEST_HELLO_SESSION_OPEN,
+          audience,
+          deployment: "test",
+        };
+        active.receive(encodeMemoryBoundary({
+          type: "hello.ok",
+          protocol: MEMORY_PROTOCOL,
+          flags: {
+            ...getMemoryProtocolFlags(),
+            routedAuthV1: true,
+            connectionAuth: true,
+          },
+          sessionOpen,
+          routerTransport: 1,
+          routerUploadWindow: 32_773,
+        }));
+        const client = await connecting;
+        try {
+          await active.whenSent(2);
+          active.trackBuffer = true;
+          const receiver = new RouterAssembler();
+          active.onSend = (frame) => {
+            const record = requireRecord(frame);
+            grantCredit(active, record.length);
+            const result = receiver.receive(record);
+            if (result !== undefined) {
+              const requestId = result.header.route.requestId;
+              if (typeof requestId !== "string") {
+                throw new Error("Expected session request identifier");
+              }
+              active.receive(encodeMemoryBoundary({
+                type: "response",
+                requestId,
+                ok: {
+                  sessionId: "s",
+                  sessionToken: "token",
+                  serverSeq: 0,
+                  sessionOpen,
+                },
+              }));
+            }
+          };
+          const session = await client.mount(audience);
+          active.onSend = undefined;
+          const sent = active.sent.length;
+          const commit = session.transact({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: "of:credit-test",
+              value: { text: "x".repeat(40_000) },
+            }],
+          });
+          const rejected = expect(commit).rejects.toThrow("closed");
+          await active.whenSent(sent + 1);
+          await clock.settle();
+          expect(active.sent).toHaveLength(sent + 1);
+          await client.close();
+          await rejected;
+          expect(active.readyState).toBe(DrivableWebSocket.CLOSED);
+        } finally {
+          await client.close();
+        }
+      });
+    });
+
+    it("streams compression controls and consumes their responses", async () => {
+      await withTransport(async (transport, socket) => {
+        try {
+          const active = await selectCredits(transport, socket);
+          transport.setMessageCompressionEnabled(true);
+          const changing = transport.requestMessageCompression(false);
+          await active.whenSent(5);
+          const receiver = new RouterAssembler();
+          let result;
+          for (const record of active.sent.slice(2)) {
+            result = receiver.receive(requireRecord(record));
+          }
+          expect(result?.header.route.type).toBe("memory.compression");
+          if (typeof result?.payload !== "string") {
+            throw new Error("Expected complete compression control");
+          }
+          grantCredit(active, active.bufferedAmount);
+          active.receive(result.payload);
+          expect(await changing).toBe(false);
+        } finally {
+          await transport.close();
+        }
+      });
+    });
+
+    it("negotiates supported windows from the Memory hello and falls back for unsupported windows", async () => {
+      const audience = (await Identity.fromPassphrase("credit-router")).did();
+      for (
+        const window of [
+          262_144,
+          32_773,
+          undefined,
+          0,
+          32_772,
+          262_145,
+          1.5,
+          "262144",
+        ]
+      ) {
+        await withTransport(async (transport, socket) => {
+          const connecting = MemoryClient.connect({ transport });
+          const active = socket();
+          active.openConnection();
+          await active.whenSent(1);
+          active.receive(encodeMemoryBoundary({
+            type: "hello.ok",
+            protocol: MEMORY_PROTOCOL,
+            flags: {
+              ...getMemoryProtocolFlags(),
+              routedAuthV1: true,
+              connectionAuth: true,
+            },
+            sessionOpen: {
+              ...TEST_HELLO_SESSION_OPEN,
+              audience,
+              deployment: "test",
+            },
+            routerTransport: 1,
+            ...(window === undefined ? {} : { routerUploadWindow: window }),
+          }));
+          const client = await connecting;
+          try {
+            await active.whenSent(2);
+            expect(active.sent[1]).toBe(
+              window === 262_144 || window === 32_773
+                ? 'fvj1:{"type":"router.transport","version":1,"uploadCredits":true}'
+                : 'fvj1:{"type":"router.transport","version":1}',
+            );
+          } finally {
+            await client.close();
+          }
+        });
+      }
+    });
+  });
+
+  it("orders transport selection before streamed data and preserves large restore controls", async () => {
+    const space = (await Identity.fromPassphrase("streaming-restore")).did();
+    await withTransport(async (transport, socket) => {
+      try {
+        const opening = transport.send(
+          'fvj1:{"type":"hello","protocol":"memory","flags":{}}',
+        );
+        socket().openConnection();
+        await opening;
+        transport.setRoutedMessagesEnabled(true, 1);
+        const restore = `fvj1:${
+          JSON.stringify({
+            type: "session.watch.set",
+            requestId: "restore",
+            space,
+            sessionId: "s",
+            watches: Array.from(
+              { length: 2048 },
+              (_, i) => ({
+                id: `watch-${i}`,
+                select: { document: `document-${i}` },
+              }),
+            ),
+          })
+        }`;
+        expect(new TextEncoder().encode(restore).length).toBeGreaterThan(
+          64 * 1024,
+        );
+        await transport.send(restore);
+        const payload = `fvj1:${
+          JSON.stringify({
+            type: "transact",
+            requestId: "r",
+            space,
+            sessionId: "s",
+            value: "x".repeat(100_000),
+          })
+        }`;
+        await transport.send(payload);
+        expect(socket().sent[1]).toBe(
+          'fvj1:{"type":"router.transport","version":1}',
+        );
+        expect(socket().sent[2]).toBe(restore);
+        const receiver = new RouterAssembler();
+        let result;
+        for (const record of socket().sent.slice(3)) {
+          expect(record).toBeInstanceOf(Uint8Array);
+          result = receiver.receive(record as Uint8Array);
+        }
+        expect(result?.payload).toBe(payload);
+      } finally {
+        await transport.close();
+      }
+    });
+  });
+
+  it("terminates a streamed upload when native socket buffering reaches its bound", async () => {
+    const space = (await Identity.fromPassphrase("streaming-output-bound"))
+      .did();
+    await withTransport(async (transport, socket) => {
+      try {
+        const opening = transport.send('fvj1:{"type":"hello"}');
+        socket().openConnection();
+        await opening;
+        transport.setRoutedMessagesEnabled(true, 1);
+        await socket().whenSent(2);
+        socket().bufferedAmount = 4 * 1024 * 1024;
+        await expect(
+          transport.send(
+            `fvj1:${
+              JSON.stringify({
+                type: "transact",
+                requestId: "r",
+                space,
+                sessionId: "s",
+              })
+            }`,
+          ),
+        ).rejects.toThrow("Router socket output limit");
+        expect(socket().readyState).toBe(DrivableWebSocket.CLOSED);
+      } finally {
+        await transport.close();
+      }
+    });
+  });
 
   /**
    * Aborts `controller` at the moment the memory client stops listening for
