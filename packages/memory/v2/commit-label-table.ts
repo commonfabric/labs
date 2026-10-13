@@ -196,6 +196,8 @@ function mapCommitResultMetadata(
         : { ...revision, document };
     }
     if (revision.op === "patch") {
+      // Applied revisions may acknowledge only identity, with no patch payload.
+      if (revision.patches === undefined) return revision;
       const patches = mapArray(
         revision.patches,
         (patch) => mapPatch(patch, mapRevisionValue),

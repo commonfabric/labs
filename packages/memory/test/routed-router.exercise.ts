@@ -1,5 +1,9 @@
 /** Disposable Linux acceptance against a compiled Rust router and real SQLite toolsheds. */
-import { deepFreeze, taggedHashStringOf } from "@commonfabric/data-model";
+import {
+  deepFreeze,
+  fabricFromConvertibleJsValue,
+  taggedHashStringOf,
+} from "@commonfabric/data-model";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { isPlainObject } from "@commonfabric/utils/types";
@@ -437,6 +441,110 @@ function pass(name: string) {
   gates.push(name);
   console.log(JSON.stringify({ gate: name, passed: true }));
 }
+
+/** Compares canonical values without constructing an unbounded text diff. */
+function expectCanonicalEqual(
+  actual: unknown,
+  expected: unknown,
+  label: string,
+  actualEvidence = actual,
+  expectedEvidence = expected,
+) {
+  const actualValue = fabricFromConvertibleJsValue(actual);
+  const expectedValue = fabricFromConvertibleJsValue(expected);
+  const actualText = encodeMemoryBoundary(actualValue);
+  const expectedText = encodeMemoryBoundary(expectedValue);
+  const actualHash = taggedHashStringOf(actualValue);
+  const expectedHash = taggedHashStringOf(expectedValue);
+  if (actualHash === expectedHash && actualText === expectedText) return;
+
+  /** Returns a bounded description of one decoded JSON value. */
+  const summary = (value: unknown): unknown => {
+    if (Array.isArray(value)) return { type: "array", length: value.length };
+    if (isPlainObject(value)) {
+      const keys = Object.keys(value);
+      return { type: "object", keyCount: keys.length, keys: keys.slice(0, 12) };
+    }
+    return typeof value === "string" && value.length > 160
+      ? { type: "string", length: value.length, prefix: value.slice(0, 160) }
+      : value;
+  };
+
+  /** Locates the first unequal JSON field while retaining array order. */
+  const firstDifference = (
+    actual: unknown,
+    expected: unknown,
+    path: string[] = [],
+  ): unknown => {
+    if (Object.is(actual, expected)) return undefined;
+    if (Array.isArray(actual) && Array.isArray(expected)) {
+      if (actual.length === expected.length) {
+        for (let i = 0; i < actual.length; i++) {
+          const difference = firstDifference(actual[i], expected[i], [
+            ...path,
+            String(i),
+          ]);
+          if (difference !== undefined) return difference;
+        }
+        return undefined;
+      }
+    } else if (isPlainObject(actual) && isPlainObject(expected)) {
+      for (
+        const key of new Set([...Object.keys(actual), ...Object.keys(expected)])
+      ) {
+        const actualPresent = Object.hasOwn(actual, key);
+        const expectedPresent = Object.hasOwn(expected, key);
+        if (actualPresent !== expectedPresent) {
+          return {
+            path: [...path, key],
+            actualPresent,
+            expectedPresent,
+            actual: summary(actual[key]),
+            expected: summary(expected[key]),
+          };
+        }
+        const difference = firstDifference(actual[key], expected[key], [
+          ...path,
+          key,
+        ]);
+        if (difference !== undefined) return difference;
+      }
+      return undefined;
+    }
+    return { path, actual: summary(actual), expected: summary(expected) };
+  };
+
+  // This separate directory survives the exercise's fixture cleanup.
+  const evidence = Deno.makeTempDirSync({
+    prefix: "routed-router-difference-",
+  });
+  Deno.writeTextFileSync(
+    `${evidence}/actual.fvj1`,
+    encodeMemoryBoundary(fabricFromConvertibleJsValue(actualEvidence)),
+  );
+  Deno.writeTextFileSync(
+    `${evidence}/expected.fvj1`,
+    encodeMemoryBoundary(fabricFromConvertibleJsValue(expectedEvidence)),
+  );
+  const diagnostics = {
+    label,
+    evidence,
+    actualHash,
+    expectedHash,
+    actualCodeUnits: actualText.length,
+    expectedCodeUnits: expectedText.length,
+    firstDifference: firstDifference(
+      JSON.parse(actualText.slice(5)),
+      JSON.parse(expectedText.slice(5)),
+    ),
+  };
+  Deno.writeTextFileSync(
+    `${evidence}/summary.json`,
+    JSON.stringify(diagnostics, null, 2),
+  );
+  throw new Error(JSON.stringify(diagnostics));
+}
+
 /**
  * Waits for a router role to create `path`. A role that never does, as the
  * link agent does not while it can open no toolshed link, fails the exercise
@@ -3397,10 +3505,12 @@ finally:
           expect(Object.hasOwn(result, "labelTable")).toBe(false);
           expect(Object.hasOwn(result, "labelPathTable")).toBe(false);
           for (const { id, document } of documents) {
-            expect(
+            expectCanonicalEqual(
               result.revisions.find((revision) => revision.id === id)
                 ?.document,
-            ).toEqual(document);
+              document,
+              "expanded acknowledgement document",
+            );
           }
           const expandedRevisions = ok.revisions.map((revision: unknown) => {
             assert(isPlainObject(revision) && isPlainObject(revision.document));
@@ -3425,7 +3535,11 @@ finally:
               },
             };
           });
-          expect(expandedRevisions).toEqual(result.revisions);
+          expectCanonicalEqual(
+            expandedRevisions,
+            result.revisions,
+            "raw acknowledgement expansion matches SDK revisions",
+          );
           expect(ok.seq).toBe(result.seq);
           expect(ok.replayed).toBe(result.replayed);
           const inlineReply = { ...reply.message, ok: result };
@@ -3462,7 +3576,22 @@ finally:
         const replayed = await writer.transact(commit);
         expect(replayed.replayed).toBe(true);
         expect(replayed.seq).toBe(applied.seq);
-        expect(replayed.revisions).toEqual(applied.revisions);
+        expect(replayed.revisions).toHaveLength(applied.revisions.length);
+        // The protocol defaults an omitted scope to `space` (v2.ts's
+        // resolveScopeKey). Initial and stored replay revisions may differ
+        // only in whether that default is written explicitly.
+        const withExplicitScope = (revisions: typeof applied.revisions) =>
+          revisions.map((revision) => ({
+            ...revision,
+            scope: revision.scope === undefined ? "space" : revision.scope,
+          }));
+        expectCanonicalEqual(
+          withExplicitScope(replayed.revisions),
+          withExplicitScope(applied.revisions),
+          "replay preserves every revision field with explicit default scope",
+          replayed,
+          applied,
+        );
         expect(wireCommits).toHaveLength(beforeReplay + 1);
         const replayRequest = wireCommits[beforeReplay];
         expect(replayRequest.message.requestId).not.toBe(
@@ -3482,7 +3611,11 @@ finally:
           });
           const stored = result.entities.find((entity) => entity.id === id);
           expect(stored?.seq).toBe(applied.seq);
-          expect(stored?.document).toEqual(document);
+          expectCanonicalEqual(
+            stored?.document,
+            document,
+            "stored commit document",
+          );
         }
         console.log(JSON.stringify({
           publicCommitLabelTables: {

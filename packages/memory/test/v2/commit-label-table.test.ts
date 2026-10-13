@@ -235,6 +235,91 @@ describe("commit-label-table", () => {
     );
   });
 
+  it("preserves identity-only patch ACKs while checking subsequent indexed patch payloads", () => {
+    const identity = {
+      id: "of:fixture",
+      branch: "",
+      seq: 3,
+      opIndex: 0,
+      commitSeq: 3,
+      op: "patch",
+    };
+    for (
+      const revision of [identity, {
+        ...identity,
+        scopeKey: "space",
+        patches: undefined,
+      }]
+    ) {
+      const source = {
+        type: "response",
+        requestId: "fixture-ack",
+        ok: { seq: 3, branch: "", revisions: [revision] },
+      };
+      const before = canonical(source);
+      expect(compressServerMessageCommitLabels(source)).toBe(source);
+      expect(expandServerMessageCommitLabels(source)).toBe(source);
+      expect(hasServerMessageCommitLabelMetadata(source)).toBe(false);
+      expect(canonical(source)).toBe(before);
+      const withPayload = {
+        ...source,
+        ok: {
+          ...source.ok,
+          revisions: [
+            revision,
+            {
+              ...identity,
+              scopeKey: "space",
+              opIndex: 1,
+              patches: [
+                {
+                  op: "replace",
+                  path: "/cfc/labelMap",
+                  value: document().cfc.labelMap,
+                },
+              ],
+            },
+          ],
+        },
+      };
+      const compact = compressServerMessageCommitLabels(withPayload);
+      expect(hasServerMessageCommitLabelMetadata(compact)).toBe(true);
+      const expanded = expandServerMessageCommitLabels(compact);
+      expect(canonical(expanded)).toBe(canonical(withPayload));
+      expect(isDeepFrozen(expanded)).toBe(true);
+      for (const field of ["label", "path"]) {
+        const indexed = {
+          ...source,
+          ok: {
+            ...source.ok,
+            revisions: [
+              revision,
+              {
+                ...identity,
+                scopeKey: "space",
+                opIndex: 1,
+                patches: [
+                  {
+                    op: "replace",
+                    path: `/cfc/labelMap/entries/0/${field}`,
+                    value: 0,
+                  },
+                ],
+              },
+            ],
+          },
+        };
+        expect(hasServerMessageCommitLabelMetadata(indexed)).toBe(true);
+        expect(() => expandServerMessageCommitLabels(indexed)).toThrow(
+          "reference",
+        );
+        expect(() => compressServerMessageCommitLabels(indexed)).toThrow(
+          "reference",
+        );
+      }
+    }
+  });
+
   it("scopes ACK dictionaries independently of sync label and schema tables", () => {
     const doc = document();
     doc.cfc.labelMap.entries[0].label = {

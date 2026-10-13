@@ -7,6 +7,7 @@ import {
   decodeRouterRecord,
   encodeRouterAdmission,
   encodeRouterHeader,
+  isRouterControl,
   ROUTER_CHUNK_BYTES,
   ROUTER_CHUNK_COUNT,
   RouterAssembler,
@@ -17,6 +18,58 @@ import {
 
 describe("router-protocol", () => {
   const route = { type: "response", requestId: "r" };
+
+  describe("isRouterControl()", () => {
+    it("identifies authentication, negotiation, and watch-admission controls", () => {
+      for (
+        const type of [
+          "hello",
+          "connection.auth",
+          "connection.challenge",
+          "connection.renew",
+          "connection.release",
+          "memory.compression",
+          "session.open",
+          "session.watch.set",
+          "session.watch.add",
+        ]
+      ) expect(isRouterControl(type)).toBe(true);
+    });
+
+    it("leaves transaction, query, and session payloads for opaque forwarding", () => {
+      for (
+        const type of [
+          "transact",
+          "graph.query",
+          "session.ack",
+          "session.close",
+          "session.report",
+          "session.watch.remove",
+          "presence.join",
+          "session/effect",
+          "response",
+        ]
+      ) expect(isRouterControl(type)).toBe(false);
+    });
+
+    it("returns false for non-string discriminants and control-name lookalikes", () => {
+      for (
+        const type of [
+          undefined,
+          null,
+          false,
+          1,
+          ["hello"],
+          { type: "hello" },
+          "",
+          "connection",
+          "connection/auth",
+          "hello.ok",
+          "session.watch.addition",
+        ]
+      ) expect(isRouterControl(type)).toBe(false);
+    });
+  });
 
   it("preserves a leading BOM and reserves its exact wire length", () => {
     const reserved: number[] = [];
