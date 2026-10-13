@@ -1102,16 +1102,13 @@ try {
     // keeps the public listener idle throughout automatic recovery.
     assertEquals(clients.length, 0);
     assertEquals(workerStats().length, 0);
-    const idleListener = rolePid("listener");
-    const idleSpawner = rolePid("spawner");
-    await command([
+    const idleRecovery = await command([
       "python3",
       "-c",
       String.raw`
-import json, os, select, signal, subprocess, sys
+import json, os, pathlib, select, signal, subprocess, sys
 
 unit = "memory-router-listener.service"
-listener, spawner = map(int, sys.argv[1:])
 
 def state():
     output = subprocess.check_output([
@@ -1120,12 +1117,24 @@ def state():
     ], text=True)
     return dict(line.split("=", 1) for line in output.splitlines())
 
+def processes(state):
+    listener = int(state["MainPID"])
+    assert listener > 0, state
+    # Type=notify follows the fork, but the child's command line can still
+    # name the listener until exec. The kernel's parent-child relation already
+    # identifies the supervised process, including that pre-exec interval.
+    children = pathlib.Path(
+        f"/proc/{listener}/task/{listener}/children"
+    ).read_text().split()
+    assert len(children) == 1, (state, children)
+    return listener, int(children[0])
+
 before = state()
 assert before["Type"] == "notify", before
 assert before["ActiveState"] == "active", before
 assert before["SubState"] == "running", before
-assert int(before["MainPID"]) == listener, before
 assert before["InvocationID"], before
+listener, spawner = processes(before)
 
 # A cursor replays every event after this point even if the restart happens
 # before journalctl attaches. Sync includes the completed initial start.
@@ -1191,6 +1200,13 @@ try:
     assert int(after["MainPID"]) > 0, after
     assert after["MainPID"] != before["MainPID"], (before, after)
     assert after["InvocationID"] == event["INVOCATION_ID"], (event, after)
+    next_listener, next_spawner = processes(after)
+    assert next_listener != listener and next_spawner != spawner
+    print(json.dumps({"idleSpawnerRecovery": {
+        "before": {"listener": listener, "spawner": spawner},
+        "after": {"listener": next_listener, "spawner": next_spawner},
+        "exit": exit_event, "restart": restart_event, "ready": event,
+    }}))
 except BaseException:
     print(json.dumps({"before": before, "after": after, "events": events}),
           file=sys.stderr)
@@ -1200,11 +1216,8 @@ finally:
     journal.wait()
     journal.stdout.close()
 `,
-      String(idleListener),
-      String(idleSpawner),
     ]);
-    assert(rolePid("listener") !== idleListener);
-    assert(rolePid("spawner") !== idleSpawner);
+    console.log(idleRecovery.trim());
     assertEquals(workerStats().length, 0);
     pass(
       "an idle spawner exit automatically restarts the listener without client traffic",
