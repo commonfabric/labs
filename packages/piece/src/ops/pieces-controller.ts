@@ -853,12 +853,24 @@ export class PiecesController<T = unknown> {
     }
   }
 
-  /** Return the piece registry, not every stored piece root. */
+  /**
+   * The registered pieces, each as a controller over its canonical result
+   * cell: the piece registry, not every stored piece root.
+   *
+   * An entry read out of the registry pull is bound to that pull's
+   * transaction, and a link resolution memoizes per transaction. The pull
+   * does not load the entries' documents, so a replica that has never held
+   * them resolves each entry to a dead end at its missing document, and the
+   * transaction would answer every later read of that entry from the memo,
+   * however many times the cell is synced. Each entry is detached from the
+   * pull's transaction first, so its reads and loads go through transactions
+   * of their own.
+   */
   async getRegisteredPieces() {
     const piecesCell = await this.getPieceRegistry();
     const pieces = await this.syncPieces(piecesCell);
     return pieces.map((piece) => {
-      const target = piece.resolveAsCell();
+      const target = piece.withTx().resolveAsCell();
       const space = target.getAsNormalizedFullLink().space;
       const controller = space === this.#space ? this : new PiecesController(
         { as: this.#session.as, space },
