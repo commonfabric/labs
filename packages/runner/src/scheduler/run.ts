@@ -681,7 +681,10 @@ export async function runSchedulerAction(
     (tx.tx as { debugActionId?: string }).debugActionId = actionId;
     tx.tx.sourceAction = action;
     tx.tx.validateReactiveReads = true;
-    tx.tx.derivedWrites = true;
+    // The mark's one effect is the local fold of a write the space refuses
+    // (`IStorageTransaction.derivedWrites`), so the flag gating the fold
+    // decides whether the run carries it.
+    tx.tx.derivedWrites = state.runtime.experimental.localFold === true;
     // Server-execution v2 stage F (serving-loop.md §3d): a serving
     // runtime's installed stamper attaches the wave run context here —
     // the reactive-action choke point — so every scheduler-driven

@@ -83,6 +83,7 @@ const config: Config = {
       "$EXPERIMENTAL_READER_SCHEMA_PRECEDENCE": Deno.env.get(
         "EXPERIMENTAL_READER_SCHEMA_PRECEDENCE",
       ),
+      "$EXPERIMENTAL_LOCAL_FOLD": Deno.env.get("EXPERIMENTAL_LOCAL_FOLD"),
       "globalThis.__cfCompileCacheRuntimeVersion":
         COMPILE_CACHE_RUNTIME_VERSION,
     },
