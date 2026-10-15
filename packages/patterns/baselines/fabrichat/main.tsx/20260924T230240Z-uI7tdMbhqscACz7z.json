@@ -1,0 +1,223 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "FabriChatMessage": {
+        "properties": {
+          "authorAvatar": {
+            "description": "The sender's profile avatar (a URL or a glyph) when the message was sent.",
+            "type": "string"
+          },
+          "authorName": {
+            "description": "The sender's profile name when the message was sent, or empty when the\nprofile has no name or the name had not yet reached the handler.",
+            "type": "string"
+          },
+          "authorProfile": {
+            "$ref": "#/$defs/FabriChatProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile the sender sent under."
+          },
+          "body": {
+            "type": "string"
+          },
+          "sentAt": {
+            "description": "When the message was sent, in milliseconds since the epoch, at the\none-second resolution a handler's clock has.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "authorProfile",
+          "authorName",
+          "authorAvatar",
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "FabriChatProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MessagesValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SentMessage"
+        },
+        "type": "array"
+      },
+      "SentMessage": {
+        "$ref": "#/$defs/FabriChatMessage",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "uiContract": {
+            "action": "FabriChatSend",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "FabriChatSendSurface"
+            ],
+            "trustedPattern": "FabriChatSendSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/fabrichat/chat.tsx",
+              "moduleIdentity": "TmNnS8uN5rJuadaHBL8n3Z_AfqaAqzZhtKaEdTkYLJE",
+              "path": [
+                "commitSend"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "description": "What FabriChat stores: the conversation, shared by the space.",
+    "properties": {
+      "messages": {
+        "$ref": "#/$defs/MessagesValue",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ]
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "fabrichat/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "FabriChatMessage": {
+        "properties": {
+          "authorAvatar": {
+            "description": "The sender's profile avatar (a URL or a glyph) when the message was sent.",
+            "type": "string"
+          },
+          "authorName": {
+            "description": "The sender's profile name when the message was sent, or empty when the\nprofile has no name or the name had not yet reached the handler.",
+            "type": "string"
+          },
+          "authorProfile": {
+            "$ref": "#/$defs/FabriChatProfile",
+            "description": "The profile the sender sent under."
+          },
+          "body": {
+            "type": "string"
+          },
+          "sentAt": {
+            "description": "When the message was sent, in milliseconds since the epoch, at the\none-second resolution a handler's clock has.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "authorProfile",
+          "authorName",
+          "authorAvatar",
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "FabriChatProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MessagesValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SentMessage"
+        },
+        "type": "array"
+      },
+      "SentMessage": {
+        "$ref": "#/$defs/FabriChatMessage",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "uiContract": {
+            "action": "FabriChatSend",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "FabriChatSendSurface"
+            ],
+            "trustedPattern": "FabriChatSendSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/fabrichat/chat.tsx",
+              "moduleIdentity": "TmNnS8uN5rJuadaHBL8n3Z_AfqaAqzZhtKaEdTkYLJE",
+              "path": [
+                "commitSend"
+              ]
+            }
+          }
+        }
+      },
+      "SubmittedTextEvent": {
+        "properties": {
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "description": "What FabriChat provides.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "messages": {
+        "$ref": "#/$defs/MessagesValue"
+      },
+      "sendMessage": {
+        "$ref": "#/$defs/SubmittedTextEvent",
+        "asCell": [
+          "stream"
+        ]
+      }
+    },
+    "required": [
+      "messages",
+      "sendMessage",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

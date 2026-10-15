@@ -1,0 +1,2220 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ChatMessage": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "asCell": [
+              "cell"
+            ]
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "properties": {
+                  "deleted": {
+                    "enum": [
+                      true
+                    ],
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "deleted"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "earlierVersions": {
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          },
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "ChatMessageVersion": {
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatReaction": {
+        "properties": {
+          "emoji": {
+            "type": "string"
+          },
+          "reactorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "asCell": [
+              "cell"
+            ]
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "reactorProfile",
+          "emoji",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage",
+            "asCell": [
+              "cell"
+            ]
+          },
+          "shownIn": {
+            "enum": [
+              "main",
+              "thread",
+              "both"
+            ]
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "ChatRoomAbout": {
+        "properties": {
+          "createdAt": {
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "enum": [
+              "group",
+              "direct"
+            ]
+          },
+          "policy": {
+            "$ref": "#/$defs/ChatRoomPolicy",
+            "asCell": [
+              "cell"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "createdAt",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "ChatRoomActivity": {
+        "properties": {
+          "at": {
+            "type": "FabricEpochNsec"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "number"
+          },
+          "what": {
+            "anyOf": [
+              {
+                "asCell": [
+                  "cell"
+                ],
+                "items": {
+                  "$ref": "#/$defs/ChatProfile",
+                  "asCell": [
+                    "cell"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "$ref": "#/$defs/ChatMessage",
+                "asCell": [
+                  "cell"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "requestId",
+          "what"
+        ],
+        "type": "object"
+      },
+      "ChatRoomPolicy": {
+        "properties": {
+          "deletionIsObliteration": {
+            "type": "boolean"
+          },
+          "keepsHistory": {
+            "type": "boolean"
+          },
+          "maxOpenWindows": {
+            "type": "number"
+          },
+          "maxWindowCount": {
+            "type": "number"
+          },
+          "ownersMayObliterate": {
+            "type": "boolean"
+          },
+          "proposedTimeMaxAgeNsec": {
+            "type": "FabricDurationNsec"
+          },
+          "proposedTimeMaxLeadNsec": {
+            "type": "FabricDurationNsec"
+          },
+          "recentActivityWindowNsec": {
+            "type": "FabricDurationNsec"
+          }
+        },
+        "required": [
+          "ownersMayObliterate",
+          "keepsHistory",
+          "deletionIsObliteration",
+          "proposedTimeMaxAgeNsec",
+          "proposedTimeMaxLeadNsec",
+          "recentActivityWindowNsec",
+          "maxWindowCount",
+          "maxOpenWindows"
+        ],
+        "type": "object"
+      },
+      "RoomMemory": {
+        "properties": {
+          "abandoned": {
+            "type": "boolean"
+          },
+          "admissions": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "authors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "expiredThrough": {
+            "type": "number"
+          },
+          "left": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "nextSeq": {
+            "type": "number"
+          },
+          "notices": {
+            "items": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "recipient": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "recipient"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "profiles": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/$defs/ChatProfile",
+                "asCell": [
+                  "cell"
+                ]
+              },
+              "type": "array"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "requests": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "usedTimes": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "requests",
+          "authors",
+          "usedTimes",
+          "nextSeq",
+          "expiredThrough",
+          "left",
+          "admissions",
+          "profiles",
+          "abandoned",
+          "notices"
+        ],
+        "type": "object"
+      },
+      "StoredActivity": {
+        "$ref": "#/$defs/ChatRoomActivity",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writePolicyAnyOf": [
+            {
+              "uiContract": {
+                "action": "ChatSend",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatSendSurface"
+                ],
+                "trustedPattern": "ChatSendSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatSend",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatSendSurface"
+                ],
+                "trustedPattern": "ChatSendSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "sendMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatEdit",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatEditSurface"
+                ],
+                "trustedPattern": "ChatEditSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitEdit"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatEdit",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatEditSurface"
+                ],
+                "trustedPattern": "ChatEditSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "editMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "deleteMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "obliterateMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatReact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitSendReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatReact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "sendReactionFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatReact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitDeleteReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatReact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "deleteReactionFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "authenticatedAction": true,
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitShowProfile"
+                  ]
+                }
+              }
+            },
+            {
+              "authenticatedAction": true,
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitLeave"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatMembers",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatMembersSurface"
+                ],
+                "trustedPattern": "ChatMembersSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitAdd"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatMembers",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatMembersSurface"
+                ],
+                "trustedPattern": "ChatMembersSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "addMemberFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatMembers",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatMembersSurface"
+                ],
+                "trustedPattern": "ChatMembersSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitRemove"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatMembers",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatMembersSurface"
+                ],
+                "trustedPattern": "ChatMembersSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "removeMemberFromUi"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "StoredMemory": {
+        "$ref": "#/$defs/RoomMemory",
+        "ifc": {
+          "writePolicyAnyOf": [
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "sendMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitEdit"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "editMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "deleteMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "obliterateMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitSendReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "sendReactionFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitDeleteReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "deleteReactionFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitShowProfile"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitLeave"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitAdd"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "addMemberFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitRemove"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "removeMemberFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitDelivered"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "StoredMessage": {
+        "$ref": "#/$defs/ChatMessage",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writePolicyAnyOf": [
+            {
+              "uiContract": {
+                "action": "ChatSend",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatSendSurface"
+                ],
+                "trustedPattern": "ChatSendSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatSend",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatSendSurface"
+                ],
+                "trustedPattern": "ChatSendSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "sendMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatEdit",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatEditSurface"
+                ],
+                "trustedPattern": "ChatEditSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitEdit"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatEdit",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatEditSurface"
+                ],
+                "trustedPattern": "ChatEditSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "editMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "deleteMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "obliterateMessageFromUi"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "StoredRoster": {
+        "ifc": {
+          "writePolicyAnyOf": [
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitAdd"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "addMemberFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitShowProfile"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitLeave"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "commitRemove"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rRvrYS-hLqJjT_vBlQIbXy_GiYGakXvVOm5zNlD-5gU",
+                  "path": [
+                    "removeMemberFromUi"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "items": {
+          "$ref": "#/$defs/ChatProfile",
+          "asCell": [
+            "cell"
+          ]
+        },
+        "type": "array"
+      }
+    },
+    "description": "Room storage and the profile supplied by its production wish boundary.",
+    "properties": {
+      "about": {
+        "$ref": "#/$defs/ChatRoomAbout",
+        "asCell": [
+          "cell"
+        ]
+      },
+      "activity": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/StoredActivity"
+        },
+        "type": "array"
+      },
+      "dedicated": {
+        "default": false,
+        "type": "boolean"
+      },
+      "initialMembers": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "memory": {
+        "$ref": "#/$defs/StoredMemory",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ]
+      },
+      "myProfile": {
+        "$ref": "#/$defs/ChatProfile",
+        "asCell": [
+          "cell"
+        ]
+      },
+      "records": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/StoredMessage"
+        },
+        "type": "array"
+      },
+      "roster": {
+        "$ref": "#/$defs/StoredRoster",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": []
+      }
+    },
+    "required": [
+      "about"
+    ],
+    "type": "object"
+  },
+  "pattern": "fabrichat/room.tsx",
+  "resultSchema": {
+    "$defs": {
+      "ChatMessage": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "properties": {
+                  "deleted": {
+                    "enum": [
+                      true
+                    ],
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "deleted"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "earlierVersions": {
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          },
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "ChatMessageList": {
+        "properties": {
+          "closeWindow": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              },
+              "windowId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "windowId"
+            ],
+            "type": "object"
+          },
+          "count": {
+            "type": "number"
+          },
+          "latest": {
+            "properties": {
+              "hasOlder": {
+                "type": "boolean"
+              },
+              "messages": {
+                "items": {
+                  "$ref": "#/$defs/ChatMessage"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "messages",
+              "hasOlder"
+            ],
+            "type": "object"
+          },
+          "newestAt": {
+            "type": "FabricEpochNsec"
+          },
+          "oldestAt": {
+            "type": "FabricEpochNsec"
+          },
+          "openWindow": {
+            "$ref": "#/$defs/OpenWindowRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "windows": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatMessageWindow"
+            },
+            "properties": {},
+            "scope": "session",
+            "type": "object"
+          }
+        },
+        "required": [
+          "count",
+          "latest",
+          "windows",
+          "openWindow",
+          "closeWindow"
+        ],
+        "type": "object"
+      },
+      "ChatMessageVersion": {
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatMessageWindow": {
+        "properties": {
+          "hasNewer": {
+            "type": "boolean"
+          },
+          "hasOlder": {
+            "type": "boolean"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/$defs/ChatMessage"
+            },
+            "type": "array"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/ChatMessage"
+          }
+        },
+        "required": [
+          "requestId",
+          "messages",
+          "hasOlder",
+          "hasNewer"
+        ],
+        "type": "object"
+      },
+      "ChatProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatReaction": {
+        "properties": {
+          "emoji": {
+            "type": "string"
+          },
+          "reactorProfile": {
+            "$ref": "#/$defs/ChatProfile"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "reactorProfile",
+          "emoji",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatReactionTallies": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "reactions": {
+            "items": {
+              "properties": {
+                "count": {
+                  "type": "number"
+                },
+                "emoji": {
+                  "type": "string"
+                },
+                "mine": {
+                  "type": "boolean"
+                },
+                "profiles": {
+                  "items": {
+                    "$ref": "#/$defs/ChatProfile"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "emoji",
+                "count",
+                "mine",
+                "profiles"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "message",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "ChatReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "shownIn": {
+            "enum": [
+              "main",
+              "thread",
+              "both"
+            ]
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "ChatRoomAbout": {
+        "properties": {
+          "createdAt": {
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "enum": [
+              "group",
+              "direct"
+            ]
+          },
+          "policy": {
+            "$ref": "#/$defs/ChatRoomPolicy"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "createdAt",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "ChatRoomActivity": {
+        "properties": {
+          "at": {
+            "type": "FabricEpochNsec"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "number"
+          },
+          "what": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ChatProfile"
+                },
+                "type": "array"
+              },
+              {
+                "$ref": "#/$defs/ChatMessage"
+              }
+            ]
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "requestId",
+          "what"
+        ],
+        "type": "object"
+      },
+      "ChatRoomFacts": {
+        "properties": {
+          "about": {
+            "$ref": "#/$defs/ChatRoomAbout"
+          },
+          "add": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "access": {
+                "enum": [
+                  "WRITE",
+                  "OWNER"
+                ]
+              },
+              "principal": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "principal",
+              "access"
+            ],
+            "type": "object"
+          },
+          "canSend": {
+            "type": "boolean"
+          },
+          "deleteMessage": {
+            "$ref": "#/$defs/MessageRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "deleteReaction": {
+            "$comment": "Docs inherited from intersection constituents. Missing docs for: { emoji: string; }.",
+            "asCell": [
+              "stream"
+            ],
+            "description": "A request naming a message by entity.",
+            "properties": {
+              "emoji": {
+                "type": "string"
+              },
+              "message": {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "message",
+              "emoji"
+            ],
+            "type": "object"
+          },
+          "delivered": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "id"
+            ],
+            "type": "object"
+          },
+          "editMessage": {
+            "$comment": "Docs inherited from intersection constituents. Missing docs for: { version: ChatMessageVersion; }.",
+            "asCell": [
+              "stream"
+            ],
+            "description": "A request naming a message by entity.",
+            "properties": {
+              "message": {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "version": {
+                "$ref": "#/$defs/ChatMessageVersion"
+              }
+            },
+            "required": [
+              "requestId",
+              "message",
+              "version"
+            ],
+            "type": "object"
+          },
+          "leave": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId"
+            ],
+            "type": "object"
+          },
+          "messages": {
+            "$ref": "#/$defs/ChatMessageList"
+          },
+          "obliterateMessage": {
+            "$ref": "#/$defs/MessageRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "outgoingNotices": {
+            "items": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "recipient": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "recipient"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "participants": {
+            "items": {
+              "$ref": "#/$defs/ChatProfile"
+            },
+            "type": "array"
+          },
+          "reactionTallies": {
+            "items": {
+              "$ref": "#/$defs/ChatReactionTallies"
+            },
+            "type": "array"
+          },
+          "recentActivity": {
+            "items": {
+              "$ref": "#/$defs/ChatRoomActivity"
+            },
+            "type": "array"
+          },
+          "recentActivityExpiredThrough": {
+            "type": "number"
+          },
+          "remove": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "principal": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "principal"
+            ],
+            "type": "object"
+          },
+          "roster": {
+            "items": {
+              "$ref": "#/$defs/ChatProfile"
+            },
+            "type": "array"
+          },
+          "sendMessage": {
+            "$ref": "#/$defs/SendMessageRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "sendReaction": {
+            "$comment": "Docs inherited from intersection constituents. Missing docs for: { emoji: string; }.",
+            "asCell": [
+              "stream"
+            ],
+            "description": "A request naming a message by entity.",
+            "properties": {
+              "emoji": {
+                "type": "string"
+              },
+              "message": {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "message",
+              "emoji"
+            ],
+            "type": "object"
+          },
+          "showProfile": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "about",
+          "recentActivity",
+          "recentActivityExpiredThrough",
+          "roster",
+          "participants",
+          "messages",
+          "canSend",
+          "reactionTallies",
+          "sendMessage",
+          "editMessage",
+          "deleteMessage",
+          "obliterateMessage",
+          "sendReaction",
+          "deleteReaction",
+          "showProfile"
+        ],
+        "type": "object"
+      },
+      "ChatRoomPolicy": {
+        "properties": {
+          "deletionIsObliteration": {
+            "type": "boolean"
+          },
+          "keepsHistory": {
+            "type": "boolean"
+          },
+          "maxOpenWindows": {
+            "type": "number"
+          },
+          "maxWindowCount": {
+            "type": "number"
+          },
+          "ownersMayObliterate": {
+            "type": "boolean"
+          },
+          "proposedTimeMaxAgeNsec": {
+            "type": "FabricDurationNsec"
+          },
+          "proposedTimeMaxLeadNsec": {
+            "type": "FabricDurationNsec"
+          },
+          "recentActivityWindowNsec": {
+            "type": "FabricDurationNsec"
+          }
+        },
+        "required": [
+          "ownersMayObliterate",
+          "keepsHistory",
+          "deletionIsObliteration",
+          "proposedTimeMaxAgeNsec",
+          "proposedTimeMaxLeadNsec",
+          "recentActivityWindowNsec",
+          "maxWindowCount",
+          "maxOpenWindows"
+        ],
+        "type": "object"
+      },
+      "ChatWindowAnchor": {
+        "anyOf": [
+          {
+            "properties": {
+              "before": {
+                "anyOf": [
+                  {
+                    "type": "FabricEpochNsec"
+                  },
+                  {
+                    "enum": [
+                      "end"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "before"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "after": {
+                "anyOf": [
+                  {
+                    "type": "FabricEpochNsec"
+                  },
+                  {
+                    "enum": [
+                      "start"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "after"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "around": {
+                "type": "FabricEpochNsec"
+              }
+            },
+            "required": [
+              "around"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MessageRequest": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "message"
+        ],
+        "type": "object"
+      },
+      "OpenWindowRequest": {
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "from": {
+            "$ref": "#/$defs/ChatWindowAnchor"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "windowId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "windowId",
+          "from",
+          "count"
+        ],
+        "type": "object"
+      },
+      "SendMessageRequest": {
+        "properties": {
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/$defs/ChatMessageVersion"
+          }
+        },
+        "required": [
+          "requestId",
+          "version"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A room's protocol and its own reviewed rendering.",
+    "properties": {
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "$VIEWS": {
+        "properties": {
+          "room": {
+            "$ref": "#/$defs/ChatRoomFacts"
+          }
+        },
+        "required": [
+          "room"
+        ],
+        "type": "object"
+      },
+      "about": {
+        "$ref": "#/$defs/ChatRoomAbout"
+      },
+      "add": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "access": {
+            "enum": [
+              "WRITE",
+              "OWNER"
+            ]
+          },
+          "principal": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "principal",
+          "access"
+        ],
+        "type": "object"
+      },
+      "canSend": {
+        "type": "boolean"
+      },
+      "deleteMessage": {
+        "$ref": "#/$defs/MessageRequest",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "deleteReaction": {
+        "$comment": "Docs inherited from intersection constituents. Missing docs for: { emoji: string; }.",
+        "asCell": [
+          "stream"
+        ],
+        "description": "A request naming a message by entity.",
+        "properties": {
+          "emoji": {
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "message",
+          "emoji"
+        ],
+        "type": "object"
+      },
+      "delivered": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "id"
+        ],
+        "type": "object"
+      },
+      "editMessage": {
+        "$comment": "Docs inherited from intersection constituents. Missing docs for: { version: ChatMessageVersion; }.",
+        "asCell": [
+          "stream"
+        ],
+        "description": "A request naming a message by entity.",
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/$defs/ChatMessageVersion"
+          }
+        },
+        "required": [
+          "requestId",
+          "message",
+          "version"
+        ],
+        "type": "object"
+      },
+      "leave": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "messages": {
+        "$ref": "#/$defs/ChatMessageList"
+      },
+      "obliterateMessage": {
+        "$ref": "#/$defs/MessageRequest",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "outgoingNotices": {
+        "items": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "recipient": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "recipient"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "participants": {
+        "items": {
+          "$ref": "#/$defs/ChatProfile"
+        },
+        "type": "array"
+      },
+      "reactionTallies": {
+        "items": {
+          "$ref": "#/$defs/ChatReactionTallies"
+        },
+        "type": "array"
+      },
+      "recentActivity": {
+        "items": {
+          "$ref": "#/$defs/ChatRoomActivity"
+        },
+        "type": "array"
+      },
+      "recentActivityExpiredThrough": {
+        "type": "number"
+      },
+      "remove": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "principal": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "principal"
+        ],
+        "type": "object"
+      },
+      "roster": {
+        "items": {
+          "$ref": "#/$defs/ChatProfile"
+        },
+        "type": "array"
+      },
+      "sendMessage": {
+        "$ref": "#/$defs/SendMessageRequest",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "sendReaction": {
+        "$comment": "Docs inherited from intersection constituents. Missing docs for: { emoji: string; }.",
+        "asCell": [
+          "stream"
+        ],
+        "description": "A request naming a message by entity.",
+        "properties": {
+          "emoji": {
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "message",
+          "emoji"
+        ],
+        "type": "object"
+      },
+      "showProfile": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "$UI",
+      "$VIEWS",
+      "about",
+      "recentActivity",
+      "recentActivityExpiredThrough",
+      "roster",
+      "participants",
+      "messages",
+      "canSend",
+      "reactionTallies",
+      "sendMessage",
+      "editMessage",
+      "deleteMessage",
+      "obliterateMessage",
+      "sendReaction",
+      "deleteReaction",
+      "showProfile"
+    ],
+    "type": "object"
+  }
+}

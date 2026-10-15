@@ -10,6 +10,7 @@ import {
   equals,
   pattern,
   type PerSession,
+  principalOf,
   type ReadonlyCell,
   Stream,
   UI,
@@ -30,6 +31,7 @@ import {
   type ComposerCell,
   entityKeyOf,
   isDeleted,
+  isObliterated,
   type JoiningManager,
   type MessageCell,
   type MessageRecord,
@@ -105,7 +107,7 @@ export const bodyText = (record: MessageRecord | undefined): string =>
     ? ""
     : typeof record.body === "string"
     ? record.body
-    : record.authorProfile === undefined
+    : isObliterated(record)
     ? "This message was removed."
     : "This message was deleted.";
 
@@ -294,7 +296,9 @@ export const FabriChatMessageRow = pattern<
       ? NO_MESSAGE_RIGHTS
       : messageRightsOf(
         message.get(),
-        myProfile.resolveAsCell(),
+        principalOf(myProfile, "represents-principal") !== undefined &&
+          principalOf(message, "authored-by") ===
+            principalOf(myProfile, "represents-principal"),
         kind,
         isOwner === true,
         ownersMayObliterateBy(policy),

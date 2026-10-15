@@ -242,7 +242,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           typeof stored(messages)[2]?.body === "object" &&
-          stored(messages)[5]?.authorProfile === undefined &&
+          stored(messages)[5]?.authorProfile?.get() === undefined &&
           threadsText(alice.messages.threads, messages) ===
             "Root:3@5 | Other:1@6"
         ),

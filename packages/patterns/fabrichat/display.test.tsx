@@ -4,15 +4,7 @@
  * no value, and that computed shows it once it has one, with a concrete
  * display.
  */
-import {
-  action,
-  type AddIntegrity,
-  assert,
-  pattern,
-  TESTS,
-  UI,
-  Writable,
-} from "commonfabric";
+import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
 import {
   clickButton,
   findNode,
@@ -31,21 +23,15 @@ import {
   type UsedTime,
 } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
+import { profileGesture, testRoomProfile } from "./room-test-fixture.ts";
 import {
   CHAT_EDIT_SURFACE,
   CHAT_REACT_SURFACE,
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
-  type ChatProfile,
 } from "./schemas.tsx";
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
-
-// A labeled stand-in for a viewer's `#profile`.
-type TestProfile = AddIntegrity<
-  ChatProfile,
-  readonly ["fabrichat-test-profile"]
->;
 
 const sendGesture = {
   surface: CHAT_SEND_SURFACE,
@@ -81,7 +67,8 @@ const editForm = (root: unknown) =>
 
 export default pattern(() => {
   const messages = Writable.of<MessagesValue>([] as MessagesValue);
-  const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
+  const ownProfile = testRoomProfile({});
+  const aliceProfile = ownProfile.profile;
   const alice = FabriChatRoomCore({
     myProfile: aliceProfile,
     about: { kind: "group" as const },
@@ -95,6 +82,7 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { action: ownProfile.initialize, trustedUi: profileGesture },
       {
         action: alice.composerSend,
         event: typed("Hello"),

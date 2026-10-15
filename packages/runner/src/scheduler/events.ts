@@ -2681,6 +2681,9 @@ export async function dispatchQueuedEvent(state: {
         // Taken before the abort, since the read set is what the client arm
         // parks on.
         const runLog = txToReactivityLog(tx);
+        // A withdrawn attempt's follow-ups are replaced by its re-run's.
+        // Record that before abort settles their speculative origin.
+        if (retry || served !== undefined) state.noteLineageRerun(tx);
         if (tx.status().status === "ready") {
           tx.abort(new Error(`handler did not run: ${reason}`));
         }

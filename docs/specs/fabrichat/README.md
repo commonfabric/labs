@@ -418,6 +418,8 @@ design, as below.
   sends this declaration to `joinRoom`. The host can also join the declared
   conversation when the user visits a container
   ([visiting rooms](../../features/private-inbox.md#joining-a-room-the-user-visits)).
+- **Request retention.** Requests and used times remain remembered for the
+  room's lifetime because the runtime supplies no finite redelivery bound.
 - **Request ids.** A rendered control sends no `requestId`, and the room and
   the manager use the event's own key (`eventKey()`), which is the same on
   every run of that event.

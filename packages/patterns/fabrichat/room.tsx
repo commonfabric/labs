@@ -44,7 +44,6 @@ import {
 import {
   addParticipant,
   type ParticipantRosterCell,
-  rosterProfiles,
 } from "../loom/participants.tsx";
 import { isInMain, type ShownIn, viewPlaces } from "./logic.ts";
 import {
@@ -64,6 +63,7 @@ import {
   type ComposerState,
   entryFor,
   FABRICHAT_POLICY,
+  isObliterated,
   isOwnerOf,
   type JoiningManager,
   type MessageCell,
@@ -133,11 +133,12 @@ export const participantsOf = (
   [
     ...listed,
     ...[...entries].sort(compareEntries).map((entry) =>
-      entry.record.authorProfile
+      isObliterated(entry.record) ? undefined : entry.record.authorProfile
     ),
   ].reduce<ProfileCell[]>(
     (found, profile) =>
-      profile === undefined || found.some((known) => equals(known, profile))
+      profile === undefined ||
+        found.some((known) => equals(known, profile))
         ? found
         : [...found, profile],
     [],
@@ -1149,7 +1150,10 @@ export const FabriChatRoomCore = pattern<
     manager,
     ownersMayObliterate: ownersMayObliterateGiven,
   } = input;
-  const composer = new Writable.perSession<ComposerState>({});
+  const composer = new Writable.perSession<ComposerState>({
+    draft: "",
+    threadDraft: "",
+  });
   const kind = computed((): ChatRoomKind => about?.get()?.kind ?? "group");
   // A room the manager created has `about`, and is its space's root; a
   // space's own chat, sharing its space, has none.
@@ -1246,8 +1250,10 @@ export const FabriChatRoomCore = pattern<
   // that root. A root room's `#default` is the room itself, so it reads only
   // its own; a space whose root isn't there yet lists none.
   const space = wish<{ participants?: ProfileCell[] }>({ query: "#default" });
-  const joined = computed(() =>
-    roster === undefined ? [] : rosterProfiles(roster)
+  // Preserve the roster array's backing link so readers never compete to
+  // materialize its profile references. This projection has no writer contract.
+  const joined = computed((): ProfileCell[] =>
+    roster === undefined ? [] : roster.get()?.items ?? []
   );
   const listed = computed((): ProfileCell[] =>
     ownSpace ? [...joined] : [...(space.result?.participants ?? []), ...joined]
@@ -1298,7 +1304,9 @@ export const FabriChatRoomCore = pattern<
       ...(canSend && profile !== undefined
         ? messageRightsOf(
           entry.record,
-          profile,
+          principalOf(profile, "represents-principal") !== undefined &&
+            principalOf(entry.cell, "authored-by") ===
+              principalOf(profile, "represents-principal"),
           kind,
           isOwner,
           ownersMayObliterateBy(policy),
@@ -1573,6 +1581,11 @@ export const FabriChatRoomCore = pattern<
         >
           <cf-submit-input
             data-ui-action={CHAT_SEND_ACTION}
+            value={composer.key("draft")}
+            onInput={action((event: { target?: { value?: string } }) =>
+              composer.key("draft").set(event.target?.value ?? "")
+            )}
+            clearOnSubmit={false}
             inputId="fabrichat-message"
             placeholder="Message"
             buttonText="Send"
@@ -1639,6 +1652,11 @@ export const FabriChatRoomCore = pattern<
           >
             <cf-submit-input
               data-ui-action={CHAT_SEND_ACTION}
+              value={composer.key("threadDraft")}
+              onInput={action((event: { target?: { value?: string } }) =>
+                composer.key("threadDraft").set(event.target?.value ?? "")
+              )}
+              clearOnSubmit={false}
               inputId="fabrichat-thread-message"
               placeholder="Reply in thread"
               buttonText="Reply"

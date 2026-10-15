@@ -1,0 +1,1167 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "fabrichat/manager.tsx",
+  "resultSchema": {
+    "$comment": "Docs inherited from intersection constituents. Missing docs for: { $UI: VNode; $NAME: string; }.",
+    "$defs": {
+      "ChatIndexEntry": {
+        "properties": {
+          "counterpart": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "direct",
+              "group"
+            ]
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomOutput"
+          },
+          "since": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "room",
+          "kind",
+          "since"
+        ],
+        "type": "object"
+      },
+      "ChatManagerFacts": {
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "createGroup": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "delivered": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "direct": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatIndexEntry"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "forget": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "openDirect": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "outgoingNotices": {
+            "items": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "recipient": {
+                  "type": "string"
+                },
+                "room": {
+                  "$ref": "#/$defs/ChatRoomOutput"
+                }
+              },
+              "required": [
+                "id",
+                "room",
+                "recipient"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatRequestOutcome"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "rooms": {
+            "items": {
+              "$ref": "#/$defs/ChatIndexEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rooms",
+          "direct",
+          "requests",
+          "outgoingNotices",
+          "openDirect",
+          "createGroup",
+          "accept",
+          "forget",
+          "delivered"
+        ],
+        "type": "object"
+      },
+      "ChatMessage": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "properties": {
+                  "deleted": {
+                    "enum": [
+                      true
+                    ],
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "deleted"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "earlierVersions": {
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          },
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "ChatMessageList": {
+        "properties": {
+          "closeWindow": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              },
+              "windowId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "windowId"
+            ],
+            "type": "object"
+          },
+          "count": {
+            "type": "number"
+          },
+          "latest": {
+            "properties": {
+              "hasOlder": {
+                "type": "boolean"
+              },
+              "messages": {
+                "items": {
+                  "$ref": "#/$defs/ChatMessage"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "messages",
+              "hasOlder"
+            ],
+            "type": "object"
+          },
+          "newestAt": {
+            "type": "FabricEpochNsec"
+          },
+          "oldestAt": {
+            "type": "FabricEpochNsec"
+          },
+          "openWindow": {
+            "$ref": "#/$defs/OpenWindowRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "windows": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatMessageWindow"
+            },
+            "properties": {},
+            "scope": "session",
+            "type": "object"
+          }
+        },
+        "required": [
+          "count",
+          "latest",
+          "windows",
+          "openWindow",
+          "closeWindow"
+        ],
+        "type": "object"
+      },
+      "ChatMessageVersion": {
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatMessageWindow": {
+        "properties": {
+          "hasNewer": {
+            "type": "boolean"
+          },
+          "hasOlder": {
+            "type": "boolean"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/$defs/ChatMessage"
+            },
+            "type": "array"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/ChatMessage"
+          }
+        },
+        "required": [
+          "requestId",
+          "messages",
+          "hasOlder",
+          "hasNewer"
+        ],
+        "type": "object"
+      },
+      "ChatProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatReaction": {
+        "properties": {
+          "emoji": {
+            "type": "string"
+          },
+          "reactorProfile": {
+            "$ref": "#/$defs/ChatProfile"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "reactorProfile",
+          "emoji",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatReactionTallies": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "reactions": {
+            "items": {
+              "properties": {
+                "count": {
+                  "type": "number"
+                },
+                "emoji": {
+                  "type": "string"
+                },
+                "mine": {
+                  "type": "boolean"
+                },
+                "profiles": {
+                  "items": {
+                    "$ref": "#/$defs/ChatProfile"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "emoji",
+                "count",
+                "mine",
+                "profiles"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "message",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "ChatReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "shownIn": {
+            "enum": [
+              "main",
+              "thread",
+              "both"
+            ]
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "ChatRequestOutcome": {
+        "anyOf": [
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "pending"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "entry": {
+                "$ref": "#/$defs/ChatIndexEntry"
+              },
+              "status": {
+                "enum": [
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ChatRoomAbout": {
+        "properties": {
+          "createdAt": {
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "enum": [
+              "direct",
+              "group"
+            ]
+          },
+          "policy": {
+            "$ref": "#/$defs/ChatRoomPolicy"
+          },
+          "record": {
+            "$ref": "#/$defs/ChatRoomRecord"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "createdAt",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "ChatRoomActivity": {
+        "properties": {
+          "at": {
+            "type": "FabricEpochNsec"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "number"
+          },
+          "what": {
+            "$ref": "#/$defs/ChatMessage"
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "requestId",
+          "what"
+        ],
+        "type": "object"
+      },
+      "ChatRoomFacts": {
+        "properties": {
+          "about": {
+            "$ref": "#/$defs/ChatRoomAbout"
+          },
+          "canSend": {
+            "type": "boolean"
+          },
+          "deleteMessage": {
+            "$ref": "#/$defs/MessageRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "deleteReaction": {
+            "$comment": "Docs inherited from intersection constituents. Missing docs for: { emoji: string; }.",
+            "asCell": [
+              "stream"
+            ],
+            "description": "A request naming a message by entity.",
+            "properties": {
+              "emoji": {
+                "type": "string"
+              },
+              "message": {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "message",
+              "emoji"
+            ],
+            "type": "object"
+          },
+          "editMessage": {
+            "$comment": "Docs inherited from intersection constituents. Missing docs for: { version: ChatMessageVersion; }.",
+            "asCell": [
+              "stream"
+            ],
+            "description": "A request naming a message by entity.",
+            "properties": {
+              "message": {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "version": {
+                "$ref": "#/$defs/ChatMessageVersion"
+              }
+            },
+            "required": [
+              "requestId",
+              "message",
+              "version"
+            ],
+            "type": "object"
+          },
+          "messages": {
+            "$ref": "#/$defs/ChatMessageList"
+          },
+          "obliterateMessage": {
+            "$ref": "#/$defs/MessageRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "participants": {
+            "items": {
+              "$ref": "#/$defs/ChatProfile"
+            },
+            "type": "array"
+          },
+          "reactionTallies": {
+            "items": {
+              "$ref": "#/$defs/ChatReactionTallies"
+            },
+            "type": "array"
+          },
+          "recentActivity": {
+            "items": {
+              "$ref": "#/$defs/ChatRoomActivity"
+            },
+            "type": "array"
+          },
+          "recentActivityExpiredThrough": {
+            "type": "number"
+          },
+          "sendMessage": {
+            "$ref": "#/$defs/SendMessageRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "sendReaction": {
+            "$comment": "Docs inherited from intersection constituents. Missing docs for: { emoji: string; }.",
+            "asCell": [
+              "stream"
+            ],
+            "description": "A request naming a message by entity.",
+            "properties": {
+              "emoji": {
+                "type": "string"
+              },
+              "message": {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "message",
+              "emoji"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "about",
+          "recentActivity",
+          "recentActivityExpiredThrough",
+          "participants",
+          "messages",
+          "canSend",
+          "reactionTallies",
+          "sendMessage",
+          "editMessage",
+          "deleteMessage",
+          "obliterateMessage",
+          "sendReaction",
+          "deleteReaction"
+        ],
+        "type": "object"
+      },
+      "ChatRoomLink": {
+        "properties": {
+          "about": {
+            "properties": {
+              "createdAt": {
+                "type": "FabricEpochNsec"
+              },
+              "kind": {
+                "enum": [
+                  "direct",
+                  "group"
+                ]
+              },
+              "policy": {
+                "$ref": "#/$defs/ChatRoomPolicy"
+              },
+              "record": {
+                "properties": {
+                  "createdAt": {
+                    "type": "FabricEpochNsec"
+                  },
+                  "kind": {
+                    "enum": [
+                      "direct",
+                      "group"
+                    ]
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "policy"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ChatRoomOutput": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          },
+          "$VIEWS": {
+            "properties": {
+              "room": {
+                "$ref": "#/$defs/ChatRoomFacts"
+              }
+            },
+            "required": [
+              "room"
+            ],
+            "type": "object"
+          },
+          "about": {
+            "$ref": "#/$defs/ChatRoomAbout"
+          },
+          "canSend": {
+            "type": "boolean"
+          },
+          "deleteMessage": {
+            "$ref": "#/$defs/MessageRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "deleteReaction": {
+            "$comment": "Docs inherited from intersection constituents. Missing docs for: { emoji: string; }.",
+            "asCell": [
+              "stream"
+            ],
+            "description": "A request naming a message by entity.",
+            "properties": {
+              "emoji": {
+                "type": "string"
+              },
+              "message": {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "message",
+              "emoji"
+            ],
+            "type": "object"
+          },
+          "editMessage": {
+            "$comment": "Docs inherited from intersection constituents. Missing docs for: { version: ChatMessageVersion; }.",
+            "asCell": [
+              "stream"
+            ],
+            "description": "A request naming a message by entity.",
+            "properties": {
+              "message": {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "version": {
+                "$ref": "#/$defs/ChatMessageVersion"
+              }
+            },
+            "required": [
+              "requestId",
+              "message",
+              "version"
+            ],
+            "type": "object"
+          },
+          "messages": {
+            "$ref": "#/$defs/ChatMessageList"
+          },
+          "obliterateMessage": {
+            "$ref": "#/$defs/MessageRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "participants": {
+            "items": {
+              "$ref": "#/$defs/ChatProfile"
+            },
+            "type": "array"
+          },
+          "reactionTallies": {
+            "items": {
+              "$ref": "#/$defs/ChatReactionTallies"
+            },
+            "type": "array"
+          },
+          "recentActivity": {
+            "items": {
+              "$ref": "#/$defs/ChatRoomActivity"
+            },
+            "type": "array"
+          },
+          "recentActivityExpiredThrough": {
+            "type": "number"
+          },
+          "sendMessage": {
+            "$ref": "#/$defs/SendMessageRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "sendReaction": {
+            "$comment": "Docs inherited from intersection constituents. Missing docs for: { emoji: string; }.",
+            "asCell": [
+              "stream"
+            ],
+            "description": "A request naming a message by entity.",
+            "properties": {
+              "emoji": {
+                "type": "string"
+              },
+              "message": {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "message",
+              "emoji"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "$UI",
+          "$VIEWS",
+          "about",
+          "recentActivity",
+          "recentActivityExpiredThrough",
+          "participants",
+          "messages",
+          "canSend",
+          "reactionTallies",
+          "sendMessage",
+          "editMessage",
+          "deleteMessage",
+          "obliterateMessage",
+          "sendReaction",
+          "deleteReaction"
+        ],
+        "type": "object"
+      },
+      "ChatRoomPolicy": {
+        "properties": {
+          "deletionIsObliteration": {
+            "type": "boolean"
+          },
+          "keepsHistory": {
+            "type": "boolean"
+          },
+          "maxOpenWindows": {
+            "type": "number"
+          },
+          "maxWindowCount": {
+            "type": "number"
+          },
+          "ownersMayObliterate": {
+            "type": "boolean"
+          },
+          "proposedTimeMaxAgeNsec": {
+            "type": "FabricDurationNsec"
+          },
+          "proposedTimeMaxLeadNsec": {
+            "type": "FabricDurationNsec"
+          },
+          "recentActivityWindowNsec": {
+            "type": "FabricDurationNsec"
+          }
+        },
+        "required": [
+          "ownersMayObliterate",
+          "keepsHistory",
+          "deletionIsObliteration",
+          "proposedTimeMaxAgeNsec",
+          "proposedTimeMaxLeadNsec",
+          "recentActivityWindowNsec",
+          "maxWindowCount",
+          "maxOpenWindows"
+        ],
+        "type": "object"
+      },
+      "ChatRoomRecord": {
+        "properties": {
+          "createdAt": {
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "enum": [
+              "direct",
+              "group"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "ChatWindowAnchor": {
+        "anyOf": [
+          {
+            "properties": {
+              "before": {
+                "anyOf": [
+                  {
+                    "type": "FabricEpochNsec"
+                  },
+                  {
+                    "enum": [
+                      "end"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "before"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "after": {
+                "anyOf": [
+                  {
+                    "type": "FabricEpochNsec"
+                  },
+                  {
+                    "enum": [
+                      "start"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "after"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "around": {
+                "type": "FabricEpochNsec"
+              }
+            },
+            "required": [
+              "around"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ManagerStreamEvent": {
+        "properties": {
+          "counterpart": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "joinableByLink": {
+            "type": "boolean"
+          },
+          "members": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink"
+          },
+          "target": {
+            "properties": {
+              "dataset": {
+                "properties": {
+                  "chatCounterpart": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MessageRequest": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "message"
+        ],
+        "type": "object"
+      },
+      "OpenWindowRequest": {
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "from": {
+            "$ref": "#/$defs/ChatWindowAnchor"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "windowId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "windowId",
+          "from",
+          "count"
+        ],
+        "type": "object"
+      },
+      "SendMessageRequest": {
+        "properties": {
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/$defs/ChatMessageVersion"
+          }
+        },
+        "required": [
+          "requestId",
+          "version"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "The home chat manager's public contract.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "$VIEWS": {
+        "properties": {
+          "chats": {
+            "$ref": "#/$defs/ChatManagerFacts"
+          }
+        },
+        "required": [
+          "chats"
+        ],
+        "type": "object"
+      },
+      "accept": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "createGroup": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "delivered": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "direct": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ChatIndexEntry"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "forget": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "openDirect": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "outgoingNotices": {
+        "items": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "recipient": {
+              "type": "string"
+            },
+            "room": {
+              "$ref": "#/$defs/ChatRoomOutput"
+            }
+          },
+          "required": [
+            "id",
+            "room",
+            "recipient"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "requests": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ChatRequestOutcome"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "rooms": {
+        "items": {
+          "$ref": "#/$defs/ChatIndexEntry"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "$VIEWS",
+      "rooms",
+      "direct",
+      "requests",
+      "outgoingNotices",
+      "openDirect",
+      "createGroup",
+      "accept",
+      "forget",
+      "delivered",
+      "$UI",
+      "$NAME"
+    ],
+    "type": "object"
+  }
+}

@@ -5,9 +5,11 @@
  * recent activity records.
  */
 import {
+  action,
   type AddIntegrity,
   assert,
   type Cell,
+  currentPrincipal,
   equals,
   pattern,
   TESTS,
@@ -92,7 +94,7 @@ const bodies = (messages: Cell<MessagesValue>): string =>
   stored(messages).map((message) =>
     typeof message.body === "string"
       ? message.body
-      : message.authorProfile === undefined
+      : message.authorProfile?.get() === undefined
       ? "<obliterated>"
       : "<deleted>"
   ).join(" | ");
@@ -180,6 +182,20 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      // Seed durable bookkeeping older than the proposal/activity windows.
+      // Later writes must preserve it even though neither visible record
+      // remains in the room's activity log.
+      {
+        action: action(() => {
+          const key = JSON.stringify([currentPrincipal(), "ancient-request"]);
+          const memo = requests.elementById(key);
+          memo.set({ key, at: epochNsecFromMsec(0) });
+          requests.addUnique(memo);
+          const used = usedTimes.elementById("0");
+          used.set({ at: epochNsecFromMsec(0) });
+          usedTimes.addUnique(used);
+        }),
+      },
       {
         assertion: assert(() =>
           alice.about.kind === "group" && alice.about.title === "Team" &&
@@ -263,12 +279,8 @@ export default pattern(() => {
         ),
       },
 
-      // Edits: only the sender's, and each keeps the version it replaces.
-      {
-        action: bobOnFirst.editMessage,
-        event: typed("Hijacked"),
-        trustedUi: editGesture,
-      },
+      // Edits keep the version they replace. Authenticated ownership is
+      // exercised with distinct principals in `actor-ownership.test.tsx`.
       {
         action: aliceOnFirst.editMessage,
         event: typed("Hello, everyone"),
@@ -285,8 +297,7 @@ export default pattern(() => {
         }),
       },
 
-      // Deletion keeps the deleted text in history; `members.test.tsx`
-      // covers who may delete someone else's message.
+      // Deletion keeps the deleted text in history.
       {
         action: bobOnSecond.deleteMessage,
         event: {},
@@ -323,7 +334,7 @@ export default pattern(() => {
         assertion: assert(() => {
           const third = stored(messages)[2];
           return typeof third?.body === "object" &&
-            third?.authorProfile === undefined &&
+            third?.authorProfile?.get() === undefined &&
             third?.earlierVersions.length === 0;
         }),
       },
@@ -400,6 +411,17 @@ export default pattern(() => {
         ),
       },
       { assertion: assert(() => alice.recentActivityExpiredThrough === 0) },
+      {
+        action: alice.sendMessage,
+        event: typed("Ancient request replay", "ancient-request"),
+        trustedUi: sendGesture,
+      },
+      {
+        assertion: assert(() =>
+          stored(messages).length === 6 &&
+          usedTimes.elementById("0").get()?.at.value === 0n
+        ),
+      },
     ],
   };
 });

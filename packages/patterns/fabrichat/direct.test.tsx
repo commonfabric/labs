@@ -94,7 +94,7 @@ const bodies = (messages: Cell<MessagesValue>): string =>
   ((messages.get() ?? []) as MessageRecord[]).map((message) =>
     typeof message?.body === "string"
       ? message.body
-      : message?.authorProfile === undefined
+      : message?.authorProfile?.get() === undefined
       ? "<obliterated>"
       : "<deleted>"
   ).join(" | ");

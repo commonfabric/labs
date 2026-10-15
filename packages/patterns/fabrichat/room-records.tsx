@@ -27,6 +27,7 @@ import {
   type FabricEpochNsec,
   getEntityId,
   handler,
+  principalOf,
   spaceAccess,
   type Stream,
   type TrustedActionWrite,
@@ -42,11 +43,9 @@ import {
   type ShownIn,
   threadView,
   type ViewItem,
-  type WindowAnchor,
-  windowCount,
-  windowSlice,
 } from "./logic.ts";
 import type { commitStart } from "./manager.tsx";
+import { CHAT_POLICY } from "./records.ts";
 import {
   type AboutRecord,
   CHAT_DELETE_ACTION,
@@ -74,7 +73,6 @@ import {
   type ChatRoomLink,
   type ChatRoomPolicy,
   CLOCK_TICK_NSEC,
-  durationNsec,
   epochNsec,
   epochNsecFromMsec,
   type MessageActOutcome,
@@ -86,30 +84,14 @@ import {
   type TitleRecord,
   type WindowEvent,
 } from "./schemas.tsx";
+import { selectWindow } from "./window.ts";
 
 //
 // Policy
 //
 
-/** Nanoseconds in one second. */
-const NSEC_PER_SEC = 1_000_000_000n;
-
-/**
- * The policy every room starts from, a group room's. Each setting is read by
- * the handlers it governs, and `about.policy` states it, so the two cannot
- * disagree. A room's `ownersMayObliterate` is `ownersMayObliterateIn()`'s,
- * and the message acts read it from the room's stated policy.
- */
-export const FABRICHAT_POLICY: ChatRoomPolicy = {
-  ownersMayObliterate: true,
-  keepsHistory: true,
-  deletionIsObliteration: false,
-  proposedTimeMaxAgeNsec: durationNsec(600n * NSEC_PER_SEC),
-  proposedTimeMaxLeadNsec: durationNsec(10n * NSEC_PER_SEC),
-  recentActivityWindowNsec: durationNsec(600n * NSEC_PER_SEC),
-  maxWindowCount: 100,
-  maxOpenWindows: 50,
-};
+/** The policy every room starts from; ownership overrides are room-specific. */
+export const FABRICHAT_POLICY = CHAT_POLICY;
 
 /**
  * The `ownersMayObliterate` a room of `kind` states in its policy, which
@@ -122,16 +104,6 @@ export const ownersMayObliterateIn = (
   kind: ChatRoomKind,
   given?: boolean,
 ): boolean => given ?? kind !== "direct";
-
-/**
- * How long the room remembers a request it acted on: the greater of the
- * proposed-time window's total width and the activity window.
- */
-const REQUEST_MEMORY_NSEC = [
-  FABRICHAT_POLICY.proposedTimeMaxAgeNsec.value +
-  FABRICHAT_POLICY.proposedTimeMaxLeadNsec.value,
-  FABRICHAT_POLICY.recentActivityWindowNsec.value,
-].reduce((a, b) => (a > b ? a : b));
 
 /** The time bounds `chooseRecordedTime()` holds a proposal to. */
 const TIME_BOUNDS = {
@@ -201,6 +173,9 @@ export interface MessageRecord {
   /** The profile the sender sent under; absent once obliterated. */
   authorProfile?: ProfileCell;
 
+  /** Whether the room has permanently removed the author and history. */
+  obliterated?: true;
+
   /** The current text, or the marker of a deleted message. */
   body: string | ChatDeletedBody;
 
@@ -262,7 +237,7 @@ export type MessagesCell = Writable<MessagesValue>;
 /** A link to one stored message. */
 export type MessageCell = Cell<MessageRecord>;
 
-/** A request the room has acted on, remembered until it expires. */
+/** A request the room has acted on, retained for the room's lifetime. */
 export interface RequestMemo {
   /** The request's key: its sender and its `requestId`. */
   key: string;
@@ -462,40 +437,19 @@ const clockNsec = (): bigint => nsecOf(epochNsecFromMsec(Date.now()));
 const requestKeyOf = (sender: string, requestId: string): string =>
   JSON.stringify([sender, requestId]);
 
-/** Whether the room has acted on the request `key` and still remembers it. */
+/** Whether the room has acted on the request `key`. */
 const actedOn = (requests: RequestsCell, key: string): boolean =>
   requests.elementById(key).get() !== undefined;
 
 /**
- * Removes every record recorded before `horizon` from `list`, a list of keyed
- * records, and clears each one: a keyed record outlives its place in the list,
- * and it is the record a lookup by key finds.
- */
-const forgetBefore = <T extends { at: FabricEpochNsec }>(
-  list: Writable<T[]>,
-  keyOf: (record: T) => string,
-  horizon: bigint,
-): void => {
-  ((list.get() ?? []) as T[])
-    .filter((record) => record !== undefined && nsecOf(record.at) < horizon)
-    .forEach((record) => {
-      const key = keyOf(record);
-      list.removeByValue(list.elementById(key));
-      const cleared: Writable<T | undefined> = list.elementById(key);
-      cleared.set(undefined);
-    });
-};
-
-/**
- * Records that the room acted on the request `key`, and forgets every request
- * older than the room's request memory.
+ * Records that the room acted on the request `key`. Requests remain remembered
+ * for the room's lifetime because event redelivery has no finite upper bound.
  */
 const rememberRequest = (
   requests: RequestsCell,
   key: string,
   clock: bigint,
 ): void => {
-  forgetBefore(requests, (memo) => memo.key, clock - REQUEST_MEMORY_NSEC);
   const memo = requests.elementById(key);
   memo.set({ key, at: epochNsec(clock) });
   requests.addUnique(memo);
@@ -505,11 +459,8 @@ const rememberRequest = (
  * Chooses a recorded time as `chooseRecordedTime()` does, against the times
  * the room has used, and marks it used. `undefined` means the record is
  * refused.
- *
- * It also forgets every used time older than the request memory. A recorded
- * time is never older than the proposed-time window's lower bound, so no
- * runtime whose clock is within the window's lead of this one chooses a time
- * that old again.
+ * Reservations survive message removal and later events, including events
+ * whose handler clock is older than the room's latest event.
  */
 const claimTime = (
   usedTimes: UsedTimesCell,
@@ -517,11 +468,6 @@ const claimTime = (
   proposed?: bigint,
   after?: bigint,
 ): FabricEpochNsec | undefined => {
-  forgetBefore(
-    usedTimes,
-    (used) => String(nsecOf(used.at)),
-    clock - REQUEST_MEMORY_NSEC,
-  );
   const time = chooseRecordedTime(
     {
       proposed,
@@ -670,6 +616,14 @@ export const compareEntries = (a: ViewItem, b: ViewItem): number =>
 export const isDeleted = (record: MessageRecord | undefined): boolean =>
   record === undefined || typeof record.body !== "string";
 
+/**
+ * Whether the record has lost its author through obliteration. The explicit
+ * marker distinguishes a cleared optional cell handle from a profile link
+ * whose contents the reader cannot resolve.
+ */
+export const isObliterated = (record: MessageRecord): boolean =>
+  record.obliterated === true || record.authorProfile === undefined;
+
 /** Whether `text` is a message body the room accepts. */
 const isValidBody = (text: unknown): text is string =>
   typeof text === "string" && text.trim() !== "";
@@ -705,32 +659,30 @@ export const NO_MESSAGE_RIGHTS: MessageRights = {
 };
 
 /**
- * What the person acting under `profile` may do to the message `record` in a
- * room of `kind`, given whether they hold OWNER in the room's space and
+ * What a person may do to the message `record`, given authenticated authorship
+ * and whether they hold OWNER in the room's space and
  * whether the room lets its OWNERs obliterate. Only the message's author may
  * edit or delete it, and in a direct room they may obliterate it too. An OWNER
  * may obliterate any message while `ownersMayObliterate` holds, and otherwise
  * gains nothing over anyone else: never an edit or a deletion of someone
  * else's message. A deleted message takes nothing further but obliteration,
  * and an obliterated one, which names no author, takes nothing. The room's
- * handlers admit an act by this, and the room's view and rendering offer one
- * by it.
+ * handlers supply authenticated authorship. Rendering supplies the viewer's
+ * profile attestation, which can differ from the principal acting in a handler.
  */
 export const messageRightsOf = (
   record: MessageRecord | undefined,
-  profile: ProfileCell | undefined,
+  isAuthor: boolean,
   kind: ChatRoomKind,
   isOwner: boolean,
   ownersMayObliterate: boolean,
 ): MessageRights => {
-  const author = record?.authorProfile;
-  const isAuthor = author !== undefined && profile !== undefined &&
-    equals(author, profile);
+  const present = record !== undefined && !isObliterated(record);
   const live = !isDeleted(record);
   return {
-    canEdit: live && isAuthor,
-    canDelete: live && isAuthor,
-    canObliterate: author !== undefined &&
+    canEdit: present && live && isAuthor,
+    canDelete: present && live && isAuthor,
+    canObliterate: present &&
       ((isOwner && ownersMayObliterate) || (kind === "direct" && isAuthor)),
   };
 };
@@ -775,21 +727,6 @@ export const canActIn = (
     (level === "WRITE" || level === "OWNER");
 };
 
-/** A `ChatWindowAnchor` as `windowSlice()` takes it, if it is well formed. */
-const anchorOf = (
-  from: WindowEvent["from"] | undefined,
-): WindowAnchor | undefined => {
-  if (from === undefined || from === null) return undefined;
-  if ("before" in from) {
-    return { before: from.before === "end" ? "end" : nsecOf(from.before) };
-  }
-  if ("after" in from) {
-    return { after: from.after === "start" ? "start" : nsecOf(from.after) };
-  }
-  if ("around" in from) return { around: nsecOf(from.around) };
-  return undefined;
-};
-
 //
 // Writers
 //
@@ -829,6 +766,12 @@ export interface ComposerState {
 
   /** The thread shown beside the conversation, by its root. */
   thread?: MessageCell;
+
+  /** The main composer's unsent text. */
+  draft?: string;
+
+  /** The thread composer's unsent text. */
+  threadDraft?: string;
 }
 
 /** The cell holding a session's composer state. */
@@ -1097,6 +1040,7 @@ const performMessageAct = (
     composer,
   } = state;
   const requestId = event?.requestId ?? eventKey();
+  if (state.outcomes?.key(requestId).get() !== undefined) return;
   const refuse = (code: MessageActRefusalCode, reason: string): void =>
     refuseAct(state, requestId, code, reason);
   const profile = myProfile?.resolveAsCell();
@@ -1105,7 +1049,7 @@ const performMessageAct = (
     refuseUnableSender(
       state,
       requestId,
-      profile?.get() !== undefined,
+      op === "delete" || op === "obliterate" || profile?.get() !== undefined,
       sender,
     ) ||
     sender === undefined
@@ -1118,7 +1062,7 @@ const performMessageAct = (
   const typed = event?.target?.value;
   const version: ChatMessageVersion | undefined = event?.version ??
     (typeof typed === "string"
-      ? { body: typed.trim(), sentAt: epochNsec(clock) }
+      ? { body: typed, sentAt: epochNsec(clock) }
       : undefined);
 
   if (op === "send") {
@@ -1126,8 +1070,8 @@ const performMessageAct = (
       refuse("invalid-body", "A message needs some text.");
       return;
     }
-    // A send arriving again after its memo has expired finds the message it
-    // made, and changes nothing.
+    // The message itself also prevents duplication if request bookkeeping
+    // is unavailable.
     if (messages.elementById(requestKey).get() !== undefined) {
       rememberRequest(requests, requestKey, clock);
       actDone(state, requestId);
@@ -1207,6 +1151,10 @@ const performMessageAct = (
     if (state.replyFrom === "replyTo" && composing?.replyTo !== undefined) {
       composer.key("replyTo").set(undefined);
     }
+    const draftKey = state.replyFrom === "thread" ? "threadDraft" : "draft";
+    if (composer.key(draftKey).get() === version.body) {
+      composer.key(draftKey).set("");
+    }
     state.joined?.send();
     return;
   }
@@ -1221,7 +1169,7 @@ const performMessageAct = (
   const ownersMayObliterate = ownersMayObliterateBy(state.policy);
   const rights = messageRightsOf(
     current,
-    profile,
+    principalOf(target, "authored-by") === sender,
     kind,
     isOwnerOf(messages),
     ownersMayObliterate,
@@ -1230,8 +1178,9 @@ const performMessageAct = (
     FABRICHAT_POLICY.deletionIsObliteration;
 
   if (op === "obliterate" || deletionObliterates) {
-    if (current.authorProfile === undefined) {
-      refuse("deleted-target", "That message was already removed.");
+    if (isObliterated(current)) {
+      rememberRequest(requests, requestKey, clock);
+      actDone(state, requestId);
       return;
     }
     if (op === "delete" && isDeleted(current)) {
@@ -1255,14 +1204,13 @@ const performMessageAct = (
       refuse("out-of-window", OUT_OF_WINDOW);
       return;
     }
-    current.reactions?.set([]);
-    target.set({
-      body: { deleted: true },
-      sentAt: current.sentAt,
-      editedAt,
-      earlierVersions: [],
-      ...(current.replyTo === undefined ? {} : { replyTo: current.replyTo }),
-    } as SentMessage);
+    if (current.reactions?.get() !== undefined) current.reactions.set([]);
+    target.key("obliterated").set(true);
+    target.key("authorProfile").set(undefined);
+    target.key("body").set({ deleted: true });
+    target.key("editedAt").set(editedAt);
+    target.key("earlierVersions").set([]);
+    target.key("reactions").set(undefined);
     appendActivity(
       activity,
       counters,
@@ -1306,15 +1254,11 @@ const performMessageAct = (
       refuse("out-of-window", OUT_OF_WINDOW);
       return;
     }
-    current.reactions?.set([]);
-    target.set({
-      authorProfile: current.authorProfile,
-      body: { deleted: true },
-      sentAt: current.sentAt,
-      editedAt,
-      earlierVersions: kept,
-      ...(current.replyTo === undefined ? {} : { replyTo: current.replyTo }),
-    } as SentMessage);
+    if (current.reactions?.get() !== undefined) current.reactions.set([]);
+    target.key("body").set({ deleted: true });
+    target.key("editedAt").set(editedAt);
+    target.key("earlierVersions").set(kept);
+    target.key("reactions").set(undefined);
     appendActivity(activity, counters, loggedAt, clock, requestId, target);
     rememberRequest(requests, requestKey, clock);
     actDone(state, requestId);
@@ -1333,17 +1277,9 @@ const performMessageAct = (
     refuse("out-of-window", OUT_OF_WINDOW);
     return;
   }
-  target.set({
-    authorProfile: current.authorProfile,
-    body: version.body,
-    sentAt: current.sentAt,
-    editedAt,
-    earlierVersions: kept,
-    ...(current.replyTo === undefined ? {} : { replyTo: current.replyTo }),
-    ...(current.reactions === undefined
-      ? {}
-      : { reactions: current.reactions }),
-  } as SentMessage);
+  target.key("body").set(version.body);
+  target.key("editedAt").set(editedAt);
+  target.key("earlierVersions").set(kept);
   appendActivity(activity, counters, loggedAt, clock, requestId, target);
   rememberRequest(requests, requestKey, clock);
   actDone(state, requestId);
@@ -1369,6 +1305,7 @@ const performReactionAct = (
   const { myProfile, messages, requests, usedTimes, activity, counters } =
     state;
   const requestId = event?.requestId ?? eventKey();
+  if (state.outcomes?.key(requestId).get() !== undefined) return;
   const refuse = (code: MessageActRefusalCode, reason: string): void =>
     refuseAct(state, requestId, code, reason);
   const profile = myProfile?.resolveAsCell();
@@ -1424,6 +1361,10 @@ const performReactionAct = (
     state.joined?.send();
   }
   if (op === "remove" && present) {
+    if (principalOf(mine, "authored-by") !== sender) {
+      refuse("not-allowed", "Only its author can remove a reaction.");
+      return;
+    }
     const loggedAt = claimTime(usedTimes, clock);
     if (loggedAt === undefined) {
       refuse("out-of-window", OUT_OF_WINDOW);
@@ -1524,19 +1465,20 @@ export const commitWindow = handler<RoomWindowEvent, WindowActState>(
       ? entries.filter(isInMain).sort(compareEntries)
       : threadView(entries, rootEntry.key);
     if (view === undefined) return;
-    const anchor = anchorOf(request.from);
-    if (anchor === undefined) return;
-    const count = windowCount(request.count, FABRICHAT_POLICY.maxWindowCount);
-    const slice = windowSlice(view, anchor, count);
-    if (slice === undefined) return;
+    if (request.from === undefined || request.count === undefined) return;
+    const selected = selectWindow(
+      view.map((entry) => ({ sentAt: entry.record.sentAt, cell: entry.cell })),
+      request.from,
+      request.count,
+      FABRICHAT_POLICY.maxWindowCount,
+    );
+    if (selected === undefined) return;
     windows.key(windowId).set({
       requestId: request.requestId,
       ...(root === undefined ? {} : { root }),
-      messages: view.slice(slice.start, slice.end).map((entry) =>
-        entry.cell.resolveAsCell()
-      ),
-      hasOlder: slice.hasOlder,
-      hasNewer: slice.hasNewer,
+      messages: selected.messages.map((entry) => entry.cell.resolveAsCell()),
+      hasOlder: selected.hasOlder,
+      hasNewer: selected.hasNewer,
     });
   },
 );

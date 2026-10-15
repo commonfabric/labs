@@ -13416,6 +13416,7 @@ export class Runner {
     }
 
     const builtinIdentity = resolveBuiltinImplementationIdentity(module);
+    const enclosingIdentity = tx.getCfcState().implementationIdentity;
     if (builtinIdentity) {
       setCfcImplementationIdentity(tx, builtinIdentity);
     }
@@ -13491,6 +13492,11 @@ export class Runner {
       );
     } finally {
       if (builtinFrame) popFrame(builtinFrame);
+      if (builtinIdentity) {
+        // Synchronous initialization shares its caller's transaction. Writes
+        // after this invocation belong to that caller again.
+        setCfcImplementationIdentity(tx, enclosingIdentity);
+      }
     }
 
     // Handle both legacy (just Action) and new (RawBuiltinResult) return formats

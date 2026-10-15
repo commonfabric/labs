@@ -4,6 +4,14 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 ## Audits and reports
 
+- [FabriChat reconciliation with main](fabrichat-reconciliation-2026-10-09.md) — 2026-10-09; retained independent room layout and sender-chosen request IDs, narrow manager room references, bounded acceptance for four unmerged Home baselines, and preserved compatibility evidence.
+- [FabriChat reconciliation with main, October 15](fabrichat-reconciliation-2026-10-15.md) — PR 8235 adoption of upstream room features, retained ownership and replay protections, and removal of two runtime support patches.
+- [FabriChat reconciliation with main, October 13](fabrichat-reconciliation-2026-10-13.md) — PR 8235 contract boundaries, retained behavior, and support changes after adopting upstream integration.
+
+- [FabriChat system membership](fabrichat-system-membership-2026-09-30.md) — 2026-09-30; system-owned membership scope revision, removal of room administration contracts, and bounded acceptance of intermediate PR baselines.
+- [FabriChat revised-spec reconciliation](fabrichat-revised-spec-2026-10-02.md) — 2026-10-02. Retaining protected storage while adopting PR 8412's revised contracts, and recording bounded compatibility exceptions.
+
+- [FabriChat protocol replacement](fabrichat-protocol-replacement-2026-09-29.md) — 2026-09-29; deliberate replacement of the example contract, bounded compatibility acceptance, and no automatic migration of old message storage.
 - [The Loom publication wish-slot ping-pong](development/performance/2026-10-14-loom-publication-wish-slot-ping-pong.md) — 2026-10-14; the Estuary toolshed instance serving a Loom publication space in which the whole team met, with one wish output slot rewritten 4,622 times by ten principals between two user-scoped links naming two wish-state documents, because the state was minted from a cause carrying the node's content-addressed inputs document and a deploy that changed the FabriChat room's `#chatManager` schema gave sessions loaded before and after it two such documents for one slot; the remote-echo breaker tripped 360 times that day and throttled the loop without ending it.
 - [Immutable-cell review fixes](development/performance/2026-10-13-immutable-cell-review-fixes/README.md) — Weak element ownership retained-heap measurements, paired creation timings under shared-host load, and focused served-pattern evidence for PR 8814.
 - [Immutable cell feedback: ownership, events, and measurement correction](development/performance/2026-10-13-immutable-cell-feedback/README.md) — 2026-10-13; nested snapshot ownership, portable event identity, traversal memoization, and corrected measured-input sharing evidence under concurrent validation load.

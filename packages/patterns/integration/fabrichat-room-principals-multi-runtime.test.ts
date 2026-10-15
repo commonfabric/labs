@@ -166,5 +166,12 @@ describe("fabrichat room principals across runtimes", () => {
         notice.writes.map((write) => `${write.id} in ${write.scopeKey}`)
       ),
     ).toEqual([]);
+    // Quiescence must come from agreement, not the scheduler suppressing
+    // a projection that keeps overwriting another reader's result.
+    for (const session of [starter, member]) {
+      const counts = await session.loggerCounts();
+      expect(counts.scheduler?.["remote-echo-breaker-tripped"]?.total ?? 0)
+        .toBe(0);
+    }
   });
 });

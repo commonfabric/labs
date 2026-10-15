@@ -83,6 +83,204 @@ export interface RequiredPatternOverride {
 
 export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
+    "pattern": "fabrichat/adapter.tsx",
+    "baselines": [
+      "20260930T023438Z-_SkOTm6m5M7lOfTT",
+      "20260930T194946Z-EvahrQYPJhsPhmYO",
+      "20261001T015716Z-JBNXPrQGFcSpTuGa",
+      "20261002T181229Z-RvETfQ6Qhvr1Ptdv",
+      "20261009T170757Z-glJhCK87C6seYWXk",
+    ],
+    "paths": [
+      "argument.placement",
+      "result.$VIEWS.chat.about.createdAt",
+    ],
+    "reason":
+      "PR 8235 adopts the current upstream FabriChat contracts while retaining its demonstrated behavior fixes. These snapshots belong only to the unmerged independent implementation; no automatic migration between its old storage layout and the upstream layout is provided.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-13.md",
+  },
+  {
+    "pattern": "fabrichat/main.tsx",
+    "baselines": [
+      "20260924T175254Z-lVPuvyO2neYxy2fr",
+      "20260924T182554Z-N3p-f7YPbqOkTZYM",
+      "20260924T225103Z-YjE9_Hki8UCUTFpT",
+      "20260924T230240Z-uI7tdMbhqscACz7z",
+      "20260924T232405Z-TEJvpSwlmDpuRRiN",
+      "20260924T234624Z-jlyRd4GdKsxMivd8",
+      "20260925T003944Z-G5oUMsfWQHE_IsdJ",
+      "20260925T010354Z-I1gvu92zRWpwqeGC",
+      "20260925T024902Z-cnnWs44Auqp7mCiB",
+      "20260925T153146Z-TdaJ74eecwaKd76W",
+      "20260925T155413Z-A_iQ8cehCGOyaBlJ",
+      "20260925T161227Z-Q_coiTXjbDNnn1pD",
+    ],
+    "paths": [
+      "argument",
+      "result.messages",
+    ],
+    "reason":
+      "PR 8235 adopts the current upstream FabriChat contracts while retaining its demonstrated behavior fixes. These snapshots belong only to the unmerged independent implementation; no automatic migration between its old storage layout and the upstream layout is provided.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-13.md",
+  },
+  {
+    "pattern": "fabrichat/main.tsx",
+    "baselines": [
+      "20260930T023438Z-88tuD6LmNbIOvJVX",
+      "20260930T194946Z-KEI7keFejPNhIeF0",
+    ],
+    "paths": [
+      "result.$VIEWS.room.add",
+    ],
+    "reason":
+      "PR 8235 adopts the current upstream FabriChat contracts while retaining its demonstrated behavior fixes. These snapshots belong only to the unmerged independent implementation; no automatic migration between its old storage layout and the upstream layout is provided.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-13.md",
+  },
+  {
+    "pattern": "fabrichat/main.tsx",
+    "baselines": [
+      "20261001T145845Z-ncOZnqrsIZD19cOT",
+      "20261002T181229Z-aXmI7khKVT7ptCgD",
+      "20261009T170757Z-2wQCx12mA9PFqXDx",
+    ],
+    "paths": [
+      "result.$VIEWS.room.reactionTallies",
+    ],
+    "reason":
+      "PR 8235 adopts the current upstream FabriChat contracts while retaining its demonstrated behavior fixes. These snapshots belong only to the unmerged independent implementation; no automatic migration between its old storage layout and the upstream layout is provided.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-13.md",
+  },
+  {
+    "pattern": "fabrichat/manager.tsx",
+    "baselines": [
+      "20260930T023438Z-Y-613Y51HslhC28m",
+      "20261001T015717Z-vI52ahn9Rpt-mR4y",
+    ],
+    "paths": [
+      "result.$VIEWS.chats.accept.room.$UI",
+    ],
+    "reason":
+      "PR 8235 adopts the current upstream FabriChat contracts while retaining its demonstrated behavior fixes. These snapshots belong only to the unmerged independent implementation; no automatic migration between its old storage layout and the upstream layout is provided.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-13.md",
+  },
+  {
+    "pattern": "fabrichat/manager.tsx",
+    "baselines": [
+      "20261002T181229Z-qn4Egf1Y6qOBV_Je",
+    ],
+    "paths": [
+      "result.$VIEWS.chats.accept.target.dataset.chatCounterpart",
+    ],
+    "reason":
+      "PR 8235 adopts the current upstream FabriChat contracts while retaining its demonstrated behavior fixes. These snapshots belong only to the unmerged independent implementation; no automatic migration between its old storage layout and the upstream layout is provided.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-13.md",
+  },
+  {
+    "pattern": "fabrichat/manager.tsx",
+    "baselines": [
+      "20261009T170757Z-T7cQHUm2f3ZVmhbz",
+      "20261009T175951Z-U_dSrjERMjUyxcZo",
+    ],
+    "paths": [
+      "argument.requests.*",
+      "result.$VIEWS.chats.accept.target.dataset.chatCounterpart",
+    ],
+    "reason":
+      "PR 8235 adopts the current upstream FabriChat contracts while retaining its demonstrated behavior fixes. These snapshots belong only to the unmerged independent implementation; no automatic migration between its old storage layout and the upstream layout is provided.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-13.md",
+  },
+  {
+    "pattern": "fabrichat/placement.tsx",
+    "baselines": [
+      "20260930T023438Z-7rYdOFuObWLMJLfB",
+      "20260930T194947Z-ssl1VJkx_ZuvRVEj",
+      "20261001T015717Z-p9D_wvISNj82l6vi",
+      "20261002T181229Z-gAaJduTjuv2Brbw5",
+      "20261009T170757Z-fV4bjbOT_p5WjamI",
+    ],
+    "paths": [
+      "argument.room",
+      "result.$VIEWS.chat.about.createdAt",
+    ],
+    "reason":
+      "PR 8235 adopts the current upstream FabriChat contracts while retaining its demonstrated behavior fixes. These snapshots belong only to the unmerged independent implementation; no automatic migration between its old storage layout and the upstream layout is provided.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-13.md",
+  },
+  {
+    "pattern": "fabrichat/room.tsx",
+    "baselines": [
+      "20260930T023438Z-nmyAM6alfm9vz1sp",
+      "20260930T194947Z-9hxxaZZOi7aQ8lgV",
+      "20260930T204159Z-9_2YGyVaYQeqpr9d",
+    ],
+    "paths": [
+      "argument.about",
+      "result.add",
+    ],
+    "reason":
+      "PR 8235 adopts the current upstream FabriChat contracts while retaining its demonstrated behavior fixes. These snapshots belong only to the unmerged independent implementation; no automatic migration between its old storage layout and the upstream layout is provided.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-13.md",
+  },
+  {
+    "pattern": "fabrichat/room.tsx",
+    "baselines": [
+      "20261001T015617Z-3iEHJmcmUiml6Jqi",
+      "20261002T001307Z-ycwUPVCm6pd4PwMA",
+      "20261002T181229Z-piaZFYc99ZxvPBW8",
+      "20261009T170757Z-aU9KyzcYPziQ2H08",
+      "20261009T173318Z-M7LDTAhN4Ptp9T5K",
+      "20261009T174950Z-GFjX4pT_hr9smEoB",
+      "20261009T175952Z-i7UKwOJJrYmh0I3m",
+    ],
+    "paths": [
+      "argument.about",
+      "result.reactionTallies",
+    ],
+    "reason":
+      "PR 8235 adopts the current upstream FabriChat contracts while retaining its demonstrated behavior fixes. These snapshots belong only to the unmerged independent implementation; no automatic migration between its old storage layout and the upstream layout is provided.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-13.md",
+  },
+  {
+    "pattern": "system/home.tsx",
+    "baselines": [
+      "20260930T023439Z-1pBKUK1T-dKGS4kd",
+      "20260930T194947Z-dvn-cmHzFRd8Igu0",
+      "20261001T015717Z-nO7yodw-u15L1y37",
+    ],
+    "paths": [
+      "result.chatManager.$VIEWS.chats.accept.room.$UI",
+    ],
+    "reason":
+      "PR 8235 adopts the current upstream FabriChat contracts while retaining its demonstrated behavior fixes. These snapshots belong only to the unmerged independent implementation; no automatic migration between its old storage layout and the upstream layout is provided.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-13.md",
+    "requiredPatternOverride": {
+      "rulingBy": "@danfuzz",
+      "on": "2026-10-13",
+      "reason":
+        "Adopt upstream FabriChat specification and incidental implementation choices in PR 8235. These Home snapshots exist only on that unmerged branch; this accepts no break against a published main Home contract.",
+    },
+  },
+  {
+    "pattern": "system/home.tsx",
+    "baselines": [
+      "20261002T181229Z-HSDSXqacR5Zpy5Ks",
+      "20261009T170758Z-WMzrkOk8leJ_0ACN",
+      "20261009T175952Z-6ZjXWIn4Hmiquydi",
+    ],
+    "paths": [
+      "result.chatManager.$VIEWS.chats.accept.target.dataset.chatCounterpart",
+    ],
+    "reason":
+      "PR 8235 adopts the current upstream FabriChat contracts while retaining its demonstrated behavior fixes. These snapshots belong only to the unmerged independent implementation; no automatic migration between its old storage layout and the upstream layout is provided.",
+    "record": "docs/history/fabrichat-reconciliation-2026-10-13.md",
+    "requiredPatternOverride": {
+      "rulingBy": "@danfuzz",
+      "on": "2026-10-13",
+      "reason":
+        "Adopt upstream FabriChat specification and incidental implementation choices in PR 8235. These Home snapshots exist only on that unmerged branch; this accepts no break against a published main Home contract.",
+    },
+  },
+  {
     // The profile gained its owner-protected share inbox pointer (`inbox`,
     // optional, undefaulted). The picker consumes a stored profile, and the
     // proof compares the new property's `ifc` label against a baseline that

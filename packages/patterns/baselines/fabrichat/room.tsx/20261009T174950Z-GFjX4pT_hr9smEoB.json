@@ -1,0 +1,1647 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ChatMessage": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "asCell": [
+              "cell"
+            ]
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "properties": {
+                  "deleted": {
+                    "enum": [
+                      true
+                    ],
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "deleted"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "earlierVersions": {
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          },
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "ChatMessageVersion": {
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "inbox": {
+            "$ref": "#/$defs/ProfileInbox",
+            "description": "The share inbox through which a manager offers a newly created room."
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatReaction": {
+        "properties": {
+          "emoji": {
+            "type": "string"
+          },
+          "reactorProfile": {
+            "$ref": "#/$defs/ChatProfile",
+            "asCell": [
+              "cell"
+            ]
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "reactorProfile",
+          "emoji",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage",
+            "asCell": [
+              "cell"
+            ]
+          },
+          "shownIn": {
+            "enum": [
+              "main",
+              "thread",
+              "both"
+            ]
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "ChatRoomActivity": {
+        "properties": {
+          "at": {
+            "type": "FabricEpochNsec"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "number"
+          },
+          "what": {
+            "$ref": "#/$defs/ChatMessage",
+            "asCell": [
+              "cell"
+            ]
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "requestId",
+          "what"
+        ],
+        "type": "object"
+      },
+      "ChatRoomRecord": {
+        "properties": {
+          "createdAt": {
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "enum": [
+              "group",
+              "direct"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "ParticipantList": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/loom/participants.tsx",
+              "moduleIdentity": "7yRcWrY7qIapItd2WnxsvbrnSiOsPq4Ww7VrfyyWhQE",
+              "path": [
+                "addParticipant"
+              ]
+            }
+          }
+        },
+        "items": {
+          "asCell": [
+            "cell"
+          ],
+          "properties": {
+            "avatar": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "ParticipantRoster": {
+        "properties": {
+          "items": {
+            "$ref": "#/$defs/ParticipantList"
+          }
+        },
+        "type": "object"
+      },
+      "ProfileInbox": {
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The owner's share inbox piece."
+          }
+        },
+        "type": "object"
+      },
+      "ShareInboxPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "StoredActivity": {
+        "$ref": "#/$defs/ChatRoomActivity",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writePolicyAnyOf": [
+            {
+              "uiContract": {
+                "action": "ChatSend",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatSendSurface"
+                ],
+                "trustedPattern": "ChatSendSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatSend",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatSendSurface"
+                ],
+                "trustedPattern": "ChatSendSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "sendMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatEdit",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatEditSurface"
+                ],
+                "trustedPattern": "ChatEditSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "commitEdit"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatEdit",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatEditSurface"
+                ],
+                "trustedPattern": "ChatEditSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "editMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "deleteMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "obliterateMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatReact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "commitSendReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatReact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "sendReactionFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatReact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "commitDeleteReaction"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatReact",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatReactSurface"
+                ],
+                "trustedPattern": "ChatReactSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "deleteReactionFromUi"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "StoredMessage": {
+        "$ref": "#/$defs/ChatMessage",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writePolicyAnyOf": [
+            {
+              "uiContract": {
+                "action": "ChatSend",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatSendSurface"
+                ],
+                "trustedPattern": "ChatSendSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatSend",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatSendSurface"
+                ],
+                "trustedPattern": "ChatSendSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "sendMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatEdit",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatEditSurface"
+                ],
+                "trustedPattern": "ChatEditSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "commitEdit"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatEdit",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatEditSurface"
+                ],
+                "trustedPattern": "ChatEditSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "editMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "commitDelete"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatDelete",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatDeleteSurface"
+                ],
+                "trustedPattern": "ChatDeleteSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "deleteMessageFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "commitObliterate"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatObliterate",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatObliterateSurface"
+                ],
+                "trustedPattern": "ChatObliterateSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room.tsx",
+                  "moduleIdentity": "rYDtMrex-aSU1Qq36zEvh5h3XS1m9e0rswH4rnZWz4w",
+                  "path": [
+                    "obliterateMessageFromUi"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "description": "Storage of a root room, or a chat belonging to an existing social space.",
+    "properties": {
+      "about": {
+        "$ref": "#/$defs/ChatRoomRecord",
+        "description": "Creation facts labeled by the manager's reviewed start.",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writePolicyAnyOf": [
+            {
+              "uiContract": {
+                "action": "ChatStart",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatStartSurface"
+                ],
+                "trustedPattern": "ChatStartSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/manager.tsx",
+                  "moduleIdentity": "ic6AO-hbNm-8HdRDfx5j5EbsQypXpTr68GuxDVdIqIs",
+                  "path": [
+                    "openDirectFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatStart",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatStartSurface"
+                ],
+                "trustedPattern": "ChatStartSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/manager.tsx",
+                  "moduleIdentity": "ic6AO-hbNm-8HdRDfx5j5EbsQypXpTr68GuxDVdIqIs",
+                  "path": [
+                    "createGroupFromUi"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatStart",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatStartSurface"
+                ],
+                "trustedPattern": "ChatStartSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/manager.tsx",
+                  "moduleIdentity": "ic6AO-hbNm-8HdRDfx5j5EbsQypXpTr68GuxDVdIqIs",
+                  "path": [
+                    "openDirect"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatStart",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatStartSurface"
+                ],
+                "trustedPattern": "ChatStartSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/manager.tsx",
+                  "moduleIdentity": "ic6AO-hbNm-8HdRDfx5j5EbsQypXpTr68GuxDVdIqIs",
+                  "path": [
+                    "createGroup"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "activity": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "description": "Recent changes with their original authorship labels.",
+        "items": {
+          "$ref": "#/$defs/StoredActivity"
+        },
+        "type": "array"
+      },
+      "participants": {
+        "$ref": "#/$defs/ParticipantRoster",
+        "asCell": [
+          "cell"
+        ],
+        "default": {},
+        "description": "Profiles added through the canonical participant writer."
+      },
+      "records": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "description": "Message documents owned by the room's writers.",
+        "items": {
+          "$ref": "#/$defs/StoredMessage"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "fabrichat/room.tsx",
+  "resultSchema": {
+    "$defs": {
+      "ChatMessage": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/ChatProfile"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "properties": {
+                  "deleted": {
+                    "enum": [
+                      true
+                    ],
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "deleted"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "earlierVersions": {
+            "items": {
+              "$ref": "#/$defs/ChatMessageVersion"
+            },
+            "type": "array"
+          },
+          "editedAt": {
+            "type": "FabricEpochNsec"
+          },
+          "reactions": {
+            "items": {
+              "$ref": "#/$defs/ChatReaction"
+            },
+            "type": "array"
+          },
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt",
+          "earlierVersions",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "ChatMessageList": {
+        "properties": {
+          "closeWindow": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "requestId": {
+                "type": "string"
+              },
+              "windowId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "windowId"
+            ],
+            "type": "object"
+          },
+          "count": {
+            "type": "number"
+          },
+          "latest": {
+            "properties": {
+              "hasOlder": {
+                "type": "boolean"
+              },
+              "messages": {
+                "items": {
+                  "$ref": "#/$defs/ChatMessage"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "messages",
+              "hasOlder"
+            ],
+            "type": "object"
+          },
+          "newestAt": {
+            "type": "FabricEpochNsec"
+          },
+          "oldestAt": {
+            "type": "FabricEpochNsec"
+          },
+          "openWindow": {
+            "$ref": "#/$defs/OpenWindowRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "windows": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatMessageWindow"
+            },
+            "properties": {},
+            "scope": "session",
+            "type": "object"
+          }
+        },
+        "required": [
+          "count",
+          "latest",
+          "windows",
+          "openWindow",
+          "closeWindow"
+        ],
+        "type": "object"
+      },
+      "ChatMessageVersion": {
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "body",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatMessageWindow": {
+        "properties": {
+          "hasNewer": {
+            "type": "boolean"
+          },
+          "hasOlder": {
+            "type": "boolean"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/$defs/ChatMessage"
+            },
+            "type": "array"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/ChatMessage"
+          }
+        },
+        "required": [
+          "requestId",
+          "messages",
+          "hasOlder",
+          "hasNewer"
+        ],
+        "type": "object"
+      },
+      "ChatProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "inbox": {
+            "$ref": "#/$defs/ProfileInbox",
+            "description": "The share inbox through which a manager offers a newly created room."
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatReaction": {
+        "properties": {
+          "emoji": {
+            "type": "string"
+          },
+          "reactorProfile": {
+            "$ref": "#/$defs/ChatProfile"
+          },
+          "sentAt": {
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "reactorProfile",
+          "emoji",
+          "sentAt"
+        ],
+        "type": "object"
+      },
+      "ChatReactionTallies": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "reactions": {
+            "items": {
+              "properties": {
+                "count": {
+                  "type": "number"
+                },
+                "emoji": {
+                  "type": "string"
+                },
+                "mine": {
+                  "type": "boolean"
+                },
+                "profiles": {
+                  "items": {
+                    "$ref": "#/$defs/ChatProfile"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "emoji",
+                "count",
+                "mine",
+                "profiles"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "message",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "ChatReply": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "shownIn": {
+            "enum": [
+              "main",
+              "thread",
+              "both"
+            ]
+          }
+        },
+        "required": [
+          "message",
+          "shownIn"
+        ],
+        "type": "object"
+      },
+      "ChatRoomAbout": {
+        "properties": {
+          "createdAt": {
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "enum": [
+              "group",
+              "direct"
+            ]
+          },
+          "policy": {
+            "$ref": "#/$defs/ChatRoomPolicy"
+          },
+          "record": {
+            "$ref": "#/$defs/ChatRoomRecord"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "createdAt",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "ChatRoomActivity": {
+        "properties": {
+          "at": {
+            "type": "FabricEpochNsec"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "number"
+          },
+          "what": {
+            "$ref": "#/$defs/ChatMessage"
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "requestId",
+          "what"
+        ],
+        "type": "object"
+      },
+      "ChatRoomFacts": {
+        "properties": {
+          "about": {
+            "$ref": "#/$defs/ChatRoomAbout"
+          },
+          "addParticipant": {
+            "asCell": [
+              "stream"
+            ],
+            "description": "Adds a live profile to the room's participant roster.",
+            "properties": {
+              "profile": {
+                "$ref": "#/$defs/ChatProfile"
+              }
+            },
+            "required": [
+              "profile"
+            ],
+            "type": "object"
+          },
+          "canSend": {
+            "type": "boolean"
+          },
+          "deleteMessage": {
+            "$ref": "#/$defs/MessageRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "deleteReaction": {
+            "$comment": "Docs inherited from intersection constituents. Missing docs for: { emoji: string; }.",
+            "asCell": [
+              "stream"
+            ],
+            "description": "A request naming a message by entity.",
+            "properties": {
+              "emoji": {
+                "type": "string"
+              },
+              "message": {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "message",
+              "emoji"
+            ],
+            "type": "object"
+          },
+          "editMessage": {
+            "$comment": "Docs inherited from intersection constituents. Missing docs for: { version: ChatMessageVersion; }.",
+            "asCell": [
+              "stream"
+            ],
+            "description": "A request naming a message by entity.",
+            "properties": {
+              "message": {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "version": {
+                "$ref": "#/$defs/ChatMessageVersion"
+              }
+            },
+            "required": [
+              "requestId",
+              "message",
+              "version"
+            ],
+            "type": "object"
+          },
+          "messages": {
+            "$ref": "#/$defs/ChatMessageList"
+          },
+          "obliterateMessage": {
+            "$ref": "#/$defs/MessageRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "participants": {
+            "items": {
+              "$ref": "#/$defs/ChatProfile"
+            },
+            "type": "array"
+          },
+          "reactionTallies": {
+            "items": {
+              "$ref": "#/$defs/ChatReactionTallies"
+            },
+            "type": "array"
+          },
+          "recentActivity": {
+            "items": {
+              "$ref": "#/$defs/ChatRoomActivity"
+            },
+            "type": "array"
+          },
+          "recentActivityExpiredThrough": {
+            "type": "number"
+          },
+          "sendMessage": {
+            "$ref": "#/$defs/SendMessageRequest",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "sendReaction": {
+            "$comment": "Docs inherited from intersection constituents. Missing docs for: { emoji: string; }.",
+            "asCell": [
+              "stream"
+            ],
+            "description": "A request naming a message by entity.",
+            "properties": {
+              "emoji": {
+                "type": "string"
+              },
+              "message": {
+                "$ref": "#/$defs/ChatMessage"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "message",
+              "emoji"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "about",
+          "recentActivity",
+          "recentActivityExpiredThrough",
+          "participants",
+          "addParticipant",
+          "messages",
+          "canSend",
+          "reactionTallies",
+          "sendMessage",
+          "editMessage",
+          "deleteMessage",
+          "obliterateMessage",
+          "sendReaction",
+          "deleteReaction"
+        ],
+        "type": "object"
+      },
+      "ChatRoomPolicy": {
+        "properties": {
+          "deletionIsObliteration": {
+            "type": "boolean"
+          },
+          "keepsHistory": {
+            "type": "boolean"
+          },
+          "maxOpenWindows": {
+            "type": "number"
+          },
+          "maxWindowCount": {
+            "type": "number"
+          },
+          "ownersMayObliterate": {
+            "type": "boolean"
+          },
+          "proposedTimeMaxAgeNsec": {
+            "type": "FabricDurationNsec"
+          },
+          "proposedTimeMaxLeadNsec": {
+            "type": "FabricDurationNsec"
+          },
+          "recentActivityWindowNsec": {
+            "type": "FabricDurationNsec"
+          }
+        },
+        "required": [
+          "ownersMayObliterate",
+          "keepsHistory",
+          "deletionIsObliteration",
+          "proposedTimeMaxAgeNsec",
+          "proposedTimeMaxLeadNsec",
+          "recentActivityWindowNsec",
+          "maxWindowCount",
+          "maxOpenWindows"
+        ],
+        "type": "object"
+      },
+      "ChatRoomRecord": {
+        "properties": {
+          "createdAt": {
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "enum": [
+              "group",
+              "direct"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "ChatWindowAnchor": {
+        "anyOf": [
+          {
+            "properties": {
+              "before": {
+                "anyOf": [
+                  {
+                    "type": "FabricEpochNsec"
+                  },
+                  {
+                    "enum": [
+                      "end"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "before"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "after": {
+                "anyOf": [
+                  {
+                    "type": "FabricEpochNsec"
+                  },
+                  {
+                    "enum": [
+                      "start"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "after"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "around": {
+                "type": "FabricEpochNsec"
+              }
+            },
+            "required": [
+              "around"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MessageRequest": {
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "message"
+        ],
+        "type": "object"
+      },
+      "OpenWindowRequest": {
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "from": {
+            "$ref": "#/$defs/ChatWindowAnchor"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "windowId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "windowId",
+          "from",
+          "count"
+        ],
+        "type": "object"
+      },
+      "ProfileInbox": {
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "description": "The owner's share inbox piece."
+          }
+        },
+        "type": "object"
+      },
+      "SendMessageRequest": {
+        "properties": {
+          "replyTo": {
+            "$ref": "#/$defs/ChatReply"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/$defs/ChatMessageVersion"
+          }
+        },
+        "required": [
+          "requestId",
+          "version"
+        ],
+        "type": "object"
+      },
+      "ShareInboxPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "description": "A room's protocol and its own reviewed rendering.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "$VIEWS": {
+        "properties": {
+          "room": {
+            "$ref": "#/$defs/ChatRoomFacts"
+          }
+        },
+        "required": [
+          "room"
+        ],
+        "type": "object"
+      },
+      "about": {
+        "$ref": "#/$defs/ChatRoomAbout"
+      },
+      "addMember": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Admits a member to a standalone group from a reviewed owner gesture.",
+        "properties": {
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "addParticipant": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Adds a live profile to the room's participant roster.",
+        "properties": {
+          "profile": {
+            "$ref": "#/$defs/ChatProfile"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
+      "canSend": {
+        "type": "boolean"
+      },
+      "deleteMessage": {
+        "$ref": "#/$defs/MessageRequest",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "deleteReaction": {
+        "$comment": "Docs inherited from intersection constituents. Missing docs for: { emoji: string; }.",
+        "asCell": [
+          "stream"
+        ],
+        "description": "A request naming a message by entity.",
+        "properties": {
+          "emoji": {
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "message",
+          "emoji"
+        ],
+        "type": "object"
+      },
+      "editMessage": {
+        "$comment": "Docs inherited from intersection constituents. Missing docs for: { version: ChatMessageVersion; }.",
+        "asCell": [
+          "stream"
+        ],
+        "description": "A request naming a message by entity.",
+        "properties": {
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/$defs/ChatMessageVersion"
+          }
+        },
+        "required": [
+          "requestId",
+          "message",
+          "version"
+        ],
+        "type": "object"
+      },
+      "messages": {
+        "$ref": "#/$defs/ChatMessageList"
+      },
+      "obliterateMessage": {
+        "$ref": "#/$defs/MessageRequest",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "participants": {
+        "items": {
+          "$ref": "#/$defs/ChatProfile"
+        },
+        "type": "array"
+      },
+      "reactionTallies": {
+        "items": {
+          "$ref": "#/$defs/ChatReactionTallies"
+        },
+        "type": "array"
+      },
+      "recentActivity": {
+        "items": {
+          "$ref": "#/$defs/ChatRoomActivity"
+        },
+        "type": "array"
+      },
+      "recentActivityExpiredThrough": {
+        "type": "number"
+      },
+      "sendMessage": {
+        "$ref": "#/$defs/SendMessageRequest",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "sendReaction": {
+        "$comment": "Docs inherited from intersection constituents. Missing docs for: { emoji: string; }.",
+        "asCell": [
+          "stream"
+        ],
+        "description": "A request naming a message by entity.",
+        "properties": {
+          "emoji": {
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "message",
+          "emoji"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "addMember",
+      "$NAME",
+      "$UI",
+      "$VIEWS",
+      "about",
+      "recentActivity",
+      "recentActivityExpiredThrough",
+      "participants",
+      "addParticipant",
+      "messages",
+      "canSend",
+      "reactionTallies",
+      "sendMessage",
+      "editMessage",
+      "deleteMessage",
+      "obliterateMessage",
+      "sendReaction",
+      "deleteReaction"
+    ],
+    "type": "object"
+  }
+}

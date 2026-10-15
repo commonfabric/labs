@@ -8,6 +8,7 @@ import { type Cell, unwrapCell } from "../cell.ts";
 import { spaceReaderRole, type SpaceRole } from "../cfc/space-membership.ts";
 import { getCellOrThrow, isCellResult } from "../query-result-proxy.ts";
 import type { Runtime } from "../runtime.ts";
+import { withdrawHandlerWhileLoading } from "../scheduler/handler-load-wait.ts";
 import { scopeRank } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { topFrame } from "./frame-context.ts";
@@ -237,7 +238,9 @@ export function cellOfTarget(target: unknown, call: string): Cell<unknown> {
  * change to whether the memory server admits this runtime to `space` runs the
  * executing action again. `own` says whether `principal` is the one the
  * calling code runs for, whose session this runtime's may be; the session
- * says nothing about any other principal.
+ * says nothing about any other principal. A handler whose access-list read
+ * has no local basis is withdrawn while its load is in flight, so an unknown
+ * membership cannot become that event's final decision.
  */
 function accessLevel(
   runtime: Runtime,
@@ -258,13 +261,24 @@ function accessLevel(
     runtime.spaceAccessWatch.rerunOnChange(space, action);
   }
 
-  const acl = runtime.getCellFromLink<unknown>(
+  const aclCell = runtime.getCellFromLink<unknown>(
     { space, id: aclDocId(space) as URI, path: [] },
     undefined,
     tx,
-  ).get();
+  );
+  const acl = aclCell.get();
 
   if (sessionIsPrincipal && isRefused(runtime, space)) return "none";
+  if (!reactive) {
+    withdrawHandlerWhileLoading(
+      runtime,
+      tx,
+      aclCell.getAsNormalizedFullLink(),
+      `the access list \`${
+        aclDocId(space)
+      }\` was read while it was still loading`,
+    );
+  }
   if (acl === undefined) return undefined;
   const role = spaceReaderRole(acl as ACL, principal);
   return role === null ? "none" : LEVEL_OF_ROLE[role];

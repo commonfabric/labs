@@ -107,8 +107,8 @@ export default pattern(() => {
   const alice = FabriChatRoomCore(
     { myProfile: aliceProfile, ...records } as RoomArg,
   );
-  // The same room with a request memory of its own, empty: it has forgotten
-  // every request, as the room does once a request's memo expires.
+  // The same room with request bookkeeping omitted, to exercise the
+  // message's independent protection against duplicate sends.
   const aliceForgetful = FabriChatRoomCore(
     {
       myProfile: aliceProfile,
@@ -223,7 +223,7 @@ export default pattern(() => {
           reactionsOn(messages, 0).length === 2
         ),
       },
-      // A send arriving again after its memo has expired changes nothing.
+      // A send arriving again with absent bookkeeping changes nothing.
       {
         action: alice.sendMessage,
         event: { requestId: "again", target: { value: "Again" } },

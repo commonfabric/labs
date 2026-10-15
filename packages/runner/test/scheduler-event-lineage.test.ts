@@ -229,8 +229,9 @@ describe("scheduler event lineage", () => {
   /**
    * Runs an origin handler whose follow-ups go to a second stream, with
    * `console.warn` captured. `origin` is handed the attempt number and a
-   * function sending one follow-up under that attempt's transaction, to a
-   * stream in `followUpSpace`, the origin's own space by default. The
+   * function sending one follow-up under that attempt's transaction, and
+   * the transaction itself. The follow-up reaches a stream in `followUpSpace`,
+   * the origin's own space by default. The
    * origin event is sent with `retries`, after `beforeSend` runs, and the run
    * is over once `settled` resolves (it is handed the count of attempts so
    * far and the warnings so far), or by default once the origin has run as
@@ -243,6 +244,7 @@ describe("scheduler event lineage", () => {
     origin: (
       attempt: number,
       sendFollowUp: (payload: number) => void,
+      handlerTx: IExtendedStorageTransaction,
     ) => void,
     options: {
       retries?: boolean;
@@ -311,7 +313,7 @@ describe("scheduler event lineage", () => {
           false,
           { originTx: handlerTx },
         );
-      });
+      }, handlerTx);
     };
     const handlerB: EventHandler = (handlerTx, event: unknown) => {
       const current = payloads.withTx(handlerTx).get();
@@ -685,6 +687,51 @@ describe("scheduler event lineage", () => {
     } finally {
       gate.fail();
       gate.restore();
+    }
+  });
+
+  describe("follow-ups of a withdrawn handler attempt", () => {
+    for (const crossSpace of [false, true]) {
+      const destination = crossSpace ? "another space" : "the same space";
+
+      it(`delivers only the re-run's follow-up to ${destination}, without a warning`, async () => {
+        const result = await runOrigin(
+          `lineage withdrawn resend ${destination}`,
+          (attempt, sendFollowUp, handlerTx) => {
+            sendFollowUp(attempt);
+            if (attempt === 1) {
+              handlerTx.dispatchedHandlerNotRun = {
+                reason: "the handler's access list is loading",
+              };
+            }
+          },
+          { followUpSpace: crossSpace ? secondSpace : space },
+        );
+
+        expect(result.originAttempts).toBe(2);
+        expect(result.delivered).toEqual([2]);
+        expect(result.warnings).toEqual([]);
+      });
+
+      it(`warns when a withdrawn one-shot loses its follow-up to ${destination}`, async () => {
+        const result = await runOrigin(
+          `lineage withdrawn one shot ${destination}`,
+          (attempt, sendFollowUp, handlerTx) => {
+            sendFollowUp(attempt);
+            handlerTx.dispatchedHandlerNotRun = {
+              reason: "the handler's access list is loading",
+            };
+          },
+          { retries: false, followUpSpace: crossSpace ? secondSpace : space },
+        );
+
+        expect(result.originAttempts).toBe(1);
+        expect(result.delivered).toEqual([]);
+        expect(result.dropWarnings).toHaveLength(1);
+        expect(result.dropWarnings[0]).toContain(
+          "speculative origin failed before",
+        );
+      });
     }
   });
 

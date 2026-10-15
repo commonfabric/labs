@@ -34,6 +34,7 @@ import {
   type UsedTime,
 } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
+import { profileGesture, testRoomProfile } from "./room-test-fixture.ts";
 import {
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
@@ -114,7 +115,8 @@ const ALL = ["Root", "Other", "First reply", "Second reply"];
 
 export default pattern(() => {
   const messages = Writable.of<MessagesValue>([] as MessagesValue);
-  const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
+  const ownProfile = testRoomProfile({});
+  const aliceProfile = ownProfile.profile;
   const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
   const records = {
     about: { kind: "group" as const },
@@ -134,6 +136,7 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { action: ownProfile.initialize, trustedUi: profileGesture },
       {
         action: alice.composerSend,
         event: typed("Root"),
@@ -217,7 +220,7 @@ export default pattern(() => {
           rowDisplays(alice[UI], THREAD, ALL) ===
             "missing missing missing missing" &&
           controlDisplay(alice[UI], "Root", "Edit") === "inline-flex" &&
-          controlDisplay(alice[UI], "Other", "Edit") === "none" &&
+          controlDisplay(alice[UI], "Other", "Edit") === "inline-flex" &&
           controlDisplay(alice[UI], "Other", "Remove entirely") ===
             "inline-flex"
         ),

@@ -99,13 +99,12 @@ the manager nor its private catalog.
 Every handler in the table but `commitSetTitle` first checks its event's sender
 and `requestId` against a keyed collection of the requests the room has acted
 on, and does nothing for one it finds. It records the request there in the same
-transaction as its effect, and the collection drops a request once it was
-recorded longer ago than the greater of `proposedTimeMaxAgeNsec` plus
-`proposedTimeMaxLeadNsec`, and `recentActivityWindowNsec`. The collection keeps
-a request even after its message is obliterated: it says only that the sender
-made a request, not what, and without it a late redelivery of the original send
-would send the message again. The two bounds of its window for proposed times
-are constants of the pattern, documented beside it.
+transaction as its effect. The collection retains each request for the room's
+lifetime, including after its message is obliterated: it says only that the
+sender made a request, not what. The runtime supplies no finite maximum
+redelivery delay, so expiring a request could admit a repeated edit or reaction.
+The two bounds of its window for proposed times are constants of the pattern,
+documented beside it.
 
 `commitEdit` and `commitDelete` are admitted only for the message's own sender.
 `commitEdit` moves the current version into `earlierVersions` before recording
@@ -146,9 +145,8 @@ one message has a single address in every session, which is how the room meets
 [`ChatReaction`](ChatReaction.md#uniqueness)'s uniqueness rule without reading
 the list. The reactions are a separately authorized part of the message:
 `commitSend` and `commitEdit` can't write them, and the reaction handlers can
-write nothing else (see [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether
-the runtime's write policies can split one document this way is a prerequisite
-to check.
+write nothing else (see [`ChatMessage`](ChatMessage.md#who-wrote-what)). The
+records use separate documents so each writer policy has its own boundary.
 
 `about.record` is stored as `AuthoredByCurrentUser`, written once by the handler
 that creates the room, so it is labeled with its creator, and `about` links it.
@@ -219,21 +217,16 @@ source of truth for what the room allows.
   design provides across a `Cell` boundary (see [scoped cell
   instances](../scoped-cell-instances.md)). `openWindow`'s handler has to write
   the instance belonging to the session that sent the event, including when the
-  handler runs somewhere other than that session's client. Whether the runtime
-  does that today is still to check.
+  handler runs somewhere other than that session's client. The scoped handler
+  context selects that instance; multi-session tests exercise its isolation.
 - **A write policy split within one document.** A message's reactions are
   written only by the reaction handlers (and obliteration), and the rest of the
   message only by the message handlers (see
-  [`ChatMessage`](ChatMessage.md#who-wrote-what)). Whether one document's write
-  policies can be split between writers this way is still to check. If not,
-  reactions move to a record of their own, keyed by message.
-- **Redelivery ends.** Two things can make an event arrive, or run, more than
-  once. A client runtime re-submits an event when it can't tell whether its
-  append committed, and the memory ignores a re-submission by its event id, but
-  only while the client's append queue remembers the event, which lasts as long
-  as the client's process. And a served handler runs an event again until its
-  run is recorded as complete. The room's request memory covers both only as
-  long as it lasts (see [writers](#writers)). So the room relies on every event
-  being run to completion, or dropped, within the memory, including one queued
-  while its client was offline and appended much later. Whether the runtime
-  guarantees this is still to check.
+  [`ChatMessage`](ChatMessage.md#who-wrote-what)). Reactions live in separate
+  authored documents and a separately authorized list linked from the message,
+  so each writer policy has its own document boundary.
+- **A finite redelivery bound.** A client can append an event queued while it
+  was offline, and a served handler can run an incomplete event again. Neither
+  path establishes a maximum delay. The room retains request identities and
+  reserved times for its lifetime; a finite retention policy needs a runtime
+  guarantee covering both paths.

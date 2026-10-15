@@ -1,0 +1,1 @@
+{"date": "2026-09-29", "from": {"k": "unit", "s": "cli", "n": "cfc-denials > `cf test --cfc-denials` > a denial the test does not allow for > prints the setup denial's reason with the flag"}, "to": {"k": "unit", "s": "cli", "n": "cfc-denials > `cf test --cfc-denials` > a denial the test does not allow for > prints the unapproved writer's denial reason with the flag"}}

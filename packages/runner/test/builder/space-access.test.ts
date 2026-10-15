@@ -538,6 +538,91 @@ describe("spaceAccess()", () => {
   });
 
   describe("in a served handler", () => {
+    for (const namedPrincipal of [false, true]) {
+      const builtin = namedPrincipal ? "spaceAccessOf" : "spaceAccess";
+
+      /** Reads a foreign target's membership in the requested execution frame. */
+      const readLevel = (
+        runtime: Runtime,
+        tx: IExtendedStorageTransaction,
+        target: Cell<unknown>,
+        kind: "handler" | "lift" = "handler",
+      ) => {
+        const frame = pushFrame({ runtime, tx, space, frameKind: kind });
+        try {
+          return namedPrincipal
+            ? spaceAccessOf(target, alice.did())
+            : spaceAccess(target);
+        } finally {
+          popFrame(frame);
+        }
+      };
+
+      /** Loads the foreign target without reading its space's access list. */
+      const foreignTarget = async (
+        runtime: Runtime,
+        seed = true,
+      ): Promise<Cell<unknown>> => {
+        const foreignSpace = bob.did() as MemorySpace;
+        const id = "of:space-access-foreign-target" as URI;
+        if (seed) {
+          await (await writerFor(bob))(id, { title: "Foreign room" });
+        }
+        const target = runtime.getCellFromLink({
+          space: foreignSpace,
+          id,
+          path: [],
+        });
+        await target.sync();
+        return target;
+      };
+
+      it(`withdraws ${builtin}'s served handler until its foreign access list arrives`, async () => {
+        await (await aclWriter(bob))({
+          [alice.did()]: "OWNER",
+          [carol.did()]: "WRITE",
+        });
+        const runtime = servingRuntime();
+        const target = await foreignTarget(runtime);
+        const cold = handlerTx(runtime, bob, carol);
+        expect(readLevel(runtime, cold, target)).toBeUndefined();
+        expect(cold.dispatchedHandlerNotRun?.reason).toContain(
+          `of:${bob.did()}`,
+        );
+        cold.abort();
+
+        await syncAcl(runtime, bob.did() as MemorySpace);
+        const warm = handlerTx(runtime, bob, carol);
+        expect(readLevel(runtime, warm, target))
+          .toBe(namedPrincipal ? "OWNER" : "WRITE");
+        expect(warm.dispatchedHandlerNotRun).toBeUndefined();
+        warm.abort();
+      });
+
+      it(`leaves ${builtin}'s served handler runnable when its access list is confirmed absent`, async () => {
+        const runtime = servingRuntime();
+        const target = await foreignTarget(runtime, false);
+        await syncAcl(runtime, bob.did() as MemorySpace);
+        const tx = handlerTx(runtime, bob, carol);
+        expect(readLevel(runtime, tx, target)).toBeUndefined();
+        expect(tx.dispatchedHandlerNotRun).toBeUndefined();
+        tx.abort();
+      });
+
+      it(`leaves ${builtin}'s reactive computation runnable while its foreign access list loads`, async () => {
+        await (await aclWriter(bob))({
+          [alice.did()]: "OWNER",
+          [carol.did()]: "WRITE",
+        });
+        const runtime = servingRuntime();
+        const target = await foreignTarget(runtime);
+        const tx = servedTx(runtime, carol);
+        expect(readLevel(runtime, tx, target, "lift")).toBeUndefined();
+        expect(tx.dispatchedHandlerNotRun).toBeUndefined();
+        tx.abort();
+      });
+    }
+
     it("returns the event's actor's level, not the instance owner's", async () => {
       const setAcl = await aclWriter();
       await setAcl({

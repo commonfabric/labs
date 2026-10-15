@@ -108,15 +108,10 @@ export default pattern(() => {
   const aliceProfile = Writable.of<TestProfile | undefined>({
     name: "Alice",
   });
-  const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
   const records = freshRecords();
   const about = { kind: "group" as const, title: "Team" };
   const alice = FabriChatRoomCore(
     { myProfile: aliceProfile, about, ...records } as RoomArg,
-  );
-  // The same room, to a second viewer under another profile.
-  const bob = FabriChatRoomCore(
-    { myProfile: bobProfile, about, ...records } as RoomArg,
   );
   // The same room, to a viewer whose profile hasn't resolved.
   const unresolved = FabriChatRoomCore({
@@ -132,13 +127,6 @@ export default pattern(() => {
     alice.sendMessage.send({
       requestId: "s-old",
       version: { body: "Late", sentAt: epochNsec(1n) },
-    })
-  );
-  const action_bob_edits_alices = action(() =>
-    bob.editMessage.send({
-      requestId: "e-bob",
-      message: messageOf(records.messages.key(0)),
-      target: { value: "Bob was here" },
     })
   );
   const action_edit_foreign = action(() =>
@@ -190,6 +178,19 @@ export default pattern(() => {
           shownRefusal(alice[UI]) === "A message needs some text."
         ),
       },
+      // A refused request remains terminal when redelivered with valid text.
+      {
+        action: alice.sendMessage,
+        event: typed("A replacement payload", "s-blank"),
+        trustedUi: sendGesture,
+      },
+      {
+        assertion: assert(() =>
+          outcomeOf(alice.messageRequests, "s-blank") ===
+            "refused/invalid-body" &&
+          records.messages.get().length === 1
+        ),
+      },
       // An act that takes effect clears what the composer shows.
       {
         action: alice.sendMessage,
@@ -204,13 +205,11 @@ export default pattern(() => {
           outcomeOf(alice.messageRequests, "s-old") === "refused/out-of-window"
         ),
       },
-      // Editing someone else's message isn't allowed, and editing a message
-      // not in the room names no target.
-      { action: action_bob_edits_alices },
+      // Editing a message outside the room names no target. Distinct-actor
+      // refusals are exercised in `actor-ownership.test.tsx`.
       { action: action_edit_foreign },
       {
         assertion: assert(() =>
-          outcomeOf(bob.messageRequests, "e-bob") === "refused/not-allowed" &&
           outcomeOf(alice.messageRequests, "e-foreign") ===
             "refused/unknown-target" &&
           (records.messages.get() as MessageRecord[])[0]?.body === "Hello"
