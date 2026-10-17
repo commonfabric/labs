@@ -15,8 +15,10 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import { Runtime } from "../src/runtime.ts";
 import {
+  createDetachedChildCellTransaction,
   createNonReactiveTransaction,
   type ExtendedStorageTransaction,
+  getTransactionForChildCells,
   TransactionWrapper,
 } from "../src/storage/extended-storage-transaction.ts";
 import type {
@@ -303,6 +305,24 @@ describe("extended-storage-transaction", () => {
         },
       } as unknown as IExtendedStorageTransaction);
       expect([...compatible.getWriteDetailsForTarget(target)]).toEqual(details);
+    });
+
+    it("hands child cells the transaction it was given, or none", () => {
+      const tx = runtime.edit();
+      try {
+        expect(getTransactionForChildCells(tx)).toBe(tx);
+        expect(
+          getTransactionForChildCells(createNonReactiveTransaction(tx)),
+        ).toBe(tx);
+        expect(
+          getTransactionForChildCells(createNonReactiveTransaction(tx, "none")),
+        ).toBeUndefined();
+        expect(
+          getTransactionForChildCells(createDetachedChildCellTransaction(tx)),
+        ).toBeUndefined();
+      } finally {
+        tx.abort();
+      }
     });
 
     it("answers for the instant as the transaction it wraps does", async () => {

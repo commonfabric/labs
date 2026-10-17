@@ -1823,9 +1823,15 @@ export class CellImpl<T extends FabricValue>
 
     // Wrap the transaction to make all reads non-reactive. Child cells created
     // during validateAndTransform will use the original transaction (via
-    // getTransactionForChildCells).
+    // getTransactionForChildCells), or none when there is no open one: the
+    // read-only transaction opened in its place is dropped with the sample,
+    // and a child cell bound to it would keep reading the instant it checked
+    // each document out at.
     const readTx = this.#runtime.readTx(this.#tx);
-    const nonReactiveTx = createNonReactiveTransaction(readTx);
+    const nonReactiveTx = createNonReactiveTransaction(
+      readTx,
+      readTx === this.#tx ? readTx : "none",
+    );
 
     return validateAndTransform(this.#runtime, nonReactiveTx, this.#viewRef);
   }
