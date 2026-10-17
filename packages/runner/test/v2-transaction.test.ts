@@ -552,6 +552,41 @@ describe("v2-transaction", () => {
   });
 
   describe("write()", () => {
+    it("hashes no more containers to elide a larger equal copy of the stored value than a smaller one", async () => {
+      // The stored value and the copy share nothing, so a comparison that
+      // hashed the copy whole would hash a container per record of the map.
+
+      const containersHashedEliding = async (length: number) => {
+        const storage = StorageManager.emulate({ as: signer });
+        try {
+          const address = {
+            space,
+            id: `of:write-equal-copy-${length}` as URI,
+            type,
+          };
+          const seed = storage.edit();
+          expect(
+            seed.write({ ...address, path: [] }, { value: keyedMap(length) })
+              .ok,
+          ).toBeTruthy();
+          expect((await seed.commit().settled).ok).toBeTruthy();
+          const tx = storage.edit();
+          const before = getContainersHashedForTestingOnly();
+          expect(tx.write({ ...address, path: ["value"] }, keyedMap(length)).ok)
+            .toBeTruthy();
+          const hashed = getContainersHashedForTestingOnly() - before;
+          expect(tx.getReactivityLog?.().writes).toEqual([]);
+          return hashed;
+        } finally {
+          await storage.close();
+        }
+      };
+
+      expect(await containersHashedEliding(32)).toBe(
+        await containersHashedEliding(4),
+      );
+    });
+
     it("returns an `InvalidArrayLengthError` for an array `length` of `2 ** 32`, and leaves the array as it was", async () => {
       const storage = StorageManager.emulate({ as: signer });
       try {

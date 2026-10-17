@@ -5,7 +5,7 @@ import {
   FabricPrimitive,
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
-  valueEqual,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { deepFrozenCloneAndInternSchema } from "@commonfabric/data-model-schema";
 import { getServerExecutionConfig } from "@commonfabric/memory/v2";
@@ -558,11 +558,11 @@ function sendValueToBindingInner<T>(
         // cause-stable result cell, so the link is usually unchanged. The read
         // is an internal write-elision decision: kept out of scheduling
         // (`ignoreReadForScheduling`) and CFC taint (`internalVerifierRead`),
-        // and compared with the `Fabric`-aware `valueEqual`.
+        // and compared with the `Fabric`-aware `valueEqualByWalk`.
         const current = tx.readValueOrThrow(bindingLink, {
           meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
         });
-        if (!valueEqual(current, newValue)) {
+        if (!valueEqualByWalk(current, newValue)) {
           tx.writeValueOrThrow(bindingLink, newValue);
         } else {
           tx.retainPendingWriteElision?.(toMemorySpaceAddress(bindingLink));

@@ -3465,6 +3465,13 @@ export class StorageManager implements IStorageManager {
    * `identity` names that principal's instance of each scoped target
    * (server-execution v2 stage A), as `syncCell` does for a stored
    * document.
+   *
+   * A schema that is not deep-frozen is interned, and so frozen in place,
+   * before the walk reads it. The memo's key holds the schema's hash, and
+   * the schema of each child is derived from its parent's, so a mutable
+   * schema costs a hash at every record the walk descends, where an interned
+   * one is hashed once and its derivations come from the derivation cache,
+   * interned themselves.
    */
   #collectLinkedCellSyncs(
     value: unknown,
@@ -3480,6 +3487,9 @@ export class StorageManager implements IStorageManager {
     }
     if (typeof value !== "object") {
       return;
+    }
+    if (isObjectOrArray(schema) && !isDeepFrozen(schema)) {
+      schema = internSchema(schema);
     }
     const context = JSON.stringify([
       base.id,

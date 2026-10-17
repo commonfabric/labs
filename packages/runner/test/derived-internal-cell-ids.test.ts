@@ -160,14 +160,15 @@ describe("derived-internal-cell-ids", () => {
       expect(mints()).toBe(2);
     });
 
-    it("hashes each time for a partial cause that is not deep-frozen, and returns the id of its content at the time", () => {
-      // An object that can change names whatever it holds when asked, so no
-      // id is kept for it.
+    it("hashes an id once for a partial cause that is not deep-frozen until its content changes", () => {
+      // An object that can change names whatever it holds when asked, so the
+      // id kept for it is keyed by that content and not by the object.
 
       const { ids, mints } = counted();
       const partialCause = { $generated: 1, name: ["a"] };
       const before = ids.idFor(first, partialCause);
       const again = ids.idFor(first, partialCause);
+      const copy = ids.idFor(first, { $generated: 1, name: ["a"] });
       partialCause.$generated = 2;
       const after = ids.idFor(first, partialCause);
 
@@ -175,18 +176,86 @@ describe("derived-internal-cell-ids", () => {
         derived(first, { $generated: 1, name: ["a"] }),
       );
       expect(again.toString()).toBe(before.toString());
+      expect(copy.toString()).toBe(before.toString());
       expect(after.toString()).toBe(
         derived(first, { $generated: 2, name: ["a"] }),
       );
-      expect(mints()).toBe(3);
+      expect(mints()).toBe(2);
     });
 
-    it("hashes each time for a frozen partial cause that holds an object that is not", () => {
+    it("hashes an id once for a frozen partial cause that holds an object that is not", () => {
       const { ids, mints } = counted();
       const partialCause = Object.freeze({ $generated: 1, name: ["a"] });
       ids.idFor(first, partialCause);
       ids.idFor(first, partialCause);
 
+      expect(mints()).toBe(1);
+    });
+
+    it("hashes an id once for two partial causes equal but for the order of their keys", () => {
+      const { ids, mints } = counted();
+      const one = ids.idFor(first, { $generated: 1, name: "a" });
+      const other = ids.idFor(first, { name: "a", $generated: 1 });
+
+      expect(other.toString()).toBe(one.toString());
+      expect(mints()).toBe(1);
+    });
+
+    it("returns ids that differ for `{ n: 0 }` and `{ n: -0 }`, each as derived", () => {
+      const { ids } = counted();
+      const zero = ids.idFor(first, { n: 0 }).toString();
+      const negativeZero = ids.idFor(first, { n: -0 }).toString();
+
+      expect(zero).toBe(derived(first, { n: 0 }));
+      expect(negativeZero).toBe(derived(first, { n: -0 }));
+      expect(zero).not.toBe(negativeZero);
+    });
+
+    it("returns ids that differ for an array holding a hole, one holding `undefined` and one holding `null`, each as derived", () => {
+      const { ids } = counted();
+      const hole = [1, , 3] as JSONValue;
+      const holdingUndefined = [1, undefined, 3] as unknown as JSONValue;
+      const holdingNull = [1, null, 3];
+      const found = [hole, holdingUndefined, holdingNull].map((partialCause) =>
+        ids.idFor(first, partialCause).toString()
+      );
+
+      expect(found).toEqual(
+        [hole, holdingUndefined, holdingNull].map((partialCause) =>
+          derived(first, partialCause)
+        ),
+      );
+      expect(new Set(found).size).toBe(3);
+    });
+
+    it("returns ids that differ for a partial cause holding one object twice and one holding two equal objects, each as derived", () => {
+      // `createRef()` derives an object it reaches a second time as `null`,
+      // so where a cause holds the same object twice its content alone does
+      // not say what the id was derived from.
+
+      const { ids } = counted();
+      const shared = { name: "a" };
+      const twice = { x: shared, y: shared };
+      const equal = { x: { name: "a" }, y: { name: "a" } };
+      const twiceId = ids.idFor(first, twice).toString();
+      const equalId = ids.idFor(first, equal).toString();
+
+      expect(twiceId).toBe(derived(first, twice));
+      expect(equalId).toBe(derived(first, equal));
+      expect(twiceId).not.toBe(equalId);
+    });
+
+    it("hashes each time for a partial cause that holds a function", () => {
+      // A cause outside the JSON values is derived as `createRef` derives it,
+      // and no id is kept for it.
+
+      const { ids, mints } = counted();
+      const partialCause = { f: () => 1 } as unknown as JSONValue;
+      const one = ids.idFor(first, partialCause);
+      const other = ids.idFor(first, partialCause);
+
+      expect(one.toString()).toBe(derived(first, partialCause));
+      expect(other.toString()).toBe(one.toString());
       expect(mints()).toBe(2);
     });
 

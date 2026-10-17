@@ -2284,7 +2284,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (
       isDelete
         ? !planned.present
-        : (planned.present && valueEqual(planned.previousValue, value) &&
+        : (planned.present && valueEqualByWalk(planned.previousValue, value) &&
           !this.#authoritativeWrites &&
           !this.#mustDeliverSchemaDoc(space, address.id))
     ) {
@@ -2431,7 +2431,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       // both); delete no-ops still skip.
       if (
         isDelete ? !planned.present : (planned.present &&
-          valueEqual(planned.previousValue, value) &&
+          valueEqualByWalk(planned.previousValue, value) &&
           !this.#authoritativeWrites &&
           !this.#mustDeliverSchemaDoc(space, address.id))
       ) {

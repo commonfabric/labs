@@ -14,6 +14,7 @@ import {
   containsExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
 import { hashStringOf } from "@commonfabric/data-model";
+import { LRUCache } from "@commonfabric/utils/cache";
 import type { MIME } from "@commonfabric/memory/interface";
 import type {
   CellScope,
@@ -266,29 +267,86 @@ export const compactWatchEntries = (
   return compacted;
 };
 
-const selectorIdentity = (selector: SchemaPathSelector): string =>
-  hashStringOf({
-    path: selector.path,
-    schemaHash: selector.schema === undefined
-      ? ""
-      : hashSchema(selector.schema),
-  });
+/**
+ * How many watch ids `watchIds` keeps, and how many selector identities
+ * `selectorIdentities` keeps. A load refreshes its watch set many times over
+ * with entries equal by value, so each is sized for the entries of the loads
+ * under way rather than for every entry a session ever watched.
+ */
+const WATCH_ID_LIMIT = 8_192;
+const SELECTOR_IDENTITY_LIMIT = 4_096;
 
+/**
+ * The identities `selectorIdentity()` has hashed most recently, by the
+ * schema hash and path they were hashed from. The key is `JSON.stringify()`
+ * of those two, which tells strings apart exactly, so two selectors share an
+ * entry only where they hash alike.
+ */
+const selectorIdentities = new LRUCache<string, string>({
+  capacity: SELECTOR_IDENTITY_LIMIT,
+});
+
+/**
+ * The ids `watchIdForEntry()` has hashed most recently, by the parts it
+ * hashes them from. As with `selectorIdentities`, the key is
+ * `JSON.stringify()` of those parts, every one a string or absent.
+ */
+const watchIds = new LRUCache<string, string>({ capacity: WATCH_ID_LIMIT });
+
+/**
+ * The identity of `selector`: the hash of its path and of its schema's hash.
+ * A schema is hashed once per interned instance, so the cost here is the
+ * hash of the pair, paid once per distinct pair.
+ */
+const selectorIdentity = (selector: SchemaPathSelector): string => {
+  const schemaHash = selector.schema === undefined
+    ? ""
+    : hashSchema(selector.schema);
+  const key = JSON.stringify([schemaHash, selector.path]);
+  let identity = selectorIdentities.get(key);
+  if (identity === undefined) {
+    identity = hashStringOf({ path: selector.path, schemaHash });
+    selectorIdentities.put(key, identity);
+  }
+  return identity;
+};
+
+/**
+ * The id of the watch `address` and `selector` name on `branch`: a hash of
+ * the two and the branch, paid once per distinct entry.
+ */
 export const watchIdForEntry = (
   address: ScopedWatchAddress,
   selector: SchemaPathSelector,
   branch = "",
-): string =>
-  `replica:${
-    hashStringOf({
-      branch,
-      id: address.id,
-      scope: address.scope ?? "space",
-      type: DOCUMENT_MIME,
-      selector: selectorIdentity(selector),
-      // The explicit instance (stage A) is watch identity: two instances
-      // of one doc are two watches, never merged by id. Absent from the
-      // hashed object when unnamed, so the OFF-arm id is byte-identical.
-      ...(address.scopeKey !== undefined ? { scopeKey: address.scopeKey } : {}),
-    })
-  }`;
+): string => {
+  const scope = address.scope ?? "space";
+  const selectorId = selectorIdentity(selector);
+  const key = JSON.stringify([
+    branch,
+    address.id,
+    scope,
+    selectorId,
+    address.scopeKey,
+  ]);
+  let id = watchIds.get(key);
+  if (id === undefined) {
+    id = `replica:${
+      hashStringOf({
+        branch,
+        id: address.id,
+        scope,
+        type: DOCUMENT_MIME,
+        selector: selectorId,
+        // The explicit instance (stage A) is watch identity: two instances
+        // of one doc are two watches, never merged by id. Absent from the
+        // hashed object when unnamed, so the OFF-arm id is byte-identical.
+        ...(address.scopeKey !== undefined
+          ? { scopeKey: address.scopeKey }
+          : {}),
+      })
+    }`;
+    watchIds.put(key, id);
+  }
+  return id;
+};
