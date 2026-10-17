@@ -696,6 +696,12 @@ pins the export, the scoping, the verify-durable consistency, the
 content-addressed exemption, and the durable-read mark on both a
 direct transaction and a piece start.
 
+The echo a blind write lands over is the speculation of an event whose
+authoritative consequence commits later, and that consequence does not
+land over the write in turn: serving-loop.md §3d supersedes every
+consequence write that a later write of the event's firing session
+overwrote.
+
 ### The durable-read mark, and the piece start that needs it
 
 An authored transaction whose writes must reach the wire can read the

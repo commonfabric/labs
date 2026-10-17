@@ -1926,6 +1926,234 @@ describe("stage D seal-into-wave", () => {
     expect(stored?.entries?.[1].consequenced).toBeUndefined();
   });
 
+  describe("an event consequence a later write overwrites", () => {
+    // The session that fired an event writes over the event's speculative
+    // echo — a user typing into the edit form a click just opened — and the
+    // event's authoritative consequence then lands after that write, whether
+    // the handler ran late or the write arrived mid-wave. The handler here
+    // seeds `draft`, which the user overwrites, and sets `editing`, which
+    // nobody touches.
+
+    type Draft = { name: string; bio: string };
+
+    const firing = { user: "did:key:alice", session: "sess-fire" };
+
+    const seedDocs = async () => {
+      const draft = runtime.getCell<Draft>(space, "wave-draft", undefined);
+      const editing = runtime.getCell<boolean>(
+        space,
+        "wave-editing",
+        undefined,
+      );
+      const seedTx = runtime.edit();
+      draft.withTx(seedTx).set({ name: "", bio: "" });
+      editing.withTx(seedTx).set(false);
+      expect((await seedTx.commit().settled).error).toBeUndefined();
+      // The event's durable entry stands at this seq: every write below
+      // comes after the event was fired.
+      return { draft, editing, eventSeq: Engine.serverSeq(engine) };
+    };
+
+    const sealConsequence = async (
+      wave: WaveAccumulator,
+      docs: Awaited<ReturnType<typeof seedDocs>>,
+      writeDraft: (tx: IExtendedStorageTransaction) => void = (tx) =>
+        docs.draft.withTx(tx).set({ name: "Ada", bio: "Countess" }),
+    ) => {
+      runtime.installSealDestination(wave);
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "start-editing",
+        kind: "event-handler",
+        eventId: "e-edit",
+        acting: firing,
+        streamEntry: {
+          sidecarId: "stream-edit",
+          index: 0,
+          seq: docs.eventSeq,
+        },
+      });
+      writeDraft(tx);
+      docs.editing.withTx(tx).set(true);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      runtime.clearSealDestination();
+    };
+
+    const overwriteDraft = (
+      docs: Awaited<ReturnType<typeof seedDocs>>,
+      session: string,
+      path: string,
+      value: string | Draft,
+    ) => {
+      Engine.applyCommit(engine, {
+        sessionId: session,
+        principal: firing.user,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "patch",
+            id: docs.draft.getAsNormalizedFullLink().id,
+            patches: [{ op: "replace", path, value }],
+          }],
+        },
+      });
+    };
+
+    const stored = (cell: { getAsNormalizedFullLink(): { id: string } }) =>
+      Engine.readState(engine, { id: cell.getAsNormalizedFullLink().id })
+        ?.document;
+
+    const typed: Draft = { name: "Grace", bio: "Admiral" };
+
+    it("drops the consequence's write to a doc the firing session overwrote before the wave opened, and commits the rest of it", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+      overwriteDraft(docs, firing.session, "/value", typed);
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({ value: typed });
+      expect(stored(docs.editing)).toEqual({ value: true });
+      expect(outcome.dispositions[0]).toEqual({
+        kind: "partially-dropped",
+        droppedOps: 1,
+      });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+      expect(outcome.requeuedEventIds).toEqual([]);
+    });
+
+    it("drops the consequence's write to a doc the firing session overwrote mid-wave, rather than requeueing the event", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      overwriteDraft(docs, firing.session, "/value", typed);
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({ value: typed });
+      expect(stored(docs.editing)).toEqual({ value: true });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+      expect(outcome.requeuedEventIds).toEqual([]);
+    });
+
+    it("commits the consequence over a doc another session overwrote after the event", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+      overwriteDraft(docs, "sess-other", "/value", typed);
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({
+        value: { name: "Ada", bio: "Countess" },
+      });
+      expect(outcome.dispositions[0]).toEqual({ kind: "committed" });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+    });
+
+    it("drops only the patches of the consequence the firing session overwrote, and commits its other patches to the doc", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+      overwriteDraft(docs, firing.session, "/value/name", "Grace");
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({
+        value: { name: "Grace", bio: "Countess" },
+      });
+      expect(stored(docs.editing)).toEqual({ value: true });
+      expect(outcome.dispositions[0]).toEqual({
+        kind: "partially-dropped",
+        droppedOps: 1,
+      });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+    });
+
+    it("rebases the patches the firing session did not overwrite when its write lands mid-wave, rather than requeueing the event", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      overwriteDraft(docs, firing.session, "/value/name", "Grace");
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({
+        value: { name: "Grace", bio: "Countess" },
+      });
+      expect(stored(docs.editing)).toEqual({ value: true });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+      expect(outcome.requeuedEventIds).toEqual([]);
+    });
+
+    it("drops the consequence's writes to both paths of a value the firing session moved", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+      Engine.applyCommit(engine, {
+        sessionId: firing.session,
+        principal: firing.user,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "patch",
+            id: docs.draft.getAsNormalizedFullLink().id,
+            patches: [{ op: "move", from: "/value/bio", path: "/value/name" }],
+          }],
+        },
+      });
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({ value: { name: "" } });
+      expect(stored(docs.editing)).toEqual({ value: true });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+    });
+
+    it("commits a consequence write to a path above the one the firing session overwrote", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+      overwriteDraft(docs, firing.session, "/value/name", "Grace");
+
+      const wave = newWave({ lease });
+      // A raw write of the whole value, which commits as one write at
+      // `/value` rather than as a patch per field.
+      await sealConsequence(wave, docs, (tx) =>
+        tx.writeOrThrow(
+          {
+            space,
+            id: docs.draft.getAsNormalizedFullLink().id,
+            type: "application/json",
+            path: ["value"],
+          },
+          { name: "Ada", bio: "Countess" },
+        ));
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({
+        value: { name: "Ada", bio: "Countess" },
+      });
+      expect(outcome.dispositions[0]).toEqual({ kind: "committed" });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+    });
+  });
+
   it("aborts the wave commit when the lease tenure lapsed (work sealed under a lapsed tenure never commits)", async () => {
     let now = 1_000_000;
     const cycle = new ExecutionLeaseCycle({

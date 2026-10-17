@@ -186,7 +186,10 @@ handler fires
   unless the event carries an acting user.
 - Ordering: per stream, events process in commit-seq order. Across
   streams in one space, wave order (arrival). No global ordering claim
-  beyond the space's commit sequence — same as today.
+  beyond the space's commit sequence — same as today. A consequence
+  takes effect at its event's place in the firing session's order: a
+  write that session committed after the event supersedes the
+  consequence writes it overwrote (serving-loop.md §3d).
 - **Terminal positions.** An error consequence, a T3 dropped notice,
   and a `needs-attention` notice each complete processing at the event's
   arrival position even when the handler produces no domain writes. A

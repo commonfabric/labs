@@ -1285,6 +1285,44 @@ classes:
   a seq the replica has not caught up to yet is the sustained-traffic
   livelock this section forbids.
 
+**A consequence write the firing session overwrote is SUPERSEDED.** An
+event's consequence takes effect at the event's place in the order of
+the session that fired it, wherever its commit lands. That session
+committed the event and rendered the handler's speculative echo
+(speculation.md), so whatever it wrote afterward it wrote over that
+echo. Before the CAS above, each write of an `event-handler` contribution
+delivering a durable entry is checked against the authored commits of
+the entry's firing session — the `firedAt` user and session the run acts
+as — after the entry's seq. A patch at or below a path one of those
+commits overwrote is DROPPED from the consequence, and so is a whole-doc
+`set` or `delete` that one of them rewrote whole. A commit overwrites a
+path with a `set` or `delete` (the root) or with a `replace`, `add` or
+`remove` patch; a write that merges into existing content (`append`,
+`splice`, `increment`, and the like) overwrites nothing. The rule holds
+wherever the session's write fell: before the wave's basis, which is
+where a requeued or late-drained handler finds it, or mid-wave, where the
+overlap would otherwise requeue the event and the requeued run would
+write over it again. The event still completes: its other writes, its
+consequence mark and its watermark advance ride the wave commit, and
+`consequenceOf` names it. The patches it keeps on a doc go through this
+class's CAS without the dropped ones. The store ends where applying the
+dropped writes at the event's position and the session's writes on top
+would have left it, and nothing can have read a dropped value in
+between, since it would have committed after the write that overwrites
+it. Whatever in the wave read a doc the consequence lost writes on folds
+into the withdrawal closure, as a reader of a superseded derivation
+write does.
+
+Two cases keep commit order. Both are OPEN, awaiting @seefeldb's
+ruling:
+
+- a later write of ANOTHER session, which is concurrent with the event
+  rather than after it in any one session's order;
+- a consequence write to a path ABOVE the one the firing session
+  overwrote — a whole-object replace against the session's write to one
+  field — where superseding would take a value merge. It keeps the
+  rebase-or-requeue arm above.
+
 An event-delivery processing checkpoint is an internal
 `bookkeeping`-stamped write. A terminal error, drop, or
 `needs-attention` notice is an `event-handler`-stamped

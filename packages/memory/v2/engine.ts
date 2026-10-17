@@ -4110,6 +4110,62 @@ ORDER BY seq, op_index
 };
 
 /**
+ * The value paths that one session's authored commits overwrote in one doc
+ * instance after `sinceSeq`, the session being `sessionId` opened by
+ * `principal`. This is the input to the wave commit step's supersession of an
+ * event consequence by a later write of the session that fired the event
+ * (serving-loop.md §3d). Only writes that replace what sits at their path
+ * count: a `set` or `delete` revision reports the root path, and a `patch`
+ * revision reports the paths of its `replace`, `add` and `remove` patches and
+ * both paths of a `move`. A patch that merges into existing content — an
+ * append, a splice, an increment — overwrites nothing and is left out.
+ */
+export const selectSessionOverwritePathsSince = (
+  engine: Engine,
+  options: {
+    branch?: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    sinceSeq: number;
+    principal: string;
+    sessionId: SessionId;
+  },
+): Array<readonly string[]> => {
+  const rows = engine.database.prepare(`
+SELECT r.op, r.data FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
+WHERE r.branch = :branch AND r.id = :id AND r.scope_key = :scope_key
+  AND r.seq > :since_seq
+  AND c.class = 'authored' AND c.session_id = :session_id
+ORDER BY r.seq, r.op_index
+`).all({
+      branch: options.branch ?? DEFAULT_BRANCH,
+      id: options.id,
+      scope_key: options.scopeKey,
+      since_seq: options.sinceSeq,
+      session_id: resolveCommitSessionKey(options.sessionId, options.principal),
+    }) as Array<{ op: string; data: string | null }>;
+  const paths: Array<readonly string[]> = [];
+  for (const row of rows) {
+    if (row.op === "patch" && row.data !== null) {
+      const patches = decodeTrustedMemoryBoundary(row.data) as PatchOp[];
+      for (const patch of patches) {
+        if (
+          patch.op === "replace" || patch.op === "add" || patch.op === "remove"
+        ) {
+          paths.push(parsePointer(patch.path));
+        } else if (patch.op === "move") {
+          paths.push(parsePointer(patch.from));
+          paths.push(parsePointer(patch.path));
+        }
+      }
+    } else if (row.op === "set" || row.op === "delete") {
+      paths.push([]);
+    }
+  }
+  return paths;
+};
+
+/**
  * Whether a commit after `sinceSeq` wrote this document instance that
  * `holder`'s own derived commits do not account for — serving-loop.md
  * §3d's INTRUSION on a document a serving tenure derives into. A client's
