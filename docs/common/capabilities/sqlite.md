@@ -81,6 +81,13 @@ turns a result into something typed. Without it the rows come back as
 `Record<string, unknown>`, and a `_cf_link` column comes back as a raw link
 string rather than a live cell.
 
+An INTEGER column within ±(2^53 − 1) arrives as a `number`, which covers a
+rowid, a count, and an epoch-millisecond timestamp. A value beyond that range
+arrives as a `bigint`, and no typed declaration reads one: under `number`,
+`bigint`, or their union the field reads as `undefined`. Select a column that
+holds such values (a 64-bit id, a nanosecond timestamp) as text,
+`CAST(col AS TEXT)`, and declare it `string`.
+
 The tables are declared on the database rather than on the pattern, so a
 pattern reading an input database does not restate them. What it needs to know
 is which tables and columns are there — the shape of the contract it is
