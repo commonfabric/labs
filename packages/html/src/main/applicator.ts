@@ -46,6 +46,67 @@ function isTextNode(node: unknown): node is Node {
 }
 
 /**
+ * Whether `element` is laid out as `display: contents` inside a slot: it, or an
+ * element of the unbroken run of `display: contents` parents above it, is
+ * assigned to a slot. Such an element is one WebKit draws out of order after a
+ * mid-list insert (see `DomApplicator#repairSlottedContentsLayout`).
+ */
+function isSlottedContents(element: Element, view: Window): boolean {
+  for (
+    let current: Element | null = element;
+    current && view.getComputedStyle(current).display === "contents";
+    current = current.parentElement
+  ) {
+    if (current.assignedSlot) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether `document`'s engine draws a child inserted before an existing sibling
+ * of a slotted `display: contents` element out of document order. Lays out a
+ * hidden two-row list of that shape, inserts a row before the first, and
+ * compares where the rows are drawn. `false` when the document cannot lay
+ * anything out.
+ */
+function misordersSlottedContentsInserts(document: Document): boolean {
+  const body = document.body;
+  if (!body || !document.defaultView) return false;
+  const host = document.createElement("div");
+  host.style.setProperty("position", "absolute");
+  host.style.setProperty("visibility", "hidden");
+  const column = document.createElement("div");
+  column.style.setProperty("display", "flex");
+  column.style.setProperty("flex-direction", "column");
+  column.append(document.createElement("slot"));
+  host.attachShadow({ mode: "open" }).append(column);
+  const list = document.createElement("span");
+  list.style.setProperty("display", "contents");
+  const row = () => {
+    const element = document.createElement("div");
+    element.style.setProperty("height", "1px");
+    return element;
+  };
+  const first = row();
+  list.append(first, row());
+  host.append(list);
+  body.append(host);
+  try {
+    void list.getBoundingClientRect();
+    list.insertBefore(row(), first);
+    const tops = [...list.children].map((child) =>
+      child.getBoundingClientRect().top
+    );
+    return tops.some((top, i) => i > 0 && top <= tops[i - 1]);
+  } finally {
+    host.remove();
+  }
+}
+
+/** `misordersSlottedContentsInserts`, worked out once per document. */
+const misordersByDocument = new WeakMap<Document, boolean>();
+
+/**
  * Returns the first object that holds `key` directly, searching `target` and
  * then each object on its prototype chain in turn. Returns `null` if no object
  * in the chain holds `key`.
@@ -93,6 +154,14 @@ export interface DomApplicatorOptions {
 
   /** Optional custom property setter */
   setProp?: SetPropHandler;
+
+  /**
+   * Whether to lay out again a slotted `display: contents` element that took a
+   * mid-list insert (see `DomApplicator#repairSlottedContentsLayout`).
+   * Defaults to whether the document's engine draws such an insert out of
+   * order, which is worked out once per document.
+   */
+  repairSlottedContentsLayout?: boolean;
 }
 
 /**
@@ -118,6 +187,16 @@ export class DomApplicator {
   readonly #setPropHandler: SetPropHandler;
   #pendingChildInserts: PendingChildInsert[] = [];
 
+  /**
+   * Parents that received a child somewhere other than at their end during
+   * the batch being applied; `#repairSlottedContentsLayout()` reads them once
+   * the batch is in.
+   */
+  readonly #midInsertParents = new Set<Element>();
+
+  /** `DomApplicatorOptions.repairSlottedContentsLayout` as passed. */
+  readonly #repairOption?: boolean;
+
   #rootNodeId: number | null = null;
 
   /**
@@ -134,6 +213,7 @@ export class DomApplicator {
     this.#runtimeClient = options.runtimeClient;
     this.#onError = options.onError;
     this.#setPropHandler = options.setProp ?? setPropDefault;
+    this.#repairOption = options.repairSlottedContentsLayout;
   }
 
   /**
@@ -153,7 +233,12 @@ export class DomApplicator {
         );
       }
     }
-    this.#replayPendingChildInserts();
+    try {
+      this.#replayPendingChildInserts();
+      this.#repairSlottedContentsLayout();
+    } finally {
+      this.#midInsertParents.clear();
+    }
 
     if (batch.rootId !== undefined) {
       this.#rootNodeId = batch.rootId;
@@ -584,10 +669,67 @@ export class DomApplicator {
 
     if (beforeNode) {
       parent.insertBefore(child, beforeNode);
+      if (isElementNode(parent)) this.#midInsertParents.add(parent);
     } else {
       parent.appendChild(child);
     }
     return true;
+  }
+
+  /**
+   * Lays out again each slotted `display: contents` element that took a child
+   * somewhere other than at its end during the batch, in an engine that draws
+   * such a child out of order.
+   *
+   * WebKit draws a child inserted before an existing sibling of a
+   * `display: contents` element in a slot after the boxes of its later
+   * siblings, while the document holds it where it was inserted, until that
+   * element's boxes are built anew. Hiding the element and reading style back
+   * builds them anew when it is shown again, all in this task: nothing is
+   * painted in between, nothing is disconnected, and focus, selection and
+   * scroll offsets inside it are kept. CSS animations inside it start over.
+   * Each element is hidden once per batch, with one style read for all.
+   *
+   * TODO: remove once WebKit draws the children of a slotted
+   * `display: contents` element in document order after an insert.
+   */
+  #repairSlottedContentsLayout(): void {
+    if (this.#midInsertParents.size === 0) return;
+    const view = this.#document.defaultView;
+    if (!view || !this.#repairsLayout()) return;
+    const repairs: HTMLElement[] = [];
+    for (const parent of this.#midInsertParents) {
+      if (isElementNode(parent) && isSlottedContents(parent, view)) {
+        repairs.push(parent);
+      }
+    }
+    if (repairs.length === 0) return;
+    const restores = repairs.map((element) => {
+      const hadStyle = element.hasAttribute("style");
+      const value = element.style.getPropertyValue("display");
+      const priority = element.style.getPropertyPriority("display");
+      element.style.setProperty("display", "none");
+      return () => {
+        if (value) element.style.setProperty("display", value, priority);
+        else element.style.removeProperty("display");
+        if (!hadStyle && element.getAttribute("style") === "") {
+          element.removeAttribute("style");
+        }
+      };
+    });
+    void view.getComputedStyle(repairs[0]).display;
+    for (const restore of restores) restore();
+  }
+
+  /** Whether `#repairSlottedContentsLayout()` acts in this document. */
+  #repairsLayout(): boolean {
+    if (this.#repairOption !== undefined) return this.#repairOption;
+    let misorders = misordersByDocument.get(this.#document);
+    if (misorders === undefined) {
+      misorders = misordersSlottedContentsInserts(this.#document);
+      misordersByDocument.set(this.#document, misorders);
+    }
+    return misorders;
   }
 
   #deferChildInsert(
