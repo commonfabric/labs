@@ -3354,16 +3354,23 @@ export interface ISpaceReplica extends ISpace {
    * server runs server execution or does not say whether it does, since its
    * executor commits waves outside the publication turn a push is complete
    * under. A document a watch mutation delivered may hold a later state than
-   * this sequence.
+   * this sequence. When `documents` is supplied, returns `undefined` if any
+   * mutable document has no delivered watch: an accepted write alone proves
+   * its stored version, not coverage of subsequent changes.
    */
-  completeThroughSeq?(): number | undefined;
+  completeThroughSeq?(
+    documents?: readonly Pick<IMemorySpaceAddress, "id" | "scope">[],
+  ): number | undefined;
 
   /**
-   * Whether the replica's state for the document is confirmed: the document
-   * is watched and delivered, no local write to it is pending, and its value
-   * is neither a refused write folded locally nor an own write promoted past
-   * what a push has covered. An absent document a push delivered is
-   * confirmed.
+   * Whether the replica holds a known stored version of the document, with
+   * no pending local write, refused local fold, or incomplete wave promotion.
+   * A watched delivery establishes it, including absence; a newer own write
+   * over that delivery waits for a covering push. An accepted whole-document
+   * set or deletion also establishes a version without a frame delivery, as
+   * does verified content under its content-addressed id. A mutable version
+   * without a delivered watch may be stale: use `completeThroughSeq()` with
+   * the read documents to ask about coverage of later changes.
    */
   isConfirmedDocument?(
     id: URI,
