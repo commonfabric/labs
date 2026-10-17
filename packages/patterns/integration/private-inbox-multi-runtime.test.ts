@@ -26,7 +26,9 @@
  * Home's one answer for its profile. A request for a profile pointed elsewhere
  * reads `not-held`, one for a profile without `setInbox` `unpointable`, one to
  * a Home with no profiles `unlisted`, and one to a Home without the stream
- * sends nothing.
+ * sends nothing. Two runtimes of the owner's each point one profile at an
+ * inbox of their own, only while it points at none, with both sends in
+ * flight at once, and the profile keeps the one the server admits first.
  *
  * The inbox's space grants every principal `WRITE` in both server-execution
  * postures: the serving loop makes a sender's write where server execution is
@@ -335,6 +337,43 @@ describe("private inbox across runtimes", () => {
     await harness.settle();
     const refusalsAfter = await adoptionRefusals();
     return { refusal, refusalsBefore, refusalsAfter };
+  });
+
+  /**
+   * `racingHome`: one profile, which the owner's runtime and a second runtime
+   * of the owner's each point at an inbox of their own, only while it points
+   * at none, with both sends in flight at once. Returns the commits admitted
+   * meanwhile that wrote the profile's pointer, and the inbox each runtime
+   * reads it pointing at once both have settled.
+   */
+  const racing = once(async () => {
+    const ownerAgain = await harness.addSession({
+      label: "private-inbox-owner-again",
+      identity: owner.identity,
+    });
+    await owner.send("createRacingProfile");
+    await harness.settle();
+    const pointer = await owner.link(["racingHome", "profiles", 0, "inbox"]);
+    const admitted = await harness.admittedCommitsDuring(async () => {
+      await Promise.all([
+        owner.send("pointRacingProfileAtLoomIfUnset", { index: 0 }),
+        ownerAgain.send("pointRacingProfileAtOtherIfUnset", { index: 0 }),
+      ]);
+      await harness.settleUntil(async () =>
+        await pointed(["racingHome", "profiles", 0])
+      );
+      await harness.settle();
+    });
+    const pointerWrites = admitted.filter((commit) =>
+      commit.space === pointer.space &&
+      commit.writes.some((write) => write.id === pointer.id)
+    );
+    const held = ["racingHome", "profiles", 0, "inbox", "piece"];
+    return {
+      pointerWrites,
+      ownerReads: await owner.link(held),
+      ownerAgainReads: await ownerAgain.link(held),
+    };
   });
 
   /**
@@ -959,6 +998,24 @@ describe("private inbox across runtimes", () => {
     expect(
       await owner.read(["replacingHome", "retainedPrivateInboxes"]),
     ).toEqual([]);
+  });
+
+  it("writes a profile's pointer once when two runtimes of the owner's each point it only while unset, at once, and both read the inbox it set", async () => {
+    // With server execution off, each runtime's own handler runs over its
+    // replica. A handler that read the pointer unset after the other's commit
+    // landed has its write refused as stale, and runs again over the pointer
+    // that commit set, where it writes nothing. With it on, the serving loop
+    // runs the two handlers in turn, and the second reads the first's
+    // pointer. Either way the pointer is written once, and both runtimes read
+    // the inbox that write set.
+
+    const { pointerWrites, ownerReads, ownerAgainReads } = await racing();
+
+    expect(pointerWrites.length).toBe(1);
+    const loom = await owner.link(["loomInbox", "piece"]);
+    const other = await owner.link(["otherInbox", "piece"]);
+    expect([loom.id, other.id]).toContain(ownerReads.id);
+    expect(ownerAgainReads.id).toBe(ownerReads.id);
   });
 
   it("creates no inbox while a profile whose pointer it cannot read advertises one", async () => {

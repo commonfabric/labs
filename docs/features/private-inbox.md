@@ -262,8 +262,18 @@ of the inbox's result other than its name. For the event's refused inbox, the
 second of those is the one the measurement above bears out.
 
 The read and the `setInbox` it leads to are two transactions, in Home's space
-and then in the profile's, so a pointer that something else sets between them
-is replaced by Home's inbox.
+and then in the profile's, so the event carries `replacing` and `setInbox`
+checks the pointer again in the transaction that writes it: holding
+`undefined` from `pointAtInboxIfUnset()`, and holding a link to the refused
+inbox from `pointAtInboxInPlaceOf()`. A pointer that something else sets
+between the two,
+such as a loom daemon pointing the profile at a share inbox it has minted, is
+kept, and the profile goes on advertising it. Two senders racing to point the
+same unpointed profile both read it unset, and the one that commits second
+finds its commit stale, runs again, and leaves the first one's pointer. A
+profile still running a `setInbox` that predates the condition ignores it
+and sets the pointer as sent, so on such a profile a pointer set in between is
+still replaced, until the profile runs the current handler.
 
 A profile whose stored `inbox` is not an object holding a link, as a writer
 bypassing `setInbox` can leave it, is repaired: the typed read takes it for no

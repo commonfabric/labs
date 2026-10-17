@@ -13,6 +13,7 @@ import ProfileHome, {
   identityProvider,
   isFreshIdentity,
   isShownIdentity,
+  type ShareInboxPiece,
   VerifiedIdentitiesSection,
   VerifiedIdentityRow,
 } from "./profile-home.tsx";
@@ -199,6 +200,43 @@ export default pattern(() => {
     profile.elements[1]?.cell?.[NAME] === "Second card"
   );
   const assert_inbox_cleared = assert(() => profile.inbox?.piece === undefined);
+  // A conditional send writes only while the pointer meets its condition:
+  // `replacing: undefined` only while the profile points at no inbox, and
+  // `replacing: <link>` only while it points at the inbox named. A link to a
+  // cell holding nothing is a link, not `undefined`, so it names an inbox the
+  // profile does not point at.
+  const emptyLink = new Writable<ShareInboxPiece>().for("emptyLink");
+  const action_set_first_if_unset = action(() => {
+    const first = profile.elements[0];
+    if (first) {
+      profile.setInbox.send({ inbox: first.cell, replacing: undefined });
+    }
+  });
+  const action_set_second_if_unset = action(() => {
+    const second = profile.elements[1];
+    if (second) {
+      profile.setInbox.send({ inbox: second.cell, replacing: undefined });
+    }
+  });
+  const action_set_first_replacing_an_empty_link = action(() => {
+    const first = profile.elements[0];
+    if (first) {
+      profile.setInbox.send({ inbox: first.cell, replacing: emptyLink });
+    }
+  });
+  const action_set_second_replacing_second = action(() => {
+    const second = profile.elements[1];
+    if (second) {
+      profile.setInbox.send({ inbox: second.cell, replacing: second.cell });
+    }
+  });
+  const action_set_second_replacing_first = action(() => {
+    const first = profile.elements[0];
+    const second = profile.elements[1];
+    if (first && second) {
+      profile.setInbox.send({ inbox: second.cell, replacing: first.cell });
+    }
+  });
   const action_remove_second_card = action(() => {
     const second = profile.elements[1];
     if (second) profile.removeElement.send({ cell: second.cell });
@@ -401,6 +439,25 @@ export default pattern(() => {
       { action: action_clear_inbox },
       { assertion: assert_inbox_cleared },
       { assertion: assert_both_cards_intact },
+      // A link to a cell holding nothing names an inbox the profile does not
+      // point at, so the send leaves the unset pointer unset.
+      { action: action_set_first_replacing_an_empty_link },
+      { assertion: assert_inbox_cleared },
+      // `replacing: undefined` sets an unset pointer, and leaves a set one as
+      // it is.
+      { action: action_set_first_if_unset },
+      { assertion: assert_inbox_links_the_first_card },
+      { action: action_set_second_if_unset },
+      { assertion: assert_inbox_links_the_first_card },
+      // `replacing: <link>` sets the pointer only in place of the inbox it
+      // names.
+      { action: action_set_second_replacing_second },
+      { assertion: assert_inbox_links_the_first_card },
+      { action: action_set_second_replacing_first },
+      { assertion: assert_inbox_links_the_second_card },
+      { assertion: assert_both_cards_intact },
+      { action: action_clear_inbox },
+      { assertion: assert_inbox_cleared },
       { action: action_remove_second_card },
       { assertion: assert_added_element },
       { action: action_remove_catalog_element },
