@@ -1,5 +1,5 @@
 import { booleanSchema } from "@commonfabric/runner/schemas";
-import { type CellHandle } from "@commonfabric/runtime-client";
+import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 
@@ -333,24 +333,32 @@ export class CFCheckbox extends BaseElement {
         return;
       }
 
-      // Toggle checked state. Outside a form, the cell controller computes
-      // it from what the cell holds, asking the worker first where it has
-      // read nothing; in a form, the toggle is buffered until the form
-      // submits.
-      if (this._formField.inFormContext) {
-        this.setChecked(!this.getChecked());
-      } else {
-        void this._checkedCellController.toggle().then(() =>
-          this._updateAriaAttributes()
-        );
-      }
-
-      // Clear indeterminate state when clicked
+      // A click settles an indeterminate checkbox, so the change it makes
+      // reports `indeterminate: false`.
       if (this.indeterminate) {
         this.indeterminate = false;
       }
 
-      // Note: cf-change event is emitted by the cell controller's onChange callback
+      // In a form, the toggle is buffered until the form submits.
+      if (this._formField.inFormContext) {
+        this.setChecked(!this.getChecked());
+      } else if (isCellHandle(this.checked)) {
+        // A bound cell's toggle is computed from what the cell holds, asking
+        // the worker first where it has read nothing, and the controller's
+        // onChange fires cf-change.
+        void this._checkedCellController.toggle().then(() =>
+          this._updateAriaAttributes()
+        );
+      } else {
+        // A plain boolean is the checkbox's own property, which it flips
+        // itself. It is read from the property, not the controller, which
+        // catches up with it only on the next update.
+        this.checked = !this.checked;
+        this.emit("cf-change", {
+          checked: this.checked,
+          indeterminate: this.indeterminate,
+        });
+      }
     }
 
     private _handleKeydown(event: KeyboardEvent) {
