@@ -857,6 +857,14 @@ correctness comes from cancellation, not staging:
      memory engine; violation is a permanent rejection. Same-session
      commits are processed in order, so the origin's fate is already
      decided when the follow-up's commit arrives: the check is free.
+   - **Split-commit origin** (closing several spaces one at a time, as a
+     create into a new space does): cross-space for every space it closes.
+     Each space is committed, and applied locally, only once the one before
+     it is accepted, so no single commit's acceptance implies the origin's.
+     A handler that creates profile space P and appends the profile to Home
+     H closes P, then H; a follow-up queued in either parks until the
+     origin's verdict, and one dispatched as soon as P were applied would
+     read H without the append.
    - **Cross-space origin**: the event **parks until the origin commit is
      confirmed**, then dispatches with ordinary semantics in the target
      space; if the origin fails, the parked event is dropped via the
