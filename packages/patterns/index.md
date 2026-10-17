@@ -128,8 +128,8 @@ private visitor recommendations), `router/`, `scoped-group-chat/`,
 `scoped-user-directory/`, `scrabble/`, `shared-note/` (a shared Markdown
 document whose live cursors carry each viewer's profile name),
 `shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
-`weekly-calendar/`, `wordsearch/` (a word search maker: form, puzzle, and a PDF
-of the puzzle and its answer key).
+`weekly-calendar/`, `wordsearch/` (a word search maker: form, puzzle, a PDF of
+the puzzle and its answer key, and a Play tab).
 
 Connector-owned patterns live with their connector families: the
 [agent debug view](../connectors/agents/debug-view/README.md) and
@@ -771,6 +771,35 @@ interface WordSearchMakerInput {
 ```ts
 interface WordSearchMakerOutput {
   puzzle: WordSearch; // from wordsearch/generator.ts
+}
+```
+
+## `wordsearch/play.tsx`
+
+Play a word search: tap a hidden word's first letter, then its last, and it is
+marked found. Found words are each player's own (`PerUser`); a reshuffled puzzle
+starts unsolved. Takes the `puzzle` that `wordsearch/wordsearch.tsx` puts out.
+
+**Keywords:** word search, puzzle, game, play, solve
+
+### Input Schema
+
+```ts
+interface WordSearchPlayInput {
+  title?: string | Default<"Word Search">;
+  puzzle?: WordSearch; // from wordsearch/generator.ts
+  found?: PerUser<Writable<string[] | Default<[]>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface WordSearchPlayOutput {
+  foundCount: number;
+  solved: boolean;
+  tap: Stream<{ index: number }>;
+  restart: Stream<void>;
 }
 ```
 
