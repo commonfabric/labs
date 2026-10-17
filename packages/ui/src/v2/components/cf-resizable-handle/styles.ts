@@ -79,9 +79,4 @@ export const resizableHandleStyles = `
   :host-context(cf-resizable-panel-group[direction="vertical"]) {
     cursor: row-resize;
   }
-
-  /* Remove default outline in favor of focus-visible */
-  :host:focus {
-    outline: none;
-  }
 `;
