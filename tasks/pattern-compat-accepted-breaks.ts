@@ -1424,4 +1424,43 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "the room keeps no activity log, so the data face the adapter re-exports no longer carries one",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
+  {
+    // A pick was a required link to a held finished book, so every valid
+    // result was five rereads. A pick is the recommended book inline now,
+    // with an optional link to the finished book it builds on.
+    pattern: "book-recommendations/main.tsx",
+    baselines: [
+      "20260920T171659Z-3vmp5U6KQQHIKzya",
+      "20261004T000822Z-RG9CkXhT9Y8zMON8",
+    ],
+    paths: ["result.recommendation.result"],
+    reason:
+      "a pick is the recommended book inline with an optional `basedOn` link, where the recorded result required a `book` link to a finished book",
+    record: "docs/history/book-recommendations-picks-break.md",
+  },
+  {
+    // The seeded demo composes the pattern and returns its result.
+    pattern: "book-recommendations/seeded-live-demo.tsx",
+    baselines: [
+      "20260922T074703Z-x2D--ODNVd-Doeie",
+      "20261004T000822Z-Uae2gNquN1m1hysE",
+    ],
+    paths: ["result.recommendation.result"],
+    reason:
+      "a pick is the recommended book inline with an optional `basedOn` link, where the recorded result required a `book` link to a finished book",
+    record: "docs/history/book-recommendations-picks-break.md",
+  },
+  {
+    // The view takes the state it displays as an argument and returns it,
+    // so the pick's new shape shows on both faces.
+    pattern: "book-recommendations/view.tsx",
+    baselines: ["20260920T171659Z-uSukTQQPKBcQgQSk"],
+    paths: [
+      "argument.state.result.picks[].title",
+      "result.state.result.picks[].book",
+    ],
+    reason:
+      "a pick carries `title`, `author` and `why` inline and `basedOn` in place of `book`",
+    record: "docs/history/book-recommendations-picks-break.md",
+  },
 ];
