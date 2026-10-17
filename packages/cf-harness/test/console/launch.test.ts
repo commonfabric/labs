@@ -127,6 +127,10 @@ const NAMED_FABRIC = {
 
 const NO_INSTANCE: ConsoleLaunchRecords = { sandbox: SANDBOX };
 
+/** A space created with a random key, which only its DID addresses. */
+const CREATED_SPACE =
+  "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
 const withPieces = (
   defaults: Record<string, unknown>,
 ): ConsoleLaunchRecords => ({
@@ -275,6 +279,22 @@ describe("launch", () => {
       expect(plan.environment.CF_HARNESS_CONSOLE_DIR).toBe(
         `.cf-harness-console-loom-${WEAVER_PAIRING_PORT}`,
       );
+    });
+
+    it("returns a space the instance recorded by DID as it is", () => {
+      // A space created with a random key has no name: its DID is the only
+      // address it has, and the one an instance records once it creates the
+      // space rather than deriving it from a name.
+      const plan = resolveConsoleLaunchPlan(
+        withPieces({
+          identity: "/keys/instance.key",
+          local_space: CREATED_SPACE,
+          server_urls: { toolshed: "http://localhost:8001" },
+        }),
+        OPTIONS,
+      );
+
+      expect(plan.environment.CF_HARNESS_FABRIC_SPACE).toBe(CREATED_SPACE);
     });
 
     it("returns the port the instance records, as loom's proxy resolves it", () => {
@@ -692,13 +712,13 @@ describe("launch", () => {
         .toThrow(/^(?!.*pieces\.json).*$/s);
     });
 
-    it("throws for a space named by DID, which composes no piece URL", () => {
-      expect(() =>
-        resolveConsoleLaunchPlan(NO_INSTANCE, {
-          ...NAMED_FABRIC,
-          space: "did:key:z6Mk",
-        })
-      ).toThrow("rather than a DID");
+    it("returns a space named by DID on the command line as it is", () => {
+      const plan = resolveConsoleLaunchPlan(NO_INSTANCE, {
+        ...NAMED_FABRIC,
+        space: CREATED_SPACE,
+      });
+
+      expect(plan.environment.CF_HARNESS_FABRIC_SPACE).toBe(CREATED_SPACE);
     });
   });
 

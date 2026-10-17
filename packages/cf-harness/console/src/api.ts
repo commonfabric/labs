@@ -30,11 +30,13 @@ import type { ConsoleRunSummary } from "../runs.ts";
 import type { ConsoleSessionSummary } from "../sessions.ts";
 import type {
   ConsoleChatEventEnvelope,
+  ConsoleChatStructuredEvent,
   ConsoleTurnResult,
 } from "../turn-result.ts";
 
 export type {
   ConsoleChatEventEnvelope,
+  ConsoleChatStructuredEvent,
   ConsoleFlow,
   ConsoleFlowCell,
   ConsoleFlowNode,

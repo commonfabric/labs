@@ -12,10 +12,11 @@
 import { html, LitElement, nothing, type TemplateResult } from "lit";
 import {
   cancelTurn,
+  type ConsoleChatEventEnvelope,
+  type ConsoleChatStructuredEvent,
   type ConsoleFlow,
   type ConsoleListedRun,
   type ConsoleRunSource,
-  type HarnessChatEventEnvelope,
   listRuns,
   readRunFlow,
   startTask,
@@ -33,6 +34,43 @@ interface Piece {
   slug?: string;
   url: string;
 }
+
+/**
+ * The piece a console event makes openable, if any. `assign_slug` reports the
+ * named address it registered as the tool message the model read, which
+ * carries a URL only for a space configured by name, so the link appears as
+ * soon as the piece is named. A completed turn's result carries the address the
+ * console composed for each piece in any space, and its last one is the newest.
+ */
+export const consoleEventPiece = (
+  event: ConsoleChatStructuredEvent,
+): Piece | undefined => {
+  if (event.kind === "turn_completed") {
+    const piece = event.result.pieces.at(-1);
+    return piece === undefined
+      ? undefined
+      : { slug: piece.slug, url: piece.url };
+  }
+  if (
+    event.kind !== "tool_completed" || event.tool.toolId !== "assign_slug" ||
+    event.status !== "completed"
+  ) {
+    return undefined;
+  }
+  let parsed: { url?: unknown; slug?: unknown };
+  try {
+    parsed = JSON.parse(event.resultSummary ?? "");
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed?.url !== "string") {
+    return undefined;
+  }
+  return {
+    url: parsed.url,
+    ...(typeof parsed.slug === "string" ? { slug: parsed.slug } : {}),
+  };
+};
 
 /** A run and the `delegate_task` children it started. */
 interface RunNode {
@@ -289,7 +327,7 @@ export class ConsoleApp extends LitElement {
     });
   }
 
-  #onEvent(envelope: HarnessChatEventEnvelope): void {
+  #onEvent(envelope: ConsoleChatEventEnvelope): void {
     this.#lastSequence = envelope.sequence;
     const event = envelope.event;
     switch (event.kind) {
@@ -306,17 +344,14 @@ export class ConsoleApp extends LitElement {
         break;
       case "tool_completed":
         this.activity = `${event.tool.toolId} ${event.status}`;
-        if (
-          event.tool.toolId === "assign_slug" && event.status === "completed"
-        ) {
-          this.#showPiece(event.resultSummary);
-        }
+        this.piece = consoleEventPiece(event) ?? this.piece;
         void this.#refresh();
         break;
       case "turn_completed":
         this.state = "done";
         this.running = false;
         this.activity = undefined;
+        this.piece = consoleEventPiece(event) ?? this.piece;
         void this.#refresh();
         break;
       case "turn_canceled":
@@ -342,27 +377,6 @@ export class ConsoleApp extends LitElement {
       default:
         break;
     }
-  }
-
-  /**
-   * `assign_slug` reports the named address it registered. Its result is the
-   * tool message the model read, so the URL is read from there rather than
-   * composed here — a space configured by DID carries no URL at all.
-   */
-  #showPiece(summary: string | undefined): void {
-    let parsed: { url?: unknown; slug?: unknown };
-    try {
-      parsed = JSON.parse(summary ?? "");
-    } catch {
-      return;
-    }
-    if (typeof parsed?.url !== "string") {
-      return;
-    }
-    this.piece = {
-      url: parsed.url,
-      ...(typeof parsed.slug === "string" ? { slug: parsed.slug } : {}),
-    };
   }
 
   async #start(): Promise<void> {

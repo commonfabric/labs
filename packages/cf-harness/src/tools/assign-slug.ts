@@ -20,6 +20,7 @@ import {
 } from "@commonfabric/piece/ops";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
+import { pieceUrl } from "../piece-url.ts";
 import { observedOutputsIn } from "../run-pattern-output-concerns.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
@@ -224,29 +225,22 @@ const slugAvailability = async (
 };
 
 /**
- * The URL a person opens for a named piece, or `undefined` when none can be
- * composed without inventing one. The address is the session's API URL, then
- * the space, then the slug — the same shape `cf piece new` prints. Only a
- * space configured by NAME yields one: a space configured by `did:key` would
- * put a bare fabric identifier in the URL, and that does not cross the model
- * boundary.
+ * The URL the model is told a named piece is at, or `undefined` when none can
+ * be composed without inventing one. The address is the session's API URL,
+ * then the space, then the slug — the same shape `cf piece new` prints. Only a
+ * space configured by NAME yields one here: the address of a space configured
+ * by `did:key` carries the DID, a bare fabric identifier that does not cross
+ * the model boundary. A console still shows the person that address, composed
+ * from its own configuration (`console/turn-result.ts`).
  */
 export const namedPieceUrl = (
   pieces: PiecesController,
   slug: string,
 ): string | undefined => {
   const spaceName = pieces.getSpaceName();
-  if (spaceName === undefined) {
-    return undefined;
-  }
-  try {
-    const url = new URL(pieces.runtime.apiUrl);
-    const base = url.pathname.endsWith("/") ? url.pathname : `${url.pathname}/`;
-    url.pathname = `${base}${encodeURIComponent(spaceName)}/${slug}`;
-    return url.toString();
-  } catch {
-    return undefined;
-  }
+  return spaceName === undefined
+    ? undefined
+    : pieceUrl(pieces.runtime.apiUrl, spaceName, slug);
 };
 
 /**

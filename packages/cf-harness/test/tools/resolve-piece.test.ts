@@ -212,6 +212,28 @@ describe("resolve-piece", () => {
       .toMatchObject({ status: "ok", resultRef: `/of:${pieceId}` });
   });
 
+  it("resolves an address naming the session's space by its DID", async () => {
+    // The DID names the space whether or not it also has a name; another
+    // DID names another space.
+    for (const named of [true, false]) {
+      using _name = stub(
+        pieces,
+        "getSpaceName",
+        () => named ? spaceName : undefined,
+      );
+      expect(
+        (await engine.invokeBuiltinTool("resolve_piece", {
+          slug: `pattern:${pieces.getSpace()}/recent-emails`,
+        })).output,
+      ).toMatchObject({ status: "ok", resultRef: `/of:${pieceId}` });
+      expect(
+        (await engine.invokeBuiltinTool("resolve_piece", {
+          slug: "pattern:did:key:z6MkforeignSpaceForResolveTest/recent-emails",
+        })).output,
+      ).toMatchObject({ status: "error", code: "foreign-space" });
+    }
+  });
+
   it("refuses a non-string slug from an untyped caller", async () => {
     const { output } = await engine.invokeBuiltinTool(
       "resolve_piece",

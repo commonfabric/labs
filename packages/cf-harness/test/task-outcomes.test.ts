@@ -142,6 +142,9 @@ describe("task-outcomes", () => {
             sessionId: "conversation",
             continuable: true,
             spaceName: "empty-space",
+            fabricApiUrl: "http://localhost:8000",
+            fabricSpaceDid:
+              "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
           }),
         ).toEqual({
           ...taskOutcome,
@@ -150,6 +153,7 @@ describe("task-outcomes", () => {
           looms: [],
           pieces: [],
           spaceName: "empty-space",
+          spaceDid: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
           finalText: message,
         });
       } finally {
@@ -566,6 +570,9 @@ describe("task-outcomes", () => {
           sessionId: started.sessionId,
           continuable: true,
           spaceName: "empty-space",
+          fabricApiUrl: "http://localhost:8000",
+          fabricSpaceDid:
+            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
         }),
       ).toMatchObject({ outcome: "completed", answer, actions });
     } finally {

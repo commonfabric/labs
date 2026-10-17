@@ -188,6 +188,19 @@ checkout by a few commits usually runs fine. Restart from your checkout when a
 turn fails for a reason that reads like a protocol mismatch, or when you need
 the toolshed's CFC posture to match what this checkout documents.
 
+### Create its space, once
+
+The console writes the pieces it builds into a space you own. Create one and
+keep the DID it prints:
+
+```sh
+cf space create --api-url <toolshed-api-url> \
+  --identity <absolute-path-to-identity-keyfile> --label "cf-harness console"
+```
+
+Run it once. Each run creates another, empty space, and opening a name never
+creates one: a name reaches only a legacy space that already exists.
+
 ### Start the console
 
 | Variable                         | Value                                                                                          |
@@ -196,7 +209,7 @@ the toolshed's CFC posture to match what this checkout documents.
 | `CF_HARNESS_CONSOLE_DIR`         | Any absolute directory unique to this console. It holds sessions, runs, and the workspace.     |
 | `CF_HARNESS_FABRIC_API_URL`      | The toolshed API URL from above.                                                               |
 | `CF_HARNESS_FABRIC_IDENTITY`     | The absolute path to the keyfile from prerequisite 3.                                          |
-| `CF_HARNESS_FABRIC_SPACE`        | A space name. A new name is fine; a `did:key` is refused.                                      |
+| `CF_HARNESS_FABRIC_SPACE`        | The DID `cf space create` printed above, or the name of a legacy space.                        |
 | `MEMORY_DIR`                     | The toolshed's store directory from above, as a plain path.                                    |
 | `CF_HARNESS_PATTERN_INDEX_URL`   | Optional: `https://us-central1-pattern-index.cloudfunctions.net`, once prerequisite 5 is done. |
 | `CF_HARNESS_SKILLS_REGISTRY_URL` | Optional: `https://skills.sh`, which adds a metadata-only `search_skills` tool.                |
@@ -207,7 +220,7 @@ export CF_HARNESS_CONSOLE_PORT=<free-console-port>
 export CF_HARNESS_CONSOLE_DIR=<absolute-unique-console-directory>
 export CF_HARNESS_FABRIC_API_URL=<toolshed-api-url>
 export CF_HARNESS_FABRIC_IDENTITY=<absolute-path-to-identity-keyfile>
-export CF_HARNESS_FABRIC_SPACE=<space-name>
+export CF_HARNESS_FABRIC_SPACE=<space-did>
 export CF_HARNESS_FABRIC_CFC_POSTURE=max-enforcement
 export CF_HARNESS_FABRIC_CFC_FLOW_LABELS=persist
 export CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE=enforce-strict
@@ -289,7 +302,7 @@ Two things the first turn does that are not faults:
 - The server log prints
   `fabric grants unavailable for this turn: Error: space
   has no default pattern to anchor the piece registry`
-  on a space with no default pattern, which a new name always is. The turn
+  on a space with no default pattern, which a new space always is. The turn
   continues without the grants that let a task explore what the space already
   holds.
 - The Runs column fills in at the first completed tool call. Press its
@@ -362,8 +375,8 @@ then **Import CLI Key**, and pick the keyfile from prerequisite 3. This is once
 per browser profile. The piece then renders at either address:
 
 ```text
-<toolshed-api-url>/<space-name>/<slug>
-<shell-origin>/<space-name>/<slug>
+<toolshed-api-url>/<space-did>/<slug>
+<shell-origin>/<space-did>/<slug>
 ```
 
 From the command line, the same piece resolves by slug:
@@ -371,7 +384,7 @@ From the command line, the same piece resolves by slug:
 ```sh
 export CF_API_URL=<toolshed-api-url>
 export CF_IDENTITY=<absolute-path-to-identity-keyfile>
-export CF_SPACE=<space-name>
+export CF_SPACE=<space-did>
 cf cell get /<slug>
 export PIECE_ID=$(cf cell get "/<slug>" --select '@' | \
   jq -r '."$link" | sub("^/of:"; "")')
@@ -432,10 +445,11 @@ The successful result is:
   "pieces": [
     {
       "slug": "reading-list",
-      "url": "<toolshed-api-url>/<space-name>/reading-list"
+      "url": "<toolshed-api-url>/<space-did>/reading-list"
     }
   ],
-  "spaceName": "<space-name>",
+  "spaceName": "<space-did>",
+  "spaceDid": "<space-did>",
   "finalText": "Created reading-list."
 }
 ```
@@ -510,7 +524,7 @@ Deploy it, keep the printed piece ID, and attach the label:
 cd <labs>
 export CF_API_URL=<toolshed-api-url>
 export CF_IDENTITY=<absolute-path-to-identity-keyfile>
-export CF_SPACE=<space-name>
+export CF_SPACE=<space-did>
 
 cf piece new --slug transaction-data finance-data.tsx
 export INPUT_PIECE_ID=<the-printed-fid1-id>
@@ -621,7 +635,7 @@ deno task run -- \
   --workspace <absolute-workspace-directory> \
   --fabric-api-url <toolshed-api-url> \
   --fabric-identity <absolute-path-to-identity-keyfile> \
-  --fabric-space <space-name> \
+  --fabric-space <space-did> \
   --fabric-cfc-posture max-enforcement \
   --space-db <absolute-path-to-space-database> \
   --input-cell "transactions=/of:${INPUT_PIECE_ID}/account" \

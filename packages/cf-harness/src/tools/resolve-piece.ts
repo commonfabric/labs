@@ -1,5 +1,6 @@
 /** Resolves a user-named piece in the session's space to an opaque reference. */
 
+import { isDID } from "@commonfabric/identity/did";
 import { resolvePieceAddress, SlugResolutionError } from "@commonfabric/piece";
 
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
@@ -102,14 +103,21 @@ export const resolvePieceTool: HarnessToolDefinition<
       );
     }
     const spaceName = session.pieces.getSpaceName();
-    if (address.spaceName !== undefined && spaceName === undefined) {
+    if (
+      address.spaceName !== undefined && !isDID(address.spaceName) &&
+      spaceName === undefined
+    ) {
       return error(
         "unavailable",
         "This session has no space name to check the qualified address against. Supply the piece's bare slug in this session's space.",
       );
     }
     try {
-      checkNamedPieceAddressSpace(address, spaceName);
+      checkNamedPieceAddressSpace(
+        address,
+        spaceName,
+        session.pieces.getSpace(),
+      );
     } catch {
       return error(
         "foreign-space",

@@ -67,10 +67,12 @@ shared host, a tailnet with an access policy — and not behind a public address
 - **An identity keyfile.** A PKCS#8 key on this host, the same one the `cf` CLI
   uses. The fabric session loads it to sign with, and the pattern index signs
   its requests with the same identity.
-- **A space named by name.** `assign_slug` composes the URL a person opens from
-  the API URL and the space's name, and offers no URL at all for a space named
-  by `did:key`. The server refuses a `did:` space at startup rather than
-  finishing a run with no link to show.
+- **A space.** Either the DID of a space created with `cf space create`, or the
+  name of a legacy space. The console names its pieces in it, and shows a person
+  each one at the API URL, then the space, then the slug: the address the shell
+  opens. The space goes in by its name, or by its DID where it was configured by
+  DID or its name cannot be held in an address. The model is given that URL only
+  when it carries a name, never a DID, so the console composes the rest itself.
 - **A connected model provider.** The provider preference lives in
   `$CF_HARNESS_HOME/config.json` and its credentials in
   `$CF_HARNESS_HOME/auth.json`, both written by `cf-harness config set` and
@@ -115,7 +117,7 @@ CF_HARNESS_SANDBOX_RUNTIME=runsc \
   deno task --cwd packages/cf-harness console:launch --instance <loom-instance>
 deno task --cwd packages/cf-harness console:launch \
   --fabric-api-url http://localhost:8000 --store packages/toolshed/cache/memory \
-  --fabric-identity "$HOME/.cf/my-key.pkcs8" --fabric-space my-space
+  --fabric-identity "$HOME/.cf/my-key.pkcs8" --fabric-space <space-did>
 ```
 
 The first names the sandbox runtime, `runsc`, with its settings in the
@@ -153,7 +155,7 @@ would otherwise have resolved:
 ```sh
 export CF_HARNESS_FABRIC_API_URL=http://localhost:8000
 export CF_HARNESS_FABRIC_IDENTITY="$HOME/.cf/my-key.pkcs8"
-export CF_HARNESS_FABRIC_SPACE=my-space
+export CF_HARNESS_FABRIC_SPACE=<space-did>
 export CF_HARNESS_PATTERN_INDEX_URL=https://index.example/   # optional
 export CF_HARNESS_SKILLS_REGISTRY_URL=https://www.skills.sh/  # optional
 
@@ -181,7 +183,7 @@ Every environment variable has a flag, and the flag wins:
 | `--port`                      | `CF_HARNESS_CONSOLE_PORT`              | `8100`                                |
 | `--fabric-api-url`            | `CF_HARNESS_FABRIC_API_URL`            | `http://localhost:8000`               |
 | `--fabric-identity`           | `CF_HARNESS_FABRIC_IDENTITY`           | required                              |
-| `--fabric-space`              | `CF_HARNESS_FABRIC_SPACE`              | required, a name                      |
+| `--fabric-space`              | `CF_HARNESS_FABRIC_SPACE`              | required: a DID, or a legacy name     |
 | `--fabric-foreign-spaces`     | `CF_HARNESS_FABRIC_FOREIGN_SPACES`     | no foreign spaces admitted            |
 | `--pattern-index-url`         | `CF_HARNESS_PATTERN_INDEX_URL`         | unset                                 |
 | `--skills-registry-url`       | `CF_HARNESS_SKILLS_REGISTRY_URL`       | unset                                 |
@@ -488,10 +490,11 @@ that turn's run minted. What the model receives is a token and the caller's own
 name for it — never the reference, and never what the cell holds. The reference
 grammar is `--input-cell`'s, so a spelling the CLI refuses is refused here with
 a 400 before any turn starts: a `ref` has to be a link naming an entity
-(`/of:fid1:…/path`, or `computed:`), not a bare hash. A cell that passes the
-grammar and still cannot be minted — one in an unadmitted foreign space, say —
-fails the turn rather than starting it without what the caller attached, and
-that turn is terminal like any other failed one.
+(`/of:fid1:…/path`, or `computed:`), not a bare hash. A reference into a foreign
+space the operator did not admit is refused with a 400 too, as the turn would
+refuse it. A cell that passes those checks and still cannot be minted fails the
+turn rather than starting it without what the caller attached, and that turn is
+terminal like any other failed one.
 
 The operator can admit foreign references at startup with
 `--fabric-foreign-spaces '{"did:key:zForeign":"https://foreign.example/"}'`. The
@@ -568,6 +571,7 @@ The completed-turn result is:
     }
   ],
   "spaceName": "my-space",
+  "spaceDid": "did:key:z6Mk…",
   "finalText": "Your reading list is ready."
 }
 ```
@@ -610,16 +614,22 @@ none. Optional `originLoomId` is the turn's submitted origin. Enable the tools
 with `--loom-authoring-config` or `CF_HARNESS_LOOM_AUTHORING_CONFIG`; the
 complete contract is [Durable Loom authoring](../docs/LOOM_AUTHORING.md). Each
 entry copies `slug` and `url` from the successful `assign_slug` observation.
-When that same held token also appeared in a verified successful composition,
-optional `loomComponents: [{loomId, componentId}]` identifies its saved
-membership. The correlation uses unique matching current-turn tool calls and
-request-order receipt IDs, never the human slug or assistant prose. When using
-this metadata, clients suppress duplicate placement only after verifying the
-pair in a freshly opened manifest. Weaver also retains a legacy exact-reference
-membership check; absent either proof it keeps ordinary placement. Different
-tokens for the same Pattern are not inferred equivalent. No cell address or
-token is added to the result. `spaceName` identifies this console's configured
-space.
+Where the model was told no `url` (a space configured by DID, or a legacy name
+no address can hold), the entry's `url` is the piece at the space's DID under
+this console's API URL. When that same held token also appeared in a verified
+successful composition, optional `loomComponents: [{loomId, componentId}]`
+identifies its saved membership. The correlation uses unique matching
+current-turn tool calls and request-order receipt IDs, never the human slug or
+assistant prose. When using this metadata, clients suppress duplicate placement
+only after verifying the pair in a freshly opened manifest. Weaver also retains
+a legacy exact-reference membership check; absent either proof it keeps ordinary
+placement. Different tokens for the same Pattern are not inferred equivalent. No
+cell address or token is added to the result. `spaceName` identifies this
+console's configured space as it was configured: a name, or a DID. `spaceDid` is
+that space's DID: `spaceName` itself for a space configured by DID, else the DID
+its legacy name derives. A client addresses a piece of the result as
+`pattern:<spaceDid>/<slug>` in any space, or as `pattern:<spaceName>/<slug>`
+where the name has no `/`, and an input cell accepts either back.
 
 The route never holds a request open; it answers with where the turn stands, and
 the status code says whether asking again can change the answer:
@@ -701,12 +711,16 @@ sentence as "done", "waiting for your answer", or "stopped", without a failure
 badge. Child agents report blockers to their parent; they cannot end the user's
 task themselves.
 
-When the run names a piece, the `assign_slug` result carries a `slug` and a
-`url`, and the page raises an **Open your piece** link above the feed. That link
-is the point of the surface: everything above it is the work, and the link is
-what the work produced. The same result is durable under
+When the run names a piece, the page raises an **Open your piece** link above
+the feed: as soon as the `assign_slug` result carries a `url`, and otherwise
+when the turn completes, from the address its result composed. A space
+configured by DID gives the model no URL, so its link appears at the end of the
+turn. That link is the point of the surface: everything above it is the work,
+and the link is what the work produced. The same result is durable under
 `<artifact-root>/<run-id>/tool-outputs/`; when a run ends without the link
-appearing, the Runs view below reads it back.
+appearing, the Runs view below reads it back. The Runs view shows what each run
+recorded, and lists runs from more than this console, so a piece named in a
+space configured by DID shows there by its slug, without a link.
 
 Cancel stops the running turn. The session survives a cancel and a page reload
 both — the stream resumes from the last event the page rendered rather than
@@ -806,13 +820,15 @@ address is the one `assign_slug` recorded, which is the Fabric API's; a host
 that shows pieces somewhere else — a pane of its own, say, where the API's
 address answers with a login gate instead of the piece — names its prefix here,
 and every piece link on the page is composed as `<piecesBase>/<space>/<slug>`
-from the space and slug the turn's result carries, each escaped. With no prefix
-named, the recorded URL is used as it stands rather than rebuilt. The prefix has
-to be an absolute `http` or `https` URL: it arrives from whatever opened the
-page and ends up in an `href`, so anything else — a `javascript:` URL, a
-relative path — is refused, the page says so, and the links stay on the recorded
-address. The console composes against a prefix it is given and knows nothing
-about the host that gave it.
+from the space and slug the turn's result carries, written as the shell writes
+an address: by the space's name, or by its DID (`spaceDid`) where it was
+configured by DID or no address can hold its name. With no prefix named, the
+recorded URL is used as it stands rather than rebuilt. The prefix has to be an
+absolute `http` or `https` URL: it arrives from whatever opened the page and
+ends up in an `href`, so anything else — a `javascript:` URL, a relative path —
+is refused, the page says so, and the links stay on the recorded address. The
+console composes against a prefix it is given and knows nothing about the host
+that gave it.
 
 The pane reads the same event stream the console page reads, from sequence zero
 — so a pane opened halfway through a turn shows the steps that already happened
@@ -1152,7 +1168,7 @@ exist:
 | `allowedToolIds`          | the tools a new session's policy asks for                             |
 | `allowedSubagentProfiles` | the subagent profiles it authorizes                                   |
 | `artifactRoot`            | where runs are filed                                                  |
-| `fabricSpace`             | the space name runs build in                                          |
+| `fabricSpace`             | the space runs build in: a name, or a DID                             |
 | `sessionDbPath`           | the durable session store, or `null` when sessions are held in memory |
 
 The prompt crosses as a digest and never as text, so a client can check that

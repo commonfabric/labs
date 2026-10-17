@@ -2042,10 +2042,10 @@ export class CfHarnessEngine {
       this.#inputCells,
       session.pieces.getSpace(),
       {
-        // The space by NAME, which is the vocabulary a named address speaks;
-        // the mint checks references against the DID beside it. A space
-        // configured by `did:key` has no name, and an address naming a space
-        // is then refused rather than assumed to mean this one.
+        // The space by NAME, which is how a named address names a legacy
+        // space; one naming the space by DID is held to the DID beside it. A
+        // space created by DID has no name, and an address naming a space by
+        // name is then refused rather than assumed to mean this one.
         ...(session.pieces.getSpaceName() !== undefined
           ? { spaceName: session.pieces.getSpaceName() }
           : {}),

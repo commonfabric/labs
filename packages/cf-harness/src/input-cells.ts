@@ -25,6 +25,7 @@
  * addressing rules per client.
  */
 
+import { isDID } from "@commonfabric/identity/did";
 import { type MemorySpace, validateSlug } from "@commonfabric/runner";
 import { AGENT_INPUT_NAME_PATTERN } from "@commonfabric/runner/agent-run";
 import {
@@ -131,24 +132,43 @@ export const parseNamedPieceAddress = (
  * another one is a mistake to report. Foreign attachments need a reference
  * carrying an operator-admitted DID.
  *
- * `spaceName` is the space's NAME, which is what an address carries; the
- * `MemorySpace` a mint checks a reference against is its DID, and the two are
- * never compared to each other.
+ * An address names a space the way the shell's addresses do: a segment that is
+ * a DID is the space's DID, held to `space`, and any other segment is a name,
+ * held to `spaceName`. A space created with a random key has no name, so its
+ * DID is the only way to name it, and a name is refused rather than assumed to
+ * mean it. A legacy space has both, and is named by either. A side that knows
+ * only the name refuses the DID form, which it cannot check; a side that knows
+ * neither, such as a parse with no session, decides nothing.
  *
  * @throws Error naming both spaces.
  */
 export const checkNamedPieceAddressSpace = (
   address: NamedPieceAddress,
   spaceName: string | undefined,
+  space?: MemorySpace,
 ): void => {
   if (
-    address.spaceName === undefined || spaceName === undefined ||
-    address.spaceName === spaceName
+    address.spaceName === undefined ||
+    (spaceName === undefined && space === undefined)
   ) {
     return;
   }
+  const byDid = isDID(address.spaceName);
+  if (address.spaceName === (byDid ? space : spaceName)) {
+    return;
+  }
+  // A QUALIFIED ADDRESS IS RESOLVED IN THIS SPACE OR NOT AT ALL: the same slug
+  // in another space is a different piece, and answering with this space's
+  // would hand back a cell nobody asked for.
+  if (!byDid && spaceName === undefined) {
+    throw new Error(
+      `names space \`${address.spaceName}\`, and this session's space has no name to check that against; name the space by its DID, or attach the piece by reference`,
+    );
+  }
   throw new Error(
-    `piece address names space \`${address.spaceName}\`, and this session runs in \`${spaceName}\`; only pieces in the session's own space can be attached`,
+    `piece address names space \`${address.spaceName}\`, and this session runs in \`${
+      spaceName ?? space
+    }\`; only pieces in the session's own space can be attached`,
   );
 };
 
@@ -197,7 +217,7 @@ export const checkInputCellSpec = (
   }
   if (address !== undefined) {
     try {
-      checkNamedPieceAddressSpace(address, spaceName);
+      checkNamedPieceAddressSpace(address, spaceName, space);
     } catch (error) {
       throw new Error(
         `--input-cell \`${spec.name}\` ${
@@ -270,7 +290,7 @@ export interface InputCellSessionResolution {
   /** Operator admission snapshot from the Fabric session. */
   foreignSpaces?: HarnessForeignSpaces;
 
-  /** The session's space, by name. */
+  /** The session's space, by name; a space created by DID has none. */
   spaceName?: string;
 
   /**
@@ -305,18 +325,6 @@ const resolvedInputCellRef = async (
   if (session.resolvePiece === undefined) {
     throw new Error(
       `--input-cell \`${spec.name}\` names the piece \`${address.slug}\`, which needs a fabric session to resolve; configure --fabric-space`,
-    );
-  }
-  // A QUALIFIED ADDRESS IS RESOLVED IN THIS SPACE OR NOT AT ALL. The
-  // resolution below asks the session, which knows one space, so a space
-  // this side cannot check the name of is one the address cannot be
-  // honoured against: the same slug in another space is a different piece,
-  // and answering with this space's would hand back a cell nobody asked
-  // for. A space configured by `did:key` has no name, which is exactly
-  // when this fires.
-  if (address.spaceName !== undefined && session.spaceName === undefined) {
-    throw new Error(
-      `--input-cell \`${spec.name}\` names space \`${address.spaceName}\`, and this session's space has no name to check that against; name the space, or attach the piece by reference`,
     );
   }
   let pieceId: string;

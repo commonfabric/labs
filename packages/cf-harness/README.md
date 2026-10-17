@@ -1474,11 +1474,14 @@ than it is told for a reference. It names a piece, not a cell inside one: a path
 after the slug is refused, and the general cell case is CT-2319's. The retired
 `piece:` spelling is not read as an address.
 
-A qualified name is resolved in the session's own space or not at all. A space
-the session cannot check the name of — one configured by `did:key`, which
-carries no name — refuses the qualified form rather than answering with this
-space's same-slug piece, because the same slug in another space is a different
-piece. A bare slug is unaffected: it names no space to disagree about.
+A qualified name is resolved in the session's own space or not at all, because
+the same slug in another space is a different piece. The space is read as the
+shell reads one: a segment that is a DID names the space with that DID, and any
+other segment names a space by name. A space created with a random key has no
+name, so `pattern:<its DID>/<slug>` names it and a name does not; a session that
+cannot check a name refuses that form rather than answering with this space's
+same-slug piece. A legacy space is named by its name or by the DID the name
+derives. A bare slug is unaffected: it names no space to disagree about.
 
 An input cell names a task target, so failure is closed and loud rather than
 tolerated: a malformed argument is a usage error, and a reference that does not
@@ -2336,7 +2339,7 @@ deno task run -- \
   --workspace /path/to/workspace \
   --fabric-api-url https://toolshed.example/ \
   --fabric-identity ~/.cf/agent.pkcs8 \
-  --fabric-space my-space \
+  --fabric-space <space-did> \
   --prompt "Deploy a pattern that doubles its input and report the result."
 ```
 
@@ -2756,13 +2759,14 @@ The URL is the session's API URL, the space, and the slug — the address
 `cf piece new` prints — and it appears only when `--fabric-space` names the
 space. A space configured as a `did:key` has no URL that is not built from that
 DID, and a bare fabric identifier does not cross the model boundary, so the
-model-facing output carries the slug alone rather than a fabricated link. The
-prompt loop strips `pieceId` and records that omission. Nothing in the remaining
-output is swapped for a handle token, because nothing in it is a fabric
-reference: the slug is the model's own word and the URL is the operator's API
-URL and space name. Its error `message`, which can carry a DID from an
-authorization failure, is scrubbed for bare fabric identifiers like the other
-free-text fields. Compiler diagnostics come back as
+model-facing output carries the slug alone rather than a fabricated link; a
+console still shows its person that address, composed from its own
+configuration. The prompt loop strips `pieceId` and records that omission.
+Nothing in the remaining output is swapped for a handle token, because nothing
+in it is a fabric reference: the slug is the model's own word and the URL is the
+operator's API URL and space name. Its error `message`, which can carry a DID
+from an authorization failure, is scrubbed for bare fabric identifiers like the
+other free-text fields. Compiler diagnostics come back as
 `{ status: "compile-error", message }` so the model can iterate on the source;
 bare fabric identifiers a diagnostic can embed (compiler-generated `fid1:`
 module roots, DIDs, `data:` URIs) are replaced with a `[fabric-id]` placeholder
@@ -3433,7 +3437,7 @@ deno task run -- \
   --workspace /path/to/workspace \
   --fabric-api-url https://toolshed.example/ \
   --fabric-identity ~/.cf/agent.pkcs8 \
-  --fabric-space my-space \
+  --fabric-space <space-did> \
   --skills-root labs/skills \
   --allow-subagent-profile pattern-author \
   --prompt "Answer the question about my space by delegating a pattern to a pattern-author child."

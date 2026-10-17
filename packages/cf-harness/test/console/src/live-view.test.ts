@@ -18,6 +18,7 @@ import {
   stepWithheldAnything,
 } from "../../../console/src/live-view.ts";
 import "../../../console/src/live.ts";
+import { urlToAppView } from "@commonfabric/navigation";
 import { readConsoleRun } from "../../../console/run-store.ts";
 import type { ConsoleRunDetail } from "../../../console/run-store.ts";
 import type {
@@ -628,10 +629,10 @@ describe("console/src/live-view", () => {
   });
 
   describe("consoleLivePieceHref()", () => {
-    const piece = { slug: "reading list", url: "http://localhost:8000/s/r" };
+    const piece = { slug: "reading-list", url: "http://localhost:8000/s/r" };
 
     it("returns the address the run recorded when no base is named", () => {
-      expect(consoleLivePieceHref(piece, "my space", undefined)).toBe(
+      expect(consoleLivePieceHref(piece, "my-space", undefined)).toBe(
         "http://localhost:8000/s/r",
       );
     });
@@ -639,9 +640,42 @@ describe("console/src/live-view", () => {
     it("returns an address under the base a host renders pieces at", () => {
       expect(consoleLivePieceHref(
         piece,
+        "my-space",
+        "http://localhost:9901/pattern-pane",
+      )).toBe("http://localhost:9901/pattern-pane/my-space/reading-list");
+    });
+
+    it("returns an address at the space's DID for a name no address can hold", () => {
+      // The shell reads `my%20space` as a space of that name, not `my space`,
+      // so the piece is opened under the base at the DID the name derives.
+      const did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+      expect(consoleLivePieceHref(
+        piece,
         "my space",
         "http://localhost:9901/pattern-pane",
-      )).toBe("http://localhost:9901/pattern-pane/my%20space/reading%20list");
+        did,
+      )).toBe(`http://localhost:9901/pattern-pane/${did}/reading-list`);
+      expect(consoleLivePieceHref(
+        piece,
+        "my space",
+        "http://localhost:9901/pattern-pane",
+      )).toBe("http://localhost:8000/s/r");
+    });
+
+    it("returns a space created by DID as the DID the shell reads", () => {
+      // Escaping the DID's colons would hand the shell a segment it reads as
+      // a space NAME, which derives a different space.
+      const space = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+      const href = consoleLivePieceHref(
+        { slug: "reading-list", url: "http://localhost:8000/x/y" },
+        space,
+        "http://localhost:9901/pattern-pane",
+      );
+      expect(href).toBe(
+        `http://localhost:9901/pattern-pane/${space}/reading-list`,
+      );
+      expect(urlToAppView(new URL(`http://shell.test/${space}/reading-list`)))
+        .toEqual({ spaceDid: space, pieceSlug: "reading-list" });
     });
 
     it("returns the recorded address for a result naming no space", () => {

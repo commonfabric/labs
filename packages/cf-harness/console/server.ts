@@ -49,13 +49,16 @@
  * instead.
  *
  * The one piece of configuration this surface insists on is the fabric
- * session, whose space has to be a name rather than a `did:key`: `assign_slug`
- * composes a piece's URL from the name and offers none for a DID, and finishing
- * with a link rather than a transcript is what this surface is for.
+ * session, because finishing with a link rather than a transcript is what this
+ * surface is for. Its space is a name or the DID of a space created with a
+ * random key; for a DID, `assign_slug` gives the model no URL, and the turn
+ * result composes the person's link itself.
  */
 
 import { readLoomAuthoringConfig } from "../src/loom-authoring.ts";
 import { parseArgs } from "@std/cli/parse-args";
+import { isDID } from "@commonfabric/identity/did";
+import { legacySpaceDid } from "@commonfabric/identity";
 import type { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import {
   feedbackEventType,
@@ -65,7 +68,6 @@ import {
   patternIndexFailure,
   patternIndexSearchRequest,
 } from "@commonfabric/pattern-index/front";
-import { isDID } from "@commonfabric/identity/did";
 import {
   dirname,
   extname,
@@ -99,7 +101,7 @@ import {
   type HarnessModelProviderId,
   resolveCfcEnforcementMode,
 } from "../src/config.ts";
-import type { CfcPosture } from "@commonfabric/runner";
+import type { CfcPosture, MemorySpace } from "@commonfabric/runner";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   type HarnessChatError,
@@ -398,8 +400,9 @@ const callPatternIndex = (
  *
  * A reference may also be a piece's NAME — `pattern:<space>/<slug>`, or a bare
  * slug meaning this console's own space — which is what a surface showing a
- * rendered piece holds. `spaceName` is this console's space, and an address
- * naming another one is refused here: the caller cannot see which space this
+ * rendered piece holds. `config` names this console's space, by a name or, for
+ * a space created with a random key, by a DID, which is how the console's
+ * results name it; an address naming another space is refused here: the caller cannot see which space this
  * console runs against, so a mismatch is this side's to explain. Whether the
  * space holds the slug is the turn's to find out, like every other reference
  * that parses and may still not mint.
@@ -408,7 +411,7 @@ const callPatternIndex = (
  */
 const parseTaskInputCells = (
   value: unknown,
-  spaceName: string,
+  config: Pick<ConsoleConfig, "fabricSession" | "fabricSpaceDid">,
 ): readonly HarnessInputCellSpec[] => {
   if (value === undefined || value === null) {
     return [];
@@ -416,6 +419,11 @@ const parseTaskInputCells = (
   if (!Array.isArray(value)) {
     throw new Error("inputCells must be an array");
   }
+  // References and addresses are held to this console's space as the mint
+  // holds them: by its DID, with the foreign spaces the operator admitted, and
+  // by its name when it was configured by one.
+  const { space, foreignSpaces } = config.fabricSession;
+  const spaceName = isDID(space) ? undefined : space;
   const specs: HarnessInputCellSpec[] = [];
   const names = new Set<string>();
   for (const entry of value) {
@@ -430,11 +438,11 @@ const parseTaskInputCells = (
     // to accept different references under the same name.
     const spec = parseInputCellArgument(`${name}=${ref}`);
     // And then once more against this console's own space, which the flag's
-    // parser cannot know. A named piece address spelling another space is a
+    // parser cannot know. A named piece address naming another space is a
     // caller mistake decidable from the text alone, so it is answered now
     // rather than spent on a turn; whether this space HOLDS the slug is not
     // decidable from the text, and the turn answers that one.
-    checkInputCellSpec(spec, undefined, spaceName);
+    checkInputCellSpec(spec, config.fabricSpaceDid, spaceName, foreignSpaces);
     if (names.has(spec.name)) {
       throw new Error(`inputCells names \`${spec.name}\` twice`);
     }
@@ -544,6 +552,12 @@ interface ConsoleConfig extends HarnessSessionConfig {
 
   /** A fabric session is required here; see `resolveConsoleConfig`. */
   fabricSession: HarnessFabricSessionConfig;
+
+  /**
+   * The DID of the session's space: the configured one, or the one a legacy
+   * name derives, as the session opens it.
+   */
+  fabricSpaceDid: MemorySpace;
 
   sessionDbPath?: string;
 
@@ -747,10 +761,8 @@ export interface ConsoleHost extends SandboxProcess {
 
 /**
  * Resolves configuration from flags over environment over defaults. The space
- * is rejected when it is a `did:key`: a run in such a space can build a piece
- * and never hand back an address for it, which is the one outcome this surface
- * exists to avoid. `host` says what applies where `env` names no sandbox
- * runtime.
+ * is a name or a DID, taken as configured. `host` says what applies where `env`
+ * names no sandbox runtime.
  *
  * @throws HarnessControlError where `env` names no sandbox runtime and
  * `host` says its caller must name one; and where it names none on macOS or
@@ -822,11 +834,6 @@ export const resolveConsoleConfig = async (
       "a fabric session is required: set --fabric-identity/CF_HARNESS_FABRIC_IDENTITY and --fabric-space/CF_HARNESS_FABRIC_SPACE",
     );
   }
-  if (isDID(space)) {
-    throw new Error(
-      `--fabric-space must be a space name rather than a DID: assign_slug composes a URL from the name, and offers none for ${space}`,
-    );
-  }
   const posture = flag("fabric-cfc-posture") ??
     nonEmpty(env.CF_HARNESS_FABRIC_CFC_POSTURE);
   if (
@@ -881,6 +888,10 @@ export const resolveConsoleConfig = async (
       }
       : {}),
   };
+  // The session opens a legacy name at the DID it derives, so the console
+  // derives the same one: references and addresses are held to it here as
+  // the mint holds them, and a piece is linked at it.
+  const fabricSpaceDid = isDID(space) ? space : await legacySpaceDid(space);
 
   // The checkout's skills/ tree gives the pattern-author subagent its
   // preloaded pattern-dev + pattern-schema skills; without a skills root the
@@ -944,6 +955,7 @@ export const resolveConsoleConfig = async (
       ? { researchReasoningEffort }
       : {}),
     fabricSession,
+    fabricSpaceDid,
     ...(loomAuthoring !== undefined ? { loomAuthoring } : {}),
     ...(spaceDbPath !== undefined ? { spaceDbPath } : {}),
     ...(patternIndexUrl !== undefined
@@ -1685,6 +1697,7 @@ export class ConsoleServer {
       pieces: [],
       looms: [],
       spaceName: this.#config.fabricSession.space,
+      spaceDid: this.#config.fabricSpaceDid,
       finalText: envelope.event.finalText ?? "",
     };
     const taskOutcome = readHarnessTaskOutcome(result);
@@ -1722,6 +1735,8 @@ export class ConsoleServer {
       artifactRoot: session?.artifactRoot ?? this.#config.artifactRoot,
       turnId,
       spaceName: this.#config.fabricSession.space,
+      fabricApiUrl: this.#config.fabricSession.apiUrl,
+      fabricSpaceDid: this.#config.fabricSpaceDid,
       timing: turn?.turn,
       display: await this.#display(),
     });
@@ -2194,10 +2209,7 @@ export class ConsoleServer {
     let inputCells: readonly HarnessInputCellSpec[];
     let patternRefs: readonly HarnessPatternRefSpec[];
     try {
-      inputCells = parseTaskInputCells(
-        body.inputCells,
-        this.#config.fabricSession.space,
-      );
+      inputCells = parseTaskInputCells(body.inputCells, this.#config);
       checkTaskInputCellNames(inputCells, this.#config.connectorGrants);
       patternRefs = parseTaskPatternRefs(body.patternRefs);
     } catch (error) {

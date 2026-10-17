@@ -462,6 +462,38 @@ describe("local-jobs/profiles", () => {
         ).toEqual({ profile: named });
       });
 
+      it("admits a piece address naming the profile's space by DID only where the profile names it by DID", async () => {
+        // A space created with a random key has only its DID, so that is how
+        // an address names it. A profile naming its space by name cannot
+        // check a DID against it, so it refuses that form.
+        const named = (await read({
+          carry: { ...CARRY, fabric: { ...CARRY.fabric, space: "my-space" } },
+        })).get("carry")!;
+        const byDid = (await read({ carry: CARRY })).get("carry")!;
+        const own = `pattern:${CARRY.fabric.space}/tracker`;
+
+        expect(narrowLocalJobProfile(byDid, { inputs: { focus: own } }))
+          .toEqual({ profile: byDid });
+        // In the request's own terms, rather than the command line's.
+        expect(
+          (narrowLocalJobProfile(byDid, {
+            inputs: { focus: "pattern:my-space/tracker" },
+          }) as { refusal: string }).refusal,
+        ).toContain("Input `focus` names its space by name");
+        for (
+          const [profile, focus] of [
+            [byDid, "pattern:did:key:z6MkforeignSpaceForProfileTest/tracker"],
+            [named, own],
+          ] as const
+        ) {
+          expect(
+            (narrowLocalJobProfile(profile, { inputs: { focus } }) as {
+              refusal: string;
+            }).refusal,
+          ).toContain("`focus`");
+        }
+      });
+
       it("refuses an input whose name the harness does not admit", async () => {
         const carry = (await read({ carry: CARRY })).get("carry")!;
 

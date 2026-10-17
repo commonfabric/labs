@@ -37,6 +37,7 @@ import {
 import { stepCfcRecorded, withheldView } from "./steps-view.ts";
 import type { ConsoleStep } from "../steps.ts";
 import type { ConsoleTurnResultPiece } from "../turn-result.ts";
+import { pieceUrl } from "../../src/piece-url.ts";
 import type { BrowserToolAction } from "../../src/tools/browser.ts";
 import type { HarnessPolicyDecisionReasonCode } from "../../src/contracts/policy-trace.ts";
 import {
@@ -119,6 +120,9 @@ export type ConsoleLiveEntry =
 
     /** The space the pieces are in, which composing an address needs. */
     spaceName?: string;
+
+    /** That space's DID, for a name no address can hold. */
+    spaceDid?: string;
   };
 
 /**
@@ -631,19 +635,23 @@ const piecesBaseFrom = (raw: string | null): string | undefined => {
 /**
  * Where one piece is opened. The host that renders pieces somewhere other than
  * the Fabric API says so with `piecesBase`, and the pane composes the address
- * from the space and the slug the run recorded; with no base named, the URL
- * the run recorded is used as it stands rather than rebuilt.
+ * from the space and the slug the run recorded, as every piece address is
+ * composed (`pieceUrl`): by the space's name, or by its DID where no address
+ * can hold the name. With no base named, the URL the run recorded is used as
+ * it stands rather than rebuilt.
  */
 export const consoleLivePieceHref = (
   piece: ConsoleTurnResultPiece,
   spaceName: string | undefined,
   piecesBase: string | undefined,
-): string =>
-  piecesBase === undefined || spaceName === undefined
-    ? piece.url
-    : `${piecesBase}/${encodeURIComponent(spaceName)}/${
-      encodeURIComponent(piece.slug)
-    }`;
+  spaceDid?: string,
+): string => {
+  const under = (space: string | undefined) =>
+    piecesBase === undefined || space === undefined
+      ? undefined
+      : pieceUrl(piecesBase, space, piece.slug);
+  return under(spaceName) ?? under(spaceDid) ?? piece.url;
+};
 
 /**
  * What the address a pane was opened at names. The session is the last segment
@@ -928,6 +936,7 @@ export const consoleLiveEntries = (
             : { revealed: event.result.revealed }),
           pieces: event.result.pieces,
           spaceName: event.result.spaceName,
+          spaceDid: event.result.spaceDid,
         });
         break;
       }
@@ -1802,6 +1811,7 @@ export class ConsoleLive extends LitElement {
                     piece,
                     entry.spaceName,
                     this.piecesBase,
+                    entry.spaceDid,
                   )}"
                   rel="noopener"
                 >
