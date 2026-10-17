@@ -2304,8 +2304,8 @@ describe("wish built-in", () => {
           {
             name: "/main.tsx",
             contents: [
-              "import { pattern, wish } from 'commonfabric';",
-              "export default pattern<{}>(() => {",
+              "import { pattern, wish, type WishState } from 'commonfabric';",
+              "export default pattern<{}, { spaceResult: WishState<unknown> }>(() => {",
               "  const spaceResult = wish({ query: '/' });",
               "  return { spaceResult };",
               "});",
@@ -2353,8 +2353,8 @@ describe("wish built-in", () => {
           {
             name: "/main.tsx",
             contents: [
-              "import { pattern, wish } from 'commonfabric';",
-              "export default pattern<{}>(() => {",
+              "import { pattern, wish, type WishState } from 'commonfabric';",
+              "export default pattern<{}, { deepValue: WishState<unknown> }>(() => {",
               "  const deepValue = wish({ query: '/', path: ['nested', 'deep', 'value'] });",
               "  return { deepValue };",
               "});",
