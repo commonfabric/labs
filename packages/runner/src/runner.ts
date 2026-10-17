@@ -91,6 +91,7 @@ import {
   recordNewDocumentProtectedDefaults,
   recordNewProtectedDefaults,
 } from "./cfc/default-initialization.ts";
+import { readStoredCfcMetadata } from "./cfc/metadata.ts";
 import {
   CFC_POLICY_MANIFEST_DOC_SCHEMA,
   CFC_POLICY_MANIFEST_ID_PREFIX,
@@ -102,6 +103,7 @@ import {
   recordReferencedArgumentFields,
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
+import { cfcSchemaEntries } from "./cfc/schema-label-view.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
@@ -826,6 +828,29 @@ const recordSchemaPolicyInputForLink = (
   });
 };
 
+/**
+ * Records `schema` as the policy the derived internal cell at `link` declares
+ * for itself, where its setup writes it no value
+ * (`derivedCellInitialization()`).
+ */
+const recordDeclaredSchemaPolicyInput = (
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  schema: JSONSchema,
+): void => {
+  tx.recordCfcWritePolicyInput({
+    kind: "schema",
+    target: {
+      space: link.space,
+      id: link.id,
+      scope: link.scope,
+      path: [...link.path],
+    },
+    schema,
+    declaration: true,
+  });
+};
+
 const recordRawBuiltinBindingSchemaPolicyInputs = (
   tx: IExtendedStorageTransaction,
   runtime: Runtime,
@@ -939,6 +964,110 @@ const recordRawBuiltinResultSchemaPolicyInput = (
     "output",
   );
 };
+
+/** Whether `schema` says who may write a value it describes, at any depth. */
+const declaresWriter = (schema: JSONSchema | undefined): boolean =>
+  schema !== undefined &&
+  cfcSchemaEntries(schema).some(({ schema: entry }) =>
+    isObjectOrArray(entry) && isObjectOrArray(entry.ifc) &&
+    (entry.ifc.writeAuthorizedBy !== undefined ||
+      entry.ifc.writePolicyAnyOf !== undefined ||
+      entry.ifc.uiContract !== undefined)
+  );
+
+/**
+ * Whether `value`, a node's bindings, holds an alias to the whole of this
+ * pattern's derived internal cell `partialCause`. An alias to a position inside
+ * the cell does not count, and neither does one deferred to a nested pattern,
+ * which names that pattern's cell, not this one's.
+ */
+const bindsDerivedCell = (value: unknown, partialCause: JSONValue): boolean => {
+  if (isAliasBinding(value)) {
+    return (value.$alias.defer ?? 0) === 0 &&
+      value.$alias.path.length === 0 &&
+      deepEqual(value.$alias.partialCause, partialCause);
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => bindsDerivedCell(item, partialCause));
+  }
+  return isObjectNotArray(value) &&
+    Object.values(value).some((item) => bindsDerivedCell(item, partialCause));
+};
+
+/**
+ * Whether one of `pattern`'s nodes fills the derived internal cell
+ * `partialCause` names: a lift, a builtin or a sub-pattern whose output is the
+ * cell. A handler lists nothing under its `outputs`, so a cell that only
+ * handlers write is the pattern's own state. A node that fills only a
+ * position inside a cell leaves the cell the pattern's state at its other
+ * positions; the builder never emits such an output, since every node it
+ * builds writes a cell of its own.
+ */
+const nodeFillsDerivedCell = (
+  pattern: Pattern,
+  partialCause: JSONValue,
+): boolean =>
+  pattern.nodes.some((node) => bindsDerivedCell(node.outputs, partialCause));
+
+/**
+ * How a pattern's derived internal cell is initialized where it holds no value:
+ * with its declared default, written as its first value, or with the writer
+ * policy its schema declares, stored as the cell's CFC envelope while the cell
+ * holds no value.
+ */
+type DerivedCellInitialization =
+  | { readonly kind: "default"; readonly value: FabricValue }
+  | { readonly kind: "declaration"; readonly schema: JSONSchema };
+
+/**
+ * How a pattern's derived internal cell is initialized where it holds no value,
+ * or `undefined` where it is not. A declared default is written. A cell with no
+ * default whose schema says who may write it (`declaresWriter()`) has that
+ * schema declared where the cell is the site that declares the policy: the
+ * declaration is stored as the cell's envelope, so the cell is held to its
+ * writer from its first write, and it writes no value, so that first write
+ * finds the cell as absent as one with no policy. That is the pattern's own
+ * state, a cell no node fills, including one a node fills only part of: the
+ * node writes into the absent cell, and the declaration holds the cell's other
+ * positions to their writers. A cell a node fills (a builtin's result, a lift's
+ * output, a sub-pattern's result) holds what the node produces, and the writers
+ * its schema names belong to what it carries, so it declares nothing. Nor does
+ * a cell whose schema makes it a link (`asCell`): it holds a reference, and the
+ * policy it describes is the referenced cell's, which that cell declares.
+ */
+const derivedCellInitialization = (
+  pattern: Pattern,
+  descriptor: NonNullable<Pattern["derivedInternalCells"]>[number],
+): DerivedCellInitialization | undefined => {
+  const schema = descriptor.schema;
+  if (!isObjectOrArray(schema)) return undefined;
+  if (schema.default !== undefined) {
+    return {
+      kind: "default",
+      value: fabricFromConvertibleJsValue(schema.default as JSONValue),
+    };
+  }
+  return schema.asCell === undefined && declaresWriter(schema) &&
+      !nodeFillsDerivedCell(pattern, descriptor.partialCause)
+    ? { kind: "declaration", schema }
+    : undefined;
+};
+
+/**
+ * Whether `initialization`, a derived internal cell's
+ * (`derivedCellInitialization()`), is due at `link`, a document that holds no
+ * value. A default is. A declaration is due only while the document stores no
+ * envelope: storing one is all it does, and a document that stores one keeps
+ * it, so a cell that holds no value again, as a cleared one does, does not
+ * declare again on every start.
+ */
+const initializationIsDue = (
+  tx: IExtendedStorageTransaction,
+  initialization: DerivedCellInitialization,
+  link: NormalizedFullLink,
+): boolean =>
+  initialization.kind === "default" ||
+  readStoredCfcMetadata(tx, link) === undefined;
 
 /**
  * Whether `argumentLink` names a stand-in: the immutable document a pre-sync
@@ -3990,20 +4119,23 @@ export class Runner {
           scopeRank(derivedScope) >
             scopeRank(resultCell.getAsNormalizedFullLink().scope))
       ) {
-        const schemaDefault = isObjectOrArray(descriptor.schema)
-          ? descriptor.schema.default as JSONValue | undefined
-          : undefined;
-        if (schemaDefault !== undefined) {
-          const currentValue = derivedCell.getRawUntyped({
-            meta: ignoreReadForScheduling,
-          });
-          if (currentValue === undefined) {
-            const seed = fabricFromConvertibleJsValue(schemaDefault);
-            derivedCell.setRawUntyped(seed);
+        const initialization = derivedCellInitialization(pattern, descriptor);
+        const seeded = derivedCell.getAsNormalizedFullLink();
+        if (
+          initialization !== undefined &&
+          derivedCell.getRawUntyped({ meta: ignoreReadForScheduling }) ===
+            undefined &&
+          initializationIsDue(tx, initialization, seeded)
+        ) {
+          if (initialization.kind === "declaration") {
+            // The schema input is what `prepare` stores the envelope from;
+            // the cell holds no value until its first write.
+            recordDeclaredSchemaPolicyInput(tx, seeded, initialization.schema);
+          } else {
+            derivedCell.setRawUntyped(initialization.value);
             // The cell is the pattern's own and absent until now, so its
             // default is an initialization whether or not anything projects
             // it: a result field, a sub-pattern's argument, or nothing.
-            const seeded = derivedCell.getAsNormalizedFullLink();
             tx.recordCfcWritePolicyInput({
               kind: "initialization",
               mode: "seed",
@@ -4013,7 +4145,7 @@ export class Runner {
                 scope: seeded.scope,
                 path: [...seeded.path],
               },
-              value: seed,
+              value: initialization.value,
             }, runtimeWritePolicyAuthorization);
           }
         }
@@ -9567,10 +9699,11 @@ export class Runner {
         if (scopeRank(derivedLink.scope) <= scopeRank(resultLink.scope)) {
           continue;
         }
-        const schemaDefault = isObjectOrArray(descriptor.schema)
-          ? descriptor.schema.default
-          : undefined;
-        if (schemaDefault === undefined) continue;
+        const initialization = derivedCellInitialization(
+          instance.pattern,
+          descriptor,
+        );
+        if (initialization === undefined) continue;
         if (!isCurrent()) return false;
         if (options.allowReadOnly && !this.#runtime.servingPosture) {
           let readOnly = readOnlySpaces.get(derivedLink.space);
@@ -9660,7 +9793,8 @@ export class Runner {
           }
           if (
             derived.getRawUntyped({ meta: ignoreReadForScheduling }) !==
-              undefined
+              undefined ||
+            !initializationIsDue(tx, initialization, derivedLink)
           ) return;
           // A default belongs to its owning piece, so it carries the label on
           // the piece's root. The pattern pointer and the manifest read above
@@ -9677,13 +9811,22 @@ export class Runner {
           // same ownership claim as setup through the ordinary writer-fit gate.
           recordRuntimeOwnedStore(tx, owner, derivedLink);
           setResultCell(derived, owner.asSchema(instance.pattern.resultSchema));
-          const value = fabricFromConvertibleJsValue(schemaDefault);
-          derived.setRawUntyped(value);
+          if (initialization.kind === "declaration") {
+            // The schema input is what `prepare` stores the envelope from;
+            // the instance holds no value until its first write.
+            recordDeclaredSchemaPolicyInput(
+              tx,
+              { ...derivedLink, path: [] },
+              initialization.schema,
+            );
+            return;
+          }
+          derived.setRawUntyped(initialization.value);
           tx.recordCfcWritePolicyInput({
             kind: "initialization",
             mode: "seed",
             target: { ...derivedLink, path: [] },
-            value,
+            value: initialization.value,
           }, runtimeWritePolicyAuthorization);
         });
         if (outcome.error) {

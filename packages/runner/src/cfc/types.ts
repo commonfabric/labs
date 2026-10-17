@@ -721,6 +721,15 @@ export type WritePolicyInput =
      * stamp (`ifc.addIntegrity`) is the stamping write's own.
      */
     readonly storedSchema?: true;
+
+    /**
+     * Present only when the schema is the policy the target declares for
+     * itself, recorded by a setup that writes the target no value. Every
+     * position the declaration guards keeps an entry, a UI contract's
+     * included, so the target's first write meets the policy. The flag can
+     * only add protection, so it needs no authority of its own.
+     */
+    readonly declaration?: true;
   }
   | {
     readonly kind: "structural-provenance";
