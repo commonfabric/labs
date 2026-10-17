@@ -1109,7 +1109,16 @@ demanded-piece startup path's setup/instantiation writes
 instantiation tx, the missing-stream-marker setup REPAIR, the
 deferred piece-start/run transactions, and the runtime-internal
 pattern-update/rollforward writes — the same `applySetupState`
-output the pattern-swap choke point already stamps). A piece-start
+output the pattern-swap choke point already stamps). A deferred
+start minted on behalf of a run that carries an instance identity
+— the start a demanded run defers until the piece's execution
+family lands — carries that identity in its `bookkeeping` stamp as
+ADDRESSING: the start reads that principal's instances, and the
+seal resolves its scoped writes (the defaults setup seeds in the
+start's own transaction among them) against the same instances
+rather than the wave-level service identity. The stamp still
+carries no acting principal (protocol.md §1's "The SpaceServer's
+own writes"). A piece-start
 commit that FAILS after start() resolved (the path is
 fire-and-forget by design) must SURFACE — loudly logged in every
 arm and counted into §7's `structureLoadFailures` on a serving
