@@ -316,6 +316,7 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 ## Investigations, journals, and working notes
 
+- [Offline fingerprint reconstruction reuse](development/performance/2026-10-17-offline-fingerprint.md) — 2026-10-17; an exhaustive 26.52 GB snapshot fingerprint in 13m05s matching the maintenance baseline, byte-identical bounded reports 3.84× faster through reconstruction reuse and scoped owner/schema caching, unchanged synthetic full-compaction verdicts, and a two-process replay experiment with a smaller gain.
 - [The Topics export's loops and quiet weeks, replayed through the echo breaker](development/performance/2026-10-08-topics-export-traces-vs-echo-breaker.md) — 2026-10-08; the July 2026 write storms and the quiet weeks after them in the 2026-08-18 export of the Topics social space, replayed through the remote-echo breaker's detector: per session the loops ran between three and sixty echoes per ten seconds, two of the five storm documents never reach twelve in ten, the quiet weeks never put more than five changed rewrites of one reactive document in a minute, and forty seconds is the shortest window that catches every July loop at the cadence it sustained.
 - [Staged-reference derivation cache](development/performance/2026-09-25-staged-reference-cache/README.md) — Alternating main/cache measurements, warmed chain controls, exact metadata equivalence, and the remaining flat-map growth; probe and raw records accompany the report (2026-09-25).
 

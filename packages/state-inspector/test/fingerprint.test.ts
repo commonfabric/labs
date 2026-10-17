@@ -432,7 +432,7 @@ Deno.test("enumerates a store past the spread-argument ceiling", () => {
       // `.extent.total` includes rows beyond the listing's display cap.
       assertEquals(listEntityModels(space).extent.total, 200_004);
 
-      // This exercises `allEntities()` without hashing every document.
+      // This exercises complete enumeration without hashing every document.
       const { generated, named } = generatedInternalCellIds(space);
       assertEquals([...generated], ["of:generated"]);
       assertEquals([...named], ["of:named"]);
@@ -500,12 +500,9 @@ function withScopedSpace(run: (space: SpaceDb) => void): void {
 /**
  * The grouped pass is interchangeable with the per-scope query, scope by scope.
  *
- * `allEntities` now fetches every scope's rows in one pass and hands each scope
- * its share, rather than letting each `listEntityModels` call fetch its own.
- * That is only a pure speedup if the share is EXACTLY what the per-scope query
- * would have returned — same rows, same order, tombstones kept — because model
- * building is deterministic given its rows, and the fingerprint's exclusions
- * turn on the `kind` it produces. So this pins the equality, not just the count.
+ * The fingerprint enumerates every scope in one pass. Each scope's share must
+ * match the per-scope query: same addresses, revision counts, and order, with
+ * tombstones kept. This pins the equality, not just the count.
  */
 Deno.test("one pass yields each scope's rows exactly as the per-scope query does", () => {
   withScopedSpace((space) => {
