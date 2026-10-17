@@ -291,16 +291,19 @@ export function cellLabelRefusal(
  * §4.4.1): the cell's own label, which includes a label its handle carries,
  * and, when its path resolves through links to another place, the label
  * there, which reflects every link the resolution followed (spec §8.2.7).
- * {@link cellLabelRefusal} fits each separately, so integrity evidence in one
- * does not discharge a clause of the other. Undefined when the labels cannot
- * be read, as when the resolution throws.
+ * The place is the resolved target's stored address, where the labels a
+ * dereference consumes are read (spec §8.2.4); an inline array element is
+ * named there rather than by a snapshot of its content, which stores no
+ * label. {@link cellLabelRefusal} fits each separately, so integrity
+ * evidence in one does not discharge a clause of the other. Undefined when
+ * the labels cannot be read, as when the resolution throws.
  */
 export function cellLabelSources(
   cell: Cell<unknown>,
 ): CfcLabelViewSource[] | undefined {
   try {
     const own = cfcLabelViewSourceForCell(cell);
-    const resolved = cell.resolveAsCell();
+    const resolved = cell.resolveAsCell({ inlineArrayItemsInPlace: true });
     return sameCell(cell, resolved)
       ? [own]
       : [own, cfcLabelViewSourceForCell(resolved)];
