@@ -122,6 +122,18 @@ candidate pattern generates it during setup. This admits the forward migration;
 add a result default as well when an older concurrently running generation must
 still be able to write its previous result shape.
 
+An object stores no property whose value is `undefined`
+(`docs/specs/json_schema.md`), so the `undefined` alternative of a property's
+schema, as an `anyOf` arm or a `type` list member, describes no value a piece
+holds. The proof compares a property with that alternative left out of both
+sides (`withoutUndefinedAlternative` in
+`packages/piece/src/schema-compatibility.ts`), and reads an `anyOf` left with
+one alternative as that alternative: a candidate argument need not accept it,
+and a candidate result that admits it promises nothing less. Beside `asCell`,
+the alternatives describe the cell's value, which may be `undefined`, and are
+kept. A schema generator that leaves out the `undefined` an optional property's
+`?` adds therefore changes no contract's compatibility.
+
 Cell wrappers (`asCell`), storage scopes (`scope`), and the write markers
 (`readOnly`, `writeOnly`) are default-stable: they say how a value is
 delivered, stored, or written, not what shape it has, so a default beneath one

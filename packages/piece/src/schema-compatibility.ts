@@ -1147,6 +1147,50 @@ function additionalPropertiesOf(schema: SchemaObject): JSONSchema {
   return unconstrained ? true : additional;
 }
 
+/**
+ * `schema`, the schema of an object's property, without the `undefined`
+ * alternative it may hold. An object stores no property whose value is
+ * `undefined` (`docs/specs/json_schema.md`), so that alternative describes no
+ * value either side holds, and both are compared without it: a schema
+ * generator that leaves out the `undefined` an optional property's `?` adds
+ * narrows nothing a piece stores. A property whose only alternative is
+ * `undefined` holds no value at all, and reads as `false`; one with a single
+ * other alternative reads as that alternative.
+ */
+function withoutUndefinedAlternative(schema: JSONSchema): JSONSchema {
+  // Beside `asCell`, the alternatives are the cell's value, which may be
+  // `undefined`; the property itself holds the cell.
+  if (!isObjectNotArray(schema) || schema.asCell !== undefined) return schema;
+  if (schema.type === "undefined") return false;
+  if (Array.isArray(schema.type) && schema.type.includes("undefined")) {
+    const types = schema.type.filter((type) => type !== "undefined");
+    if (types.length === 0) return false;
+    return { ...schema, type: types.length === 1 ? types[0]! : types };
+  }
+  if (Array.isArray(schema.anyOf)) {
+    const alternatives = schema.anyOf.filter((alternative) =>
+      !isObjectNotArray(alternative) || alternative.type !== "undefined" ||
+      Object.keys(alternative).some((key) =>
+        key !== "type" && !DESCRIPTIVE_ANNOTATION_KEYS.has(key)
+      )
+    );
+    if (alternatives.length === schema.anyOf.length) return schema;
+    if (alternatives.length === 0) return false;
+    // One alternative left is the property's schema itself, read with the
+    // node's other keywords where they do not overlap it.
+    const { anyOf: _, ...rest } = schema;
+    const [only] = alternatives;
+    if (
+      alternatives.length === 1 && isObjectNotArray(only) &&
+      Object.keys(rest).every((key) => !Object.hasOwn(only, key))
+    ) {
+      return { ...rest, ...only };
+    }
+    return { ...schema, anyOf: alternatives };
+  }
+  return schema;
+}
+
 function objectSubsetIssue(
   source: SchemaObject,
   target: SchemaObject,
@@ -1337,7 +1381,9 @@ function objectSubsetIssue(
 
   for (const property of Object.keys(previousProperties)) {
     const propertyPath = `${path}.${property}`;
-    const sourceDirect = sourceProperties[property];
+    const sourceDirect = withoutUndefinedAlternative(
+      sourceProperties[property],
+    );
     const sourceContracts = [
       sourceDirect,
       ...matchingPatternPropertySchemas(source.patternProperties, property),
@@ -1350,7 +1396,7 @@ function objectSubsetIssue(
     if (Object.hasOwn(targetProperties, property)) {
       const directIssue = schemaSubsetIssue(
         sourceDirect,
-        targetProperties[property],
+        withoutUndefinedAlternative(targetProperties[property]),
         propertyPath,
         context,
       );
