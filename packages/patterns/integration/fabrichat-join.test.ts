@@ -280,12 +280,14 @@ describe("fabrichat-join", () => {
     // Added by their address alone, the person is offered the room through
     // the profile the adder's manager lists for them, which points at their
     // Home's private inbox, and the room's page, reading the manager's verdict
-    // from the adder's home, says so. A served handler can't read the
-    // manager's per-session `people`, so under server execution it finds no
-    // profile for them, and queues a notice instead.
+    // from the adder's home, says so. Under server execution the session's
+    // `people` lists nobody: deriving it has the serving runtime read each
+    // room's space at session scope, which it refuses for a space other than
+    // the one it serves. So the served handler finds no profile for them, and
+    // queues a notice instead.
     // TODO(danfuzz): Expect `offered` under server execution too, and the
-    // room in the person's chats below, once a served handler can read a
-    // per-session instance of its user's.
+    // room in the person's chats below, once deriving `people` takes no
+    // per-session read of a room's space.
     await fillCfInput(adder, "#fabrichat-add-member-address", addedAddress);
     await clickTrustedAction(adder, ADD_MEMBER_ACTION);
     await waitForSettledText(

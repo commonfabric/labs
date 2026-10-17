@@ -146,13 +146,18 @@ it stores needs to be `PerUser` or `PerSession`.
 is `people`, which is drawn from it, though each room's `roster` is shared by
 everyone the room's space admits: a profile lives in its owner's own space, and
 attests no principal to a reader that space refuses, so two readers can key the
-same roster differently. Each room in it is read under the reader's own access,
-so a manager more than one principal reads, as one outside a home space can be,
-lists different rooms to a principal a room's space refuses than to its members.
-Stored once for every reader, a value readers derive differently is one their
-runtimes overwrite without end. A stream reads neither, except `offerRoom`,
-which reads `people` for the session that sends it: every other request names a
-room's members by principal or by profile itself.
+same roster differently. A client's runtime reads each room in it as its own
+user, so a manager more than one principal reads, as one outside a home space
+can be, lists different rooms to a principal a room's space refuses than to its
+members. With server execution off those runtimes commit what they derive, and
+stored once for every reader, a value readers derive differently is one they
+overwrite without end. With it on, the runtime serving the manager derives each
+session's instance, and its reads of a room's space at session scope are
+refused whoever the session's user is
+([`serverExecution`](../../development/EXPERIMENTAL_OPTIONS.md#serverexecution)),
+so a session's `people` there lists nobody. A stream reads neither, except
+`offerRoom`, which reads `people` for the session that sends it: every other
+request names a room's members by principal or by profile itself.
 
 ## Facts
 
