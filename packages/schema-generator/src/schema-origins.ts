@@ -43,3 +43,47 @@ export function unionFoldedFrom(
   origins.set(schema, { kind: "union", parts: () => arms });
   return schema;
 }
+
+/**
+ * `copy`, a schema made from `original` by changing keywords that say nothing
+ * about its source type, recorded as coming from what `original` came from.
+ * A copy with no record would read as the one type its schema stands for.
+ */
+export function withOriginOf(
+  copy: MutableJSONSchema,
+  original: MutableJSONSchema,
+  context: GenerationContext,
+): MutableJSONSchema {
+  const origin = isObjectOrArray(original)
+    ? context.schemaOrigins?.get(original)
+    : undefined;
+  if (origin && isObjectOrArray(copy) && copy !== original) {
+    context.schemaOrigins?.set(copy, origin);
+  }
+  return copy;
+}
+
+/**
+ * `schema` with each schema in it that has an origin recorded wrapped with
+ * that record's number (`originNumbers`), for a key that tells apart equal
+ * schemas from different types, as two branded primitives' fallbacks are.
+ * A copy recorded as its original's (`withOriginOf()`) is numbered alike.
+ */
+export function withOriginsNumbered(
+  schema: unknown,
+  context: GenerationContext,
+): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map((item) => withOriginsNumbered(item, context));
+  }
+  if (!isObjectOrArray(schema)) return schema;
+  const numbered: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    numbered[key] = withOriginsNumbered(value, context);
+  }
+  const origin = context.schemaOrigins?.get(schema as MutableJSONSchemaObj);
+  const numbers = context.originNumbers;
+  if (origin === undefined || numbers === undefined) return numbered;
+  if (!numbers.has(origin)) numbers.set(origin, numbers.size);
+  return { origin: numbers.get(origin), schema: numbered };
+}

@@ -85,6 +85,7 @@ import {
   scopeUnionUnreadError,
 } from "../scope-placement.ts";
 import {
+  EVIDENCE_LABELS,
   POLICY_READ_IN_PART,
   referenceChain,
   withIfcLabels,
@@ -247,7 +248,12 @@ export const resolveScopeWrapperNode = (
   return scope === undefined ? undefined : { scope, node };
 };
 
-const applyScopeToAsCellEntry = (
+/**
+ * `entry`, a cell's `asCell` entry, capped to `scope`: following the cell's
+ * handle reads in that scope. Throws where another scope already caps the
+ * cell (`nestedScopeError()`).
+ */
+export const applyScopeToAsCellEntry = (
   entry: AsCellEntry,
   scope: SchemaScope,
 ): AsCellEntry => {
@@ -364,7 +370,7 @@ const unionBranches = (
 };
 
 /** The error for a scope wrapper nested in another with no cell between. */
-const nestedScopeError = (): Error =>
+export const nestedScopeError = (): Error =>
   new Error("Nested scope wrappers require a cell boundary between scopes.");
 
 /**
@@ -663,17 +669,6 @@ const boundPayloadOf = (metadata: CarriedMetadata): ts.Type | undefined => {
 };
 
 /**
- * The labels that are evidence a value carries, which a part of a value may
- * carry only where it provably came from the policy's payload. Every other
- * label restricts what may happen to the value or is a claim the runtime
- * verifies at the write, and is safe wherever the payload's data may be.
- */
-const EVIDENCE_LABELS: ReadonlySet<string> = new Set([
-  "integrity",
-  "addIntegrity",
-]);
-
-/**
  * A mapped type as the checker holds it, with the type it maps over:
  * `modifiersType` is `T` in `{ readonly [K in keyof T]: T[K] }`, which the
  * checker sets once it resolves the mapped type's members.
@@ -727,8 +722,33 @@ const holdsCarriersUnwritten = (
  * Which members of a value of `type` a policy whose payload is `of` reaches:
  * those that may hold the payload's data, where a restriction belongs, and
  * those that must, where evidence belongs. `all` stands for the whole value.
+ * A value of a union payload is one of its alternatives. Where `type` holds
+ * one of them as a part, as each arm the checker distributes an intersection
+ * over that union into does, the data that must be the payload's is that
+ * alternative's, while the data that may be is still any alternative's.
  */
 const payloadReach = (
+  type: ts.Type,
+  of: ts.Type | undefined,
+  checker: ts.TypeChecker,
+): { may: readonly string[] | "all"; must: readonly string[] | "all" } => {
+  const reach = reachOfPayload(type, of, checker);
+  const held = of?.isUnion()
+    ? of.types.filter((alternative) =>
+      partsOf(alternative).every((part) => partsOf(type).includes(part))
+    )
+    : [];
+  return held.length === 1
+    ? { may: reach.may, must: reachOfPayload(type, held[0], checker).must }
+    : reach;
+};
+
+/** The parts of `type`: those of an intersection, or `type` itself. */
+const partsOf = (type: ts.Type): readonly ts.Type[] =>
+  type.isIntersection() ? type.types : [type];
+
+/** Helper for `payloadReach()`, for a payload read as a whole. */
+const reachOfPayload = (
   type: ts.Type,
   of: ts.Type | undefined,
   checker: ts.TypeChecker,
@@ -749,25 +769,51 @@ const payloadReach = (
     return { may: "all", must: "all" };
   }
   const payloadMembers = dataMemberDeclarations(of, checker);
-  const indexed = alternativesOf(of).some((alternative) =>
-    checker.getIndexInfosOfType(alternative).length > 0
+  const payloadIndexes = alternativesOf(of).flatMap((alternative) =>
+    checker.getIndexInfosOfType(alternative)
   );
+  const indexed = payloadIndexes.length > 0;
   const valueMembers = [...dataMemberDeclarations(type, checker)];
   const unwritten = holdsCarriersUnwritten(type, checker);
+  // A value an object part of which has an index signature holds data under
+  // keys no member names, which is the payload's only where an index
+  // signature of the payload applies to every one of those keys: one keyed by
+  // `string` applies to numeric keys too, while one keyed by `number` or by a
+  // template literal applies to only some of a `string` key's. A primitive's
+  // own index, as `string`'s by position, names no data of its own, nor does
+  // a `never`-valued one, nor one keyed by symbols, which no schema holds.
+  const payloadKeys = (key: ts.Type) =>
+    payloadIndexes.some(({ keyType }) =>
+      checker.isTypeAssignableTo(key, keyType) ||
+      ((keyType.flags & ts.TypeFlags.String) !== 0 &&
+        (key.flags & ts.TypeFlags.NumberLike) !== 0)
+    );
+  const holdsUnnamed = alternativesOf(type).some((alternative) =>
+    partsOf(alternative).some((part) =>
+      (part.flags & PRIMITIVE_TYPE_FLAGS) === 0 &&
+      checker.getIndexInfosOfType(part).some((info) =>
+        (info.type.flags & ts.TypeFlags.Never) === 0 &&
+        (info.keyType.flags & ts.TypeFlags.ESSymbolLike) === 0 &&
+        !payloadKeys(info.keyType)
+      )
+    )
+  );
   // A payload whose type lists no members, such as `{}` or `unknown`: its
   // data may be under any key, and is the whole value only where nothing
   // writes over the value's members and the value holds nothing besides.
   if (payloadMembers.size === 0 && !indexed) {
     return {
       may: "all",
-      must: unwritten && valueMembers.length === 0 ? "all" : [],
+      must: unwritten && valueMembers.length === 0 && !holdsUnnamed
+        ? "all"
+        : [],
     };
   }
   if (valueMembers.length === 0) {
     const whole = payloadMembers.size === 0;
     return {
-      may: whole ? "all" : [],
-      must: whole && unwritten ? "all" : [],
+      may: whole || indexed ? "all" : [],
+      must: whole && unwritten && !holdsUnnamed ? "all" : [],
     };
   }
   // A member with no declaration may hold the payload's data under a name the
@@ -794,20 +840,27 @@ const payloadReach = (
       (members.length > 0 && members.length === valueMembers.length)
       ? "all" as const
       : members;
-  return { may: whole(may), must: whole(must) };
+  return {
+    may: whole(may),
+    must: holdsUnnamed && must.length > 0 ? must : whole(must),
+  };
 };
 
 /**
  * `schema` with `labels` on `members` of the value: the whole value, or each
- * of those members alone, or nowhere where there are none. Read for its
- * labels alone (`labelsOnly`), a value whose label belongs to some of its
- * members carries none at its top.
+ * of those members alone, or nowhere where there are none. A schema with no
+ * members to hold them, such as an unsupported-pattern fallback, takes a
+ * restriction whole, and evidence (`evidence`) not at all, as it would then
+ * label data the payload did not establish. Read for its labels alone
+ * (`labelsOnly`), a value whose label belongs to some of its members carries
+ * none at its top.
  */
 const placeLabelsOn = (
   schema: MutableJSONSchema,
   labels: Record<string, unknown>,
   members: readonly string[] | "all",
   context: GenerationContext,
+  evidence = false,
 ): MutableJSONSchema => {
   if (members === "all") return withIfcLabels(schema, labels);
   if (members.length === 0 || context.labelsOnly) return schema;
@@ -815,7 +868,7 @@ const placeLabelsOn = (
       isObjectOrArray(schema.properties)
     ? schema.properties as Record<string, MutableJSONSchema>
     : undefined;
-  if (!properties) return withIfcLabels(schema, labels);
+  if (!properties) return evidence ? schema : withIfcLabels(schema, labels);
   const labeled: Record<string, MutableJSONSchema> = { ...properties };
   for (const name of members) {
     const property = labeled[name];
@@ -858,7 +911,7 @@ const placeCarriedLabels = (
       result = placeLabelsOn(result, restrictions, reach.may, context);
     }
     if (Object.keys(evidence).length > 0) {
-      result = placeLabelsOn(result, evidence, reach.must, context);
+      result = placeLabelsOn(result, evidence, reach.must, context, true);
     }
   }
   return result;

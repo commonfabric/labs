@@ -4205,6 +4205,14 @@ describe("Schema: CFC authoring aliases", () => {
           "a library alias over a named policy alias",
           "{ box: Readonly<Protected> }",
         ],
+        [
+          "a property several members of an intersection declare",
+          "{ a: { value: WriteAuthorizedBy<{ x: string }, typeof save> } } & { a: { value: { x: string; y: number } } }",
+        ],
+        [
+          "a later declaration of a property several members of an intersection declare",
+          "{ a: { value: { x: string; y: number } } } & { a: { value: WriteAuthorizedBy<{ x: string }, typeof save> } }",
+        ],
       ] as const
     ) {
       it(`keeps a writer reached through ${reach}, which syntax names, in a document and elsewhere`, async () => {
@@ -4250,6 +4258,92 @@ describe("Schema: CFC authoring aliases", () => {
         expect(document.schema).toEqual(view.schema);
       });
     }
+
+    it("keeps a writer and the labels beside it on the members its declaration of a property several members of an intersection declare names", async () => {
+      // The type the checker gives the property names no writer, and a value's
+      // carriers are read in full or not at all, so the property is settled
+      // from the schemas its declarations give it.
+
+      const policy =
+        `{ a: { value: Confidential<WriteAuthorizedBy<{ x: string }, typeof save>, ["secret"]> } }`;
+      const other = "{ a: { value: { x: string; y: number } } }";
+      const first = await generate(`${policy} & ${other}`, false);
+      const later = await generate(`${other} & ${policy}`, false);
+
+      expect(first.diagnostics).toEqual([]);
+      expect(later.diagnostics).toEqual([]);
+      expect(first.schema).toEqual({
+        type: "object",
+        properties: {
+          a: {
+            type: "object",
+            properties: {
+              value: {
+                type: "object",
+                properties: {
+                  x: {
+                    type: "string",
+                    ifc: {
+                      writeAuthorizedBy: {
+                        __ctWriterIdentityOf: {
+                          file: "test.ts",
+                          path: ["save"],
+                        },
+                      },
+                      confidentiality: ["secret"],
+                    },
+                  },
+                  y: { type: "number" },
+                },
+                required: ["x", "y"],
+              },
+            },
+            required: ["value"],
+          },
+        },
+        required: ["a"],
+      });
+      expect(later.schema).toEqual(first.schema);
+    });
+
+    it("admits `undefined` for a property carrying a writer that one declaration makes optional and another admits", async () => {
+      const { schema, diagnostics } = await generate(
+        "{ a: { value?: WriteAuthorizedBy<{ x: string }, typeof save> } } & { a: { value: { x: string } | undefined } }",
+        true,
+      );
+
+      expect(diagnostics).toEqual([]);
+      expect(schema).toEqual({
+        type: "object",
+        properties: {
+          a: {
+            type: "object",
+            properties: {
+              value: {
+                anyOf: [
+                  {
+                    type: "object",
+                    properties: { x: { type: "string" } },
+                    required: ["x"],
+                    ifc: {
+                      writeAuthorizedBy: {
+                        __ctWriterIdentityOf: {
+                          file: "test.ts",
+                          path: ["save"],
+                        },
+                      },
+                    },
+                  },
+                  { type: "undefined" },
+                ],
+              },
+            },
+            required: ["value"],
+          },
+        },
+        required: ["a"],
+      });
+    });
 
     it("names `WritePolicyAnyOf` for a policy set a mapped type folds into an object", async () => {
       const { diagnostics } = await generate(
