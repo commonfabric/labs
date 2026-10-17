@@ -100,6 +100,7 @@ export * from "./components/cf-tab-panel/index.ts";
 export * from "./components/cf-tabs/index.ts";
 export * from "./components/cf-loader/index.ts";
 export * from "./components/cf-location/index.ts";
+export * from "./components/cf-loom-presence/index.ts";
 export * from "./components/cf-map/index.ts";
 export * from "./components/cf-markdown/index.ts";
 export * from "./components/cf-message-beads/index.ts";

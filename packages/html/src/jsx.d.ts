@@ -2898,6 +2898,7 @@ interface CFCellLinkElement extends CFHTMLElement {}
 interface CFSpaceCreateElement extends CFHTMLElement {}
 interface CFSpaceLinkElement extends CFHTMLElement {}
 interface CFLoaderElement extends CFHTMLElement {}
+interface CFLoomPresenceElement extends CFHTMLElement {}
 interface CFInputElement extends CFHTMLElement {}
 interface CFLinkPreviewElement extends CFHTMLElement {}
 interface CFTextAreaElement extends CFHTMLElement {}
@@ -3669,6 +3670,23 @@ interface CFDropZoneAttributes<T> extends CFHTMLAttributes<T> {
       type?: string;
     }
   >;
+}
+
+interface CFLoomPresenceAttributes<T> extends CFHTMLAttributes<T> {
+  /**
+   * A cell in the Loom's space. The room joined is the Loom's, derived from
+   * the space alone; nothing of the cell is read but its space.
+   */
+  "$cell"?: CellLike<any>;
+  /**
+   * The viewer's display name, published to the room. Empty publishes
+   * nothing, and the viewer is unseen by the others.
+   */
+  "name"?: string | CellLike<string>;
+  /** Fired once per presence failure, with `{ category }`. */
+  "oncf-presence-error"?: EventHandler<{ category: string }>;
+  /** Fired each time the element joins the room. */
+  "oncf-presence-join"?: EventHandler<{}>;
 }
 
 interface CFLoaderAttributes<T> extends CFHTMLAttributes<T> {
@@ -5062,6 +5080,10 @@ declare global {
       "cf-loader": CFDOM.DetailedHTMLProps<
         CFLoaderAttributes<CFLoaderElement>,
         CFLoaderElement
+      >;
+      "cf-loom-presence": CFDOM.DetailedHTMLProps<
+        CFLoomPresenceAttributes<CFLoomPresenceElement>,
+        CFLoomPresenceElement
       >;
       "cf-input": CFDOM.DetailedHTMLProps<
         CFInputAttributes<CFInputElement>,

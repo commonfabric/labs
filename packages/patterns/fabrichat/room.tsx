@@ -1418,6 +1418,9 @@ export const FabriChatRoomCore = pattern<
   };
   const closeThread = action(() => composer.key("thread").set(undefined));
   const cancelReply = action(() => composer.key("replyTo").set(undefined));
+  // What the room publishes of the viewer to the Loom's presence room: the
+  // profile's name, or nothing while the viewer has no profile.
+  const viewerName = computed(() => myProfile?.get()?.name ?? "");
 
   return {
     [NAME]: name,
@@ -1476,6 +1479,17 @@ export const FabriChatRoomCore = pattern<
           ))}
         </div>
         {addMember[UI]}
+
+        {
+          /* Who has the Loom this room is in open right now. The room's
+            result cell names the room's space, which is the Loom's; the
+            element reads nothing else of it. */
+        }
+        <cf-loom-presence
+          id="fabrichat-presence"
+          $cell={self}
+          name={viewerName}
+        />
 
         <cf-vstack
           id="fabrichat-messages"

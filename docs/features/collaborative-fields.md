@@ -58,6 +58,11 @@ room. The hash is a
 rendezvous key, not authorization; a human space name is display state and
 does not participate in Cell identity.
 
+A record is published once per animation frame. A hidden document is given no
+animation frames, so there the runtime client paces the publication on a timer
+of a frame's length instead: a name set in a document that never paints, such
+as a host's background document, is sent all the same.
+
 A record's state is keyed by facet, and the editor publishes one: `caret`,
 holding focus, the Memory `{ epoch, version }` whose document coordinates the
 selection uses, the selection with CodeMirror's side association for every
@@ -95,6 +100,22 @@ category alone.
 covers the guest API, and
 [`../common/ai/iframe-pattern-guide.md`](../common/ai/iframe-pattern-guide.md)
 the authoring contract.
+
+`cf-loom-presence` is the third consumer, and its room belongs to a Loom
+rather than to a field. Every client with a socialized Loom open joins the
+Loom's room: a Weaver through its own runtime, and the FabriChat room the
+Loom's panel renders through this element. The room is derived from an anchor
+cell the Loom's space derives from a fixed cause and that nothing writes
+(`joinLoomPresenceRoom()` in
+[`../../packages/runtime-client/README.md`](../../packages/runtime-client/README.md)),
+so the room is the space's, and a client that knows the space joins it with no
+record of the Loom in hand. The element is bound a cell in the Loom's space,
+reads nothing of it but its space, publishes the viewer's name, and shows the
+other members by the principal the relay stamped on their records, one entry
+per person however many devices they hold the Loom open on. A record with no
+principal names nobody and is left out. A join refused by the connection is
+asked again on the next change the element sees, not on a timer, since a join
+asked the moment a runtime reports ready can race its first socket.
 
 ## Authority and lifecycle
 

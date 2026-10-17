@@ -159,6 +159,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-list-item` | Generic list row (SwiftUI-List inspired) | |
 | `cf-loader` | Inline spinner for pending async operations | |
 | `cf-location` | Geolocation capture (single or continuous) | `$location` |
+| `cf-loom-presence` | Who is present in a Loom right now, from its presence room (see [cf-loom-presence](#cf-loom-presence)) | `$cell` |
 | `cf-map` | Interactive Leaflet/OpenStreetMap map (see [cf-map](#cf-map)) | `$value`, `$center`, `$zoom`, `$bounds` |
 | `cf-markdown` | Renders markdown with syntax highlighting and copy buttons; safe for untrusted content, and raw HTML written into the markdown is not rendered | `$content` |
 | `cf-message-beads` | Compact bead visualization of a message history | `$messages` |
@@ -1162,6 +1163,38 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   `wish({query:"#profile"})` once and place the badge in the static JSX; gate only
   its *siblings* reactively, or use `ifElse(cond, staticA, staticB)` as a child of a
   static wrapper. Repro: `packages/patterns/scope-bug-computed-vnode-blank/`.
+
+### cf-loom-presence
+
+Who has a Loom open right now, drawn the way a chat shows who is in the room.
+The element joins the Loom's presence room, the one every client with the Loom
+open meets in (see
+[ephemeral co-presence](../../features/collaborative-fields.md#ephemeral-co-presence)),
+and shows every other person present, one entry per principal, so a person
+with the Loom open on two devices shows once. The viewer's own principal is
+left out.
+
+```tsx
+// Shown for illustration only.
+const viewerName = computed(() => myProfile?.get()?.name ?? "");
+...
+<cf-loom-presence $cell={self} name={viewerName} />
+```
+
+- `$cell`: a **cell in the Loom's space**. The room is the Loom's, derived from
+  the space alone; the element reads nothing of the cell but its space and its
+  runtime, so a room binds its own result cell, `[SELF]`.
+- `name`: the viewer's display name, published to the room so the others see
+  the viewer. Empty publishes nothing, and the viewer is unseen; a pattern
+  passes the viewer's profile name, which is empty while they have no profile.
+- Nothing is shown while nobody else is present. A name shown here is what the
+  other person published and earns no part of the verification treatment; to
+  present someone's identity, bind their profile to `cf-profile-badge`.
+- `cf-presence-error` reports a failure once, as a category with no room, name,
+  or server payload in it, and `cf-presence-join` fires on each join. A join
+  the runtime's connection refuses is asked again on the next change the
+  element sees; a `configuration` failure, a runtime or server without
+  presence, stands until the bound cell changes.
 
 ---
 

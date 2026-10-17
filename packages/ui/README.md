@@ -149,7 +149,7 @@ Useful references:
 | Element             | Element            | Element            | Element      |
 | ------------------- | ------------------ | ------------------ | ------------ |
 | `cf-cfc-authorship` | `cf-cfc-label`     | `cf-google-oauth`  | `cf-oauth`   |
-| `cf-owner-view`     |                    |                    |              |
+| `cf-owner-view`     | `cf-loom-presence` |                    |              |
 | `cf-plaid-link`     | `cf-profile-badge` | `cf-secret-viewer` | `cf-webhook` |
 
 ### Navigation And Routing

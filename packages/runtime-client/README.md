@@ -125,14 +125,23 @@ A handle carries the room's name and the facets it sets — `caret` for an
 editor's focus and selection, whatever a later consumer adds — and every handle
 on one room shares the membership and the record: `setName()` names the room's
 participant, `setFacet()` and `clearFacet()` change this handle's share of the
-record, and the merged record is published once per animation frame.
-`.participants` is every other member's latest record, and `subscribe()` hears
-each `snapshot`, `upsert`, and `remove` as it is applied. A `failure` ends the
-room; a consumer that still wants it leaves and joins again. `leave()` releases
-the handle, and the room once its last handle is gone.
+record, and the merged record is published once per animation frame, or, in a
+hidden document, which is given no animation frames, on a timer of a frame's
+length. `.participants` is every other member's latest record, and `subscribe()`
+hears each `snapshot`, `upsert`, and `remove` as it is applied. A `failure` ends
+the room; a consumer that still wants it leaves and joins again. `leave()`
+releases the handle, and the room once its last handle is gone.
 
 A server that does not advertise `presenceV1` makes the join reject; nothing is
 sent to it.
+
+`joinLoomPresenceRoom(runtime, space)` joins the presence room of the Loom whose
+space is `space`: the room derived from an anchor cell the space derives from
+the cause `loomPresenceAnchorCause(space)` names, which nothing writes. Every
+client with the Loom open derives the same anchor and so meets in the same room,
+and a client that knows the space joins with no record of the Loom in hand. The
+handle is an ordinary `PresenceRoomHandle`, and a second join of the same
+space's room shares its membership.
 
 ## Sending events
 

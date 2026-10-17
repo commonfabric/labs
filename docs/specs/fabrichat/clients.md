@@ -67,7 +67,10 @@ messages themselves, each a cell, deriving a thread from their `replyTo` (see
 [reading the rest](ChatMessageList.md#reading-the-rest)). Both are in `[VIEWS]`
 (see [views a host draws
 itself](../../common/components/COMPONENTS.md#views-a-host-draws-itself)). A
-client that renders VDOM shows the adapter's `[UI]`.
+client that renders VDOM shows the adapter's `[UI]`, which also shows who has
+the Loom the room is in open right now, from the Loom's presence room
+(`cf-loom-presence`); a client that draws natively does not show presence
+through the room, and a host that shows it reads the room itself.
 
 A client that draws natively MUST:
 

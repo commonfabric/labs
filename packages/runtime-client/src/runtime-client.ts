@@ -255,7 +255,8 @@ function assertRenderDeclassificationPolicy(policy: unknown): void {
  * handle owns the facets it sets, which leave the record when it leaves. A
  * facet two handles both set is the focused handle's, and among handles
  * alike in focus the one that set it last. Changes coalesce at the
- * browser's animation-frame boundary into one publication.
+ * browser's animation-frame boundary into one publication, or, in a hidden
+ * document, which is given no frames, at a timer of a frame's length.
  */
 export interface PresenceRoomHandle {
   /** The id the relay assigned this membership; changes on reconnect. */
@@ -320,8 +321,8 @@ type PresenceRoomState = {
   handles: Set<PresenceHandleState>;
   name: string;
 
-  /** The scheduled publication, or `undefined` when none is pending. */
-  frame: number | undefined;
+  /** Cancels the scheduled publication; `undefined` when none is pending. */
+  cancelPublish: (() => void) | undefined;
 
   /**
    * Set by a `failure`, or once the room is dropped from the client's
@@ -363,12 +364,30 @@ type PendingPresenceJoin = {
 const presenceRoomKey = (space: string, room: string): string =>
   `${space}\0${room}`;
 
-const scheduleAnimationFrame = (callback: () => void): number => {
+/** The pacing a hidden document's publications coalesce at, in milliseconds. */
+const HIDDEN_DOCUMENT_FRAME_MS = 16;
+
+/**
+ * Runs `callback` at the next animation-frame boundary and returns what
+ * cancels it. A hidden document is given no animation frames, so there a
+ * timer of a frame's length paces the callback instead: what the frame does
+ * is coalesce, and the timer coalesces the same way. Where there are no
+ * animation frames at all, as in a worker, the callback runs on the
+ * microtask queue and cannot be canceled.
+ */
+const scheduleAnimationFrame = (callback: () => void): () => void => {
   if (typeof globalThis.requestAnimationFrame === "function") {
-    return globalThis.requestAnimationFrame(() => callback());
+    const document = (globalThis as { document?: { hidden?: boolean } })
+      .document;
+    if (document?.hidden === true) {
+      const timer = setTimeout(callback, HIDDEN_DOCUMENT_FRAME_MS);
+      return () => clearTimeout(timer);
+    }
+    const frame = globalThis.requestAnimationFrame(() => callback());
+    return () => globalThis.cancelAnimationFrame(frame);
   }
   queueMicrotask(callback);
-  return 0;
+  return () => {};
 };
 
 /**
@@ -917,9 +936,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return new CellHandle<T>(this, ref);
   }
 
-  // TODO(unused)
-  // Currently unused in shell, but a PiecesController-like layer
-  // could be built using this
+  /**
+   * Returns a handle on the cell `cause` derives in `space`: the same space
+   * and cause always name the same cell.
+   */
   async getCell<T>(
     space: DID,
     cause: FabricValue,
@@ -1990,7 +2010,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
         ),
         handles: join.handles,
         name: "",
-        frame: undefined,
+        cancelPublish: undefined,
         ended: false,
       };
       for (const event of join.early) this.#receivePresence(room, event);
@@ -2051,9 +2071,9 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   }
 
   #schedulePresencePublish(room: PresenceRoomState): void {
-    if (room.frame !== undefined || room.ended) return;
-    room.frame = scheduleAnimationFrame(() => {
-      room.frame = undefined;
+    if (room.cancelPublish !== undefined || room.ended) return;
+    room.cancelPublish = scheduleAnimationFrame(() => {
+      room.cancelPublish = undefined;
       this.#publishPresence(room);
     });
   }
@@ -2115,13 +2135,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   #endPresenceRoom(room: PresenceRoomState): void {
     room.ended = true;
-    if (
-      room.frame !== undefined &&
-      typeof globalThis.cancelAnimationFrame === "function"
-    ) {
-      globalThis.cancelAnimationFrame(room.frame);
-    }
-    room.frame = undefined;
+    room.cancelPublish?.();
+    room.cancelPublish = undefined;
   }
 
   /**

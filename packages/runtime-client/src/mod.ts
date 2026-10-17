@@ -7,6 +7,7 @@ export * from "./cell-handle.ts";
 export * from "./piece-handle.ts";
 export * from "./runtime-client.ts";
 export * from "./favorites-manager.ts";
+export * from "./loom-presence.ts";
 export * from "./client/emitter.ts";
 export * from "./client/transport.ts";
 export * from "./client/connection.ts";

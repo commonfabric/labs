@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
 import type { PresenceEvent } from "@commonfabric/memory/v2/client";
 import type { PresenceRecord } from "@commonfabric/memory/v2";
 
@@ -610,6 +611,79 @@ describe("RuntimeClient presence rooms", () => {
       expect(publishes(requests)).toEqual([]);
       await handle.leave();
       expect(requests.at(-1)?.type).toBe(RequestType.PresenceLeave);
+    });
+  });
+
+  describe("pacing", () => {
+    // Deno has no animation frames and no document, so each case stands in
+    // the globals a browser has and takes them away again.
+
+    type FrameGlobals = {
+      requestAnimationFrame?: (callback: () => void) => number;
+      cancelAnimationFrame?: (frame: number) => void;
+      document?: { hidden: boolean };
+    };
+
+    const withDocument = async (
+      hidden: boolean,
+      run: (frames: (() => void)[]) => Promise<void>,
+    ) => {
+      const globals = globalThis as FrameGlobals;
+      const frames: (() => void)[] = [];
+      globals.requestAnimationFrame = (callback) => frames.push(callback);
+      globals.cancelAnimationFrame = (frame) => {
+        frames[frame - 1] = () => {};
+      };
+      globals.document = { hidden };
+      try {
+        await run(frames);
+      } finally {
+        delete globals.requestAnimationFrame;
+        delete globals.cancelAnimationFrame;
+        delete globals.document;
+      }
+    };
+
+    it("publishes at the animation frame of a document that is shown", async () => {
+      await withDocument(false, async (frames) => {
+        const { client, cell, requests } = buildClient();
+        const handle = await client.joinPresenceRoom(cell);
+        handle.setName("Ada");
+        await settle();
+        expect(publishes(requests)).toEqual([]);
+        expect(frames).toHaveLength(1);
+        frames[0]();
+        expect(publishes(requests).map(({ name }) => name)).toEqual(["Ada"]);
+      });
+    });
+
+    it("publishes on a timer in a hidden document, which is given no frames", async () => {
+      await withDocument(true, async (frames) => {
+        using time = new FakeTime();
+        const { client, cell, requests } = buildClient();
+        const handle = await client.joinPresenceRoom(cell);
+        handle.setName("Ada");
+        await settle();
+        expect(frames).toEqual([]);
+        expect(publishes(requests)).toEqual([]);
+        await time.tickAsync(16);
+        expect(publishes(requests).map(({ name }) => name)).toEqual(["Ada"]);
+      });
+    });
+
+    it("sends nothing from a hidden document whose room ended before its timer fired", async () => {
+      await withDocument(true, async () => {
+        using time = new FakeTime();
+        const { client, cell, requests, notify } = buildClient();
+        const handle = await client.joinPresenceRoom(cell);
+        handle.setName("Ada");
+        notify({
+          kind: "failure",
+          error: { name: "SessionRevokedError", message: "taken over" },
+        });
+        await time.tickAsync(16);
+        expect(publishes(requests)).toEqual([]);
+      });
     });
   });
 });
