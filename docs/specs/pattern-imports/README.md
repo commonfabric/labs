@@ -227,11 +227,15 @@ as `/data/cities.json`.
 
 Attached data files participate in the deployed source revision's identity, on
 the same footing as attached test entry points and through the same kind of
-identity-only edge from the entry module. Changing, adding, or removing a data
-file therefore creates a distinct revision even when the executable source is
-unchanged, and each revision stays independently recoverable with its own
-bytes. Source recovery and `cf piece getsrc` return the executable source, its
-attached tests, and its data files together, and report which files are data.
+identity-only edge. The edge leaves from the module whose `dataFile()` call
+names the file, so a sub-pattern that reads its own data carries that data in
+its own identity and reaches it when loaded by that identity. The edge for a
+file no module names, such as one read by a computed path, leaves from the
+entry module. Changing, adding, or removing a data file therefore creates a
+distinct revision even when the executable source is unchanged, and each
+revision stays independently recoverable with its own bytes. Source recovery
+and `cf piece getsrc` return the executable source, its attached tests, and
+its data files together, and report which files are data.
 Repeat the complete set of `--datafile` flags on every `setsrc` because each
 update defines a complete source revision.
 

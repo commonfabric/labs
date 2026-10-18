@@ -15,6 +15,7 @@ import {
   loadCompiledClosure,
   loadVerifiedSourceClosure,
   setCompileCacheRuntimeVersionForTesting,
+  writeSourceAndCompiledDocs,
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
@@ -594,6 +595,159 @@ describe("load by module identity (warm + version-bump recovery)", () => {
     } finally {
       await warmRuntime.dispose({ closeStorage: false });
     }
+  });
+
+  describe("a data file read by a module other than the entry", () => {
+    // `/frame.tsx` reads the file and `/main.tsx` only re-exports it. A
+    // sub-pattern referenced by `{ identity, symbol }` is loaded at its own
+    // module, from what that module's own links reach, so the reader's links
+    // have to reach its data.
+
+    const program = (html: string): RuntimeProgram => ({
+      main: "/main.tsx",
+      dataFiles: ["/frame.html"],
+      files: [
+        {
+          name: "/main.tsx",
+          contents: 'export { default } from "./frame.tsx";\n',
+        },
+        {
+          name: "/frame.tsx",
+          contents: [
+            'import { dataFile, pattern } from "commonfabric";',
+            "export default pattern(() => ({",
+            '  html: dataFile("./frame.html"),',
+            "}));",
+          ].join("\n"),
+        },
+        { name: "/frame.html", contents: html },
+      ],
+    });
+
+    const moduleNamed = (
+      modules: readonly CacheableModule[],
+      filename: string,
+    ): CacheableModule => {
+      const found = modules.find((module) => module.filename === filename);
+      if (found === undefined) throw new Error(`No module \`${filename}\``);
+      return found;
+    };
+
+    const htmlOf = async (
+      reader: Runtime,
+      pattern: unknown,
+      cause: string,
+    ): Promise<unknown> => {
+      const runTx = reader.edit();
+      const resultCell = reader.getCell<{ html: string }>(
+        space,
+        cause,
+        undefined,
+        runTx,
+      );
+      // deno-lint-ignore no-explicit-any
+      const result = reader.run(runTx, pattern as any, {}, resultCell);
+      await runTx.commit().settled;
+      await result.pull();
+      return (result.getAsQueryResult() as { html: unknown }).html;
+    };
+
+    it("links the reading module to the file, and gives it an identity that changes with the file", async () => {
+      const one = await engine.compileToRecordGraph(program("<p>one</p>"));
+      const two = await engine.compileToRecordGraph(program("<p>two</p>"));
+
+      const frame = moduleNamed(one.modules, "/frame.tsx");
+      expect(frame.imports).toContainEqual({
+        specifier: "cf:data-file/frame.html",
+        targetIdentity: moduleNamed(one.modules, "/frame.html").identity,
+      });
+      expect(moduleNamed(two.modules, "/frame.tsx").identity).not.toBe(
+        frame.identity,
+      );
+    });
+
+    it("gives the reading module the identity it has as an entry", async () => {
+      const asChild = await engine.compileToRecordGraph(program("<p>one</p>"));
+      const asEntry = await engine.compileToRecordGraph({
+        ...program("<p>one</p>"),
+        main: "/frame.tsx",
+      });
+
+      expect(moduleNamed(asChild.modules, "/frame.tsx").identity).toBe(
+        asEntry.entryIdentity,
+      );
+    });
+
+    it("loads the reading module by its own identity from the compiled closure", async () => {
+      const compiled = await engine.compileToRecordGraph(
+        program("<p>warm</p>"),
+      );
+      const runtimeVersion = await getCompileCacheRuntimeVersion();
+      if (runtimeVersion === undefined) throw new Error("No runtime version");
+      writeSourceAndCompiledDocs(
+        runtime,
+        space,
+        compiled.modules,
+        compiled.entryIdentity,
+        { runtimeVersion },
+        tx,
+      );
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      tx = runtime.edit();
+      await runtime.storageManager.synced();
+
+      const reader = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const frame = await reader.patternManager.loadPatternByIdentity(
+          moduleNamed(compiled.modules, "/frame.tsx").identity,
+          "default",
+          space,
+        );
+        expect(reader.patternManager.getCompileCacheStats().byIdentityHits)
+          .toBe(1);
+        expect(await htmlOf(reader, frame, "warm frame")).toBe("<p>warm</p>");
+      } finally {
+        await reader.dispose({ closeStorage: false });
+      }
+    });
+
+    it("loads the reading module by its own identity from the source closure", async () => {
+      const compiled = await engine.compileToRecordGraph(
+        program("<p>cold</p>"),
+      );
+      writeSourceDocs(
+        runtime,
+        space,
+        compiled.modules,
+        compiled.entryIdentity,
+        tx,
+      );
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      tx = runtime.edit();
+      await runtime.storageManager.synced();
+
+      const reader = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const frame = await reader.patternManager.loadPatternByIdentity(
+          moduleNamed(compiled.modules, "/frame.tsx").identity,
+          "default",
+          space,
+        );
+        expect(reader.patternManager.getCompileCacheStats().byIdentityHits)
+          .toBe(0);
+        expect(await htmlOf(reader, frame, "cold frame")).toBe("<p>cold</p>");
+      } finally {
+        await reader.dispose({ closeStorage: false });
+      }
+    });
   });
 
   it("trusts integrity-gated cached bodies and skips body re-verification", async () => {

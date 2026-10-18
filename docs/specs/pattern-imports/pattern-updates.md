@@ -536,7 +536,8 @@ as `patternIdentity`, verified by a parity test against the real
   adopt.
 - **Assemble the program the worker assembles.** Resolving a pattern for a
   compile attaches every file that a `dataFile()` call in its closure reads,
-  and the compiler folds each one into the entry's hash. The light path
+  and the compiler folds each one into the hash of the module that reads it,
+  which the entry's hash covers. The light path
   attaches them by the same step (`attachDeclaredDataFiles`), and reads each
   one as a program stores it: strictly as UTF-8, keeping a leading byte order
   mark that decoding it as source would drop.

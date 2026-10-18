@@ -371,6 +371,28 @@ describe("typescript/resolver.ts", () => {
       )).toEqual([]);
     });
 
+    it("reads a call whose reader is named through an identifier escape", () => {
+      expect(names(
+        'import { dataF\\u0069le } from "commonfabric";\n' +
+          'export default () => dataF\\u0069le("/data/cities.json");\n',
+      )).toEqual(["/data/cities.json"]);
+      expect(names(
+        'import * as cf from "commonfabric";\n' +
+          'export default () => cf.dataF\\u{69}le("/data/cities.json");\n',
+      )).toEqual(["/data/cities.json"]);
+    });
+
+    it("reads a call whose reader is imported under its string name", () => {
+      expect(names(
+        'import { "dataFile" as read } from "commonfabric";\n' +
+          'export default () => read("/data/cities.json");\n',
+      )).toEqual(["/data/cities.json"]);
+      expect(names(
+        'import { "data\\x46ile" as read } from "commonfabric";\n' +
+          'export default () => read("/data/cities.json");\n',
+      )).toEqual(["/data/cities.json"]);
+    });
+
     it("finds nothing in a module that never imports it", () => {
       expect(names("export const x = 1;\n")).toEqual([]);
     });

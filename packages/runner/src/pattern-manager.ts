@@ -352,17 +352,17 @@ function uniqueCacheableImports(
 }
 
 /**
- * The authored filenames an entry document's source-package edges point at, for
- * one edge kind — {@link SOURCE_ROOT_SPECIFIER} for attached source entry
- * points, {@link DATA_FILE_SPECIFIER} for attached data files. An edge whose
- * target is not in the closure contributes nothing.
+ * The authored filenames a document's source-package edges point at, for one
+ * edge kind — {@link SOURCE_ROOT_SPECIFIER} for attached source entry points,
+ * {@link DATA_FILE_SPECIFIER} for attached data files. An edge whose target is
+ * not in the closure contributes nothing.
  */
 function sourcePackagePaths(
-  entry: { imports: readonly { specifier: string; identity: string }[] },
+  owner: { imports: readonly { specifier: string; identity: string }[] },
   docsByIdentity: ReadonlyMap<string, { filename: string }>,
   specifierPrefix: string,
 ): string[] {
-  return entry.imports
+  return owner.imports
     .filter((edge) => edge.specifier.startsWith(specifierPrefix))
     .map((edge) => docsByIdentity.get(edge.identity)?.filename)
     .filter((filename): filename is string => filename !== undefined);
@@ -2628,15 +2628,18 @@ export class PatternManager {
     }
     const moduleDelegations = moduleDelegationsFromDocs(sourceDocs);
     const sourcePackages = [...sourceDocs.values()].map((doc) => ({
-      entryPath: doc.filename,
+      ownerPath: doc.filename,
       rootPaths: sourcePackagePaths(doc, sourceDocs, SOURCE_ROOT_SPECIFIER),
       dataPaths: sourcePackagePaths(doc, sourceDocs, DATA_FILE_SPECIFIER),
     })).filter((sourcePackage) =>
       sourcePackage.rootPaths.length > 0 || sourcePackage.dataPaths.length > 0
     );
-    const dataFiles = sourcePackages.flatMap((sourcePackage) =>
-      sourcePackage.dataPaths
-    );
+    // Two modules reading one file each own an edge to it.
+    const dataFiles = [
+      ...new Set(
+        sourcePackages.flatMap((sourcePackage) => sourcePackage.dataPaths),
+      ),
+    ];
 
     const sourceFiles: Source[] = [...sourceDocs.values()].map((doc) => ({
       name: doc.filename,
@@ -3624,11 +3627,15 @@ export class PatternManager {
       sourceDocs,
       SOURCE_ROOT_SPECIFIER,
     ).filter((filename) => filename.startsWith("/"));
-    const dataFiles = sourcePackagePaths(
-      entry,
-      sourceDocs,
-      DATA_FILE_SPECIFIER,
-    ).filter((filename) => filename.startsWith("/"));
+    // A data file's edge leaves from the module that reads it, which need not
+    // be the entry, so every document in the closure may hold one.
+    const dataFiles = [
+      ...new Set(
+        [...sourceDocs.values()].flatMap((doc) =>
+          sourcePackagePaths(doc, sourceDocs, DATA_FILE_SPECIFIER)
+        ),
+      ),
+    ].filter((filename) => filename.startsWith("/")).sort();
     // Return only the AUTHORED files — the faithful replacement for the old
     // meta-cell `program`. The verified source closure also contains
     // runtime-INJECTED helper modules (e.g. `cfc.ts`), which the compiler

@@ -557,13 +557,22 @@ for its identity. Their link sets are different. A source document stores intern
 authored-import links, including links to authored declarations. It omits fabric
 edges so one program's source closure does not absorb another program.
 Synthetic retention links may keep other source roots alive, but they are
-excluded from the identity hash and executable graph traversal. Separately, an
-entry source document stores one identity-only link per member of its source
-package that no import reaches: [`SOURCE_ROOT_SPECIFIER`][c7]
-(`cf:source-root/`) for an attached source entry point such as a test, and
-[`DATA_FILE_SPECIFIER`][c7] (`cf:data-file/`) for an attached data file. Unlike
-a retention link, these participate in the entry module's identity, so changing
-the package changes the revision. Neither resolves a module record. A data
+excluded from the identity hash and executable graph traversal. Separately, a
+source document stores one identity-only link per member of its source package
+that no import reaches and that its module owns: [`SOURCE_ROOT_SPECIFIER`][c7]
+(`cf:source-root/`) for an attached source entry point such as a test, owned
+by the entry, and [`DATA_FILE_SPECIFIER`][c7] (`cf:data-file/`) for an attached
+data file, owned by the module whose `dataFile()` call names it. The entry owns
+a data file that no module's source names, such as one read by a computed path
+([`sourcePackageOwners`][c17] assigns the owners). Unlike a retention
+link, these participate in the owning module's identity, and through it in the
+identity of every module that reaches the owner, so changing the package
+changes the revision. A load entered at a module that reads a data file, by
+its own identity, as a sub-pattern referenced by `{ identity, symbol }` is
+loaded, therefore reaches the file. Whether that module is a program's entry
+or a child of it changes its identity only by what the entry alone owns: the
+program's source roots and the data files no module's source names. Neither
+link resolves a module record. A data
 document is hashed as a leaf over its own bytes and filename rather than through
 a parse of its contents, which is what lets a data file hold bytes that are not
 TypeScript. Both namespaces are reserved against authored imports. The compiled
@@ -950,6 +959,7 @@ index's restart-stable `action` column,
 [c14]: ../../packages/runner/src/compilation-cache/cell-cache.ts
 [c15]: ../../packages/runner/src/sandbox/runtime-module-policy.ts
 [c16]: ../../packages/runner/src/harness/authored-debug-source.ts
+[c17]: ../../packages/runner/src/harness/declared-data-files.ts
 
 - Compile and evaluate entry points: [`Engine.compileToRecordGraph`][c1],
   [`Engine.compileResolvedToRecordGraph`][c1],
@@ -961,7 +971,8 @@ index's restart-stable `action` column,
 - Module identity: [`computeModuleHashes`][c3] and [`resolveModuleImports`][c3],
   with [`findInternalTarget`][c3] deciding what counts as an internal edge, and
   the Engine-facing wrappers [`computeModuleIdentities`][c7] and
-  [`computeFabricModuleIdentities`][c7].
+  [`computeFabricModuleIdentities`][c7]. [`sourcePackageOwners`][c17] assigns
+  each source-package edge to the module that owns it.
 - Emit configuration: [`getCompilerOptions`][c4] / [`MODULE_KIND`][c4].
 - Import-graph discovery, including `export * from` and inline import types:
   [`collectImportSpecifiers`][c5].

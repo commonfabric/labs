@@ -499,7 +499,8 @@ export function compiledDocKey(
  * resolves a module's edges from its own source, not its stored links).
  * Explicit source-package roots use {@link SOURCE_ROOT_SPECIFIER} and attached
  * data files use {@link DATA_FILE_SPECIFIER} instead; both participate in the
- * entry module's identity.
+ * identity of the module whose document carries them, which is the entry for a
+ * root and the reading module for a data file its source names.
  */
 export const ROOT_LINK_SPECIFIER = "cf:cache-root/";
 

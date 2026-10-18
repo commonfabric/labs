@@ -99,7 +99,10 @@ import {
   type RuntimeProgram,
   type TypeScriptHarnessProcessOptions,
 } from "./types.ts";
-import { attachDeclaredDataFiles } from "./declared-data-files.ts";
+import {
+  attachDeclaredDataFiles,
+  sourcePackageOwners,
+} from "./declared-data-files.ts";
 import {
   getDefiningModule,
   readBindingIdentity,
@@ -299,6 +302,48 @@ function persistableSourceFiles(files: readonly Source[]): Source[] {
   return files.filter((file) =>
     !file.name.endsWith(".d.ts") || file.name.startsWith("/")
   );
+}
+
+/**
+ * Helper for the two compile paths, which drops the modules mounted from
+ * fabric imports. A mount is hashed as its own source set, apart from the
+ * program's source package, so no edge of that package can leave from one.
+ */
+function authoredModules(modules: readonly Source[]): Source[] {
+  return modules.filter((module) => !module.name.startsWith(FABRIC_MOUNT_ROOT));
+}
+
+/**
+ * Helper for the two compile paths, which writes the source-package edges
+ * `owner` holds as the identity-only imports of its stored documents.
+ * `storedNameFor` gives the name each target is stored under.
+ */
+function sourcePackageImports(
+  owner: SourcePackageIdentity | undefined,
+  identityByPath: ReadonlyMap<string, string>,
+  storedNameFor: (name: string) => string,
+): CacheableModule["imports"] {
+  if (owner === undefined) return [];
+  const imports: CacheableModule["imports"] = [];
+  for (const rootPath of owner.rootPaths) {
+    const rootIdentity = identityByPath.get(rootPath);
+    if (rootIdentity === undefined) {
+      throw new Error(`Source root '${rootPath}' has no module identity.`);
+    }
+    imports.push({
+      specifier: sourceRootSpecifier(storedNameFor(rootPath)),
+      targetIdentity: rootIdentity,
+    });
+  }
+  for (const dataPath of owner.dataPaths ?? []) {
+    // Every data path is in the pristine set the identities were computed
+    // over, the same guarantee the root lookup above relies on.
+    imports.push({
+      specifier: dataFileSpecifier(storedNameFor(dataPath)),
+      targetIdentity: identityByPath.get(dataPath)!,
+    });
+  }
+  return imports;
 }
 
 interface RuntimeInternals {
@@ -557,14 +602,20 @@ export class Engine extends EventTarget {
         mounts,
         sourceFiles: authoredCompileSources,
       });
-      const pristineSourceFiles = [
-        ...pristineModuleSources(
-          persistableSourceFiles(resolvedFiles),
-          authoredByStoredName,
-          (name) => storedFilenameFor(name, id, mounts),
-        ),
-        ...dataSources,
-      ];
+      const storedNameFor = (name: string) =>
+        storedFilenameFor(name, id, mounts);
+      const pristineModules = pristineModuleSources(
+        persistableSourceFiles(resolvedFiles),
+        authoredByStoredName,
+        storedNameFor,
+      );
+      const pristineSourceFiles = [...pristineModules, ...dataSources];
+      const sourcePackages = sourcePackageOwners({
+        main: mappedProgram.main,
+        sourceRoots,
+        dataPaths,
+        modules: authoredModules(pristineModules),
+      }, storedNameFor);
 
       // Prefix-free content identity per resolved module path. Computed here
       // (cheap, no TS compile) so the cache-hit check and the write-back
@@ -572,18 +623,7 @@ export class Engine extends EventTarget {
       const identityByPath = computeFabricModuleIdentities(
         pristineSourceFiles,
         mounts,
-        {
-          idPrefix: `/${id}`,
-          ...(sourceRoots.length || dataPaths.length
-            ? {
-              sourcePackages: [{
-                entryPath: mappedProgram.main,
-                rootPaths: sourceRoots,
-                dataPaths,
-              }],
-            }
-            : {}),
-        },
+        { idPrefix: `/${id}`, sourcePackages },
       );
       const entryIdentity = identityByPath.get(mappedProgram.main)!;
 
@@ -741,7 +781,7 @@ export class Engine extends EventTarget {
         // Carried onto the graph under their stored (prefix-free) names, the
         // same spelling the warm path recovers from the compiled set.
         dataFiles: dataSources.map((file) =>
-          [storedFilenameFor(file.name, id, mounts), file.contents] as const
+          [storedNameFor(file.name), file.contents] as const
         ),
         // Strip the whole-program `/<id>` prefix from per-module identities so
         // `cf:module/<hash>` is entry-point independent and dedupes across
@@ -752,7 +792,7 @@ export class Engine extends EventTarget {
         identityByPath,
         // A `dataFile()` path resolves against the reading module's stored
         // name, so a read lands in the same space `dataFiles` is keyed by.
-        storedNameFor: (name) => storedFilenameFor(name, id, mounts),
+        storedNameFor,
       });
       if (options.patternCoverage) {
         this.#patternCoverageByGraph.set(graph, options.patternCoverage);
@@ -835,6 +875,9 @@ export class Engine extends EventTarget {
         main: "",
         files: pristineSourceFiles,
       }, { dataFiles: dataFileSet });
+      const packageByOwner = new Map(
+        sourcePackages.map((owner) => [owner.ownerPath, owner]),
+      );
       const modules: CacheableModule[] = pristineSourceFiles.map((file) => {
         const identity = identityByPath.get(file.name)!;
         const sourceMap = precompiledSourceMaps.get(file.name);
@@ -845,39 +888,19 @@ export class Engine extends EventTarget {
           : options.patternCoverage?.spansForFile(
             coverageFilenameFor(file.name, id, mounts),
           );
-        const imports = cacheableImportsFor(
-          file.name,
-          importEdges,
-          identityByPath,
-          specifierAliases,
-        );
-        if (file.name === mappedProgram.main) {
-          for (const rootPath of sourceRoots) {
-            const rootIdentity = identityByPath.get(rootPath);
-            if (rootIdentity === undefined) {
-              throw new Error(
-                `Source root '${rootPath}' has no module identity.`,
-              );
-            }
-            imports.push({
-              specifier: sourceRootSpecifier(
-                storedFilenameFor(rootPath, id, mounts),
-              ),
-              targetIdentity: rootIdentity,
-            });
-          }
-          for (const dataPath of dataPaths) {
-            // Every data path is in the pristine set the identities were
-            // computed over, the same guarantee the module lookup above relies
-            // on.
-            imports.push({
-              specifier: dataFileSpecifier(
-                storedFilenameFor(dataPath, id, mounts),
-              ),
-              targetIdentity: identityByPath.get(dataPath)!,
-            });
-          }
-        }
+        const imports = [
+          ...cacheableImportsFor(
+            file.name,
+            importEdges,
+            identityByPath,
+            specifierAliases,
+          ),
+          ...sourcePackageImports(
+            packageByOwner.get(file.name),
+            identityByPath,
+            storedNameFor,
+          ),
+        ];
         const policyManifests = emittedBody === undefined
           ? undefined
           : validatePolicyManifestsForModule(
@@ -1128,16 +1151,20 @@ export class Engine extends EventTarget {
     assertNoReservedFabricPaths(resolvedFiles);
     // A child can reach package attachments owned by another module. Their
     // original owners are part of the content identity of the whole closure.
-    const sourcePackages = options.sourcePackages ?? [{
-      entryPath: entryFilename,
-      rootPaths: canonicalSourceRoots(entryFilename, options.sourceRoots),
+    const declaredRoots = canonicalSourceRoots(
+      entryFilename,
+      options.sourceRoots,
+    );
+    const attachments = options.sourcePackages ?? [{
+      ownerPath: entryFilename,
+      rootPaths: declaredRoots,
       dataPaths: canonicalDataFiles(entryFilename, options.dataFiles),
     }];
-    const attachedRoots = sourcePackages.flatMap((sourcePackage) => [
-      sourcePackage.entryPath,
+    const attachedRoots = attachments.flatMap((sourcePackage) => [
+      sourcePackage.ownerPath,
       ...sourcePackage.rootPaths,
     ]);
-    const attachedData = sourcePackages.flatMap((sourcePackage) =>
+    const attachedData = attachments.flatMap((sourcePackage) =>
       sourcePackage.dataPaths ?? []
     );
     // Data files carry arbitrary bytes; keep them away from every scan, parse
@@ -1214,14 +1241,22 @@ export class Engine extends EventTarget {
     const authoredByStoredName = new Map(
       codeFiles.map((f) => [f.name, f.contents]),
     );
-    const pristineSourceFiles = [
-      ...pristineModuleSources(
-        persistableSourceFiles(resolvedProgramFiles),
-        authoredByStoredName,
-        (name) => storedFilenameFor(name, undefined, mounts),
-      ),
-      ...dataSources,
-    ];
+    const pristineModules = pristineModuleSources(
+      persistableSourceFiles(resolvedProgramFiles),
+      authoredByStoredName,
+      (name) => storedFilenameFor(name, undefined, mounts),
+    );
+    const pristineSourceFiles = [...pristineModules, ...dataSources];
+    // Stored attachments keep the owners they were stored under, which is what
+    // lets a stored closure recompile to the identities it is keyed by. A
+    // program given only its roots and data files assigns owners as a fresh
+    // compile does.
+    const sourcePackages = options.sourcePackages ?? sourcePackageOwners({
+      main: entryFilename,
+      sourceRoots: declaredRoots,
+      dataPaths,
+      modules: authoredModules(pristineModules),
+    });
     const identityByPath = computeFabricModuleIdentities(
       pristineSourceFiles,
       mounts,
@@ -1298,6 +1333,9 @@ export class Engine extends EventTarget {
       main: "",
       files: pristineSourceFiles,
     }, { dataFiles: dataFileSet });
+    const packageByOwner = new Map(
+      sourcePackages.map((owner) => [owner.ownerPath, owner]),
+    );
     const modules: CacheableModule[] = pristineSourceFiles.map((file) => {
       const out = emitted.get(file.name);
       const identity = identityByPath.get(file.name)!;
@@ -1307,39 +1345,19 @@ export class Engine extends EventTarget {
         : options.patternCoverage?.spansForFile(
           coverageFilenameFor(file.name, undefined, mounts),
         );
-      const imports = cacheableImportsFor(
-        file.name,
-        importEdges,
-        identityByPath,
-        specifierAliases,
-      );
-      const sourcePackage = sourcePackages.find((sourcePackage) =>
-        sourcePackage.entryPath === file.name
-      );
-      if (sourcePackage !== undefined) {
-        for (const rootPath of sourcePackage.rootPaths) {
-          const rootIdentity = identityByPath.get(rootPath);
-          if (rootIdentity === undefined) {
-            throw new Error(
-              `Source root '${rootPath}' has no module identity.`,
-            );
-          }
-          imports.push({
-            specifier: sourceRootSpecifier(
-              storedFilenameFor(rootPath, undefined, mounts),
-            ),
-            targetIdentity: rootIdentity,
-          });
-        }
-        for (const dataPath of sourcePackage.dataPaths ?? []) {
-          imports.push({
-            specifier: dataFileSpecifier(
-              storedFilenameFor(dataPath, undefined, mounts),
-            ),
-            targetIdentity: identityByPath.get(dataPath)!,
-          });
-        }
-      }
+      const imports = [
+        ...cacheableImportsFor(
+          file.name,
+          importEdges,
+          identityByPath,
+          specifierAliases,
+        ),
+        ...sourcePackageImports(
+          packageByOwner.get(file.name),
+          identityByPath,
+          (name) => storedFilenameFor(name, undefined, mounts),
+        ),
+      ];
       const policyManifests = out === undefined
         ? undefined
         : validatePolicyManifestsForModule(identity, out.policyManifests);

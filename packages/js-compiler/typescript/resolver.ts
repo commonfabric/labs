@@ -154,6 +154,16 @@ export function collectDataFileNames(
   source: Source,
   target: ts.ScriptTarget,
 ): string[] {
+  // Every form recognized below names the reader as the contiguous characters
+  // `dataFile`, in an identifier or in a string literal, unless an escape
+  // breaks them up, and every escape starts with a backslash. A source holding
+  // neither declares nothing, and is not parsed.
+  if (
+    !source.contents.includes(DATA_FILE_READER) &&
+    !source.contents.includes("\\")
+  ) {
+    return [];
+  }
   const sourceFile = ts.createSourceFile(
     source.name,
     source.contents,

@@ -1,6 +1,8 @@
 import type { ProgramResolver, Source } from "@commonfabric/js-compiler";
-import type { RuntimeProgram } from "./types.ts";
+
+import type { SourcePackageIdentity } from "../sandbox/module-record-compiler.ts";
 import { compilerStack } from "./deferred-compiler-stack.ts";
+import type { RuntimeProgram } from "./types.ts";
 
 /**
  * Attach the data files a program's own source declares.
@@ -71,4 +73,78 @@ export async function attachDeclaredDataFiles(
     files: [...program.files, ...attached],
     dataFiles: [...new Set([...(program.dataFiles ?? []), ...names])],
   };
+}
+
+/**
+ * Assigns each edge of a program's source package to the module that owns it.
+ *
+ * A module whose `dataFile()` call names a data file owns the edge to that
+ * file, so the module's identity covers the bytes it reads and its stored
+ * documents link to them. A load entered at that module by its own identity,
+ * as a sub-pattern referenced by `{ identity, symbol }` is loaded, then
+ * reaches the file. The entry owns every attached source root, and every data
+ * file no module's source names: one read by a computed path, or one nothing
+ * reads. Those are the only edges whose owner depends on which module is the
+ * entry, so a module compiled as the entry and as a child gets one identity
+ * when the program carries neither.
+ *
+ * `modules` are the code modules whose identities are being computed, and only
+ * those can own an edge, so a reader the program's roots never reach leaves
+ * its file to the entry. Each is scanned under `storedNameFor(name)`, the name
+ * the runtime resolves its reads against; the result names modules and files
+ * the way `program` does. A module that owns nothing has no entry in the
+ * result.
+ *
+ * Parsing is the compiler stack's work, so the caller must have awaited
+ * `ensureCompilerStack()`.
+ */
+export function sourcePackageOwners(
+  program: {
+    main: string;
+    sourceRoots: readonly string[];
+    dataPaths: readonly string[];
+    modules: readonly Source[];
+  },
+  storedNameFor: (name: string) => string = (name) => name,
+): SourcePackageIdentity[] {
+  const dataByStoredName = new Map(
+    program.dataPaths.map((path) => [storedNameFor(path), path]),
+  );
+  const dataByOwner = new Map<string, Set<string>>();
+  const claimed = new Set<string>();
+  if (dataByStoredName.size > 0) {
+    const { collectDataFileNames, TARGET } = compilerStack();
+    for (const module of program.modules) {
+      const read = {
+        name: storedNameFor(module.name),
+        contents: module.contents,
+      };
+      for (const name of collectDataFileNames(read, TARGET)) {
+        const path = dataByStoredName.get(name);
+        if (path === undefined) continue;
+        claimed.add(path);
+        const owned = dataByOwner.get(module.name) ?? new Set<string>();
+        owned.add(path);
+        dataByOwner.set(module.name, owned);
+      }
+    }
+  }
+  const entryData = dataByOwner.get(program.main) ?? new Set<string>();
+  for (const path of program.dataPaths) {
+    if (!claimed.has(path)) entryData.add(path);
+  }
+  dataByOwner.delete(program.main);
+
+  const owners: SourcePackageIdentity[] = [];
+  if (program.sourceRoots.length > 0 || entryData.size > 0) {
+    owners.push({
+      ownerPath: program.main,
+      rootPaths: [...program.sourceRoots],
+      dataPaths: [...entryData].sort(),
+    });
+  }
+  for (const [ownerPath, owned] of dataByOwner) {
+    owners.push({ ownerPath, rootPaths: [], dataPaths: [...owned].sort() });
+  }
+  return owners;
 }

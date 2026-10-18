@@ -540,15 +540,23 @@ function stripIdentityPrefix(name: string, idPrefix?: string): string {
 }
 
 /**
- * The parts of a deployed source package that bind to the entry module's
- * identity without being reachable from it through an import. `rootPaths` are
- * attached source entry points such as tests; `dataPaths` are attached data
- * files. Each contributes one identity-only edge from `entryPath`, so adding,
- * changing, or removing any of them yields a distinct entry identity.
+ * The parts of a deployed source package that bind to one module's identity
+ * without being reachable from it through an import. Each contributes one
+ * identity-only edge from `ownerPath`, so adding, changing, or removing any of
+ * them yields a distinct identity for that module and for every module that
+ * reaches it.
  */
 export interface SourcePackageIdentity {
-  entryPath: string;
+  /** The module the edges leave from. */
+  ownerPath: string;
+
+  /** Attached source entry points, such as tests. The entry owns these. */
   rootPaths: readonly string[];
+
+  /**
+   * Attached data files. The module whose `dataFile()` call names a file owns
+   * its edge, and the entry owns a file no module's source names.
+   */
   dataPaths?: readonly string[];
 }
 
@@ -575,17 +583,17 @@ export function computeModuleIdentities(
   >();
   const dataFiles = new Set<string>();
   for (const sourcePackage of options.sourcePackages ?? []) {
-    const entryPath = stripPath(sourcePackage.entryPath);
+    const ownerPath = stripPath(sourcePackage.ownerPath);
     const rootPaths = [
       ...new Set(sourcePackage.rootPaths.map(stripPath)),
     ]
-      .filter((rootPath) => rootPath !== entryPath);
+      .filter((rootPath) => rootPath !== ownerPath);
     const dataPaths = [
       ...new Set((sourcePackage.dataPaths ?? []).map(stripPath)),
     ]
-      .filter((dataPath) => dataPath !== entryPath);
+      .filter((dataPath) => dataPath !== ownerPath);
     for (const dataPath of dataPaths) dataFiles.add(dataPath);
-    const entryDeps = [
+    const ownerDeps = [
       ...rootPaths.map((rootPath) => ({
         specifier: sourceRootSpecifier(rootPath),
         target: rootPath,
@@ -595,8 +603,8 @@ export function computeModuleIdentities(
         target: dataPath,
       })),
     ];
-    if (entryDeps.length > 0) {
-      additionalInternalDeps.set(entryPath, entryDeps);
+    if (ownerDeps.length > 0) {
+      additionalInternalDeps.set(ownerPath, ownerDeps);
     }
   }
   const hashes = computeModuleHashes(

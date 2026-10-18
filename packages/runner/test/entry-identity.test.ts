@@ -297,6 +297,51 @@ describe("computeEntryIdentity (light, drift-free)", () => {
     );
   });
 
+  it("matches the engine when a module the entry imports reads a data file", async () => {
+    const program: RuntimeProgram = {
+      main: "/entry.tsx",
+      dataFiles: ["/frame.html", "/named.txt"],
+      files: [
+        {
+          name: "/entry.tsx",
+          contents: 'export { html } from "./frame.ts";\n',
+        },
+        {
+          name: "/frame.ts",
+          contents: 'import { dataFile } from "commonfabric";\n' +
+            'export const html = () => dataFile("./frame.html");\n',
+        },
+        { name: "/frame.html", contents: "<p>frame</p>\n" },
+        { name: "/named.txt", contents: "read by a computed path\n" },
+      ],
+    };
+    const light = computeEntryIdentity(program.main, program.files, program);
+    const compiled = await engine.compileToRecordGraph(program);
+    expect(light).toBe(compiled.entryIdentity);
+  });
+
+  it("matches the engine when a file the entry never reaches reads a data file", async () => {
+    // The engine compiles only what the entry reaches, so an unreached reader
+    // claims nothing, and the program's data file belongs to the entry.
+    const program: RuntimeProgram = {
+      main: "/entry.tsx",
+      dataFiles: ["/frame.html"],
+      files: [
+        { name: "/entry.tsx", contents: ENTRY },
+        { name: "/shared.ts", contents: SHARED },
+        {
+          name: "/unreached.ts",
+          contents: 'import { dataFile } from "commonfabric";\n' +
+            'export const html = () => dataFile("./frame.html");\n',
+        },
+        { name: "/frame.html", contents: "<p>frame</p>\n" },
+      ],
+    };
+    const light = computeEntryIdentity(program.main, program.files, program);
+    const compiled = await engine.compileToRecordGraph(program);
+    expect(light).toBe(compiled.entryIdentity);
+  });
+
   it("throws for a source root whose closure is incomplete", () => {
     const files = [
       { name: "/entry.ts", contents: "export default 1;\n" },
