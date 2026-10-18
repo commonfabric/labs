@@ -70,9 +70,9 @@ import {
   getPatternIdentityRef,
   getPatternSource,
   getPieceReconciliation,
-  getPieceSourceRevisions,
   getPieceSourceSnapshot,
   keepLaterConfirmation,
+  knownPieceReleasedAt,
   type PieceReconciliation,
   type PieceReconciliationOutcome,
   type PieceReconciliationReason,
@@ -209,14 +209,15 @@ function reconciliationFor(
 
 /**
  * Whether an offer released at `offered` is an earlier release than the one a
- * piece runs, released at `running` (`runningReleasedAt()`). Release times are
- * compared only where the running source has one: a piece adopted from a host
- * stating none has nothing to order an offer against until a release offering
- * that same source confirms it at a stated time, and until then takes any
- * offer as before. An offer stating none is earlier than any running release
- * that has one, so a host that states no release time cannot move a piece
- * another host has placed on a stated one. An offer stating the same time as
- * the running release is not earlier.
+ * piece runs, whose latest known release time is `running`
+ * (`knownPieceReleasedAt()`). Release times are compared only where the
+ * running source has one: a piece adopted from a host stating none has nothing
+ * to order an offer against until a release offering that same source
+ * confirms it at a stated time, and until then takes any offer as before. An
+ * offer stating none is earlier than any running release that has one, so a
+ * host that states no release time cannot move a piece another host has placed
+ * on a stated one. An offer stating the same time as the running release is
+ * not earlier.
  */
 export function isEarlierRelease(
   offered: number | undefined,
@@ -224,34 +225,6 @@ export function isEarlierRelease(
 ): boolean {
   if (running === undefined) return false;
   return offered === undefined || offered < running;
-}
-
-/**
- * The release time of the source `resultCell` runs: the later of the one the
- * revision that adopted it records and the one its reconciliation record
- * confirms for it, or `undefined` when neither says. A revision says only when
- * it is the piece's last and names what the piece runs: the one that adopted
- * it, or a later one that kept it in place and carries its time
- * (`knownPieceReleasedAt`). A record says only when it confirms that same
- * source.
- */
-export function runningReleasedAt(
-  resultCell: Cell<unknown>,
-  running: { identity: string; symbol: string },
-): number | undefined {
-  const last = getPieceSourceRevisions(resultCell).at(-1);
-  const adopted = last !== undefined &&
-      last.pattern.identity === running.identity &&
-      last.pattern.symbol === running.symbol
-    ? last.releasedAt
-    : undefined;
-  const confirmed = getPieceReconciliation(resultCell)?.confirmed;
-  const reconfirmed = confirmed?.identity === running.identity
-    ? confirmed.releasedAt
-    : undefined;
-  return adopted === undefined || reconfirmed === undefined
-    ? adopted ?? reconfirmed
-    : Math.max(adopted, reconfirmed);
 }
 
 /**
@@ -948,7 +921,7 @@ export class SourceReconciler {
   ): Promise<ReconcileOutcome> {
     // Read before anything can end the pass, so that an attempt that fails
     // leaves the record confirming what the last one did.
-    const runningRelease = runningReleasedAt(resultCell, state.running);
+    const runningRelease = knownPieceReleasedAt(resultCell, state.running);
     if (runningRelease !== undefined) {
       state.confirmed = {
         identity: state.running.identity,
@@ -1605,7 +1578,7 @@ export class SourceReconciler {
         ordered &&
         isEarlierRelease(
           advertised?.releasedAt,
-          runningReleasedAt(resultCell.withTx(tx), state.running),
+          knownPieceReleasedAt(resultCell.withTx(tx), state.running),
         ) &&
         keepsRunningSource(
           resultCell.withTx(tx),
@@ -1648,7 +1621,7 @@ export class SourceReconciler {
       // The piece keeps what it runs, as an earlier offer leaves it, and the
       // record confirms that source at the release time that overtook this
       // candidate.
-      const confirmedAt = runningReleasedAt(resultCell, state.running);
+      const confirmedAt = knownPieceReleasedAt(resultCell, state.running);
       state.offered = { ...state.running };
       if (confirmedAt !== undefined) {
         state.confirmed = {

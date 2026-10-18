@@ -246,7 +246,6 @@ export {
 export {
   isEarlierRelease,
   type ReconcileOutcome,
-  runningReleasedAt,
   SourceReconciler,
 } from "./source-reconciler.ts";
 export {

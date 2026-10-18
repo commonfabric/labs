@@ -931,6 +931,62 @@ describe("piece source reconciliation", () => {
         });
       });
 
+      it("keeps a later release when the revision that last kept it in place records no release time", async () => {
+        // A runtime that does not carry the running source's release time onto
+        // a revision leaving that source in place writes the revision without
+        // one, and the transition clears the record that confirmed it. The
+        // revision that adopted the source still records its time.
+
+        const { piece, identities, offer } = await followingPiece();
+        await offer({ marker: "v2", releasedAt: LATER });
+        const expected = getPieceSourceSnapshot(piece)!;
+        const baseline = await preparePieceSourceTransitionBaseline(
+          runtime,
+          piece,
+          expected,
+        );
+        const kept = await runtime.editWithRetry((tx) => {
+          applyPieceSourceTransition(runtime, piece, tx, expected.pattern, {
+            revisionId: crypto.randomUUID(),
+            baseline,
+            timestamp: Date.now(),
+            operation: "repoint",
+            origin: expected.origin,
+            expected,
+          });
+          const history = piece.withTx(tx).getMetaRaw(
+            "pieceSourceHistory",
+          ) as Record<string, unknown>[];
+          const { releasedAt: _carried, ...untimed } = history.at(-1)!;
+          piece.withTx(tx).setMetaRaw(
+            "pieceSourceHistory",
+            [...history.slice(0, -1), untimed] as FabricValue,
+            rawMetaWriteAuthorization,
+          );
+        });
+        expect(kept.error).toBeUndefined();
+        expect(
+          getPieceSourceRevisions(piece).map(({ pattern, releasedAt }) => ({
+            identity: pattern.identity,
+            releasedAt,
+          })).slice(-2),
+        ).toEqual([
+          { identity: identities.v2, releasedAt: Date.parse(LATER) },
+          { identity: identities.v2, releasedAt: undefined },
+        ]);
+        expect(getPieceReconciliation(piece)).toBeUndefined();
+
+        expect(await offer({ marker: "v1", releasedAt: EARLIER })).toEqual({
+          outcome: "ahead",
+          running: "v2",
+        });
+        expect(originUpdates(piece)).toHaveLength(1);
+        expect(getPieceReconciliation(piece)?.confirmed).toEqual({
+          identity: identities.v2,
+          releasedAt: Date.parse(LATER),
+        });
+      });
+
       it("settles on the later of two releases its hosts offer in turn", async () => {
         const { piece, offer } = await followingPiece();
         const outcomes: string[] = [];

@@ -50,6 +50,7 @@ import {
   isStream,
   type JSONSchema,
   KeepAsCell,
+  knownPieceReleasedAt,
   memoryHostNote,
   type MemorySpace,
   type Module,
@@ -64,7 +65,6 @@ import {
   pieceSourceMovedPast,
   type PieceSourceTransition,
   preparePieceSourceTransitionBaseline,
-  runningReleasedAt,
   Runtime,
   runtimePresets,
   RuntimeProgram,
@@ -3220,7 +3220,10 @@ export class PiecesController<T = unknown> {
     const behindPinnedRelease = (root: Cell<NameSchema>) =>
       reason === "unloadable" &&
       pieceSourceMovedPast(root, officialRef, pinnedRef) &&
-      isEarlierRelease(officialReleasedAt, runningReleasedAt(root, pinnedRef));
+      isEarlierRelease(
+        officialReleasedAt,
+        knownPieceReleasedAt(root, pinnedRef),
+      );
     const movedBackReason = () =>
       `would move the root back to ${officialRef.identity}#` +
       `${officialRef.symbol}, an earlier release than the pinned one, which ` +

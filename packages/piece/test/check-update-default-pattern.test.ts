@@ -1121,6 +1121,58 @@ describe("opening a space root", () => {
     expect(getPatternIdentityRef(after)?.identity).toBe(officialV1);
   });
 
+  it("keeps the root on that release when a later revision kept it in place without its release time", async () => {
+    // A runtime that does not carry the running source's release time onto a
+    // revision leaving that source in place writes the revision without one,
+    // and clears the record. The revision that adopted the source still
+    // records its time.
+
+    const { pinned } = await rootAheadOfThisRuntime(
+      "2026-10-16T15:03:00Z",
+      "2026-10-16T14:03:00Z",
+    );
+    const root = (await controller.getDefaultPattern(false))!;
+    const { error } = await runtime.editWithRetry((tx) => {
+      const candidate = root.withTx(tx);
+      const history = candidate.getMetaRaw("pieceSourceHistory") as Record<
+        string,
+        FabricValue
+      >[];
+      const { releasedAt: _carried, ...adopted } = history.at(-1)!;
+      candidate.setMetaRaw("pieceSourceHistory", [
+        ...history,
+        {
+          ...adopted,
+          revisionId: `repoint-${pinned}`,
+          timestamp: Date.now(),
+          operation: "repoint",
+        },
+      ], rawMetaWriteAuthorization);
+      candidate.setMetaRaw(
+        "pieceReconciliation",
+        undefined,
+        rawMetaWriteAuthorization,
+      );
+    });
+    expect(error).toBeUndefined();
+    const kept = getPieceSourceRevisions(
+      (await controller.getDefaultPattern(false))!,
+    ).at(-1);
+    expect(kept).toMatchObject({
+      pattern: { identity: pinned },
+      operation: "repoint",
+    });
+    expect(kept?.releasedAt).toBeUndefined();
+
+    // Opened without following its origin, so the repair alone decides.
+    await controller.getDefaultPattern({ reconcile: false, start: true })
+      .catch(() => undefined);
+    await runtime.idle();
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(pinned);
+  });
+
   it("rolls the root back to the source its history records moving from when its host offers it at a later release", async () => {
     // A deploy that rolls back states a later release time, which orders the
     // earlier source after the one the root holds.
