@@ -119,9 +119,12 @@ export function payloadFits(payload: string, limits: PartLimits): boolean {
  * the first in `message`'s envelope, the rest as effects for `session`.
  * `prepared` is `message` as the connection's table encodings leave it, whose
  * entries are measured when they correspond one for one to `message`'s, so
- * that a part is cut by what it takes on the wire; a part's own tables can
- * still take it past the bounds, which the caller checks. Returns `[message]`
- * when the sync has fewer than two entries or the entries fit one part.
+ * that a part is cut by what it takes on the wire. Every part is charged
+ * room for tables: those of the whole prepared message, which hold every
+ * table a part can carry, up to half the bounds. A part whose own tables
+ * still take it past the bounds is the caller's to check. Returns
+ * `[message]` when the sync has fewer than two entries or the entries fit
+ * one part.
  */
 export function splitSyncMessage(
   message: ServerMessage,
@@ -141,13 +144,15 @@ export function splitSyncMessage(
       measured.every((item, index) => item.field === entries[index].field)
     ? measured
     : entries).map((item) => measure(item.entry));
-  // Every part is charged the larger of the two envelopes a part can take.
+  // Every part is charged the larger of the two envelopes a part can take,
+  // and room for tables.
   const empty = partOf(sync, SYNC_LISTS, [], true, true) as SessionSync;
   const first = measure(inEnvelope(message, empty, session, true));
   const later = measure(inEnvelope(message, empty, session, false));
+  const tables = tablesOf(sync, compacted, limits);
   const groups = pack(entries, sizes, {
-    bytes: Math.max(first.bytes, later.bytes),
-    values: Math.max(first.values, later.values),
+    bytes: Math.max(first.bytes, later.bytes) + tables.bytes,
+    values: Math.max(first.values, later.values) + tables.values,
   }, limits);
   if (groups.length === 1) return [message];
   return groups.map((group, index) =>
@@ -351,6 +356,34 @@ export function stagedWatchSet(part: WatchSetRequest): WatchSetRequest {
     if (Array.isArray(list)) staged[field] = [...list];
   }
   return staged as WatchSetRequest;
+}
+
+/**
+ * Helper for the sync split: the size of the fields table encodings add to
+ * `sync` in `compacted`, at most half of each bound.
+ */
+function tablesOf(
+  sync: SessionSync,
+  compacted: SessionSync | undefined,
+  limits: PartLimits,
+): Size {
+  let bytes = 0;
+  let values = 0;
+  if (compacted !== undefined) {
+    for (const [key, value] of Object.entries(compacted)) {
+      if (Object.hasOwn(sync, key)) continue;
+      const size = measure(value);
+      // The key, its quotes and colon, and the comma before it.
+      bytes += size.bytes + key.length + 4;
+      values += size.values;
+    }
+  }
+  return {
+    bytes: Math.min(bytes, Math.floor(limits.bytes / 2)),
+    values: limits.values === null
+      ? values
+      : Math.min(values, Math.floor(limits.values / 2)),
+  };
 }
 
 /** Helper for the splits, which lists a message's entries in order. */

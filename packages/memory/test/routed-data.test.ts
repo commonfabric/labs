@@ -5351,6 +5351,8 @@ describe("routed close diagnostics", () => {
       o.send(syncPart(space, "s1", 1000, true));
       expect(() => o.send(syncPart(space, "s2", 1000, false))).toThrow();
       await o.socket.closed.promise;
+      o.f.host.close();
+      expect(o.closedVerdicts()[0].reason).toBe("data-protocol");
     } finally {
       await o.close();
     }

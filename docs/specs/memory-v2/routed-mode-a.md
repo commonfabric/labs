@@ -762,9 +762,10 @@ failed send, before socket accounting can change during close:
 
 - `frameBytes`: the attempted message's encoded payload size, in UTF-8 bytes
   for text or byte-array length for binary.
-- `bufferedBytes`: the larger of retained logical output bytes and npm `ws`'s
-  `bufferedAmount`. Control sockets use `bufferedAmount` alone. Socket writable
-  bytes can include framing.
+- `bufferedBytes`: the larger of retained logical output bytes, parts of
+  split syncs excluded, and npm `ws`'s `bufferedAmount`; for a part of a split
+  sync, the bytes of parts retained. Control sockets use `bufferedAmount`
+  alone. Socket writable bytes can include framing.
 - `limitBytes`: the bound that refused the send: 8 MiB for a message too large
   to send alone, the bound on parts for a part of a split sync, else
   `limits.outputBytesPerSocket` (default 4 MiB) on their sum; equality is

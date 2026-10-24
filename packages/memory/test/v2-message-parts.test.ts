@@ -432,6 +432,113 @@ Deno.test("a server sends a sync whole to a client that does not take one in par
   assertEquals(sync.upserts.length, DOCS);
 });
 
+/**
+ * Opens a session on a raw connection that splits syncs to `limits`, writes
+ * `values` as documents `of:<name>-<i>` and sets a watch on them all. Returns
+ * the messages the watch set's answer took.
+ */
+const watchedThrough = async (
+  name: string,
+  limits: PartLimits,
+  values: unknown[],
+): Promise<ServerMessage[]> => {
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL(`memory://${name}`),
+    subscriptionRefreshDelayMs: 0,
+  });
+  const messages: ServerMessage[] = [];
+  const connection = server.connect(
+    (message) => messages.push(message),
+    limits,
+  );
+  const space = `did:key:z6Mk-${name}`;
+  try {
+    await connection.receive(encodeMemoryBoundary(HELLO));
+    const ok = messages.shift() as HelloOkMessage;
+    const sessionOpen = ok.sessionOpen as SessionOpenAuthMetadata;
+    await connection.receive(encodeMemoryBoundary({
+      type: "session.open",
+      requestId: "open",
+      space,
+      session: {},
+      invocation: {
+        aud: sessionOpen.audience,
+        challenge: sessionOpen.challenge.value,
+      },
+    }));
+    const sessionId =
+      (messages.shift() as ResponseMessage<{ sessionId: string }>).ok!
+        .sessionId;
+    await connection.receive(encodeMemoryBoundary({
+      type: "transact",
+      requestId: "write",
+      space,
+      sessionId,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: values.map((value, n) => ({
+          op: "set",
+          id: `of:${name}-${n}`,
+          value: { value },
+        })),
+      },
+    } as never));
+    messages.length = 0;
+    await connection.receive(encodeMemoryBoundary({
+      type: "session.watch.set",
+      requestId: "watch",
+      space,
+      sessionId,
+      watches: [{
+        id: "all",
+        kind: "graph",
+        query: {
+          roots: values.map((_, n) => ({
+            id: `of:${name}-${n}`,
+            selector: { path: [], schema: false },
+          })),
+        },
+      }],
+    }));
+    const start = messages.findIndex((message) =>
+      message.type === "response" &&
+      (message as ResponseMessage<unknown>).requestId === "watch"
+    );
+    return messages.slice(start);
+  } finally {
+    connection.close();
+    await server.close();
+  }
+};
+
+Deno.test("a server cuts a sync's parts by what its entries take once compacted", async () => {
+  // Forty documents link with one large schema. Inline, each document is
+  // about 2 KB and the sync about 80 KB; compacted, each is about 200 bytes
+  // and the schema goes once in a table. Cut by the compacted entries, with
+  // room for the table, the sync takes two parts of 8 KB, not a part for
+  // every three documents.
+  const schema: JSONSchema = {
+    type: "object",
+    properties: Object.fromEntries(
+      Array.from({ length: 60 }, (_, i) => [`field${i}`, { type: "string" }]),
+    ),
+  };
+  const parts = await watchedThrough(
+    "sync-parts-compacted",
+    { bytes: 8192, values: null },
+    Array.from({ length: 40 }, (_, n) => ({
+      n,
+      link: linkRefFrom({ id: `of:target-${n}`, path: [], schema }),
+    })),
+  );
+  assertEquals(parts.length, 2);
+  for (const part of parts) {
+    assert(encodeMemoryBoundary(part).length <= 8192);
+  }
+});
+
 Deno.test("a server halves a sync whose own tables take it past its bounds", async () => {
   // Two documents, each linking with a large schema of its own. Compacted,
   // each document is small, and by their own sizes both fit one part; but
@@ -957,8 +1064,7 @@ Deno.test("a client restores a watch set past its connection's bounds in staged 
     await watcherClient.restoreConnection();
     assert(stagedParts > stagedBefore);
 
-    // The documents of the first watch and the last, in the first part and
-    // the last, both reach the restored session.
+    // Every watch, whichever part named it, reaches the restored session.
     const updates = (await watcher.watchAddSync([])).view.subscribe();
     const writer = await writerClient.mount(
       space,
@@ -968,7 +1074,7 @@ Deno.test("a client restores a watch set past its connection's bounds in staged 
     await writer.transact({
       localSeq: 1,
       reads: { confirmed: [], pending: [] },
-      operations: [0, DOCS - 1].map((index) => ({
+      operations: Array.from({ length: DOCS }, (_, index) => ({
         op: "set" as const,
         id: `of:sync-part-${index}`,
         value: { value: { index } },
@@ -979,12 +1085,132 @@ Deno.test("a client restores a watch set past its connection's bounds in staged 
       (next.value?.entities ?? []).filter((entity: EntitySnapshot) =>
         entity.seq > 0
       ).map((entity: EntitySnapshot) => entity.id).sort(),
-      [`of:sync-part-0`, `of:sync-part-${DOCS - 1}`].sort(),
+      Array.from({ length: DOCS }, (_, index) => `of:sync-part-${index}`)
+        .sort(),
     );
   } finally {
     await watcherClient.close();
     await writerClient.close();
     await before.close();
     await after.close();
+  }
+});
+
+Deno.test("a server holds at most 64 parts of a staged set before its last", async () => {
+  const { server, send, watch } = await rawSession("staged-set-bound");
+  try {
+    for (let part = 0; part < 64; part++) {
+      const answer = await send({
+        type: "session.watch.set",
+        requestId: `part-${part}`,
+        watches: [watch(part % DOCS)],
+        stage: "set",
+        part,
+        more: true,
+      });
+      assertEquals(answer.ok, { staged: true }, `part ${part}`);
+    }
+    const over = await send({
+      type: "session.watch.set",
+      requestId: "part-64",
+      watches: [watch(0)],
+      stage: "set",
+      part: 64,
+      more: true,
+    });
+    assertEquals(over.error?.name, "ProtocolError");
+    // The set ended with the refusal: its last part follows nothing.
+    const last = await send({
+      type: "session.watch.set",
+      requestId: "part-65",
+      watches: [watch(1)],
+      stage: "set",
+      part: 65,
+    });
+    assertEquals(last.error?.name, "ProtocolError");
+  } finally {
+    await server.close();
+  }
+});
+
+Deno.test("a client handles a message for the session that carries no sync between its sync's parts", async () => {
+  // A router answers some of a session's requests itself, between the parts
+  // of the session's sync; here a presence notice stands in for its answer.
+  // The client handles it and completes the sync, on the one connection.
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL("memory://sync-parts-client-between"),
+    subscriptionRefreshDelayMs: 0,
+  });
+  let hellos = 0;
+  let injected = false;
+  const inner = loopback(server, { syncParts: { bytes: 2048, values: 400 } });
+  let deliver = (_payload: string) => {};
+  const transport: Transport = {
+    ...inner,
+    send: (payload: string) => {
+      if (payload.includes('"type":"hello"')) hellos++;
+      return inner.send(payload);
+    },
+    close: () => inner.close(),
+    setReceiver(receiver: (payload: string) => void) {
+      deliver = receiver;
+      inner.setReceiver((payload: string) => {
+        receiver(payload);
+        // After a part that names the session and says more follow.
+        const match = /"sessionId":"([^"]+)"/.exec(payload);
+        if (!injected && payload.includes('"more":true') && match !== null) {
+          injected = true;
+          deliver(encodeMemoryBoundary({
+            type: "presence/remove",
+            space,
+            sessionId: match[1],
+            room: "room",
+            participantId: "someone",
+          }));
+        }
+      });
+    },
+  };
+  const writerClient = await connect({ transport: loopback(server) });
+  const watcherClient = await connect({ transport });
+  const space = "did:key:z6Mk-sync-parts-client-between";
+  try {
+    const writer = await writerClient.mount(
+      space,
+      {},
+      testSessionOpenAuthFactory,
+    );
+    await writer.transact({
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: Array.from({ length: DOCS }, (_, index) => ({
+        op: "set" as const,
+        id: `of:sync-part-${index}`,
+        value: { value: { index, text: "c".repeat(300) } },
+      })),
+    });
+    const watcher = await watcherClient.mount(
+      space,
+      {},
+      testSessionOpenAuthFactory,
+    );
+    const view = await watcher.watchSet([{
+      id: "all",
+      kind: "graph",
+      query: {
+        roots: Array.from({ length: DOCS }, (_, index) => ({
+          id: `of:sync-part-${index}`,
+          selector: { path: [], schema: false },
+        })),
+      },
+    }]);
+    assert(injected);
+    assertEquals(view.entities.length, DOCS);
+    assertEquals(hellos, 1);
+  } finally {
+    await writerClient.close();
+    await watcherClient.close();
+    await server.close();
   }
 });
