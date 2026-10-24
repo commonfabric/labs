@@ -1,9 +1,9 @@
 /**
- * A read with no shape of its own, where it crosses a stored link carrying a
- * schema: the view behind the link reads the keys that schema names through
- * views of their own and the rest as stored, following no link under them; a
- * host's read-out reads the same; and a subscription through it depends on
- * nothing a link under an unnamed key reaches.
+ * A read with no shape of its own, where it meets a stored link carrying a
+ * schema: a read of the position holding the link takes the link's schema as
+ * its own and reads what it names, a host's read-out reads each link it
+ * follows the same way, and a query-result view reads whatever it is asked
+ * for, alike for every reader that reaches it.
  */
 
 import { expect } from "@std/expect";
@@ -12,7 +12,6 @@ import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 
 import { type Cell, hostValueOf, sinkProjected } from "../src/cell.ts";
-import { isSigilLink } from "../src/link-types.ts";
 import { KeepAsCell } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -37,7 +36,6 @@ type Profile = { name: string; avatar: string; extra: string; inbox: unknown };
  * `write()` stores a document and waits for it to settle.
  */
 async function documents(schema: unknown = profileSchema) {
-  const profileLinkSchema = schema === null ? undefined : schema;
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     storageManager,
@@ -56,6 +54,8 @@ async function documents(schema: unknown = profileSchema) {
     await runtime.idle();
     return runtime.getCell(where as never, id, withSchema as never);
   };
+  const link = (cell: Cell<unknown>) =>
+    cell.getAsLink({ includeSchema: true, keepAsCell: KeepAsCell.All });
   const catalog = await write(elsewhere, "catalog", { entries: {} });
   const inbox = await write(elsewhere, "inbox", {
     catalog: catalog.getAsLink(),
@@ -66,28 +66,16 @@ async function documents(schema: unknown = profileSchema) {
     avatar: "a",
     extra: "not declared",
     inbox: inbox.getAsLink(),
-  }, profileLinkSchema);
+  }, schema === null ? undefined : schema);
   const message = await write(space, "message", {
-    authorProfile: profile.getAsLink({
-      includeSchema: true,
-      keepAsCell: KeepAsCell.All,
-    }),
+    authorProfile: link(profile),
     body: "hello",
-  });
-  // The same profile linked twice from one document, under the schema and
-  // under none, so that the two views of it are built in one read.
-  const both = await write(space, "both", {
-    typed: profile.getAsLink({
-      includeSchema: true,
-      keepAsCell: KeepAsCell.All,
-    }),
-    plain: profile.getAsLink(),
   });
   return {
     runtime,
     write,
+    link,
     message,
-    both,
     async [Symbol.asyncDispose]() {
       await runtime.dispose();
       await storageManager.close();
@@ -95,107 +83,116 @@ async function documents(schema: unknown = profileSchema) {
   };
 }
 
-describe("a view behind a link carrying a schema", () => {
-  it("reads the keys the schema names, and the rest as stored with no link followed", async () => {
+describe("a shapeless read of a position holding a link carrying a schema", () => {
+  it("reads what the link's schema names, and nothing else the target holds", async () => {
     await using docs = await documents();
-    const view = docs.message.get() as { authorProfile: Profile };
 
-    expect(Object.keys(view.authorProfile)).toEqual([
-      "avatar",
-      "extra",
-      "inbox",
-      "name",
-    ]);
-    expect(view.authorProfile.name).toBe("an author");
-    expect(view.authorProfile.extra).toBe("not declared");
-    // The unnamed `inbox` holds a link, which stays one: the inbox is not
-    // read, so nothing of it, or of the catalog it links, is here.
-    expect(isSigilLink(view.authorProfile.inbox)).toBe(true);
-    expect(
-      Object.getOwnPropertyDescriptor(view.authorProfile, "inbox")?.value,
-    ).toEqual(view.authorProfile.inbox);
-  });
-
-  it("reads out for a host the same way", async () => {
-    await using docs = await documents();
-    const value = hostValueOf(docs.message.get()) as {
-      authorProfile: Profile;
-      body: string;
-    };
-
-    expect(value.body).toBe("hello");
-    expect(Object.keys(value.authorProfile)).toEqual([
-      "avatar",
-      "extra",
-      "inbox",
-      "name",
-    ]);
-    expect(value.authorProfile.name).toBe("an author");
-    expect(isSigilLink(value.authorProfile.inbox)).toBe(true);
-  });
-
-  it("shows every key behind a link carrying no schema", async () => {
-    await using docs = await documents(null);
-
-    expect(hostValueOf(docs.message.get())).toEqual({
-      authorProfile: {
-        name: "an author",
-        avatar: "a",
-        extra: "not declared",
-        inbox: { catalog: { entries: {} }, offers: [] },
-      },
-      body: "hello",
+    expect(docs.message.key("authorProfile").get()).toEqual({
+      avatar: "a",
+      name: "an author",
     });
   });
 
-  it("follows every link where the schema admits additional properties", async () => {
+  it("reads the same through a slot its reader's schema leaves open", async () => {
+    await using docs = await documents();
+    const open = docs.runtime.getCell(space, "message", {
+      type: "object",
+      properties: { authorProfile: true, body: { type: "string" } },
+    } as never);
+
+    expect((open.get() as { authorProfile: unknown }).authorProfile).toEqual({
+      avatar: "a",
+      name: "an author",
+    });
+  });
+
+  it("reads everything behind a link carrying no schema", async () => {
+    await using docs = await documents(null);
+
+    expect(hostValueOf(docs.message.key("authorProfile").get())).toEqual({
+      name: "an author",
+      avatar: "a",
+      extra: "not declared",
+      inbox: { catalog: { entries: {} }, offers: [] },
+    });
+  });
+
+  it("reads everything where the link's schema admits additional properties", async () => {
     await using docs = await documents({
       ...profileSchema,
       additionalProperties: true,
     });
 
-    expect(hostValueOf(docs.message.get())).toEqual({
-      authorProfile: {
+    expect(hostValueOf(docs.message.key("authorProfile").get())).toEqual({
+      name: "an author",
+      avatar: "a",
+      extra: "not declared",
+      inbox: { catalog: { entries: {} }, offers: [] },
+    });
+  });
+
+  it("subscribes to what the link's schema names alone", async () => {
+    await using docs = await documents();
+    const names: unknown[] = [];
+    const cancel = sinkProjected(
+      docs.message.key("authorProfile"),
+      hostValueOf,
+      (value) => {
+        names.push((value as Profile).name);
+      },
+    );
+    try {
+      expect(names).toEqual(["an author"]);
+
+      // What the profile holds outside its declaration changes, and what its
+      // inbox links: nothing is delivered.
+      await docs.write(elsewhere, "catalog", { entries: { added: true } });
+      await docs.write(elsewhere, "inbox", {
+        catalog: docs.runtime.getCell(elsewhere, "catalog").getAsLink(),
+        offers: [{ from: "someone" }],
+      });
+      await docs.write(space, "profile", {
         name: "an author",
         avatar: "a",
-        extra: "not declared",
-        inbox: { catalog: { entries: {} }, offers: [] },
-      },
+        extra: "changed",
+        inbox: docs.runtime.getCell(elsewhere, "inbox").getAsLink(),
+      }, profileSchema);
+      expect(names).toEqual(["an author"]);
+
+      // A named field changes: the new value is delivered.
+      await docs.write(space, "profile", {
+        name: "a renamed author",
+        avatar: "a",
+        extra: "changed",
+        inbox: docs.runtime.getCell(elsewhere, "inbox").getAsLink(),
+      }, profileSchema);
+      expect(names).toEqual(["an author", "a renamed author"]);
+    } finally {
+      cancel();
+    }
+  });
+});
+
+describe("a host's read-out of a link it follows", () => {
+  it("reads the target as the link's schema names it", async () => {
+    await using docs = await documents();
+
+    expect(hostValueOf(docs.message.get())).toEqual({
+      authorProfile: { avatar: "a", name: "an author" },
       body: "hello",
     });
   });
 
-  it("keeps a view under a declaration apart from the view under none, whichever is read first", async () => {
-    // Both views come out of one read, so they share one view cache; a
-    // read-out would not show this, since it follows links on its own.
-    type Both = { typed: Profile; plain: Profile };
-    const inlined = (inbox: unknown) => (inbox as { catalog: unknown }).catalog;
-    {
-      await using docs = await documents();
-      const both = docs.both.get() as Both;
-      expect(isSigilLink(both.typed.inbox)).toBe(true);
-      expect(inlined(both.plain.inbox)).toEqual({ entries: {} });
-    }
-    {
-      await using docs = await documents();
-      const both = docs.both.get() as Both;
-      expect(inlined(both.plain.inbox)).toEqual({ entries: {} });
-      expect(isSigilLink(both.typed.inbox)).toBe(true);
-    }
-  });
-
-  it("keeps views under declarations that differ only below the root apart, whichever is read first", async () => {
-    // Two declarations naming the same keys at the root and different ones
-    // below: a record's `child` with `a` or with `b` declared, and a `list`
-    // whose items declare `a` or `b`. Each declared field holds a link to
-    // its text, which is followed only under the declaration naming it.
-    const declaring = (field: "a" | "b") => ({
+  it("reads each link under its own schema, two links to one target apart", async () => {
+    await using docs = await documents();
+    // Two declarations naming the same root key and different ones below,
+    // in a member and in an array's items, and two naming fields spelled
+    // like schema annotations. Each named field holds a link to its text,
+    // followed only under the declaration naming it.
+    const declaring = (field: string) => ({
       type: "object",
       properties: {
-        child: {
-          type: "object",
-          properties: { [field]: { type: "string" } },
-        },
+        child: { type: "object", properties: { [field]: { type: "string" } } },
         list: {
           type: "array",
           items: {
@@ -203,110 +200,49 @@ describe("a view behind a link carrying a schema", () => {
             properties: { [field]: { type: "string" } },
           },
         },
+        [field]: { type: "string" },
       },
     });
-    const build = async () => {
-      const docs = await documents();
-      const a = await docs.write(space, "a", "text a");
-      const b = await docs.write(space, "b", "text b");
-      const record = await docs.write(space, "record", {
-        a: a.getAsLink(),
-        b: b.getAsLink(),
-      });
-      const target = await docs.write(space, "target", {
-        child: record.getAsLink(),
-        list: [record.getAsLink()],
-      });
-      const link = (field: "a" | "b") =>
-        docs.runtime.getCell(space, "target", declaring(field) as never)
-          .getAsLink({ includeSchema: true, keepAsCell: KeepAsCell.All });
-      await docs.write(space, "holder", { one: link("a"), two: link("b") });
-      void target;
-      return docs;
-    };
-    type Shaped = {
-      child: { a?: unknown; b?: unknown };
-      list: { a?: unknown; b?: unknown }[];
-    };
-    {
-      await using docs = await build();
-      const holder = docs.runtime.getCell(space, "holder").get() as {
-        one: Shaped;
-        two: Shaped;
-      };
-      expect(holder.one.child.a).toBe("text a");
-      expect(holder.one.list[0].a).toBe("text a");
-      expect(holder.two.child.b).toBe("text b");
-      expect(holder.two.list[0].b).toBe("text b");
-    }
-    {
-      await using docs = await build();
-      const holder = docs.runtime.getCell(space, "holder").get() as {
-        one: Shaped;
-        two: Shaped;
-      };
-      expect(holder.two.child.b).toBe("text b");
-      expect(holder.two.list[0].b).toBe("text b");
-      expect(holder.one.child.a).toBe("text a");
-      expect(holder.one.list[0].a).toBe("text a");
-    }
-  });
-
-  it("keeps views apart whose declarations name fields spelled like schema annotations, whichever is read first", async () => {
-    // `title` and `description` are property names here, each holding a link
-    // to its text; one declaration names the first, the other the second.
-    const declaring = (field: "title" | "description") => ({
-      type: "object",
-      properties: { [field]: { type: "string" } },
+    const text = (id: string) => docs.write(space, id, `text ${id}`);
+    const fields = ["a", "b", "title", "description"];
+    const texts = await Promise.all(fields.map(text));
+    const record = await docs.write(
+      space,
+      "record",
+      Object.fromEntries(fields.map((f, i) => [f, texts[i].getAsLink()])),
+    );
+    await docs.write(space, "target", {
+      child: record.getAsLink(),
+      list: [record.getAsLink()],
+      ...Object.fromEntries(fields.map((f, i) => [f, texts[i].getAsLink()])),
     });
-    const build = async () => {
-      const docs = await documents();
-      const title = await docs.write(space, "title-text", "the title");
-      const description = await docs.write(
-        space,
-        "description-text",
-        "the description",
+    const typed = (field: string) =>
+      docs.link(
+        docs.runtime.getCell(space, "target", declaring(field) as never),
       );
-      await docs.write(space, "target", {
-        title: title.getAsLink(),
-        description: description.getAsLink(),
+    await docs.write(
+      space,
+      "holder",
+      Object.fromEntries(fields.map((f) => [f, typed(f)])),
+    );
+
+    const out = hostValueOf(
+      docs.runtime.getCell(space, "holder").get(),
+    ) as Record<string, Record<string, unknown>>;
+    for (const field of fields) {
+      expect(out[field]).toEqual({
+        child: { [field]: `text ${field}` },
+        list: [{ [field]: `text ${field}` }],
+        [field]: `text ${field}`,
       });
-      const link = (field: "title" | "description") =>
-        docs.runtime.getCell(space, "target", declaring(field) as never)
-          .getAsLink({ includeSchema: true, keepAsCell: KeepAsCell.All });
-      await docs.write(space, "holder", {
-        titled: link("title"),
-        described: link("description"),
-      });
-      return docs;
-    };
-    type Shaped = { title?: unknown; description?: unknown };
-    {
-      await using docs = await build();
-      const holder = docs.runtime.getCell(space, "holder").get() as {
-        titled: Shaped;
-        described: Shaped;
-      };
-      expect(holder.titled.title).toBe("the title");
-      expect(holder.described.description).toBe("the description");
-    }
-    {
-      await using docs = await build();
-      const holder = docs.runtime.getCell(space, "holder").get() as {
-        titled: Shaped;
-        described: Shaped;
-      };
-      expect(holder.described.description).toBe("the description");
-      expect(holder.titled.title).toBe("the title");
     }
   });
 
-  it("reads a linked member under the member's own declaration, not the document's", async () => {
-    // The profile's `child` is an untyped link to a record whose `title`
-    // is a link to its text. The profile's declaration names `child.title`
-    // and no `title` of its own, so the record's `title` is followed only
-    // under the member's declaration; under the document's it would be an
-    // unnamed key, kept as the link it holds.
+  it("follows a member's link under the member's own declaration, not the document's", async () => {
+    // The profile's `child` is a link carrying no schema to a record whose
+    // `title` is a link to its text. The profile's declaration names
+    // `child.title` and no `title` of its own, so the record's `title` is
+    // read only under the member's declaration.
     const schema = {
       type: "object",
       properties: {
@@ -328,46 +264,27 @@ describe("a view behind a link carrying a schema", () => {
       child: child.getAsLink(),
     }, schema);
 
-    type Shaped = { authorProfile: { child: { title: unknown } } };
-    const view = docs.message.get() as Shaped;
-    expect(view.authorProfile.child.title).toBe("a linked title");
-    expect(
-      (hostValueOf(docs.message.get()) as Shaped).authorProfile.child.title,
-    ).toBe("a linked title");
+    expect(hostValueOf(docs.message.get())).toEqual({
+      authorProfile: { name: "an author", child: { title: "a linked title" } },
+      body: "hello",
+    });
   });
+});
 
-  it("subscribes through the link to nothing an unnamed key links", async () => {
+describe("a query-result view behind a link carrying a schema", () => {
+  it("is the view every reader of the position gets, whatever link it came through", async () => {
     await using docs = await documents();
-    const names: unknown[] = [];
-    const cancel = sinkProjected(
-      docs.message.key("authorProfile"),
-      hostValueOf,
-      (value) => {
-        names.push((value as Profile).name);
-      },
-    );
-    try {
-      expect(names).toEqual(["an author"]);
+    const profile = docs.runtime.getCell(space, "profile");
+    await docs.write(space, "both", {
+      typed: docs.link(profile),
+      plain: profile.getAsLink(),
+    });
+    const both = docs.runtime.getCell(space, "both").get() as {
+      typed: Profile;
+      plain: Profile;
+    };
 
-      // What the unnamed `inbox` links changes, and what that links: nothing
-      // is delivered.
-      await docs.write(elsewhere, "catalog", { entries: { added: true } });
-      await docs.write(elsewhere, "inbox", {
-        catalog: docs.runtime.getCell(elsewhere, "catalog").getAsLink(),
-        offers: [{ from: "someone" }],
-      });
-      expect(names).toEqual(["an author"]);
-
-      // A named key changes: the new value is delivered.
-      await docs.write(space, "profile", {
-        name: "a renamed author",
-        avatar: "a",
-        extra: "not declared",
-        inbox: docs.runtime.getCell(elsewhere, "inbox").getAsLink(),
-      }, profileSchema);
-      expect(names).toEqual(["an author", "a renamed author"]);
-    } finally {
-      cancel();
-    }
+    expect(both.typed).toBe(both.plain);
+    expect(both.typed.extra).toBe("not declared");
   });
 });

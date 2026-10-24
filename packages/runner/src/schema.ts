@@ -56,6 +56,7 @@ import { waveRunContextOf } from "./executor/wave.ts";
 import {
   readMaybeLink,
   resolveLink,
+  resolveLinkTracingDereferences,
   undefinedDataLink,
 } from "./link-resolution.ts";
 import type {
@@ -69,7 +70,11 @@ import {
 import { getReaderSchemaPrecedenceConfig } from "./reader-schema-precedence-config.ts";
 import type { Runtime } from "./runtime.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
-import { markIfcBearingLinkCrossing, schemaHasIfc } from "./schema-ifc.ts";
+import {
+  ensureExternalSchemaClosure,
+  markIfcBearingLinkCrossing,
+  schemaHasIfc,
+} from "./schema-ifc.ts";
 import { arrayMatchesPositionally } from "./schema-match.ts";
 import {
   externalResolutionMissCount,
@@ -83,7 +88,10 @@ import {
 } from "./schema-view.ts";
 import { canFollowScopedLink, isCellScope } from "./scope.ts";
 import { getTransactionForChildCells } from "./storage/extended-storage-transaction.ts";
-import type { IExtendedStorageTransaction } from "./storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  MemorySpace,
+} from "./storage/interface.ts";
 import { usesLocalReads } from "./storage/local-read-policy.ts";
 import {
   excludeReadFromConflict,
@@ -631,6 +639,112 @@ function filterAsCell(schema: JSONSchema | undefined): JSONSchema | undefined {
   } else {
     return makeRawResult();
   }
+}
+
+/**
+ * What `schema`, a stored link's schema as a resolution carries it onto the
+ * link's target, declares the target to hold, in the form a read takes as
+ * its own: resolved to its structural form, with the handle kind it names for
+ * the link's holder (`asCell`) left off, since a read of the target wants its
+ * value. `undefined` where it declares nothing a read could go by: no object
+ * schema, a stream, which a read reaches as the stream itself, one whose
+ * `cid:` closure `space` does not hold complete (ignored, as link resolution
+ * ignores it when narrowing, `ensureExternalSchemaClosure()`), or one that
+ * constrains nothing once the handle kind is off. `space` is that of the
+ * document holding the link, where its closure travels.
+ */
+export function declaredShape(
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+  schema: JSONSchema | undefined,
+): JSONSchemaObj | undefined {
+  if (!isObjectNotArray(schema)) return undefined;
+  if (ContextualFlowControl.declaresStream(schema)) return undefined;
+  if (!ensureExternalSchemaClosure(tx, space, schema)) return undefined;
+  const resolved = resolveSchema(schema);
+  if (!isObjectNotArray(resolved)) return undefined;
+  const shape = filterAsCell(resolved);
+  return isObjectNotArray(shape) && isNontrivialSchema(shape)
+    ? shape
+    : undefined;
+}
+
+/**
+ * Whether `shape` selects among a record's keys: it names `properties` and
+ * admits no additional ones. A read under it reads those keys and no other,
+ * as the schema view does (`#traverseObjectWithSchema`).
+ */
+export function selectsKeys(
+  shape: JSONSchemaObj | undefined,
+): shape is JSONSchemaObj {
+  if (shape === undefined || !isObjectNotArray(shape.properties)) return false;
+  const additional = shape.additionalProperties;
+  return additional === undefined || additional === false;
+}
+
+/** Whether a read of a record under `shape` reads its key `key`. */
+export function declaresKey(
+  shape: JSONSchemaObj | undefined,
+  key: string,
+): boolean {
+  return !selectsKeys(shape) ||
+    Object.hasOwn(shape.properties as object, key);
+}
+
+/**
+ * The schema the link held at `link`'s position declares of its target
+ * ({@link declaredShape}), or `undefined` where the position holds no link,
+ * or one declaring nothing a read could go by.
+ */
+function linkDeclaredShape(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+): JSONSchemaObj | undefined {
+  // The read that follows resolves the same link and kicks its cross-space
+  // targets, so this one kicks none.
+  const resolved = resolveLinkTracingDereferences(runtime, tx, link, "value", {
+    kickCrossSpaceTargets: false,
+  });
+  if (resolved.traces.length === 0) return undefined;
+  return declaredShape(
+    tx,
+    resolved.traces[resolved.traces.length - 1].source.space,
+    resolved.link.schema,
+  );
+}
+
+/**
+ * The read of `link`'s position for a reader with no shape of its own. Where
+ * the position holds a link whose stored schema declares what its target
+ * holds ({@link linkDeclaredShape}), the read takes that schema as its own,
+ * as a shaped reader crossing the link does (`combineSchemaForLink`: a true
+ * reader adopts the link's schema), so it reads what the schema names and
+ * nothing else the target holds or links. Anywhere else it is a query-result
+ * view of the position, which reads whatever it is asked for.
+ */
+function shapelessRead(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  cfcLabelView: CfcLabelView | undefined,
+  options: { synced?: boolean; mismatchThrows?: boolean },
+): unknown {
+  const adopted = linkDeclaredShape(runtime, tx, link);
+  if (adopted === undefined) {
+    return createQueryResultProxy(runtime, tx, link, 0, cfcLabelView);
+  }
+  return validateAndTransform(
+    runtime,
+    tx,
+    { link: { ...link, schema: adopted }, cfcLabelView },
+    [],
+    {
+      synced: options.synced,
+      mismatchThrows: options.mismatchThrows,
+      viewChild: true,
+    },
+  );
 }
 
 /**
@@ -1267,7 +1381,10 @@ export function validateAndTransform(
     ) &&
     filteredSchema !== false && !isNontrivialSchema(filteredSchema)
   ) {
-    return createQueryResultProxy(runtime, tx, link, 0, cfcLabelView);
+    return shapelessRead(runtime, tx, link, cfcLabelView, {
+      synced: options?.synced,
+      mismatchThrows: options?.mismatchThrows,
+    });
   }
 
   // Now resolve further links until we get the actual value.
@@ -2058,13 +2175,13 @@ class TransformObjectCreator
     // If we have a schema without asCell or asStream, we should annotate the
     // object so we can get back to the cell if needed.
     if (link.schema === undefined || link.schema === true) {
-      return createQueryResultProxy(
+      return shapelessRead(
         this.#runtime,
         this.#tx,
         link,
-        0,
         this.#labelViewFor(link),
-      );
+        { synced: this.#synced },
+      ) as AnyCellWrapping<FabricValue>;
     } else if (isObjectOrArray(link.schema)) {
       // A reference-form schema resolves here — materialization is a
       // structural use (asCell handles, defaults), and the handle minted
@@ -2117,13 +2234,13 @@ class TransformObjectCreator
       // If it's not a cell/stream, but the schema is true-ish, use a
       // QueryResultProxy
       if (ContextualFlowControl.isTrueSchema(schema)) {
-        return createQueryResultProxy(
+        return shapelessRead(
           this.#runtime,
           this.#tx,
           link,
-          0,
           this.#labelViewFor(link),
-        );
+          { synced: this.#synced },
+        ) as AnyCellWrapping<FabricValue>;
       }
       // link.schema is not true, and not asCell/asStream
       // If we're undefined, check for a default and apply that

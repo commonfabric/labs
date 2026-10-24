@@ -163,12 +163,8 @@ import { type MetaField, type RawMetaWriteAuthorization } from "./meta-seam.ts";
 import {
   type CellResult,
   createQueryResultProxy,
-  declaredShape,
-  declaresKey,
   getCellOrThrow,
   isCellResultForDereferencing,
-  selectsKeys,
-  SHAPE_READ,
   type ViewReadOut,
   viewReadOut,
 } from "./query-result-proxy.ts";
@@ -184,9 +180,12 @@ import { withdrawHandlerWhileLoading } from "./scheduler/handler-load-wait.ts";
 import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
 import {
   type CellViewRef,
+  declaredShape,
+  declaresKey,
   processDefaultValue,
   resolveSchema,
   schemaHasIfc,
+  selectsKeys,
   validateAndTransform,
 } from "./schema.ts";
 import { isCellScope, narrowerScopeCap, normalizeCellScope } from "./scope.ts";
@@ -5560,9 +5559,10 @@ export function convertCellsToLinks(
  * A cell's value in the form the worker hands it to a host: each cell inside
  * it as the link it names, carrying the display form of that cell's label
  * view with every caveat's source redacted, and each query result read out
- * into the data behind it, following its links, except a link under a key
- * that the declaration of a crossed link does not name, which stays the link
- * it is (`readOutView()`). A sigil link already in the
+ * into the data behind it, following its links. Behind a link whose stored
+ * schema declares what its target holds, the target is read out as that
+ * schema names it, and a key it does not name is left out
+ * (`readOutView()`). A sigil link already in the
  * value is rebuilt as the container it is, view and all; stored data carries
  * no view on a link, the persist seam having stripped it, so the minted links
  * are where a view crosses. What a host is sent is
@@ -5852,6 +5852,9 @@ function convertOneToLinks(
   }
 }
 
+/** A read of a container's shape alone: its keys, not what they hold. */
+const SHAPE_READ = { nonRecursive: true } as const;
+
 /**
  * Reads the document a view describes out as the data the view reads, in
  * place of walking the view member by member: the stored value is frozen,
@@ -5862,16 +5865,18 @@ function convertOneToLinks(
  * a document that no longer holds what the view was built over refuses as
  * every access through the view does; the read registers every position
  * under it, where reading through the view registers each as it is reached.
- * Under a declaration that selects among a record's keys (the view's own, or
- * a followed link's, `declaredShape`), the record is read at its shape, each
- * named member on its own and each other member as stored, with no link
- * under it followed, as the view reads them. A stored link is followed
- * where it sits, as the view follows one on access, with the same
- * resolution, so the dereference traces and labeled crossings it records are
- * the ones the view's reads record. A link that returns to a position the
- * walk is inside yields a back-link to it, as a cycle does elsewhere in the
- * walk. A stream position yields the link to the stream, carrying the label
- * view a view of it would carry.
+ * A stored link is followed where it sits, as the view follows one on
+ * access, with the same resolution, so the dereference traces and labeled
+ * crossings it records are the ones the view's reads record. What the link
+ * declares of its target (`declaredShape()`, from the stored schema the
+ * resolution carries) is what the walk reads there, as a shaped read
+ * crossing the link reads it: a record whose declaration selects keys is
+ * read at its shape and at each key it names, and a key it does not name is
+ * left out, unread. The declaration comes from the link alone, not from the
+ * view, which reads alike for every reader that reaches it. A link that
+ * returns to a position the walk is inside yields a back-link to it, as a
+ * cycle does elsewhere in the walk. A stream position yields the link to the
+ * stream, carrying the label view a view of it would carry.
  *
  * `stack` is the path to the view from the walk's root, pushed to and popped
  * from as {@link convertOneToLinks} does, so a back-link made here names a
@@ -5901,8 +5906,9 @@ function readOutView(
 
     // What `stored` holds, which sits at `position` inside the document
     // `document` names, under the label view `cfcLabelView` carries for that
-    // document position and the declaration `declaration` (read at its shape
-    // alone where the declaration selects keys, else whole). `position` is
+    // document position, under the declaration `declaration` a followed link
+    // made of it, or none. `stored` is the value at `position` as read: at its
+    // shape alone where `declaration` selects keys, else whole. `position` is
     // pushed to and popped from in step with `stack`.
     const walk = (
       stored: unknown,
@@ -5999,8 +6005,7 @@ function readOutView(
         }
       };
       // A member of a record read at its shape is read on its own: at its
-      // shape in turn where its declaration selects keys, else whole. A member
-      // the declaration does not name is read whole and kept as stored.
+      // shape in turn where its declaration selects keys, else whole.
       const readMember = (
         key: string,
         memberDeclared: (JSONSchema & object) | undefined,
@@ -6028,16 +6033,14 @@ function readOutView(
         }
         if (selectsKeys(declaration)) {
           return Object.freeze(Object.fromEntries(
-            Object.keys(stored).map((key) => {
-              if (!declaresKey(declaration, key)) {
-                return [key, readMember(key, undefined) as FabricValue];
-              }
-              const memberDeclared = memberDeclaration(key);
-              return [
-                key,
-                member(key, readMember(key, memberDeclared), memberDeclared),
-              ];
-            }),
+            Object.keys(stored).filter((key) => declaresKey(declaration, key))
+              .map((key) => {
+                const memberDeclared = memberDeclaration(key);
+                return [
+                  key,
+                  member(key, readMember(key, memberDeclared), memberDeclared),
+                ];
+              }),
           ));
         }
         return Object.freeze(Object.fromEntries(
@@ -6050,13 +6053,12 @@ function readOutView(
       }
     };
 
-    const declaration = view.declaration;
     return walk(
-      view.readDocument(!selectsKeys(declaration)),
+      view.readDocument(),
       view.link,
       [],
       view.cfcLabelView,
-      declaration,
+      undefined,
     );
   });
 }
