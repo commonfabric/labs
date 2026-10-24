@@ -224,10 +224,10 @@ space.
   claims, not proof of access.
 - **`messageRights`** says what the reader may do to each of the room's
   messages: one entry per message, oldest first, holding the `message`, as the
-  link `messages.latest` holds for it, and `canEdit`, `canDelete`, and
-  `canObliterate`, decided by the rules the streams below admit an event by, so
-  a client offers exactly the acts the room would take. Every entry is all
-  `false` while `canSend` doesn't hold.
+  link to its own cell that every field of the room naming it holds, and
+  `canEdit`, `canDelete`, and `canObliterate`, decided by the rules the streams
+  below admit an event by, so a client offers exactly the acts the room would
+  take. Every entry is all `false` while `canSend` doesn't hold.
 - **`canAdd`** says whether the reader can add someone to the room's space: the
   room is a group room in a space of its own, and their access is OWNER. It is
   false in a direct room, whose space keeps its two members, and in a space's
@@ -241,6 +241,15 @@ space.
 - **`titleRequests`** holds the outcome of each of the reader's
   [`setTitle`](#settitlerequestid-string-title-string) requests, by its
   `requestId`. Like `addRequests`, it is the reader's alone.
+- **`fileStore`** links the store of the files of the room's space (see
+  [`FileStore`](../fabrifile/FileStore.md#where-it-lives)): for a room that is
+  its space's root, the store the room names itself, and for any other, the
+  one its space's root names. It is absent while that names none, and in a
+  space whose root keeps no store.
+- **`fileStoreRecord`**, for a room that is its space's root, is where it keeps
+  that store, offered as any root offering its space's store offers it (see
+  [`FileStore`](../fabrifile/FileStore.md#where-it-lives)). Any other room
+  keeps none, and offers none.
 - The lists here are projections. An implementation may keep each message's
   reactions as a list of their own, as long as what it offers satisfies these
   rules.
@@ -351,31 +360,45 @@ These rules hold for every stream:
 
 | Stream | Reviewed surface | Effect |
 | --- | --- | --- |
-| [`sendMessage`](#sendmessagebody-string-replyto-chatreply) | `ChatSendSurface` | appends a message from the sender, once |
+| [`sendMessage`](#sendmessagebody-string-replyto-chatreply-attachments-cellfileentry) | `ChatSendSurface` | appends a message from the sender, once |
 | [`editMessage`](#editmessagemessage-cellchatmessage-body-string) | `ChatEditSurface` | records a new version of the sender's message, once |
 | [`deleteMessage`](#deletemessagemessage-cellchatmessage) | `ChatDeleteSurface` | records the sender's message as deleted |
 | [`obliterateMessage`](#obliteratemessagemessage-cellchatmessage) | `ChatObliterateSurface` | removes a message and its history, leaving a tombstone |
 | [`sendReaction`](#sendreactionmessage-cellchatmessage-emoji-string) | `ChatReactSurface` | adds the sender's reaction, if it isn't there |
 | [`deleteReaction`](#deletereactionmessage-cellchatmessage-reaction-cellchatreaction) | `ChatReactSurface` | removes the sender's reaction, the one named |
 
-### `sendMessage(body: string, replyTo?: ChatReply)`
+### `sendMessage(body: string, replyTo?: ChatReply, attachments?: Cell<FileEntry>[])`
 
 - `body: string` — The message's text, exactly as the person saw it when they
-  sent it. It must be a string, not empty or only whitespace.
+  sent it. It must be a string, not empty or only whitespace unless the
+  message has attachments.
 - `replyTo?: ChatReply` — What the message replies to, and where it is shown
   (see [`ChatReply`](ChatReply.md)). Absent for a message that isn't a reply,
   which is shown in the main conversation. `replyTo.message` must be a message
   in this room, and a `"main"` reply must be to a message the main conversation
   shows.
+- `attachments?: Cell<FileEntry>[]` — The files sent with the message, in
+  order: entries of the store of the room's space (see
+  [`FileEntry`](../fabrifile/FileEntry.md)), none of them removed, and no more
+  of them than the room's `maxAttachments` (see
+  [implementation-defined behavior](#implementation-defined-behavior)). Absent
+  or empty for none. A client adds a file to the store before it attaches it
+  (see [attaching a file](../fabrifile/clients.md#attaching-a-file)).
 
 Sends a message from the sender.
 
 - **Admitted:** as a trusted gesture on `ChatSendSurface`.
 - **Effect:** appends a [`ChatMessage`](ChatMessage.md) to the room's messages,
-  with the sender's profile as `authorProfile`, `body` as `body`, the handler
-  clock as `sentAt` (see [times](ChatMessage.md#times)), and no reactions.
-- **Refused:** a `body` that isn't a non-empty string, a sender whose profile
-  hasn't resolved, or a `replyTo` whose `message` is outside the room's space.
+  with the sender's profile as `authorProfile`, `body` as `body`, links to the
+  `attachments` in their order where there are any, the handler clock as
+  `sentAt` (see [times](ChatMessage.md#times)), and no reactions. The room
+  reads each attachment's entry, and nothing else of the store.
+- **Refused:** a `body` that isn't a string, or is empty in a send with no
+  attachments; a sender whose profile hasn't resolved; a `replyTo` whose
+  `message` is outside the room's space; more attachments than the room's
+  `maxAttachments`; or an attachment that names no entry, an entry outside the
+  room's space, one whose blob is in another space's blob store, or one removed
+  from its store.
   Otherwise the room takes `replyTo` as sent: a client sends a reply only to a
   message of the room that is not deleted, with a `shownIn` its target allows
   (see [`ChatReply`](ChatReply.md)).
@@ -388,7 +411,8 @@ makes three messages.
 - `message: Cell<ChatMessage>` — The message to edit. Must be a message in this
   room, sent by the sender, and not deleted.
 - `body: string` — The new text, exactly as the person saw it when they edited
-  it. It must be a string, not empty or only whitespace.
+  it. It must be a string, not empty or only whitespace unless the message has
+  attachments.
 
 Records new text for one of the sender's messages.
 
@@ -396,9 +420,10 @@ Records new text for one of the sender's messages.
   message's sender.
 - **Effect:** makes `body` the message's text, and the handler clock its
   `editedAt`. The text it replaces is gone. `authorProfile`, `sentAt`,
-  `replyTo`, and the reactions don't change.
+  `replyTo`, the attachments, and the reactions don't change.
 - **Refused:** a `message` outside the room's space, sent by someone else, or
-  deleted, or a `body` that isn't a non-empty string.
+  deleted, or a `body` that isn't a string, or is empty in a message with no
+  attachments.
 
 ### `deleteMessage(message: Cell<ChatMessage>)`
 
@@ -417,11 +442,12 @@ Records one of the sender's messages as deleted.
     or reactions (see [obliterated
     messages](ChatMessage.md#obliterated-messages)).
   - If it doesn't, the message's `body` becomes exactly `{ deleted: true }`,
-    recorded at the handler clock as `editedAt`, and its reactions are gone.
-    Its `authorProfile` stays.
+    recorded at the handler clock as `editedAt`, and its attachments and
+    reactions are gone. Its `authorProfile` stays.
 
-  Either way, no reaction outlives the deletion, and the message stays among the
-  room's messages, so replies to it and threads rooted at it keep their links.
+  Either way, no attachment or reaction outlives the deletion, and the message
+  stays among the room's messages, so replies to it and threads rooted at it
+  keep their links. The files it attached stay in their store.
 - **Refused:** a `message` outside the room's space, or sent by someone else.
   Deleting a message that is already deleted changes nothing.
 
@@ -450,7 +476,8 @@ room, it is also how either person removes their own words completely.
 - **Effect:** reduces the message to a tombstone (see [obliterated
   messages](ChatMessage.md#obliterated-messages)): its `body` becomes
   `{ deleted: true }`, its `editedAt` the handler clock, and its
-  `authorProfile` and `reactions` are removed. `sentAt` and `replyTo` stay.
+  `authorProfile`, `attachments` and `reactions` are removed. `sentAt` and
+  `replyTo` stay. The files it attached stay in their store.
   The tombstone is labeled `authored-by` the sender, whoever obliterated it.
 - **Refused:** a `message` outside the room's space; and, unless the room is a
   direct room and the message is the sender's own, a sender who isn't an
@@ -622,6 +649,23 @@ gesture of its own, records its outcome, and is in `[VIEWS]`.
   same whatever the `reason` says. A refusal changes nothing else. A retitle the
   stream doesn't admit, as one without the gesture, records nothing.
 
+### `ensureFileStore()`
+
+Creates the store of the room's space's files, unless the space names one
+already, which is how something that needs to put a file in the space, such as
+an attachment, makes sure there is somewhere to put it. Like `addParticipant`,
+it takes no `requestId`, since a repeat changes nothing, and it is in
+`[VIEWS]`.
+
+- **Admitted:** without a reviewed gesture, from anyone who can write in the
+  room's space; the space's access list decides.
+- **Effect:** for a room that is its space's root, creates a store as a piece
+  in the space and names it as the room's own. For any other room, it does the
+  same where its space's root keeps its store, when that root offers a record
+  of it (see [`FileStore`](../fabrifile/FileStore.md#where-it-lives)), and
+  does nothing in a space whose root offers none. Where the space names a store
+  already, it changes nothing, so the space keeps the one store it names.
+
 ## Renderings
 
 - **`[UI]`** is the room's own rendering, with its reviewed surfaces. An
@@ -629,7 +673,8 @@ gesture of its own, records its outcome, and is in `[VIEWS]`.
 - **`[VIEWS]`** holds a `room` group with the facts and streams above, for hosts
   that draw natively. It includes `messages`, `canSend`, `viewer`,
   `messageRights`, `addMember` with `canAdd` and
-  `addRequests`, and `setTitle` with `titleRequests`. A client uses it to show
+  `addRequests`, `setTitle` with `titleRequests`, and `ensureFileStore` with
+  `fileStore`. A client uses it to show
   a room outside any container. Inside a container, it reads the placement's
   `chat` group instead
   ([`FabriChatPlacement.md`](FabriChatPlacement.md#outputs)).
@@ -650,6 +695,8 @@ these, and an implementation MUST state its choice for each in its rooms'
   anyone's (`ownersMayObliterate`), in a direct room as in a group room.
 - **How many of the newest messages `messages.latest` holds**
   (`maxWindowCount`).
+- **How many attachments a message may have** (`maxAttachments`), 10 where a
+  room's policy doesn't say.
 
 An implementation may make these configurable, per room or otherwise, and how it
 does so is its own business (see

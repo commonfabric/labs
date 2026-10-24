@@ -291,30 +291,27 @@ export class StandaloneMemoryServer {
   }
 }
 
-// Best-effort per-commit write tracing (CF_DEBUG_MEMORY_WRITES=1): one line
-// per operation with id + scope, the fastest way to see which scope partition
-// a client's writes actually land in.
+/** Logs received commit operations after the connection's admission parser. */
 function logCommitOperations(connectionTag: number, payload: string): void {
   try {
-    const parsed = MemoryServer.parseClientMessage(payload) as unknown as {
-      commit?: { operations?: Array<Record<string, any>> };
-    };
-    const operations = parsed?.commit?.operations;
-    if (!Array.isArray(operations)) return;
-    for (const op of operations) {
-      const detail = op?.op === "patch"
-        ? ` paths=${
-          JSON.stringify(
-            (op.patches ?? []).map((p: { path?: string }) => p?.path),
-          )
-        }`
-        : op?.op === "set"
-        ? ` keys=${JSON.stringify(Object.keys(op.value?.value ?? {}))}`
+    // Observation only: receive() owns capability admission. Expand metadata
+    // here so compact and inline requests produce the same diagnostic.
+    const parsed = MemoryServer.parseClientMessage(payload, {
+      commitLabelTableV1: true,
+    });
+    if (parsed?.type !== "transact") return;
+    for (const op of parsed.commit.operations) {
+      const id = "id" in op ? op.id : undefined;
+      const scope = "scope" in op ? op.scope : undefined;
+      const detail = op.op === "patch"
+        ? ` paths=${JSON.stringify(op.patches.map((patch) => patch.path))}`
+        : op.op === "set"
+        ? ` keys=${JSON.stringify(Object.keys(op.value.value ?? {}))}`
         : "";
       console.error(
-        `[memwrite conn=${connectionTag}] op=${op?.op} id=${
-          String(op?.id).slice(0, 24)
-        } scope=${op?.scope ?? "(space)"}${detail}`,
+        `[memwrite conn=${connectionTag}] op=${op.op} id=${
+          String(id).slice(0, 24)
+        } scope=${scope ?? "(space)"}${detail}`,
       );
     }
   } catch {

@@ -1419,9 +1419,8 @@ const handlers: Record<
   // reading handler then no-ops SILENTLY (the 2026-08-22 ON-lane
   // group-chat flake). Once the first event's consequence has arrived
   // back, its commit is in the space's history, so any later-fired
-  // event is served against a view that includes it. Backstopped by
-  // the harness RPC timeout, which names this session and command;
-  // instant on the OFF arm (no overlay) and when nothing is
+  // event is served against a view that includes it. Nothing bounds
+  // the wait; instant on the OFF arm (no overlay) and when nothing is
   // outstanding. First-order only, like the count it drains — a
   // server-side cascade child is no session's intent.
   async awaitEventConsequences() {

@@ -5,10 +5,12 @@
  * says what kind of work it is, and the depth how far to take it. It selects
  * prompt sections and the opening research pass, and grants no authority.
  *
- * Only `deep` changes a run today: it gives a classified task in the `fabric`
- * domain the opening research pass, which an `author` task gets at any depth
- * and a run that was never classified already gets. A `quick` run is a
- * `standard` one until a section names `quick`.
+ * `quick` and `deep` each add strategy sections (`strategy.ts`) that a
+ * `standard` run does not get: a quick run takes the shortest path to what was
+ * asked, and a deep run searches exhaustively where its domains are, then reads
+ * its result back. `deep` also gives a classified task in the `fabric` domain
+ * the opening research pass, which an `author` task gets at any depth and a
+ * run that was never classified already gets.
  */
 export const HARNESS_RUN_DEPTHS = ["quick", "standard", "deep"] as const;
 

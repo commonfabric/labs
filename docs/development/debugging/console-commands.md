@@ -361,7 +361,8 @@ await commonfabric.rt.getLoggerCounts()
 // .compileCache = { hits, misses, byIdentityHits }; the `pattern-manager`
 // timing rows `compile-cache/load-by-identity/<outcome>` (hit, entry-absent,
 // entry-unverified, closure-refused, coverage-missing, eval-failed,
-// no-version) and `compile-cache/cold-load/<outcome>` (compiled,
+// no-version) and `compile-cache/cold-load/<outcome>` (compiled, shared —
+// the load reused a compile of the same identity already in flight —
 // source-unavailable, compile-failed, eval-failed) name the pattern in each
 // row's `slowest` details
 

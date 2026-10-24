@@ -215,3 +215,29 @@ flight. The shell calls it when the person navigates into a space
 `spaceaccesslost` named, and when the page regains focus or becomes visible.
 [`docs/features/space-access.md`](../../docs/features/space-access.md) says how
 the answer is kept current.
+
+## Recovering failed loads
+
+Two events say that a load which failed may now succeed, and nothing else says
+when to ask again, so they are the events for a host to retry on.
+
+The `connectionrestored` event reports that one of the worker's connections to a
+memory server came back after it was lost: the reconnect has finished its
+handshake and restored the sessions it could. A session a retriable access
+denial holds restores on its own later, and is not waited for. The event carries
+nothing, and it is sent once per restored connection, so a worker holding a
+connection per space sends it once for each one that comes back. The first
+connection to a server is not a restored one, and neither is a reconnect attempt
+that fails.
+
+The `spaceaccessrestored` event reports that a space which refused the runtime's
+principal, as `spaceaccesslost` reported, has admitted it again. It carries the
+`space`. It is sent for every admission, whoever asked for the retry that
+decided it: the runtime itself, on the memory server's `session/admissible`; the
+renderer's Retry button on a refused space's placeholder; or a host through
+`retrySpaceAccess()`.
+
+`RuntimeInternals` in `@commonfabric/lib-shell` drops the loads it remembers as
+failed, every space's on `connectionrestored` and the one space's on
+`spaceaccessrestored`, and then dispatches an event of the same name. The shell
+runs again each load whose failure a view of that space is showing.

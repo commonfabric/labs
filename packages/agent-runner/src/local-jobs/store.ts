@@ -15,7 +15,9 @@
  * them twice.
  */
 
+import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import type { HarnessRunDepth } from "@commonfabric/cf-harness/contracts/run-depth";
+import type { HarnessModelLimits } from "@commonfabric/cf-harness/model/client";
 import type {
   HarnessTaskDomain,
   HarnessTaskTag,
@@ -46,13 +48,14 @@ export const LOCAL_JOB_TERMINAL_STATES: ReadonlySet<LocalJobState> = new Set([
 export const RUNNER_RESTARTED = "RUNNER_RESTARTED";
 
 /** What a caller asked for: everything but who asked and under which key. */
-export interface LocalJobRequest {
+export interface LocalJobRequest extends HarnessModelLimits {
   task: string;
   instructions?: string;
   context?: unknown;
   resultSchema: unknown;
   tools?: string[];
   maxModelTurns?: number;
+  imageAttachments?: HarnessInlineImageAttachment[];
 
   /** How far the caller wants the job taken; the harness's default when absent. */
   depth?: HarnessRunDepth;
@@ -147,7 +150,7 @@ export interface LocalJobEnding {
 
 const PRAGMAS = `
   PRAGMA journal_mode = WAL;
-  PRAGMA synchronous = NORMAL;
+  PRAGMA synchronous = FULL;
   PRAGMA busy_timeout = 5000;
   PRAGMA foreign_keys = ON;
 `;

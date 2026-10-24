@@ -7,19 +7,20 @@ Status: current implementation reference
 A run that acts on the person's data — making a loom, writing a page — needs to
 reach the operations the host offers without the harness naming any of them. The
 host already describes those operations in its command manifest and already
-narrows them per run with a broker. Two generic tools put that in front of the
+narrows them per run with a broker. Three generic tools put that in front of the
 model: `list_commands` shows the commands the host lets this run run, each as a
-typed signature, and `run_command` runs one or a batch of them, as the agent.
-Which commands those are is the host's decision alone; nothing in cf-harness
-names a command.
+typed signature; `run_command` runs one or a batch of them, as the agent, with
+write-class authority; and `run_read_command` runs broker-granted reads the same
+way. Which commands those are is the host's decision alone; nothing in
+cf-harness names a command.
 
 ## Host configuration
 
 The batch CLI accepts `--loom-commands-config /absolute/host-config.json` or
 `CF_HARNESS_LOOM_COMMANDS_CONFIG`. The file is supplied by the operator, read on
-the host, and never passed into the sandbox. Without it both tools are absent,
-including when `--allow-tool` names one: naming one without the configuration is
-refused at argument parsing.
+the host, and never passed into the sandbox. Without it the command tools are
+absent, including when `--allow-tool` names one: naming one without the
+configuration is refused at argument parsing.
 
 ```json
 {
@@ -54,22 +55,25 @@ digits, and underscores, starting with a letter or underscore, and cannot
 replace `PATH` or `LOOM_PAGE_RPC_QUEUE`. Neither the model's arguments nor
 ambient process environment select the id.
 
-| Tool            | Host command                                                     |
-| --------------- | ---------------------------------------------------------------- |
-| `list_commands` | `loom command list --json`                                       |
-| `run_command`   | `loom command run <id> --args-json - --json [--loom] [--expect]` |
+| Tool               | Host command                                                     |
+| ------------------ | ---------------------------------------------------------------- |
+| `list_commands`    | `loom command list --json`                                       |
+| `run_command`      | `loom command run <id> --args-json - --json [--loom] [--expect]` |
+| `run_read_command` | The same invocation, with `--read-only` appended                 |
 
-`list_commands`, and the first `run_command` of a run, read the listing. Each
-call `run_command` sends to the host, a lone call or one call of a batch, is one
-`loom command run` process; a call refused before it is sent starts none.
+`list_commands`, the first `run_command` of a run, and every `run_read_command`
+read the listing. Each call `run_command` or `run_read_command` sends to the
+host, a lone call or one call of a batch, is one `loom command run` process; a
+call refused before it is sent starts none.
 
 ## The run's catalog
 
-Both tools read one catalog, held for the run: the host's listing is read the
-first time either tool needs it and kept for the rest of the run, so a run that
-calls many commands lists once. An explicit `list_commands` reads the host
-afresh and holds what it read. A read that fails is not held; the next call asks
-the host again.
+The tools read one catalog, held for the run: the host's listing is read the
+first time a tool needs it and kept for the rest of the run, so a run that calls
+many commands lists once. An explicit `list_commands`, and every
+`run_read_command`, reads the host afresh and holds what it read, so the
+read-only grant `run_read_command` checks is the host's current one. A read that
+fails is not held; the next call asks the host again.
 
 ## `list_commands`
 
@@ -85,7 +89,8 @@ Takes an optional `detail`, naming up to sixteen commands. Returns:
       "name": "people-discovery.dossier",
       "signature": "people-discovery.dossier(entity_id: string, limit?: integer = 50) -> {messages, records}  [read, global]",
       "title": "Gather what is known about a person.",
-      "description": "…"
+      "description": "…",
+      "readOnlyGranted": true
     }
   ],
   "hidden": 1
@@ -112,6 +117,9 @@ Each entry's `signature` is one line read from the command's argument schema
   where it declares none). A command whose target is `loom` takes a `loomId`;
   `run_command` passes the one a call names and infers none from the target.
 
+An entry carries `readOnlyGranted: true` where the broker grants read-only
+execution of the command, the grant `run_read_command` requires.
+
 A line is cut to 400 characters, its trailing parameters replaced by `…`. A
 command named in `detail` also carries its `inputSchema`: the host's schema with
 its `x-*` extension keywords removed, which every schema the model sees is, or
@@ -136,9 +144,10 @@ say an agent may not run it:
 The filter is presentation. The broker's scope is what decides; a row the host
 declares nothing about is shown.
 
-The host's manifest declares no effect today, so entries normally carry none.
-The listing's `notice` says to assume such a command may change the person's
-data.
+An absent or unknown effect grants no read-only authority. The listing's
+`notice` says to assume such a command may change the person's data. A broker's
+`readOnlyGranted` stamp is separate from the command's declared effect and from
+the consent `grant` that hides a row.
 
 ## `run_command`
 
@@ -229,13 +238,37 @@ conservative choice.
 
 ### Authorization
 
-The tool's effect class is `write` for every call, a batch included, because the
-host does not say which commands only read. Policy judges a tool call, so a
-batch is authorized or refused whole, as one write. Policy treats it as any
-other write: under `enforce-explicit` and `enforce-strict` a call runs only when
-the run's task is bound as a `direct-command` prompt slot, so a task that
-arrived as `context` — a request a pattern submitted, say — can list commands
-but not run one, a read command included.
+The tool's effect class is `write` for every call, a batch included, even when
+the host declares the command a read. Policy judges a tool call, so a batch is
+authorized or refused whole, as one write. Policy treats it as any other write:
+under `enforce-explicit` and `enforce-strict` a call runs only when the run's
+task is bound as a `direct-command` prompt slot, so a task that arrived as
+`context` — a request a pattern submitted, say — cannot invoke this tool.
+
+## `run_read_command`
+
+Shares `run_command`'s inputs, one call or a batch, its catalog lookup, argument
+checks, output, and confidentiality measurement. Its effect class is `read`, so
+an enforcing context-bound task may invoke it. Before execution it reads the
+host's catalog afresh and requires, for each call, that the selected row has
+both `effect: "read"` and the broker's literal `readOnlyGranted: true`. A
+command the fresh listing does not show returns `unknown_command`; a changed or
+unknown effect, or an absent read-only grant, returns `not_granted` with
+`landed: "no"` and a `hint`, without issuing a command.
+
+At `enforce-strict`, `list_commands` and `run_read_command` are the narrow
+host-broker read exception for an explicitly `context`-bound task. Quoted or
+absent task authority still cannot invoke them, other strict read tools keep
+their existing gate, and `run_command` remains a write. The policy trace names
+this admission `cfc_enforce_strict_host_command_read`; invocation still checks
+the current broker grant rather than treating the policy admission as one.
+
+The invocation appends `--read-only`, outside the model's JSON arguments. A host
+that supports this tool must propagate that demand to its broker and refuse the
+call unless the command's current effect is `read` and the current job's grant
+permits read-only execution. This final check covers changes between discovery
+and execution. The broker supplies the catalog stamp; neither model arguments
+nor source content may supply it. `run_command` sends no read-only demand.
 
 ## The answer is Loom data
 

@@ -26,15 +26,41 @@ import {
   PatternCoverageCollector,
   type PatternCoverageSpan,
 } from "../src/pattern-coverage.ts";
-import { Runtime } from "../src/runtime.ts";
+import { type MemorySpace, Runtime } from "../src/runtime.ts";
 import {
   buildRecordsFromCompiled,
   type CachedCompiledModule,
 } from "../src/sandbox/module-record-compiler.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { observeColdCompiles } from "./support/telemetry-observers.ts";
 
 const signer = await Identity.fromPassphrase("load-by-identity");
 const space = signer.did();
+
+/**
+ * Hand-built stored modules, for shapes `injectCfHelpers` itself refuses to
+ * produce, such as broken envelopes: each identity is the hash over the given
+ * bytes.
+ */
+const storedModules = async (
+  entryFilename: string,
+  files: { name: string; contents: string }[],
+  imports: Record<string, { specifier: string; target: string }[]> = {},
+): Promise<{ modules: CacheableModule[]; entryIdentity: string }> => {
+  await ensureCompilerStack();
+  const hashes = computeModuleHashes({ main: entryFilename, files });
+  const modules: CacheableModule[] = files.map((f) => ({
+    identity: hashes.get(f.name)!,
+    filename: f.name,
+    source: f.contents,
+    js: "",
+    imports: (imports[f.name] ?? []).map((i) => ({
+      specifier: i.specifier,
+      targetIdentity: hashes.get(i.target)!,
+    })),
+  }));
+  return { modules, entryIdentity: hashes.get(entryFilename)! };
+};
 
 describe("load by module identity (warm + version-bump recovery)", () => {
   // The load-by-identity warm path: build + evaluate a pattern directly from
@@ -782,6 +808,302 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       result: 6,
     });
   });
+
+  describe("concurrent cold loads across spaces", () => {
+    // A verified source closure is the same bytes in every space holding it,
+    // so loads of one identity racing in several spaces share the leader's
+    // compile and evaluation. What stays per space is the compiled closure's
+    // write-back, and a failure only the leader's space can explain.
+
+    const load = (entryIdentity: string, inSpace: MemorySpace) =>
+      runtime.patternManager.loadPatternByIdentity(
+        entryIdentity,
+        "default",
+        inSpace,
+      );
+
+    /**
+     * Writes `fixture`'s source docs, and no compiled set, into each space.
+     * A transaction writes to one space, so each space gets its own commit.
+     */
+    const storeSourceIn = async (
+      fixture: { modules: CacheableModule[]; entryIdentity: string },
+      spaces: readonly MemorySpace[],
+    ) => {
+      for (const target of spaces) {
+        const writeTx = runtime.edit();
+        writeSourceDocs(
+          runtime,
+          target,
+          fixture.modules,
+          fixture.entryIdentity,
+          writeTx,
+        );
+        runtime.prepareTxForCommit(writeTx);
+        expect((await writeTx.commit().settled).error).toBeUndefined();
+      }
+      await runtime.storageManager.synced();
+    };
+
+    /**
+     * Counts the engine's cold compiles from here on. `gate` holds the first
+     * one open until it resolves; `drift` makes every one report a different
+     * entry identity than it compiled.
+     */
+    const countColdCompiles = (
+      options: { gate?: Promise<void>; drift?: boolean } = {},
+    ): () => number => {
+      let count = 0;
+      const original = engine.compileResolvedToRecordGraph.bind(engine);
+      engine.compileResolvedToRecordGraph = (async (
+        ...args: Parameters<typeof original>
+      ) => {
+        if (count++ === 0) await options.gate;
+        const compiled = await original(...args);
+        return options.drift
+          ? { ...compiled, entryIdentity: `${compiled.entryIdentity}-drift` }
+          : compiled;
+      }) as typeof engine.compileResolvedToRecordGraph;
+      return () => count;
+    };
+
+    const coldLoads = (outcome: string) =>
+      getLogger("pattern-manager")
+        .getTimeStats("compile-cache", `cold-load/${outcome}`)?.count ?? 0;
+
+    beforeEach(() => {
+      getLogger("pattern-manager").resetTimeStats();
+    });
+
+    it("share one compile and evaluation, and each space writes back its own closure", async () => {
+      const spaces = [
+        space,
+        (await Identity.fromPassphrase("cold share B")).did(),
+        (await Identity.fromPassphrase("cold share C")).did(),
+      ];
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, spaces);
+
+      // The leader's compile is held open until both other spaces' loads
+      // have joined it, the state a slow compile puts a booting worker in.
+      const observed = observeColdCompiles(runtime);
+      const release = Promise.withResolvers<void>();
+      const compiles = countColdCompiles({ gate: release.promise });
+      const [leaderSpace, ...followerSpaces] = spaces;
+      const leader = load(entryIdentity, leaderSpace);
+      await observed.whenStarted(1);
+      const followers = followerSpaces.map((target) =>
+        load(entryIdentity, target)
+      );
+      await observed.whenJoined(2);
+      release.resolve();
+
+      const loaded = await Promise.all([leader, ...followers]);
+      expect(loaded.map((pattern) => typeof pattern)).toEqual([
+        "function",
+        "function",
+        "function",
+      ]);
+      expect(compiles()).toBe(1);
+      expect(observed.starts()).toEqual([{
+        space: leaderSpace,
+        entryIdentity,
+      }]);
+      expect(new Set(observed.joins().map((join) => join.space))).toEqual(
+        new Set(followerSpaces),
+      );
+      // Once every load has settled, the finished compile is gone.
+      await observed.whenCompleted(1);
+      expect(observed.inFlight()).toBe(0);
+      observed.restore();
+      expect(coldLoads("compiled")).toBe(1);
+      expect(coldLoads("shared")).toBe(2);
+      // One artifact for all three: a follower takes its symbol from the
+      // leader's evaluation.
+      expect(loaded[1]).toBe(loaded[0]);
+      expect(loaded[2]).toBe(loaded[0]);
+      expect(
+        await runPattern({ default: loaded[1] }, 4, "shared cold load run"),
+      ).toEqual({ result: 8 });
+
+      // Every space gets the compiled closure written back, so its next
+      // runtime loads warm.
+      await runtime.patternManager.flushCompileCacheWrites();
+      await runtime.storageManager.synced();
+      const runtimeVersion = (await getCompileCacheRuntimeVersion())!;
+      const readTx = runtime.edit();
+      try {
+        for (const target of spaces) {
+          const closure = await loadCompiledClosure(
+            runtime,
+            target,
+            entryIdentity,
+            { runtimeVersion },
+            readTx,
+          );
+          expect(closure.has(entryIdentity)).toBe(true);
+        }
+      } finally {
+        readTx.abort?.("closure assertion read complete");
+      }
+    });
+
+    it("compile on their own behalf when the leader's space cannot resolve a fabric import", async () => {
+      const spaceB = (await Identity.fromPassphrase("cold share dependency"))
+        .did();
+      const dependency = await storedModules("/dep.tsx", [{
+        name: "/dep.tsx",
+        contents: "import { pattern } from 'commonfabric';\n" +
+          "export default pattern<{ value: number }>(({ value }) => ({ doubled: value * 2 }));\n",
+      }]);
+      const importer = await storedModules("/main.tsx", [{
+        name: "/main.tsx",
+        contents: "import { pattern } from 'commonfabric';\n" +
+          `import dep from "cf:pattern:${dependency.entryIdentity}";\n` +
+          "export default pattern<{ value: number }>(({ value }) => ({ child: dep({ value }) }));\n",
+      }]);
+      await storeSourceIn(importer, [space, spaceB]);
+      await storeSourceIn(dependency, [spaceB]);
+
+      // The leader's compile is held open until the follower has joined it,
+      // so the follower sees that compile fail rather than leading its own.
+      const observed = observeColdCompiles(runtime);
+      const release = Promise.withResolvers<void>();
+      const compiles = countColdCompiles({ gate: release.promise });
+      const leader = load(importer.entryIdentity, space);
+      await observed.whenStarted(1);
+      const follower = load(importer.entryIdentity, spaceB);
+      await observed.whenJoined(1);
+      release.resolve();
+
+      expect(await leader).toBeUndefined();
+      const loaded = await follower;
+      expect(typeof loaded).toBe("function");
+      expect(compiles()).toBe(2);
+      // The follower joined the leader's compile, then ran its own.
+      expect(observed.joins()).toEqual([
+        { space: spaceB, entryIdentity: importer.entryIdentity },
+      ]);
+      expect(observed.starts()).toEqual([
+        { space, entryIdentity: importer.entryIdentity },
+        { space: spaceB, entryIdentity: importer.entryIdentity },
+      ]);
+      await observed.whenCompleted(2);
+      expect(observed.inFlight()).toBe(0);
+      observed.restore();
+      expect(coldLoads("compile-failed")).toBe(1);
+      expect(coldLoads("compiled")).toBe(1);
+      expect(coldLoads("shared")).toBe(0);
+      expect(
+        await runPattern({ default: loaded }, 6, "follower's own compile"),
+      ).toEqual({ child: { doubled: 12 } });
+      await runtime.patternManager.flushCompileCacheWrites();
+    });
+
+    it("share a deterministic failure, memoized in every space that joined", async () => {
+      const spaceB = (await Identity.fromPassphrase("cold share drift")).did();
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      await storeSourceIn(fixture, [space, spaceB]);
+
+      const observed = observeColdCompiles(runtime);
+      const release = Promise.withResolvers<void>();
+      const compiles = countColdCompiles({
+        gate: release.promise,
+        drift: true,
+      });
+      const leader = load(fixture.entryIdentity, space);
+      await observed.whenStarted(1);
+      const follower = load(fixture.entryIdentity, spaceB);
+      await observed.whenJoined(1);
+      release.resolve();
+
+      expect(await leader).toBeUndefined();
+      expect(await follower).toBeUndefined();
+      expect(compiles()).toBe(1);
+      expect(coldLoads("compile-failed")).toBe(2);
+      // The memo holds in both spaces: neither load compiles again.
+      expect(await load(fixture.entryIdentity, space)).toBeUndefined();
+      expect(await load(fixture.entryIdentity, spaceB)).toBeUndefined();
+      expect(compiles()).toBe(1);
+      expect(observed.starts()).toHaveLength(1);
+      observed.restore();
+    });
+
+    it("share an evaluation failure rather than compiling again", async () => {
+      const spaceB = (await Identity.fromPassphrase("cold share eval")).did();
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      await storeSourceIn(fixture, [space, spaceB]);
+
+      // Evaluation reads no space, so a follower gains nothing by redoing the
+      // compile whose evaluation failed.
+      const observed = observeColdCompiles(runtime);
+      const release = Promise.withResolvers<void>();
+      const compiles = countColdCompiles({ gate: release.promise });
+      engine.evaluateCachedModules = (() =>
+        Promise.reject(
+          new Error("evaluation refused"),
+        )) as typeof engine.evaluateCachedModules;
+      const leader = load(fixture.entryIdentity, space);
+      await observed.whenStarted(1);
+      const follower = load(fixture.entryIdentity, spaceB);
+      await observed.whenJoined(1);
+      release.resolve();
+
+      expect(await leader).toBeUndefined();
+      expect(await follower).toBeUndefined();
+      expect(compiles()).toBe(1);
+      expect(coldLoads("eval-failed")).toBe(2);
+      expect(coldLoads("compile-failed")).toBe(0);
+      expect(observed.starts()).toHaveLength(1);
+      observed.restore();
+    });
+
+    it("keep a finished compile for a load that was in flight when it finished", async () => {
+      const spaceB = (await Identity.fromPassphrase("cold share late")).did();
+      const spaceC = (await Identity.fromPassphrase("cold share later")).did();
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, [space, spaceB, spaceC]);
+      const internals = runtime.patternManager.accessForTestingOnly;
+
+      // A load of this identity is in flight in space B (its slot is held by
+      // hand, under the preview key so B's ordinary load below is not its
+      // follower) while space A's load compiles and finishes.
+      const observed = observeColdCompiles(runtime);
+      const compiles = countColdCompiles();
+      const inFlightInB = Promise.withResolvers<undefined>();
+      const slot = `${spaceB}\0${entryIdentity}\0preview`;
+      internals.inProgressByIdentityLoads.set(slot, inFlightInB.promise);
+      expect(typeof await load(entryIdentity, space)).toBe("function");
+      expect(compiles()).toBe(1);
+      expect(observed.inFlight()).toBe(1);
+
+      // B's load checked the in-memory index before A's evaluation filled
+      // it, and reaches the cold path only now: it finds A's result waiting.
+      const forgetEvaluation = () => {
+        internals.addressableByIdentity.delete(entryIdentity);
+        internals.modulesByIdentity.delete(entryIdentity);
+      };
+      forgetEvaluation();
+      expect(typeof await load(entryIdentity, spaceB)).toBe("function");
+      expect(compiles()).toBe(1);
+      expect(coldLoads("shared")).toBe(1);
+      expect(observed.joins()).toEqual([{ space: spaceB, entryIdentity }]);
+
+      // Once the in-flight load settles, the result leaves, and a load that
+      // reaches the cold path afterwards compiles for itself.
+      inFlightInB.resolve(undefined);
+      internals.inProgressByIdentityLoads.delete(slot);
+      await observed.whenCompleted(1);
+      forgetEvaluation();
+      expect(typeof await load(entryIdentity, spaceC)).toBe("function");
+      expect(compiles()).toBe(2);
+      await observed.whenCompleted(2);
+      observed.restore();
+      await runtime.patternManager.flushCompileCacheWrites();
+    });
+  });
 });
 
 describe("legacy-envelope tolerance on cold load", () => {
@@ -893,28 +1215,6 @@ describe("legacy-envelope tolerance on cold load", () => {
       modules,
       entryIdentity: legacyByAuthored.get(authored.entryIdentity)!,
     };
-  };
-
-  // Hand-built stored modules (for shapes injectCfHelpers itself refuses to
-  // produce, e.g. broken envelopes): identity = hash over the given bytes.
-  const storedModules = async (
-    entryFilename: string,
-    files: { name: string; contents: string }[],
-    imports: Record<string, { specifier: string; target: string }[]> = {},
-  ): Promise<{ modules: CacheableModule[]; entryIdentity: string }> => {
-    await ensureCompilerStack();
-    const hashes = computeModuleHashes({ main: entryFilename, files });
-    const modules: CacheableModule[] = files.map((f) => ({
-      identity: hashes.get(f.name)!,
-      filename: f.name,
-      source: f.contents,
-      js: "",
-      imports: (imports[f.name] ?? []).map((i) => ({
-        specifier: i.specifier,
-        targetIdentity: hashes.get(i.target)!,
-      })),
-    }));
-    return { modules, entryIdentity: hashes.get(entryFilename)! };
   };
 
   const persist = async (

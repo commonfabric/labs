@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { editDistance, nearestName } from "../src/refusal.ts";
+import { editDistance, listFlags, nearestName } from "../src/refusal.ts";
 
 describe("refusal", () => {
   describe("editDistance", () => {
@@ -47,6 +47,21 @@ describe("refusal", () => {
 
     it("returns undefined over an empty vocabulary", () => {
       expect(nearestName("title", [])).toBeUndefined();
+    });
+  });
+
+  describe("listFlags", () => {
+    it("returns an empty string for no flags, and a single flag as it is", () => {
+      expect(listFlags([])).toBe("");
+      expect(listFlags(["--a"])).toBe("--a");
+    });
+
+    it("joins two flags with `and`", () => {
+      expect(listFlags(["--a", "--b"])).toBe("--a and --b");
+    });
+
+    it("joins three or more with commas and a final `and`", () => {
+      expect(listFlags(["--a", "--b", "--c"])).toBe("--a, --b and --c");
     });
   });
 });

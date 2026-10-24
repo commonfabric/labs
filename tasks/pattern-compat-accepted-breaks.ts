@@ -1119,6 +1119,32 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/fabrichat-view-scopes-break.md",
   },
   {
+    // A room's policy gained an optional `maxAttachments`. The policy's
+    // schema allows other keys, so typing this one narrows it, and a
+    // manager's request outcomes carry the policy through the rooms they
+    // link.
+    pattern: "fabrichat/manager.tsx",
+    baselines: [
+      "20261011T221322Z-ESDR30hfSt52JJjG",
+      "20261012T173536Z-6WvdcsJ1uCY7_PMp",
+      "20261013T211911Z-_KGvbNdJDAorzeH2",
+      "20261014T030847Z--3DmbOSzIygprqSe",
+      "20261014T162031Z-5e6WmbJILlZPfDKs",
+      "20261015T201316Z-Sd2QSmU_za1kG0sR",
+      "20261015T211658Z-urNzNYcruTANHQRY",
+      "20261016T130411Z-0Lt2aLoYFhOy5W4t",
+      "20261016T131516Z-zwm-rd7FOQzgJmf2",
+      "20261016T150221Z-BMe3uZoF-rfz0nHI",
+      "20261016T232233Z-pyVPXvcNYTbzFVqa",
+      "20261018T181023Z-H3M1K82AIA1y33AS",
+      "20261022T220213Z-LlstD45te1meAfuA",
+    ],
+    paths: ["argument.requests.*"],
+    reason:
+      "a room's policy states `maxAttachments`, an optional number, where its schema took any value; no stored policy holds the key",
+    record: "docs/history/fabrichat-max-attachments-break.md",
+  },
+  {
     // Home types its `chatManager` as the manager's output, so the scope the
     // manager's `rooms` declares reaches home's contract too. Home is a
     // required pattern, so this entry carries the ruling that lets it name

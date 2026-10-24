@@ -23,9 +23,10 @@ interface ChatThreadSummary {
 
 - **`root`** links the thread's root (see
   [`ChatReply`](ChatReply.md#threads)), which is always a message the main
-  conversation shows. A client finds the summary for a message it shows by
-  comparing this link with the message's, as it compares any two links to a
-  message.
+  conversation shows, by the link to its own cell, the link every field of the
+  room naming it holds. A client finds the summary for a message it shows by
+  comparing this link with the message's, which are equal exactly when they
+  name the same message.
 - **`replyCount`** is how many messages the thread holds besides its root, by
   the membership [`ChatReply`](ChatReply.md#threads) states, whichever message
   of the thread each replies to. It is the number of messages a window onto

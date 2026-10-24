@@ -71,6 +71,7 @@ import {
   type CachedCompiledModule,
   DATA_FILE_SPECIFIER,
   SOURCE_ROOT_SPECIFIER,
+  type SourcePackageIdentity,
 } from "./sandbox/module-record-compiler.ts";
 import type {
   CommitError,
@@ -424,6 +425,51 @@ type ProgramCompilation = {
   readonly spaces: Set<MemorySpace>;
 };
 
+/** What a cold compile takes in: a verified source closure and its context. */
+type ColdCompilationInput = {
+  /** Content identity of the closure's entry module. */
+  readonly entryIdentity: string;
+
+  /** Authored filename of the entry module. */
+  readonly entryFilename: string;
+
+  /** The verified closure's modules, as the compiler takes them. */
+  readonly sourceFiles: Source[];
+
+  /** The source-package edges the closure's modules carry. */
+  readonly sourcePackages: readonly SourcePackageIdentity[];
+
+  /** The attached data files among `sourceFiles`. */
+  readonly dataFiles: readonly string[];
+
+  /** Where the compile resolves fabric imports. */
+  readonly space: MemorySpace;
+
+  /** The collector instrumenting the compile, when coverage is on. */
+  readonly patternCoverage: PatternCoverageCollector | undefined;
+};
+
+/** What one cold compile yields: the compiled module set and its evaluation. */
+type ColdCompilationResult = {
+  /** The compiled modules, as the compile cache stores them. */
+  readonly modules: CacheableModule[];
+
+  /** The evaluation of those modules. */
+  readonly result: EvaluateResult;
+};
+
+/**
+ * A cold compile and evaluation in flight, shared by every space loading its
+ * entry identity.
+ */
+type ColdCompilation = {
+  /** Settles with the compiled module set and its evaluation. */
+  readonly promise: Promise<ColdCompilationResult>;
+
+  /** Whether the compile step finished, so a later failure is evaluation's. */
+  compiled: boolean;
+};
+
 /**
  * What a by-identity load's timing row names: the pattern, and how many
  * documents its closure read refused, when it refused any.
@@ -511,6 +557,23 @@ export class PatternManager {
     string,
     Promise<Pattern | undefined>
   >();
+
+  /**
+   * Cold compiles in flight, keyed by entry identity and compile-cache runtime
+   * version. A verified source closure is content-addressed and the bytes it
+   * compiles to are a function of it and the compiler alone, so every load of
+   * one identity that misses while another's compile runs — in another space,
+   * or the preview and ordinary loads of one space — shares the leader's
+   * compile and SES evaluation through this map and writes the result back
+   * into its own space, as `#inProgressCompilations` lets program compiles
+   * do. A finished compile stays until every by-identity load of its identity
+   * that was in flight when it finished has settled, so a load whose storage
+   * reads outlast the compile still finds it; a failed one leaves at once, so
+   * a load retrying on its own behalf never meets it again. Each entry runs
+   * inside a by-identity load registered in `#inProgressByIdentityLoads`,
+   * which is where the durability barrier sees it.
+   */
+  readonly #inProgressColdCompiles = new Map<string, ColdCompilation>();
 
   /**
    * Session-local negative memo for compile failures that are deterministic
@@ -2631,7 +2694,6 @@ export class PatternManager {
     cacheOpts?: { runtimeVersion: string },
     options: { repairCache?: boolean } = {},
   ): Promise<Pattern | undefined> {
-    const harness = this.#runtime.harness;
     const coldStart = performance.now();
     const record = (outcome: string) =>
       logger.timeDetailed(
@@ -2681,109 +2743,213 @@ export class PatternManager {
     }));
 
     const patternCoverage = this.#patternCoverageFor();
-    let compileSucceeded = false;
-    try {
-      const compiled = await harness.compileResolvedToRecordGraph(
-        sourceFiles,
-        entry.filename,
-        {
-          fabricImports: { space },
-          ...(patternCoverage ? { patternCoverage } : {}),
-          sourcePackages,
-        },
-      );
-      if (compiled.entryIdentity !== entryIdentity) {
-        throw deterministicCompileError(
-          `source closure recompiled to ${compiled.entryIdentity}, expected ${entryIdentity}`,
-        );
-      }
-      compileSucceeded = true;
-      const cachedModules: CachedCompiledModule[] = compiled.modules.map(
-        (module) => ({
-          identity: module.identity,
-          filename: module.filename,
-          code: module.js,
-          ...(module.isData ? { isData: true } : {}),
-          ...(module.sourceMap !== undefined
-            ? { sourceMap: module.sourceMap as never }
-            : {}),
-          // The spans naming the lines this body's coverage probes stand for.
-          ...(module.patternCoverageSpans !== undefined
-            ? { patternCoverageSpans: module.patternCoverageSpans }
-            : {}),
-          ...(module.builderSourceSites !== undefined
-            ? { builderSourceSites: module.builderSourceSites }
-            : {}),
-          imports: module.imports,
-        }),
-      );
-      const result = await harness.evaluateCachedModules(
-        cachedModules,
+    // Spaces loading one identity at once share a compile (see
+    // `#inProgressColdCompiles`); the write-back below is each space's own.
+    const compileKey = `${entryIdentity}\0${cacheOpts?.runtimeVersion ?? ""}`;
+    for (;;) {
+      const inFlight = this.#inProgressColdCompiles.get(compileKey);
+      const compilation = inFlight ?? this.#startColdCompilation(compileKey, {
         entryIdentity,
-        {
-          sourceFiles,
-          ...(dataFiles.length === 0 ? {} : { dataFiles }),
-          ...(patternCoverage ? { patternCoverage } : {}),
-        },
-      );
-      const pattern = this.#patternFromMain(result, symbol, entryIdentity);
-      record("compiled");
-      if (cacheOpts === undefined || options.repairCache === false) {
-        this.#recordDeferredCacheRepair(
+        entryFilename: entry.filename,
+        sourceFiles,
+        sourcePackages,
+        dataFiles,
+        space,
+        patternCoverage,
+      });
+      if (inFlight !== undefined) {
+        this.#runtime.telemetry.submit({
+          type: "pattern.cold-compile.join",
           space,
-          compiled.modules,
-          cacheOpts !== undefined,
-        );
-      }
-      if (cacheOpts !== undefined && options.repairCache !== false) {
-        const recoveryKey = compileCacheRecoveryKey(space, entryIdentity);
-        const repair = this.#persistCompileCacheTracked(
-          space,
-          compiled.modules,
           entryIdentity,
-          cacheOpts,
-          moduleDelegations,
-        ).then(() => {
-          this.#failedCompileCacheRecoveries.delete(recoveryKey);
-          this.#recordDeferredCacheRepair(space, compiled.modules, false);
-        }).catch((error) => {
-          this.#failedCompileCacheRecoveries.add(recoveryKey);
-          logger.warn("load-pattern-by-identity-writeback-failed", () => [
-            `entry=${entryIdentity}`,
-            `symbol=${symbol}`,
-            String(error),
-          ]);
         });
-        this.#compileCacheWrites.add(repair);
-        repair.finally(() => this.#compileCacheWrites.delete(repair));
       }
-      return pattern;
-    } catch (error) {
-      record(compileSucceeded ? "eval-failed" : "compile-failed");
-      logger.warn("load-pattern-by-identity-source-miss", () => [
-        `entry=${entryIdentity}`,
-        `symbol=${symbol}`,
-        String(error),
-      ]);
-      // Only engine/local failures explicitly classified after source-closure
-      // verification are memoized. Resolution and evaluation errors carry no
-      // marker and are retried on the next call.
-      // Coverage compilation calls into the runtime-supplied collector while
-      // the compiler is running. A collector failure is not a pure function of
-      // source bytes, so coverage-enabled attempts deliberately fail open.
-      if (
-        patternCoverage === undefined &&
-        isDeterministicCompileFailure(error)
-      ) {
-        this.#memoizeColdLoadFailure(
-          space,
-          entryIdentity,
-          cacheOpts?.runtimeVersion,
+      try {
+        const { modules, result } = await compilation.promise;
+        const pattern = this.#patternFromMain(result, symbol, entryIdentity);
+        record(inFlight === undefined ? "compiled" : "shared");
+        if (cacheOpts === undefined || options.repairCache === false) {
+          this.#recordDeferredCacheRepair(
+            space,
+            modules,
+            cacheOpts !== undefined,
+          );
+        }
+        if (cacheOpts !== undefined && options.repairCache !== false) {
+          const recoveryKey = compileCacheRecoveryKey(space, entryIdentity);
+          const repair = this.#persistCompileCacheTracked(
+            space,
+            modules,
+            entryIdentity,
+            cacheOpts,
+            moduleDelegations,
+          ).then(() => {
+            this.#failedCompileCacheRecoveries.delete(recoveryKey);
+            this.#recordDeferredCacheRepair(space, modules, false);
+          }).catch((error) => {
+            this.#failedCompileCacheRecoveries.add(recoveryKey);
+            logger.warn("load-pattern-by-identity-writeback-failed", () => [
+              `entry=${entryIdentity}`,
+              `symbol=${symbol}`,
+              String(error),
+            ]);
+          });
+          this.#compileCacheWrites.add(repair);
+          repair.finally(() => this.#compileCacheWrites.delete(repair));
+        }
+        return pattern;
+      } catch (error) {
+        // A follower whose leader failed before its compile step finished, and
+        // outside the deterministic marker — on a fabric import the leader's
+        // space could not resolve, say — compiles on its own behalf; each pass
+        // consumes a settled leader, so the loop is bounded by the number of
+        // concurrent callers. A deterministic failure is a function of the
+        // shared bytes, and evaluation reads no space, so either is this
+        // space's failure too.
+        if (
+          inFlight !== undefined && !compilation.compiled &&
+          !isDeterministicCompileFailure(error)
+        ) {
+          continue;
+        }
+        record(compilation.compiled ? "eval-failed" : "compile-failed");
+        logger.warn("load-pattern-by-identity-source-miss", () => [
+          `entry=${entryIdentity}`,
+          `symbol=${symbol}`,
           String(error),
-        );
+        ]);
+        // Only engine/local failures explicitly classified after source-closure
+        // verification are memoized. Resolution and evaluation errors carry no
+        // marker and are retried on the next call.
+        // Coverage compilation calls into the runtime-supplied collector while
+        // the compiler is running. A collector failure is not a pure function of
+        // source bytes, so coverage-enabled attempts deliberately fail open.
+        if (
+          patternCoverage === undefined &&
+          isDeterministicCompileFailure(error)
+        ) {
+          this.#memoizeColdLoadFailure(
+            space,
+            entryIdentity,
+            cacheOpts?.runtimeVersion,
+            String(error),
+          );
+        }
+        return undefined;
       }
-      return undefined;
     }
+  }
+
+  /**
+   * Helper for `#tryColdLoadByIdentity()`, which compiles and evaluates one
+   * verified source closure, registering the work in `#inProgressColdCompiles`
+   * under `key` for as long as that map's contract keeps it there.
+   */
+  #startColdCompilation(
+    key: string,
+    input: ColdCompilationInput,
+  ): ColdCompilation {
+    const { entryIdentity } = input;
+    const compilation: ColdCompilation = {
+      compiled: false,
+      promise: this.#compileAndEvaluateClosure(input, () => {
+        compilation.compiled = true;
+      }),
+    };
+    const drop = () => {
+      if (this.#inProgressColdCompiles.get(key) === compilation) {
+        this.#inProgressColdCompiles.delete(key);
+      }
+      this.#runtime.telemetry.submit({
+        type: "pattern.cold-compile.complete",
+        entryIdentity,
+      });
+    };
+    compilation.promise.then(
+      // The loads of this identity in flight now may still be reading their
+      // own space; the result waits for them, then leaves.
+      () => {
+        Promise.allSettled(this.#byIdentityLoadsOf(entryIdentity)).then(drop);
+      },
+      // A failed compile leaves at once, ahead of the followers that awaited
+      // it, so one retrying on its own behalf never meets it again.
+      drop,
+    );
+    this.#inProgressColdCompiles.set(key, compilation);
+    this.#runtime.telemetry.submit({
+      type: "pattern.cold-compile.start",
+      space: input.space,
+      entryIdentity,
+    });
+    return compilation;
+  }
+
+  /** The by-identity loads of `entryIdentity` in flight now, in every space. */
+  #byIdentityLoadsOf(entryIdentity: string): Promise<unknown>[] {
+    const loads: Promise<unknown>[] = [];
+    for (const [key, load] of this.#inProgressByIdentityLoads) {
+      if (key.split("\0")[1] === entryIdentity) loads.push(load);
+    }
+    return loads;
+  }
+
+  /**
+   * Helper for `#startColdCompilation()`, which compiles the verified source
+   * closure `input` describes, calls `onCompiled` once the compile step has
+   * finished, and evaluates the compiled modules. The closure is the same
+   * bytes in every space that verifies it; `input.space` only decides where
+   * its fabric imports are resolved.
+   */
+  async #compileAndEvaluateClosure(
+    input: ColdCompilationInput,
+    onCompiled: () => void,
+  ): Promise<ColdCompilationResult> {
+    const harness = this.#runtime.harness;
+    const { entryIdentity, sourceFiles, dataFiles, patternCoverage } = input;
+    const compiled = await harness.compileResolvedToRecordGraph(
+      sourceFiles,
+      input.entryFilename,
+      {
+        fabricImports: { space: input.space },
+        ...(patternCoverage ? { patternCoverage } : {}),
+        sourcePackages: input.sourcePackages,
+      },
+    );
+    if (compiled.entryIdentity !== entryIdentity) {
+      throw deterministicCompileError(
+        `source closure recompiled to ${compiled.entryIdentity}, expected ${entryIdentity}`,
+      );
+    }
+    onCompiled();
+    const cachedModules: CachedCompiledModule[] = compiled.modules.map(
+      (module) => ({
+        identity: module.identity,
+        filename: module.filename,
+        code: module.js,
+        ...(module.isData ? { isData: true } : {}),
+        ...(module.sourceMap !== undefined
+          ? { sourceMap: module.sourceMap as never }
+          : {}),
+        // The spans naming the lines this body's coverage probes stand for.
+        ...(module.patternCoverageSpans !== undefined
+          ? { patternCoverageSpans: module.patternCoverageSpans }
+          : {}),
+        ...(module.builderSourceSites !== undefined
+          ? { builderSourceSites: module.builderSourceSites }
+          : {}),
+        imports: module.imports,
+      }),
+    );
+    const result = await harness.evaluateCachedModules(
+      cachedModules,
+      entryIdentity,
+      {
+        sourceFiles,
+        ...(dataFiles.length === 0 ? {} : { dataFiles }),
+        ...(patternCoverage ? { patternCoverage } : {}),
+      },
+    );
+    return { modules: compiled.modules, result };
   }
 
   /**

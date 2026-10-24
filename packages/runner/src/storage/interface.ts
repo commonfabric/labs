@@ -581,6 +581,18 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Cancel;
 
   /**
+   * Observes a connection to a memory server coming back after it was lost:
+   * the connection is up again and the sessions it carries are restored, apart
+   * from any that a retriable denial holds, which restore on their own later.
+   * Called once per restored connection, so a manager holding several calls
+   * it once for each that comes back. The first connection to a server, and a
+   * reconnect attempt that fails, do not emit. A load that failed while the
+   * connection was down may succeed once this is called, and nothing else
+   * says when to ask again.
+   */
+  subscribeConnectionRestored?(observer: () => void): Cancel;
+
+  /**
    * Register an in-flight commit so the durability barrier
    * (`hasPendingCommits` / `pendingCommitsSettled`) covers it. Called by the
    * transaction layer at `commit()` entry, synchronously with the commit

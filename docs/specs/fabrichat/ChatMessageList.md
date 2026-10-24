@@ -33,8 +33,9 @@ interface ChatMessageList {
 - **`latest`** holds the newest messages of the main conversation (see
   [`ChatReply`](ChatReply.md#the-two-views)), up to the room's `maxWindowCount`
   (see [`ChatRoomPolicy`](ChatRoomPolicy.md)), oldest first, and `hasOlder` says
-  whether there are more. It follows the conversation as new messages arrive,
-  and needs no request.
+  whether there are more. Each is the link to the message's own cell, the same
+  link every other field of the room that names it holds. It follows the
+  conversation as new messages arrive, and needs no request.
 - **`threads`** holds a [`ChatThreadSummary`](ChatThreadSummary.md) for each
   thread in the room that holds a reply: its root, how many replies it holds,
   and when the newest was sent, oldest root first. A client shows a message of

@@ -32,6 +32,9 @@ mapped in [`../README.md`](../README.md).
   Contextual Flow Control: where the specification lives, how to classify a
   change, when the specification moves first, and what a pending ruling
   permits
+- [`automated-gates.md`](automated-gates.md) — what `deno task check`
+  type-checks, how the trees it leaves out are recorded, and the gates that
+  fail CI on their own. Read it before you push
 
 ## Dependencies and configuration
 
