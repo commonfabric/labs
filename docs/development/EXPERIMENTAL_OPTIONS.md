@@ -1844,13 +1844,13 @@ the per-epic implementation notes).
   the argument document, whose report the present result shows to predate its
   write, is asked of the store again. A start held only for defaults such
   documents owe seeds them without the pre-sync walk. Outside a caller-owned
-  setup, a start whose user- or session-scoped cell is such a document runs
-  apart from the caller's transaction the same way, without the walk: a served
-  derivation that set the piece up in its own transaction would read that
-  instance before the serving loop produced it, and be withdrawn until it was.
-  A transaction's read of one still reaches commit unexamined, so a commit
-  that read it absent after the store gained it is refused and the run
-  repeated
+  setup, a start of a family no pre-sync named whose user- or session-scoped
+  cell is such a document runs apart from the caller's transaction the same way,
+  without the walk: a served derivation that set the piece up in its own
+  transaction would read that instance before the serving loop produced it, and
+  be withdrawn until it was. A transaction's read of one still reaches commit
+  unexamined, so a commit that read it absent after the store gained it is
+  refused and the run repeated
   (`packages/runner/test/engine-read-through.test.ts`). On the served FabriChat
   send burst no row start ran a pre-sync, where a burst's ran 2 to 24, and the
   burst's time did not move; over three rooms of the chat probe the serving

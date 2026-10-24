@@ -7548,11 +7548,11 @@ export class Runner {
    * nothing for, needs no name-sync, which could deliver none of them. Its
    * run is held for the seeds alone, which `seeds` names, and not at all in
    * a caller-owned setup, which seeds them in the caller's transaction. A
-   * piece whose other absences are user- or session-scoped cells the store
-   * reported holding nothing at is held the same way, and so not in a
-   * caller-owned setup either: their instances join `seeds`, so that outside
-   * such a setup its start runs apart from the caller's transaction
-   * (`#familyAbsent` says why).
+   * piece of a family no pre-sync named, whose other absences are user- or
+   * session-scoped cells the store reported holding nothing at, is held the
+   * same way, and so not in a caller-owned setup either: their instances
+   * join `seeds`, so that outside such a setup its start runs apart from the
+   * caller's transaction (`#familyAbsent` says why).
    */
   #patternToNameBeforeRun(
     patternOrModule: Pattern | Module | undefined,
