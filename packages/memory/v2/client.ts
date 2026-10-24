@@ -38,6 +38,7 @@ import {
   type PresenceRemoveMessage,
   type PresenceUpsertMessage,
   type ResponseMessage,
+  type ServerMessage,
   SESSION_REPORT_TEXT_MAX,
   type SessionAdmissibleMessage,
   type SessionEffectMessage,
@@ -75,7 +76,6 @@ import {
   PresenceError,
   validatePresencePublication,
 } from "./presence.ts";
-import type { Server } from "./server.ts";
 import { parseSessionReport } from "./session-reports.ts";
 import {
   expandServerMessageLabels,
@@ -405,6 +405,13 @@ type OutstandingCommit = {
   pending: PromiseWithResolvers<AppliedCommit>;
 
   /**
+   * The server's acceptance, once its response has arrived. The commit stays
+   * outstanding until its send settles as well, which a transport may report
+   * only after the frames the server sent while handling it.
+   */
+  applied?: AppliedCommit;
+
+  /**
    * How many attempts failed because the commit's own write failed on an open
    * connection. The client stops replaying the commit once this reaches
    * `MAX_OWN_WRITE_FAILURES`.
@@ -618,8 +625,14 @@ export async function settleBounded<T>(
   return results;
 }
 
+/** A request awaiting its response; see {@link Client.request}. */
+type PendingRequest = PromiseWithResolvers<unknown> & {
+  /** Hears the response as the client handles it, before any frame after it. */
+  onResponse?: (response: ResponseMessage<unknown>) => void;
+};
+
 export class Client {
-  #pending = new Map<string, PromiseWithResolvers<unknown>>();
+  #pending = new Map<string, PendingRequest>();
   #spaces = new Set<SpaceSession>();
   #nextRequest = 1;
   #helloPending:
@@ -904,10 +917,18 @@ export class Client {
    * reconnect, unless `options.whileConnected` is set, in which case it
    * throws a `ConnectionError`: a request a session's restore makes would
    * otherwise wait for the reconnect that is running that restore.
+   *
+   * The request settles once its send has too, which a transport may report
+   * only after the server has handled the request, and so after the frames
+   * the server sent while handling it. `options.onResponse` hears the
+   * response as the client handles it, before any frame after it.
    */
   async request<Result>(
     message: FabricPlainObject,
-    options: { whileConnected?: boolean } = {},
+    options: {
+      whileConnected?: boolean;
+      onResponse?: (response: ResponseMessage<Result>) => void;
+    } = {},
   ): Promise<Result> {
     if (options.whileConnected === true && !this.#connected) {
       throw connectionLostWhileRestoring();
@@ -932,7 +953,12 @@ export class Client {
       ? compressClientMessageLabels(message)
       : message;
     const encoded = encodeMemoryBoundary(prepared);
-    const pending = Promise.withResolvers<unknown>();
+    const pending: PendingRequest = Promise.withResolvers<unknown>();
+    const { onResponse } = options;
+    if (onResponse !== undefined) {
+      pending.onResponse = (response) =>
+        onResponse(response as ResponseMessage<Result>);
+    }
     // The rejection handler below only attaches after the transport send
     // completes, and send suspends across event-loop turns on any real
     // transport — close()'s rejectPending() can fire in that window with
@@ -2138,6 +2164,11 @@ export class Client {
       if (pending) {
         pending.resolve(message);
         this.#pending.delete(message.requestId);
+        try {
+          pending.onResponse?.(message);
+        } catch (cause) {
+          console.error("request response observer threw:", cause);
+        }
       }
     }
   }
@@ -3595,10 +3626,9 @@ export class SpaceSession {
     const background = [...this.#background];
     this.#background.clear();
     await Promise.allSettled(background);
-    for (const pending of this.#outstandingCommits.values()) {
-      pending.pending.reject(new Error("memory session closed"));
-    }
-    this.#outstandingCommits.clear();
+    // A commit whose send failed after its acceptance arrived is outstanding
+    // still, and settles with its verdict.
+    this.#settleOutstandingCommits(new Error("memory session closed"));
     this.#replaceWatchSpecs([]);
     this.#viewInterests = [];
     this.#viewCapabilityLostObservers.clear();
@@ -3619,8 +3649,10 @@ export class SpaceSession {
   }
 
   /**
-   * Close this session terminally with `error`: reject its outstanding commits
-   * and caught-up waiters, forget it from the client, and drop its watch state.
+   * Close this session terminally with `error`: settle its outstanding commits,
+   * one the server has accepted with its verdict and the rest by rejecting
+   * them, reject its caught-up waiters, forget it from the client, and drop its
+   * watch state.
    * The stored error is what `#assertOpen()` rethrows for any later call, so a
    * storage subscriber observes the real cause on its next watch or transact.
    * Shared by session revocation, a permanent reopen authorization denial,
@@ -3643,11 +3675,11 @@ export class SpaceSession {
     this.#endWatchRequests(error);
     this.#readyOnConnection = false;
     this.#client.forgetSession(this);
-    for (const pending of this.#outstandingCommits.values()) {
-      pending.pending.reject(error);
-    }
+    // An accepted commit settles with its verdict: a session the commit's own
+    // ACL write revokes is told so right after the verdict, which can reach it
+    // before the commit's send settles.
+    this.#settleOutstandingCommits(error);
     this.#rejectCaughtUpLocalSeqWaiters(error);
-    this.#outstandingCommits.clear();
     this.#replaceWatchSpecs([]);
     this.#viewInterests = [];
     this.#viewCapabilityLostObservers.clear();
@@ -3663,6 +3695,21 @@ export class SpaceSession {
         console.error("session-termination subscriber threw:", cause);
       }
     }
+  }
+
+  /**
+   * Settles and forgets every outstanding commit: one whose acceptance has
+   * arrived with its verdict, the rest by rejecting them with `error`.
+   */
+  #settleOutstandingCommits(error: Error): void {
+    for (const pending of this.#outstandingCommits.values()) {
+      if (pending.applied !== undefined) {
+        pending.pending.resolve(pending.applied);
+      } else {
+        pending.pending.reject(error);
+      }
+    }
+    this.#outstandingCommits.clear();
   }
 
   /** Terminates the session when its client cannot restore the connection. */
@@ -4411,6 +4458,10 @@ export class SpaceSession {
           space: this.space,
           sessionId: this.#sessionId,
           commit: pendingCommit.commit,
+        }, {
+          onResponse: (response) => {
+            if (response.ok !== undefined) pendingCommit.applied = response.ok;
+          },
         });
         this.#noteResult(applied.seq);
         if (this.#outstandingCommits.get(localSeq) === pendingCommit) {
@@ -4698,28 +4749,41 @@ export class WatchView {
 
 export const connect = Client.connect;
 
-// Loopback delivers server frames on EVENT LOOP turns, one frame per
-// turn, like a socket: no response or push ever arrives inside the sender's
-// own await cascade, so code that accidentally depends on "nothing arrives
-// until I yield" fails here the way it would against a deployment. One
-// frame per macrotask also guarantees a frame's full microtask cascade
-// (response resolution, request() continuation, caller continuation)
-// completes before the next frame delivers. Client→server keeps awaiting
-// the server's processing: the server's fan-out drain-wait counts a frame
-// from receive() entry, and a send that merely enqueued would let fan-out
-// read heads that predate a write already handed to the transport. Frames
-// staged at close() are dropped — nothing arrives after the socket is
-// gone. Remaining fidelity gap: setCloseReceiver is a no-op, so a
-// server-initiated disconnect is invisible over loopback.
-//
-// The pump takes that turn through armTurn, so a queued frame always has an
-// armed zero-delay timer for `clock.settle()` to see without the delivery
-// itself waiting on one. A posted message is not an option in its place:
-// Node's MessageChannel replaces the web one as soon as anything in the
-// process loads node compatibility, and its ports deliver inside a microtask
-// cascade rather than on a turn of their own.
-export const loopback = (server: Server): Transport => {
+/**
+ * A transport over a connection whose server frames are handed to it one at
+ * a time ({@link QueuedFrameTransport.deliver}). It delivers them on event
+ * loop turns, one frame per turn, like a socket: no response or push ever
+ * arrives inside the sender's own await cascade, so code that accidentally
+ * depends on "nothing arrives until I yield" fails here the way it would
+ * against a deployment. One frame per macrotask also guarantees a frame's
+ * full microtask cascade (response resolution, `request()` continuation,
+ * caller continuation) completes before the next frame delivers.
+ * Client→server keeps awaiting the server's processing: the server's fan-out
+ * drain-wait counts a frame from `receive()` entry, and a send that merely
+ * enqueued would let fan-out read heads that predate a write already handed
+ * to the transport. Frames staged at `close()` are dropped, since nothing
+ * arrives after the socket is gone, and `delivered()` waits for the frames
+ * held at the call.
+ *
+ * The pump takes each turn through `armTurn`, so a queued frame always has an
+ * armed zero-delay timer for `clock.settle()` to see without the delivery
+ * itself waiting on one. A posted message is not an option in its place:
+ * Node's MessageChannel replaces the web one as soon as anything in the
+ * process loads node compatibility, and its ports deliver inside a microtask
+ * cascade rather than on a turn of their own.
+ *
+ * `loopback()` builds one over an in-process connection; the serving worker's
+ * plane builds one over its port.
+ */
+export const queuedFrameTransport = (
+  connection: {
+    /** Hands one client frame to the server; settles once it has taken it. */
+    receive(payload: string): Promise<void>;
+    close(): void;
+  },
+): QueuedFrameTransport => {
   let receiver = (_payload: string) => {};
+  let closeReceiver: ((error?: Error) => void) | undefined;
   let closed = false;
   const queue: string[] = [];
   let turn: ArmedTurn | null = null;
@@ -4751,36 +4815,85 @@ export const loopback = (server: Server): Transport => {
   const schedule = () => {
     turn ??= armTurn(drainOne);
   };
-  const connection = server.connect((message) => {
-    if (closed) return;
-    queue.push(encodeMemoryBoundary(message));
-    queued++;
-    schedule();
-  });
+  const end = () => {
+    closed = true;
+    turn?.cancel();
+    turn = null;
+    queue.length = 0;
+    releaseWaiters();
+  };
   return {
     async send(payload: string) {
+      if (closed) throw connectionError("memory transport closed");
       await connection.receive(payload);
     },
     close() {
-      closed = true;
-      turn?.cancel();
-      turn = null;
-      queue.length = 0;
-      releaseWaiters();
+      end();
       connection.close();
       return Promise.resolve();
     },
     setReceiver(next) {
       receiver = next;
     },
-    setCloseReceiver() {},
+    setCloseReceiver(next) {
+      closeReceiver = next;
+    },
     delivered() {
       if (closed || handedOver >= queued) return Promise.resolve();
       const { promise, resolve } = Promise.withResolvers<void>();
       deliveryWaiters.push({ target: queued, resolve });
       return promise;
     },
+    deliver(frame) {
+      if (closed) return;
+      queue.push(frame);
+      queued++;
+      schedule();
+    },
+    lose(error) {
+      if (closed) return;
+      end();
+      closeReceiver?.(error);
+    },
   };
+};
+
+/** What {@link queuedFrameTransport} returns. */
+export type QueuedFrameTransport = Transport & {
+  /** Hands one server frame over, to reach the receiver on its own turn. */
+  deliver(frame: string): void;
+
+  /**
+   * Reports the connection lost to the close receiver, dropping the frames
+   * held: what a transport over a port does when the port closes under it.
+   */
+  lose(error: Error): void;
+};
+
+/**
+ * A transport to an in-process server, delivering its frames as
+ * {@link queuedFrameTransport} does. Nothing calls `lose()` over it, so a
+ * disconnect the server initiates is invisible over loopback.
+ */
+export const loopback = (
+  server: {
+    connect(send: (message: ServerMessage) => void): {
+      receive(payload: string): Promise<void>;
+      close(): void;
+    };
+  },
+): Transport => {
+  // The transport exists before the connection, so a frame the server
+  // sends as it connects is queued rather than lost.
+  const built: { connection?: ReturnType<typeof server.connect> } = {};
+  const transport = queuedFrameTransport({
+    receive: (payload) => built.connection!.receive(payload),
+    close: () => built.connection?.close(),
+  });
+  built.connection = server.connect((message) => {
+    transport.deliver(encodeMemoryBoundary(message));
+  });
+  return transport;
 };
 
 /**

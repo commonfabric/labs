@@ -36,16 +36,44 @@ function observeViewInput(
   };
 }
 
-/** Whole-value fingerprints cover every descendant of an observed path. */
+/**
+ * Whole-value fingerprints cover every descendant of an observed path.
+ * `fingerprintOf` takes the fingerprint of one document version at one path;
+ * a caller that fingerprints the same versions over and over hands in one
+ * that remembers them.
+ */
 export function viewInputBasis(
   addresses: IMemorySpaceAddress[],
   documentAt: (address: IMemorySpaceAddress) => EntityDocument | undefined,
+  fingerprintOf: (
+    document: EntityDocument | undefined,
+    path: readonly string[],
+  ) => string = viewInputFingerprint,
 ): ViewValueBasis[] {
-  return sortAndCompactPaths(addresses).map((address) => ({
+  return viewInputBasisOf(
+    sortAndCompactPaths(addresses),
+    documentAt,
+    fingerprintOf,
+  );
+}
+
+/**
+ * The basis of addresses already sorted and compacted, as `viewInputBasis`
+ * sorts and compacts them, for a caller that keeps them so across bases.
+ */
+export function viewInputBasisOf(
+  addresses: readonly IMemorySpaceAddress[],
+  documentAt: (address: IMemorySpaceAddress) => EntityDocument | undefined,
+  fingerprintOf: (
+    document: EntityDocument | undefined,
+    path: readonly string[],
+  ) => string = viewInputFingerprint,
+): ViewValueBasis[] {
+  return addresses.map((address) => ({
     id: address.id,
     scope: address.scope ?? "space",
     path: [...address.path],
-    fingerprint: viewInputFingerprint(documentAt(address), address.path),
+    fingerprint: fingerprintOf(documentAt(address), address.path),
   }));
 }
 

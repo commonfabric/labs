@@ -42,7 +42,7 @@ describe("local-read-policy", () => {
     await storage.close();
   });
 
-  it("shares one checker within validation and renews it for later state", () => {
+  it("shares one checker across reads and makes one for each validation pass", () => {
     const tx = runtime.edit();
     let allowed = true;
     let generation = 0;
@@ -64,15 +64,39 @@ describe("local-read-policy", () => {
           path: ["value"],
         }, () => true);
       }
-      expect(checked).toEqual([1, 2]);
+      expect(checked).toEqual([1, 1]);
       expect(validateLocalReadBasis(tx)).toBeUndefined();
-      expect(checked).toEqual([1, 2, 3, 3]);
+      expect(checked).toEqual([1, 1, 2, 2]);
       allowed = false;
       expect(validateLocalReadBasis(tx)).toBeInstanceOf(LocalReadUnavailable);
-      expect(checked.at(-1)).toBe(4);
+      expect(checked.at(-1)).toBe(3);
       allowed = true;
       expect(localReadsReady(tx)).toBe(true);
-      expect(checked.slice(-2)).toEqual([5, 5]);
+      expect(checked.slice(-2)).toEqual([4, 4]);
+    } finally {
+      tx.abort();
+    }
+  });
+
+  it("fails validation for a read its shared checker let through before the state changed", () => {
+    const tx = runtime.edit();
+    let allowed = true;
+    restrictToLocalReads(tx.tx, () => {
+      const snapshot = allowed;
+      return () => snapshot;
+    });
+    const read = (id: "of:first" | "of:second") =>
+      assertLocalReadAvailable(tx.tx, {
+        space,
+        id,
+        type: "application/json",
+        path: ["value"],
+      }, () => true);
+    try {
+      read("of:first");
+      allowed = false;
+      read("of:second");
+      expect(validateLocalReadBasis(tx)).toBeInstanceOf(LocalReadUnavailable);
     } finally {
       tx.abort();
     }

@@ -1,12 +1,12 @@
 /**
  * The runtime factory an `ExecutorHost` builds its per-space serving runtimes
- * with: a runtime over a loopback storage manager on the co-hosted memory
- * server, signing its session opens as the service identity, in the serving
- * posture. It is the one construction of a serving runtime, so a test that
- * builds its host with it serves its spaces the way a deployment does.
+ * with: a runtime over a loopback storage manager on the memory server,
+ * reached in-process or over transports from the thread that holds it,
+ * signing its session opens as the service identity, in the serving posture.
+ * It is the one construction of a serving runtime, so a test that builds its
+ * host with it serves its spaces the way a deployment does.
  */
 
-import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import {
   type ExperimentalOptions,
@@ -15,7 +15,10 @@ import {
   type RuntimeFetch,
 } from "../runtime.ts";
 import type { ExecutorHostOptions } from "./host.ts";
-import { LoopbackStorageManager } from "./loopback-storage.ts";
+import {
+  type LoopbackPlane,
+  LoopbackStorageManager,
+} from "./loopback-storage.ts";
 
 /**
  * The flags a serving runtime runs regardless of the flags it is otherwise
@@ -29,8 +32,11 @@ export const SERVING_RUNTIME_EXPERIMENTAL = {
 
 /** What {@link servingRuntimeFactory} builds each serving runtime from. */
 export type ServingRuntimeFactoryOptions = {
-  /** The co-hosted memory server the loopback storage plane connects to. */
-  server: MemoryServer;
+  /**
+   * The co-hosted memory server the loopback storage plane connects to, or
+   * the transports that reach it from another thread.
+   */
+  server: LoopbackPlane;
 
   /** Signs the serving sessions' `session.open`; the host's service identity. */
   identity: Signer;

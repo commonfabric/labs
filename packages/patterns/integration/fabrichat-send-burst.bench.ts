@@ -49,6 +49,7 @@
 
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { rowKeyOf } from "@commonfabric/integration/row-key";
 import { sizeFromEnv } from "./fabrichat-room-bench-support.ts";
 import {
   MultiRuntimeHarness,
@@ -84,10 +85,15 @@ const WARMUP = 1;
 const harness = await MultiRuntimeHarness.create({
   programPath: PROGRAM_PATH,
   rootPath: ROOT_PATH,
-  sessions: Array.from(
-    { length: MEMBERS },
-    (_, index) => `fabrichat-send-burst-${index + 1}`,
-  ),
+  // Each member is a web client with its view mounted, as a browser tab is,
+  // so that under `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION` it opens pieces
+  // under a view selection and runs locally the way a browser does; the flag
+  // is held constant across a comparison.
+  sessions: Array.from({ length: MEMBERS }, (_, index) => ({
+    label: `fabrichat-send-burst-${index + 1}`,
+    renderView: true,
+    clientClass: "web" as const,
+  })),
   aclMode: "enforce",
 });
 const members = harness.sessions;
@@ -133,18 +139,55 @@ async function openRoom(round: number): Promise<Room> {
       "sendMessage",
       {
         requestId: `join-${round}`,
-        target: { value: `Member ${index + 1} joins.` },
+        target: { value: joinOf(index) },
       },
       SEND_ACTION,
       { piece: room },
     );
     await harness.settle();
   }
+  await holdMessages(room, members.map((_, index) => joinOf(index)));
   await verify(room, round, 0);
   return room;
 }
 
-/** Fire every member's messages before any of them settles, then settle all. */
+/** The message a member joins a room with. */
+function joinOf(member: number): string {
+  return `Member ${member + 1} joins.`;
+}
+
+/** The text of a member's message in a burst. */
+function messageOf(round: number, member: number, message: number): string {
+  return `Burst ${round}, message ${message + 1} from member ${member + 1}.`;
+}
+
+/**
+ * Resolve once every member's own view of the room's newest messages holds
+ * exactly `bodies`. A member's view is current only when the room's derived
+ * messages reach it: a member that does not run the room derives nothing
+ * itself, and the server can commit an event's consequence in one wave and
+ * the derivations that read it in the next.
+ */
+async function holdMessages(room: Room, bodies: string[]): Promise<void> {
+  const expected = Object.fromEntries(
+    bodies.map((body) => [rowKeyOf([body]), body]),
+  );
+  await Promise.all(members.map((member) =>
+    member.waitForRows(
+      ["messages", "latest", "messages"],
+      [["body"]],
+      ["body"],
+      expected,
+      { piece: room },
+    )
+  ));
+}
+
+/**
+ * Fire every member's messages before any of them settles, then wait until
+ * every member's own view of the room holds the joins and every message sent:
+ * the burst's measured end, on either arm.
+ */
 async function burst(room: Room, round: number): Promise<void> {
   await Promise.all(
     members.flatMap((member, index) =>
@@ -155,10 +198,7 @@ async function burst(room: Room, round: number): Promise<void> {
             "sendMessage",
             {
               requestId: `burst-${round}-${message}`,
-              target: {
-                value: `Burst ${round}, message ${message + 1} from ` +
-                  `member ${index + 1}.`,
-              },
+              target: { value: messageOf(round, index, message) },
             },
             SEND_ACTION,
             { piece: room, idle: false },
@@ -166,8 +206,19 @@ async function burst(room: Room, round: number): Promise<void> {
       )
     ),
   );
-  // A measured burst ends only after its served consequences arrive. The
-  // harness's budgeted settle can return while those consequences are pending.
+  await holdMessages(room, [
+    ...members.map((_, index) => joinOf(index)),
+    ...members.flatMap((_, index) =>
+      Array.from(
+        { length: MESSAGES },
+        (_, message) => messageOf(round, index, message),
+      )
+    ),
+  ]);
+}
+
+/** What a burst leaves pending outside its measured end, before a check. */
+async function afterBurst(): Promise<void> {
   await Promise.all(members.map(async (member) => {
     await member.idle();
     await member.awaitEventConsequences();
@@ -215,6 +266,7 @@ async function reverts() {
   const room = await openRoom(0);
   const before = await reverts();
   await burst(room, 0);
+  await afterBurst();
   const after = await reverts();
   await verify(room, 0, MESSAGES);
   console.error(
@@ -259,6 +311,7 @@ Deno.bench({
     b.start();
     await burst(room, current);
     b.end();
+    await afterBurst();
     await verify(room, current, MESSAGES);
     if (current === INVOCATIONS) await harness.dispose();
   },

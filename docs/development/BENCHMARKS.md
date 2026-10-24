@@ -322,6 +322,17 @@ measurement.
   through the shell's own navigation rather than by clicking, because a topic in
   the middle of the board is on no card or link the page is showing.
 
+Under server execution the serving runtime computes those derivations, and with
+web view-scoped replication on the page shows what it delivers without running
+any of them, so the browser's worker may complete no run at all during either
+operation. Both segments' timed samples declare `mayRunNothing` when the
+deployment serves with server execution on, which permits that zero rather than
+asserting it; with server execution off the browser computes the derivations,
+and the guard stays. Neither segment takes its read-accounted sample under
+server execution, and each writes a line saying so instead: the sample
+attributes the browser's reads to the derivations, and what the browser runs
+there is its echo of them, or nothing.
+
 The comment segment needs the viewer to have a Profile, since the composer's
 send button is disabled until `#profile` resolves to a named one. The field
 beside it is not gated, so the draft is typed either way and it is the send that
@@ -513,7 +524,10 @@ Each charts the interval `timeTopicsOperation()` brackets, and each writes a
 alongside it. `reopen` declares `mayRunNothing` on that sample, because a reopen
 completes no run for the call to attribute and the zero is what it has to
 record; it writes its timed sample as well, for the graph and timing the
-read-accounted half's elapsed time cannot speak for.
+read-accounted half's elapsed time cannot speak for. Under a deployment serving
+with server execution on, the two navigation series declare it on their timed
+samples instead and write no read-accounted sample, for the reasons their
+section gives.
 
 ### The posture a sample is labeled with
 
@@ -754,7 +768,8 @@ which it may not; read that before weakening an assertion in it.
 several people editing one thing at the same moment cost each other: ten voters
 each cast a vote on each of ten lunch-poll options, all hundred dispatched
 before any settles, timed until every one of the ten clients holds the whole
-result. Its `lunch poll` group carries one series, `vote burst 10x10`.
+result. Its `lunch poll` group carries one series, `vote burst 10x10 rendered`,
+named for the views its clients hold.
 
 It is the only benchmark in the repository with a second writer. Every other
 bench file drives one runtime against storage it alone holds, so a write
@@ -762,40 +777,59 @@ conflict cannot arise in one, and the cost of a contended write — the rejected
 commit, the rolled-back optimistic write, the re-run — is invisible to all of
 them. This one runs ten runtimes, each in its own Deno worker, through
 `packages/patterns/integration/multi-runtime-harness.ts`. The benchmark passes
-the harness no `apiUrl`, so it hosts an in-process storage server whether or
-not `API_URL` is set, matching the resolved posture: a plain one when server
+the harness no `apiUrl`, so it hosts an in-process storage server whether or not
+`API_URL` is set, matching the resolved posture: a plain one when server
 execution resolves OFF, and one with a serving loop attached when it resolves
-ON, by `EXPERIMENTAL_SERVER_EXECUTION=true` or by the first-party default.
-Both modes use ordinary worker
-clients, without a browser or renderer mounts. The view-scoped web-client flag
-therefore does not activate selective replication in this benchmark. Use the
-browser Topics benchmarks to measure that mode, and hold server execution
-constant when comparing replication flags.
+ON, by `EXPERIMENTAL_SERVER_EXECUTION=true` or by the first-party default. Both
+modes use ordinary worker clients with no browser, each holding the worker
+reconciler's demand over the piece's view for the run, as a mounted tab does
+(`renderView` on the session, with the fixture showing the poll's own view under
+its `renderPoll` input), so a client that derives the tallies and cards it would
+show has derived them by the measured end. Each client is a web client
+(`clientClass: "web"` on the session), so under
+`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION` its view registers as a view interest
+and the server selects what it receives, as it does for a browser tab; hold that
+flag and server execution constant when comparing arms. Such a client derives
+none of the poll itself, and the tallies the server derives from a burst's votes
+can reach it a wave after the votes do, which the measured end below does not
+wait for, so with that flag and server execution on the end is the votes'
+arrival rather than the view's.
 
-Each burst waits for every writer's event consequences to arrive before the
-replica barriers. The harness's budgeted `settle()` alone can return with pending
-consequences, so it cannot define a successful measurement. Outside the timed
-interval, every replica must contain the expected vote count and color
-distribution for every option; a mismatch fails the run.
+A burst's measured interval ends when every client's own vote list, read at
+that runtime's quiescence and woken by the list's own changes, holds exactly
+the round's rows: each voter's vote on each option at the value cast this
+round, and no other row. The predicate runs after that client's `idle()` inside
+the timed burst. The rows are locally visible and may include speculation; this
+endpoint is not a proof of durable serving coverage. Outside the interval,
+`afterBurst()` waits for event consequences and the harness's budgeted `settle()`.
+Then every replica must contain the expected vote count and color distribution
+for every option, or the run fails.
 
 Four things follow from that shape:
 
 - **Setup runs once, at module scope.** Ten workers, ten joins, ten options and
-  two warm-up bursts cost around twelve seconds, so paying it per iteration
-  would leave a run with almost no samples. Each iteration recolors every vote,
-  so all hundred are real changes and the poll holds a hundred votes throughout;
-  no iteration leaves a state the next one starts from differently.
-- **Few samples.** An iteration runs in about 450ms on a developer machine and
-  2.6 seconds on a four-core CI host, which puts this benchmark at the end of
-  the distribution where the 75th percentile buys least — it discards the
-  slowest quarter of a dozen samples, so two stalls in a run reach the figure
-  the trend reads. Read it across several windows.
+  two warm-up bursts took four and a half minutes with the loop off on a
+  four-core container, the first warm-up burst two and a half of them, so
+  paying it per iteration would leave a run with almost no samples. Each
+  iteration recolors every vote, so all hundred are real changes and the poll
+  holds a hundred votes throughout; no iteration leaves a state the next one
+  starts from differently.
+- **Few samples.** An iteration took 35.5 seconds on average with the loop off
+  on a four-core container, from 29.3 to 40.9, which puts this benchmark at the
+  end of the distribution where the 75th percentile buys least — it discards
+  the slowest quarter of a dozen samples, so two stalls in a run reach the
+  figure the trend reads. Read it across several windows.
 - **The wall-clock is half of what it measures.** A contended write is also
   work thrown away, and that half does not appear in a timing. The file writes a
   contention accounting — rejected commits and rolled-back writes over one
-  untimed burst — to stderr, and so into `diagnostics.log`. On the keyed vote
-  write both are zero; the same burst over a whole-list write measured 430 and
-  558.
+  untimed burst — to stderr, and so into `diagnostics.log`. None of the
+  commits a burst's sessions refuse writes the vote list, so with the loop off
+  what the accounting counts is the clients' derivations: each derives what its
+  view shows and commits it, and those commits contend. One burst at 10x10
+  counted 1,460 rejected commits and 2,356 rolled-back writes on a four-core
+  container, most of the refused commits writing derived documents alone. Over
+  clients that hold no view the keyed write's burst counts zero of both, and
+  the same burst over a whole-list write measured 430 and 558.
 - **The size names the series.** `CF_LUNCH_POLL_VOTERS` and
   `CF_LUNCH_POLL_OPTIONS` resize it for a local run asking how the burst scales.
   Changing either starts a new line rather than continuing this one, exactly as
@@ -803,18 +837,17 @@ Four things follow from that shape:
   is written to stderr.
 
 Ten runtimes is a large footprint, and the cost is worth knowing before adding
-a voter to it. **Measured on a default hosted
-runner — four cores, 15.6GB — the file takes 89 seconds and peaks at 4.76GB
-resident**, under a third of that host with around 9GB still free. The runner
-group this workflow uses is a larger machine than that one, so the share it
-takes there is smaller again.
+a voter to it. **Measured with the loop off on a four-core container, the file
+takes 1,044 seconds and peaks at 8.73GB resident**, more than half of a default
+hosted runner's 15.6GB. The runner group this workflow uses is a larger machine
+than that one, so the share it takes there is smaller.
 
-Read that peak as a working set rather than as a requirement. The same run
-under `--max-old-space-size=512` completes in 3.5GB at roughly double the
-per-iteration time, and a developer machine with far more memory peaks higher,
-at 5.4GB. So the absolute figure rises with the headroom the heap is offered
-while the fraction of the host falls, and it is the fraction that decides
-whether this belongs beside the other benchmarks.
+Read that peak as a working set rather than as a requirement. A run over
+clients that hold no view completed in 3.5GB under `--max-old-space-size=512`,
+at roughly double the per-iteration time, and peaked higher, at 5.4GB, on a
+developer machine with far more memory. So the absolute figure rises with the
+headroom the heap is offered while the fraction of the host falls, and it is
+the fraction that decides whether this belongs beside the other benchmarks.
 
 That peak is a floor under everything measured after it. The workers are
 released at process exit — `Deno.bench` offers no seam for "this file's
@@ -824,9 +857,43 @@ Which benchmarks that floor sits under is therefore a question of where
 a question the workflow's list answers.
 
 `packages/patterns/integration/lunch-poll-keyed-votes.test.ts` is the assertion
-half of the same property: it counts rolled-back writes instead of timing them,
-and requires none, so a regression that this benchmark shows as trend drift
-also fails a test.
+half of the same property: over clients that hold no view it counts rolled-back
+writes instead of timing them, bounds them below one a vote, and requires that
+no refused commit wrote the vote list, so a regression that this benchmark
+shows as trend drift also fails a test.
+
+### The browser copy of the vote burst
+
+`packages/patterns/integration/lunch-poll-vote-burst.browser.ts` measures the
+same burst through real browsers, and is a separate series from the worker
+benchmark above: the production lunch poll rather than the keyed-votes fixture,
+five independent Chromium profiles that create a profile, join the poll and add
+its options through the UI, votes cast as trusted CDP clicks, and an endpoint
+that is every page's rendered swatches. A burst ends when every page holds the
+exact option, name and color tuple for every voter on every option, with no
+duplicate row, and two animation frames have passed since the last change, so
+the endpoint is a paint opportunity in every browser rather than a runtime's
+quiescence. Both are timed from the moment every page's runtime is idle, before
+the clicks are prepared and dispatched. The driver's own completion, until it
+has seen every page converge, is reported apart from that headline, and the
+browsers' teardown comes after both and is not timed. Two warmup bursts precede
+the measured rounds.
+
+It is a `deno run -A` script rather than a `Deno.bench` file, so the Benchmarks
+workflow does not run it and the dashboard carries no series for it; it is run
+by hand, against a source toolshed and a shell build whose
+`EXPERIMENTAL_SERVER_EXECUTION`, `SERVER_EXECUTION_WORKER` and
+`SERVER_EXECUTION_STORE_READ_THROUGH` match the arm under measurement, with
+`API_URL` and `FRONTEND_URL` naming them. `CF_LUNCH_POLL_VOTERS` and
+`CF_LUNCH_POLL_OPTIONS` size the poll (five and five unless set),
+`CF_LUNCH_POLL_BROWSER_ROUNDS` sets the measured rounds (three unless set), and
+`CF_LUNCH_POLL_BROWSER_OUT` names a JSON file for the samples, every client's
+logger rows and the server's health snapshots, all captured outside the timed
+intervals. The rows a page shows may include that page's own speculation, so a
+converged DOM is not a proof of durable serving coverage, and the script, unlike
+the worker benchmark, checks none after a burst: the next waits only for every
+page's runtime to go idle. Arms compare only within one sitting, for the reason
+the worker benchmark gives.
 
 ## Rendered lunch-poll read scaling
 

@@ -28,6 +28,10 @@ export class LocalReadUnavailable extends Error {
 /** Local eligibility in addition to replica coverage, such as producer currency. */
 type LocalReadPolicy = {
   permits?: () => (address: IMemorySpaceAddress) => boolean;
+
+  /** The checker the transaction's reads share, made at its first read. */
+  readPermits?: (address: IMemorySpaceAddress) => boolean;
+
   failure?: LocalReadUnavailable;
   basis: PathKeyMap<{ address: IMemorySpaceAddress; covered: () => boolean }>;
   conditions: { address: IMemorySpaceAddress; current: () => boolean }[];
@@ -38,7 +42,9 @@ const policies = new WeakMap<object, LocalReadPolicy>();
 
 /**
  * Restricts a transaction before its first read; restrictions cannot be cleared.
- * `permits` creates a checker for one synchronous read or validation pass.
+ * `permits` creates a checker. The transaction's reads share one, and each
+ * validation pass makes its own, so what a read let through is checked again
+ * before the transaction can seal.
  */
 export function restrictToLocalReads(
   tx: IStorageTransaction,
@@ -85,7 +91,10 @@ export function assertLocalReadAvailable(
     address.id,
     ...address.path,
   ], { address, covered });
-  if (covered() && policy.permits?.()(address) !== false) return;
+  if (covered()) {
+    policy.readPermits ??= policy.permits?.();
+    if (policy.readPermits?.(address) !== false) return;
+  }
   const failure = new LocalReadUnavailable(address);
   policy.failure ??= failure;
   throw failure;
@@ -99,6 +108,7 @@ export function releaseLocalReadBasis(tx: object): void {
   policy.wakes.clear();
   policy.conditions.length = 0;
   policy.permits = undefined;
+  policy.readPermits = undefined;
 }
 
 /** Whether the inputs of a disposed attempt have become eligible for a new run. */

@@ -1946,7 +1946,7 @@ describe("cli piece parsing", () => {
             getCell: () => Promise.resolve(rootCell),
           },
         }),
-      runtime: { marker: "runtime" },
+      runtime: { marker: "runtime", experimental: { serverExecution: false } },
       getSpace: () => "did:key:test-space",
     };
     const filter = parseSelectionFilter(".id == 2");
@@ -1987,7 +1987,7 @@ describe("cli piece parsing", () => {
         Promise.resolve({
           result: { getCell: () => Promise.resolve(rootCell) },
         }),
-      runtime: {},
+      runtime: { experimental: { serverExecution: false } },
       getSpace: () => "did:key:test-space",
     };
 
@@ -2034,7 +2034,7 @@ describe("cli piece parsing", () => {
         Promise.resolve({
           result: { getCell: () => Promise.resolve(rootCell) },
         }),
-      runtime: {},
+      runtime: { experimental: { serverExecution: false } },
       getSpace: () => "did:key:test-space",
     };
 
@@ -2078,7 +2078,7 @@ describe("cli piece parsing", () => {
         Promise.resolve({
           result: { getCell: () => Promise.resolve(rootCell) },
         }),
-      runtime: {},
+      runtime: { experimental: { serverExecution: false } },
       getSpace: () => "did:key:test-space",
     };
     const deps = {
@@ -2136,7 +2136,7 @@ describe("cli piece parsing", () => {
         Promise.resolve({
           input: { getCell: () => Promise.resolve(targetCell) },
         }),
-      runtime: {},
+      runtime: { experimental: { serverExecution: false } },
       getSpace: () => "did:key:test-space",
     };
 
@@ -2274,6 +2274,7 @@ describe("cli piece parsing", () => {
         return Promise.resolve();
       },
       runtime: {
+        experimental: { serverExecution: false },
         settled: () => {
           order.push("runtime.settled");
           return Promise.resolve();
@@ -2366,6 +2367,7 @@ describe("cli piece parsing", () => {
         return Promise.resolve();
       },
       runtime: {
+        experimental: { serverExecution: false },
         settled: () => {
           order.push("runtime.settled");
           return Promise.resolve();
@@ -2452,6 +2454,7 @@ describe("cli piece parsing", () => {
         return Promise.resolve();
       },
       runtime: {
+        experimental: { serverExecution: false },
         settled: () => {
           order.push("runtime.settled");
           return Promise.resolve();
@@ -2502,6 +2505,7 @@ describe("cli piece parsing", () => {
       getRaw: () => ({ value: { "/": "missing-session-value" } }),
     };
     const controller = {
+      runtime: { experimental: { serverExecution: false } },
       get: () =>
         Promise.resolve({
           input: { get: () => Promise.resolve(undefined) },
@@ -2538,6 +2542,7 @@ describe("cli piece parsing", () => {
       getRaw: () => undefined,
     };
     const controller = {
+      runtime: { experimental: { serverExecution: false } },
       get: () =>
         Promise.resolve({
           input: { get: () => Promise.resolve(undefined) },
@@ -2581,6 +2586,7 @@ describe("cli piece parsing", () => {
       key: () => childCell,
     };
     const controller = {
+      runtime: { experimental: { serverExecution: false } },
       get: () =>
         Promise.resolve({
           input: { get: () => Promise.resolve(undefined) },
@@ -2614,6 +2620,7 @@ describe("cli piece parsing", () => {
 
   it("rethrows a read failure that is not a path/projection condition", async () => {
     const controller = {
+      runtime: { experimental: { serverExecution: false } },
       get: () =>
         Promise.resolve({
           input: { get: () => Promise.resolve(undefined) },
@@ -2651,6 +2658,7 @@ describe("cli piece parsing", () => {
       getRaw: () => ({ "/": "optional-session-value" }),
     };
     const controller = {
+      runtime: { experimental: { serverExecution: false } },
       get: () =>
         Promise.resolve({
           input: { get: () => Promise.resolve(undefined) },
@@ -2745,7 +2753,7 @@ describe("cli piece parsing", () => {
         Promise.resolve(
           {
             get: () => Promise.resolve(piece),
-            runtime: {},
+            runtime: { experimental: { serverExecution: false } },
             getSpace: () => "did:key:test-space",
           } as never,
         ),

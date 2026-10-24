@@ -1587,6 +1587,8 @@ export type GraphQuery = {
   atSeq?: number;
   branch?: BranchName;
   excludeSent?: boolean;
+  /** Include the highest authored commit at or below the query's sequence. */
+  includeAuthoredSeq?: boolean;
 };
 
 export type EntitySnapshot = {
@@ -1618,6 +1620,11 @@ export type EntitySnapshot = {
 export type GraphQueryResult = {
   serverSeq: number;
   entities: EntitySnapshot[];
+  /**
+   * Present when requested, bounded by `atSeq` and restricted to the
+   * branch.
+   */
+  authoredSeq?: number;
 };
 
 export type EntityIdListResult = {

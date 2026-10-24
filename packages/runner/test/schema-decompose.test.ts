@@ -2,7 +2,10 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
-import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import {
+  internSchema,
+  internSchemaAsTaggedHashString,
+} from "@commonfabric/data-model-schema";
 import {
   collectExternalSchemaRefHashes,
   formatExternalSchemaRef,
@@ -396,6 +399,22 @@ describe("schema-decompose", () => {
           definitions: { T: { type: "string" } },
         })
       ).toThrow(SchemaNotDecomposableError);
+    });
+
+    it("throws the refusal it kept for a schema refused before", () => {
+      const schema = internSchema({
+        type: "object",
+        properties: { x: { $id: "https://example.invalid/x", type: "string" } },
+      });
+      const first = (() => {
+        try {
+          decomposeSchema(schema);
+        } catch (error) {
+          return error;
+        }
+      })();
+      expect(first).toBeInstanceOf(SchemaNotDecomposableError);
+      expect(() => decomposeSchema(schema)).toThrow(first as Error);
     });
 
     it("throws for a pre-existing external ref with no document resolver", () => {

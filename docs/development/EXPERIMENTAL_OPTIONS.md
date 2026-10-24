@@ -61,6 +61,9 @@ was last checked against the code.
 | [`experimentalConcurrentWatchRefresh`](#experimentalconcurrentwatchrefresh) | `IRemoteStorageProviderSettings`; in the shell, the `commonfabric.concurrentWatchRefresh()` console command (localStorage, per browser profile) | off                                                                                  | Ben Follington (#4937; shell toggle #4974)            | graduate to always-on after live measurement, or remove if superseded                                                                                                                                                             | off by default; acquisition/removal ordering tested; real-latency measurement pending |
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
 | [`SERVER_EXECUTION_STORE_READ_THROUGH`](#server_execution_store_read_through) | `SERVER_EXECUTION_STORE_READ_THROUGH` env on toolshed, or `SpaceServerPolicy.storeReadThrough` | off | Bernhard Seefeld (store read-through) | soak with the posture forced on, flip on, then delete the knob and the home-space session read path | implemented, off by default |
+| [`SERVER_EXECUTION_WORKER`](#server_execution_worker) | `SERVER_EXECUTION_WORKER` env on toolshed | off | Bernhard Seefeld (the serving loop off the request thread) | soak with the worker on, flip on, then delete the knob and the in-process arm | implemented, off by default |
+| [`SERVER_EXECUTION_OVERLAP_COMMIT`](#server_execution_overlap_commit) | `SERVER_EXECUTION_OVERLAP_COMMIT` env on toolshed, or `SpaceServerPolicy.overlapWaveCommit` | off | Bernhard Seefeld (the wave commit overlapped with the next cycle) | measure under the worker, flip on where it pays, then delete the knob and the inline arm | implemented, off by default |
+| [`SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`](#server_execution_flush_deadline_max_ms) | `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` env on toolshed, or `SpaceServerPolicy.flushDeadlineMaxMs` | off (a fixed deadline) | Bernhard Seefeld (the flush deadline that grows after a cut settle) | measure the vote burst and the seed with a cap, pick a default cap where it pays, then delete the knob | implemented, off by default |
 | [`fuseNfsCacheTuning`](#fusenfscachetuning)                                 | `cf fuse mount --attrcache-timeout <whole seconds; 0 = untuned>` or `--noattrcache`                                                             | cf adds `attrcache-timeout=1` (one second) to FUSE-T mounts                          | Ian Hickson                                           | keep the default; shrink the exec.ts listing-recheck delay once the default has field-soaked                                                                                                                                      | implemented, on by default for FUSE-T, soak-validated                           |
 
 Removed or never-shipped flags that documentation elsewhere still references are
@@ -592,6 +595,48 @@ flags it adopts from the deployment it runs against.
   for the current bounds and
   [the implementation plan](../plans/view-scoped-client-replication.md) for
   follow-up work.
+- **Status (2026-10-22):** off by default. Under the served vote burst at
+  5x5, with the flush deadline capped at 1000 ms, the benchmark with the flag
+  on reads faster than with the serving loop off on the main thread, 3.4 s
+  against 4.3 s, and about the same in the worker, 3.5 to 3.6 s against 3.7
+  to 3.8 s, a difference within the half second its readings vary by between
+  runs. Under the FabriChat send burst the worker arm with it on reads 3.8 to
+  5.1 s against 3.0 s with the loop off. The
+  planner plans a wave the deadline cut over its last UI walk; a
+  plan whose delivery is unchanged reaches the session without a watch-set
+  evaluation, and one whose delivery only grew without a full re-evaluation
+  of the session, its added roots evaluated and its support graph extended
+  by them; the committed documents reach the sessions before the planner
+  walks; and a walk after a change reads again only the cells whose recorded
+  reads it touched, for a plan of 220 to 266 ms where it was 442 ms. What
+  remains is a plan per session carrying about 320,000 characters of roots
+  and producer bases. A client that runs nothing of a piece itself shows an
+  event's consequence a wave before the derivations that read it whenever a
+  flush deadline comes between them, the trade
+  [the events specification](../specs/server-side-execution/events.md) states
+  in §2
+  ([read-through record](../history/development/performance/2026-10-22-served-chat-burst-event-view-under-read-through.md),
+  [chat record](../history/development/performance/2026-10-22-served-chat-burst-and-the-deferred-settle.md),
+  [vote record](../history/development/performance/2026-10-22-served-vote-batching-and-planner-reads.md),
+  [the earlier record](../history/development/performance/2026-10-22-view-scoped-replication-vote-burst.md)).
+- **Status (2026-10-23):** off by default. With the serving loop in the worker
+  and the store read-through on, the vote burst at 5x5 reads 2.4 and 2.5 s with
+  the flag on against 2.9 and 3.4 s with the loop off, an end that on the flag's
+  arm is every client's vote list, which the tallies the server derives can
+  follow by a wave; the FabriChat send burst 3.0 and 3.1 s against 2.0 and 2.2
+  s; and the Topics navigation benchmark is faster in four segments and slower
+  on the board, 2.6 s against 1.7 s, for a journey of 4.9 s against 4.6 s. One
+  rendered lunch vote at 296 votes takes about 1.1 s against 0.7 s. The plan's
+  read index is held per producer and a selection is resolved over the roots it
+  adds, which took the serving worker's plan to 307 ms a vote and the memory
+  server's selection handling to 41 ms without moving the vote: the browser's
+  runtime worker, re-proving producers at each committing run's read validation,
+  is that vote's critical path ([three-realm
+  record](../history/development/performance/2026-10-23-one-served-vote-across-three-realms.md),
+  [plan and selection
+  record](../history/development/performance/2026-10-23-served-vote-plan-and-selection.md),
+  [chat
+  record](../history/development/performance/2026-10-23-served-chat-burst-per-session-rows.md)).
 
 
 ### `lazyMaterialization`
@@ -1813,9 +1858,12 @@ the per-epic implementation notes).
   variable on toolshed, read by the serving-host bootstrap
   ([`packages/toolshed/lib/server-execution.ts`](../../packages/toolshed/lib/server-execution.ts))
   into `SpaceServerPolicy.storeReadThrough`; a harness constructing an
-  `ExecutorHost` sets the policy field directly. Only the literal `true` turns
-  it on; `false` and unset leave it off, and anything else warns and leaves it
-  off. Meaningful only with the serving loop running
+  `ExecutorHost` sets the policy field directly, and a test's serving memory
+  server (`packages/runner/src/executor/serving-memory-server.deno.ts`) reads
+  the same variable for a policy that leaves the field unset, which is how a
+  lane runs its tests under the posture. Only the literal `true` turns
+  it on; `false` and unset leave it off, and anything else leaves it off,
+  with a warning from the toolshed bootstrap and none from the test server. Meaningful only with the serving loop running
   ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the store read-through change.
 - **Purpose.** The serving runtime reads its HOME space straight from the
@@ -1826,8 +1874,12 @@ the per-epic implementation notes).
   re-read the documents the replica holds. The memory server then never walks
   a selector's schema closure for the serving session, and the loopback
   transport carries no frames for it. Writes and foreign-space reads stay on
-  the session. [`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
-  §1 plane (a) states the posture and what it does not do.
+  the session. The serving loop's settle is then local: the feed's drain is
+  the barrier that applied the home space's input, so a settle waits on
+  neither the memory server's `idle()` nor a home-space frame before it
+  declares a wave quiescent. [`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
+  §1 plane (a) states the posture and what it does not do, and its §3
+  prefix-coverage paragraph the barrier each posture gives the settle.
 - **Current default and planned end state.** Off by default. The read-through
   follows session delivery's rules in its own form: another principal's
   instance is read only under a live tenure of the space's lease (a read that
@@ -1869,6 +1921,144 @@ the per-epic implementation notes).
   integration lanes pass.
 - **Path to removal.** Soak with the posture forced on, flip the default, then
   delete the knob and the home-space session read path it replaces.
+
+### `SERVER_EXECUTION_WORKER`
+
+- **Toggle via.** The `SERVER_EXECUTION_WORKER` environment variable on
+  toolshed, read by the serving-host bootstrap
+  ([`packages/toolshed/lib/server-execution.ts`](../../packages/toolshed/lib/server-execution.ts)).
+  Only the literal `true` turns it on; `false`, empty, and unset leave it off.
+  Other values warn and leave it off. The serving memory server tests build
+  ([`packages/runner/src/executor/serving-memory-server.deno.ts`](../../packages/runner/src/executor/serving-memory-server.deno.ts))
+  reads it too, where its `worker` option is left unset, and `cf test` sets that
+  option to keep its loop on its own thread. Meaningful only with the serving
+  loop running ([`serverExecution`](#serverexecution) on).
+- **Added by.** Bernhard Seefeld, in the change that moves the serving loop
+  off the request thread.
+- **Purpose.** The serving loop, its host and every serving runtime run in a Web
+  Worker of the toolshed process instead of on the thread that answers the
+  memory server's frames and the HTTP routes. A wave's settle step is a run of
+  synchronous scheduler actions, and on one thread every client round trip waits
+  behind it. The worker reads the store through its own SQLite connections and
+  reaches the memory server over a port: wave commits cross to a sink on the
+  main thread, which applies every commit the server fans out; the serving
+  runtimes' storage sessions cross as frames; and the server's observer crosses
+  as events. The memory server's store has to be a file for the worker to open
+  it. The pattern-lifecycle verbs reach the loop as descriptors on both arms.
+  [`docs/plans/serving-loop-worker.md`](../plans/serving-loop-worker.md) is the
+  design and its stages.
+- **Current default and planned end state.** Off by default. The end state is
+  on by default, then the in-process arm goes, with the knob.
+- **Path to removal.** Soak with the worker on, flip the default, then delete
+  the knob and the in-process arm.
+
+### `SERVER_EXECUTION_OVERLAP_COMMIT`
+
+- **Toggle via.** The `SERVER_EXECUTION_OVERLAP_COMMIT` environment variable
+  on toolshed, read by the serving-host bootstrap
+  ([`packages/toolshed/lib/server-execution.ts`](../../packages/toolshed/lib/server-execution.ts))
+  into `SpaceServerPolicy.overlapWaveCommit`; a harness constructing an
+  `ExecutorHost` sets the policy field directly, and a test's serving memory
+  server (`packages/runner/src/executor/serving-memory-server.deno.ts`) reads
+  the same variable for a policy that leaves the field unset. Only the literal
+  `true` turns it on; `false` and unset leave it off, and anything else leaves
+  it off, with a warning from the toolshed bootstrap and none from the test
+  server. Meaningful only with the serving loop running
+  ([`serverExecution`](#serverexecution) on), and worth something only where
+  the wave commit sink answers on another thread
+  ([`SERVER_EXECUTION_WORKER`](#server_execution_worker)).
+- **Added by.** Bernhard Seefeld, in the change that overlaps the wave commit
+  with the next cycle.
+- **Purpose.** A serving cycle leaves its wave's commit in flight to the sink
+  and ends at its publish; with input waiting, the next cycle drains and
+  settles over it and finishes it inside its settle, after the settle's first
+  completed step or after the deadline cuts the settle, and before it
+  computes its own advance, and with nothing waiting but the loop's own
+  echoes the cycle finishes it before it ends, so a quiet space runs as it
+  does with the commit inline. Under the worker the commit is a port round trip the main thread
+  answers between its flush passes, so a cycle that waited on it idled for
+  about as long as its own work took; overlapped, the loop pays only the part
+  of the round trip the next drain and settle do not cover
+  (`executor/wave/commit-wait` against `executor/wave/commit`). The wave
+  machinery already lets a seal open the next wave over a commit in flight
+  (`noteOwnWaveCommit`, [`serving-loop-worker.md`](../plans/serving-loop-worker.md)
+  under "Ordering and failure"), so a successor's writes to the documents the
+  predecessor wrote rebase rather than conflict, and a write the sink refuses
+  rolls back while the successor's settle is still open, which re-runs what
+  read it before the successor commits. The successor waits the commit out
+  inside its own flush deadline, so a round trip slower than the deadline
+  cuts that settle and grows the next deadline as any cut does. A cycle that
+  ran a lifecycle verb commits inline, since the verb's receipt reads the
+  outcome, and a park with a commit in flight waits for its seals to settle
+  before disposing the runtime.
+- **Current default and planned end state.** Off by default. The end state is
+  on under the worker, where the measurement decides it, then the knob and the
+  inline arm go.
+- **Status on 2026-10-12.** Implemented, off by default. Every executor suite
+  passes with the overlap forced on, which is how the drain's in-flight guard
+  came to record the wave a drained copy sealed into. Measured on the lunch poll's 25-vote burst with five rendering clients, worker
+  and store read-through, in
+  [the served-vote record](../history/development/performance/2026-10-11-served-vote-per-viewer-runs.md):
+  the cycle falls from 215 ms to 143 ms with the commit's round trip hidden
+  under the next drain and settle, the loop serves 38 waves a burst instead of
+  28, and the burst stays at about 5 s, bounded by the main thread's
+  per-session fan-out; the 30-topic seed does not move. On the main-thread
+  arm, with nothing to hide, the overlap lengthens the burst from 6.5 s to
+  7.8 s. It stays off until the fan-out floor moves.
+- **Path to removal.** Measure the vote burst and the seed under the worker
+  with the overlap on, flip the default where it pays, then delete the knob.
+
+### `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`
+
+- **Toggle via.** The `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` environment
+  variable on toolshed, read by the serving-host bootstrap
+  ([`packages/toolshed/lib/server-execution.ts`](../../packages/toolshed/lib/server-execution.ts))
+  into `SpaceServerPolicy.flushDeadlineMaxMs` when it is a positive decimal
+  integer of milliseconds; a harness constructing an `ExecutorHost` sets the
+  policy field directly, and a test's serving memory server
+  (`packages/runner/src/executor/serving-memory-server.deno.ts`) reads the
+  same variable for a policy that leaves the field unset. Unset, or no longer
+  than the flush deadline itself (`SERVER_EXECUTION_FLUSH_DEADLINE_MS`, 100 ms
+  unless set), it changes nothing. Meaningful only with the serving loop
+  running ([`serverExecution`](#serverexecution) on).
+- **Added by.** Bernhard Seefeld, in the change that lets the flush deadline
+  grow after a cut settle.
+- **Purpose.** The flush deadline bounds how long a consequence waits to
+  become visible, and a wave it cuts commits what is sealed so far
+  ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md) §3).
+  Under a burst that bound cuts every settle: a vote's cascade in the lunch
+  poll runs about 180 ms of scheduler work against a 100 ms deadline, so the
+  loop takes one event per wave and finishes each cascade over two more, and
+  every one of those partial waves costs the memory server a flush pass, a
+  walk per session tracking what it wrote, and a frame per session, and costs
+  each client an integration that re-triggers its derivations. With a cap
+  set, a settle the deadline cut hands the next cycle a deadline twice as
+  long, up to the cap, and a settle that reaches quiescence, or a loop that
+  finds no work, hands it the base again. The first consequence of a burst
+  stays visible within the base; the cascade behind it is cut less often as
+  it goes; and the events that arrive while a longer settle runs are drained
+  together by the next cycle, so one wave carries several events and the
+  commit, flush pass, frames and client integrations behind a wave are paid
+  once for all of them. The serving runtime's scheduler runs every event it
+  holds ready before one derivation pass, so those events are derived from
+  together as well.
+- **Current default and planned end state.** Off by default: every settle
+  takes the base deadline. The end state is a default cap, chosen from the
+  vote burst's and the seed's counts of waves, flush passes, frames and
+  client integrations with the cap on, and then the knob goes.
+- **Status on 2026-10-22.** Implemented, off by default. With a 1000 ms cap
+  over the 100 ms base, one burst of 25 votes takes 8 waves on the main
+  thread rather than 68 and 7 in the worker rather than 31; on the main
+  thread flush passes fall from 76 to 17, session walks from 330 to 75,
+  frames from 660 to 202 and each client's runs from 643 to 315, the serving
+  scheduler's own runs do not move, and the worker benchmark's 5x5 vote burst
+  goes from 5.8 s to 4.7 s on the main thread and 4.6 s to 4.1 s in the
+  worker
+  ([record](../history/development/performance/2026-10-22-served-vote-wave-costs.md)).
+  The seed has not been counted with a cap.
+- **Path to removal.** Measure the vote burst and the seed with a cap on both
+  served arms, pick the default cap where the counts and the headline agree,
+  then delete the knob.
 
 ## Flag-gated tripwires
 

@@ -6,7 +6,11 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { EntityDocument } from "@commonfabric/memory/v2";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { entityIdFrom, isStream, Runtime } from "@commonfabric/runner";
-import { PiecesController } from "@commonfabric/piece/ops";
+import {
+  PiecesController,
+  servedLifecycleRunner,
+  type ServedLifecycleVerbRunner,
+} from "@commonfabric/piece/ops";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
@@ -141,8 +145,7 @@ describe("pattern-lifecycle verbs (transport half)", () => {
         hostsSpace: () => true,
         aclMode: "enforce",
       },
-      host: () => host,
-      serviceIdentity: operator,
+      host: () => host && servedLifecycleRunner(host, operator),
       append: (entry) => server.commitDelegatedAppend(entry),
       readDocument: (space, id) => server.readDocument(space, id),
       watchAdmittedCommits: (watcher) => server.watchAdmittedCommits(watcher),
@@ -192,7 +195,7 @@ describe("pattern-lifecycle verbs (transport half)", () => {
         readAcl: async (target) =>
           (await server.readDocument(target, `of:${target}`))?.value,
       },
-      host: () => host,
+      host: () => host && servedLifecycleRunner(host, operator),
       append: (entry) => server.commitDelegatedAppend(entry),
       readDocument: (space, id) => server.readDocument(space, id),
       watchAdmittedCommits: (watcher) => server.watchAdmittedCommits(watcher),
@@ -719,8 +722,15 @@ export default pattern(() => {
   });
 
   it("maps a compile failure to 422", async () => {
+    const attributes = new Map<string, unknown>();
+    const requestSpan: NonNullable<LifecycleDeps["requestSpan"]> = {
+      setAttribute(key, value) {
+        attributes.set(key, value);
+        return this;
+      },
+    };
     const broken = refused(
-      await processInstantiate(deps, alice.did(), {
+      await processInstantiate({ ...deps, requestSpan }, alice.did(), {
         space,
         program: {
           main: "/main.tsx",
@@ -730,12 +740,16 @@ export default pattern(() => {
     );
     expect(broken.status).toBe(422);
     expect(broken.code).toBe("compile-failed");
+    expect(attributes.get("cf.lifecycle.instantiate.run_ms")).toEqual(
+      expect.any(Number),
+    );
+    expect(attributes.has("cf.lifecycle.instantiate.confirm_ms")).toBe(false);
   });
 
   it("answers 500 with its own code when the verb fails for a reason it does not name", async () => {
-    const failing = {
+    const failing: ServedLifecycleVerbRunner = {
       runLifecycleVerb: () => Promise.reject(new Error("the loop fell over")),
-    } as unknown as ExecutorHost;
+    };
     const seen = refused(
       await processUpload(
         { ...deps, host: () => failing },

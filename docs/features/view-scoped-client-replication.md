@@ -57,7 +57,21 @@ After a successful serving settlement, including a quiet settlement or a partial
 wave that reaches its flush deadline, the planner checks whether the view
 selection needs updating. Unsettled producers carry no currency basis. It
 traverses a new or changed visible view using renderer semantics and shared
-component schemas. Ordinary rendered attributes and object props contribute
+component schemas. After a wave the flush deadline cut, a view that already
+holds a published selection keeps it, and only a view with none is planned;
+the next settlement that reaches quiescence plans every view whose snapshot
+or walk changed, so a burst of cut waves plans each view once, as it ends,
+over the snapshot it left. The cap bounds each cut settle and not the
+deferral: a space under continuous input keeps its plans for as long as the
+input lasts. When a settlement that reached quiescence plans after its wave
+committed, the serving loop first has the memory server send the sessions
+the documents the wave committed: planning walks every viewing session's UI,
+and on a co-hosted server that is time the frames those documents owe would
+otherwise wait behind. With the overlapped commit
+(`SERVER_EXECUTION_OVERLAP_COMMIT`), the plan publishes while the commit is
+still in flight, and its frames keep the refresh's own turn. Within one settlement, views whose snapshots carry the same
+observations and whose walks read the same addresses select their cone once.
+Ordinary rendered attributes and object props contribute
 their reads. Declared bindings contribute their effective component projection;
 stream targets identify visible handlers, and writable bindings identify direct
 edits.
@@ -95,7 +109,11 @@ looking up its observations.
 
 The publisher caches the visible tree walk under its session and view lifetime.
 Storage notifications invalidate it using the scheduler's scoped, path-sensitive
-read matching, including shallow reads and missing values. Visible stream links
+read matching, including shallow reads and missing values. Within the walk,
+what was found at each visible cell is kept the same way: a change forgets
+only the cells whose recorded reads it touches, a walk reads those again and
+takes the rest from the last walk, and a cell the walk no longer reaches is
+forgotten with it. Visible stream links
 are retained independently of handler observations, so new handler read sets can
 change eligibility without walking the UI again. Replica resets and replacement
 view lifetimes discard the cached walk.
@@ -127,12 +145,23 @@ the current execution snapshot.
 Memory retains demand and supporting delivery as separate tracked graphs. Dirty
 documents refresh those graphs incrementally; support updates do not become
 execution demand. Ordinary watch additions extend the demand graph and deliver
-differences against the session's current delivery state. A full view
-replacement or recovery rebuilds the graphs. Unrelated commits without catch-up
+differences against the session's current delivery state. A selection that
+adds delivery roots to a view and takes none away extends the view's support
+graph by the added roots within the next incremental refresh, over the demand
+graph that refresh keeps current. A selection that drops a delivered root
+rebuilds the view's support graphs from the current selections over the demand
+graphs, which the same pass first refreshes by its dirty documents, and diffs
+the session's delivery against the result, so the departed documents are
+removed without the demand being walked again. A full view replacement or
+recovery rebuilds every graph. A selection that changes only what
+the view may run or adopt leaves the graphs standing: its plans ride the
+session's next frame, a frame of plans alone when nothing dirtied it. A frame carries the plans when they are owed, by
+such a selection or by a rebuilt graph; an incremental frame that owes none
+carries documents alone, and the client keeps the plans it holds. Unrelated commits without catch-up
 markers or operation changes produce no view frame. View replacements declare
 the replica's current holdings when the server supports that protocol, allowing
 unchanged documents to be omitted while still delivering missing documents and
-removals. Complete manifests accompany view-aware synchronization frames.
+removals. A frame carries complete manifests whenever it carries plans.
 
 ## Guarded local execution
 
@@ -175,8 +204,12 @@ outputs, and the complete transitive producer basis.
 
 This initial state retains server provenance: it does not count as a successful
 local attempt. Plan and coverage changes revalidate clean adopted nodes,
-including evidence for ancestors omitted from the replica. Value changes or a
-failed proof retire adoption and use ordinary guarded execution. Later plans
+including evidence for ancestors omitted from the replica. One revalidation
+proves each producer, matches each basis value, and checks each source once,
+for every adopted node that reaches it, and a node whose proof observes what
+its previous proof did keeps the dependencies and write surface that proof
+installed. Value changes or a failed proof retire adoption and use ordinary
+guarded execution. Later plans
 cannot adopt a node that has already been invalidated or run. Missing or cyclic
 proof uses the same fallback, without requesting more documents solely to enable
 adoption. The existing view-replication flags govern this behavior.
@@ -200,9 +233,10 @@ local overlay; the output must match too. Basis dependencies wake parked
 consumers when a side input changes, even if its producer cannot run locally.
 The client indexes admitted inputs and producer write surfaces by document and
 scope for each accepted plan. A synchronous currency proof checks each reached
-producer once and records its basis as wake dependencies. Proof results are
-discarded at the end of that validation pass, so a later read or commit
-validates current replica and local scheduler state again. Fingerprints may be
+producer once and records its basis as wake dependencies. The reads of one
+transaction share a proof, and each validation pass makes its own, so a commit
+validates current replica and local scheduler state again and fails a read an
+earlier proof let through before that state changed. Fingerprints may be
 reused for an unchanged primitive or a value proven deeply frozen. Every check
 still observes the current value and path reachability. Mutable values are
 rehashed.

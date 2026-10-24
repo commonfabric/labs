@@ -289,6 +289,59 @@ deno run --allow-read skills/perf-investigation/scripts/attribute-measures.ts \
   /tmp/measures.json --key=tx/read --chains     # the full chains
 ```
 
+### Attribute refresh frequency to its inputs
+
+When serving runs in a worker, `/api/health/serving-loop-realm` answers with
+the worker's `loggerCounts` and `timingStats`; `/api/health/stats` reads only
+the memory server's thread, and its `servingLoop` block holds executor counters
+rather than worker logger rows. The realm route asks the worker and waits for
+its turn, which is why it is not part of `stats`; with the loop on this thread
+it answers with the process's own loggers, and with the loop off it answers
+404. Collect both routes to account for the serving loop's work.
+
+The memory server emits `memory/refresh/batch` for each space processed by a
+flush, with its dirty instance keys, derived-key count, and connection count.
+`memory/refresh/session/{touched,untouched}` details identify the session,
+sequence interval, dirty count, graph count, and tracked-document count. A flush
+can process multiple batches; a touched session can refresh multiple graphs.
+Count these boundaries separately before dividing traversal counts by them.
+
+`memory/refresh/walk/total` details identify the graph's scope identity, affected
+and missed document keys, root-evaluation count, manager reads, updates, and
+outcome.
+The affected and missed entries are document keys, not root selectors. `reads`
+includes partial work on a failed refresh; `updates` describes a successful
+refresh. `memory/query/root` brackets root evaluations
+during watch extension and incremental refresh, naming the document, selector
+path and schema hash, reads, and outcome.
+`traverse` carries the same document/path/schema vocabulary on clients and
+servers, with schema-call and memo-hit counts. Its outcome distinguishes a
+returned validation failure from a thrown exception. Keep the process or worker
+name beside every row; equal keys across realms are different work.
+
+`memory/refresh/conflict` names rejected commits whose operations and read sets
+are staged for catch-up. A dirty key is an invalidation, not proof of a changed
+server version. Batches coalesce these invalidations with writes, so conflict
+events and batches do not have a one-to-one relationship.
+
+Occurrence details are JSON in the measure's detail suffix, leaving aggregate
+keys fixed. The logger computes them lazily for emitted measures and retained
+slowest samples. Use `detailOfMeasure` from `utils/logger` to decode the suffix,
+then group by individual fields when `--detail` is too specific. No document
+values are included. Timing measures remain opt-in with `CF_TIMING_MEASURES=1`.
+For causal scheduler data, enable both `setTriggerTraceEnabled(true)` and
+`setActionRunTraceEnabled(true)`, then compare
+`getTriggerTrace()` decisions and changed addresses with `getActionRunTrace()`;
+both histories are bounded, so check their retention before treating them as a
+whole-run count. A probe that drains or captures them belongs outside the
+workload.
+
+Save `performance.timeOrigin` with each realm's measures and the CPU profiler's
+clock alignment. Do not concatenate worker-relative timestamps or infer CPU
+from summed durations. Asynchronous intervals can overlap without a caller
+relationship; explicit session, document, and identity fields constrain what
+interval attribution alone can establish.
+
 ### Keep asking until the shape stops changing
 
 Each answer here suggests the next question, and the investigation is not
@@ -699,6 +752,22 @@ measurement: a wave that overruns the flush deadline reports that deadline
 however far past it the wave ran, so the counter says how often and the span
 says by how much.
 
+With the loop in a worker, each request over its port is timed on both sides:
+`executor/port/request/<method>` on the side that asked is the whole round
+trip, and `executor/port/handle/<method>` on the side that answered is the
+handler's own time, so their difference is what the request spent waiting for
+the other thread's turn and in transit. A wave commit under the worker is the
+`sink.commitWave` request, and its `executor/wave/commit` phase is that round
+trip plus the sink's bookkeeping around it. With the commit overlapped with
+the next cycle (`SERVER_EXECUTION_OVERLAP_COMMIT`), `executor/wave/commit`
+still names the whole round trip, and `executor/wave/commit-wait` is what was
+left of it when the loop finished the commit: the remainder after the next
+cycle's drain and settle ran over it, or, when nothing but the loop's own
+echoes arrived and the committing cycle finished it itself, the whole of it.
+The two cases are told apart by `executor/wave/commit-wait` against
+`executor/wave/commit`: a wait near the round trip is a quiet cycle, a wait
+well under it is the overlap at work.
+
 `memory/frame/queue` against `memory/frame/handle` splits an inbound frame's
 time into waiting behind the frames already in flight on its connection and
 doing its own work. Only the second is that frame's cost, so a queue time far
@@ -721,7 +790,9 @@ evaluation through response assembly. `memory/response/prepareSchemas` against
 `memory/response/sendRaw` splits each outbound message, response or effect, into
 schema-table compression and the hand-off to the transport;
 `memory.compression/send/encode` is the websocket compression that follows, on
-whichever side is sending.
+whichever side is sending; its detail carries the payload's length in characters
+and the frame's size in bytes on the wire (UTF-8 for a text frame), so a capture
+can say what a costly encode carried.
 
 ### Find sessions watching or caching a particular schema
 

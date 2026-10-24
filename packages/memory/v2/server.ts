@@ -6,6 +6,7 @@ import {
   cloneIfNecessary,
   isFabricPlainObject,
   valueEqual,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
@@ -205,7 +206,11 @@ import {
   unionQuery,
 } from "./server-sync.ts";
 import { authorizationError } from "./session-open-auth.ts";
-import { SessionRegistry, type SessionState } from "./session-registry.ts";
+import {
+  type SessionLifecycleEvent,
+  SessionRegistry,
+  type SessionState,
+} from "./session-registry.ts";
 import { isSpaceKind } from "./space-kind.ts";
 import {
   columnOriginUnavailableReason,
@@ -238,7 +243,10 @@ import {
 } from "./view-interest.ts";
 
 export { MAX_DOCUMENT_INTEREST_SESSIONS } from "./document-interests.ts";
-export { SessionRegistry } from "./session-registry.ts";
+export {
+  type SessionLifecycleEvent,
+  SessionRegistry,
+} from "./session-registry.ts";
 
 /**
  * A space DID pinned tightly enough to name a store. `isDID`
@@ -695,6 +703,43 @@ type AclState =
   | { kind: "invalid" }
   | { kind: "valid"; acl: Record<string, Capability | undefined> };
 
+/** The access list `engine` stores for `space`, classified. */
+const readAclState = (engine: Engine.Engine, space: string): AclState => {
+  const state = Engine.readState(engine, { id: aclDocId(space) });
+  if (state === null) return { kind: "missing" };
+  // A retracted ACL is not equivalent to a never-created ACL: treating the
+  // tombstone as public would turn deletion into an authorization bypass.
+  if (state.document === null) return { kind: "invalid" };
+  const acl = state.document.value;
+  if (!isACL(acl)) return { kind: "invalid" };
+  const byPrincipal = acl as Record<string, Capability | undefined>;
+  if (!hasConcreteOwner(byPrincipal)) return { kind: "invalid" };
+  return { kind: "valid", acl: byPrincipal };
+};
+
+/**
+ * The owner of `space` as the access list `engine` stores resolves it: the
+ * space itself when its list names it `OWNER`, else the first other concrete
+ * `OWNER` in sorted order, and `undefined` for a space whose list is missing
+ * or invalid. {@link Server.resolveSpaceOwner} returns this, and a serving
+ * loop holding its own connection to the store reads it directly.
+ */
+export const resolveSpaceOwnerOf = (
+  engine: Engine.Engine,
+  space: string,
+): string | undefined => {
+  const state = readAclState(engine, space);
+  if (state.kind !== "valid") return undefined;
+  if (state.acl[space] === "OWNER") return space;
+  const owners = Object.entries(state.acl)
+    .filter(([principal, capability]) =>
+      principal !== ANYONE_USER && capability === "OWNER"
+    )
+    .map(([principal]) => principal)
+    .sort();
+  return owners[0];
+};
+
 const commitTouchesAclDoc = (
   operations: readonly Operation[],
   space: string,
@@ -975,12 +1020,34 @@ export type ServerExecutionObserver = {
    * the serving runtime's OWN loopback session — the service principal's
    * tracked-set growth is the serving graph's own reads, not client
    * demand, and must neither wake the loop nor count in `pushGrowthWakes`
-   * (W1 review MINOR-4). */
+   * (W1 review MINOR-4). `sessionId` names the changed session where the
+   * change is one session's, so a mirror of the demand set can re-read
+   * that session's share alone. */
   demandChanged?: (
     space: string,
     reason?: DemandChangeReason,
     principal?: string,
+    sessionId?: string,
   ) => void;
+
+  /**
+   * A session's VIEW SET was set: a `session.watch.set` carried views,
+   * which is the one message that registers, revises or withdraws them.
+   * Fires beside the `demandChanged` the same message raises, and only
+   * then: a watch set without views leaves the session's views as they
+   * are, and a mirror of `viewInterestsForSpace` can hold its list across
+   * every such message.
+   */
+  viewsChanged?: (space: string, sessionId: string) => void;
+
+  /**
+   * A session opened, resumed, detached or removed on this server, as
+   * {@link SessionLifecycleEvent} describes it. Installing an observer that
+   * has this replays every session the server then holds, so a host that
+   * mirrors the sessions starts from the whole set. For an open, it fires
+   * before `sessionOpened` does.
+   */
+  sessionChanged?: (event: SessionLifecycleEvent) => void;
 };
 
 /** (d′): why `demandChanged` fired — `watch` (the pre-existing
@@ -2394,6 +2461,73 @@ export type EngineOpener = (
   open: (space: string) => Promise<Engine.Engine>,
 ) => Promise<Engine.Engine>;
 
+/** Whether every member of `subset` is in `superset`. */
+function isSubset(subset: Set<string>, superset: Set<string>): boolean {
+  for (const key of subset) if (!superset.has(key)) return false;
+  return true;
+}
+
+/**
+ * A planner delivery root's key: the branch its query reads, its address and
+ * its selector. A root whose selector changed reaches different documents,
+ * which only a full evaluation diffs out, so it is not the same root.
+ */
+function deliveryRootKey(
+  query: ViewQuery,
+  root: ViewQuery["roots"][number],
+): string {
+  return JSON.stringify([
+    query.branch ?? "",
+    root.scope ?? "space",
+    root.id,
+    root.selector,
+  ]);
+}
+
+/**
+ * The keys of the roots a planner delivery names (`deliveryRootKey()`): two
+ * deliveries naming the same keys, in whatever order, deliver the same
+ * documents.
+ */
+function deliveryRootKeys(delivery: readonly ViewQuery[]): Set<string> {
+  const keys = new Set<string>();
+  for (const query of delivery) {
+    for (const root of query.roots) keys.add(deliveryRootKey(query, root));
+  }
+  return keys;
+}
+
+/**
+ * What of `delivery`, a selection a view's planner proposes, the server has
+ * yet to resolve: the roots that `installed`, the selection the view holds
+ * under the same revision, does not deliver on the same branch, each query
+ * kept with those of its roots alone. Without such a selection it is all of
+ * `delivery`. A root the installed selection delivers was resolved when that
+ * selection was, and the session's refresh passes evaluate it whichever of
+ * the two selections is installed. A root that stops resolving in between,
+ * a schema it names gone, fails those passes either way: `refreshDirty`
+ * logs the failure, skips the session's frame and marks it for a full
+ * re-evaluation, which each later pass makes until the root resolves again
+ * or a selection without it is installed. Resolving the root here again
+ * would only refuse the new selection in favor of the installed one, which
+ * delivers the same root.
+ */
+function deliveryToResolve(
+  delivery: readonly ViewQuery[],
+  installed: { delivery: readonly ViewQuery[] } | undefined,
+): readonly ViewQuery[] {
+  if (installed === undefined) return delivery;
+  const held = deliveryRootKeys(installed.delivery);
+  const added: ViewQuery[] = [];
+  for (const query of delivery) {
+    const roots = query.roots.filter((root) =>
+      !held.has(deliveryRootKey(query, root))
+    );
+    if (roots.length > 0) added.push({ ...query, roots });
+  }
+  return added;
+}
+
 /**
  * The memory v2 server. An instance accepts connections and serves the
  * session protocol over them — opening sessions, admitting transactions,
@@ -2714,6 +2848,7 @@ export class Server {
     },
   ) {
     this.#sessions = options.sessions ?? new SessionRegistry();
+    this.#sessions.setObserver((event) => this.#notifySessionChanged(event));
     this.#store = options.store;
     this.#operationCodecs = options.operationCodecs ??
       createDefaultOperationCodecRegistry();
@@ -2960,16 +3095,7 @@ export class Server {
     engine: Engine.Engine,
     space: string,
   ): string | undefined {
-    const state = this.#aclState(engine, space);
-    if (state.kind !== "valid") return undefined;
-    if (state.acl[space] === "OWNER") return space;
-    const owners = Object.entries(state.acl)
-      .filter(([principal, capability]) =>
-        principal !== ANYONE_USER && capability === "OWNER"
-      )
-      .map(([principal]) => principal)
-      .sort();
-    return owners[0];
+    return resolveSpaceOwnerOf(engine, space);
   }
 
   /**
@@ -3000,16 +3126,7 @@ export class Server {
   }
 
   #aclState(engine: Engine.Engine, space: string): AclState {
-    const state = Engine.readState(engine, { id: aclDocId(space) });
-    if (state === null) return { kind: "missing" };
-    // A retracted ACL is not equivalent to a never-created ACL: treating the
-    // tombstone as public would turn deletion into an authorization bypass.
-    if (state.document === null) return { kind: "invalid" };
-    const acl = state.document.value;
-    if (!isACL(acl)) return { kind: "invalid" };
-    const byPrincipal = acl as Record<string, Capability | undefined>;
-    if (!hasConcreteOwner(byPrincipal)) return { kind: "invalid" };
-    return { kind: "valid", acl: byPrincipal };
+    return readAclState(engine, space);
   }
 
   #resolveCapability(
@@ -6541,39 +6658,89 @@ export class Server {
         }))),
       );
       if (denyForeign) return false;
-      // Resolve schema and graph closure before publishing planner output.
-      // A failed selection leaves the session's existing delivery intact.
-      await this.evaluateWatchSet(
-        space,
-        selection.delivery.map((query, index) => ({
-          id: `selection:${index}`,
-          kind: "graph" as const,
-          query,
-        })),
-        engine,
-        { principal: session!.principal, sessionId: session!.id },
-      );
-      if (!current()) return false;
+      // A selection delivering what the view's current one delivers changes
+      // only what the client may run or adopt: its support graphs stand, and
+      // the next frame carries the plans. One that delivers differently is
+      // resolved to its schema and graph closure first, so a failed selection
+      // leaves the session's existing delivery intact, and then rebuilds the
+      // graphs and diffs against the session's delivery state. The roots the
+      // current selection delivers were resolved when it was installed, so
+      // only the roots it does not deliver are resolved here
+      // (`deliveryToResolve`).
+      const deliveryKeys = deliveryRootKeys(selection.delivery);
+      const sameDelivery = (
+        previous: ReturnType<SessionState["viewSelections"]["get"]>,
+      ) => {
+        if (previous === undefined || previous.revision !== handle.revision) {
+          return false;
+        }
+        const previousKeys = deliveryRootKeys(previous.delivery);
+        return previousKeys.size === deliveryKeys.size &&
+          isSubset(previousKeys, deliveryKeys);
+      };
+      const installed = session!.viewSelections.get(handle.viewId);
+      if (!sameDelivery(installed)) {
+        await this.evaluateWatchSet(
+          space,
+          deliveryToResolve(
+            selection.delivery,
+            installed?.revision === handle.revision ? installed : undefined,
+          ).map((query, index) => ({
+            id: `selection:${index}`,
+            kind: "graph" as const,
+            query,
+          })),
+          engine,
+          { principal: session!.principal, sessionId: session!.id },
+        );
+        if (!current()) return false;
+      }
       this.#assertRoutedAuthority(session!);
       const previous = session!.viewSelections.get(handle.viewId);
       if (
         previous !== undefined && selection.generation <= previous.generation
       ) {
         return selection.generation === previous.generation &&
-          valueEqual(previous, { ...selection, revision: handle.revision });
+          valueEqualByWalk(previous, {
+            ...selection,
+            revision: handle.revision,
+          });
       }
       session!.viewSelections.set(handle.viewId, {
         ...selection,
         revision: handle.revision,
       });
-      session!.forceFullResync = true;
+      // A delivery that only grew extends the view's support graph on the
+      // next pass; one that dropped a root rebuilds the support graphs over
+      // the demand graphs the session holds, and diffs the departed
+      // documents out. A view's first selection evaluates everything.
+      if (sameDelivery(previous)) {
+        session!.viewPlansPending = true;
+      } else if (
+        previous !== undefined && previous.revision === handle.revision
+      ) {
+        if (
+          isSubset(deliveryRootKeys(previous.delivery), deliveryKeys)
+        ) {
+          session!.viewSupportGrown = true;
+        } else {
+          session!.viewSupportReplaced = true;
+        }
+        session!.viewPlansPending = true;
+      } else {
+        session!.forceFullResync = true;
+      }
       this.markSpaceDirty(space, []);
       return true;
     });
   }
 
-  /** Publishes eligibility only with the document frame that supplies its inputs. */
+  /**
+   * Publishes eligibility only with the document frame that supplies its
+   * inputs; the frame carries the plans a changed selection owed.
+   */
   #attachViewPlans(session: SessionState, sync: SessionSync): void {
+    session.viewPlansPending = false;
     sync.viewPlans = session.views.map((view) => {
       const selection = session.viewSelections.get(view.id);
       return {
@@ -6612,18 +6779,7 @@ export class Server {
       engine,
       identity,
     );
-    const selected: WatchSpec[] = [];
-    for (const view of views) {
-      const selection = session.viewSelections.get(view.id);
-      if (selection?.revision !== view.revision) continue;
-      for (const [index, query] of selection.delivery.entries()) {
-        selected.push({
-          id: `view-support:${view.id}:${index}`,
-          kind: "graph",
-          query,
-        });
-      }
-    }
+    const selected = this.#viewSupportWatches(session, views);
     const delivery = selected.length === 0
       ? demand
       : await this.evaluateWatchSet(
@@ -6648,6 +6804,72 @@ export class Server {
       demandGraphs: demand.graphs,
       demandEntities: demand.entities,
     };
+  }
+
+  /**
+   * Rebuilds a view session's support graphs from the planner's current
+   * selections over the demand graphs the session holds, after refreshing
+   * those by `dirtyIds`, the batch the pass would otherwise have refreshed
+   * incrementally: the full evaluation's result for a session whose
+   * delivery dropped a root, without walking its demand again.
+   */
+  async #reevaluateViewSupport(
+    session: SessionState,
+    dirtyIds: ReadonlySet<string> | undefined,
+  ) {
+    this.#assertRoutedAuthority(session);
+    const engine = await this.#openEngine(session.space);
+    this.#assertRoutedAuthority(session);
+    const identity = { principal: session.principal, sessionId: session.id };
+    if (dirtyIds !== undefined && dirtyIds.size > 0) {
+      for (const graph of session.viewDemandGraphs.values()) {
+        refreshTrackedGraph(session.space, engine, graph, dirtyIds);
+      }
+    }
+    const demandGraphs = session.viewDemandGraphs;
+    const selected = this.#viewSupportWatches(session, session.views);
+    const delivery = selected.length === 0
+      ? undefined
+      : await this.evaluateWatchSet(
+        session.space,
+        selected,
+        engine,
+        identity,
+      );
+    const graphs = new Map([...demandGraphs].map(([branch, graph]) => [
+      `view-demand:${branch}`,
+      graph,
+    ]));
+    for (const [branch, graph] of delivery?.graphs ?? []) {
+      graphs.set(`view-support:${branch}`, graph);
+    }
+    return {
+      serverSeq: delivery?.serverSeq ?? Engine.serverSeq(engine),
+      graphs,
+      entities: this.#entriesFromGraphs(graphs.values(), identity),
+      demandGraphs,
+      demandEntities: this.#entriesFromGraphs(demandGraphs.values(), identity),
+    };
+  }
+
+  /** The delivery-only watches the planner's current selections give views. */
+  #viewSupportWatches(
+    session: SessionState,
+    views: readonly ViewInterest[],
+  ): WatchSpec[] {
+    const selected: WatchSpec[] = [];
+    for (const view of views) {
+      const selection = session.viewSelections.get(view.id);
+      if (selection?.revision !== view.revision) continue;
+      for (const [index, query] of selection.delivery.entries()) {
+        selected.push({
+          id: `view-support:${view.id}:${index}`,
+          kind: "graph",
+          query,
+        });
+      }
+    }
+    return selected;
   }
 
   /** Extends ordinary demand while retaining the view's rendered and support graphs. */
@@ -7117,6 +7339,10 @@ export class Server {
           if (!kept.has(id)) nextOperationCursors.delete(id);
         }
       }
+      // An addition to a view session extends the graphs it holds; every
+      // other watch set evaluates them whole.
+      const extended = views.length > 0 && incremental &&
+        !session.forceFullResync;
       const evaluated: Awaited<ReturnType<Server["evaluateWatchSet"]>> & {
         demandGraphs?: typeof session.graphs;
         demandEntities?: typeof session.entities;
@@ -7130,7 +7356,7 @@ export class Server {
             sessionId: message.sessionId,
           },
         )
-        : incremental && !session.forceFullResync
+        : extended
         ? await this.#extendViewWatchSet(session, message.watches, aclEngine)
         : await this.#evaluateViewWatchSet(
           session,
@@ -7236,6 +7462,13 @@ export class Server {
         ),
       );
       session.forceFullResync = false;
+      // A full evaluation installed every view's whole support graph, so a
+      // growth or a rebuild an earlier selection owed is already in it; an
+      // extension leaves both owed to the next pass.
+      if (!extended) {
+        session.viewSupportGrown = false;
+        session.viewSupportReplaced = false;
+      }
       session.viewDemandGraphs = demandGraphs;
       session.viewDemandEntities = demandEntities;
       session.watches = [...message.watches];
@@ -7279,7 +7512,15 @@ export class Server {
       if (message.views !== undefined || views.length > 0) {
         this.#attachViewPlans(session, sync);
       }
-      this.#notifyDemandChanged(message.space, "watch", session.principal);
+      this.#notifyDemandChanged(
+        message.space,
+        "watch",
+        session.principal,
+        session.id,
+      );
+      if (message.views !== undefined) {
+        this.#notifyViewsChanged(message.space, session.id);
+      }
       return {
         type: "response",
         requestId: message.requestId,
@@ -7309,6 +7550,7 @@ export class Server {
     engine: Engine.Engine,
     watches: readonly WatchSpec[],
     previous: SessionState["graphs"],
+    keyOf: (branch: string) => string = (branch) => branch,
   ) {
     const graphs = new Map(previous);
     const identity = this.#sessionScopeIdentity(session);
@@ -7324,7 +7566,8 @@ export class Server {
     };
     const attribution = createRootAttribution();
     for (const [branch, group] of graphWatchesByBranch(watches)) {
-      const existing = graphs.get(branch);
+      const key = keyOf(branch);
+      const existing = graphs.get(key);
       if (existing === undefined) {
         const tracked = trackGraph(
           session.space,
@@ -7342,7 +7585,7 @@ export class Server {
         // failure (or a failing operation-field attachment) must not
         // leave an already-inserted entry over budget.
         this.#enforceEvaluationCacheBudget();
-        graphs.set(branch, tracked.state);
+        graphs.set(key, tracked.state);
         for (const [docKey, entity] of tracked.state.entities) {
           recordUpdate(docKey, entity);
         }
@@ -7350,7 +7593,7 @@ export class Server {
       }
 
       const staged = cloneTrackedGraphState(engine, existing);
-      graphs.set(branch, staged);
+      graphs.set(key, staged);
       const extended = extendTrackedGraph(
         session.space,
         engine,
@@ -7687,7 +7930,12 @@ export class Server {
       }
       this.#touchDemand(session);
       session.lastSyncedSeq = serverSeq;
-      this.#notifyDemandChanged(message.space, "watch", session.principal);
+      this.#notifyDemandChanged(
+        message.space,
+        "watch",
+        session.principal,
+        session.id,
+      );
       recordSlowQueryDuration(
         "session.watch.add",
         message.space,
@@ -7804,9 +8052,10 @@ export class Server {
     try {
       // `stats` is diagnostics, not wire: split it off here so the
       // response carries exactly the declared result shape.
+      const queryEngine = engine ?? await this.#openEngine(space);
       const { stats, ...result } = queryGraph(
         space,
-        engine ?? await this.#openEngine(space),
+        queryEngine,
         query,
         reuse,
         {
@@ -7820,6 +8069,16 @@ export class Server {
         roots: query.roots.length,
         ...rootAttributionOf(stats),
       });
+      if (query.includeAuthoredSeq === true) {
+        return {
+          ...result,
+          authoredSeq: Engine.authoredSeqThrough(
+            queryEngine,
+            query.atSeq ?? result.serverSeq,
+            query.branch,
+          ),
+        };
+      }
       return result;
     } finally {
       // The insert precedes the snapshot mapping, so enforcement must
@@ -8328,10 +8587,24 @@ export class Server {
     const preCallCaughtUp = session.caughtUpLocalSeq;
     const preCallPending = session.pendingCaughtUpLocalSeq;
     const preCallForceFullResync = session.forceFullResync;
+    const preCallViewPlansPending = session.viewPlansPending;
     // Whether THIS pass re-armed a lapsed lease-holder exemption (see
     // below); restored on a throw so the re-arm's full evaluation is
     // not lost with the failed pass.
     let rearmedLeaseHolder = false;
+    const preCallViewSupportReplaced = session.viewSupportReplaced;
+    // A dropped delivery root rebuilds the support graphs over the demand
+    // graphs, which first take this pass's dirty batch; a full evaluation
+    // rebuilds both, so it owes no separate rebuild.
+    let supportReplaced: { dirtyIds?: ReadonlySet<string> } | undefined;
+    if (session.viewSupportReplaced) {
+      session.viewSupportReplaced = false;
+      if (!session.forceFullResync && session.views.length > 0) {
+        supportReplaced = { dirtyIds };
+        dirtyIds = undefined;
+        dirtyOrigins = undefined;
+      }
+    }
     if (session.forceFullResync) {
       // Rollback re-inserted tombstones for a lost frame's removes; only a
       // full evaluation re-diffs them out. Self-clearing (restored by the
@@ -8369,7 +8642,17 @@ export class Server {
               sync.caughtUpLocalSeq = session.caughtUpLocalSeq;
             }
             await this.#attachOperationFields(space, sessionId, sync);
-            if (session.views.length > 0) this.#attachViewPlans(session, sync);
+            // A frame carries the plans when they are owed: a full
+            // evaluation rebuilt the graphs they describe, or a selection
+            // changed what the views may run or adopt. An incremental frame
+            // that owes none carries the documents alone, and the client
+            // keeps the plans it holds.
+            if (
+              session.views.length > 0 &&
+              (dirtyIds === undefined || session.viewPlansPending)
+            ) {
+              this.#attachViewPlans(session, sync);
+            }
             return {
               type: "session/effect",
               space,
@@ -8387,7 +8670,8 @@ export class Server {
               serverSeq > fromSeq;
             if (
               !hasPendingCatchUp && !mayCarryOperations &&
-              (session.views.length === 0 || !preCallForceFullResync)
+              (session.views.length === 0 ||
+                !(preCallForceFullResync || preCallViewPlansPending))
             ) {
               return null;
             }
@@ -8478,6 +8762,7 @@ export class Server {
             // branch).
             const batchDirtyIds = dirtyIds;
             const startedAt = performance.now();
+            const refreshFromSeq = session.lastSyncedSeq;
             // Per-session refresh rows (`memory/refresh/session/{untouched,
             // touched}`) and, for a touched session, the phase rows
             // (`memory/refresh/phase/{walk,diff,tracked,frame}`):
@@ -8489,8 +8774,9 @@ export class Server {
             // expensive failure is the one most worth attributing.
             let sessionKind: "untouched" | "touched" = "untouched";
             try {
-              let touched = false;
+              let touched = session.viewSupportGrown;
               for (const dirtyId of batchDirtyIds) {
+                if (touched) break;
                 if (session.trackedIds.has(dirtyId)) {
                   touched = true;
                   break;
@@ -8514,6 +8800,8 @@ export class Server {
               // The delivered entries of the documents the re-walks retired:
               // the frame retracts them.
               const removed = new Map<string, SessionCacheEntry>();
+              const retired: Array<{ docKey: QueryDocKey; branch: string }> =
+                [];
               const changedInterests = new Set<string>();
               const walkStartedAt = performance.now();
 
@@ -8560,11 +8848,7 @@ export class Server {
                     );
                   }
                   for (const docKey of refreshed.removed) {
-                    const { id, scopeKey } = fromDocKey(docKey);
-                    const key = cacheKeyForEntity(graph.branch, id, scopeKey);
-                    const entry = session.entities.get(key);
-                    if (entry !== undefined) removed.set(key, entry);
-                    changedInterests.add(toDirtyKey(id, scopeKey));
+                    retired.push({ docKey, branch: graph.branch });
                   }
                 }
               } finally {
@@ -8575,6 +8859,43 @@ export class Server {
                   "phase",
                   "walk",
                 );
+              }
+              // A planner selection that grew a view's delivery extends its
+              // support graph here, by the added roots, over the demand graph
+              // the refresh above kept current; the grown graphs take effect
+              // as this frame commits.
+              let grownGraphs: SessionState["graphs"] | undefined;
+              if (session.viewSupportGrown) {
+                const grown = this.#extendWatchGraphs(
+                  session,
+                  engine,
+                  this.#viewSupportWatches(session, session.views),
+                  session.graphs,
+                  (branch) => `view-support:${branch}`,
+                );
+                grownGraphs = grown.graphs;
+                for (const [key, entry] of grown.updates) {
+                  changedInterests.add(toDirtyKey(entry.id, entry.scopeKey));
+                  updates.set(key, entry);
+                }
+              }
+              // A session with views holds a demand graph and a support
+              // graph over one branch, so a document one of them retired can
+              // still be one the other reaches, the support graph as it grew
+              // above included. Only what no graph of the session over that
+              // branch tracks any more is retracted.
+              const frameGraphs = [...(grownGraphs ?? session.graphs).values()];
+              for (const { docKey, branch } of retired) {
+                if (
+                  frameGraphs.some((other) =>
+                    other.branch === branch && other.tracker.has(docKey)
+                  )
+                ) continue;
+                const { id, scopeKey } = fromDocKey(docKey);
+                const key = cacheKeyForEntity(branch, id, scopeKey);
+                const entry = session.entities.get(key);
+                if (entry !== undefined) removed.set(key, entry);
+                changedInterests.add(toDirtyKey(id, scopeKey));
               }
               if (
                 updates.size === 0 && changedInterests.size === 0 &&
@@ -8654,6 +8975,14 @@ export class Server {
               const commitEntities = () => {
                 const trackedStartedAt = performance.now();
                 try {
+                  if (grownGraphs !== undefined) {
+                    session.graphs = grownGraphs;
+                    this.#addMissedToTrackedIds(
+                      session.trackedIds,
+                      grownGraphs.values(),
+                    );
+                    session.viewSupportGrown = false;
+                  }
                   // A new delivered entity adds a key to the session's
                   // demand; a changed snapshot of a held one does not.
                   let enteredEntity = false;
@@ -8696,6 +9025,7 @@ export class Server {
                       space,
                       "push-growth",
                       session.principal,
+                      session.id,
                     );
                   }
                 } finally {
@@ -8710,10 +9040,11 @@ export class Server {
               };
               const toSeq = Engine.serverSeq(engine);
               // A re-walk that followed a link out of the space for the
-              // first time has a crossing to tell of, upserts or none.
+              // first time has a crossing to tell of, upserts or none, and so
+              // does the support graph's growth.
               const newCrossings = this.#undeliveredCrossings(
                 session,
-                session.graphs.values(),
+                frameGraphs,
               );
               if (
                 upserts.length === 0 && removed.size === 0 &&
@@ -8785,7 +9116,18 @@ export class Server {
               session.lastSyncedSeq = toSeq;
               return message;
             } finally {
-              timing.time(
+              timing.timeDetailed(
+                () =>
+                  JSON.stringify({
+                    space,
+                    session: sessionId,
+                    fromSeq: refreshFromSeq,
+                    toSeq: session.lastSyncedSeq,
+                    dirty: batchDirtyIds.size,
+                    graphs: session.graphs.size,
+                    tracked: session.trackedIds.size,
+                    views: session.views.length,
+                  }),
                 startedAt,
                 "memory",
                 "refresh",
@@ -8795,12 +9137,23 @@ export class Server {
             }
           }
 
+          // A support rebuild refreshes the demand graphs in place, so the
+          // demand they held before is read ahead of it.
+          const demandBeforeRebuild = supportReplaced !== undefined &&
+              this.#serverExecutionObserver?.demandChanged !== undefined
+            ? this.#viewDemandIds(session)
+            : undefined;
           const { serverSeq, graphs, entities, demandGraphs, demandEntities } =
-            await this.#evaluateViewWatchSet(
-              session,
-              session.watches,
-              session.views,
-            );
+            supportReplaced === undefined
+              ? await this.#evaluateViewWatchSet(
+                session,
+                session.watches,
+                session.views,
+              )
+              : await this.#reevaluateViewSupport(
+                session,
+                supportReplaced.dirtyIds,
+              );
           // protocol.md §3's applicable-set filter on the FULL
           // evaluation path: explicit foreign instances enter `entities`
           // only through admitted lease-holder reads, and the exemption
@@ -8887,15 +9240,10 @@ export class Server {
               this.#serverExecutionObserver?.demandChanged !== undefined;
             let changed = false;
             if (wantsDemandNotify) {
-              const previous = session.views.length === 0
-                ? session.trackedIds
-                : trackedIdsFromEntries(session.viewDemandEntities.values());
-              if (session.views.length > 0) {
-                this.#addMissedToTrackedIds(
-                  previous,
-                  session.viewDemandGraphs.values(),
-                );
-              }
+              const previous = demandBeforeRebuild ??
+                (session.views.length === 0
+                  ? session.trackedIds
+                  : this.#viewDemandIds(session));
               const next = session.views.length === 0
                 ? evaluatedTrackedIds
                 : evaluatedDemandIds;
@@ -8912,6 +9260,9 @@ export class Server {
             session.viewDemandGraphs = demandGraphs;
             session.viewDemandEntities = demandEntities;
             session.graphs = graphs;
+            // The full evaluation built the whole support graph, so a growth
+            // an earlier selection owed is already in it.
+            session.viewSupportGrown = false;
             session.entities = entities;
             this.#markCrossingsDelivered(session, newCrossings.keys);
             session.trackedIds = evaluatedTrackedIds;
@@ -8922,6 +9273,7 @@ export class Server {
                 space,
                 "push-growth",
                 session.principal,
+                session.id,
               );
             }
           };
@@ -8953,6 +9305,10 @@ export class Server {
           );
           session.forceFullResync = session.forceFullResync ||
             preCallForceFullResync;
+          session.viewPlansPending = session.viewPlansPending ||
+            preCallViewPlansPending;
+          session.viewSupportReplaced = session.viewSupportReplaced ||
+            preCallViewSupportReplaced;
           // A re-arm consumed by a throwing pass re-stages: the next
           // pass runs the full evaluation the lapse still owes.
           if (rearmedLeaseHolder) session.leaseHolderReadsLapsed = true;
@@ -9327,6 +9683,40 @@ export class Server {
     return demand;
   }
 
+  /**
+   * The shares of the sessions `sessionIds` name among `space`'s sessions, as
+   * `demandForSpace()` builds them, the sessions of `excludePrincipal` and
+   * the ids the registry no longer holds left out: what a mirror of the
+   * demand set reads for the sessions whose demand it was told changed.
+   */
+  demandForSessions(
+    space: string,
+    sessionIds: readonly string[],
+    options: { excludePrincipal?: string } = {},
+  ): SessionDemand[] {
+    // Prune once for the batch before the targeted, non-pruning lookups.
+    this.#sessions.sessionsForSpace(space);
+    const demand: SessionDemand[] = [];
+    for (const sessionId of sessionIds) {
+      const session = this.#sessions.peek(space, sessionId);
+      if (
+        session === undefined ||
+        (options.excludePrincipal !== undefined &&
+          session.principal === options.excludePrincipal)
+      ) {
+        continue;
+      }
+      let share = this.#sessionDemand.get(session);
+      if (share === undefined) {
+        share = this.#buildSessionDemand(session);
+        this.#sessionDemand.set(session, share);
+        this.#sessionDemandBuilds += 1;
+      }
+      demand.push(share);
+    }
+    return demand;
+  }
+
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a
    * space's client sessions, plus the union size (design §2.6 — the
    * demand-set size and its drift are measured, not assumed). */
@@ -9383,6 +9773,11 @@ export class Server {
     observer: ServerExecutionObserver | undefined,
   ): void {
     this.#serverExecutionObserver = observer;
+    if (observer?.sessionChanged !== undefined) {
+      for (const event of this.#sessions.snapshot()) {
+        this.#notifySessionChanged(event);
+      }
+    }
   }
 
   /**
@@ -9433,6 +9828,19 @@ export class Server {
     }
   }
 
+  #notifySessionChanged(event: SessionLifecycleEvent): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.sessionChanged === undefined) return;
+    try {
+      observer.sessionChanged(event);
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on sessionChanged",
+        error,
+      );
+    }
+  }
+
   #notifySessionOpened(space: string): void {
     const observer = this.#serverExecutionObserver;
     if (observer?.sessionOpened === undefined) return;
@@ -9446,15 +9854,29 @@ export class Server {
     }
   }
 
+  #notifyViewsChanged(space: string, sessionId: string): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.viewsChanged === undefined) return;
+    try {
+      observer.viewsChanged(space, sessionId);
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on viewsChanged",
+        error,
+      );
+    }
+  }
+
   #notifyDemandChanged(
     space: string,
     reason: DemandChangeReason = "watch",
     principal?: string,
+    sessionId?: string,
   ): void {
     const observer = this.#serverExecutionObserver;
     if (observer?.demandChanged === undefined) return;
     try {
-      observer.demandChanged(space, reason, principal);
+      observer.demandChanged(space, reason, principal, sessionId);
     } catch (error) {
       console.warn(
         "memory v2: server-execution observer threw on demandChanged",
@@ -9796,6 +10218,7 @@ export class Server {
     session: SessionState,
     commit: ClientCommit,
   ): void {
+    const startedAt = performance.now();
     session.pendingCaughtUpLocalSeq = Math.max(
       session.pendingCaughtUpLocalSeq,
       commit.localSeq,
@@ -9821,6 +10244,22 @@ export class Server {
       addInstanceKey(read.id, read.scope);
     }
     this.markSpaceDirty(space, ids);
+    timing.timeDetailed(
+      () =>
+        JSON.stringify({
+          space,
+          session: session.id,
+          localSeq: commit.localSeq,
+          dirty: [...ids],
+          operations: commit.operations.length,
+          confirmedReads: commit.reads.confirmed.length,
+          pendingReads: commit.reads.pending.length,
+        }),
+      startedAt,
+      "memory",
+      "refresh",
+      "conflict",
+    );
   }
 
   async flushSessions(spaces?: Iterable<string>): Promise<void> {
@@ -10011,6 +10450,10 @@ export class Server {
 
       for (const space of spaces) {
         await this.#withSpacePublicationLock(space, async () => {
+          // A space a caller names that nothing dirtied has no batch to send:
+          // every write and every owed frame marks its space dirty, and an
+          // absent batch would otherwise read as one that dirtied everything.
+          if (!this.#dirtySpaces.has(space)) return;
           // Removed at its own processing turn (CT-1927): pre-deleting the
           // whole selection meant a failure mid-batch stranded every
           // not-yet-processed space — dirty maps intact but the space no
@@ -10051,6 +10494,7 @@ export class Server {
               "memory.fanout",
               { root: true },
               async (span) => {
+                const startedAt = performance.now();
                 span.setAttribute("space.did", space);
                 span.setAttribute("subscriber.count", this.#connections.size);
                 span.setAttribute("dirty.count", dirtyIds?.size ?? 0);
@@ -10097,6 +10541,19 @@ export class Server {
                     }
                   }
                 } finally {
+                  timing.timeDetailed(
+                    () =>
+                      JSON.stringify({
+                        space,
+                        dirty: dirtyIds === undefined ? null : [...dirtyIds],
+                        derived: derivedDirty?.size ?? 0,
+                        connections: this.#connections.size,
+                      }),
+                    startedAt,
+                    "memory",
+                    "refresh",
+                    "batch",
+                  );
                   span.end();
                 }
               },

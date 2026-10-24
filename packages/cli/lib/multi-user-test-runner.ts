@@ -340,6 +340,9 @@ export async function runMultiUserTestPattern(
       ? await listenServingMemoryServer({
         apiUrl: new URL(import.meta.url),
         experimental,
+        // On this thread whatever the environment selects for a toolshed,
+        // as the single-runtime runner's loop is.
+        worker: false,
       })
       : StandaloneMemoryServer.start();
     const identities = new Map<string, Identity>();

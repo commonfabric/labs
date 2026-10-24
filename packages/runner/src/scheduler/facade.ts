@@ -53,6 +53,7 @@ import type {
   SchedulerGraphSnapshot,
 } from "../telemetry.ts";
 import type { ViewExecutionNode } from "../view-replication.ts";
+import type { ViewProofPass } from "../view-replication-client.ts";
 import {
   CONVERGENCE_IDLE_HOLD_MAX_BACKOFF_PASSES,
   INITIAL_RUN_SYNC_HOLD_TIMEOUT_MS,
@@ -149,6 +150,7 @@ import {
   subscribePullSchedulerAction,
   unsubscribeSchedulerAction,
 } from "./registration.ts";
+import { sameReactivityLog } from "./reactivity.ts";
 import { runSchedulerAction, type SchedulerActionRunState } from "./run.ts";
 import {
   captureEchoRun,
@@ -331,6 +333,15 @@ export class Scheduler {
   readonly #pending = new Set<Action>();
   #dependencies = new WeakMap<Action, ReactivityLog>();
   #viewConsumers = new Map<MemorySpace, Set<string>>();
+
+  /** Each space's active view nodes by node id, as of a registry membership. */
+  #viewNodeIndex:
+    | {
+      membership: number;
+      bySpace: Map<MemorySpace, Map<string, SchedulerNode>>;
+    }
+    | undefined;
+
   #viewOutcomes = new WeakMap<
     Action,
     Map<string, {
@@ -574,6 +585,20 @@ export class Scheduler {
   #running: Promise<unknown> | undefined = undefined;
   #scheduled = false;
   #disposed = false;
+
+  /**
+   * Whether the latest pass ended on a head parked on its loads, deferring its
+   * settle to the pass the park's end queues (`#endHeadEventLoadPark`). While
+   * it holds, the continuation queues no pass for the deferred derivations.
+   */
+  #settleDeferredForLoadPark = false;
+
+  /**
+   * How many event handlers the event phases have started. A phase that
+   * moves past its head without starting one dropped or deferred it.
+   */
+  #eventHandlerRuns = 0;
+
   #actionRunState!: SchedulerActionRunState;
   #graphSnapshotState!: SchedulerGraphSnapshotState;
   #settleLoopState!: SchedulerSettleLoopState;
@@ -2097,13 +2122,7 @@ export class Scheduler {
     ) return;
     const views = this.runtime.viewReplication;
     const generation = views.version(piece.space);
-    const producers = new Map([...this.#nodes.nodes()].flatMap((node) => {
-      const annotated = node.action as Partial<TelemetryAnnotations>;
-      return annotated.viewPiece?.space === piece.space &&
-          annotated.viewNodeId !== undefined
-        ? [[annotated.viewNodeId, node] as const]
-        : [];
-    }));
+    const producers = this.#viewNodes(piece.space);
     if (!usesLocalReads(tx)) {
       restrictToLocalReads(tx.tx, () => {
         const producerCurrent = views.createProducerCheck(
@@ -2153,6 +2172,28 @@ export class Scheduler {
     );
   }
 
+  /**
+   * The space's active view nodes by node id, indexed again only after a node
+   * joins or leaves the active set.
+   */
+  #viewNodes(space: MemorySpace): ReadonlyMap<string, SchedulerNode> {
+    if (this.#viewNodeIndex?.membership !== this.#nodes.membership) {
+      const bySpace = new Map<MemorySpace, Map<string, SchedulerNode>>();
+      for (const node of this.#nodes.nodes()) {
+        const annotated = node.action as Partial<TelemetryAnnotations>;
+        const nodeSpace = annotated.viewPiece?.space;
+        if (nodeSpace === undefined || annotated.viewNodeId === undefined) {
+          continue;
+        }
+        let nodes = bySpace.get(nodeSpace);
+        if (nodes === undefined) bySpace.set(nodeSpace, nodes = new Map());
+        nodes.set(annotated.viewNodeId, node);
+      }
+      this.#viewNodeIndex = { membership: this.#nodes.membership, bySpace };
+    }
+    return this.#viewNodeIndex.bySpace.get(space) ?? new Map();
+  }
+
   /** A local producer is current only after a successful completed attempt. */
   #viewActionCurrent(action: Action | undefined): boolean {
     if (action === undefined || this.#viewRunning.has(action)) return false;
@@ -2166,6 +2207,7 @@ export class Scheduler {
   #initialViewDependencies(
     action: Action,
     identity: string,
+    pass?: ViewProofPass,
   ): ReactivityLog | undefined {
     const { viewPiece, viewNodeId, viewLocalOnly } = action as Partial<
       TelemetryAnnotations
@@ -2178,6 +2220,7 @@ export class Scheduler {
       viewPiece,
       viewNodeId,
       identity,
+      pass,
     );
   }
 
@@ -2186,6 +2229,9 @@ export class Scheduler {
     space: MemorySpace,
     { parked = true }: { parked?: boolean } = {},
   ): void {
+    // Nothing the loop does changes the replica or the plans, so every
+    // adopted node's proof shares what an earlier node's proved.
+    const pass = this.runtime.viewReplication.createProofPass();
     for (const node of this.#nodes.nodes()) {
       const metadata = node.action as Partial<TelemetryAnnotations>;
       if (metadata.viewPiece?.space !== space) continue;
@@ -2193,7 +2239,14 @@ export class Scheduler {
         const log = this.#initialViewDependencies(
           node.action,
           node.adoptedViewIdentity,
+          pass,
         );
+        // A proof that observed what the node's last one did leaves the
+        // dependencies and write surface that proof installed as they stand.
+        if (
+          log !== undefined && node.adoptedViewDependencies !== undefined &&
+          sameReactivityLog(node.adoptedViewDependencies, log)
+        ) continue;
         if (log !== undefined) {
           const writes = sortAndCompactPaths([
             ...resolveRegistrationSurface(node.action, log),
@@ -2216,6 +2269,9 @@ export class Scheduler {
             writes,
           );
           this.resubscribe(node.action, log);
+          if (node.adoptedViewIdentity !== undefined) {
+            node.adoptedViewDependencies = log;
+          }
           continue;
         }
       } else if (!parked || node.status !== "unavailable") continue;
@@ -2244,7 +2300,10 @@ export class Scheduler {
   /** Revokes authority evidence while the next invocation is unresolved. */
   beginViewAction(action: Action): void {
     const node = this.#nodes.get(action);
-    if (node !== undefined) node.adoptedViewIdentity = undefined;
+    if (node !== undefined) {
+      node.adoptedViewIdentity = undefined;
+      node.adoptedViewDependencies = undefined;
+    }
     const metadata = action as Partial<TelemetryAnnotations>;
     if (
       metadata.viewNodeId !== undefined &&
@@ -2751,7 +2810,33 @@ export class Scheduler {
     if (this.runningPromise) await this.runningPromise;
 
     this.#beginExecuteCycle();
-    const eventBlockingDeps = await this.#processExecuteEventPhase();
+    const deferredBefore = this.#settleDeferredForLoadPark;
+    const { eventBlockingDeps, dispatched } = await this
+      .#processExecuteEventPhases();
+    // Under the serving posture a head the preflight parked on its loads,
+    // behind events this pass dispatched, ends the pass without its settle:
+    // the pass the park's end queues dispatches it and settles behind it,
+    // so the derivations the events before it invalidated run once behind
+    // all of them rather than once per parked event. That is the trade: the
+    // scheduler is not idle while the head is parked, and a serving cycle
+    // whose flush deadline comes first commits the handlers' writes a wave
+    // ahead of the derivations over them (events.md §2). A head that parks
+    // again before this pass dispatched anything keeps a settle the previous
+    // pass deferred waiting with it; one that parks with no batch ahead of it
+    // lets the settle run. Every pass while the park holds defers, whatever
+    // asked for it, so a write from elsewhere waits for the park's end too,
+    // which a park reaches when its loads settle or fail: what invalidates
+    // between passes is mostly the park's own loads and the batch's commits,
+    // whose derivations the deferral exists to run once.
+    this.#settleDeferredForLoadPark = this.runtime.servingPosture === true &&
+      (dispatched > 0 || deferredBefore) && eventBlockingDeps.size === 0 &&
+      this.#hasLoadParkedHeadEvent();
+    if (this.#settleDeferredForLoadPark) {
+      this.#recordExecuteEndTelemetry();
+      this.#applyExecuteContinuation();
+      logger.timeEnd("scheduler", "execute");
+      return;
+    }
     const initialSeeds = this.#buildInitialExecuteSeeds(eventBlockingDeps);
 
     const settleResult = await this.#runSettleLoop(initialSeeds);
@@ -2770,6 +2855,47 @@ export class Scheduler {
 
     // Non-settling heuristic: record `#execute()` start
     markExecuteStart(this.#settlingTracker);
+  }
+
+  /**
+   * The pass's event phases. A pass takes one event, the queue's head, and
+   * then settles the derivations it demands. Under the serving posture it
+   * takes every event that is ready behind it as well, running their
+   * handlers back to back before the one settle: the derivations those
+   * handlers invalidate run once over all of them rather than once per
+   * event, which is the batching a wave of several events is for. A
+   * handler's own inputs stay current either way, since the preflight ahead
+   * of each dispatch recomputes an invalid input the handler reads, and an
+   * event the preflight holds for such a dependency ends the phases, so the
+   * settle runs it. The run stops at an event that is not ready, at the
+   * events the pass began with, and at a phase that left its head in place.
+   * Returns the dependencies those events wait on and how many handlers the
+   * phases ran: a head they dropped or deferred instead is not counted.
+   */
+  async #processExecuteEventPhases(): Promise<{
+    eventBlockingDeps: Set<Action>;
+    dispatched: number;
+  }> {
+    const eventBlockingDeps = new Set<Action>();
+    let remaining = this.#eventQueue.length;
+    const runsBefore = this.#eventHandlerRuns;
+    while (true) {
+      const head = this.#eventQueue[0];
+      const deps = await this.#processExecuteEventPhase();
+      for (const dep of deps) eventBlockingDeps.add(dep);
+      if (
+        !this.runtime.servingPosture || deps.size > 0 || head === undefined ||
+        this.#eventQueue[0] === head
+      ) break;
+      if (--remaining <= 0 || this.#eventQueue.length === 0) break;
+      // The handler's run has to have landed before the next preflight
+      // reads what it wrote.
+      if (this.runningPromise) await this.runningPromise;
+    }
+    return {
+      eventBlockingDeps,
+      dispatched: this.#eventHandlerRuns - runsBefore,
+    };
   }
 
   async #processExecuteEventPhase(): Promise<Set<Action>> {
@@ -3343,6 +3469,7 @@ export class Scheduler {
       },
       hasPendingLineageHeadEvent: () => this.#hasPendingLineageHeadEvent(),
       hasLoadParkedHeadEvent: () => this.#hasLoadParkedHeadEvent(),
+      settleDeferredForLoadPark: () => this.#settleDeferredForLoadPark,
       scheduleWake: (at) => this.#gates.scheduleWake(at),
       hasWakeTimer: () => this.#gates.hasWakeTimer(),
       setScheduled: (scheduled) => {
@@ -3404,6 +3531,9 @@ export class Scheduler {
         return getEventPreflightTelemetryEnabled();
       },
       setRunningPromise: (promise) => {
+        // An event handler's run hands its promise here once, as it starts,
+        // so counting the hand-offs counts the handlers the phases ran.
+        this.#eventHandlerRuns++;
         this.runningPromise = promise;
       },
       getActionId: (target) => this.#getActionId(target),
@@ -3833,7 +3963,6 @@ export class Scheduler {
         this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0,
       ]),
     );
-    this.#headEventLoadPark = { eventId: event.id, keys, generations };
     logger.debug("event-load-park", () => [
       `event ${event.id} parks on ${keys.length} loading document(s)`,
       keys,
@@ -3850,7 +3979,8 @@ export class Scheduler {
           failures.push(error);
         })
       ));
-    settled.then(() => {
+    this.#headEventLoadPark = { eventId: event.id, keys, generations };
+    void settled.then(() => {
       if (failures.length === 0) this.#releaseHeadEventLoadPark(event.id);
       else this.#failHeadEventLoadPark(event, failures);
     });
@@ -3864,6 +3994,20 @@ export class Scheduler {
     for (const [key, generation] of this.#headEventLoadPark.generations) {
       this.#headEventLoadParkHistory.generations.set(key, generation);
     }
+    this.#endHeadEventLoadPark();
+  }
+
+  /**
+   * Ends the head event's load park, however it ends, and queues the pass
+   * that runs what waited on it: the events behind the head, and a settle a
+   * pass deferred to the park (`#settleDeferredForLoadPark`), for which no
+   * other pass is queued. A release, a failed load and a drop through
+   * `#dropEvent()` each end the park through here. A drop the event phases
+   * make on their own leaves the park naming an event no longer at the head:
+   * no pass defers to it, its release finds it and ends it here, and the next
+   * head's park replaces it first.
+   */
+  #endHeadEventLoadPark(): void {
     this.#headEventLoadPark = null;
     this.queueExecution();
   }
@@ -3934,7 +4078,7 @@ export class Scheduler {
       ? errors[errors.findIndex((each) => !isAuthorizationLoadFailure(each))]
       : errors[0];
     const keys = this.#headEventLoadPark.keys.join(", ");
-    this.#headEventLoadPark = null;
+    this.#endHeadEventLoadPark();
     this.#headEventLoadParkHistory = null;
     const detail = error instanceof Error ? error.message : String(error);
     if (event.served === undefined) {
@@ -3943,7 +4087,6 @@ export class Scheduler {
         `Event dropped: required replica load failed before dispatch ` +
           `(${keys}: ${detail})`,
       );
-      this.queueExecution();
       return;
     }
     const failure = error instanceof ReplicaLoadFailureError ? error.failure : {
@@ -3989,7 +4132,6 @@ export class Scheduler {
         },
       );
     }
-    this.queueExecution();
   }
 
   #dropEvent(
@@ -4007,7 +4149,8 @@ export class Scheduler {
     } = {},
   ): void {
     if (this.#headEventLoadPark?.eventId === event.id) {
-      this.#headEventLoadPark = null;
+      // The park's release finds no park once the drop has ended it.
+      this.#endHeadEventLoadPark();
     }
     if (this.#headEventLoadParkHistory?.eventId === event.id) {
       this.#headEventLoadParkHistory = null;

@@ -1221,18 +1221,28 @@ interface GraphQueryRequest {
     roots: GraphQueryRoot[];
     branch?: BranchId;
     atSeq?: number;
+    includeAuthoredSeq?: boolean;
   };
 }
 
 interface GraphQueryResult {
   serverSeq: number;
   entities: EntitySnapshot[];
+  authoredSeq?: number;
 }
 ```
 
 The selector path is relative to `document.value`, not the full stored document
 root. The server converts it to a document path by prepending `"value"` before
 running shared traversal.
+
+When `includeAuthoredSeq` is true, `authoredSeq` is the highest authored commit
+sequence in the query's branch at or below `atSeq` (or `serverSeq` when omitted),
+and is zero when none exists. This metadata requires the same authenticated READ
+authority as the query and does not load document values. A client waiting for
+serving coverage through a captured head can request it with empty roots and
+wait for W to cover that authored sequence. A watermark document's revision
+alone is not evidence that intervening authored commits have been covered.
 
 ### 4.3.4 Entity Identifier Discovery and Lookup
 

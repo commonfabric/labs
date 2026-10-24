@@ -34,6 +34,7 @@ import {
 import {
   deepFrozenCloneAndInternSchema,
   internSchema,
+  internSchemaAsTaggedHashString,
   isInternedSchema,
 } from "@commonfabric/data-model-schema";
 import type { MemorySpace } from "@commonfabric/memory/interface";
@@ -1587,7 +1588,20 @@ export class CellImpl<T extends FabricValue>
     if (cached?.link === link && cached.cfcLabelView === cfcLabelView) {
       return cached.hash;
     }
-    const hash = hashStringOf({ link, cfcLabelView } satisfies CellViewRef);
+    // An interned schema stands in by its interned hash, which is already
+    // computed, where hashing the schema's structure again costs as much as
+    // the whole of a small read. A schema that is not interned is hashed
+    // whole, as interning it here would freeze a schema its caller owns.
+    // Either way two view refs hash alike only when their links, schemas
+    // included, and their label views agree; the two forms never meet, since
+    // a schema is never a string.
+    const { schema, ...rest } = link;
+    const hash = schema !== undefined && isInternedSchema(schema)
+      ? hashStringOf({
+        link: { ...rest, schema: internSchemaAsTaggedHashString(schema) },
+        cfcLabelView,
+      })
+      : hashStringOf({ link, cfcLabelView } satisfies CellViewRef);
     this.#viewRefHashCache = { link, cfcLabelView, hash };
     return hash;
   }
@@ -2370,42 +2384,129 @@ export class CellImpl<T extends FabricValue>
           );
         }
         {
-          const overlay = this.#runtime.speculationOverlay;
-          overlay?.trackIntent(space, sidecarId, firedEventId);
           const eventId = firedEventId;
-          const outcome = replica.enqueueEventAppend({
-            sidecarId,
-            stream,
-            eventId,
-            payload: event as never,
-            ...(mintedKeys !== undefined
-              ? { runtimeInjectedEventKeys: [...mintedKeys] }
-              : {}),
-            // The renderer-trust attestation (fan-out stage B, OW34):
-            // the runtime — never the pattern — records that the sent
-            // event carried the process-local renderer-trust mark, so the
-            // SERVED handler run can re-mark the payload and record the
-            // trusted-event policy input its UI-contract-gated writes
-            // need. The sister of the injected-keys carriage above, same
-            // trust argument (see StreamEventEntry.rendererTrusted).
-            ...(isRendererTrustedEvent(event) ? { rendererTrusted: true } : {}),
-          }).then((delivery) => {
-            if (!delivery.delivered) {
-              // Deterministic admission refusal: the intent is dead —
-              // un-render the echo and signal (events.md §5).
-              overlay?.resolveIntent(space, sidecarId, eventId, {
-                kind: "refused",
-                reason: delivery.refused,
+          let fired = false;
+          const fire = (): Promise<EventAppendDeliveryOutcome> => {
+            fired = true;
+            this.#runtime.trackEventIntent(space, sidecarId, eventId);
+            // Read after the tracking call, which installs the overlay when
+            // this fire is the first thing the runtime does.
+            const overlay = this.#runtime.speculationOverlay;
+            const appended = replica.enqueueEventAppend!({
+              sidecarId,
+              stream,
+              eventId,
+              payload: event as never,
+              ...(mintedKeys !== undefined
+                ? { runtimeInjectedEventKeys: [...mintedKeys] }
+                : {}),
+              // The renderer-trust attestation (fan-out stage B, OW34):
+              // the runtime — never the pattern — records that the sent
+              // event carried the process-local renderer-trust mark, so
+              // the SERVED handler run can re-mark the payload and record
+              // the trusted-event policy input its UI-contract-gated
+              // writes need. The sister of the injected-keys carriage
+              // above, same trust argument (see
+              // StreamEventEntry.rendererTrusted).
+              ...(isRendererTrustedEvent(event)
+                ? { rendererTrusted: true }
+                : {}),
+            }).then((delivery) => {
+              if (!delivery.delivered) {
+                // Deterministic admission refusal: the intent is dead —
+                // un-render the echo and signal (events.md §5).
+                overlay?.resolveIntent(space, sidecarId, eventId, {
+                  kind: "refused",
+                  reason: delivery.refused,
+                });
+              }
+              return delivery;
+            });
+            // The durability barrier (`synced()`) covers undischarged
+            // intents: an event queued offline is an unacked write.
+            this.#runtime.storageManager.trackPendingCommit(
+              appended as Promise<unknown>,
+              () => ({ kind: "event-intent", spaces: [space] }),
+            );
+            return appended;
+          };
+          // A fire made inside a writable transaction is work that
+          // transaction launched, and it happens only if the transaction
+          // commits (events.md §2): the intent is tracked and the event
+          // appended at the commit's verdict. The append is an external
+          // effect, so it runs from the transaction's post-commit outbox,
+          // which flushes at the verdict and only on success. A transaction
+          // that fails or is aborted, as `editWithRetry` aborts an attempt
+          // it runs again, flushes nothing, so no intent is outstanding for
+          // it and no outcome is signaled; its commit callback retires what
+          // the fire's local run left in the overlay, the in-memory
+          // compensation that hook is for. So an attempt run again fires its
+          // event once, and one run again under the caller's own event id,
+          // as `PieceController.edit()` runs it, is not reported refused
+          // before it fires.
+          //
+          // The scheduler's lineage gate (`queueEvent(…, { originTx })`)
+          // decides the same commit-or-drop question for the events this
+          // runtime queues, and the local echo below goes through it. The
+          // append cannot: it is not an event this runtime runs, and a
+          // client that runs nothing of the piece drops its echo at dispatch
+          // for want of a handler, while the append has to happen all the
+          // same.
+          //
+          // A fire through a transaction that already committed happens at
+          // once, and one through a transaction that already failed does
+          // not happen. A read-only transaction commits nothing and so
+          // launches nothing: a fire through one happens at once, as one
+          // with none does.
+          const unfired = (
+            error: { message: string },
+          ): EventAppendDeliveryOutcome => {
+            this.#runtime.speculationOverlay?.retireUnfiredEcho(
+              space,
+              eventId,
+            );
+            return {
+              delivered: false,
+              refused: "the transaction that sent the event did not " +
+                `commit: ${error.message}`,
+            };
+          };
+          const originTx = this.#tx;
+          const origin = originTx?.isReadOnly?.() === true
+            ? undefined
+            : originTx?.status();
+          let outcome: Promise<EventAppendDeliveryOutcome>;
+          if (
+            originTx === undefined || origin === undefined ||
+            origin.status === "done"
+          ) {
+            outcome = fire();
+          } else if (origin.status === "error") {
+            outcome = Promise.resolve(unfired(origin.error));
+          } else {
+            outcome = new Promise((resolve) => {
+              originTx.enqueuePostCommitEffect({
+                // Unique per fire. Two sends of one caller event id inside
+                // one transaction both append, each settled by its own
+                // entry: the outbox's deduplication by id would drop the
+                // second entry and leave that fire's outcome unsettled once
+                // the transaction commits. The server's receipt is what
+                // collapses them (scheduler-v2 I11: at most one handling of
+                // an event id commits), and both sends wait on the same
+                // intent's consequence.
+                id: `event-append:${eventId}:${crypto.randomUUID()}`,
+                kind: "event-append",
+                flush: () => {
+                  resolve(fire());
+                },
               });
-            }
-            return delivery;
-          });
-          // The durability barrier (`synced()`) covers undischarged
-          // intents: an event queued offline is an unacked write.
-          this.#runtime.storageManager.trackPendingCommit(
-            outcome as Promise<unknown>,
-            () => ({ kind: "event-intent", spaces: [space] }),
-          );
+              originTx.addCommitCallback((_tx, result) => {
+                if (result.error !== undefined) {
+                  resolve(unfired(result.error));
+                }
+              });
+            });
+          }
           // The durable-ack coupling (verdict blocker, 2026-08-12): the
           // caller's settle callback must NEVER settle from the
           // speculative local run — under events-down the local
@@ -2424,6 +2525,14 @@ export class CellImpl<T extends FabricValue>
             const callerOnCommit = onCommit;
             onCommit = (echoTx: IExtendedStorageTransaction) => {
               void outcome.then(async (delivery) => {
+                // A send whose transaction did not commit never happened,
+                // and the sender hears nothing of it: the attempt that
+                // commits sends again and reports for itself, so a sender
+                // retrying its edit, as the webhook forwarder does, is told
+                // of the event once.
+                if (!fired) {
+                  return;
+                }
                 // An echo that withdrew aborted without the handler
                 // failing, so its append is reported as a clean one; the
                 // served handling decides the outcome below.
@@ -2446,6 +2555,9 @@ export class CellImpl<T extends FabricValue>
                   ));
                   return;
                 }
+                // A delivered append was fired, and the fire's tracking
+                // call installed the overlay if the runtime has one.
+                const overlay = this.#runtime.speculationOverlay;
                 const consequence = overlay === undefined
                   ? { kind: "consequenced" as const }
                   : await overlay.waitForIntentConsequence(space, eventId);
