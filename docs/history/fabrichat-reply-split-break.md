@@ -41,8 +41,11 @@ schema doesn't declare, and its schemas set no `additionalProperties`.
 Twenty-five of those also report the scope the room's `participantEntries`
 declares, which `fabrichat-view-scopes-per-user-break.md` records, and so does
 the baseline recorded with this change before that scope reached it. The proof
-reports one issue per role, so one entry names both paths for all of them, in
-place of that break's own entry for the room.
+reports one issue per role, so the room's entries for the two breaks are one
+per group of baselines, each naming the paths its group blames: both, for the
+twenty-five that report both; the reply split alone, for the two recorded
+with the scope; and the scope alone, for the one recorded with the split.
+They take the place of that break's own entry for the room.
 
 `threadInfo` is a new argument field with a default, so it breaks nothing.
 Its records' write policy names `commitSend`, `commitThreadSend` and

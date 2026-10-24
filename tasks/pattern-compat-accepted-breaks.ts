@@ -1450,9 +1450,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // These baselines also report the scope the room's `participantEntries`
     // declares, which `fabrichat-view-scopes-per-user-break.md` records, in
     // the result role: the proof reports one issue per role. The entry names
-    // both paths: the baseline recorded with the reply split reports the
-    // scope alone, and the two recorded with the scope report the reply
-    // alone.
+    // both paths, in place of that break's own entry for the room.
     pattern: "fabrichat/room.tsx",
     baselines: [
       "20261016T053638Z-KQKz6B5ir-i_b2SS",
@@ -1475,17 +1473,43 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261022T220214Z-LuSDquW0A2n4QZ8w",
       "20261023T213239Z-wQjScvFleK2bL80b",
       "20261024T000756Z-dKtPP_2-Aa_KMMvf",
-      "20261024T002137Z-Vy-7CaW79knps1fr",
       "20261024T003401Z-xURqZ9DluSiRDXhB",
       "20261024T014452Z-fKwRjY5cCkMEpatS",
       "20261024T022151Z-IsyaJEIMyiypxAgF",
       "20261024T022626Z-fQTNhQDagiuXxPOO",
       "20261024T145618Z-Gv5sfeYUA8vf1ZMN",
-      "20261024T154554Z-Bj6AuJ00TzMD7yZs",
+    ],
+    paths: [
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message",
+      "result.$VIEWS.room.participantEntries",
+    ],
+    reason:
+      "a message's reply names its thread and its quote apart, in place of the one message a reply named; stored replies are left as they are, counted and shown as replying to nothing",
+    record: "docs/history/fabrichat-reply-split-break.md",
+  },
+  {
+    // The same two breaks: the baselines recorded with the per-user scope
+    // report the reply split alone.
+    pattern: "fabrichat/room.tsx",
+    baselines: [
+      "20261024T002137Z-Vy-7CaW79knps1fr",
       "20261024T171044Z-nGvvC4U9_mwy0apw",
     ],
     paths: [
       "result.$VIEWS.room.deleteMessage.message.replyTo.message",
+    ],
+    reason:
+      "a message's reply names its thread and its quote apart, in place of the one message a reply named; stored replies are left as they are, counted and shown as replying to nothing",
+    record: "docs/history/fabrichat-reply-split-break.md",
+  },
+  {
+    // The same two breaks: the baseline recorded with the reply split, before
+    // the per-user scope reached it, reports the scope alone.
+    pattern: "fabrichat/room.tsx",
+    baselines: [
+      "20261024T154554Z-Bj6AuJ00TzMD7yZs",
+    ],
+    paths: [
       "result.$VIEWS.room.participantEntries",
     ],
     reason:
