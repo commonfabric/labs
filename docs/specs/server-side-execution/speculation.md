@@ -148,8 +148,9 @@ currency. The existing overlay and retirement rules below still apply.
   whose schema promised a value would crash on the `undefined` (the
   OW51 `splitDefinitions` TypeError, observed on BOTH the client and
   the serving runtime because the read path is shared code). Instead
-  the lazy read REFUSES (when the reader's schema PROMISES a value —
-  see the carve-outs below): it registers the dead-end doc's read (the
+  the lazy read REFUSES (when the reader's schema declares NO default,
+  whether or not its type admits `undefined` — see the carve-outs
+  below): it registers the dead-end doc's read (the
   dependency that re-triggers the run when the doc arrives) and the run
   is disposed as a non-event — **output `undefined`, no action failure,
   re-triggered when any of its reads so far change, exactly like a

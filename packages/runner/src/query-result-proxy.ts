@@ -1034,6 +1034,16 @@ function createViewProxy<T>(
     );
   }
 
+  readOuts.set(proxy as object, {
+    runtime,
+    tx,
+    readTx,
+    atEpoch,
+    link,
+    readDocument: () => currentValue(true),
+    cfcLabelView,
+  });
+
   // Cache the proxy in the appropriate cache before returning
   txCache.byLink.set(cacheKey, proxy);
   // Not the by-value index for a pinned view: it names a value rather than an
@@ -1108,6 +1118,56 @@ export function snapshotQueryResult<T>(value: T): T {
     return object;
   };
   return snapshot(value) as T;
+}
+
+/**
+ * What a walk needs to read a view's document out as data without going
+ * through the view's traps: the transaction its reads go through and the
+ * instant they are scoped to, the link the view resolved to, the label view
+ * it carries, and the transaction and runtime a cell minted at a position
+ * inside it is bound to.
+ */
+export type ViewReadOut = {
+  /** The runtime the view reads through. */
+  readonly runtime: Runtime;
+
+  /** The transaction the view was asked for, which a minted cell is bound to. */
+  readonly tx: IExtendedStorageTransaction | undefined;
+
+  /** The transaction a read made now goes through. */
+  readonly readTx: () => IExtendedStorageTransaction;
+
+  /** Runs `body` inside the instant the view describes. */
+  readonly atEpoch: <T>(body: () => T) => T;
+
+  /** The link the view resolved to: the document position it reads. */
+  readonly link: NormalizedFullLink;
+
+  /**
+   * Reads the whole value at the view's position, as a recursive read, with
+   * the check every trap makes: a document that no longer holds a container
+   * of the kind the view was built over refuses with `ViewDriftError`.
+   */
+  readonly readDocument: () => unknown;
+
+  /** The label view the view carries, rebased to its position. */
+  readonly cfcLabelView: CfcLabelView | undefined;
+};
+
+/** For each view, what reads its document out without its traps. */
+const readOuts = new WeakMap<object, ViewReadOut>();
+
+/**
+ * What reads `view`'s document out without its traps, or `undefined` for
+ * anything that is not a query-result view. A walk that only copies what a
+ * view reads has no use for a view per member, and takes this instead: the
+ * reads it makes through the transaction here are the view's reads, and so
+ * is the instant they are scoped to.
+ */
+export function viewReadOut(view: unknown): ViewReadOut | undefined {
+  return typeof view === "object" && view !== null
+    ? readOuts.get(view)
+    : undefined;
 }
 
 /**

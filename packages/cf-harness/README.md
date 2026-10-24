@@ -243,13 +243,15 @@ What works today:
     (present only with `--loom-retrieval-config`; read-only, each row measured
     against the run's observation ceiling; a row loom returns without a label is
     given the query's label, and one whose label is malformed is withheld)
-  - `list_commands` and `run_command` (present only with
+  - `list_commands`, `run_command`, and `run_read_command` (present only with
     `--loom-commands-config` or `CF_HARNESS_LOOM_COMMANDS_CONFIG`; the commands
     the host's broker admits for this run, run as the agent; the listing shows
     each command as a one-line signature and is the host's command metadata,
     unmeasured; `run_command` refuses a name the listing does not show, takes
     one call or a batch of up to sixteen, and measures each answer like a
-    retrieval row)
+    retrieval row; `run_read_command` takes the same calls but sends only a
+    command a fresh listing declares a read and the broker grants read-only,
+    while `run_command` remains write-class)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,
@@ -576,8 +578,13 @@ research, and descendant calls. Each completed model call contributes once,
 including calls made by a child that later fails or is canceled. The persisted
 `run-report.json` keeps `usage` and `modelUsage` for the direct run, plus
 `totalUsage` including research and descendants. The batch result JSON carries
-that total usage object. `costUsd`, when present, came from the provider;
-`estimatedCostUsd` is an estimate based on the
+that total usage object. The report's `model` is the requested identifier.
+`modelResponses` records the provider's returned model identifier for each
+direct call, or `null` when unavailable. `actualModels` contains the distinct
+observed identifiers; `modelAttributionComplete` is true only when every direct
+turn has one. Research and descendant attribution belongs to those runs' own
+reports. `costUsd`, when present, came from the provider; `estimatedCostUsd` is
+an estimate based on the
 [public OpenAI price schedule](https://developers.openai.com/api/docs/pricing)
 for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 models and is not an invoice or a
 subscription quota conversion.
@@ -2088,10 +2095,15 @@ than the keyword rule can state the tags (`--task-tags`) or the domains
 classifier's, which decides any part the caller leaves out; the record says
 `caller` for a part it stated. None of these grants authority. An agent-runner
 local job takes `depth`, `tags` and `domains` from its request, and
-`reasoningEffort` from its profile, which a request may lower but not raise.
-Only `deep` changes a run today, adding the opening research pass for a
-classified task in the `fabric` domain; an `author` task gets that pass at any
-depth. The effort applies to the job's own model calls and children on its
+`reasoningEffort` from its profile, which a request may lower but not raise. A
+`standard` run's prompt has no strategy section. A `quick` run is told to answer
+directly when it can, and otherwise to take the shortest path that does what was
+asked, adding nothing beyond it. A `deep` run is told to search every source of
+the person's data (`personal` domain) or to read several web sources (`web`), to
+leave only material worth opening, and to read its result back before it
+finishes (`src/strategy.ts`). A `deep` run also adds the opening research pass
+for a classified task in the `fabric` domain; an `author` task gets that pass at
+any depth. The effort applies to the job's own model calls and children on its
 model; research keeps its own effort setting.
 
 A tool descriptor is a contract: its name, its parameters with one-line

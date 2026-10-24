@@ -19,6 +19,7 @@ import {
 } from "../typecheck.ts";
 import * as path from "@std/path";
 import { ACCEPTED_CONTRACT_BREAKS } from "../pattern-compat-accepted-breaks.ts";
+import { COMPILER_PATHS, GATE_PATHS } from "../check-cause-assignments.ts";
 import {
   BASELINES_DIR,
   collectCompatibilityPaths,
@@ -389,11 +390,23 @@ export const REACHED_BY_ABSENT_PATHS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The gates that hold a file to being appended to. Each reads the file as
- * it stood at the merge base with the revision the change is measured
- * against, which takes a checkout carrying history.
+ * The gates that compare the tree with the revision the change is measured
+ * against: two hold a file to being appended to, and one holds the
+ * compiler to numbering an unchanged pattern's cells as it did. Each reads
+ * the merge base with that revision, which takes a checkout carrying
+ * history.
  */
 export const HISTORY_GATES: readonly Gate[] = [
+  {
+    name: "check-cause-assignments",
+    kind: "gate",
+    run: ["task", "check-cause-assignments"],
+    args: ({ baseRef }) => [baseRef],
+    // The trees a pattern's numbering is built by, and the gate's own
+    // modules. The task passes a change touching none of them without
+    // compiling anything, so the two lists are one.
+    reachedBy: [...COMPILER_PATHS, ...GATE_PATHS],
+  },
   {
     name: "check-baselines-append-only",
     kind: "gate",

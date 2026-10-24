@@ -6,8 +6,8 @@
  * whom the profile attests, so two members of a room derive both differently.
  * Two sessions share the harness's space, where the manager lives: the
  * starter, who creates a group room, and a member, named in it, who joins it
- * under a profile in a space that admits the member alone. Each session reads
- * both from instances of its own, and once every runtime has caught up, none
+ * under a profile in a space that admits the member alone. Each user reads
+ * both from instances of their own, and once every runtime has caught up, none
  * of them commits anything more.
  *
  * Kept apart from `fabrichat-spaces-multi-runtime.test.ts`, whose test
@@ -148,12 +148,13 @@ describe("fabrichat room principals across runtimes", () => {
       SERVER_EXECUTION ? member.identity.did() : "none",
     ]);
 
-    // Each session reads instances of its own: one instance for every reader
-    // is a document the readers' runtimes hold differently.
+    // Each user reads instances of their own: one instance for every reader
+    // is a document the readers' runtimes hold differently, and access is the
+    // principal's, so every session of one user shares theirs.
     expect(await starter.link(PRINCIPALS, { piece: room }))
-      .toMatchObject({ scope: "session" });
+      .toMatchObject({ scope: "user" });
     expect(await starter.link(ENTRIES, { piece: room }))
-      .toMatchObject({ scope: "session" });
+      .toMatchObject({ scope: "user" });
 
     // A whole settle of every runtime and the server, with nothing left to
     // happen, admits no commit. Each document written is named with the

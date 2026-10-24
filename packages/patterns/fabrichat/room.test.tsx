@@ -335,7 +335,7 @@ export default pattern(() => {
     expectRuntimeErrors: [
       // The blank send, and the send from a viewer whose profile hasn't
       // resolved.
-      "This send has no text in `body`.",
+      "This send has no text in `body`, and no attachments.",
       "Your profile hasn't loaded yet.",
       // Bob's edit of Alice's message, and the edit of a deleted one.
       "Only its author can edit a message.",

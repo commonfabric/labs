@@ -198,6 +198,15 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
       "tests beside them, not modules the repository builds.",
   },
   {
+    tree: "packages/runner/test/fixtures/compile-cache-corpus",
+    because: "the compile-cache version's corpus: frozen copies of pattern " +
+      "sources that a build compiles through the runtime harness, under " +
+      "the classic-`h` JSX runtime patterns compile under, to hash what the " +
+      "compiler emits. They are data for that build step rather than " +
+      "modules the repository builds, and they stand as they were copied " +
+      "rather than as the tree now authors them.",
+  },
+  {
     tree: "packages/static/assets/types",
     because:
       "the declaration bundles handed to the in-memory pattern compiler. " +

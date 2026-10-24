@@ -1,7 +1,7 @@
 # ChatMessage
 
 One message in a room ([`ChatRoomOutput`](ChatRoomOutput.md)), with its
-reactions. A client reads a room's newest messages from its
+attachments and its reactions. A client reads a room's newest messages from its
 [`ChatMessageList`](ChatMessageList.md), and the rest from the stored messages
 themselves.
 
@@ -11,8 +11,17 @@ interface ChatMessage {
   /** The profile the sender sent under; absent once obliterated. */
   authorProfile?: Cell<ChatProfile>;
 
-  /** The current text, or the marker of a deleted message. */
+  /**
+   * The current text, empty only where the message has attachments, or the
+   * marker of a deleted message.
+   */
   body: string | { deleted: true };
+
+  /**
+   * The files sent with the message, in the order they were sent; absent for
+   * none, and once the message is deleted.
+   */
+  attachments?: Cell<FileEntry>[];
 
   /** The room's handler clock when it recorded the message. */
   sentAt: FabricEpochNsec;
@@ -45,8 +54,18 @@ interface ChatMessage {
   represents. It is absent only from an obliterated message (see [obliterated
   messages](#obliterated-messages)).
 - **`body`** is the current version's text, as the person saw it when they sent
-  or edited it. Text is never empty. A deleted message's body is exactly the
-  plain object `{ deleted: true }`, with no other keys.
+  or edited it. Text is empty only in a message with attachments, such as a
+  photo sent on its own. A deleted message's body is exactly the plain object
+  `{ deleted: true }`, with no other keys.
+- **`attachments`** links the files sent with the message, each a
+  [`FileEntry`](../fabrifile/FileEntry.md) of the store of the room's space,
+  in the order they were sent, and no more of them than the room's
+  `maxAttachments` (see [`ChatRoomPolicy`](ChatRoomPolicy.md#keys)). A message
+  links an entry rather than copying it, so a reader reads the file's name, its
+  media type and its blob through the link, under their own access, and learns
+  of a rename or a removal (see [attaching a
+  file](../fabrifile/clients.md#attaching-a-file)). It never changes, and it is
+  absent from a message with none, and once the message is deleted.
 - **`sentAt`** is the room's handler clock when it recorded the message (see
   [times](#times)).
 - **`editedAt`** is the room's handler clock when it recorded the current
@@ -67,12 +86,15 @@ interface ChatMessage {
 A message is written by more than one person, so its parts carry their own
 labels and are admitted by their own writers:
 
-- **The message**, meaning everything but `reactions`, is written by the room's
-  `sendMessage`, `editMessage`, `deleteMessage`, and `obliterateMessage`
-  streams, each admitted only as a trusted gesture on its own surface (see
-  [`ChatRoomOutput`](ChatRoomOutput.md#streams)). Each version is labeled
-  `authored-by` the principal who recorded it, so an obliterated message's
-  tombstone is labeled with whoever obliterated it.
+- **The message**, meaning everything but `reactions`, is written by the
+  room's `sendMessage`, `editMessage`, `deleteMessage`, and
+  `obliterateMessage` streams, each admitted only as a trusted gesture on its
+  own surface (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)). Each
+  version is labeled `authored-by` the principal who recorded it, so an
+  obliterated message's tombstone is labeled with whoever obliterated it. Its
+  attachments are links the message holds, so they carry the message's label;
+  each file they link is an entry of its store, labeled and written as the
+  store's own (see [`FileEntry`](../fabrifile/FileEntry.md)).
 - **Each reaction** is written only by the room's `sendReaction` and
   `deleteReaction` streams, as a trusted gesture on `ChatReactSurface`, and is
   labeled `authored-by` its reactor.
@@ -101,8 +123,8 @@ it aren't orphaned:
   message.
 - `sentAt` and `replyTo` stay, so the message keeps its place in the
   conversation and in its thread, and its identity.
-- `authorProfile` and `reactions` are gone. Nothing of what was said, or by
-  whom, remains in the message.
+- `authorProfile`, `attachments` and `reactions` are gone. Nothing of what was
+  said, or by whom, remains in the message.
 - The tombstone is labeled `authored-by` whoever obliterated it. That label is
   the attestation of who removed the message.
 
@@ -143,8 +165,10 @@ nothing, and a client sends no reply to it. Replies it already had, and a thread
 their links.
 
 There is no undeletion. A message keeps no history: an edit replaces its text,
-and a deletion drops it, so nothing of what a message said before remains in
-the room.
+and a deletion drops it with the message's attachments, so nothing of what a
+message said before remains in the room. A deletion takes no file out of its
+store: an attachment's entry stays there, and anyone else linking it still
+reads it.
 
 ## Future directions
 
@@ -156,9 +180,6 @@ shape above doesn't close them off.
   exactly what they saw applies to the formatting as much as to the words. A
   room's title could use the same format (see
   [`ChatRoomAbout`](ChatRoomAbout.md#future-directions)).
-- **Attachments.** Images and other media sent with a message. An attachment
-  would be linked rather than copied into the message, so it keeps its own label
-  and is read under the reader's own access, as profiles are.
 - **Links as items.** Links in a message held as items of their own rather than
   as text inside `body`: both web URLs and in-model links to cells in other
   spaces, including spaces served by other hosts (see [Common Fabric

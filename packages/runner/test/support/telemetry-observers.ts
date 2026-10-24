@@ -1,10 +1,10 @@
 /**
- * Listeners on a runtime's telemetry that shadow two indexes a test would
+ * Listeners on a runtime's telemetry that shadow three indexes a test would
  * otherwise have to read from inside the class: the runner's pending
- * commit-gated starts, and the pattern manager's in-flight cache write-backs.
- * Each rebuilds its index from the marker pair the class emits as an entry
- * comes and goes. Dispatch is synchronous, so a read here sees the change the
- * moment the class made it.
+ * commit-gated starts, the pattern manager's in-flight cache write-backs, and
+ * its in-flight cold compiles. Each rebuilds its index from the markers the
+ * class emits as an entry comes and goes. Dispatch is synchronous, so a read
+ * here sees the change the moment the class made it.
  */
 
 import type { Runtime } from "../../src/runtime.ts";
@@ -91,6 +91,75 @@ export function observeCacheWriteBacks(runtime: Runtime): {
   return {
     started: () => started,
     inFlight: () => started - completed,
+    restore,
+  };
+}
+
+/** Where a cold compile began, or which load joined one. */
+export type ColdCompileSite = { space: string; entryIdentity: string };
+
+/**
+ * Watches the pattern manager's in-flight cold compiles through its
+ * `pattern.cold-compile.start`, `pattern.cold-compile.join` and
+ * `pattern.cold-compile.complete` markers. Install it before the loads whose
+ * compiles are to be counted.
+ */
+export function observeColdCompiles(runtime: Runtime): {
+  /** Where each cold compile began, in order. */
+  starts(): readonly ColdCompileSite[];
+
+  /** Each load that joined a compile already in flight, in order. */
+  joins(): readonly ColdCompileSite[];
+
+  /** How many cold compiles have started and are still joinable. */
+  inFlight(): number;
+
+  /** Resolves once `count` cold compiles have started. */
+  whenStarted(count: number): Promise<void>;
+
+  /** Resolves once `count` loads have joined a compile in flight. */
+  whenJoined(count: number): Promise<void>;
+
+  /** Resolves once `count` cold compiles have stopped being joinable. */
+  whenCompleted(count: number): Promise<void>;
+
+  /** Stops listening. */
+  restore(): void;
+} {
+  const starts: ColdCompileSite[] = [];
+  const joins: ColdCompileSite[] = [];
+  let completed = 0;
+  const waiters: { readonly ready: () => boolean; resolve: () => void }[] = [];
+  const settle = () => {
+    for (const waiter of waiters.splice(0)) {
+      if (waiter.ready()) waiter.resolve();
+      else waiters.push(waiter);
+    }
+  };
+  const once = (ready: () => boolean) =>
+    new Promise<void>((resolve) => {
+      waiters.push({ ready, resolve });
+      settle();
+    });
+  const restore = listen(runtime, (marker) => {
+    if (marker.type === "pattern.cold-compile.start") {
+      starts.push({ space: marker.space, entryIdentity: marker.entryIdentity });
+    } else if (marker.type === "pattern.cold-compile.join") {
+      joins.push({ space: marker.space, entryIdentity: marker.entryIdentity });
+    } else if (marker.type === "pattern.cold-compile.complete") {
+      completed++;
+    } else {
+      return;
+    }
+    settle();
+  });
+  return {
+    starts: () => starts,
+    joins: () => joins,
+    inFlight: () => starts.length - completed,
+    whenStarted: (count) => once(() => starts.length >= count),
+    whenJoined: (count) => once(() => joins.length >= count),
+    whenCompleted: (count) => once(() => completed >= count),
     restore,
   };
 }

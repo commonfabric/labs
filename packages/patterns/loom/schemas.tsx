@@ -1,6 +1,7 @@
 /** Public linked-cell contract of a shared Loom. */
 
 import type {
+  Cell,
   Default,
   JSONValue,
   NAME,
@@ -12,6 +13,11 @@ import type {
   VNode,
   Writable,
 } from "commonfabric";
+import type { FileStoreOutput } from "../fabrifile/schemas.tsx";
+import type {
+  FileStoreRecord,
+  FileStoreRecordCell,
+} from "../fabrifile/store.tsx";
 import type { PanelAdderDid, PanelAdderProfile } from "./admission.tsx";
 import type {
   ParticipantProfile,
@@ -60,9 +66,9 @@ export interface PublishedDocument {
  * the label entry the panel declares there names the same principal when the
  * root wrote it. Of the root's handlers only `admitPanel` writes either, and
  * once it has written a panel no other handler may. An occurrence it creates
- * records `addedByProfile` when its event names a profile, and otherwise
- * `addedBy` when the event acted for a principal, so a run that acts for no
- * one records neither. An occurrence a caller made may hold an
+ * records `addedByProfile` when its event names a profile of its actor's own,
+ * and otherwise `addedBy` when the event acted for a principal, so a run that
+ * acts for no one records neither. An occurrence a caller made may hold an
  * `addedBy` the root never wrote: the value is its writer's claim, and a label
  * entry there names the writer, not the principal the value names. A panel
  * with neither names no adder.
@@ -193,6 +199,10 @@ export interface LoomInput {
   >;
   participants?: PerSpace<ParticipantRosterCell>;
   chatRoom?: PerSpace<ChatRoomCell>;
+
+  /** The Loom's space's file store, absent until it is first needed. */
+  fileStore?: PerSpace<FileStoreRecordCell>;
+
   meeting?: PerSpace<MeetingAssociationCell>;
   hiddenPanels?: PerUser<Writable<Writable<Panel>[] | Default<[]>>>;
   privatePanels?: PerUser<Writable<PrivatePanel[] | Default<[]>>>;
@@ -238,8 +248,10 @@ export interface PrivatePanel {
 }
 
 /**
- * The profile under which the person adding a panel acts. Without one, the
- * root records the principal the event acted for; an event never names it.
+ * The profile under which the person adding a panel acts, which is one of
+ * their own: the root refuses a profile whose label does not attest the
+ * principal the event acts for. Without one, the root records that principal;
+ * an event never names it.
  */
 export interface PanelAdder {
   as?: ParticipantProfile;
@@ -296,6 +308,19 @@ export interface LoomOutput {
   chatRoom?: Writable<LinkedChatRoom>;
   setChatRoom: Stream<ChatRoomChoice>;
   ensureChatRoom: Stream<void>;
+
+  /** The Loom's space's file store, absent until `ensureFileStore` names one. */
+  fileStore?: Cell<FileStoreOutput>;
+
+  /** Names a new store as the Loom's space's, unless it names one already. */
+  ensureFileStore: Stream<void>;
+
+  /**
+   * Where the Loom keeps its space's file store, which its chat room, as a
+   * FabriChat container's, names a store in too.
+   */
+  fileStoreRecord: Cell<FileStoreRecord>;
+
   meeting: MeetingAssociation;
   bindMeeting: Stream<BindMeetingRequest>;
   retitleLoom: Stream<{ title: string }>;

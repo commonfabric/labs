@@ -33,8 +33,15 @@
  * source, that nothing logged a refused transition, a dropped stored slot or a
  * failed start of a nested piece, that every stored slot and per-user outcome
  * reads as it did, that the updated room can edit and react to a seeded
- * message, and that starting a direct chat with the same person again finds
- * the room the manager holds.
+ * message, that the manager lists its rooms and the group room its
+ * participants' principals, before and after a room is started, and that
+ * starting a direct chat with the same person again finds the room the
+ * manager holds.
+ *
+ * The whole rehearsal runs twice: once with the manager's and the group room's
+ * views never read before the update, and once with a client showing Home and
+ * reading them first. Which of the two a deployed piece is in decides what it
+ * has stored for those views, and so what the update finds there.
  *
  * The copy is only a rehearsal while it matches what is deployed, which is
  * `main`. `deno task refresh-fabrichat-rehearsal` replaces it with
@@ -230,417 +237,492 @@ const kept = (
 ): StoredSlot[] =>
   after.filter((slot) => before.some(({ name }) => name === slot.name));
 
-describe("FabriChat update rehearsal", () => {
-  // Set up once, in `beforeAll()`: the deployed release, seeded and then
-  // updated to this tree's source. Each test reads what that left, so each
-  // holds on its own.
-  let server: ReturnType<typeof newLoopbackServer>;
-  let temporary: string;
-  let http: Deno.HttpServer<Deno.NetAddr>;
-  let storage: EmulatedStorageManager;
-  let runtime: Runtime;
-  let controller: PiecesController;
-  let route: PatternsRoute;
-  let home: Cell<unknown>;
-  let manager: Cell<unknown>;
-  let directRoom: Cell<unknown>;
-  let room: Cell<unknown>;
-  let first: Cell<unknown>;
-  let second: Cell<unknown>;
-  let before: Snapshot;
-  let after: Snapshot;
-  let failuresBefore: Record<string, number>;
-  let failuresAfter: Record<string, number>;
-  const adopted: {
-    source: string | undefined;
-    identity: string | undefined;
-    expected: string;
-  }[] = [];
+/** Each room's kind, in order, as a reader reads a list of rooms. */
+const kindsOf = (rooms: unknown): string[] | undefined =>
+  Array.isArray(rooms)
+    ? rooms.map((entry) => (entry as { kind?: string }).kind ?? "none").sort()
+    : undefined;
 
-  /** Sends `event` to `target`'s `stream`, and waits for what it does. */
-  const send = async (
-    target: Cell<unknown>,
-    stream: string,
-    event: Record<string, unknown>,
-  ): Promise<void> => {
-    const tx = runtime.edit();
-    target.withTx(tx).key(stream).send(event);
-    runtime.prepareTxForCommit(tx);
-    expect((await tx.commit().settled).error).toBeUndefined();
-    await runtime.idle();
-  };
+/**
+ * Rehearses the update as `title`. With `readBefore`, a client shows Home and
+ * reads the manager's and the group room's views before the update, as one
+ * showing them would have. Without it, nothing reads those views until the
+ * update has happened. A deployed piece can be updated in either state.
+ */
+const rehearse = (title: string, readBefore: boolean): void => {
+  describe(title, () => {
+    // Set up once, in `beforeAll()`: the deployed release, seeded and then
+    // updated to this tree's source. Each test reads what that left, so each
+    // holds on its own.
+    let server: ReturnType<typeof newLoopbackServer>;
+    let temporary: string;
+    let http: Deno.HttpServer<Deno.NetAddr>;
+    let storage: EmulatedStorageManager;
+    let runtime: Runtime;
+    let controller: PiecesController;
+    let route: PatternsRoute;
+    let home: Cell<unknown>;
+    let manager: Cell<unknown>;
+    let directRoom: Cell<unknown>;
+    let room: Cell<unknown>;
+    let first: Cell<unknown>;
+    let second: Cell<unknown>;
+    let before: Snapshot;
+    let after: Snapshot;
+    let failuresBefore: Record<string, number>;
+    let failuresAfter: Record<string, number>;
+    const adopted: {
+      source: string | undefined;
+      identity: string | undefined;
+      expected: string;
+    }[] = [];
 
-  /**
-   * The piece a link at `at` names, resolved and readable. Its provenance
-   * belongs to the resolved piece, which a read through the link's own opaque
-   * reference schema does not reach.
-   */
-  const pieceAt = async (at: Cell<unknown>): Promise<Cell<unknown>> => {
-    const link = await at.asSchema<Cell<unknown>>(asCell).pull();
-    expect(link).toBeDefined();
-    const handle = runtime.getCellFromLink(link!.getAsNormalizedFullLink(), {});
-    await handle.sync();
-    const piece = handle.resolveAsCell();
-    await piece.sync();
-    return piece;
-  };
-
-  /** The group room's newest messages, as cells. */
-  const latest = () =>
-    room.key("messages").key("latest").key("messages")
-      .asSchema<Cell<unknown>[]>(asCells).pull();
-
-  /** What the rehearsal holds to reading back unchanged. */
-  const snapshot = async () => ({
-    manager: await storedSlots(runtime, manager.key("requests")),
-    rooms: await Promise.all(
-      [directRoom, room].map((each) =>
-        storedSlots(runtime, each.getArgumentCell<unknown>()!)
-      ),
-    ),
-    // Kept per user, outside the room's argument.
-    addRequests: await room.key("addRequests").pull(),
-    bodies: await Promise.all(
-      (await latest()).map((message) => message.key("body").pull()),
-    ),
-  });
-  type Snapshot = Awaited<ReturnType<typeof snapshot>>;
-
-  beforeAll(async () => {
-    server = newLoopbackServer();
-    temporary = await Deno.makeTempDir({
-      prefix: "fabrichat-update-rehearsal-",
-    });
-    await writeFrozenRelease(temporary);
-    route = new PatternsRoute(PATTERNS, [
-      { routePrefix: "fabrichat/", directory: join(temporary, "fabrichat") },
-      { routePrefix: "loom/", directory: join(temporary, "loom") },
-    ]);
-    http = Deno.serve(
-      { hostname: "127.0.0.1", port: 0, onListen() {} },
-      async (request) =>
-        await route.serve(request) ??
-          new Response("Not found", { status: 404 }),
-    );
-    const apiUrl = new URL(`http://127.0.0.1:${http.addr.port}`);
-    storage = EmulatedStorageManager.connectTo(server, { as: owner });
-    runtime = new Runtime({ apiUrl, storageManager: storage });
-    controller = new PiecesController(
-      createSession({ identity: owner, spaceDid: owner.did() }),
-      runtime,
-    );
-
-    // The deployed release, and what it stores.
-    home = (await controller.ensureDefaultPattern()).getCell();
-    expect(getPatternSource(home)).toBe("system:system/home.tsx");
-    await runtime.idle();
-    await home.pull();
-
-    await send(
-      home,
-      "createProfile",
-      trusted(
-        { target: { value: "Rehearsal owner" } },
-        "ProfileCreateSurface",
-        "CreateProfile",
-      ),
-    );
-
-    manager = home.key("chatManager");
-    await send(
-      manager,
-      "openDirect",
-      trusted(
-        { requestId: "direct", counterpart },
-        "ChatStartSurface",
-        "ChatStart",
-      ),
-    );
-    await send(
-      manager,
-      "createGroup",
-      trusted(
-        { requestId: "group", title: "Rehearsal", members: [member] },
-        "ChatStartSurface",
-        "ChatStart",
-      ),
-    );
-    // A start this user can't make, which the manager refuses.
-    await send(
-      manager,
-      "openDirect",
-      trusted(
-        { requestId: "refused", counterpart: "not a principal" },
-        "ChatStartSurface",
-        "ChatStart",
-      ),
-    );
-    // A request still being worked on when the release changes.
-    {
+    /** Sends `event` to `target`'s `stream`, and waits for what it does. */
+    const send = async (
+      target: Cell<unknown>,
+      stream: string,
+      event: Record<string, unknown>,
+    ): Promise<void> => {
       const tx = runtime.edit();
-      manager.withTx(tx).key("requests").key("in flight").set({
-        status: "pending",
-      });
+      target.withTx(tx).key(stream).send(event);
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
-    }
+    };
 
-    directRoom = await pieceAt(
-      manager.key("direct").key(counterpart).key("room"),
-    );
-    room = await pieceAt(
-      manager.key("requests").key("group").key("entry").key("room"),
-    );
-    const rooms = [directRoom, room];
-    for (const room of rooms) {
-      // A room follows the release of its own module, as Home does its.
-      expect(getPatternSource(room)).toBe("system:fabrichat/room.tsx");
-    }
-    await send(
-      directRoom,
-      "sendMessage",
-      trusted(
-        { body: "Hello, you" },
-        "ChatSendSurface",
-        "ChatSend",
-      ),
-    );
-    await send(
-      room,
-      "sendMessage",
-      trusted(
-        { body: "First" },
-        "ChatSendSurface",
-        "ChatSend",
-      ),
-    );
-    await send(
-      room,
-      "sendMessage",
-      trusted(
-        { body: "Second" },
-        "ChatSendSurface",
-        "ChatSend",
-      ),
-    );
-    [first, second] = await latest();
-    await send(
-      room,
-      "editMessage",
-      trusted(
-        { message: second, body: "Second, edited" },
-        "ChatEditSurface",
-        "ChatEdit",
-      ),
-    );
-    await send(
-      room,
-      "sendMessage",
-      trusted(
-        {
-          body: "In the thread",
-          replyTo: { message: first, shownIn: "thread" },
-        },
-        "ChatSendSurface",
-        "ChatSend",
-      ),
-    );
-    await send(
-      room,
-      "sendReaction",
-      trusted(
-        { message: first, emoji: "👍" },
-        "ChatReactSurface",
-        "ChatReact",
-      ),
-    );
-    // An act the room drops: a reaction that is not a single emoji.
-    await send(
-      room,
-      "sendReaction",
-      trusted(
-        { message: first, emoji: "two words" },
-        "ChatReactSurface",
-        "ChatReact",
-      ),
-    );
-    await send(
-      room,
-      "addMember",
-      trusted(
-        { requestId: "add", target: { value: added } },
-        "ChatAddMemberSurface",
-        "ChatAddMember",
-      ),
-    );
-    await runtime.idle();
-    // The rows a browser showing the room would have set up, the thread's
-    // root among them.
-    await render(room);
-    await runtime.idle();
-
-    before = await snapshot();
-
-    // The seed is what the rehearsal is about, so it is checked to be there.
-    const managerSlot = (name: string) =>
-      before.manager.find((slot) => slot.name === name)?.value;
-    expect(managerSlot("requests")).toMatchObject({
-      direct: { status: "done" },
-      group: { status: "done" },
-      refused: { status: "refused" },
-      "in flight": { status: "pending" },
-    });
-    expect(managerSlot("direct")).toHaveProperty(counterpart);
-    // One for each person told of a room: the direct room's, the group
-    // member's, and the added member's, whom no profile can be offered to.
-    expect(managerSlot("outgoingNotices")).toHaveLength(3);
-    expect(before.bodies).toEqual(["First", "Second, edited"]);
-    expect(before.addRequests).toMatchObject({ add: { status: "done" } });
-    for (const slots of before.rooms) {
-      expect(slots.map((slot) => slot.name)).toContain("messages");
-    }
-
-    // The update to this tree's source.
-    failuresBefore = updateFailureCounts();
-    // A route made afresh models a release replacing its source cache.
-    route = new PatternsRoute(PATTERNS);
-    const expected = [
-      await route.identity("system/home.tsx"),
-      ...rooms.map(() => route.identity("fabrichat/room.tsx")),
-    ];
-    // Each piece is opened as a person opening it would: the open follows
-    // its origin to the source the route now serves, and waits for the
-    // running piece to swap to it.
-    for (const piece of [home, ...rooms]) await controller.openPiece(piece);
-    await runtime.idle();
-    // The rows again, as the browser that opened the room shows them: each
-    // is set up over the argument the updated room carries.
-    await render(room);
-    await runtime.idle();
-
-    failuresAfter = updateFailureCounts();
-    const resolved = await Promise.all(expected);
-    for (const [index, piece] of [home, ...rooms].entries()) {
-      const current = await piece.withTx().sync();
-      adopted.push({
-        source: getPatternSource(current),
-        identity: getPatternIdentityRef(current)?.identity,
-        expected: resolved[index],
-      });
-    }
-    after = await snapshot();
-  });
-
-  afterAll(async () => {
-    await runtime?.sourceReconciler.idle();
-    await controller?.dispose();
-    await runtime?.dispose();
-    await storage?.close();
-    await server?.close();
-    await http?.shutdown();
-    if (temporary !== undefined) {
-      await Deno.remove(temporary, { recursive: true });
-    }
-  });
-
-  it("adopts this tree's source for Home and each room, refusing and dropping nothing", () => {
-    expect(
-      failuresAfter,
-      "The update refused or dropped stored data; the log above says which " +
-        "piece, and why",
-    ).toEqual(failuresBefore);
-    for (const { source, identity, expected } of adopted) {
-      expect(identity, `${source} did not adopt this tree's source`).toBe(
-        expected,
+    /**
+     * The piece a link at `at` names, resolved and readable. Its provenance
+     * belongs to the resolved piece, which a read through the link's own opaque
+     * reference schema does not reach.
+     */
+    const pieceAt = async (at: Cell<unknown>): Promise<Cell<unknown>> => {
+      const link = await at.asSchema<Cell<unknown>>(asCell).pull();
+      expect(link).toBeDefined();
+      const handle = runtime.getCellFromLink(
+        link!.getAsNormalizedFullLink(),
+        {},
       );
-    }
-  });
+      await handle.sync();
+      const piece = handle.resolveAsCell();
+      await piece.sync();
+      return piece;
+    };
 
-  it("reads back every stored slot and per-user outcome the deployed release wrote", () => {
-    // The update may add slots, each with its default; every slot the
-    // deployed release stored has to read back as it was.
-    expect(
-      kept(after.manager, before.manager),
-      "The manager's stored slots changed",
-    ).toEqual(before.manager);
-    after.rooms.forEach((slots, index) =>
+    /** The group room's newest messages, as cells. */
+    const latest = () =>
+      room.key("messages").key("latest").key("messages")
+        .asSchema<Cell<unknown>[]>(asCells).pull();
+
+    /** What the rehearsal holds to reading back unchanged. */
+    const snapshot = async () => ({
+      manager: await storedSlots(runtime, manager.key("requests")),
+      rooms: await Promise.all(
+        [directRoom, room].map((each) =>
+          storedSlots(runtime, each.getArgumentCell<unknown>()!)
+        ),
+      ),
+      // Kept per user, outside the room's argument.
+      addRequests: await room.key("addRequests").pull(),
+      bodies: await Promise.all(
+        (await latest()).map((message) => message.key("body").pull()),
+      ),
+    });
+    type Snapshot = Awaited<ReturnType<typeof snapshot>>;
+
+    /**
+     * What a client reads of the manager's rooms and of the group room's
+     * participants, each directly and through the views a client that draws
+     * natively reads. Rooms are listed by kind, sorted, since two rooms started
+     * in the same instant may list in either order.
+     */
+    const views = async () => ({
+      rooms: kindsOf(await manager.key("rooms").pull()),
+      viewedRooms: kindsOf(
+        await manager.key("$VIEWS").key("chats").key("rooms").pull(),
+      ),
+      principals: await room.key("participantPrincipals").pull(),
+      viewedPrincipals: await room.key("$VIEWS").key("room")
+        .key("participantPrincipals").pull(),
+      entries: ((await room.key("participantEntries").pull()) as
+        | { principal?: string }[]
+        | undefined)?.map((entry) => entry.principal ?? "none"),
+    });
+    type Views = Awaited<ReturnType<typeof views>>;
+    let viewsBefore: Views | undefined;
+
+    beforeAll(async () => {
+      server = newLoopbackServer();
+      temporary = await Deno.makeTempDir({
+        prefix: "fabrichat-update-rehearsal-",
+      });
+      await writeFrozenRelease(temporary);
+      route = new PatternsRoute(PATTERNS, [
+        { routePrefix: "fabrichat/", directory: join(temporary, "fabrichat") },
+        { routePrefix: "loom/", directory: join(temporary, "loom") },
+      ]);
+      http = Deno.serve(
+        { hostname: "127.0.0.1", port: 0, onListen() {} },
+        async (request) =>
+          await route.serve(request) ??
+            new Response("Not found", { status: 404 }),
+      );
+      const apiUrl = new URL(`http://127.0.0.1:${http.addr.port}`);
+      storage = EmulatedStorageManager.connectTo(server, { as: owner });
+      runtime = new Runtime({ apiUrl, storageManager: storage });
+      controller = new PiecesController(
+        createSession({ identity: owner, spaceDid: owner.did() }),
+        runtime,
+      );
+
+      // The deployed release, and what it stores.
+      home = (await controller.ensureDefaultPattern()).getCell();
+      expect(getPatternSource(home)).toBe("system:system/home.tsx");
+      await runtime.idle();
+      await home.pull();
+
+      await send(
+        home,
+        "createProfile",
+        trusted(
+          { target: { value: "Rehearsal owner" } },
+          "ProfileCreateSurface",
+          "CreateProfile",
+        ),
+      );
+
+      manager = home.key("chatManager");
+      await send(
+        manager,
+        "openDirect",
+        trusted(
+          { requestId: "direct", counterpart },
+          "ChatStartSurface",
+          "ChatStart",
+        ),
+      );
+      await send(
+        manager,
+        "createGroup",
+        trusted(
+          { requestId: "group", title: "Rehearsal", members: [member] },
+          "ChatStartSurface",
+          "ChatStart",
+        ),
+      );
+      // A start this user can't make, which the manager refuses.
+      await send(
+        manager,
+        "openDirect",
+        trusted(
+          { requestId: "refused", counterpart: "not a principal" },
+          "ChatStartSurface",
+          "ChatStart",
+        ),
+      );
+      // A request still being worked on when the release changes.
+      {
+        const tx = runtime.edit();
+        manager.withTx(tx).key("requests").key("in flight").set({
+          status: "pending",
+        });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+      }
+
+      directRoom = await pieceAt(
+        manager.key("direct").key(counterpart).key("room"),
+      );
+      room = await pieceAt(
+        manager.key("requests").key("group").key("entry").key("room"),
+      );
+      const rooms = [directRoom, room];
+      for (const room of rooms) {
+        // A room follows the release of its own module, as Home does its.
+        expect(getPatternSource(room)).toBe("system:fabrichat/room.tsx");
+      }
+      await send(
+        directRoom,
+        "sendMessage",
+        trusted(
+          { body: "Hello, you" },
+          "ChatSendSurface",
+          "ChatSend",
+        ),
+      );
+      await send(
+        room,
+        "sendMessage",
+        trusted(
+          { body: "First" },
+          "ChatSendSurface",
+          "ChatSend",
+        ),
+      );
+      await send(
+        room,
+        "sendMessage",
+        trusted(
+          { body: "Second" },
+          "ChatSendSurface",
+          "ChatSend",
+        ),
+      );
+      [first, second] = await latest();
+      await send(
+        room,
+        "editMessage",
+        trusted(
+          { message: second, body: "Second, edited" },
+          "ChatEditSurface",
+          "ChatEdit",
+        ),
+      );
+      await send(
+        room,
+        "sendMessage",
+        trusted(
+          {
+            body: "In the thread",
+            replyTo: { message: first, shownIn: "thread" },
+          },
+          "ChatSendSurface",
+          "ChatSend",
+        ),
+      );
+      await send(
+        room,
+        "sendReaction",
+        trusted(
+          { message: first, emoji: "👍" },
+          "ChatReactSurface",
+          "ChatReact",
+        ),
+      );
+      // An act the room drops: a reaction that is not a single emoji.
+      await send(
+        room,
+        "sendReaction",
+        trusted(
+          { message: first, emoji: "two words" },
+          "ChatReactSurface",
+          "ChatReact",
+        ),
+      );
+      await send(
+        room,
+        "addMember",
+        trusted(
+          { requestId: "add", target: { value: added } },
+          "ChatAddMemberSurface",
+          "ChatAddMember",
+        ),
+      );
+      await runtime.idle();
+      // The rows a browser showing the room would have set up, the thread's
+      // root among them.
+      await render(room);
+      await runtime.idle();
+      if (readBefore) {
+        await render(home);
+        await runtime.idle();
+        viewsBefore = await views();
+      }
+
+      before = await snapshot();
+
+      // The seed is what the rehearsal is about, so it is checked to be there.
+      const managerSlot = (name: string) =>
+        before.manager.find((slot) => slot.name === name)?.value;
+      expect(managerSlot("requests")).toMatchObject({
+        direct: { status: "done" },
+        group: { status: "done" },
+        refused: { status: "refused" },
+        "in flight": { status: "pending" },
+      });
+      expect(managerSlot("direct")).toHaveProperty(counterpart);
+      // One for each person told of a room: the direct room's, the group
+      // member's, and the added member's, whom no profile can be offered to.
+      expect(managerSlot("outgoingNotices")).toHaveLength(3);
+      expect(before.bodies).toEqual(["First", "Second, edited"]);
+      expect(before.addRequests).toMatchObject({ add: { status: "done" } });
+      for (const slots of before.rooms) {
+        expect(slots.map((slot) => slot.name)).toContain("messages");
+      }
+
+      // The update to this tree's source.
+      failuresBefore = updateFailureCounts();
+      // A route made afresh models a release replacing its source cache.
+      route = new PatternsRoute(PATTERNS);
+      const expected = [
+        await route.identity("system/home.tsx"),
+        ...rooms.map(() => route.identity("fabrichat/room.tsx")),
+      ];
+      // Each piece is opened as a person opening it would: the open follows
+      // its origin to the source the route now serves, and waits for the
+      // running piece to swap to it.
+      for (const piece of [home, ...rooms]) await controller.openPiece(piece);
+      await runtime.idle();
+      // The rows again, as the browser that opened the room shows them: each
+      // is set up over the argument the updated room carries.
+      await render(room);
+      await runtime.idle();
+
+      failuresAfter = updateFailureCounts();
+      const resolved = await Promise.all(expected);
+      for (const [index, piece] of [home, ...rooms].entries()) {
+        const current = await piece.withTx().sync();
+        adopted.push({
+          source: getPatternSource(current),
+          identity: getPatternIdentityRef(current)?.identity,
+          expected: resolved[index],
+        });
+      }
+      after = await snapshot();
+    });
+
+    afterAll(async () => {
+      await runtime?.sourceReconciler.idle();
+      await controller?.dispose();
+      await runtime?.dispose();
+      await storage?.close();
+      await server?.close();
+      await http?.shutdown();
+      if (temporary !== undefined) {
+        await Deno.remove(temporary, { recursive: true });
+      }
+    });
+
+    it("adopts this tree's source for Home and each room, refusing and dropping nothing", () => {
       expect(
-        kept(slots, before.rooms[index]),
-        `Room ${index}'s stored slots changed`,
-      ).toEqual(before.rooms[index])
-    );
-    expect(after.addRequests).toEqual(before.addRequests);
-    expect(after.bodies).toEqual(before.bodies);
-  });
+        failuresAfter,
+        "The update refused or dropped stored data; the log above says which " +
+          "piece, and why",
+      ).toEqual(failuresBefore);
+      for (const { source, identity, expected } of adopted) {
+        expect(identity, `${source} did not adopt this tree's source`).toBe(
+          expected,
+        );
+      }
+    });
 
-  it("edits, and changes the reactions on, a message the deployed release stored", async () => {
-    // The deployed handlers wrote the seeded records, so each carries their
-    // module as its writer. The updated handlers write them through the
-    // authority the release hands their modules, so these writes commit only
-    // if the update went through a path that hands it on.
-    await send(
-      room,
-      "editMessage",
-      trusted(
-        { message: second, body: "Second, edited after" },
-        "ChatEditSurface",
-        "ChatEdit",
-      ),
-    );
-    const firstReaction = first.key("reactions").asSchema<Cell<unknown>[]>(
-      asCells,
-    ).key(0);
-    await send(
-      room,
-      "deleteReaction",
-      trusted(
-        { message: first, reaction: firstReaction },
-        "ChatReactSurface",
-        "ChatUnreact",
-      ),
-    );
-    await send(
-      room,
-      "sendReaction",
-      trusted(
-        { message: first, emoji: "🎉" },
-        "ChatReactSurface",
-        "ChatReact",
-      ),
-    );
-    expect(await second.key("body").pull()).toBe("Second, edited after");
-    const emoji = await first.key("reactions").asSchema<{ emoji: string }[]>({
-      type: "array",
-      items: { type: "object", properties: { emoji: { type: "string" } } },
-    }).pull();
-    expect(emoji.map((reaction) => reaction.emoji)).toEqual(["🎉"]);
-  });
+    it("reads back every stored slot and per-user outcome the deployed release wrote", () => {
+      // The update may add slots, each with its default; every slot the
+      // deployed release stored has to read back as it was.
+      expect(
+        kept(after.manager, before.manager),
+        "The manager's stored slots changed",
+      ).toEqual(before.manager);
+      after.rooms.forEach((slots, index) =>
+        expect(
+          kept(slots, before.rooms[index]),
+          `Room ${index}'s stored slots changed`,
+        ).toEqual(before.rooms[index])
+      );
+      expect(after.addRequests).toEqual(before.addRequests);
+      expect(after.bodies).toEqual(before.bodies);
+    });
 
-  it("finds the direct room the manager holds when a direct chat with the same person starts again", async () => {
-    // Starting a direct chat with the same person again writes the
-    // manager's seeded records, and finds the room the manager already
-    // holds, rather than making a second.
-    await send(
-      manager,
-      "openDirect",
-      trusted(
-        { requestId: "direct again", counterpart },
-        "ChatStartSurface",
-        "ChatStart",
-      ),
-    );
-    expect(
-      await manager.key("requests").key("direct again").key("status")
-        .pull(),
-    ).toBe("done");
-    const again = await pieceAt(
-      manager.key("requests").key("direct again").key("entry").key("room"),
-    );
-    expect(again.equalLinks(directRoom)).toBe(true);
-    const direct = await manager.key("direct").asSchema<
-      Record<string, unknown>
-    >({ type: "object" }).pull();
-    expect(Object.keys(direct)).toEqual([counterpart]);
+    it("edits, and changes the reactions on, a message the deployed release stored", async () => {
+      // The deployed handlers wrote the seeded records, so each carries their
+      // module as its writer. The updated handlers write them through the
+      // authority the release hands their modules, so these writes commit only
+      // if the update went through a path that hands it on.
+      await send(
+        room,
+        "editMessage",
+        trusted(
+          { message: second, body: "Second, edited after" },
+          "ChatEditSurface",
+          "ChatEdit",
+        ),
+      );
+      const firstReaction = first.key("reactions").asSchema<Cell<unknown>[]>(
+        asCells,
+      ).key(0);
+      await send(
+        room,
+        "deleteReaction",
+        trusted(
+          { message: first, reaction: firstReaction },
+          "ChatReactSurface",
+          "ChatUnreact",
+        ),
+      );
+      await send(
+        room,
+        "sendReaction",
+        trusted(
+          { message: first, emoji: "🎉" },
+          "ChatReactSurface",
+          "ChatReact",
+        ),
+      );
+      expect(await second.key("body").pull()).toBe("Second, edited after");
+      const emoji = await first.key("reactions").asSchema<{ emoji: string }[]>({
+        type: "array",
+        items: { type: "object", properties: { emoji: { type: "string" } } },
+      }).pull();
+      expect(emoji.map((reaction) => reaction.emoji)).toEqual(["🎉"]);
+    });
+
+    it("lists the manager's rooms and the group room's participants after the update, and a room started since", async () => {
+      const listed = {
+        rooms: ["direct", "group"],
+        viewedRooms: ["direct", "group"],
+        principals: [owner.did()],
+        viewedPrincipals: [owner.did()],
+        entries: [owner.did()],
+      };
+      if (readBefore) expect(viewsBefore).toEqual(listed);
+      expect(await views()).toEqual(listed);
+
+      await send(
+        manager,
+        "createGroup",
+        trusted(
+          { requestId: "group since", title: "Since", members: [member] },
+          "ChatStartSurface",
+          "ChatStart",
+        ),
+      );
+      expect(
+        await manager.key("requests").key("group since").key("status").pull(),
+      ).toBe("done");
+      expect(await views()).toMatchObject({
+        rooms: ["direct", "group", "group"],
+        viewedRooms: ["direct", "group", "group"],
+      });
+    });
+
+    it("finds the direct room the manager holds when a direct chat with the same person starts again", async () => {
+      // Starting a direct chat with the same person again writes the
+      // manager's seeded records, and finds the room the manager already
+      // holds, rather than making a second.
+      await send(
+        manager,
+        "openDirect",
+        trusted(
+          { requestId: "direct again", counterpart },
+          "ChatStartSurface",
+          "ChatStart",
+        ),
+      );
+      expect(
+        await manager.key("requests").key("direct again").key("status")
+          .pull(),
+      ).toBe("done");
+      const again = await pieceAt(
+        manager.key("requests").key("direct again").key("entry").key("room"),
+      );
+      expect(again.equalLinks(directRoom)).toBe(true);
+      const direct = await manager.key("direct").asSchema<
+        Record<string, unknown>
+      >({ type: "object" }).pull();
+      expect(Object.keys(direct)).toEqual([counterpart]);
+    });
   });
-});
+};
+
+rehearse("FabriChat update rehearsal", false);
+rehearse("FabriChat update rehearsal, its views read before the update", true);

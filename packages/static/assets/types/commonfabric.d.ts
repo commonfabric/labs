@@ -4284,22 +4284,31 @@ export type PrincipalClaimKind = "authored-by" | "represents-principal";
 /**
  * Returns the one principal that the label on `target`'s value attests with a
  * claim of `kind`: the DID a profile represents, or the author of a record.
- * The claim is read at the value's root and on its top-level fields, and only
- * in the form the runtime writes when it resolves `RepresentsCurrentUser`,
- * `AuthoredByCurrentUser` or `ownerPrincipal`, which a pattern cannot write
- * for anyone but the principal it runs for.
+ * An `authored-by` claim is read at the value's root and on its top-level
+ * fields, and only in the form the runtime writes when it resolves
+ * `AuthoredByCurrentUser`, which a pattern cannot write for anyone but the
+ * principal it runs for; a claim in another form there makes the result
+ * `undefined`. A `represents-principal` claim on a value whose owner wrote a
+ * name (a `name` field holding more than whitespace) is read from the root and
+ * the `name` field alone: the written name says whose the value is, and a
+ * field still at its default may carry the principal of another runtime. On
+ * any other value it is read from every label entry the value holds, deeper
+ * ones and those a link carries included. It counts when it is an object of
+ * that kind with a subject beginning `did:`, and an atom in another form is
+ * skipped.
  *
- * `undefined` means the label names no verified single principal of that kind:
- * none, more than one, or a claim in some other form. It also means that
+ * `undefined` means the label names no single principal of that kind: none,
+ * more than one, or, for `authored-by`, a claim in some other form. It also means that
  * `target` is `undefined`, which is what a value that cannot be read yet reads
  * as. It is never a guess, and a caller refuses whatever needs a principal. A
  * label the caller cannot observe, a refused read among them, returns
  * `undefined` as well, as missing metadata does; a label stored in a form the
  * runtime cannot interpret throws.
  *
- * It reads the label, and no contents of the value beyond the link pointers
- * needed to reach it. In a reactive computation
- * (`computed()`, `lift()`) the result updates when the label changes. It can
+ * It reads the label, the value's `name` for a `represents-principal` claim,
+ * and no other contents of the value beyond the link pointers needed to reach
+ * them. In a reactive computation (`computed()`, `lift()`) the result updates
+ * when the label or the name changes. It can
  * also be called in a handler, on a cell an event names. Calling it in a
  * pattern body throws: wrap it in `computed()` instead.
  *

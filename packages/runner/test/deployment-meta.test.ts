@@ -1059,6 +1059,7 @@ describe("deployment-meta", () => {
       expect(SHELL_DEPLOYMENT_FLAGS).toEqual([
         "localSessionDocuments",
         "sharedMemoryConnection",
+        "instanceNames",
       ]);
       for (const flag of SHELL_DEPLOYMENT_FLAGS) {
         expect(SHELL_FLAG_SOURCES[flag]).toBe("deployment");

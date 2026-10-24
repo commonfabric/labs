@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { spy } from "@std/testing/mock";
 
 import { defer } from "@commonfabric/utils/defer";
 
@@ -93,6 +94,67 @@ const query = (
   }));
 
 describe("Connection receive order", () => {
+  it("refuses an ordered request before hello without opening a session, then accepts a valid handshake", async () => {
+    const authorize = spy(testSessionOpenServerOptions.authorizeSessionOpen);
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      authorizeSessionOpen: authorize,
+      store: new URL("memory://memory-v2-receive-order-before-hello"),
+      subscriptionRefreshDelayMs: "manual",
+    });
+    const messages: ServerMessage[] = [];
+    const connection = server.connect((message) => messages.push(message));
+    const open = {
+      type: "session.open",
+      requestId: "open-before-hello",
+      space: FAST_SPACE,
+      session: {},
+    };
+    try {
+      await connection.receive(encodeMemoryBoundary(open));
+      expect(messages).toEqual([{
+        type: "response",
+        requestId: "handshake",
+        error: {
+          name: "ProtocolError",
+          message: "memory hello is required first",
+        },
+      }]);
+      expect(authorize.calls).toHaveLength(0);
+      expect(server.accessForTestingOnly.sessionsForSpace(FAST_SPACE))
+        .toEqual([]);
+      expect(server.documentCachesDiagnostics().spaces).toEqual({});
+
+      messages.length = 0;
+      await connection.receive(encodeMemoryBoundary(HELLO));
+      expect(messages).toHaveLength(1);
+      const hello = messages.shift();
+      expect(hello?.type).toBe("hello.ok");
+      if (hello?.type !== "hello.ok" || hello.sessionOpen === undefined) {
+        throw new Error("Expected a hello with session authentication");
+      }
+      await connection.receive(encodeMemoryBoundary({
+        ...open,
+        invocation: {
+          aud: hello.sessionOpen.audience,
+          challenge: hello.sessionOpen.challenge.value,
+        },
+      }));
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        type: "response",
+        requestId: open.requestId,
+        ok: { sessionId: expect.any(String) },
+      });
+      expect(authorize.calls).toHaveLength(1);
+      expect(server.accessForTestingOnly.sessionsForSpace(FAST_SPACE))
+        .toHaveLength(1);
+    } finally {
+      connection.close();
+      await server.close();
+    }
+  });
+
   it("handles a frame for one space while a frame for another space waits", async () => {
     const server = createServer("across-spaces");
     const gate = defer<void>();

@@ -77,6 +77,7 @@ import {
   type HKT,
   type ICell,
   isReactiveMarker,
+  isStreamValue,
   type IsThisObject,
   type IStreamable,
   type JSONSchema,
@@ -137,8 +138,17 @@ import {
 import { actingForEmission, waveRunContextOf } from "./executor/wave.ts";
 import { immutableCellsFor, pinImmutableCell } from "./immutable-cell.ts";
 import { areLinksSame } from "./link-equality.ts";
-import { type LastNode, resolveLink } from "./link-resolution.ts";
-import { areNormalizedLinksSame, isPrimitiveCellLink } from "./link-types.ts";
+import {
+  type LastNode,
+  resolveLink,
+  resolveLinkTracingDereferences,
+} from "./link-resolution.ts";
+import {
+  addressKey,
+  areNormalizedLinksSame,
+  isPrimitiveCellLink,
+  isSigilLink,
+} from "./link-types.ts";
 import {
   createSigilLinkFromParsedLink,
   declareStreamSchema,
@@ -155,6 +165,8 @@ import {
   createQueryResultProxy,
   getCellOrThrow,
   isCellResultForDereferencing,
+  type ViewReadOut,
+  viewReadOut,
 } from "./query-result-proxy.ts";
 import type { Runtime } from "./runtime.ts";
 import { isRuntime } from "./runtime-brand.ts";
@@ -5033,7 +5045,13 @@ function subscribeToReferencedDocs<T>(
       const newValue = validateAndTransform(runtime, wrappedTx, ref, [], {
         synced: true,
       });
-      if (needsTraversal && newValue !== undefined && newValue !== null) {
+      // A projection reads what it delivers, and those reads are this sink's
+      // dependencies. A sink delivering the value itself hears every change
+      // under it, so the whole of the value is read.
+      if (
+        project === undefined && needsTraversal && newValue !== undefined &&
+        newValue !== null
+      ) {
         deepTraverse(newValue);
       }
       // Read the label on the SINK's transaction (`tx`), not the child `extraTx`,
@@ -5579,7 +5597,9 @@ export function readProjected<R>(
  * to the value: `callback` runs with the projection of each value, and the
  * labels of everything the read and the projection consumed, read on the
  * sink's own transaction so that a write to anything the projection reached,
- * labels included, runs it again. A stream holds no value to project, and is
+ * labels included, runs it again. What the projection reaches is what the
+ * subscription depends on: a part of the value it never reads is a part
+ * whose change does not run it. A stream holds no value to project, and is
  * refused.
  */
 export function sinkProjected<R>(
@@ -5714,12 +5734,17 @@ function convertOneToLinks(
         // subclass would return a subclass instance.
         container = value as unknown[] | Record<string, unknown>;
       } else {
-        // A query-result proxy serves the symbol from a trap rather than as
-        // an own property, and a subclass fails the prototype check. Either
-        // is read out into a plain copy first, which is a valid
-        // `FabricValueLayer` already and so wants no further conversion.
-        // Objects need this as much as arrays do -- the annotation goes on
-        // either (see `schema.ts`).
+        // A query-result view serves the symbol from a trap rather than as an
+        // own property. Its document is read out directly rather than member
+        // by member through its traps, each of which would build a view of
+        // its own, resolve its link and derive its label view for a member
+        // that is then only copied.
+        const readOut = viewReadOut(value);
+        if (readOut !== undefined) return readOutView(readOut, options, stack);
+        // A subclass fails the prototype check, and is read out into a plain
+        // copy first, which is a valid `FabricValueLayer` already and so wants
+        // no further conversion. Objects need this as much as arrays do -- the
+        // annotation goes on either (see `schema.ts`).
         container = (isArray
           ? shallowCleanArray(value, false)
           : shallowCleanPlainObject(value as object, false)) as
@@ -5819,6 +5844,133 @@ function convertOneToLinks(
     // elsewhere in the code.
     ancestors.popExpect(original);
   }
+}
+
+/**
+ * Reads the document a view describes out as the data the view reads, in
+ * place of walking the view member by member: the stored value is frozen,
+ * and copying it from there costs no view, link resolution or label view per
+ * member.
+ *
+ * The document is read once, whole, through the view's own checked read, so
+ * a document that no longer holds what the view was built over refuses as
+ * every access through the view does; the read registers every position
+ * under it, where reading through the view registers each as it is reached. A stored link is followed where it sits, as the view follows
+ * one on access, with the same resolution, so the dereference traces and
+ * labeled crossings it records are the ones the view's reads record. A link
+ * that returns to a position the walk is inside yields a back-link to it, as
+ * a cycle does elsewhere in the walk. A stream position yields the link to
+ * the stream, carrying the label view a view of it would carry.
+ *
+ * `stack` is the path to the view from the walk's root, pushed to and popped
+ * from as {@link convertOneToLinks} does, so a back-link made here names a
+ * path from that same root.
+ */
+function readOutView(
+  view: ViewReadOut,
+  options: CellLinkOptions,
+  stack: string[],
+): FabricValue {
+  const { runtime } = view;
+  return view.atEpoch(() => {
+    const tx = view.readTx();
+    // The depth the walk entered each container it is inside, keyed by the
+    // container's document position, so that a link back to one yields a
+    // back-link to that depth.
+    const entered = new Map<string, number>();
+
+    const streamLink = (
+      link: NormalizedFullLink,
+      cfcLabelView: CfcLabelView | undefined,
+    ): FabricValue =>
+      linkToCell(
+        createCell(runtime, link, view.tx, false, "stream", cfcLabelView),
+        options,
+      );
+
+    // What `stored` holds, which sits at `position` inside the document
+    // `document` names, under the label view `cfcLabelView` carries for that
+    // document position. `position` is pushed to and popped from in step with
+    // `stack`.
+    const walk = (
+      stored: unknown,
+      document: NormalizedFullLink,
+      position: string[],
+      cfcLabelView: CfcLabelView | undefined,
+    ): FabricValue => {
+      if (isSigilLink(stored)) {
+        const resolved = resolveLinkTracingDereferences(
+          runtime,
+          tx,
+          { ...document, path: [...document.path, ...position] },
+          "value",
+          { markIfcCrossings: true },
+        );
+        const target = resolved.link;
+        const targetView = mergeCfcLabelViews([
+          rebaseCfcLabelView(cfcLabelView, position),
+          cfcAcquisitionViewForDereferenceTraces(tx, resolved.traces),
+        ]);
+        if (ContextualFlowControl.declaresStream(target.schema)) {
+          return streamLink(target, targetView);
+        }
+        const depth = entered.get(addressKey(target));
+        if (depth !== undefined) {
+          return deepFreeze(linkRefFrom({ path: stack.slice(0, depth) }));
+        }
+        return walk(tx.readValueOrThrow(target), target, [], targetView);
+      }
+      if (isStreamValue(stored)) {
+        return streamLink(
+          { ...document, path: [...document.path, ...position] },
+          rebaseCfcLabelView(cfcLabelView, position),
+        );
+      }
+      if (!isObjectOrArray(stored) || stored instanceof FabricPrimitive) {
+        return stored as FabricValue;
+      }
+      if (stored instanceof FabricInstance) {
+        // A view over an instance reports no own keys, so what a copy of one
+        // holds is an empty record; the marker above the view construction in
+        // `query-result-proxy.ts` says what closes this.
+        return Object.freeze({});
+      }
+      const member = (key: string, value: unknown): FabricValue => {
+        stack.push(key);
+        position.push(key);
+        try {
+          return walk(value, document, position, cfcLabelView);
+        } finally {
+          position.pop();
+          stack.pop();
+        }
+      };
+      // The container is an ancestor of everything below it for as long as
+      // the walk is inside it, and nothing else: a value reached again on
+      // another branch is shared, and is read out again there.
+      const here = addressKey({
+        ...document,
+        path: [...document.path, ...position],
+      });
+      entered.set(here, stack.length);
+      try {
+        if (Array.isArray(stored)) {
+          return Object.freeze(
+            stored.map((element, index) => member(String(index), element)),
+          );
+        }
+        return Object.freeze(Object.fromEntries(
+          Object.entries(stored).map((
+            [key, value],
+          ) => [key, member(key, value)]),
+        ));
+      } finally {
+        entered.delete(here);
+      }
+    };
+
+    return walk(view.readDocument(), view.link, [], view.cfcLabelView);
+  });
 }
 
 /**

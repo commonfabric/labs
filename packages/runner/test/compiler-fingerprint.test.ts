@@ -4,6 +4,7 @@ import { fromFileUrl } from "@std/path";
 
 import {
   COMPILE_FINGERPRINT_INPUTS,
+  compileCacheVersionSourceOf,
   computeCompilerFingerprint,
   computeCompilerVersion,
   computeCurrentCompilerVersion,
@@ -249,5 +250,23 @@ describe("compile-cache version axis", () => {
     ) {
       expect(COMPILE_FINGERPRINT_INPUTS).toContain(input);
     }
+  });
+});
+
+describe("compileCacheVersionSourceOf", () => {
+  it("takes either source by name, and the fallback when the variable is unset", () => {
+    expect(compileCacheVersionSourceOf(undefined, "output")).toBe("output");
+    expect(compileCacheVersionSourceOf(undefined, "inputs")).toBe("inputs");
+    expect(compileCacheVersionSourceOf("inputs", "output")).toBe("inputs");
+    expect(compileCacheVersionSourceOf("output", "inputs")).toBe("output");
+  });
+
+  it("refuses any other spelling rather than reading it as either source", () => {
+    // The binary build and the shell bundle read the variable through this
+    // one function, so a misspelling cannot leave them on different versions.
+    expect(() => compileCacheVersionSourceOf("outputs", "output")).toThrow(
+      '"output" or "inputs"',
+    );
+    expect(() => compileCacheVersionSourceOf("", "inputs")).toThrow();
   });
 });

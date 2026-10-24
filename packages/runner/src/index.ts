@@ -362,7 +362,10 @@ export {
   WebhookConfigSchema,
 } from "./builder/types.ts";
 export { createNodeFactory } from "./builder/module.ts";
-export { attestedPrincipalsAt } from "./builder/principal-of.ts";
+export {
+  attestedPrincipalsAt,
+  profileNameWrittenAt,
+} from "./builder/principal-of.ts";
 export { reactive as cell } from "./builder/reactive.ts";
 export {
   CFC_ATOM_TYPE,

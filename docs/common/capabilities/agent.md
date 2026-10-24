@@ -83,11 +83,19 @@ const view = recommendation.pending
   the graph.
 - `INVALID_RESULT` means the model loop completed without a structured result
   satisfying `resultSchema`: the result was missing, malformed JSON, or
-  schema-invalid. Model and tool failures use `PROVIDER_FAILURE`.
+  schema-invalid. The model returns its result through `submit_result`, which
+  must be the only tool call in its model turn; a turn that pairs it with
+  another call is refused and the run continues. Model and tool failures use
+  `PROVIDER_FAILURE`.
 - `run` is a link to the run's `AgentRun` record: its `state`, `stateSince`,
   and, once finished, `outcome`, `usage`, `modelTurns`, and `toolCalls`, for
-  a pattern that wants to show progress or cost. `host` is the origin of the
-  toolshed serving the record's space, for a reader on another host.
+  a pattern that wants to show progress or cost. Optional `modelResponses`
+  records the model ID returned for each direct model response, with `null`
+  when the provider omitted it; `actualModels` lists the distinct observed IDs.
+  `modelAttributionComplete` is true only when every direct model turn has an
+  observed ID. Missing attribution fields mean unknown, including on older
+  records. `host` is the origin of the toolshed serving the record's space, for
+  a reader on another host.
 - `requestHash` identifies the request. The same request in the same user
   instance yields the same record, so a re-run of the node over unchanged
   inputs is a memo hit and creates nothing; a pattern that wants a fresh run

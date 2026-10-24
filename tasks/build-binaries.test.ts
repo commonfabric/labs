@@ -26,6 +26,7 @@ import {
   BuildConfig,
   type BuildDependencies,
   type BuildSignalApi,
+  computeShippedCompileCacheVersion,
   defaultBuildDependencies,
   embedArgs,
   installBuildSignalCleanup,
@@ -879,7 +880,7 @@ Deno.test("prepareWorkspace writes the fingerprint; revertWorkspace restores the
   const sourceModule = await Deno.readTextFile(versionPath);
   const computedModule = await renderComputedVersionModule(root);
   try {
-    await prepareWorkspace(config);
+    await prepareWorkspace(config, await computeCompilerVersion(root));
 
     // The version module holds the compiler-input fingerprint baked into binaries.
     const stamped = await Deno.readTextFile(versionPath);
@@ -928,7 +929,11 @@ Deno.test("prepareWorkspace refuses to build without a lockfile", async () => {
   try {
     await Deno.remove(`${root}/deno.lock`);
     const config = new BuildConfig({ root, toolshedFlags: [], cliOnly: true });
-    await assertRejects(() => prepareWorkspace(config), Error, "deno.lock");
+    await assertRejects(
+      () => prepareWorkspace(config, `${VERSION_NAMESPACE}/unbuilt`),
+      Error,
+      "deno.lock",
+    );
     // The error path leaves the source version module untouched.
     assertEquals(
       await Deno.readTextFile(config.compileCacheVersionPath()),
@@ -946,7 +951,7 @@ Deno.test("signal cleanup restores workspace and exits once", async () => {
     const config = new BuildConfig({ root, toolshedFlags: [], cliOnly: true });
     const versionPath = config.compileCacheVersionPath();
     const compiledPath = join(root, "packages", "toolshed", "COMPILED");
-    await prepareWorkspace(config);
+    await prepareWorkspace(config, await computeCompilerVersion(root));
     assertNotEquals(
       await Deno.readTextFile(versionPath),
       SOURCE_VERSION_MODULE,
@@ -1055,17 +1060,100 @@ Deno.test("each build step throws naming its output when its command fails", asy
       buildToolshed,
       buildCli,
     } = defaultBuildDependencies;
-    const steps: [(config: BuildConfig) => Promise<void>, string][] = [
-      [buildShell, "Failed to build shell app"],
-      [buildToolshed, "Failed to build toolshed binary"],
-      [buildCli, "Failed to build CLI binary"],
+    const steps: [() => Promise<void>, string][] = [
+      [
+        () => buildShell(config, `${VERSION_NAMESPACE}/unbuilt`),
+        "Failed to build shell app",
+      ],
+      [() => buildToolshed(config), "Failed to build toolshed binary"],
+      [() => buildCli(config), "Failed to build CLI binary"],
     ];
     for (const [step, message] of steps) {
-      await assertRejects(() => step(config), Error, message);
+      await assertRejects(step, Error, message);
     }
     for (const binary of ["toolshed", "cf"]) {
       assert(!(await exists(config.distPath(binary))), binary);
     }
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("runBuildBinaries bakes the output-based version unless asked for the inputs one", async () => {
+  const root = await makeFakeRepo();
+  const original = Deno.env.get("CF_COMPILE_CACHE_VERSION");
+  try {
+    const configs: BuildConfig[] = [];
+    const runBuild = (config: BuildConfig) => {
+      configs.push(config);
+      return Promise.resolve();
+    };
+    Deno.env.delete("CF_COMPILE_CACHE_VERSION");
+    await runBuildBinaries(["cf"], { root, runBuild });
+    Deno.env.set("CF_COMPILE_CACHE_VERSION", "inputs");
+    await runBuildBinaries(["cf"], { root, runBuild });
+
+    assertEquals(configs.length, 2);
+    assertEquals(
+      configs[0].compileCacheVersion,
+      computeShippedCompileCacheVersion,
+    );
+    assertEquals(configs[1].compileCacheVersion, computeCompilerVersion);
+
+    // Any other spelling is refused, so a typo cannot bake one version into
+    // the binary and another into its shell.
+    Deno.env.set("CF_COMPILE_CACHE_VERSION", "outputs");
+    await assertRejects(
+      () => runBuildBinaries(["cf"], { root, runBuild }),
+      Error,
+      '"output" or "inputs"',
+    );
+    assertEquals(configs.length, 2);
+  } finally {
+    if (original === undefined) {
+      Deno.env.delete("CF_COMPILE_CACHE_VERSION");
+    } else {
+      Deno.env.set("CF_COMPILE_CACHE_VERSION", original);
+    }
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("build computes the compile-cache version once, for the shell build and the version module alike", async () => {
+  // The shell builds before the workspace is prepared, and both bake the
+  // version; a shipped build earns it by compiling the corpus, which is
+  // worth doing once.
+  const root = await makeFakeRepo();
+  try {
+    const version = `${VERSION_NAMESPACE}/baked-once`;
+    let computed = 0;
+    const config = new BuildConfig({
+      root,
+      toolshedFlags: [],
+      binaries: ["toolshed"],
+      compileCacheVersion: () => {
+        computed += 1;
+        return Promise.resolve(version);
+      },
+    });
+    const shellSaw: string[] = [];
+    await build(
+      config,
+      recordingBuildDependencies([], {
+        buildShell: (_config, compileCacheVersion) => {
+          shellSaw.push(compileCacheVersion);
+          return Promise.resolve();
+        },
+        prepareWorkspace,
+      }),
+    );
+
+    assertEquals(shellSaw, [version]);
+    assertEquals(
+      await Deno.readTextFile(config.compileCacheVersionPath()),
+      renderVersionModule(version),
+    );
+    assertEquals(computed, 1);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
