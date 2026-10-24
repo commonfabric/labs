@@ -776,6 +776,113 @@ describe("load by module identity (warm + version-bump recovery)", () => {
     });
   });
 
+  describe("the timing row of a load served from memory", () => {
+    // Every by-identity load records a `compile-cache/load-by-identity/<outcome>`
+    // row. A load the in-memory artifact index serves reads no storage and
+    // records `memory`; one the compiled closure in storage serves records
+    // `hit`. A capture then counts both kinds, per pattern.
+
+    const rows = (outcome: string) =>
+      getLogger("pattern-manager")
+        .getTimeStats("compile-cache", `load-by-identity/${outcome}`)
+        ?.count ?? 0;
+
+    beforeEach(() => {
+      getLogger("pattern-manager").resetTimeStats();
+    });
+
+    it("records `memory` for a load the index serves, and `hit` for one the compiled closure serves", async () => {
+      const { modules, entryIdentity } = await engine.compileToRecordGraph(
+        PROGRAM,
+      );
+      await runtime.patternManager.compileOrGetPattern(PROGRAM);
+      expect(
+        typeof await runtime.patternManager.loadPatternByIdentity(
+          entryIdentity,
+          "default",
+          space,
+        ),
+      ).toBe("function");
+      expect(rows("memory")).toBe(1);
+      expect(rows("hit")).toBe(0);
+
+      // A fresh runtime, with the compiled closure in storage and nothing
+      // live: its first load reads the closure, and its second is served
+      // from memory.
+      const runtimeVersion = await getCompileCacheRuntimeVersion();
+      if (runtimeVersion === undefined) throw new Error("No runtime version");
+      const writeTx = runtime.edit();
+      writeSourceAndCompiledDocs(
+        runtime,
+        space,
+        modules,
+        entryIdentity,
+        { runtimeVersion },
+        writeTx,
+      );
+      runtime.prepareTxForCommit(writeTx);
+      expect((await writeTx.commit().settled).error).toBeUndefined();
+      await runtime.storageManager.synced();
+      const reader = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const load = () =>
+          reader.patternManager.loadPatternByIdentity(
+            entryIdentity,
+            "default",
+            space,
+          );
+        expect(typeof await load()).toBe("function");
+        expect(rows("hit")).toBe(1);
+        expect(rows("memory")).toBe(1);
+        expect(typeof await load()).toBe("function");
+        expect(rows("hit")).toBe(1);
+        expect(rows("memory")).toBe(2);
+      } finally {
+        await reader.dispose({ closeStorage: false });
+      }
+    });
+
+    it("records `memory` for the pattern the runner resolves synchronously when it starts a piece", async () => {
+      const created = await runtime.patternManager.compileOrGetPattern(
+        PROGRAM,
+      );
+      const piece = runtime.getCell<{ result: number }>(
+        space,
+        "piece whose start records a row",
+        undefined,
+        tx,
+      );
+      const run = runtime.run(tx, created, { value: 2 }, piece);
+      await tx.commit().settled;
+      tx = runtime.edit();
+      await run.pull();
+      await runtime.idle();
+      const pieceLink = piece.getAsNormalizedFullLink();
+
+      // A fresh runtime with the pattern live resolves it synchronously when
+      // it starts the piece, with no load through the asynchronous loader.
+      const starter = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        await starter.patternManager.compileOrGetPattern(PROGRAM);
+        getLogger("pattern-manager").resetTimeStats();
+        const started = starter.getCellFromLink(pieceLink);
+        await started.sync();
+        expect(await starter.start(started)).toBe(true);
+        await starter.idle();
+        expect(rows("memory")).toBe(1);
+        expect(rows("hit")).toBe(0);
+      } finally {
+        await starter.dispose({ closeStorage: false });
+      }
+    });
+  });
+
   describe("a load served from memory in a space without the compiled closure", () => {
     // The artifact index is cross-space: once one space's load has evaluated
     // an identity, a load of it from any other space is served from memory

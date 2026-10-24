@@ -484,6 +484,26 @@ function byIdentityLoadDetail(
 }
 
 /**
+ * Records the timing row of a by-identity load the in-memory artifact index
+ * served, begun at `loadStart`: outcome `memory` beside the storage-backed
+ * outcomes, naming the pattern, so a capture counts the loads that read no
+ * storage as well as the ones that did.
+ */
+function recordLoadFromMemory(
+  entryIdentity: string,
+  symbol: string,
+  loadStart: number,
+): void {
+  logger.timeDetailed(
+    () => `${entryIdentity}#${symbol}`,
+    loadStart,
+    "compile-cache",
+    "load-by-identity",
+    "memory",
+  );
+}
+
+/**
  * Helper for the program caches, which hashes a detached program in its
  * compilation context. Space-aware compilation uses a separate entry because it
  * resolves fabric imports in that space and can produce a durable closure.
@@ -2475,7 +2495,12 @@ export class PatternManager {
    * serves, in a space this session has not written the compiled closure
    * into, also copies the closure there from a space it has written into
    * (`#copyClosureForLoadFromMemory()`), fire-and-forget, so the next
-   * session's load in that space finds it.
+   * session's load in that space finds it. A load the index serves and a
+   * load the storage path serves each record a
+   * `compile-cache/load-by-identity/<outcome>` timing row naming the pattern,
+   * the former under `memory`; the returns ahead of both — a keyless
+   * identity, enforcement disabled, a memoized compile failure — record
+   * none, consulting neither.
    *
    * Returns the pattern, or `undefined` when the by-identity load is
    * unavailable (CFC not enforcing / closure absent or incomplete / invalid /
@@ -2488,6 +2513,7 @@ export class PatternManager {
     space: MemorySpace,
     options: { repairCache?: boolean } = {},
   ): Promise<Pattern | undefined> {
+    const loadStart = performance.now();
     const recoveryKey = compileCacheRecoveryKey(space, entryIdentity);
     const retryFailedRecovery =
       this.#failedCompileCacheRecoveries.has(recoveryKey) ||
@@ -2503,6 +2529,7 @@ export class PatternManager {
       !retryFailedRecovery && indexed !== undefined && isTrustedPattern(indexed)
     ) {
       this.#esmCacheStats.byIdentityHits++;
+      recordLoadFromMemory(entryIdentity, symbol, loadStart);
       this.#copyClosureForLoadFromMemory(entryIdentity, space, options);
       return indexed;
     }
@@ -2529,6 +2556,7 @@ export class PatternManager {
       : this.#patternFromEvaluatedModule(entryIdentity, symbol);
     if (live) {
       this.#esmCacheStats.byIdentityHits++;
+      recordLoadFromMemory(entryIdentity, symbol, loadStart);
       this.#copyClosureForLoadFromMemory(entryIdentity, space, options);
       return live;
     }
@@ -3232,17 +3260,20 @@ export class PatternManager {
    * Like `artifactFromIdentitySync()`, except that a hit is a load served
    * from memory in `space`, as `loadPatternByIdentity()`'s in-memory hit is:
    * when `space` is due the closure, it is copied there
-   * (`#copyClosureForLoadFromMemory()`). For the paths that start or follow
-   * a piece in `space` and resolve its pattern synchronously while the
-   * module is live, loading asynchronously only on a miss.
+   * (`#copyClosureForLoadFromMemory()`), and the hit records the `memory`
+   * timing row as that one does. For the paths that start or follow a piece
+   * in `space` and resolve its pattern synchronously while the module is
+   * live, loading asynchronously only on a miss.
    */
   artifactFromIdentitySyncInSpace(
     identity: string,
     symbol: string,
     space: MemorySpace,
   ): unknown {
+    const loadStart = performance.now();
     const artifact = this.artifactFromIdentitySync(identity, symbol);
     if (artifact !== undefined) {
+      recordLoadFromMemory(identity, symbol, loadStart);
       this.#copyClosureForLoadFromMemory(identity, space, {});
     }
     return artifact;
