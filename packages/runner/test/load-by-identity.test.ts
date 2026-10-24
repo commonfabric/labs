@@ -776,6 +776,486 @@ describe("load by module identity (warm + version-bump recovery)", () => {
     });
   });
 
+  describe("a load served from memory in a space without the compiled closure", () => {
+    // The artifact index is cross-space: once one space's load has evaluated
+    // an identity, a load of it from any other space is served from memory
+    // and reads no storage. Such a space holds no compiled closure unless
+    // something writes one there, and its next session pays a cold compile.
+    // So a load served from memory, in a space this session has not written
+    // the closure into, copies it there from a space it has.
+
+    let spaceB: MemorySpace;
+
+    beforeEach(async () => {
+      spaceB = (await Identity.fromPassphrase("load-by-identity space B"))
+        .did();
+    });
+
+    const load = (
+      entryIdentity: string,
+      inSpace: MemorySpace,
+      options?: { repairCache?: boolean },
+    ) =>
+      runtime.patternManager.loadPatternByIdentity(
+        entryIdentity,
+        "default",
+        inSpace,
+        options,
+      );
+
+    /**
+     * Writes `fixture`'s source docs, and no compiled set, into each space.
+     * A transaction writes to one space, so each space gets its own commit.
+     */
+    const storeSourceIn = async (
+      fixture: { modules: CacheableModule[]; entryIdentity: string },
+      spaces: readonly MemorySpace[],
+    ) => {
+      for (const target of spaces) {
+        const writeTx = runtime.edit();
+        writeSourceDocs(
+          runtime,
+          target,
+          fixture.modules,
+          fixture.entryIdentity,
+          writeTx,
+        );
+        runtime.prepareTxForCommit(writeTx);
+        expect((await writeTx.commit().settled).error).toBeUndefined();
+      }
+      await runtime.storageManager.synced();
+    };
+
+    /** Whether `target` holds a compiled closure for `entryIdentity`. */
+    const holdsClosure = async (
+      target: MemorySpace,
+      entryIdentity: string,
+    ): Promise<boolean> => {
+      const runtimeVersion = await getCompileCacheRuntimeVersion();
+      if (runtimeVersion === undefined) throw new Error("No runtime version");
+      const readTx = runtime.edit();
+      try {
+        const closure = await loadCompiledClosure(
+          runtime,
+          target,
+          entryIdentity,
+          { runtimeVersion },
+          readTx,
+        );
+        return closure.has(entryIdentity);
+      } finally {
+        readTx.abort?.("closure assertion read complete");
+      }
+    };
+
+    /** Resolves once every write the manager has issued is durable. */
+    const flushed = async () => {
+      await runtime.patternManager.flushCompileCacheWrites();
+      await runtime.storageManager.synced();
+    };
+
+    /** Counts the engine's cold compiles from here on. */
+    const countColdCompiles = (): () => number => {
+      let count = 0;
+      const original = engine.compileResolvedToRecordGraph.bind(engine);
+      engine.compileResolvedToRecordGraph = ((
+        ...args: Parameters<typeof original>
+      ) => {
+        count++;
+        return original(...args);
+      }) as typeof engine.compileResolvedToRecordGraph;
+      return () => count;
+    };
+
+    /**
+     * Stores `PROGRAM`'s source in both spaces and cold-loads it in `space`,
+     * with the closure written back there and durable, so the identity is
+     * live in memory while `spaceB` holds its source alone.
+     */
+    const coldLoadedInSpace = async () => {
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      await storeSourceIn(fixture, [space, spaceB]);
+      const loaded = await load(fixture.entryIdentity, space);
+      await flushed();
+      expect(typeof loaded).toBe("function");
+      expect(await holdsClosure(space, fixture.entryIdentity)).toBe(true);
+      expect(await holdsClosure(spaceB, fixture.entryIdentity)).toBe(false);
+      return { entryIdentity: fixture.entryIdentity, loaded };
+    };
+
+    it("copies the closure into its space from the space that compiled it, without compiling again", async () => {
+      const compiles = countColdCompiles();
+      const { entryIdentity, loaded } = await coldLoadedInSpace();
+      expect(compiles()).toBe(1);
+
+      expect(await load(entryIdentity, spaceB)).toBe(loaded);
+      expect(compiles()).toBe(1);
+      await flushed();
+      expect(await holdsClosure(spaceB, entryIdentity)).toBe(true);
+
+      // A fresh runtime loads the pattern in `spaceB` from that closure, with
+      // no compile.
+      const reader = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        reader.harness.compileResolvedToRecordGraph = () => {
+          throw new Error("A copied closure loads without compiling");
+        };
+        const reloaded = await reader.patternManager.loadPatternByIdentity(
+          entryIdentity,
+          "default",
+          spaceB,
+        );
+        expect(typeof reloaded).toBe("function");
+        expect(reader.patternManager.getCompileCacheStats().byIdentityHits)
+          .toBe(1);
+      } finally {
+        await reader.dispose({ closeStorage: false });
+      }
+    });
+
+    it("copies the closure into a space whose load arrives while the compiling space's write-back is in flight", async () => {
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, [space, spaceB]);
+      const manager = runtime.patternManager.accessForTestingOnly;
+      const firstWriteStarted = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let writes = 0;
+      // The manager's write, with the first one — the cold load's write-back
+      // into `space` — held open until `release` resolves.
+      manager.compileCacheWriter = async (
+        target,
+        modules,
+        entry,
+        opts,
+        moduleDelegations,
+      ) => {
+        if (writes++ === 0) {
+          firstWriteStarted.resolve();
+          await release.promise;
+        }
+        const writeTx = runtime.edit();
+        writeSourceAndCompiledDocs(
+          runtime,
+          target,
+          modules,
+          entry,
+          { ...opts, moduleDelegations },
+          writeTx,
+        );
+        runtime.prepareTxForCommit(writeTx);
+        expect((await writeTx.commit().settled).error).toBeUndefined();
+      };
+      try {
+        const loaded = await load(entryIdentity, space);
+        await firstWriteStarted.promise;
+        expect(await load(entryIdentity, spaceB)).toBe(loaded);
+        release.resolve();
+        await flushed();
+        expect(writes).toBe(2);
+        expect(await holdsClosure(space, entryIdentity)).toBe(true);
+        expect(await holdsClosure(spaceB, entryIdentity)).toBe(true);
+      } finally {
+        release.resolve();
+        manager.compileCacheWriter = undefined;
+      }
+    });
+
+    it("copies nothing into a space while any persist into it is still in flight", async () => {
+      // Two persists into `spaceB` overlap under the child's identity: the
+      // parent program's closure carries the child, and a persist of the
+      // child's own closure runs beside it and fails. While the parent's
+      // write still runs, a load of the child served from memory in `spaceB`
+      // copies nothing, since the space is being supplied. The child is live
+      // from a compile into no space, and `space` holds the closure, so the
+      // copy is otherwise due.
+      const program: RuntimeProgram = {
+        main: "/parent.tsx",
+        files: [
+          {
+            name: "/parent.tsx",
+            contents: [
+              'import { pattern } from "commonfabric";',
+              'import Child from "./child.tsx";',
+              "export default pattern<{ value: number }>(({ value }) => ({",
+              "  child: Child({ value }),",
+              "}));",
+            ].join("\n"),
+          },
+          {
+            name: "/child.tsx",
+            contents: [
+              'import { pattern } from "commonfabric";',
+              "export default pattern<{ value: number }>(({ value }) => ({",
+              "  doubled: value * 2,",
+              "}));",
+            ].join("\n"),
+          },
+        ],
+      };
+      const compiled = await engine.compileToRecordGraph(program);
+      const child = compiled.modules.find((module) =>
+        module.filename === "/child.tsx"
+      );
+      if (child === undefined) throw new Error("No child module");
+      await runtime.patternManager.compileOrGetPattern(program);
+      const manager = runtime.patternManager.accessForTestingOnly;
+      const runtimeVersion = await getCompileCacheRuntimeVersion();
+      if (runtimeVersion === undefined) throw new Error("No runtime version");
+      const release = Promise.withResolvers<void>();
+      let writes = 0;
+      // The manager's write, with the parent's write into `spaceB` held open
+      // until `release` resolves and the child's own write into it failing.
+      manager.compileCacheWriter = async (
+        target,
+        modules,
+        entry,
+        opts,
+        moduleDelegations,
+      ) => {
+        writes++;
+        if (target === spaceB && entry === compiled.entryIdentity) {
+          await release.promise;
+        }
+        if (target === spaceB && entry === child.identity) {
+          throw new Error("the child's own persist fails");
+        }
+        const writeTx = runtime.edit();
+        writeSourceAndCompiledDocs(
+          runtime,
+          target,
+          modules,
+          entry,
+          { ...opts, moduleDelegations },
+          writeTx,
+        );
+        runtime.prepareTxForCommit(writeTx);
+        expect((await writeTx.commit().settled).error).toBeUndefined();
+      };
+      try {
+        await manager.persistCompileCacheTracked(
+          space,
+          compiled.modules,
+          compiled.entryIdentity,
+          { runtimeVersion },
+        );
+        const parentIntoB = manager.persistCompileCacheTracked(
+          spaceB,
+          compiled.modules,
+          compiled.entryIdentity,
+          { runtimeVersion },
+        );
+        await expect(
+          manager.persistCompileCacheTracked(
+            spaceB,
+            [child],
+            child.identity,
+            { runtimeVersion },
+          ),
+        ).rejects.toThrow("the child's own persist fails");
+        expect(typeof await load(child.identity, spaceB)).toBe("function");
+        release.resolve();
+        await parentIntoB;
+        await flushed();
+        expect(writes).toBe(3);
+        expect(await holdsClosure(spaceB, child.identity)).toBe(true);
+      } finally {
+        release.resolve();
+        manager.compileCacheWriter = undefined;
+      }
+    });
+
+    it("copies the closure into the space of a piece the runtime starts from memory", async () => {
+      // The runner resolves a live pattern synchronously when it starts a
+      // piece, without the asynchronous loader, so that path is a load
+      // served from memory in the piece's space too. A piece created in
+      // `spaceB` with the source stored there and no compiled closure: a
+      // fresh runtime compiles the identity cold in `space` first, then
+      // starts the piece from memory, and `spaceB` receives the closure.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      const created = await runtime.patternManager.compileOrGetPattern(
+        PROGRAM,
+      );
+      const piece = runtime.getCell<{ result: number }>(
+        spaceB,
+        "piece started from memory",
+        undefined,
+        tx,
+      );
+      const run = runtime.run(tx, created, { value: 4 }, piece);
+      await tx.commit().settled;
+      tx = runtime.edit();
+      await run.pull();
+      await runtime.idle();
+      await storeSourceIn(fixture, [space, spaceB]);
+      const pieceLink = piece.getAsNormalizedFullLink();
+
+      const starter = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        let compiles = 0;
+        const original = starter.harness.compileResolvedToRecordGraph.bind(
+          starter.harness,
+        );
+        starter.harness.compileResolvedToRecordGraph = (...args) => {
+          compiles++;
+          return original(...args);
+        };
+        expect(
+          typeof await starter.patternManager.loadPatternByIdentity(
+            entryIdentity,
+            "default",
+            space,
+          ),
+        ).toBe("function");
+        await starter.patternManager.flushCompileCacheWrites();
+        await starter.storageManager.synced();
+        expect(compiles).toBe(1);
+        expect(await holdsClosure(spaceB, entryIdentity)).toBe(false);
+
+        const started = starter.getCellFromLink(pieceLink);
+        await started.sync();
+        expect(await starter.start(started)).toBe(true);
+        await starter.idle();
+        await starter.patternManager.flushCompileCacheWrites();
+        await starter.storageManager.synced();
+        expect(compiles).toBe(1);
+        expect(await holdsClosure(spaceB, entryIdentity)).toBe(true);
+      } finally {
+        await starter.dispose({ closeStorage: false });
+      }
+    });
+
+    it("copies from a space whose failed persist left another one in flight", async () => {
+      // Two persists of one closure into `space` share a storage slot and
+      // run in turn; the first fails and the second is still writing. A load
+      // served from memory in `spaceB` while it writes names `space` as the
+      // copy's origin all the same: the copy waits for that write, and the
+      // closure reaches `spaceB` from it.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await runtime.patternManager.compileOrGetPattern(PROGRAM);
+      const manager = runtime.patternManager.accessForTestingOnly;
+      const runtimeVersion = await getCompileCacheRuntimeVersion();
+      if (runtimeVersion === undefined) throw new Error("No runtime version");
+      const release = Promise.withResolvers<void>();
+      let writes = 0;
+      // The manager's write: the first into `space` fails, the second into
+      // it is held open until `release` resolves.
+      manager.compileCacheWriter = async (
+        target,
+        modules,
+        entry,
+        opts,
+        moduleDelegations,
+      ) => {
+        const write = ++writes;
+        if (target === space && write === 1) {
+          throw new Error("the first persist fails");
+        }
+        if (target === space && write === 2) await release.promise;
+        const writeTx = runtime.edit();
+        writeSourceAndCompiledDocs(
+          runtime,
+          target,
+          modules,
+          entry,
+          { ...opts, moduleDelegations },
+          writeTx,
+        );
+        runtime.prepareTxForCommit(writeTx);
+        expect((await writeTx.commit().settled).error).toBeUndefined();
+      };
+      try {
+        // Distinct delegations give the two persists distinct closure
+        // signatures, so the second queues behind the first instead of
+        // joining it.
+        const first = manager.persistCompileCacheTracked(
+          space,
+          fixture.modules,
+          entryIdentity,
+          { runtimeVersion },
+          new Map([[entryIdentity, new Set([entryIdentity])]]),
+        );
+        const second = manager.persistCompileCacheTracked(
+          space,
+          fixture.modules,
+          entryIdentity,
+          { runtimeVersion },
+        );
+        await expect(first).rejects.toThrow("the first persist fails");
+        expect(typeof await load(entryIdentity, spaceB)).toBe("function");
+        release.resolve();
+        await second;
+        await flushed();
+        expect(writes).toBe(3);
+        expect(await holdsClosure(spaceB, entryIdentity)).toBe(true);
+      } finally {
+        release.resolve();
+        manager.compileCacheWriter = undefined;
+      }
+    });
+
+    it("copies once into a space, however many loads it serves there", async () => {
+      const { entryIdentity, loaded } = await coldLoadedInSpace();
+      const { compileCacheWrites } =
+        runtime.patternManager.accessForTestingOnly;
+
+      // Three loads before any copy lands: the first issues the copy, and
+      // the other two find it issued.
+      const loads = [
+        load(entryIdentity, spaceB),
+        load(entryIdentity, spaceB),
+        load(entryIdentity, spaceB),
+      ];
+      expect(compileCacheWrites.size).toBe(1);
+      for (const pattern of await Promise.all(loads)) {
+        expect(pattern).toBe(loaded);
+      }
+      await flushed();
+      expect(await holdsClosure(spaceB, entryIdentity)).toBe(true);
+
+      // Once the copy is durable, a load there issues nothing, as a load in
+      // the space that compiled it never did.
+      expect(await load(entryIdentity, spaceB)).toBe(loaded);
+      expect(compileCacheWrites.size).toBe(0);
+      expect(await load(entryIdentity, space)).toBe(loaded);
+      expect(compileCacheWrites.size).toBe(0);
+    });
+
+    it("copies nothing for a preview load", async () => {
+      const { entryIdentity, loaded } = await coldLoadedInSpace();
+      const { compileCacheWrites } =
+        runtime.patternManager.accessForTestingOnly;
+
+      expect(await load(entryIdentity, spaceB, { repairCache: false }))
+        .toBe(loaded);
+      expect(compileCacheWrites.size).toBe(0);
+      await flushed();
+      expect(await holdsClosure(spaceB, entryIdentity)).toBe(false);
+    });
+
+    it("copies nothing while no space holds the closure", async () => {
+      // Compiled with no space, the program's closure is live in memory and
+      // durable nowhere, so there is nothing to copy from.
+      const { entryIdentity } = await engine.compileToRecordGraph(PROGRAM);
+      const compiled = await runtime.patternManager.compileOrGetPattern(
+        PROGRAM,
+      );
+      const { compileCacheWrites } =
+        runtime.patternManager.accessForTestingOnly;
+
+      expect(await load(entryIdentity, spaceB)).toBe(compiled);
+      expect(compileCacheWrites.size).toBe(0);
+    });
+  });
+
   it("trusts integrity-gated cached bodies and skips body re-verification", async () => {
     // Spec (module-loading.md, threat model): a warm hit loaded from the
     // integrity-gated compiled set trusts the CFC label, so `trustedBodies`
