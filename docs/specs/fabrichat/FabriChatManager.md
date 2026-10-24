@@ -23,7 +23,7 @@ each, and a row in the built-in targets table of
 ## State
 
 The manager keeps `direct`, `requests`, `outgoingNotices`, and
-`roomMembership` in the home space. `rooms` is derived per session from those
+`roomMembership` in the home space. `rooms` is derived per user from those
 membership choices and the user's shared-space catalog, Home's, which Home
 hands the manager
 ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)).
@@ -61,7 +61,7 @@ catalog entry, that entry's revision, and the resolved room identity. Clients pa
 unchanged to `forget`; they need supply no container. A direct room's
 `counterpart` is the one `direct` holds the resolved room under, or else the
 room's labeled creator. `people` is drawn from listed rooms' rosters per
-session, keyed by the principal each profile attests.
+user, keyed by the principal each profile attests.
 
 The manager's rendering labels each listed room with its `about.title`, read
 through the room's link, so a retitle shows there once the room records it. A
@@ -175,7 +175,7 @@ the room's `addMember` sends once it has granted them access. It runs as an
 event of its own, after the add has committed, and offers the room through the
 same steps as step 3: through the profile the add named, or, for an add naming
 only an address, through the profiles `people` lists for that person, as the
-session sending it reads `people`. It records `offered` or `noticed` under the
+user sending it reads `people`. It records `offered` or `noticed` under the
 request's id, which the room reads back as the add's `delivery`.
 
 ## Prerequisites

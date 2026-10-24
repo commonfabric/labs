@@ -20,6 +20,8 @@ import {
   FabricEpochNsec,
   isWellFormedDID,
 } from "commonfabric";
+import type { FileEntry } from "../fabrifile/schemas.tsx";
+import type { FileStoreRecord } from "../fabrifile/store.tsx";
 import type { ProfileInbox } from "../system/profile-home.tsx";
 
 //
@@ -199,8 +201,18 @@ export interface ChatMessage {
   /** The profile the sender sent under; absent once obliterated. */
   authorProfile?: ProfileCell;
 
-  /** The current text, or the marker of a deleted message. */
+  /**
+   * The current text, empty only where the message has attachments, or the
+   * marker of a deleted message.
+   */
   body: string | ChatDeletedBody;
+
+  /**
+   * The files sent with the message, as entries of its space's file store, in
+   * the order they were sent; absent for none, and once the message is
+   * deleted.
+   */
+  attachments?: Cell<FileEntry>[];
 
   /** The room's handler clock when it recorded the message. */
   sentAt: FabricEpochNsec;
@@ -221,7 +233,16 @@ export interface ChatMessage {
   reactions?: ChatReaction[];
 }
 
-/** A room's policy, stated correctly, with every key present. */
+/**
+ * How many attachments a message may have, in a room whose policy doesn't
+ * say: what an absent `maxAttachments` means.
+ */
+export const DEFAULT_MAX_ATTACHMENTS = 10;
+
+/**
+ * A room's policy, stated correctly, with every key present but
+ * `maxAttachments`, which an earlier room's policy doesn't hold.
+ */
 export interface ChatRoomPolicy {
   /** Whether an OWNER may obliterate messages. */
   ownersMayObliterate: boolean;
@@ -246,6 +267,12 @@ export interface ChatRoomPolicy {
 
   /** Stated for the policy's shape, and read by nothing: the room offers no windows. */
   maxOpenWindows: number;
+
+  /**
+   * The most attachments a message may have; absent for
+   * `DEFAULT_MAX_ATTACHMENTS`.
+   */
+  maxAttachments?: number;
 }
 
 /** The kind of room: how it was created, not how many members it has. */
@@ -405,10 +432,20 @@ export interface ChatRoomLink {
   roster?: ManagerProfileCell[];
 }
 
-/** A container's explicit declaration of the conversation it holds. */
+/**
+ * A container's explicit declaration of the conversation it holds, and where
+ * it keeps the store of its space's files, which a room in its space that
+ * isn't its root uses as its own. It offers the record rather than a stream
+ * to create the store with: a stream declared here reads as present whether or
+ * not the container has one, and an event sent to one it lacks is dropped, so
+ * only a value can say whether the container keeps a store.
+ */
 export interface ChatContainer {
   /** The declared conversation, wherever its room lives. */
   chatRoom?: Cell<ChatRoomLink>;
+
+  /** Where the container keeps its space's file store. */
+  fileStoreRecord?: FileStoreRecord;
 }
 
 /** One room in a user's chat manager. */
