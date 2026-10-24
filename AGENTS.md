@@ -260,6 +260,8 @@ leaves out; read it when one fails, or before adding a check exemption.
   `resolveLocalProgram`
 - `check-baselines-append-only` — a pattern baseline deleted rather than added
   to
+- `check-cause-assignments` — a compiler change that renumbers an unchanged
+  pattern's anonymous cells
 - `check-test-aliases` — a test-identity alias line edited, removed, duplicated,
   or cyclic
 - `check-pattern-tiers` — a legacy or fixture pattern without its marker

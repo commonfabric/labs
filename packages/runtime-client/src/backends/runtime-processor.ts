@@ -1083,6 +1083,8 @@ export class RuntimeProcessor {
    */
   #hostReadGate = new HostReadGate(undefined, {});
   #cancelSpaceAccessLoss?: Cancel;
+  #cancelSpaceAccessRestored?: Cancel;
+  #cancelConnectionRestored?: Cancel;
 
   /**
    * The retries of refused spaces in flight, which the render boundaries'
@@ -1120,6 +1122,27 @@ export class RuntimeProcessor {
       ?.subscribeSpaceAccessLoss?.((space) => {
         for (const client of clients()) {
           client.post({ type: NotificationType.SpaceAccessLost, space });
+        }
+      });
+    // An access change is a denial or a recovery, and only a recovery leaves
+    // the space with no access error. A storage manager that cannot say what
+    // the error is cannot tell the two apart, so nothing is posted for it.
+    const storage = runtime.storageManager;
+    const accessError = storage?.spaceAccessError?.bind(storage);
+    if (accessError !== undefined) {
+      this.#cancelSpaceAccessRestored = storage?.subscribeSpaceAccessChange?.(
+        (space) => {
+          if (accessError(space) !== undefined) return;
+          for (const client of clients()) {
+            client.post({ type: NotificationType.SpaceAccessRestored, space });
+          }
+        },
+      );
+    }
+    this.#cancelConnectionRestored = runtime.storageManager
+      ?.subscribeConnectionRestored?.(() => {
+        for (const client of clients()) {
+          client.post({ type: NotificationType.ConnectionRestored });
         }
       });
   }
@@ -1442,6 +1465,10 @@ export class RuntimeProcessor {
         this.#intentOutcomeCancel?.();
         this.#cancelSpaceAccessLoss?.();
         this.#cancelSpaceAccessLoss = undefined;
+        this.#cancelSpaceAccessRestored?.();
+        this.#cancelSpaceAccessRestored = undefined;
+        this.#cancelConnectionRestored?.();
+        this.#cancelConnectionRestored = undefined;
         this.#spaceAccessRetries.dispose();
         this.#intentOutcomeCancel = undefined;
         this.#profilePreloadCancel?.();

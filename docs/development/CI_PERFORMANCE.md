@@ -271,11 +271,17 @@ The lane jobs restore a pattern compile byte cache from `.ci-cache/compile` in
 one `actions/cache` step, keyed `cc-lane-<fingerprint>-tests-<lane>-<hash>` with
 the restore prefix `cc-lane-<fingerprint>-`, where the hash is a `hashFiles()`
 over `packages/patterns` and `packages/generated-patterns`. The fingerprint is
-the compiler-input fingerprint. The runtime's version axis is `cf/esm-compile/`
-followed by that same fingerprint, so a compiled document is stored under
-`compileCache:cf/esm-compile/<fingerprint>/<identity>`. A cache entry CI names
-by the fingerprint therefore holds bytes the compiler now running emitted, and
-an entry from any other compiler is one the lanes never ask for. The prefix lets
+the compiler-input fingerprint, which moves with every input that can change
+what the compiler emits. A cache entry CI names by it therefore holds bytes the
+compiler now running emitted, and an entry from any other compiler is one the
+lanes never ask for. (A shipped build's own version axis,
+`compileCache:cf/esm-compile/<version>/<identity>`, is coarser on purpose: it
+is a hash of what the compiler emits for a fixed corpus, baked in at build time,
+so it stays put across compiler changes that compile the corpus to the same
+documents. The lanes'
+test binaries take the input fingerprint instead, which costs no corpus
+compile; `CF_COMPILE_CACHE_VERSION` in `tasks/build-binaries.ts` is the
+switch.) The prefix lets
 a lane restore a cache another lane or an earlier commit saved. That costs only
 the restore time, because a compiled pattern is reused only where its source is
 unchanged. The hash of the pattern sources is what makes a
@@ -291,8 +297,9 @@ as its `fingerprint` output. The cache step then references that step's output.
 This is the shape [Cache Keys And Post-Job Saves](#cache-keys-and-post-job-saves)
 prescribes, and it buys two things here. The
 post-job save re-evaluates the key without walking the fingerprinted trees a
-second time. And the CI key and the runtime version become one value computed
-once, rather than two descriptions of one list of inputs that can drift apart.
+second time. And the CI key is the one value `tasks/compile-cache-key.ts`
+defines, computed once, rather than a second description of the same list of
+inputs that can drift from it.
 
 `COMPILE_FINGERPRINT_INPUTS` in
 `packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts` is the list

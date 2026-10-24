@@ -19,14 +19,16 @@ and one left out by accident look identical in a list of paths, so the record is
 what separates them: a tree nobody decided about fails the test rather than
 passing in silence. Adding an exemption means adding an entry that says why.
 
-Four trees are recorded as unchecked. `packages/schema-generator/test/fixtures`
+Five trees are recorded as unchecked. `packages/schema-generator/test/fixtures`
 and `packages/ts-transformers/test/fixtures` are fixture corpora — the inputs
-those tests feed their transformer, and the outputs they compare against — and
-`packages/static/assets/types` is the ambient environment a pattern compiles
-against, handed to the in-memory compiler. What earns all three the exemption is
-holding data rather than modules this repository builds; neither corpus compiles
-as a unit, though files within one may well compile alone. The fourth is
-`packages/patterns`, which the next paragraph covers.
+those tests feed their transformer, and the outputs they compare against —
+`packages/runner/test/fixtures/compile-cache-corpus` is the frozen pattern
+corpus a build compiles to hash the compiler's output into the compile-cache
+version, and `packages/static/assets/types` is the ambient environment a
+pattern compiles against, handed to the in-memory compiler. What earns all four
+the exemption is holding data rather than modules this repository builds;
+neither test corpus compiles as a unit, though files within one may well compile
+alone. The fifth is `packages/patterns`, which the next paragraph covers.
 
 An exemption's reason is held to being true of every file it matches, which is
 what decides how wide the entry may be. Two entries divide `packages/patterns`,
@@ -46,7 +48,7 @@ by a file's shape while the reason beside it names a lane, the two agreeing in
 the middle and parting at the edges.
 
 The reasons that do not name another gate say what a tree _is_ rather than
-asserting a property of each file in it. That is why the three above are
+asserting a property of each file in it. That is why the four above are
 described as corpora and as an ambient environment: none is a set of modules the
 repository builds, which is what earns the exemption. Individual files in them
 may well compile alone, so a reason claiming that none of them does would be
@@ -147,6 +149,26 @@ Each of these gates fails CI on its own, and none of them run as part of
   the caller attached
 - `deno task check-baselines-append-only` — a pattern baseline that was deleted
   rather than added to
+- `deno task check-cause-assignments` — a change to how patterns are built
+  that moves an anonymous cell of an in-tree pattern to a new
+  `{ $generated: N }` number while the pattern's source stays the same. The runtime mints such a cell's id from
+  its number, so a deployed piece would read each moved cell's state from the
+  document another cell wrote, under a pattern identity that did not change.
+  The gate compiles every pattern with the merge base's compiler and with the
+  change's, without type checking, and compares the builds of each pattern
+  whose source files match, telling a cell apart from its neighbors by what
+  writes it rather than by its schema, which the schema generator reshapes
+  without moving anything. A pattern that fails to compile on either side
+  fails the gate, unless that side's own `tasks/pattern-compat-unevaluable.ts`
+  lists it. The gate
+  compiles only for a change touching `packages/js-compiler/`,
+  `packages/runner/src/builder/`, `packages/runner/src/builtins/`,
+  `packages/runner/src/harness/`, `packages/schema-generator/src/` or
+  `packages/ts-transformers/src/`, or its own files (`COMPILER_PATHS` and
+  `GATE_PATHS` in `tasks/check-cause-assignments.ts`), and passes any other
+  change without compiling. A move that has to ship is declared in
+  `tasks/cause-assignments-accepted-moves.ts`, naming the two builds by the
+  digests the failure prints and giving a reason
 - `deno task check-test-aliases` — a test-identity alias line that was edited or
   removed rather than appended, mapped an identity twice, or formed a cycle. The
   lines live under `tasks/test-identity-aliases/`, in files named after the last
