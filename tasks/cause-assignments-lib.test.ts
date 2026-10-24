@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  ambiguousCells,
   assignmentDigest,
   assignmentLevels,
   movedCells,
@@ -122,6 +123,33 @@ describe("cause-assignments-lib", () => {
           to: 1,
         },
       ]);
+    });
+  });
+
+  describe("ambiguousCells()", () => {
+    it("returns, with its pattern and level, a description of children whose count differs", () => {
+      expect(
+        ambiguousCells(
+          assignment([{ child: CHILD }, { child: CHILD }, { lift: true }]),
+          assignment([{ child: CHILD }, { lift: true }]),
+        ),
+      ).toEqual([{
+        pattern: "test.tsx",
+        level: "",
+        description:
+          "cell, computed, written by sub-pattern child-identi#Child",
+        before: [0, 1],
+        after: [0],
+      }]);
+    });
+
+    it("returns nothing for a level only one side has", () => {
+      expect(
+        ambiguousCells(
+          { pattern: "test.tsx", source: "source", levels: [] },
+          assignment([{ child: CHILD }]),
+        ),
+      ).toEqual([]);
     });
   });
 

@@ -126,7 +126,12 @@ another renumbers it under a pattern identity that did not change, and a
 deployed piece then reads the moved cell's state from the document another
 cell wrote. `deno task check-cause-assignments` holds the compiler to the
 base revision's numbering of every in-tree pattern whose source is unchanged
-(`docs/development/automated-gates.md`).
+(`docs/development/automated-gates.md`). It matches the cells of one level
+across the two builds by a description that holds across compilers, and by
+their order among cells of one description
+(`packages/runner/src/cause-assignment.ts`). So where cells holding state share
+a description and their count or their numbers change, which cell went where
+cannot be told, and the gate fails on that as well.
 
 ### Sub-pattern instance identity
 
