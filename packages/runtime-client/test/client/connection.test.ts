@@ -690,7 +690,36 @@ describe("connection", () => {
       await connection.dispose();
     });
 
-    it("calls a value-only subscriber no more when the worker reports the cell undefined, though the label its handle holds is then not current", async () => {
+    it("hands a label-aware subscriber what the handle holds again, as current, when the worker restores the value and label it held", async () => {
+      // After an update holding nothing, the worker's next update brings back
+      // the value and label the handle kept: nothing it holds changes but
+      // that the label is the worker's read again.
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const holding = listen(new CellHandle<string>(runtime, ref));
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("alice") }),
+      );
+      transport.emit("message", posted({ value: undefined }));
+
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("alice") }),
+      );
+
+      expect(holding.heard).toEqual([
+        { cfcLabel: undefined, current: false },
+        { cfcLabel: label("alice"), current: true },
+        { cfcLabel: label("alice"), current: false },
+        { cfcLabel: label("alice"), current: true },
+      ]);
+      holding.cancel();
+      await connection.dispose();
+    });
+
+    it("calls a value-only subscriber no more when the worker reports the cell undefined and then restores it, though the currency of the label its handle holds changes", async () => {
       const transport = new FakeTransport();
       const connection = await initializedConnection(transport);
       const runtime = runtimeOf(connection);
@@ -710,6 +739,14 @@ describe("connection", () => {
 
       expect(values).toEqual([undefined, "by alice"]);
       expect(valueOnly.cfcLabelCurrent).toBe(false);
+
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("alice") }),
+      );
+
+      expect(values).toEqual([undefined, "by alice"]);
+      expect(valueOnly.cfcLabelCurrent).toBe(true);
       labeled.cancel();
       valueOnlyCancel();
       await connection.dispose();

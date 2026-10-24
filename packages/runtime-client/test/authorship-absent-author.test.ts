@@ -46,8 +46,8 @@ const apiUrl = "http://localhost/";
  * message whose `body` she wrote and whose `authorProfile` links to that
  * profile, with a client attached to it over a channel. `open()` makes a
  * fresh handle on one of the message's fields, as a page opening a new view
- * of the message does, and `obliterate()` rewrites the message without its
- * author, its body still Ada's.
+ * of the message does, `obliterate()` rewrites the message without its
+ * author, its body still Ada's, and `restore()` puts the author back.
  */
 async function messageByAda() {
   const storage = StorageManager.emulate({ as: signer });
@@ -81,6 +81,10 @@ async function messageByAda() {
       },
     } as FabricValue);
   const authoredByAda = { kind: "authored-by", subject: ada };
+  const authorProfile = profile.getAsLink({
+    includeSchema: true,
+    keepAsCell: KeepAsCell.All,
+  });
   const commit = async (
     edit: (tx: ReturnType<Runtime["edit"]>) => void,
   ) => {
@@ -101,10 +105,7 @@ async function messageByAda() {
       message,
       {
         body: "hello",
-        authorProfile: profile.getAsLink({
-          includeSchema: true,
-          keepAsCell: KeepAsCell.All,
-        }),
+        authorProfile,
       },
       ["body"],
       authoredByAda,
@@ -153,6 +154,16 @@ async function messageByAda() {
       commit((tx) => {
         seed(tx, message, { body: { deleted: true } }, ["body"], authoredByAda);
       }),
+    restore: () =>
+      commit((tx) => {
+        seed(
+          tx,
+          message,
+          { body: { deleted: true }, authorProfile },
+          ["body"],
+          authoredByAda,
+        );
+      }),
     [Symbol.asyncDispose]: async () => {
       await client.dispose();
       await runtime.dispose();
@@ -163,16 +174,26 @@ async function messageByAda() {
 
 /**
  * Observes a fresh view of the message's authorship, as a page opening one
- * does: `first` is the first verdict it reports.
+ * does: `first` is the first verdict it reports, and `next(state)` resolves
+ * when it next reports `state`.
  */
 function observeView(fixture: Awaited<ReturnType<typeof messageByAda>>) {
   const first = Promise.withResolvers<CfcAuthorshipState>();
+  const waiting: Array<{ state: CfcAuthorshipState; resolve: () => void }> = [];
   const cancel = observeAuthorship(
     fixture.open("body"),
     fixture.open("authorProfile"),
-    (observation) => first.resolve(observation.state),
+    (observation) => {
+      first.resolve(observation.state);
+      for (const waiter of waiting.splice(0)) {
+        if (waiter.state === observation.state) waiter.resolve();
+        else waiting.push(waiter);
+      }
+    },
   );
-  return { first: first.promise, cancel };
+  const next = (state: CfcAuthorshipState) =>
+    new Promise<void>((resolve) => waiting.push({ state, resolve }));
+  return { first: first.promise, next, cancel };
 }
 
 describe("authorship-absent-author", () => {
@@ -190,6 +211,27 @@ describe("authorship-absent-author", () => {
     const later = observeView(fixture);
 
     expect(await later.first).toBe("unknown");
+    later.cancel();
+    live.cancel();
+  });
+
+  it("reports `verified` again on a view open while the author link goes and comes back", async () => {
+    // The worker's update restoring the link carries the value and label the
+    // view's handle held before the link went, so only their currency has
+    // changed.
+    await using fixture = await messageByAda();
+    const live = observeView(fixture);
+    expect(await live.first).toBe("verified");
+    const gone = live.next("unknown");
+    await fixture.obliterate();
+    await gone;
+
+    const back = live.next("verified");
+    await fixture.restore();
+    await back;
+    const later = observeView(fixture);
+
+    expect(await later.first).toBe("verified");
     later.cancel();
     live.cancel();
   });

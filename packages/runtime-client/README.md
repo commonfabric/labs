@@ -30,7 +30,9 @@ subscriber that was given a value learns that the cell now holds nothing. A
 handle holds in place, telling no subscriber. A handle that hears of a dropped
 update no longer counts the label it holds as the worker's current read, and a
 subscriber that asked for labels is called again with what the handle holds,
-told that its label is not current (`CellDelivery`).
+told that its label is not current (`CellDelivery`). The worker's next update
+with a label makes it current again, and that subscriber is told so even when
+the update brings back the value and label the handle held.
 
 A subscription's read that finds the value and label the worker last sent for it
 sends nothing: a change elsewhere in what the read depends on, which runs the
