@@ -22,8 +22,8 @@ export const ROUTED_DEFAULT_SLOT_LIMIT = 150_000;
  * Most encoded bytes of one part of a message split for a routed peer: a sync
  * the toolshed splits for a client that takes one in parts (`syncPartsV1`),
  * and a watch set the SDK stages in parts (`watchSetPartsV1`). Well under the
- * 4 MiB a request and the 8 MiB a response may take, so that other sessions'
- * messages, on the toolshed's socket and through the router, go between one
- * message's parts.
+ * 4 MiB a request and the 8 MiB a response may take, so that the router can
+ * send other toolsheds' messages to the client between one sync's parts. A
+ * toolshed sends a sync's parts back to back on its socket.
  */
 export const ROUTED_PART_BYTES = 1024 * 1024;

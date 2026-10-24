@@ -183,8 +183,8 @@ export async function startRoutedToolshed(config: RoutedToolshedFixture) {
     }, 0);
   };
   const connectRouted = server.connectRouted.bind(server);
-  server.connectRouted = (send, owns) => {
-    const backend = connectRouted(send, owns);
+  server.connectRouted = (send, owns, syncParts) => {
+    const backend = connectRouted(send, owns, syncParts);
     const receive = backend.receive.bind(backend);
     backend.receive = async (payload) => {
       const hold = admission;

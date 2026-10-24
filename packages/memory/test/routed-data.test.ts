@@ -1740,21 +1740,36 @@ Deno.test("a session's watch IDs are bounded by configuration, and a mutation pa
         // Two parts of four IDs fill the bound, and a third part's one more
         // ID, though its frame is small, takes the set past it.
         assertEquals(
-          (await request({ watches: watches("a", 4), part: 0, more: true })).ok,
+          (await request({
+            watches: watches("a", 4),
+            stage: "ab",
+            part: 0,
+            more: true,
+          })).ok,
           { staged: true },
         );
         assertEquals(
-          (await request({ watches: watches("b", 4), part: 1, more: true })).ok,
+          (await request({
+            watches: watches("b", 4),
+            stage: "ab",
+            part: 1,
+            more: true,
+          })).ok,
           { staged: true },
         );
         const reasons = await refusalReasons(async () => {
-          const refused = await request({ watches: watches("c", 1), part: 2 });
+          const refused = await request({
+            watches: watches("c", 1),
+            stage: "ab",
+            part: 2,
+          });
           assert(refused.error !== undefined, JSON.stringify(refused));
           // Holdings named over two parts are bounded together as well.
           assert(
             (await request({
               watches: [],
               holdings: holdings(3),
+              stage: "held",
               part: 0,
               more: true,
             })).ok,
@@ -1762,6 +1777,7 @@ Deno.test("a session's watch IDs are bounded by configuration, and a mutation pa
           const holdingsRefused = await request({
             watches: [],
             holdings: holdings(2),
+            stage: "held",
             part: 1,
           });
           assert(
@@ -1774,9 +1790,17 @@ Deno.test("a session's watch IDs are bounded by configuration, and a mutation pa
         // parts make, applied, is what it then holds: a set staged at the
         // bound is taken, and leaves no room for another ID.
         assert(
-          (await request({ watches: watches("d", 4), part: 0, more: true })).ok,
+          (await request({
+            watches: watches("d", 4),
+            stage: "de",
+            part: 0,
+            more: true,
+          })).ok,
         );
-        assert((await request({ watches: watches("e", 4), part: 1 })).ok);
+        assert(
+          (await request({ watches: watches("e", 4), stage: "de", part: 1 }))
+            .ok,
+        );
         const full = await refusalReasons(async () => {
           const refused = await f.request({
             type: "session.watch.add",
@@ -5255,7 +5279,7 @@ describe("routed close diagnostics", () => {
     },
   } as ServerMessage);
 
-  it("admits each session's split sync past the queued-output bound, and bounds the output queued behind it", async () => {
+  it("bounds the parts of split syncs together, apart from other output", async () => {
     const o = await outputFixture("output-split-sync", {
       outputBytesPerSocket: 256 * 1024,
     });
@@ -5267,7 +5291,7 @@ describe("routed close diagnostics", () => {
     try {
       const space = o.f.space.did();
       // Five 100 KiB parts of one session's sync, and two of another's, are
-      // retained together while the reader acknowledges nothing.
+      // retained together past the 256 KiB bound, within eight times it.
       for (let i = 0; i < 4; i++) o.send(syncPart(space, "s1", 100_000, true));
       o.send(syncPart(space, "s1", 100_000, false));
       o.send(syncPart(space, "s2", 100_000, true));
@@ -5290,8 +5314,8 @@ describe("routed close diagnostics", () => {
     }
   });
 
-  it("bounds a session's next split sync while its earlier one is retained", async () => {
-    const o = await outputFixture("output-split-sync-next", {
+  it("refuses a part that would take the parts retained past eight times the bound", async () => {
+    const o = await outputFixture("output-split-sync-bound", {
       outputBytesPerSocket: 256 * 1024,
     });
     const callbacks: (() => void)[] = [];
@@ -5301,19 +5325,32 @@ describe("routed close diagnostics", () => {
     });
     try {
       const space = o.f.space.did();
-      o.send(syncPart(space, "s1", 100_000, true));
-      o.send(syncPart(space, "s1", 100_000, false));
-      // The session's next sync meets the bound: its first part is admitted
-      // alone, and its second would take it past the bound.
-      o.send(syncPart(space, "s1", 150_000, true));
-      expect(() => o.send(syncPart(space, "s1", 150_000, false))).toThrow(
+      // Six parts of 300 KiB, 1.8 MiB, fit the 2 MiB the parts may take; a
+      // seventh does not.
+      for (let i = 0; i < 6; i++) {
+        o.send(syncPart(space, "s1", 300 * 1024, true));
+      }
+      expect(() => o.send(syncPart(space, "s1", 300 * 1024, false))).toThrow(
         "Routed memory output limit",
       );
       await o.socket.closed.promise;
       o.f.host.close();
       expect(o.closedVerdicts()[0].outputLimit).toMatchObject({
-        classification: "queued-output",
+        limitBytes: 2 * 1024 * 1024,
+        classification: "sync-parts",
       });
+    } finally {
+      await o.close();
+    }
+  });
+
+  it("closes the socket on a message for another session between a split sync's parts", async () => {
+    const o = await outputFixture("output-split-sync-interleaved");
+    try {
+      const space = o.f.space.did();
+      o.send(syncPart(space, "s1", 1000, true));
+      expect(() => o.send(syncPart(space, "s2", 1000, false))).toThrow();
+      await o.socket.closed.promise;
     } finally {
       await o.close();
     }

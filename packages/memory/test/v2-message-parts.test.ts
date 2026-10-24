@@ -26,15 +26,18 @@ import {
   type WatchSetRequest,
 } from "../v2.ts";
 import {
+  appendWatchSetPart,
   halveSyncPart,
-  joinWatchSetParts,
   type PartLimits,
   payloadFits,
   serverMessageSync,
   splitSyncMessage,
   splitWatchSetRequest,
+  stagedWatchSet,
   SyncPartAssembler,
 } from "../v2/message-parts.ts";
+import type { JSONSchema } from "@commonfabric/api";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { countValues } from "./support/routed-slots.ts";
 import {
   testSessionOpenAuthFactory,
@@ -195,6 +198,40 @@ Deno.test("the assembler passes other sessions' messages between a split sync's 
   );
 });
 
+Deno.test("the assembler passes a message for the session that carries no sync between its sync's parts", () => {
+  const parts = splitSyncMessage(responseWith(syncOf(10)), SESSION, {
+    bytes: 1500,
+    values: null,
+  });
+  // A router's own answer to another of the session's requests, and any
+  // other message that carries no sync, come as they are.
+  const refusal = {
+    type: "response",
+    requestId: "req:2",
+    error: {
+      name: "AuthorizationError",
+      message: "Routed memory request denied",
+    },
+  } as ServerMessage;
+  const presence = {
+    type: "presence/remove",
+    ...SESSION,
+    room: "room",
+    participantId: "someone",
+  } as ServerMessage;
+  const assembler = new SyncPartAssembler();
+  assertEquals(assembler.accept(parts[0], SESSION), undefined);
+  assertEquals(assembler.accept(refusal, SESSION), refusal);
+  assertEquals(assembler.accept(presence, SESSION), presence);
+  for (const part of parts.slice(1, -1)) {
+    assertEquals(assembler.accept(part, SESSION), undefined);
+  }
+  assertEquals(
+    assembler.accept(parts.at(-1)!, SESSION),
+    responseWith(syncOf(10)),
+  );
+});
+
 Deno.test("the assembler refuses a split sync's parts out of sequence", () => {
   const parts = splitSyncMessage(responseWith(syncOf(10)), SESSION, {
     bytes: 1500,
@@ -207,21 +244,11 @@ Deno.test("the assembler refuses a split sync's parts out of sequence", () => {
         for (const message of messages) assembler.accept(message, SESSION);
       },
       Error,
-      "Invalid multi-part session sync",
+      "Invalid session sync part",
     );
   };
-  // Another message for the session before the last part.
-  refuses([parts[0], {
-    type: "response",
-    requestId: "req:2",
-    ok: { serverSeq: 41 },
-  } as ServerMessage]);
-  refuses([parts[0], {
-    type: "presence/remove",
-    ...SESSION,
-    room: "room",
-    participantId: "someone",
-  } as ServerMessage]);
+  // Another sync for the session, in a response, before the last part.
+  refuses([parts[0], responseWith({ ...syncOf(1), removes: [] })]);
   // A later part at another sequence than the first.
   const moved = structuredClone(parts[1]) as SessionEffectMessage;
   moved.effect.toSeq = 41;
@@ -230,7 +257,7 @@ Deno.test("the assembler refuses a split sync's parts out of sequence", () => {
   assertThrows(
     () => new SyncPartAssembler().accept(parts[0], undefined),
     Error,
-    "Invalid multi-part session sync",
+    "Invalid session sync part",
   );
   // `more` with a value other than `true`.
   const odd = structuredClone(parts[0]) as ResponseMessage<
@@ -242,13 +269,17 @@ Deno.test("the assembler refuses a split sync's parts out of sequence", () => {
 
 Deno.test("payloadFits counts the values of text long enough to exceed the bound", () => {
   const values = 100;
-  // Short text cannot hold more values than its characters allow.
-  assert(payloadFits(`fvj1:[${"0,".repeat(98)}0]`, { bytes: 1000, values }));
-  // Text past twice the bound is counted: 200 one-character values do not
-  // fit; one long string does.
-  assert(
-    !payloadFits(`fvj1:[${"0,".repeat(199)}0]`, { bytes: 1000, values }),
-  );
+  const numbers = (n: number) => `fvj1:[${"0,".repeat(n - 1)}0]`;
+  // Text of at most 201 characters cannot hold more than 100 values: 97
+  // numbers in an array, 98 values, take 200.
+  assertEquals(numbers(97).length, 200);
+  assert(payloadFits(numbers(97), { bytes: 1000, values }));
+  // Longer text is counted: 99 numbers, 100 values, fit; 100 numbers, 101
+  // values, do not, in 206 characters; one long string does.
+  assert(payloadFits(numbers(99), { bytes: 1000, values }));
+  assertEquals(numbers(100).length, 206);
+  assert(!payloadFits(numbers(100), { bytes: 1000, values }));
+  assert(!payloadFits(numbers(200), { bytes: 1000, values }));
   assert(payloadFits(`fvj1:["${"x".repeat(900)}"]`, { bytes: 1000, values }));
   // Bytes are UTF-8 bytes.
   assert(!payloadFits(`fvj1:"${"é".repeat(600)}"`, { bytes: 1000, values }));
@@ -271,7 +302,7 @@ const DOCS = 24;
 const watchThroughParts = async (
   storeName: string,
   limits: PartLimits,
-  flags: Record<string, unknown> = HELLO.flags,
+  flags: typeof HELLO.flags = HELLO.flags,
 ): Promise<ServerMessage[]> => {
   const server = new Server({
     ...testSessionOpenServerOptions,
@@ -289,7 +320,7 @@ const watchThroughParts = async (
   const open = async (
     connection: ReturnType<Server["connect"]>,
     messages: ServerMessage[],
-    hello: Record<string, unknown>,
+    hello: typeof HELLO.flags,
   ): Promise<string> => {
     await connection.receive(encodeMemoryBoundary({ ...HELLO, flags: hello }));
     const ok = messages.shift() as HelloOkMessage;
@@ -365,6 +396,7 @@ Deno.test("a server splits a watch set's sync for a client that takes a sync in 
       new TextEncoder().encode(encodeMemoryBoundary(part)).length <=
         limits.bytes,
     );
+    assert(valueCount(part) <= limits.values);
   }
   const sessionId = (parts[1] as SessionEffectMessage).sessionId;
   const assembler = new SyncPartAssembler();
@@ -398,6 +430,107 @@ Deno.test("a server sends a sync whole to a client that does not take one in par
   const sync = serverMessageSync(response)!;
   assertEquals(sync.more, undefined);
   assertEquals(sync.upserts.length, DOCS);
+});
+
+Deno.test("a server halves a sync whose own tables take it past its bounds", async () => {
+  // Two documents, each linking with a large schema of its own. Compacted,
+  // each document is small, and by their own sizes both fit one part; but
+  // the message carries both schemas in its table, which takes it past the
+  // bound. Halved, each part carries the one schema it uses, and fits.
+  const schemaOf = (n: number): JSONSchema => ({
+    type: "object",
+    properties: Object.fromEntries(
+      Array.from({ length: 60 }, (_, i) => [`field${n}x${i}`, {
+        type: "string",
+      }]),
+    ),
+  });
+  const limits = { bytes: 3072, values: null };
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL("memory://sync-parts-halved"),
+    subscriptionRefreshDelayMs: 0,
+  });
+  const messages: ServerMessage[] = [];
+  const connection = server.connect(
+    (message) => messages.push(message),
+    limits,
+  );
+  const space = "did:key:z6Mk-sync-parts-halved";
+  try {
+    await connection.receive(encodeMemoryBoundary(HELLO));
+    const ok = messages.shift() as HelloOkMessage;
+    const sessionOpen = ok.sessionOpen as SessionOpenAuthMetadata;
+    await connection.receive(encodeMemoryBoundary({
+      type: "session.open",
+      requestId: "open",
+      space,
+      session: {},
+      invocation: {
+        aud: sessionOpen.audience,
+        challenge: sessionOpen.challenge.value,
+      },
+    }));
+    const sessionId =
+      (messages.shift() as ResponseMessage<{ sessionId: string }>).ok!
+        .sessionId;
+    await connection.receive(encodeMemoryBoundary({
+      type: "transact",
+      requestId: "write",
+      space,
+      sessionId,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [0, 1].map((n) => ({
+          op: "set",
+          id: `of:halved-${n}`,
+          value: {
+            value: {
+              link: linkRefFrom({
+                id: `of:target-${n}`,
+                path: [],
+                schema: schemaOf(n),
+              }),
+            },
+          },
+        })),
+      },
+    }));
+    messages.length = 0;
+    await connection.receive(encodeMemoryBoundary({
+      type: "session.watch.set",
+      requestId: "watch",
+      space,
+      sessionId,
+      watches: [{
+        id: "both",
+        kind: "graph",
+        query: {
+          roots: [0, 1].map((n) => ({
+            id: `of:halved-${n}`,
+            selector: { path: [], schema: false },
+          })),
+        },
+      }],
+    }));
+    const start = messages.findIndex((message) =>
+      message.type === "response" &&
+      (message as ResponseMessage<unknown>).requestId === "watch"
+    );
+    const parts = messages.slice(start);
+    assertEquals(parts.length, 2);
+    for (const part of parts) {
+      assert(encodeMemoryBoundary(part).length <= limits.bytes);
+      const sync = serverMessageSync(part) as SessionSync & {
+        schemaTable?: Record<string, unknown>;
+      };
+      assertEquals(Object.keys(sync.schemaTable ?? {}).length, 1);
+    }
+  } finally {
+    connection.close();
+    await server.close();
+  }
 });
 
 Deno.test("a client applies a watch set and a commit that arrive in parts", async () => {
@@ -512,6 +645,8 @@ Deno.test("a staged watch set's parts are numbered, fit their bounds and join to
     assertEquals(part.sessionId, SESSION.sessionId);
   }
   assertEquals(parts.map((part) => part.part), parts.map((_, index) => index));
+  // Every part names its set.
+  assert(parts.every((part) => part.stage === message.requestId));
   assertEquals(
     parts.map((part) => part.more),
     [...parts.slice(1).map(() => true as const), undefined],
@@ -521,9 +656,9 @@ Deno.test("a staged watch set's parts are numbered, fit their bounds and join to
   assertEquals(parts.at(-1)!.requestId, message.requestId);
   // An empty list the set sent is still sent, on the first part.
   assertEquals(parts[0].views, []);
-  let joined: WatchSetRequest | undefined;
-  for (const part of parts) joined = joinWatchSetParts(joined, part);
-  assertEquals(joined, message);
+  const joined = stagedWatchSet(parts[0]);
+  for (const part of parts.slice(1)) appendWatchSetPart(joined, part);
+  assertEquals({ ...joined, requestId: message.requestId }, message);
 });
 
 /**
@@ -601,6 +736,7 @@ Deno.test("a server holds a watch set's staged parts and applies them as one set
         type: "session.watch.set",
         requestId: `part-${part}`,
         watches: [watch(2 * part), watch(2 * part + 1)],
+        stage: "set",
         part,
         more: true,
       });
@@ -610,6 +746,7 @@ Deno.test("a server holds a watch set's staged parts and applies them as one set
       type: "session.watch.set",
       requestId: "set",
       watches: [watch(6)],
+      stage: "set",
       part: 3,
     });
     assertEquals(
@@ -621,57 +758,52 @@ Deno.test("a server holds a watch set's staged parts and applies them as one set
   }
 });
 
-Deno.test("a server refuses a staged part that does not follow the parts it holds, and the rest of the set", async () => {
+Deno.test("a server refuses a staged part that does not follow the parts of its set it holds, and the rest of the set", async () => {
   const { server, send, watch } = await rawSession("staged-set-gap");
+  const part = (
+    requestId: string,
+    index: number,
+    stage: string,
+    more = true,
+  ) =>
+    send({
+      type: "session.watch.set",
+      requestId,
+      watches: [watch(index)],
+      stage,
+      part: index,
+      ...(more ? { more: true } : {}),
+    });
   try {
-    assertEquals(
-      (await send({
-        type: "session.watch.set",
-        requestId: "part-0",
-        watches: [watch(0)],
-        part: 0,
-        more: true,
-      })).ok,
-      { staged: true },
-    );
+    assertEquals((await part("a-0", 0, "a")).ok, { staged: true });
     // Part 1 never arrives: part 2 is refused, and so is the last part,
     // which would otherwise replace the watch set with part 0 and itself.
-    const gap = await send({
-      type: "session.watch.set",
-      requestId: "part-2",
-      watches: [watch(2)],
-      part: 2,
-      more: true,
-    });
-    assertEquals(gap.error?.name, "ProtocolError");
-    const last = await send({
-      type: "session.watch.set",
-      requestId: "set",
-      watches: [watch(3)],
-      part: 3,
-    });
-    assertEquals(last.error?.name, "ProtocolError");
-    // Another mutation between parts is refused, and ends the staged set.
-    await send({
-      type: "session.watch.set",
-      requestId: "again-0",
-      watches: [watch(0)],
-      part: 0,
-      more: true,
-    });
+    assertEquals((await part("a-2", 2, "a")).error?.name, "ProtocolError");
+    assertEquals(
+      (await part("a-3", 3, "a", false)).error?.name,
+      "ProtocolError",
+    );
+    // A part of another set, at the place the held parts end, is refused:
+    // set b's first part never arrived, and set a's held part is not one of
+    // b's.
+    assertEquals((await part("a-0", 0, "a")).ok, { staged: true });
+    assertEquals(
+      (await part("b-1", 1, "b", false)).error?.name,
+      "ProtocolError",
+    );
+    // Another watch mutation is applied, and ends a staged set: a router
+    // may have refused the set's last part itself.
+    assertEquals((await part("c-0", 0, "c")).ok, { staged: true });
     const add = await send({
       type: "session.watch.add",
       requestId: "add",
       watches: [watch(4)],
     });
-    assertEquals(add.error?.name, "ProtocolError");
-    const after = await send({
-      type: "session.watch.set",
-      requestId: "again-1",
-      watches: [watch(1)],
-      part: 1,
-    });
-    assertEquals(after.error?.name, "ProtocolError");
+    assertEquals(add.error, undefined);
+    assertEquals(
+      (await part("c-1", 1, "c", false)).error?.name,
+      "ProtocolError",
+    );
     // A whole set applies as ever.
     const whole = await send({
       type: "session.watch.set",

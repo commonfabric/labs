@@ -437,8 +437,8 @@ interface QueuedBody {
   /** Payload bytes whose data-record callbacks have run, not bytes passed to the socket. */
   writtenBytes: number;
 
-  /** The session whose split sync this body is a part of, when the bound exempts it. */
-  exempt?: string;
+  /** Whether this body is a part of a split sync, which the bound does not count. */
+  part: boolean;
 }
 
 /** One record passed to the socket, until its write callback runs. */
@@ -463,9 +463,8 @@ export class RouterSender {
   #fail: (error: Error) => void;
   #limit: number | null;
   #bytes = 0;
-  /** Retained bytes of exempt bodies, by the session they belong to. */
-  #exempt = new Map<string, number>();
-  #exemptBytes = 0;
+  /** Retained bytes of the bodies that are parts of split syncs. */
+  #partBytes = 0;
   #queue: QueuedBody[] = [];
   /** Queue prefix whose records have all been passed to the socket. */
   #dispatchedBodies = 0;
@@ -523,14 +522,14 @@ export class RouterSender {
     return this.#bytes;
   }
 
-  /** Retained bytes the queued-output bound counts: all but exempt bodies'. */
+  /** Retained bytes the queued-output bound counts: all but parts'. */
   get boundedBytes(): number {
-    return this.#bytes - this.#exemptBytes;
+    return this.#bytes - this.#partBytes;
   }
 
-  /** Whether exempt bodies of `session` are retained. */
-  exemptRetained(session: string): boolean {
-    return this.#exempt.has(session);
+  /** Retained bytes of parts of split syncs, which the caller bounds. */
+  get partBytes(): number {
+    return this.#partBytes;
   }
 
   /**
@@ -592,13 +591,13 @@ export class RouterSender {
 
   /**
    * Submits a body, refusing it before enqueueing if its budget is exhausted.
-   * A body `exempt` names a session for is a part of that session's split
-   * sync, which the queued-output bound neither refuses nor counts.
+   * A `part` of a split sync is neither refused nor counted by the
+   * queued-output bound; the caller bounds parts by `partBytes`.
    */
   send(
     route: Record<string, unknown>,
     payload: string | Uint8Array,
-    exempt?: string,
+    part = false,
   ): void {
     requireRouted(!this.#closed);
     const body = typeof payload === "string"
@@ -608,7 +607,7 @@ export class RouterSender {
     try {
       requireRouted(
         body.length <= ROUTED_RAW_LIMIT &&
-          (exempt !== undefined || bounded === 0 || this.#limit === null ||
+          (part || bounded === 0 || this.#limit === null ||
             bounded + body.length <= this.#limit),
       );
       encodeRouterHeader({
@@ -625,10 +624,7 @@ export class RouterSender {
       throw error;
     }
     this.#bytes += body.length;
-    if (exempt !== undefined) {
-      this.#exemptBytes += body.length;
-      this.#exempt.set(exempt, (this.#exempt.get(exempt) ?? 0) + body.length);
-    }
+    if (part) this.#partBytes += body.length;
     this.#admittedBodies++;
     this.#admittedBytes += body.length;
     const records = this.#records(route, body, typeof payload !== "string");
@@ -637,7 +633,7 @@ export class RouterSender {
       bytes: body.length,
       enqueuedAt: this.#now(),
       writtenBytes: 0,
-      ...(exempt === undefined ? {} : { exempt }),
+      part,
     });
     this.#observe?.("enqueue");
     this.#pump();
@@ -651,8 +647,7 @@ export class RouterSender {
     this.#dispatchedBodies = 0;
     this.#credit = 0;
     this.#bytes = 0;
-    this.#exempt.clear();
-    this.#exemptBytes = 0;
+    this.#partBytes = 0;
     this.#pending = [];
     this.#pendingBytes = 0;
     this.#drained?.resolve(false);
@@ -716,12 +711,7 @@ export class RouterSender {
     this.#queue.splice(index, 1);
     this.#dispatchedBodies--;
     this.#bytes -= body.bytes;
-    if (body.exempt !== undefined) {
-      this.#exemptBytes -= body.bytes;
-      const left = this.#exempt.get(body.exempt)! - body.bytes;
-      if (left === 0) this.#exempt.delete(body.exempt);
-      else this.#exempt.set(body.exempt, left);
-    }
+    if (body.part) this.#partBytes -= body.bytes;
     this.#completedBodies++;
     this.#completedBytes += body.bytes;
     if (this.#queue.length === 0) {
