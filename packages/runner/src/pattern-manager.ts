@@ -133,6 +133,21 @@ const MAX_PARKED_FAILED_REPLICATIONS = 64;
 // bundle is ~10 modules), and entries are cheap (a reference to an already-live
 // namespace).
 const MAX_EVALUATED_MODULE_CACHE_SIZE = 1000;
+
+/**
+ * How many cold compiles' output the pattern manager holds for the repairs it
+ * still owes (`PatternManager.#retainedCompiles`). Each is one closure's
+ * modules: their source, emitted code and source maps.
+ */
+const MAX_RETAINED_COMPILES = 8;
+
+/**
+ * How many times one session writes an entry's closure back into a space
+ * that refuses it before leaving the space to a later session's loads. The
+ * store retries a transient failure inside each attempt, so a failure that
+ * recurs across attempts is one the session cannot write past.
+ */
+const MAX_COMPILE_CACHE_WRITE_BACK_FAILURES = 3;
 const PATTERN_COVERAGE_CACHE_VARIANT = "pattern-coverage";
 
 /**
@@ -459,6 +474,21 @@ type ColdCompilationResult = {
 };
 
 /**
+ * A cold compile's output, held for a repair still owed: what a write-back of
+ * it into a space takes.
+ */
+type RetainedCompile = {
+  /** The compiled modules, as the compile cache stores them. */
+  readonly modules: CacheableModule[];
+
+  /** The module delegations the verified source closure carried. */
+  readonly moduleDelegations: ModuleDelegationMap;
+
+  /** The cache variant the modules compiled under. */
+  readonly cacheOpts: { runtimeVersion: string };
+};
+
+/**
  * A cold compile and evaluation in flight, shared by every space loading its
  * entry identity.
  */
@@ -534,11 +564,24 @@ export class PatternManager {
   #compileCacheWriter: CompileCacheWriter | undefined = undefined;
 
   /**
-   * Identities whose best-effort recovery failed to persist. Such an identity
-   * skips the in-memory artifact shortcuts on the next load so storage recovery
-   * runs again.
+   * How many write-backs of an entry's closure into a space failed this
+   * session, by `(space, entryIdentity)`. While the count is under
+   * `MAX_COMPILE_CACHE_WRITE_BACK_FAILURES`, a load of the entry there repairs
+   * the space (`#owedRepair()`): from the retained compile when one is held
+   * (`#retainedCompiles`), else by the storage path, whose cold arm compiles
+   * and writes back. A write-back that lands clears the entry.
    */
-  #failedCompileCacheRecoveries = new Set<string>();
+  readonly #failedCompileCacheRecoveries = new Map<string, number>();
+
+  /**
+   * Cold compiles' output held for repairs still owed, by entry identity: a
+   * compile whose write-back a preview deferred, or whose write-back failed,
+   * leaves its output here, and the load that repairs a space persists these
+   * bytes rather than compiling again. Bounded FIFO at
+   * `MAX_RETAINED_COMPILES`; an evicted entry costs the repairing load a
+   * recompile, never a wrong closure. Entries live for the session.
+   */
+  readonly #retainedCompiles = new Map<string, RetainedCompile>();
 
   /** Compilations in progress, keyed by program content and compilation context. */
   readonly #inProgressCompilations = new Map<string, ProgramCompilation>();
@@ -1341,46 +1384,168 @@ export class PatternManager {
   }
 
   /**
-   * Helper for `loadPatternByIdentity()`, which gives `space` the compiled
-   * closure behind a load served from memory. The artifact index is
-   * cross-space, so such a load reads nothing from `space`, and a space
-   * whose every load of an identity is served that way never receives the
-   * closure and pays a cold compile in its next session. When this session
-   * has written that closure into another space, or is writing it, the load
-   * copies it into `space` from there: fire-and-forget, tracked in
-   * `#compileCacheWrites`, once per space and program for the session. The
-   * decision reads the session-local records alone — no load served from
-   * memory reads storage to find out — so a session that writes no closure
-   * copies none (a space lacking it since before the session began is
-   * supplied by the next session that writes it), and a space the session
-   * has written into, or is writing into, is copied into no more. A
-   * preview load (`repairCache: false`) persists nothing and copies
-   * nothing.
+   * Whether `space` is owed a repair of `entryIdentity`'s closure: a
+   * write-back there failed fewer times than the session retries
+   * (`MAX_COMPILE_CACHE_WRITE_BACK_FAILURES`), or a preview compiled there and
+   * persisted nothing — which an ordinary load repairs and a preview, under
+   * `options`, does not.
    */
-  #copyClosureForLoadFromMemory(
+  #owedRepair(
+    space: MemorySpace,
     entryIdentity: string,
+    options: { repairCache?: boolean },
+  ): boolean {
+    const failures = this.#writeBackFailures(space, entryIdentity);
+    return (failures > 0 &&
+      failures < MAX_COMPILE_CACHE_WRITE_BACK_FAILURES) ||
+      (options.repairCache !== false &&
+        this.#unpersistedPatternRecoveries.has(
+          compileCacheRecoveryKey(space, entryIdentity),
+        ));
+  }
+
+  /** How many write-backs of `entryIdentity`'s closure into `space` failed. */
+  #writeBackFailures(space: MemorySpace, entryIdentity: string): number {
+    return this.#failedCompileCacheRecoveries.get(
+      compileCacheRecoveryKey(space, entryIdentity),
+    ) ?? 0;
+  }
+
+  /**
+   * Helper for the loads served from memory, which gives `space` the closure
+   * behind one. A repair the space is owed (`#owedRepair()`) is paid from the
+   * retained compile; otherwise the space is supplied as
+   * `#copyClosureForLoadFromMemory()` decides. A preview load
+   * (`repairCache: false`) persists nothing, and a space that refused the
+   * write `MAX_COMPILE_CACHE_WRITE_BACK_FAILURES` times this session is
+   * written into no more: its loads are served from memory alone.
+   */
+  #supplyClosureForLoadFromMemory(
+    entryIdentity: string,
+    symbol: string,
     space: MemorySpace,
     options: { repairCache?: boolean },
   ): void {
     if (options.repairCache === false) return;
+    if (
+      this.#writeBackFailures(space, entryIdentity) >=
+        MAX_COMPILE_CACHE_WRITE_BACK_FAILURES
+    ) {
+      return;
+    }
+    if (this.#owedRepair(space, entryIdentity, options)) {
+      const retained = this.#retainedCompiles.get(entryIdentity);
+      if (retained !== undefined) {
+        this.#issueCacheRepair(space, entryIdentity, symbol, retained);
+      }
+      return;
+    }
+    this.#copyClosureForLoadFromMemory(entryIdentity, symbol, space);
+  }
+
+  /**
+   * Helper for the cold path and the loads served from memory, which writes
+   * `compile` back into `space` fire-and-forget, tracked in
+   * `#compileCacheWrites`. A write-back that lands clears the repair the
+   * space was owed; one that fails counts against the session's attempts for
+   * the space and keeps the compile retained for the next load's attempt.
+   */
+  #issueCacheRepair(
+    space: MemorySpace,
+    entryIdentity: string,
+    symbol: string,
+    compile: RetainedCompile,
+  ): void {
+    const recoveryKey = compileCacheRecoveryKey(space, entryIdentity);
+    const repair = this.#persistCompileCacheTracked(
+      space,
+      compile.modules,
+      entryIdentity,
+      compile.cacheOpts,
+      compile.moduleDelegations,
+    ).then(() => {
+      this.#failedCompileCacheRecoveries.delete(recoveryKey);
+      this.#recordDeferredCacheRepair(space, compile.modules, false);
+    }).catch((error) => {
+      this.#failedCompileCacheRecoveries.set(
+        recoveryKey,
+        (this.#failedCompileCacheRecoveries.get(recoveryKey) ?? 0) + 1,
+      );
+      this.#retainCompile(entryIdentity, compile);
+      logger.warn("load-pattern-by-identity-writeback-failed", () => [
+        `entry=${entryIdentity}`,
+        `symbol=${symbol}`,
+        String(error),
+      ]);
+    });
+    this.#compileCacheWrites.add(repair);
+    repair.finally(() => this.#compileCacheWrites.delete(repair));
+  }
+
+  /**
+   * Helper for the repairs, which holds `compile` in `#retainedCompiles`
+   * under `entryIdentity`, newest last, evicting the oldest past the cap.
+   */
+  #retainCompile(entryIdentity: string, compile: RetainedCompile): void {
+    this.#retainedCompiles.delete(entryIdentity);
+    this.#retainedCompiles.set(entryIdentity, compile);
+    while (this.#retainedCompiles.size > MAX_RETAINED_COMPILES) {
+      const oldest = this.#retainedCompiles.keys().next().value;
+      if (oldest === undefined) break;
+      this.#retainedCompiles.delete(oldest);
+      logger.debug("retained-compile-evicted", () => [
+        `entry=${oldest}`,
+        `cap=${MAX_RETAINED_COMPILES}`,
+      ]);
+    }
+  }
+
+  /**
+   * Helper for `#supplyClosureForLoadFromMemory()`, which gives `space` the
+   * compiled closure behind a load served from memory. The artifact index is
+   * cross-space, so such a load reads nothing from `space`, and a space
+   * whose every load of an identity is served that way never receives the
+   * closure and pays a cold compile in its next session. When this session
+   * has written that closure into another space, or is writing it, the load
+   * copies it into `space` from there, and when no space holds it but the
+   * compile is retained for a repair elsewhere (`#retainedCompiles`), writes
+   * that compile back: either fire-and-forget, tracked in
+   * `#compileCacheWrites`, once per space and program for the session. The
+   * decision reads the session-local records alone — no load served from
+   * memory reads storage to find out — so a session that writes and compiles
+   * no closure copies none (a space lacking it since before the session
+   * began is supplied by the next session that writes it), and a space the
+   * session has written into, or is writing into, is copied into no more.
+   */
+  #copyClosureForLoadFromMemory(
+    entryIdentity: string,
+    symbol: string,
+    space: MemorySpace,
+  ): void {
     const durable = this.#persistedClosureSpaces.get(entryIdentity);
     const inFlight = this.#closurePersistsInFlight.get(entryIdentity);
     if (durable?.has(space) || inFlight?.has(space)) return;
-    // A durable origin ahead of one still writing, whose write may yet fail.
+    // A durable origin ahead of one still writing, whose write may yet fail;
+    // the retained compile only when neither exists.
     const origin = durable?.values().next().value ??
       inFlight?.keys().next().value;
-    if (origin === undefined) return;
-    const key = (identity: string) => stringTupleKey([space, identity]);
-    if (this.#closureCopiesIssued.has(key(entryIdentity))) return;
-    // The copy carries every module the entry's program evaluated with, so
-    // a load of any of them served from memory in `space` needs no copy of
-    // its own.
-    for (
-      const identity of this.#programModules.get(entryIdentity) ??
-        [entryIdentity]
-    ) {
-      this.#closureCopiesIssued.add(key(identity));
+    if (origin === undefined) {
+      const retained = this.#retainedCompiles.get(entryIdentity);
+      if (
+        retained === undefined ||
+        !this.#markClosureCopyIssued(space, entryIdentity)
+      ) {
+        return;
+      }
+      logger.debug("retained-compile-written-back", () => [
+        `entry=${entryIdentity}`,
+        `to=${space}`,
+        "trigger=load-from-memory",
+      ]);
+      this.#issueCacheRepair(space, entryIdentity, symbol, retained);
+      return;
     }
+    if (!this.#markClosureCopyIssued(space, entryIdentity)) return;
     logger.debug("closure-replication-issued", () => [
       `entry=${entryIdentity}`,
       `from=${origin}`,
@@ -1388,6 +1553,25 @@ export class PatternManager {
       "trigger=load-from-memory",
     ]);
     this.#issueReplication(entryIdentity, origin, space, undefined);
+  }
+
+  /**
+   * Helper for `#copyClosureForLoadFromMemory()`, which marks a copy into
+   * `space` issued for `entryIdentity` and returns whether it was the first:
+   * the copy carries every module the entry's program evaluated with, so a
+   * load of any of them served from memory in `space` needs no copy of its
+   * own, and the marks cover them all.
+   */
+  #markClosureCopyIssued(space: MemorySpace, entryIdentity: string): boolean {
+    const key = (identity: string) => stringTupleKey([space, identity]);
+    if (this.#closureCopiesIssued.has(key(entryIdentity))) return false;
+    for (
+      const identity of this.#programModules.get(entryIdentity) ??
+        [entryIdentity]
+    ) {
+      this.#closureCopiesIssued.add(key(identity));
+    }
+    return true;
   }
 
   /**
@@ -2475,7 +2659,11 @@ export class PatternManager {
    * serves, in a space this session has not written the compiled closure
    * into, also copies the closure there from a space it has written into
    * (`#copyClosureForLoadFromMemory()`), fire-and-forget, so the next
-   * session's load in that space finds it.
+   * session's load in that space finds it. A load in a space owed a repair —
+   * a write-back there failed, or a preview compiled there and persisted
+   * nothing — writes the retained compile back rather than compiling again
+   * (`#issueCacheRepair()`); only with none retained does it take the
+   * storage path, whose cold arm compiles.
    *
    * Returns the pattern, or `undefined` when the by-identity load is
    * unavailable (CFC not enforcing / closure absent or incomplete / invalid /
@@ -2488,11 +2676,14 @@ export class PatternManager {
     space: MemorySpace,
     options: { repairCache?: boolean } = {},
   ): Promise<Pattern | undefined> {
-    const recoveryKey = compileCacheRecoveryKey(space, entryIdentity);
+    // A repair the space is owed is paid from memory when the compile is
+    // retained: the load is served as a hit and the compile written back.
+    // With none retained the load takes the storage path, whose cold arm
+    // compiles and writes back.
     const retryFailedRecovery =
-      this.#failedCompileCacheRecoveries.has(recoveryKey) ||
-      (options.repairCache !== false &&
-        this.#unpersistedPatternRecoveries.has(recoveryKey));
+      this.#owedRepair(space, entryIdentity, options) &&
+      (options.repairCache === false ||
+        !this.#retainedCompiles.has(entryIdentity));
     // In-memory artifact index: the pattern may already be live this session —
     // an evaluated ESM artifact, or a hand-built pattern given a synthetic
     // pointer via `associatePatternIdentity`. This path is independent of the
@@ -2503,7 +2694,12 @@ export class PatternManager {
       !retryFailedRecovery && indexed !== undefined && isTrustedPattern(indexed)
     ) {
       this.#esmCacheStats.byIdentityHits++;
-      this.#copyClosureForLoadFromMemory(entryIdentity, space, options);
+      this.#supplyClosureForLoadFromMemory(
+        entryIdentity,
+        symbol,
+        space,
+        options,
+      );
       return indexed;
     }
     // A keyless identity is session-only by construction: no source or
@@ -2529,7 +2725,12 @@ export class PatternManager {
       : this.#patternFromEvaluatedModule(entryIdentity, symbol);
     if (live) {
       this.#esmCacheStats.byIdentityHits++;
-      this.#copyClosureForLoadFromMemory(entryIdentity, space, options);
+      this.#supplyClosureForLoadFromMemory(
+        entryIdentity,
+        symbol,
+        space,
+        options,
+      );
       return live;
     }
     // Check before single-flight: follower retries re-enter from the top and
@@ -2854,34 +3055,23 @@ export class PatternManager {
         const { modules, result } = await compilation.promise;
         const pattern = this.#patternFromMain(result, symbol, entryIdentity);
         record(inFlight === undefined ? "compiled" : "shared");
-        if (cacheOpts === undefined || options.repairCache === false) {
-          this.#recordDeferredCacheRepair(
-            space,
+        if (cacheOpts === undefined) {
+          this.#recordDeferredCacheRepair(space, modules, false);
+        } else if (options.repairCache === false) {
+          // A preview persists nothing; the ordinary load that follows in
+          // this space writes this compile back.
+          this.#recordDeferredCacheRepair(space, modules, true);
+          this.#retainCompile(entryIdentity, {
             modules,
-            cacheOpts !== undefined,
-          );
-        }
-        if (cacheOpts !== undefined && options.repairCache !== false) {
-          const recoveryKey = compileCacheRecoveryKey(space, entryIdentity);
-          const repair = this.#persistCompileCacheTracked(
-            space,
-            modules,
-            entryIdentity,
-            cacheOpts,
             moduleDelegations,
-          ).then(() => {
-            this.#failedCompileCacheRecoveries.delete(recoveryKey);
-            this.#recordDeferredCacheRepair(space, modules, false);
-          }).catch((error) => {
-            this.#failedCompileCacheRecoveries.add(recoveryKey);
-            logger.warn("load-pattern-by-identity-writeback-failed", () => [
-              `entry=${entryIdentity}`,
-              `symbol=${symbol}`,
-              String(error),
-            ]);
+            cacheOpts,
           });
-          this.#compileCacheWrites.add(repair);
-          repair.finally(() => this.#compileCacheWrites.delete(repair));
+        } else {
+          this.#issueCacheRepair(space, entryIdentity, symbol, {
+            modules,
+            moduleDelegations,
+            cacheOpts,
+          });
         }
         return pattern;
       } catch (error) {
@@ -3243,7 +3433,7 @@ export class PatternManager {
   ): unknown {
     const artifact = this.artifactFromIdentitySync(identity, symbol);
     if (artifact !== undefined) {
-      this.#copyClosureForLoadFromMemory(identity, space, {});
+      this.#supplyClosureForLoadFromMemory(identity, symbol, space, {});
     }
     return artifact;
   }
