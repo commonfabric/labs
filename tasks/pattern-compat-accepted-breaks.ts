@@ -1123,6 +1123,11 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // schema allows other keys, so typing this one narrows it, and a
     // manager's request outcomes carry the policy through the rooms they
     // link.
+    //
+    // These baselines also report the scope the manager's `people` declares,
+    // which `fabrichat-view-scopes-per-user-break.md` records, in the result
+    // role. The entry names both paths, and the last baseline, recorded with
+    // that scope, reports the policy alone.
     pattern: "fabrichat/manager.tsx",
     baselines: [
       "20261011T221322Z-ESDR30hfSt52JJjG",
@@ -1138,8 +1143,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261016T232233Z-pyVPXvcNYTbzFVqa",
       "20261018T181023Z-H3M1K82AIA1y33AS",
       "20261022T220213Z-LlstD45te1meAfuA",
+      "20261024T002137Z-_xficjXREAbKWap9",
     ],
-    paths: ["argument.requests.*"],
+    paths: ["argument.requests.*", "result.$VIEWS.chats.people"],
     reason:
       "a room's policy states `maxAttachments`, an optional number, where its schema took any value; no stored policy holds the key",
     record: "docs/history/fabrichat-max-attachments-break.md",
@@ -1503,22 +1509,12 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // The manager's views derived under the reader's access (`rooms`,
     // `people`) are declared per user where they were declared per session.
     // The proof reads that as a changed scope, and reports one issue per
-    // role, so each baseline names the field it blames.
+    // role, so each baseline names the field it blames. The baselines that
+    // also report the room policy's `maxAttachments` are in that break's
+    // entry, which names both paths.
     pattern: "fabrichat/manager.tsx",
     baselines: [
-      "20261011T221322Z-ESDR30hfSt52JJjG",
-      "20261012T173536Z-6WvdcsJ1uCY7_PMp",
-      "20261013T211911Z-_KGvbNdJDAorzeH2",
-      "20261014T030847Z--3DmbOSzIygprqSe",
-      "20261014T162031Z-5e6WmbJILlZPfDKs",
-      "20261015T201316Z-Sd2QSmU_za1kG0sR",
-      "20261015T211658Z-urNzNYcruTANHQRY",
-      "20261016T130411Z-0Lt2aLoYFhOy5W4t",
-      "20261016T131516Z-zwm-rd7FOQzgJmf2",
-      "20261016T150221Z-BMe3uZoF-rfz0nHI",
-      "20261016T232233Z-pyVPXvcNYTbzFVqa",
-      "20261018T181023Z-H3M1K82AIA1y33AS",
-      "20261022T220213Z-LlstD45te1meAfuA",
+      "20261024T000755Z-abyOKppwBZufFk_m",
     ],
     paths: ["result.$VIEWS.chats.people"],
     reason:
@@ -1549,6 +1545,12 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261019T231845Z-Vj5dqYA2toFthDOE",
       "20261022T220214Z-LuSDquW0A2n4QZ8w",
       "20261023T213239Z-wQjScvFleK2bL80b",
+      "20261024T000756Z-dKtPP_2-Aa_KMMvf",
+      "20261024T003401Z-xURqZ9DluSiRDXhB",
+      "20261024T014452Z-fKwRjY5cCkMEpatS",
+      "20261024T022151Z-IsyaJEIMyiypxAgF",
+      "20261024T022626Z-fQTNhQDagiuXxPOO",
+      "20261024T145618Z-Gv5sfeYUA8vf1ZMN",
     ],
     paths: ["result.$VIEWS.room.participantEntries"],
     reason:
@@ -1584,6 +1586,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261022T203735Z-VmCROm_UqDxFqhqv",
       "20261022T220216Z-drGbEASF5X5lV4en",
       "20261023T225638Z-ul8itnlMjhVPl5G4",
+      "20261024T000758Z-cjuKEPPeYWQzIxGW",
     ],
     paths: ["result.chatManager.$VIEWS.chats.people"],
     reason:

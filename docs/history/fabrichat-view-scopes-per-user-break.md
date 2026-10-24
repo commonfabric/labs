@@ -103,20 +103,21 @@ them.
 Against each recorded baseline that declares one of these fields per session,
 the pattern-update proof reports `scope changed`:
 
-- `fabrichat/manager.tsx`: `result.$VIEWS.chats.people`, against 14
+- `fabrichat/manager.tsx`: `result.$VIEWS.chats.people`, against 15
   baselines;
-- `fabrichat/room.tsx`: `result.$VIEWS.room.participantEntries`, against 19
+- `fabrichat/room.tsx`: `result.$VIEWS.room.participantEntries`, against 25
   baselines;
 - `system/home.tsx`, whose result types its `chatManager` as
   `FabriChatManagerOutput`: `result.chatManager.$VIEWS.chats.people`, against
-  25 baselines.
+  26 baselines.
 
 The proof reports at most one issue per role, so it names the first field it
-finds of each pattern's. Three of those pairs were already accepted for
-another break, `fabrichat-add-member-offer-break.md`, whose path the proof now
-reports behind this one. Those entries name both paths. The rest have entries
-of their own in `tasks/pattern-compat-accepted-breaks.ts`, which name this
-record.
+finds of each pattern's. Some of those pairs were already accepted for another
+break whose path the proof reports beside or behind this one, and those entries
+name both paths: three for `fabrichat-add-member-offer-break.md`, and thirteen
+of the manager's for `fabrichat-max-attachments-break.md`, which also covers
+one manager baseline recorded with the per-user scope. The rest have entries of
+their own in `tasks/pattern-compat-accepted-breaks.ts`, which name this record.
 
 ## The rulings
 
