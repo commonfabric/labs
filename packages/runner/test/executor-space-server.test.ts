@@ -19,6 +19,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
+import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/utils/logger";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -45,6 +46,8 @@ import { COMPONENT_READ_CONTRACT_VERSION } from "../src/component-read-contract.
 import type { Action } from "../src/scheduler/types.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { getMetaLink } from "../src/link-utils.ts";
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { storedSetupBuildOf } from "../src/stored-setup-build.ts";
 import { Runtime } from "../src/runtime.ts";
 import type {
   IExtendedStorageTransaction,
@@ -1244,6 +1247,132 @@ describe("stage G SpaceServer recovery seams", () => {
       expect(stats.structureLoadFailures).toBe(0);
     } finally {
       (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
+    }
+  });
+
+  it("counts a demanded root whose start is refused as refused, parks it, and loads it once a commit to it restores its record", async () => {
+    // The piece's record says another build set it up with its writable one
+    // number further on, so its start is refused, which no retry of this
+    // build changes: the root parks, counted as refused rather than failed,
+    // until a commit to it, here one that restores the record of this
+    // build, as a migration would, re-arms it.
+    const stats = emptyServingLoopStats();
+    const rootName = "refused-root";
+    const creatorManager = EmulatedStorageManager.connectTo(server, {
+      as: spaceSigner,
+    });
+    const creator = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: creatorManager,
+    });
+    let restore: (() => Promise<void>) | undefined;
+    try {
+      const compiled = await creator.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: [
+            "import { computed, pattern, UI, Writable } from 'commonfabric';",
+            "export default pattern<{ n: number }>(({ n }) => ({",
+            "  total: computed(() => n + 7),",
+            "  [UI]: <span>{new Writable('draft')}</span>,",
+            "}));",
+          ].join("\n"),
+        }],
+      }, { space });
+      const argument = creator.getCell<{ n: number }>(
+        space,
+        "refused-root-arg",
+        undefined,
+      );
+      const creatorRoot = creator.getCell<{ total?: number }>(
+        space,
+        rootName,
+        undefined,
+      );
+      await argument.sync();
+      await creatorRoot.sync();
+      const runTx = creator.edit();
+      argument.withTx(runTx).set({ n: 1 });
+      creator.run(runTx, compiled, argument, creatorRoot);
+      expect((await runTx.commit().settled).error).toBeUndefined();
+      await creator.idle();
+      creator.runner.stop(creatorRoot);
+      const ref = creator.patternManager.getArtifactEntryRef(compiled)!;
+      const own = storedSetupBuildOf(
+        compiled,
+        ref,
+        (artifact) => creator.patternManager.getArtifactEntryRef(artifact),
+      );
+      expect(own.state.length).toBe(1);
+      const stampRecord = async (record: typeof own) => {
+        const tx = creator.edit();
+        creatorRoot.withTx(tx).setMetaRaw(
+          "patternSetupBuild",
+          fabricFromConvertibleJsValue(record as never),
+          rawMetaWriteAuthorization,
+        );
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await creator.storageManager.synced();
+      };
+      await stampRecord({
+        ...own,
+        cells: "a record of another build",
+        state: own.state.map(([number, description]) => [
+          number + 1,
+          description,
+        ]),
+      });
+      restore = () => stampRecord(own);
+    } catch (error) {
+      await creator.dispose();
+      await creatorManager.close();
+      throw error;
+    }
+
+    const created = newSpaceServer({ stats });
+    expect(await created.activate()).toBe(true);
+    const runtime = servingRuntime!;
+    const rootCell = runtime.getCell<{ total?: number }>(
+      space,
+      rootName,
+      undefined,
+    );
+    const rootId = rootCell.getAsNormalizedFullLink().id;
+    const originalWatched = server.demandForSpace.bind(server);
+    (server as { demandForSpace: unknown }).demandForSpace = () =>
+      sessionDemandOf(demandRowsFor([{ id: rootId }]));
+    try {
+      await awaitEach(cycles, () => {
+        created.noteDemandChanged();
+        return stats.structureLoadRefused === 1;
+      });
+      expect(stats.structureLoadFailures).toBe(0);
+      expect(runtime.runner.isRunning(rootCell)).toBe(false);
+
+      // Parked: the waves that further input drives attempt nothing for it.
+      for (let i = 0; i < 3; i++) {
+        created.noteDemandChanged();
+        await driveOneWave(`refused-root-probe-${i}`);
+      }
+      expect(stats.structureLoadRefused).toBe(1);
+
+      await restore!();
+      created.enqueueCommit({
+        space,
+        seq: Engine.serverSeq(engine),
+        class: "authored",
+        sessionId: "session:refused-root-restorer",
+        writes: [{ id: rootId, scopeKey: "space" }],
+      });
+      await awaitEach(cycles, () => runtime.runner.isRunning(rootCell));
+      expect(stats.structureLoadRefused).toBe(1);
+      expect(stats.structureLoadRearmed).toBe(1);
+      expect(stats.structureLoadFailures).toBe(0);
+    } finally {
+      (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
+      await creator.dispose();
+      await creatorManager.close();
     }
   });
 
