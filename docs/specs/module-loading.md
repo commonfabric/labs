@@ -843,7 +843,9 @@ cell's contents. The cache is designed around this:
   identity are all served from it never receives the compiled closure, and
   compiles cold in its next session. When the runner has written that
   closure into another space in the same session, such a load copies it
-  into its own space from there.
+  into its own space from there; when it compiled the closure in the same
+  session and the write-back was deferred by a preview or failed, the load
+  writes that compile back instead of compiling again.
   Chain-of-custody holds — compiled docs are read through the integrity-gated
   loader ([`loadCompiledClosure`][c14]; only docs already carrying the compiler
   stamp replicate) and re-stamped on the child-space write by a legitimate
