@@ -533,32 +533,125 @@ describe("list-result-container-seed", () => {
       expect(logger.warnings).toEqual([]);
     });
 
-    it("waits afresh for a container the coordinator let go and took up again", async () => {
+    it("returns `false` from `mayWait()` for another cell naming the container it waited for", async () => {
+      // The container is the document a cell names, and a coordinator can come
+      // to hold a second cell for the same one.
+
+      const wait = resumeContainerWait(
+        runtime,
+        logger,
+        "map/resume-seed/of:reminted-container",
+      );
+      const container = newContainer("reminted-container");
+      const reminted = newContainer("reminted-container");
+      expect(reminted).not.toBe(container);
+      wait.begin(container, () => true, noop);
+      await storageManager.synced();
+      expect(wait.mayWait(reminted)).toBe(false);
+      expect(logger.warnings).toEqual([]);
+    });
+
+    it("returns `false` from `mayWait()` for a container whose wait settled while the coordinator held another", async () => {
+      // The coordinator has swapped this container away by the time the pull
+      // settles, so the wait re-arms nothing and writes nothing. The pull has
+      // still happened, and a reconcile that takes the container up again,
+      // through this cell or another, reads what it brought.
+
+      const wait = resumeContainerWait(
+        runtime,
+        logger,
+        "map/resume-seed/of:released-container",
+      );
+      const container = newContainer("released-container");
+      let rearms = 0;
+      wait.begin(container, () => false, () => rearms++);
+      await storageManager.synced();
+      expect(rearms).toBe(0);
+      expect(valueOf(container)).toBeUndefined();
+      expect(wait.mayWait(container)).toBe(false);
+      expect(wait.mayWait(newContainer("released-container"))).toBe(false);
+      expect(logger.warnings).toEqual([]);
+    });
+
+    it("re-arms the coordinator for a container taken up again after another container's wait settled", async () => {
+      // The coordinator holds `interim`, and took `returned` up and let it go
+      // again before either wait settled. The wait on `returned` has nothing
+      // to seed, so it settles first, and the one on `interim` settles after
+      // it; `returned` is no longer the container waited for last.
+
       const wait = resumeContainerWait(
         runtime,
         logger,
         "map/resume-seed/of:returned-container",
       );
-      const container = newContainer("returned-container");
-      let held = false;
+      const returned = newContainer("returned-container");
+      const interim = newContainer("interim-container");
+      let held = interim;
       let rearms = 0;
-      // The coordinator has swapped this container away by the time the pull
-      // settles, so the wait ends having told it nothing: nothing is re-armed
-      // and nothing is written.
-      wait.begin(container, () => held, () => rearms++);
-      await storageManager.synced();
-      expect(rearms).toBe(0);
-      expect(valueOf(container)).toBeUndefined();
-      expect(wait.mayWait(container)).toBe(true);
-
-      // It takes the same container up again. The wait it takes now runs to a
-      // re-arm of its own, where joining the settled one would answer nobody.
-      held = true;
-      wait.begin(container, () => held, () => rearms++);
+      wait.begin(interim, () => held === interim, () => rearms++);
+      wait.begin(returned, () => held === returned, () => rearms++);
       await storageManager.synced();
       expect(rearms).toBe(1);
+      expect(valueOf(returned)).toBeUndefined();
+      expect(wait.mayWait(returned)).toBe(true);
+
+      // Taking `returned` up again opens a wait that runs to a re-arm of its
+      // own, where joining the one that ended would re-arm nobody.
+      held = returned;
+      wait.begin(returned, () => held === returned, () => rearms++);
+      await storageManager.synced();
+      expect(rearms).toBe(2);
+      expect(valueOf(returned)).toEqual([]);
+      expect(wait.mayWait(returned)).toBe(false);
+      expect(logger.warnings).toEqual([]);
+    });
+
+    it("re-arms the coordinator again for a container taken up from inside its own wait's re-arm", async () => {
+      // The reconcile a re-arm schedules can run before the wait's settlement
+      // is seen, and by then another wait may have settled and moved the
+      // record of what was waited for off this container. Its reconcile then
+      // waits again, and the wait it takes has to be one of its own: the one
+      // that re-armed it has nothing left to re-arm it with.
+
+      const wait = resumeContainerWait(
+        runtime,
+        logger,
+        "map/resume-seed/of:rearmed-container",
+      );
+      const container = newContainer("rearmed-container");
+      let rearms = 0;
+      const rearm = () => {
+        rearms++;
+        if (rearms === 1) wait.begin(container, () => true, rearm);
+      };
+      wait.begin(container, () => true, rearm);
+      await storageManager.synced();
+      expect(rearms).toBe(2);
       expect(valueOf(container)).toEqual([]);
-      expect(wait.mayWait(container)).toBe(false);
+      expect(logger.warnings).toEqual([]);
+    });
+
+    it("re-arms a coordinator holding another cell for the container an outstanding wait was opened for", async () => {
+      // Each wait asks its own `stillHeld` whether to seed and re-arm, so a
+      // reconcile holding another cell for the same document that joined the
+      // outstanding wait would never be re-armed.
+
+      const wait = resumeContainerWait(
+        runtime,
+        logger,
+        "map/resume-seed/of:reminted-during-wait",
+      );
+      const container = newContainer("reminted-during-wait");
+      const reminted = newContainer("reminted-during-wait");
+      const held = reminted;
+      let rearms = 0;
+      wait.begin(container, () => held === container, () => rearms++);
+      wait.begin(reminted, () => held === reminted, () => rearms++);
+      expect(storageManager.pendingCrossSpacePromiseCount()).toBe(2);
+      await storageManager.synced();
+      expect(rearms).toBe(1);
+      expect(valueOf(reminted)).toEqual([]);
+      expect(wait.mayWait(reminted)).toBe(false);
       expect(logger.warnings).toEqual([]);
     });
 

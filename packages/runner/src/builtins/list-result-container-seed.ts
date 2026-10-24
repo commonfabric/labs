@@ -2,6 +2,10 @@ import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { Logger } from "@commonfabric/utils/logger";
 
 import { type Cell, syncCellForIdentity } from "../cell.ts";
+import {
+  areNormalizedLinksSame,
+  type NormalizedFullLink,
+} from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
 import { markDurableReadTx } from "../storage/reactivity-log.ts";
 
@@ -128,16 +132,19 @@ export function seedResultContainerWhenPullSettles(
 
 /** One list coordinator's wait on its own result container. */
 export interface ResumeContainerWait {
-  /** Whether a reconcile holding `container` may wait for it. */
+  /**
+   * Whether a reconcile holding `container` may wait for it: not when it names
+   * the document whose wait settled last, through whichever cell.
+   */
   mayWait(container: Cell<any[]>): boolean;
 
   /**
    * Wait for `container`: pull it, seed it when it is absent, and re-arm the
-   * coordinator once both have settled. A call naming the container a wait is
-   * already outstanding for joins that wait rather than starting a second one;
-   * one naming a container whose wait has settled opens a wait of its own,
-   * which is what a coordinator that let a container go and took it up again
-   * takes.
+   * coordinator once both have settled if `stillHeld` returns `true` then. A
+   * call naming the cell a wait is already outstanding for joins that wait
+   * rather than starting a second one. A call naming any other cell, one naming
+   * the same document included, opens a wait of its own, which asks its own
+   * `stillHeld` whether to seed and re-arm.
    */
   begin(
     container: Cell<any[]>,
@@ -158,6 +165,13 @@ export interface ResumeContainerWait {
  * wait for: the pull it would start has already happened, and waiting on it
  * again is a cycle whose every turn leaves the list rendering nothing.
  *
+ * A container is the document a cell names, not the cell, and its pull has
+ * happened once its wait settles, whether or not the coordinator still held it
+ * then to be re-armed. So a second cell naming that document finds it already
+ * waited for, and so does a coordinator that let the container go before the
+ * wait settled and has taken it up again: the reconcile that next reads it asks
+ * `mayWait` first, and reads the container as the pull left it.
+ *
  * A read that does not change is an ordinary state for a client running under
  * server-side execution. Such a client keeps its own writes in a process-local
  * speculation overlay, and a layer standing on the container's document that
@@ -171,7 +185,8 @@ export interface ResumeContainerWait {
  * `mayWait` is therefore asked before the container is read, and answers for
  * the container alone: a coordinator that swaps in a replacement waits for that
  * one as well, since a replacement's own state is what its first reconcile
- * confirms.
+ * confirms. It answers for the container whose wait settled last, so one taken
+ * up again after another container's wait has settled is waited for again.
  */
 export function resumeContainerWait(
   runtime: Runtime,
@@ -180,18 +195,32 @@ export function resumeContainerWait(
   identity?: ScopeKeyIdentity,
 ): ResumeContainerWait {
   let outstanding: Cell<any[]> | undefined;
-  let waited: Cell<any[]> | undefined;
+  let waited: NormalizedFullLink | undefined;
   return {
-    mayWait: (container) => waited !== container,
+    mayWait: (container) =>
+      waited === undefined ||
+      !areNormalizedLinksSame(waited, container.getAsNormalizedFullLink()),
     begin: (container, stillHeld, rearm) => {
       if (outstanding === container) return;
       outstanding = container;
+      const address = container.getAsNormalizedFullLink();
+      // The chain settles whether or not the coordinator was still holding the
+      // container to re-arm, and the container counts as waited for either
+      // way. Releasing the cell keeps a later wait on it from joining one that
+      // has ended, which a coordinator reaches when another wait settles in
+      // between and moves `waited` off this container.
+      const end = () => {
+        waited = address;
+        if (outstanding === container) outstanding = undefined;
+      };
       const settled = seedResultContainerWhenPullSettles(
         runtime,
         container,
         stillHeld,
         () => {
-          waited = container;
+          // Ended ahead of the settlement below as well, because the reconcile
+          // this re-arm schedules can run before that is seen.
+          end();
           rearm();
         },
         syncCellForIdentity(container, identity),
@@ -199,14 +228,8 @@ export function resumeContainerWait(
         seedActionId,
         identity,
       );
-      // The chain settles whether or not the coordinator was still holding the
-      // container to re-arm, and a coordinator that was not is one this wait
-      // told nothing. Releasing the container here is what lets it wait afresh
-      // if it takes that same container up again, rather than join a wait
-      // whose answer never reached it. The chain does not reject.
-      settled.then(() => {
-        if (outstanding === container) outstanding = undefined;
-      });
+      // The chain does not reject.
+      settled.then(end);
     },
   };
 }

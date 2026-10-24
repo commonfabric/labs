@@ -917,14 +917,17 @@ holds the measurements and the conditions for revisiting.
 - **Status on 2026-10-14.** Both arms are covered by
   `packages/runner/test/refused-derived-write.test.ts`, and the plumbing by
   `packages/runner/test/experimental-options.test.ts`.
-- **Status on 2026-10-20.** A refused derived write the replica reverts takes
+- **Status on 2026-10-24.** A refused derived write the replica reverts takes
   no scheduler retry, so a READ principal running a pattern locally settles
-  after one refusal per computation. Its derived state is not stored, the
-  panel list's result container among it, so such a principal sees a loom's
-  root without its panels; `packages/toolshed/test/loom-cold-reader.test.ts`
-  pins that beside the cases that render them: a WRITE viewer under local and
-  server execution, a READ viewer under server execution, and a READ viewer
-  under local execution with the flag on.
+  after a bounded number of refusals: one per computation, and for a list
+  coordinator one more each time the refusal of its result container's setup
+  hands it back a container it has to replace, until the wait on that
+  container has settled. Its derived state is not stored, the panel list's
+  result container among it, so such a principal sees a loom's root without
+  its panels; `packages/toolshed/test/loom-cold-reader.test.ts` pins that
+  beside the cases that render them: a WRITE viewer under local and server
+  execution, a READ viewer under server execution, and a READ viewer under
+  local execution with the flag on.
 - **Path to removal.** Remove the env mapping, the runtime option and its
   authority and shell-source entries, the shell define, and the gate in the
   scheduler. If the fold loses, the fold machinery in

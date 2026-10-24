@@ -398,10 +398,10 @@ function createFilterInstance(
       return;
     }
 
-    // A fresh (non-resume) reconcile has no container yet; seed [] so the first
-    // render has a value. On resume this is unreachable — the defer guard above
-    // either holds for the still-loading container or sees the durable value, so
-    // priorSlots is never undefined here.
+    // A container with no value yet gets `[]` so that the first render has
+    // one. That is a fresh (non-resume) reconcile's container, or on resume one
+    // the defer guard above has already waited for and this reconcile still
+    // reads as absent.
     if (priorSlots === undefined) {
       probeScoped(() => resultWithLog.set([]));
     }
