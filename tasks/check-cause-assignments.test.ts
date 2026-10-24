@@ -379,6 +379,27 @@ describe("check-cause-assignments", () => {
   });
 
   describe("describeFailures()", () => {
+    it("returns a description only the base build has as removed, and one only this build has as added, with its numbers", () => {
+      // A lift and a child are removed, and an `ifElse` is added: the child's
+      // move fails the pattern, and each description one side lacks is named
+      // with the numbers the other side gives it.
+      const text = describeFailures(
+        compareDumps(
+          dump(build("note.tsx", "s", [LIFT, CHILD])),
+          dump(build("note.tsx", "s", [IF_ELSE])),
+          [],
+          NOTHING_UNEVALUABLE,
+        ),
+      );
+
+      expect(text).toContain(`  removed: [0]: ${LIFT} (entry pattern)`);
+      expect(text).toContain(
+        `  removed, holds state: [1]: ${CHILD} (entry pattern)`,
+      );
+      expect(text).toContain(`  added: [0]: ${IF_ELSE} (entry pattern)`);
+      expect(text).not.toContain("ambiguous");
+    });
+
     it("returns a description of cells holding no state that cannot be matched, with both builds' numbers and no mention of state", () => {
       const text = describeFailures(
         compareDumps(

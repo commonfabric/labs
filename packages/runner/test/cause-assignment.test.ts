@@ -336,8 +336,12 @@ describe("cause-assignment", () => {
       ]);
     });
 
-    it("returns only descriptions of cells holding no state, given `false`", () => {
-      expect(ambiguousDescriptions(mixedBefore(), mixedAfter(), false))
+    it("returns only descriptions of cells holding no state, given `holdingState: false`", () => {
+      expect(
+        ambiguousDescriptions(mixedBefore(), mixedAfter(), {
+          holdingState: false,
+        }),
+      )
         .toEqual([
           {
             description: "cell, computed, written by function",

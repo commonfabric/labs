@@ -239,10 +239,12 @@ export function describeFailures(comparison: Comparison): string {
     "before the change would read each moved cell's state from the document " +
     "another cell wrote. Where cells share a description and their count or " +
     "their numbers changed, which cell went where cannot be told, so the " +
-    "report gives each build's numbers for them.",
+    "report gives each build's numbers for them, or names them added or " +
+    "removed where only one build has any.",
     "",
   ];
   const where = (level: string) => level === "" ? "entry pattern" : level;
+  const list = (numbers: readonly number[]) => `[${numbers.join(", ")}]`;
   for (const { pattern, base, head, moved, ambiguous } of comparison.failing) {
     lines.push(`${pattern} (base build ${base}, this build ${head}):`);
     for (const cell of moved) {
@@ -254,11 +256,14 @@ export function describeFailures(comparison: Comparison): string {
       );
     }
     for (const cells of ambiguous) {
+      const [kind, numbers] = cells.after.length === 0
+        ? ["removed", list(cells.before)]
+        : cells.before.length === 0
+        ? ["added", list(cells.after)]
+        : ["ambiguous", `${list(cells.before)} -> ${list(cells.after)}`];
       lines.push(
-        `  ambiguous${cells.holdsState ? ", holds state" : ""}: ` +
-          `[${cells.before.join(", ")}] -> ` +
-          `[${cells.after.join(", ")}]: ${cells.description} ` +
-          `(${where(cells.level)})`,
+        `  ${kind}${cells.holdsState ? ", holds state" : ""}: ${numbers}: ` +
+          `${cells.description} (${where(cells.level)})`,
       );
     }
   }

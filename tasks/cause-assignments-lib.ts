@@ -201,7 +201,9 @@ export function ambiguousCells(
       });
     }
     for (
-      const found of ambiguousDescriptions(before.cells, level.cells, false)
+      const found of ambiguousDescriptions(before.cells, level.cells, {
+        holdingState: false,
+      })
     ) {
       ambiguous.push({
         pattern: head.pattern,
