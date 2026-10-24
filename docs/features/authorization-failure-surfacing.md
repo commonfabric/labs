@@ -120,8 +120,9 @@ The storage provider exposes `subscribeSpaceAccessLoss` and `spaceAccessError`
 for consumers of already-rendered cells. An authoritative session loss updates
 the affected space immediately, without waiting for another document watch. An
 explicit successful session replacement after a new grant clears the old
-verdict. The runtime client forwards `spaceaccesslost` with the affected space;
-it does not send the server's diagnostic error text to the UI.
+verdict. The runtime client forwards `spaceaccesslost` with the affected space,
+and `spaceaccessrestored` with the space once a retry admits the principal
+again; it does not send the server's diagnostic error text to the UI.
 
 The worker renderer subscribes at cell boundaries. Revoking a foreign target
 removes that target's content and event handlers while retaining the authorized

@@ -5348,10 +5348,12 @@ export class Runner {
         recordSelection(tx, undefined);
         return;
       }
-      const live = this.#runtime.patternManager.artifactFromIdentitySync(
-        selected.identity,
-        selected.symbol,
-      ) as Pattern | undefined;
+      const live = this.#runtime.patternManager
+        .artifactFromIdentitySyncInSpace(
+          selected.identity,
+          selected.symbol,
+          resultCell.space,
+        ) as Pattern | undefined;
       if (live === undefined) {
         return this.#runtime.patternManager.loadPatternByIdentity(
           selected.identity,
@@ -6239,10 +6241,12 @@ export class Runner {
         newKey: string,
       ): void => {
         // In-memory fast path: the module is usually live this session.
-        const live = this.#runtime.patternManager.artifactFromIdentitySync(
-          newRef.identity,
-          newRef.symbol,
-        ) as Pattern | undefined;
+        const live = this.#runtime.patternManager
+          .artifactFromIdentitySyncInSpace(
+            newRef.identity,
+            newRef.symbol,
+            resultCell.space,
+          ) as Pattern | undefined;
         if (live) {
           // A pointer moved here, by this runtime or by a transition it
           // took part in, has what the incoming pattern reads in place
@@ -6751,9 +6755,10 @@ export class Runner {
 
     // Sync lookup by identity (the module is live this session).
     const initialResolved = this.#runtime.patternManager
-      .artifactFromIdentitySync(
+      .artifactFromIdentitySyncInSpace(
         initialRef.identity,
         initialRef.symbol,
+        resultCell.space,
       ) as Pattern | undefined;
     if (!initialResolved) {
       cleanup();
@@ -6801,7 +6806,11 @@ export class Runner {
       return undefined;
     }
     const manager = this.#runtime.patternManager;
-    const loaded = manager.artifactFromIdentitySync(ref.identity, ref.symbol) ??
+    const loaded = manager.artifactFromIdentitySyncInSpace(
+      ref.identity,
+      ref.symbol,
+      resultCell.space,
+    ) ??
       await manager.loadPatternByIdentity(
         ref.identity,
         ref.symbol,
@@ -7081,9 +7090,10 @@ export class Runner {
       return Promise.resolve(false);
     }
     const pm = this.#runtime.patternManager;
-    const pattern = pm.artifactFromIdentitySync(
+    const pattern = pm.artifactFromIdentitySyncInSpace(
       identityRef.identity,
       identityRef.symbol,
+      rootCell.space,
     ) as Pattern | undefined;
     if (
       !pattern &&
