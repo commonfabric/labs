@@ -119,7 +119,7 @@ const AUTHOR_DISPLAY_FIELDS = [
 
 /** A claim's own value, or one of its fields: a primitive. */
 const PRIMITIVE_CLAIM_SCHEMA = {
-  anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }],
+  type: ["string", "number", "boolean"],
 } as const;
 
 /**
@@ -133,7 +133,7 @@ const PRIMITIVE_CLAIM_SCHEMA = {
  */
 export const AUTHOR_CLAIM_SCHEMA: JSONSchema = {
   anyOf: [
-    ...PRIMITIVE_CLAIM_SCHEMA.anyOf,
+    PRIMITIVE_CLAIM_SCHEMA,
     {
       type: "object",
       properties: Object.fromEntries(
