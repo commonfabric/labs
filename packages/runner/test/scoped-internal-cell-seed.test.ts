@@ -463,6 +463,34 @@ describe("scoped-internal-cell-seed", () => {
       }),
     );
     expect((await protect.commit().settled).error).toBeUndefined();
+    // The control: the same default seeded alone, from a transaction of its
+    // own, under the same policy. Its label is what each batched seed must
+    // carry — no more (a seed tainted by its transaction-mates) and no less.
+    const controlCompiled = await first.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+          import { pattern, Writable } from "commonfabric";
+          export default pattern<Record<string, never>>(() => ({
+            tab: Writable.perSession.of<string>("overview"),
+          }));`,
+      }],
+    }, { space });
+    const controlOriginal = first.getCell(space, "one session default");
+    await first.runSynced(controlOriginal, controlCompiled, {});
+    await first.idle();
+    const protectControl = first.edit();
+    setCfcImplementationIdentity(protectControl, {
+      kind: "builtin",
+      builtinId: "scoped-seed-owner-policy",
+    });
+    applyCfcPolicyToExistingValue(
+      controlOriginal.withTx(protectControl).asSchema({
+        ifc: { confidentiality: [committedPersonalSpace] },
+      }),
+    );
+    expect((await protectControl.commit().settled).error).toBeUndefined();
     await first.storageManager.synced();
 
     const second = openRuntime(owner);
@@ -508,9 +536,22 @@ describe("scoped-internal-cell-seed", () => {
       .find((entry) => entry.space === space)?.writers
       .find((entry) => entry.session === secondManager.id);
     expect(writer?.tenMinutes.accepted).toBe(1);
-    // Each seed carries the piece's committed personal-space label.
+    // The control seeds alone in this session, in its own transaction.
+    const controlPiece = second.getCell(space, "one session default");
+    await controlPiece.sync();
+    expect(await second.runner.start(controlPiece)).toBe(true);
+    await second.idle();
+    const controlCell = controlPiece.key("tab").resolveAsCell();
+    expect(controlCell.getRawUntyped()).toBe("overview");
+    // Each seed carries the piece's committed personal-space label, and
+    // exactly the label the control's lone seed carries.
     const inspect = second.edit();
     try {
+      const control = readStoredCfcMetadata(
+        inspect,
+        controlCell.getAsNormalizedFullLink(),
+      )?.labelMap.entries;
+      expect(control).toBeDefined();
       const stamped = cells.map((cell) =>
         readStoredCfcMetadata(inspect, cell.getAsNormalizedFullLink())
           ?.labelMap.entries
@@ -527,8 +568,9 @@ describe("scoped-internal-cell-seed", () => {
           }),
         ]));
       }
-      expect(stamped[1]).toEqual(stamped[0]);
-      expect(stamped[2]).toEqual(stamped[0]);
+      expect(stamped[0]).toEqual(control);
+      expect(stamped[1]).toEqual(control);
+      expect(stamped[2]).toEqual(control);
     } finally {
       inspect.abort("batched seed label assertions complete");
     }
