@@ -56,6 +56,7 @@
     "check-test-shuffle": "deno run --allow-read --allow-run=git ./tasks/check-test-shuffle.ts",
     "check-control-characters": "deno run --allow-read --allow-run=git ./tasks/check-control-characters.ts",
     "check-local-program": "deno run --allow-read --allow-env --allow-run=git ./tasks/check-local-program.ts",
+    "compile-cache-version": "deno run --allow-read --allow-write=packages/runner/src/compilation-cache --allow-env --allow-ffi --allow-net=127.0.0.1 ./tasks/compile-cache-version.ts",
     "check-docs-history-index": "deno run --allow-read ./tasks/check-docs-history-index.ts",
     "check-unused-deps": "deno run --allow-read --allow-run=git ./tasks/check-unused-deps.ts",
     "check-deno-pins": "deno run --allow-read ./tasks/check-deno-pins.ts",

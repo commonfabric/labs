@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import {
   AUTHOR_CLAIM_SCHEMA,
@@ -10,7 +11,9 @@ import {
   observeAuthorship,
   type ObserveAuthorshipOptions,
 } from "@/authorship.ts";
-import { CellReadRefusedError } from "@/cell-handle.ts";
+import { CellHandle, CellReadRefusedError } from "@/cell-handle.ts";
+import type { CellRef } from "@/protocol/mod.ts";
+import { $conn, type RuntimeClient } from "@/runtime-client.ts";
 
 /** A label whose root says its value was written by `sender`. */
 const authoredByLabel = (sender: string) => ({
@@ -865,7 +868,7 @@ describe("authorship", () => {
       });
     });
 
-    it("reads an author cell that can be narrowed under the claim schema, and nothing through the cell as bound", async () => {
+    it("reads an author cell handle under the claim schema, and nothing through the handle as bound", async () => {
       const schemas: unknown[] = [];
       let notify: (() => void) | undefined;
       // What the cell holds under the claim schema: the name, and none of
@@ -880,21 +883,28 @@ describe("authorship", () => {
           return () => {};
         },
       };
-      const bound = {
-        asSchema: (schema: unknown) => {
-          schemas.push(schema);
-          return narrowed;
+      const bound = new CellHandle(
+        { [$conn]: () => ({}) } as unknown as RuntimeClient,
+        {
+          id: "of:authorship-bound-author" as CellRef["id"],
+          space: "did:key:test" as CellRef["space"],
+          scope: "space",
+          path: [],
         },
-        get: () => {
-          throw new Error("the author was read as bound");
-        },
-        getCfcLabel: () => {
-          throw new Error("the author's label was read as bound");
-        },
-        subscribe: () => {
-          throw new Error("the author was subscribed to as bound");
-        },
-      };
+      );
+      using _asSchema = stub(bound, "asSchema", (schema) => {
+        schemas.push(schema);
+        return narrowed as unknown as CellHandle;
+      });
+      using _get = stub(bound, "get", () => {
+        throw new Error("the author was read as bound");
+      });
+      using _getCfcLabel = stub(bound, "getCfcLabel", () => {
+        throw new Error("the author's label was read as bound");
+      });
+      using _subscribe = stub(bound, "subscribe", () => {
+        throw new Error("the author was subscribed to as bound");
+      });
       const observation = observe(
         {
           getCfcLabel: () =>

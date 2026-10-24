@@ -15,7 +15,7 @@ import type { DID } from "@commonfabric/identity";
 import { toValuePath } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/utils/logger";
 
-import { observeAuthorship } from "@/authorship.ts";
+import { AUTHOR_CLAIM_SCHEMA, observeAuthorship } from "@/authorship.ts";
 import { CellHandle } from "@/cell-handle.ts";
 import { RuntimeConnection } from "@/client/connection.ts";
 import { EventEmitter } from "@/client/emitter.ts";
@@ -358,11 +358,15 @@ describe("connection", () => {
     // the refusal cases above do, so that a handle hears what a real
     // transport hands over.
 
+    // The cell is bound under the claim schema, the one an authorship
+    // observation reads an author cell under, so the handle an observation
+    // reads through shares a subscription with the handles each case makes.
     const ref: CellRef = {
       id: "of:connection-label-currency-cell" as CellRef["id"],
       space: "did:key:test" as CellRef["space"],
       scope: "space",
       path: [],
+      schema: AUTHOR_CLAIM_SCHEMA,
     };
     const label = (sender: string) => ({
       version: 1 as const,

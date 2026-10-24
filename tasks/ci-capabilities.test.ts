@@ -912,7 +912,10 @@ describe("the binaries a lane caches", () => {
         expect(bakes.COMMIT_SHA).toBeUndefined();
       }
       expect(cachedBinaries(on)["toolshed-baked-opposite"].bakes)
-        .toEqual({ EXPERIMENTAL_SERVER_EXECUTION: `${off}` });
+        .toEqual({
+          EXPERIMENTAL_SERVER_EXECUTION: `${off}`,
+          CF_COMPILE_CACHE_VERSION: "inputs",
+        });
     }
   });
 });
