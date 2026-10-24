@@ -28,8 +28,9 @@ export const ROUTED_QUEUE_LIMIT = 4 * 1024 * 1024;
  * Most encoded bytes of one part of a message split for a routed peer: a sync
  * the toolshed splits for a client that takes one in parts (`syncPartsV1`),
  * and a watch set the SDK stages in parts (`watchSetPartsV1`). A message is
- * split only when it could not go whole, past the 8 MiB a response or the
- * 4 MiB a request may take, or past the frame cap; a part is well under
+ * split only when it could not go whole, past the bytes a response (16 MiB
+ * expanded when compressed, 8 MiB as text) or a request (4 MiB) may take, or
+ * past the frame cap; a part is well under
  * those, so that the router can send other toolsheds' messages to the client
  * between one sync's parts. A toolshed sends a sync's parts back to back on
  * its socket.

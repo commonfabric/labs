@@ -469,8 +469,10 @@ usual 32 KiB records; no message over 8 MiB is sent on any socket. A refusal
 closes the socket with an `output-limit` verdict classified `single-message`
 (over 8 MiB) or `queued-output`.
 
-The toolshed splits a sync that one message could not carry, past the 8 MiB a
-message may take or `limits.frameSlots`, into parts of at most 1 MiB
+The toolshed splits a sync that one message could not carry, past
+`limits.frameSlots` or the bytes a message may take (16 MiB once expanded,
+when the socket compresses its output, else the 8 MiB on the socket), into
+parts of at most 1 MiB
 (`ROUTED_PART_BYTES`), for a client that advertised `syncPartsV1`
 ([04-protocol.md](04-protocol.md) section 4.2.3), and sends them back to back
 on its socket. Splitting costs the toolshed's thread more than sending whole:
@@ -645,10 +647,10 @@ streamed bodies are checked at the toolshed and SDK. The SDK refuses to send a
 frame exceeding the advertised cap and closes on receiving one. Endpoint
 exposure is also bounded by the byte caps (8 MiB raw, 16 MiB expanded, 8 MiB
 for one message sent alone and 4 MiB of output queued behind other output per
-data socket), including when value counting is disabled. A sync past 8 MiB or
-the value cap is sent in parts to a client that takes one in parts, so these
-bounds apply to each part; a single document past them still cannot be
-delivered.
+data socket), including when value counting is disabled. A sync past those
+byte caps or the value cap is sent in parts to a client that takes one in
+parts, so these bounds apply to each part; a single document past them still
+cannot be delivered, nor can a sync whose compressed whole exceeds 8 MiB.
 Context, principal, router and toolshed quotas cover sessions, watches and
 holdings; resource bounds and exact values are in the infra router README.
 

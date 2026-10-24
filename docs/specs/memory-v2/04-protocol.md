@@ -928,8 +928,8 @@ violations, which discard the connection, as a frame the client cannot decode
 does. A connection that closes before the last part arrives loses the parts
 with it, as it loses any frame in flight.
 
-The routed host splits a sync that one message could not carry, past the 8 MiB
-a message may take or the routed frame cap, into parts of at most 1 MiB
+The routed host splits a sync that one message could not carry, past the
+routed frame cap or the bytes a message may take, into parts of at most 1 MiB
 ([`routed-mode-a.md`](routed-mode-a.md)): splitting costs the server more than
 sending whole. A direct server sends every sync whole.
 
