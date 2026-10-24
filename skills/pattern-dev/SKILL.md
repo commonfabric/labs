@@ -48,6 +48,12 @@ the rule is about state lifetime, not only collaboration. Do not store user ids
 or session ids in ordinary data to simulate isolation; use scope wrappers on the
 relevant input and output types.
 
+A handler the server runs reads each space with its owner's access, so access is
+never why it misses what its user can read. What it can't reach is someone
+else's scoped instance, or a `PerUser` or `PerSession` instance in another
+space; `docs/common/patterns/multi-user-patterns.md`, "Scoped State In A Served
+Run", has the rule.
+
 Two common scoped authoring styles are useful:
 
 ```ts

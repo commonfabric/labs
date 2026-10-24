@@ -507,6 +507,34 @@ Plain `new Writable(...)` inherits the containing pattern or factory scope. Use
 the scoped constructors when the local cell must have a specific sharing
 boundary.
 
+## Scoped State In A Served Run
+
+With [`serverExecution`](../../development/EXPERIMENTAL_OPTIONS.md#serverexecution)
+on, handlers and derivations run in a serving runtime on the server, one per
+space, and clients send events. A served run is not a second reader with access
+of its own. On a deployment that enforces access lists, its reads of a space
+that names an owner are authorized as that owner, and the server's own identity
+reads nothing of such a space but its access list. The registry entry lists the
+configurations where no owner is bound; in none of them does the server read
+less. So access does not explain a served run missing what the person it runs
+for can read, and a pattern has no narrower "server view" to design around.
+
+What a served run can't reach is a scoped instance that belongs to someone
+else, which is the scope rule above and not an access rule:
+
+- A served handler runs as the person and session that sent its event. The
+  `PerUser` and `PerSession` state it reads and writes is that person's and
+  that session's instance, as when their own runtime runs it.
+- No run reads another user's `PerUser` instance or another session's
+  `PerSession` instance, served or not. A value every member reads belongs in
+  `PerSpace` state.
+- A serving runtime serves one space. A served run reads another space's
+  `PerSpace` state, and its read of another space's `PerUser` or `PerSession`
+  state is refused. A handler whose run reads one fails, and none of its writes
+  commit. A handler reads what its state's schema declares, so a link from a
+  piece in one space to a piece in another declares only the `PerSpace` part
+  the handler needs.
+
 ## Authorization And Admin Roles
 
 Scopes decide which data instance a user sees. They do not decide who may write

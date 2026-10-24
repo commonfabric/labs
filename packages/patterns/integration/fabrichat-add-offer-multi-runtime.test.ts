@@ -152,11 +152,12 @@ describe("fabrichat add offer across runtimes", () => {
 
     // Ada adds Grace by her address alone. Her manager offers Grace the room
     // through the profile it lists for her, and the room reads the verdict.
-    // A served handler can't read the manager's per-session `people`, so
-    // under server execution it finds no profile for her, and queues a
-    // notice instead.
-    // TODO(danfuzz): Expect `offered` under server execution too, once a
-    // served handler can read a per-session instance of its user's.
+    // Under server execution the session's `people` lists nobody: deriving it
+    // has the serving runtime read each room's space at session scope, which
+    // it refuses for a space other than the one it serves. So the served
+    // handler finds no profile for her, and queues a notice instead.
+    // TODO(danfuzz): Expect `offered` under server execution too, once
+    // deriving `people` takes no per-session read of a room's space.
     await ada.send(
       "addMember",
       {

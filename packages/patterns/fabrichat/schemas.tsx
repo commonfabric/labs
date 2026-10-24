@@ -392,25 +392,26 @@ export const reactionTalliesOf = (
 /**
  * A room as a manager links it: only the part of `ChatRoomOutput` the manager
  * reads through the link. The manager runs in its user's home, not in the
- * room's space, and a server running it reads only the documents the room's
- * space shares with every member, never the ones each member has of their
- * own. A served handler whose declared reads reach one of those never runs,
- * and the link's schema is part of every manager handler's declared reads.
+ * room's space, and the runtime serving a home reads another space's
+ * space-scoped documents only: a read of a per-user or per-session instance
+ * there is refused, whatever access the reader holds. A served handler whose
+ * run reads one fails, and the link's schema is part of every manager
+ * handler's declared reads.
  *
- * So the link carries what the room's space shares with every member and
- * costs little to read: what the room says about itself, how many messages it
+ * So the link carries what the room's space holds at space scope and costs
+ * little to read: what the room says about itself, how many messages it
  * holds and when the newest was sent, which the room derives from its
  * messages alone, and its roster, which the room stores. It leaves out the
  * rest of the room's data face. Its `participants` lists every author beside
  * those the roster holds, so deriving it reads every message. A room's
  * `canSend` is decided per reader, from their own profile, and its
- * `messages.windows` are each session's own, so both reach documents of a
- * member's own, as the room's rendering does. Its `messages.latest` is
- * shared, but holds up to `maxWindowCount` messages and their reactions, which
- * every manager handler would then load for every room; a reader that wants
- * the messages reads them through the room. The rendering is not part of the
- * link either, and `cf-render` still draws the room through it, since a render
- * reads the rendering whatever the link declares.
+ * `messages.windows` are each session's own, so both reach per-user or
+ * per-session instances, as the room's rendering does. Its `messages.latest`
+ * is space-scoped, but holds up to `maxWindowCount` messages and their
+ * reactions, which every manager handler would then load for every room; a
+ * reader that wants the messages reads them through the room. The rendering
+ * is not part of the link either, and `cf-render` still draws the room through
+ * it, since a render reads the rendering whatever the link declares.
  */
 export interface ChatRoomLink {
   /** What the room says about itself. */

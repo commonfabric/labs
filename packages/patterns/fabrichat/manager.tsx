@@ -1263,10 +1263,13 @@ const performManagerAct = (
     // A member named by principal alone is offered the room through the
     // profiles `people` lists for them, so a person this user shares no room
     // with is offered nothing.
-    // TODO(danfuzz): A served run can't read the session's instance of
-    // `people`, and finds none listed, so under server execution such a
-    // member gets a notice. Offer through `people` there too, once a served
-    // handler can read a per-session instance of its user's.
+    // TODO(danfuzz): Under server execution the session's `people` lists
+    // nobody, so such a member gets a notice. `people` is derived from rooms
+    // found per session, which has the serving runtime read each room's space
+    // at session scope, and it refuses a scoped read of a space other than
+    // the one it serves. This run's own read of `people` is of its own space
+    // and succeeds. Offer through `people` there too, once deriving `people`
+    // takes no per-session read of a room's space.
     const profiles = named === undefined
       ? [...(state.people?.[member] ?? [])]
       : [named];
@@ -1856,10 +1859,11 @@ export const FabriChatManagerCore = pattern<
         )
         : [];
     });
-    // A room's space is read under the reader's own access, so a principal it
-    // refuses finds nothing there that the others find. Each room is found,
-    // and everything read from it derived, per session: a value stored once
-    // for every reader, which readers derive differently, is one their
+    // Each room is found, and everything read from it derived, per session,
+    // so each session's runtime writes its own instance of what it finds. A
+    // client runtime reads a room's space as its own user, and one whose user
+    // that space refuses finds no room where a member's finds one. Stored
+    // once for every reader, a value they derive differently is one their
     // runtimes overwrite without end.
     const found = savedRooms.map((entry) =>
       FoundRoom.asScope("session")({ space: entry.space, kind: entry.kind })

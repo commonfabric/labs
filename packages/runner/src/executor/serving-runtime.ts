@@ -4,6 +4,12 @@
  * server, signing its session opens as the service identity, in the serving
  * posture. It is the one construction of a serving runtime, so a test that
  * builds its host with it serves its spaces the way a deployment does.
+ *
+ * The service identity is not who a serving runtime reads as. Its sessions
+ * carry `actingAs: "space-owner"`. A memory server that lists the identity
+ * in `acl.delegatingDids`, in an access-list mode other than `off`, makes
+ * their `READ` decisions as the owner the space's access list names, and as
+ * the service identity for a space whose list names no concrete owner.
  */
 
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
@@ -32,7 +38,11 @@ export type ServingRuntimeFactoryOptions = {
   /** The co-hosted memory server the loopback storage plane connects to. */
   server: MemoryServer;
 
-  /** Signs the serving sessions' `session.open`; the host's service identity. */
+  /**
+   * Signs the serving sessions' `session.open`; the host's service identity.
+   * Whom the sessions read as is the memory server's decision, as this
+   * module's header describes.
+   */
   identity: Signer;
 
   /** The patterns and compile base, the serving runtimes' `apiUrl`. */

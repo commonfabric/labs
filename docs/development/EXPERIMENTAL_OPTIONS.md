@@ -405,6 +405,46 @@ flags it adopts from the deployment it runs against.
     F10 interim — is DELETED). Later stages add their surfaces under
     this same flag; both halves of any coupled behavior move together
     on it.
+- **Who a served run reads as.** The owner of the space it reads, which for a
+  Home space is the user whose space it is. The flag adds no reader with
+  access of its own, and none with less access than a member of the space
+  has.
+  - **Access.** Under ON, toolshed lists its process identity, the service
+    identity, as the memory server's one delegating principal
+    (`memoryAclPrincipalsFor` in
+    [`packages/toolshed/lib/server-execution-flag.ts`](../../packages/toolshed/lib/server-execution-flag.ts)),
+    and every session a serving runtime opens carries the delegated read
+    binding `actingAs: "space-owner"`. The memory server resolves the binding
+    to the owner the space's access list names, and makes the session's `READ`
+    decisions (`session.open`, queries, watches) as that principal: the
+    space's own DID where the list names it `OWNER`, which for a Home space is
+    the user whose space it is, else the first concrete `OWNER` in DID order.
+    The binding belongs to the session, so every run that serving runtime
+    makes reads the space as that one principal. The service identity is the
+    envelope principal of derived commits, and the principal that `WRITE` and
+    `OWNER` decisions on those sessions are made against, so the binding
+    carries no write. Of a space's contents, only the access list is read on
+    the service identity's behalf, when the memory server resolves the owner.
+    Three cases bind nothing: a space whose access list is missing or names no
+    concrete owner, where the session holds what any authenticated principal
+    holds there; an operator that lists the process identity in
+    `MEMORY_SERVICE_DIDS`, which makes it `OWNER` by that listing; and
+    `acl.mode: "off"`, where no session's access is decided at all. In the
+    other two modes the binding is admitted only from a principal on the
+    delegating list, and a `session.open` carrying it from any other is
+    refused. Under OFF that list is empty and no serving runtime exists to
+    send it.
+  - **Scoped instances.** What a served run cannot reach is a scoped instance,
+    which is a fact about scope and not about access. A served handler reads
+    and writes `PerUser` and `PerSession` state as the event's stamped actor,
+    user and session, and a served derivation that reads scoped state runs
+    once per user or session demanding it, as that principal (scopes.md §2,
+    §5). No run reads the instance of another user or session, and a run with
+    no acting session has no session instance. A serving runtime also serves
+    one space. In every other space it reads space-scoped documents only, and
+    its read of a user- or session-scoped document there is refused with a
+    `ForeignScopedReadRefusedError`, so a served handler whose run reads one
+    fails and commits nothing (protocol.md §2).
 - **Current default and planned end state.** The summary table's cell
   states the current value of the ONE first-party default,
   `SERVER_EXECUTION_DEFAULT_ENABLED` in
