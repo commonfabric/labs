@@ -7549,8 +7549,9 @@ export class Runner {
    * run is held for the seeds alone, which `seeds` names, and not at all in
    * a caller-owned setup, which seeds them in the caller's transaction. A
    * piece whose other absences are user- or session-scoped cells the store
-   * reported holding nothing at is held the same way, their instances in
-   * `seeds` too, so that its start runs apart from the caller's transaction
+   * reported holding nothing at is held the same way, and so not in a
+   * caller-owned setup either: their instances join `seeds`, so that outside
+   * such a setup its start runs apart from the caller's transaction
    * (`#familyAbsent` says why).
    */
   #patternToNameBeforeRun(
@@ -7724,12 +7725,13 @@ export class Runner {
    * to `seeds`, the instances whose defaults a start seeds before it runs,
    * and the cell holds the run no further. A user- or session-scoped cell
    * of a family no pre-sync named that the store reported holding nothing at
-   * adds its instance to `seeds` too, so that the start runs apart from the
-   * caller's transaction: a served derivation that sets the piece up there
-   * reads that instance before the serving loop has produced it, and is
-   * withdrawn until it is produced (`unproducedScopedInstance`), which only
-   * this start would do. Any other absent cell owed a default holds it,
-   * whatever the replica examined, since the store may hold a value for it.
+   * adds its instance to `seeds` too, so that a start outside a caller-owned
+   * setup runs apart from the caller's transaction: a served derivation that
+   * sets the piece up there reads that instance before the serving loop has
+   * produced it, and is withdrawn until it is produced
+   * (`unproducedScopedInstance`), which only this start would do. Any other
+   * absent cell owed a default holds it, whatever the replica examined, since
+   * the store may hold a value for it.
    */
   #familyAbsent(
     pattern: Pattern,
