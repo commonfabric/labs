@@ -79,7 +79,7 @@ export interface AmbiguousCells extends AmbiguousDescription {
   level: string;
 
   /** Whether the cells hold state, as {@link NumberedCell} says. */
-  holdsState: boolean;
+  hasState: boolean;
 }
 
 type Unknown = Readonly<Record<string, unknown>>;
@@ -196,7 +196,7 @@ export function ambiguousCells(
       ambiguous.push({
         pattern: head.pattern,
         level: level.key,
-        holdsState: true,
+        hasState: true,
         ...found,
       });
     }
@@ -208,7 +208,7 @@ export function ambiguousCells(
       ambiguous.push({
         pattern: head.pattern,
         level: level.key,
-        holdsState: false,
+        hasState: false,
         ...found,
       });
     }
