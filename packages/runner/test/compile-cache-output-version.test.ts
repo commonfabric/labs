@@ -7,10 +7,10 @@ import {
   type CompiledOutput,
   compiledOutputOf,
   type CompiledVariant,
-  CORPUS_DIR,
   CORPUS_ENTRIES,
   outputFingerprintOf,
 } from "../src/compilation-cache/compile-cache-output-version.deno.ts";
+import { CORPUS_DIR } from "../src/compilation-cache/compile-cache-output-memo.deno.ts";
 import { FINGERPRINT_LENGTH } from "../src/compilation-cache/compiler-fingerprint.deno.ts";
 import {
   cacheVariantName,
