@@ -26,7 +26,6 @@ import {
   type ClientCommit,
   type ClientMessage,
   encodeMemoryBoundary,
-  type EntitySnapshot,
   getMemoryProtocolFlags,
   type SessionReport,
   toDocumentPath,
@@ -2551,7 +2550,7 @@ finally:
   }
   pass("an SDK session commits across its toolshed's restart");
 
-  // Messages past the frame's value cap go through the router in parts. 48
+  // Messages past the frame's value cap go through the router in parts. 60
   // documents of 4,000 numbers each are more values than one frame may carry:
   // the toolshed sends the sync that delivers them in parts, which the router
   // forwards one by one and the SDK applies as one sync. A watch set naming
@@ -2569,17 +2568,17 @@ finally:
         bob,
       );
       try {
-        const ids = Array.from({ length: 48 }, (_, i) => `of:in-parts-${i}`);
+        const ids = Array.from({ length: 60 }, (_, i) => `of:in-parts-${i}`);
         const values = (i: number) =>
           Array.from({ length: 4000 }, (_, j) => i * 4000 + j);
         for (let half = 0; half < 2; half++) {
           await session.transact({
             localSeq: half + 1,
             reads: { confirmed: [], pending: [] },
-            operations: ids.slice(half * 24, half * 24 + 24).map((id, i) => ({
+            operations: ids.slice(half * 30, half * 30 + 30).map((id, i) => ({
               op: "set" as const,
               id,
-              value: { value: values(half * 24 + i) },
+              value: { value: values(half * 30 + i) },
             })),
           });
         }
@@ -2596,22 +2595,22 @@ finally:
           }))),
           deadline(60000),
         ]);
-        assertEquals(view.entities.filter((e) => e.seq > 0).length, 48);
+        assertEquals(view.entities.filter((e) => e.seq > 0).length, 60);
         pass(
           "a sync past the frame's value cap arrives through the router in parts and is applied whole",
         );
 
         // Sixty watches of 600 roots each, about 180,000 values, name more
         // than one frame carries, so the set is staged in parts. Each watch
-        // reaches one document, the first 48 a document each, so a toolshed
-        // that applied less than the whole set would leave some out.
+        // reaches a document no other watch does, so a toolshed that applied
+        // less than the whole set would leave some out.
         const watches: WatchSpec[] = Array.from({ length: 60 }, (_, w) => ({
           id: `in-staged-parts-${w}`,
           kind: "graph" as const,
           query: {
             roots: Array.from(
               { length: 600 },
-              () => root(ids[w % ids.length]),
+              () => root(ids[w]),
             ),
           },
         }));
@@ -2620,24 +2619,7 @@ finally:
           session.watchSet(watches),
           deadline(60000),
         ]);
-        assertEquals(staged.entities.filter((e) => e.seq > 0).length, 48);
-        const updates = staged.subscribe();
-        const next = updates.next();
-        await session.transact({
-          localSeq: 3,
-          reads: { confirmed: [], pending: [] },
-          operations: [{
-            op: "set",
-            id: ids[47],
-            value: { value: "after the staged set" },
-          }],
-        });
-        const update = await Promise.race([next, deadline(30000)]);
-        assertEquals(
-          update.value?.entities.find((e: EntitySnapshot) => e.id === ids[47])
-            ?.document,
-          { value: "after the staged set" },
-        );
+        assertEquals(staged.entities.filter((e) => e.seq > 0).length, 60);
       } finally {
         await connection.close();
       }

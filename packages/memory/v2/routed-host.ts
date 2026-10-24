@@ -2884,14 +2884,16 @@ export class RoutedMemoryHost {
             // behind its unanswered watch mutation, and this host dispatches a
             // session's watch mutations one at a time.
             const set = body.type === "session.watch.set";
+            // As the Memory server reads them from a set alone.
             requireRouted(
-              (body.part === undefined) === (body.stage === undefined) &&
-                (body.part === undefined ||
-                  (Number.isSafeInteger(body.part) &&
-                    (body.part as number) >= 0 &&
-                    isRoutedIdentifier(body.stage))) &&
-                (body.more === undefined ||
-                  (body.more === true && body.part !== undefined)),
+              !set ||
+                (body.part === undefined) === (body.stage === undefined) &&
+                  (body.part === undefined ||
+                    (Number.isSafeInteger(body.part) &&
+                      (body.part as number) >= 0 &&
+                      isRoutedIdentifier(body.stage))) &&
+                  (body.more === undefined ||
+                    (body.more === true && body.part !== undefined)),
             );
             const staging = set && body.more === true;
             const base = set && typeof body.part === "number" &&
