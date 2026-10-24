@@ -64,8 +64,9 @@ describe("the binary build suites", () => {
   });
 
   it("builds a lane's binary on the compiler-input fingerprint", () => {
-    // A lane's binary is a test fixture: it takes the cheap version rather
-    // than the corpus compile a shipped build pays for.
+    // The corpus compile a shipped build pays for would take this build
+    // past the bound a lane is packed to; the compiler-input fingerprint
+    // keeps it inside.
     return byId("binaries").command(
       [{ unit: "cf", skip: [] }],
       { root: "/repo", outputDir: "/out", spoolDir: "/spool" },

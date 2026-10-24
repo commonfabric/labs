@@ -2,7 +2,12 @@ import { type Config } from "@commonfabric/felt";
 
 import ports from "@commonfabric/ports" with { type: "json" };
 
-import { computeCurrentCompilerVersion } from "../runner/src/compilation-cache/compiler-fingerprint.deno.ts";
+import { fromFileUrl } from "@std/path";
+
+import {
+  compileCacheVersionSourceOf,
+  computeCurrentCompilerVersion,
+} from "../runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 
 const PRODUCTION = !!Deno.env.get("PRODUCTION");
 const ENVIRONMENT = PRODUCTION ? "production" : "development";
@@ -10,8 +15,10 @@ const ENVIRONMENT = PRODUCTION ? "production" : "development";
 // corpus compile, about two minutes); a development bundle takes the
 // compiler-input fingerprint, which costs nothing. `CF_COMPILE_CACHE_VERSION`
 // (`output` or `inputs`) overrides the choice either way.
-const COMPILE_CACHE_VERSION_SOURCE = Deno.env.get("CF_COMPILE_CACHE_VERSION") ??
-  (PRODUCTION ? "output" : "inputs");
+const COMPILE_CACHE_VERSION_SOURCE = compileCacheVersionSourceOf(
+  Deno.env.get("CF_COMPILE_CACHE_VERSION"),
+  PRODUCTION ? "output" : "inputs",
+);
 // A binary build that embeds this shell hands over the version it baked, so
 // the two name one compiler and the corpus compiles once per build.
 const COMPILE_CACHE_RUNTIME_VERSION =
@@ -21,7 +28,7 @@ const COMPILE_CACHE_RUNTIME_VERSION =
       ? await (await import(
         "../runner/src/compilation-cache/compile-cache-output-version.deno.ts"
       )).computeCompilerOutputVersion(
-        new URL("../../", import.meta.url).pathname,
+        fromFileUrl(new URL("../../", import.meta.url)),
       )
       : await computeCurrentCompilerVersion());
 

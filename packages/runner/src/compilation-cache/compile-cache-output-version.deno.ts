@@ -106,6 +106,14 @@ export interface CompiledOutput {
   readonly js: string;
 
   /**
+   * The module's internal import edges, specifier to the imported module's
+   * identity, in specifier order. The compiled document stores them and the
+   * loader follows them to the dependency documents, so an edge the compiler
+   * emits differently is a difference the version has to see.
+   */
+  readonly imports: readonly (readonly [specifier: string, identity: string])[];
+
+  /**
    * Everything else the compiled document stores for the module, as the
    * artifact's own fields in key order, minus the source map: a source map
    * describes the same bytes for a debugger, and a change to it alone leaves
@@ -127,7 +135,12 @@ export interface CompiledVariant {
   readonly entries: readonly CompiledEntry[];
 }
 
-/** Reduce a compiled module to the fields the output fingerprint covers. */
+/**
+ * Reduce a compiled module to the fields the output fingerprint covers: what
+ * its compiled document stores, less the source map. The identity is the
+ * document's key, which the cache's identity axis names rather than its
+ * version, and the source is the source set's document, so neither is here.
+ */
 export function compiledOutputOf(module: CacheableModule): CompiledOutput {
   const {
     js,
@@ -135,7 +148,7 @@ export function compiledOutputOf(module: CacheableModule): CompiledOutput {
     source: _source,
     identity: _identity,
     filename,
-    imports: _imports,
+    imports,
     ...artifact
   } = module;
   const fields = artifact as Record<string, unknown>;
@@ -144,6 +157,9 @@ export function compiledOutputOf(module: CacheableModule): CompiledOutput {
   return {
     filename,
     js,
+    imports: imports
+      .map((edge) => [edge.specifier, edge.targetIdentity] as const)
+      .sort((a, b) => utf8Compare(a[0], b[0]) || utf8Compare(a[1], b[1])),
     artifact: keys.length === 0 ? "" : JSON.stringify(
       Object.fromEntries(keys.map((key) => [key, fields[key]])),
     ),
@@ -152,9 +168,9 @@ export function compiledOutputOf(module: CacheableModule): CompiledOutput {
 
 /**
  * The output fingerprint of the corpus compiled under each variant: a hash
- * over every variant's every module's emitted body and stored artifact
- * fields, in a fixed order, folded with `epoch`. Same bytes in every mode,
- * same fingerprint, whatever compiled them.
+ * over every variant's every module's emitted body, import edges and stored
+ * artifact fields, in a fixed order, folded with `epoch`. Same bytes in every
+ * mode, same fingerprint, whatever compiled them.
  */
 export function outputFingerprintOf(
   variants: readonly CompiledVariant[],
@@ -174,7 +190,12 @@ export function outputFingerprintOf(
           entry.entry,
           [...entry.modules]
             .sort((a, b) => utf8Compare(a.filename, b.filename))
-            .map((module) => [module.filename, module.js, module.artifact]),
+            .map((module) => [
+              module.filename,
+              module.js,
+              module.imports,
+              module.artifact,
+            ]),
         ]),
     ]),
   });

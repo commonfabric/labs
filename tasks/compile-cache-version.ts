@@ -10,9 +10,11 @@
  * the shell's production bundle compute it themselves. `--bake` is for a tree
  * that runs from source but ships as it stands, which is how loom runs its
  * vendored copy of this repository: it writes the version into
- * `compile-cache-version.ts`, where every Deno source run and every bundle
- * built from that tree reads it, so the daemon's runtimes and the worker
- * agree. Compiling the corpus takes about two minutes.
+ * `compile-cache-version.ts`, which every Deno source run from that tree
+ * reads. A bundle takes its version from its build's
+ * `__cfCompileCacheRuntimeVersion` define instead, so a bundle build that
+ * defines it from the baked module gives the daemon's runtimes and the worker
+ * one version. Compiling the corpus takes a minute or two.
  *
  * Usage: deno task compile-cache-version [--bake]
  */

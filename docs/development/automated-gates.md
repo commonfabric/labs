@@ -48,7 +48,7 @@ by a file's shape while the reason beside it names a lane, the two agreeing in
 the middle and parting at the edges.
 
 The reasons that do not name another gate say what a tree _is_ rather than
-asserting a property of each file in it. That is why the three above are
+asserting a property of each file in it. That is why the four above are
 described as corpora and as an ambient environment: none is a set of modules the
 repository builds, which is what earns the exemption. Individual files in them
 may well compile alone, so a reason claiming that none of them does would be

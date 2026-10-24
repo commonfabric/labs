@@ -163,6 +163,30 @@ export function versionOfFingerprint(fingerprint: string): string {
   return `${VERSION_NAMESPACE}/${fingerprint}`;
 }
 
+/** What a build names its compiler by: what it emits for the corpus, or its inputs. */
+export type CompileCacheVersionSource = "output" | "inputs";
+
+/**
+ * The version source `CF_COMPILE_CACHE_VERSION` names, given its value:
+ * `output` for the corpus output a shipped build earns, `inputs` for the
+ * compiler-input fingerprint a test fixture keeps, and `fallback` when it is
+ * unset. The binary build and the shell bundle both read the variable through
+ * here, so one spelling means one thing to both, and any other spelling is
+ * refused rather than read as either.
+ */
+export function compileCacheVersionSourceOf(
+  value: string | undefined,
+  fallback: CompileCacheVersionSource,
+): CompileCacheVersionSource {
+  if (value === undefined) return fallback;
+  if (value === "output" || value === "inputs") return value;
+  throw new Error(
+    `CF_COMPILE_CACHE_VERSION is ${
+      JSON.stringify(value)
+    }; it takes "output" or "inputs".`,
+  );
+}
+
 /** The full `cf/esm-compile/<fingerprint>` version string for `repoRoot`. */
 export async function computeCompilerVersion(
   repoRoot: string,

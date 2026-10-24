@@ -88,24 +88,34 @@ function withModule(
   );
 }
 
+/** The entry module as one compiled variant reduced it. */
+function entryModule(variant: CompiledVariant): CompiledOutput {
+  return variant.entries[0].modules
+    .find((module) => module.filename === "/main.tsx")!;
+}
+
 /** The entry module's emitted body under one compiled variant. */
 function entryBody(variant: CompiledVariant): string {
-  return variant.entries[0].modules
-    .find((module) => module.filename === "/main.tsx")!.js;
+  return entryModule(variant).js;
 }
 
 describe("compile-cache-output-version", () => {
   describe("compiledOutputOf()", () => {
-    it("keeps the body and the stored artifact fields, not the source map or identity", () => {
+    it("keeps the body, the import edges and the stored artifact fields, not the source map or identity", () => {
       const output = compiledOutputOf(cacheable({
         sourceMap: "{}",
         policyManifests: [{ a: 1 }],
         importSpecs: ["./double.ts"],
+        imports: [
+          { specifier: "./z.ts", targetIdentity: "z" },
+          { specifier: "./double.ts", targetIdentity: "d" },
+        ],
       }));
 
       expect(output).toEqual({
         filename: "/main.tsx",
         js: "module.exports = 1;",
+        imports: [["./double.ts", "d"], ["./z.ts", "z"]],
         artifact: JSON.stringify({
           importSpecs: ["./double.ts"],
           policyManifests: [{ a: 1 }],
@@ -124,15 +134,20 @@ describe("compile-cache-output-version", () => {
       entries: [{
         entry: "b.tsx",
         modules: [
-          { filename: "/b.tsx", js: "b", artifact: "" },
-          { filename: "/a.ts", js: "a", artifact: "" },
+          {
+            filename: "/b.tsx",
+            js: "b",
+            imports: [["./a.ts", "a"]],
+            artifact: "",
+          },
+          { filename: "/a.ts", js: "a", imports: [], artifact: "" },
         ],
       }],
     }, {
       variant: "",
       entries: [{
         entry: "a.tsx",
-        modules: [{ filename: "/a.tsx", js: "a", artifact: "x" }],
+        modules: [{ filename: "/a.tsx", js: "a", imports: [], artifact: "x" }],
       }],
     }];
 
@@ -153,12 +168,16 @@ describe("compile-cache-output-version", () => {
       );
     });
 
-    it("changes with an emitted body, a stored artifact field, or the epoch", () => {
+    it("changes with an emitted body, an import edge, a stored artifact field, or the epoch", () => {
       const base = outputFingerprintOf(variants);
       const body = withModule(variants, { variant: 0, module: 1 }, {
         js: "a2",
       });
       expect(outputFingerprintOf(body)).not.toBe(base);
+      const edge = withModule(variants, { variant: 0, module: 0 }, {
+        imports: [["./a.ts", "a-elsewhere"]],
+      });
+      expect(outputFingerprintOf(edge)).not.toBe(base);
       const artifact = withModule(variants, { variant: 1, module: 0 }, {
         artifact: "y",
       });
@@ -198,6 +217,8 @@ describe("compile-cache-output-version", () => {
       // The closure, plus whatever module the compiler injects beside it.
       expect(first.entries[0].modules.map((module) => module.filename))
         .toEqual(expect.arrayContaining(["/double.tsx", "/main.tsx"]));
+      expect(entryModule(first).imports.map(([specifier]) => specifier))
+        .toContain("./double.tsx");
       expect(outputFingerprintOf([second])).toBe(outputFingerprintOf([first]));
     });
 
@@ -247,6 +268,29 @@ describe("compile-cache-output-version", () => {
       for (const entry of CORPUS_ENTRIES) {
         const info = await Deno.stat(join(REPO_ROOT, CORPUS_DIR, entry));
         expect(info.isFile).toBe(true);
+      }
+    });
+
+    describe("each entry", () => {
+      // A shipped build compiles the corpus to name its compiler, and a lane's
+      // binary build takes the input fingerprint instead to fit the lane, so
+      // this is where an entry the compiler stops accepting fails a pull
+      // request rather than a release: one entry under one persisted variant
+      // per test, each a few seconds, well inside the time a test may take.
+
+      for (const entry of CORPUS_ENTRIES) {
+        for (const variant of PERSISTED_CACHE_VARIANTS) {
+          const name = cacheVariantName(variant);
+          it(`compiles ${entry} under the ${name === "" ? "plain" : name} variant`, async () => {
+            const compiled = await compileCorpus(
+              join(REPO_ROOT, CORPUS_DIR),
+              variant,
+              [entry],
+            );
+            expect(compiled.entries[0].entry).toBe(entry);
+            expect(compiled.entries[0].modules.length).toBeGreaterThan(0);
+          });
+        }
       }
     });
   });

@@ -4,6 +4,7 @@ import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
 import {
   COMPILE_FINGERPRINT_INPUTS,
+  compileCacheVersionSourceOf,
   computeCompilerVersion,
   renderVersionModule,
 } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
@@ -133,7 +134,6 @@ export class BuildConfig {
 
   #manifestOriginal: string;
   #compileCacheVersionOriginal: string;
-  #bakedCompileCacheVersion: string | undefined;
 
   constructor(options: BuildConfigInitializer) {
     this.root = options.root;
@@ -178,15 +178,6 @@ export class BuildConfig {
 
   compileCacheVersionOriginal() {
     return this.#compileCacheVersionOriginal;
-  }
-
-  /** The version `prepareWorkspace()` baked, once it has. */
-  bakedCompileCacheVersion(): string | undefined {
-    return this.#bakedCompileCacheVersion;
-  }
-
-  recordBakedCompileCacheVersion(version: string): void {
-    this.#bakedCompileCacheVersion = version;
   }
 
   workspaceManifestPath() {
@@ -274,8 +265,8 @@ export class BuildConfig {
 
   /**
    * Every path the build reads, as opposed to writes: those its path methods
-   * name, and the compiler inputs whose fingerprint `prepareWorkspace()`
-   * writes into the binaries. A binary cached under `BINARY_SOURCES` is only
+   * name, and the compiler inputs whose fingerprint a lane's build writes
+   * into the binaries. A binary cached under `BINARY_SOURCES` is only
    * as fresh as this list is complete, so every path a path method of this
    * class names is either named here or named by a method that
    * `build-binaries.test.ts` records as naming paths the build does not read.
@@ -377,8 +368,11 @@ export class BuildConfig {
 
 export type BuildDependencies = {
   ensureDistDir(config: BuildConfig): Promise<void>;
-  buildShell(config: BuildConfig): Promise<void>;
-  prepareWorkspace(config: BuildConfig): Promise<void>;
+  buildShell(config: BuildConfig, compileCacheVersion: string): Promise<void>;
+  prepareWorkspace(
+    config: BuildConfig,
+    compileCacheVersion: string,
+  ): Promise<void>;
   buildToolshed(config: BuildConfig): Promise<void>;
   buildCli(config: BuildConfig): Promise<void>;
   revertWorkspace(config: BuildConfig): Promise<void>;
@@ -402,8 +396,14 @@ export async function build(
     // Ensure dist directory exists
     await dependencies.ensureDistDir(config);
 
-    if (config.builds("toolshed")) await dependencies.buildShell(config);
-    await dependencies.prepareWorkspace(config);
+    // The compile-cache version the binary and its shell both bake, computed
+    // once: before the shell build, and before `prepareWorkspace()` rewrites
+    // `deno.jsonc`, which is a compiler input.
+    const compileCacheVersion = await config.compileCacheVersion(config.root);
+    if (config.builds("toolshed")) {
+      await dependencies.buildShell(config, compileCacheVersion);
+    }
+    await dependencies.prepareWorkspace(config, compileCacheVersion);
     if (config.builds("toolshed")) await dependencies.buildToolshed(config);
     if (config.builds("cf")) await dependencies.buildCli(config);
   } catch (e: unknown) {
@@ -423,7 +423,10 @@ async function ensureDistDir(config: BuildConfig): Promise<void> {
   }
 }
 
-async function buildShell(config: BuildConfig): Promise<void> {
+async function buildShell(
+  config: BuildConfig,
+  compileCacheVersion: string,
+): Promise<void> {
   for (const mode of ["development", "production"]) {
     console.log(`Building shell app in ${mode}...`);
     const task = mode === "production" ? "production" : "build";
@@ -441,12 +444,8 @@ async function buildShell(config: BuildConfig): Promise<void> {
       // `EXPERIMENTAL_SERVER_EXECUTION` that `prepareWorkspace()` writes into
       // the markers, each unset where the caller left it unset. The
       // compile-cache version is the one exception: the binary and its shell
-      // name one compiler, so the shell takes the version this build baked.
-      ...(config.bakedCompileCacheVersion() === undefined ? {} : {
-        env: {
-          CF_COMPILE_CACHE_RUNTIME_VERSION: config.bakedCompileCacheVersion()!,
-        },
-      }),
+      // name one compiler, so the shell takes the version this build bakes.
+      env: { CF_COMPILE_CACHE_RUNTIME_VERSION: compileCacheVersion },
       stdout: "inherit",
       stderr: "inherit",
     }).output();
@@ -611,6 +610,7 @@ export function lockedCompileArgs(config: BuildConfig): string[] {
 // that do not work with toolshed.
 export async function prepareWorkspace(
   config: BuildConfig,
+  compileCacheVersion: string,
 ): Promise<void> {
   const denoJsonPath = config.workspaceManifestPath();
 
@@ -620,12 +620,8 @@ export async function prepareWorkspace(
     );
   }
 
-  // Write the compile-cache version before compiling binaries. The value is
-  // computed before `deno.jsonc` changes so it reflects the committed compiler
-  // options, and kept for the shell build, which bakes the same value rather
-  // than computing one of its own.
-  const compileCacheVersion = await config.compileCacheVersion(config.root);
-  config.recordBakedCompileCacheVersion(compileCacheVersion);
+  // Write the compile-cache version before compiling binaries: the one the
+  // build computed before `deno.jsonc` changed, and the shell build baked.
   await Deno.writeTextFile(
     config.compileCacheVersionPath(),
     renderVersionModule(compileCacheVersion),
@@ -765,7 +761,10 @@ export async function runBuildBinaries(
     // A build from here ships, so it names its compiler by what it emits.
     // `CF_COMPILE_CACHE_VERSION=inputs` takes the compiler-input fingerprint
     // instead, for a binary that is a test fixture rather than a release.
-    compileCacheVersion: Deno.env.get("CF_COMPILE_CACHE_VERSION") === "inputs"
+    compileCacheVersion: compileCacheVersionSourceOf(
+        Deno.env.get("CF_COMPILE_CACHE_VERSION"),
+        "output",
+      ) === "inputs"
       ? computeCompilerVersion
       : computeShippedCompileCacheVersion,
   });
