@@ -161,6 +161,7 @@ import {
   spentDeliveryFailureMs,
 } from "./delivery-failure.ts";
 import { setCfcTrustSnapshot } from "../storage/extended-storage-transaction.ts";
+import { PieceStateMovedError } from "../stored-setup-build.ts";
 
 const logger = getLogger("space-server", { enabled: true, level: "warn" });
 
@@ -1524,7 +1525,15 @@ export class SpaceServer implements TransactionSealDestination {
     // path is fire-and-forget by design). Count it where the demand
     // cycle's synchronous failures already count, so the swallowed-
     // refusal class is a health-stats fact, never a log grep.
-    runtime.pieceStartCommitFailureObserver = ({ actionId, error }) => {
+    runtime.pieceStartCommitFailureObserver = (
+      { actionId, error, refused },
+    ) => {
+      if (refused) {
+        // A refusal of a piece whose state moved, on a retry of its start's
+        // commit; the runner has logged what moved.
+        this.#options.stats.structureLoadRefused += 1;
+        return;
+      }
       this.#options.stats.structureLoadFailures += 1;
       logger.warn("piece-start-commit-failed", () => [
         `piece-start commit ${actionId} failed on the serving runtime; ` +
@@ -5293,6 +5302,28 @@ export class SpaceServer implements TransactionSealDestination {
             }
           } catch (error) {
             if (!this.#active || this.#runtime !== runtime) return;
+            if (error instanceof PieceStateMovedError) {
+              // The piece's record says another build numbered its cells
+              // holding state differently, which no retry of this build
+              // changes. Park the root as a terminal one, until a commit to
+              // the demanded doc or the piece's own root, such as a
+              // migration's, re-arms it. The runner has logged what moved.
+              this.#pendingStructureLoads.delete(key);
+              this.#structureLoadDeferralStreaks.delete(key);
+              const owningRoot = this.#pieceRootByDemandKey.get(key);
+              this.#terminalStructureLoads.set(
+                key,
+                new Set(
+                  owningRoot === undefined ? [root.id] : [root.id, owningRoot],
+                ),
+              );
+              stats.structureLoadRefused += 1;
+              logger.info?.("structure-load-refused", () => [
+                `demanded root ${root.id} was refused, its state having ` +
+                "moved; parked until a commit touches it",
+              ]);
+              continue;
+            }
             this.#pendingStructureLoads.add(key);
             stats.structureLoadFailures += 1;
             logger.warn("structure-load-failed", () => [

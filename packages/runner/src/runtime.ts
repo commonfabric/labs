@@ -2307,11 +2307,24 @@ export class Runtime {
    * SWALLOWED and the piece silently ran against stale setup. The
    * SpaceServer installs the observer at activation and counts the
    * failure into §7's `structureLoadFailures` (a demanded-structure
-   * load that failed, asynchronously); the runner's loud error log
+   * load that failed, asynchronously), or a refusal of a piece whose
+   * state moved into `structureLoadRefused`; the runner's loud log
    * rides the same reporting call in every arm.
    */
   pieceStartCommitFailureObserver:
-    | ((failure: { actionId: string; error: unknown }) => void)
+    | ((failure: {
+      /** The commit's action identity, which names the piece. */
+      actionId: string;
+
+      /** What cut the commit short. */
+      error: unknown;
+
+      /**
+       * Whether the start refused a piece whose state moved
+       * (`PieceStateMovedError`), rather than failing to load it.
+       */
+      refused: boolean;
+    }) => void)
     | undefined;
 
   /**
