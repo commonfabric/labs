@@ -222,6 +222,7 @@ import {
 import {
   isCfcEnforcementRejection,
   isConflictRejection,
+  isPermanentAuthorizationRefusal,
   isStaleReadConflict,
   isStorageTransactionInconsistent,
 } from "./storage/rejection.ts";
@@ -5861,10 +5862,20 @@ export class Runner {
           // document no earlier round loaded. The rounds of both kinds come
           // from one budget, `PIECE_RUN_START_MAX_RETRIES`, the bound
           // `Runtime.editWithRetry()` and a named piece's run start also put
-          // on a basis that keeps moving.
+          // on a basis that keeps moving. A start repair the principal may
+          // not commit, a READ member's start of a piece another build set
+          // up, takes one retry with no repair staged: the piece then runs
+          // for them over the stored setup, as it does for anyone the start
+          // owes no repair, and the next start by a writer repairs it.
           const recoverInstantiation = async (
             error: unknown,
-            refusal: "absence" | "basis" | "dropped" | "manifest" | "terminal",
+            refusal:
+              | "absence"
+              | "basis"
+              | "dropped"
+              | "manifest"
+              | "repair"
+              | "terminal",
             absent: readonly string[] = [],
           ): PieceInstantiationSettlement => {
             if (!exactNodesAreCurrent()) {
@@ -5914,10 +5925,14 @@ export class Runner {
                 : refusal === "dropped"
                 ? "had its contribution dropped from the serving wave; " +
                   "re-instantiating once from the rolled-back view"
+                : refusal === "repair"
+                ? "carried a setup repair this principal may not commit; " +
+                  "instantiating once more with no repair staged"
                 : "lost its basis to a concurrent write; re-instantiating " +
                   "from the caught-up view"),
               error,
             ]);
+            if (refusal === "repair") setupRepair = undefined;
 
             // The graph reads its own pending setup and internal-cell writes
             // while it is installed. A stale-read refusal or a later wave
@@ -6006,7 +6021,8 @@ export class Runner {
               return await instantiatePattern(
                 pattern,
                 undefined,
-                refusal === "manifest" || refusal === "dropped"
+                refusal === "manifest" || refusal === "dropped" ||
+                  refusal === "repair"
                   ? { roundsLeft: 0, loaded: new Set() }
                   : {
                     roundsLeft: (retry?.roundsLeft ??
@@ -6058,6 +6074,19 @@ export class Runner {
                   isStorageTransactionInconsistent(error)
                 ) {
                   return await recoverInstantiation(error, "basis");
+                }
+                // A repair refused for want of authority is the repair's
+                // failure, not the start's: the plain instantiation the
+                // principal is entitled to is what the retry commits.
+                if (
+                  repair !== undefined &&
+                  isPermanentAuthorizationRefusal(
+                    error as Parameters<
+                      typeof isPermanentAuthorizationRefusal
+                    >[0],
+                  )
+                ) {
+                  return await recoverInstantiation(error, "repair");
                 }
                 const failure = this.#reportPieceStartCommitFailure(
                   instantiateActionId,
@@ -6747,7 +6776,8 @@ export class Runner {
                 // re-validated here, so the marker keeps saying so: the next
                 // setup for this identity still re-stages and validates it.
                 // The repair does not come back for that, because the
-                // manifest it writes now covers the pattern.
+                // stored setup it writes now agrees with the build, the
+                // manifest and the build digest both.
                 leaveCompletionMarker: true,
               },
               undefined,

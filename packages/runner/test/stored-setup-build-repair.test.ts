@@ -7,7 +7,20 @@ import {
   type FabricValue,
 } from "@commonfabric/data-model";
 
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
+import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+} from "../src/storage/cache.deno.ts";
+import {
+  type Options,
+  type SessionFactory,
+  StorageManager,
+} from "../src/storage/v2.ts";
 import type {
   DerivedInternalCellDescriptor,
   Pattern,
@@ -72,17 +85,26 @@ describe("stored-setup-build-repair", () => {
   // disagreement from the stored state alone, and `#startCore()` re-stages the
   // internal cells and the projection before instantiating.
 
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let server: ReturnType<typeof newLoopbackServer>;
   let rt: Runtime;
 
+  const openRuntime = (as: Identity): Runtime =>
+    new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: EmulatedStorageManager.connectTo(server, { as }),
+    });
+
   beforeEach(() => {
-    storageManager = StorageManager.emulate({ as: signer });
-    rt = new Runtime({ apiUrl: new URL(import.meta.url), storageManager });
+    server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    rt = openRuntime(signer);
   });
 
   afterEach(async () => {
+    await rt.idle();
+    await rt.patternManager.flushCompileCacheWrites();
+    await rt.storageManager.synced();
     await rt.dispose();
-    await storageManager.close();
+    await server.close();
   });
 
   const settled = async () => {
@@ -363,5 +385,157 @@ describe("stored-setup-build-repair", () => {
     expect(cell.getRaw()).toEqual(projection);
     expect(cell.getMetaRaw("internal")).toEqual(manifest);
     expect(cell.getMetaRaw("patternSetupBuild")).toBeUndefined();
+  });
+
+  it("leaves a piece alone on a cold reopen by another runtime of the same build", async () => {
+    // The cases above start in the runtime that set the piece up, so the
+    // start digests the same pattern object setup stamped. A reopen loads the
+    // pattern by identity through the compile cache, and its digest has to
+    // be the same one, or every cold start would re-stage.
+    const { cell } = await setUpAndStop("cold");
+    const stamp = cell.getMetaRaw("patternSetupBuild");
+    const projection = cell.getRaw();
+    const manifest = cell.getMetaRaw("internal");
+    await rt.patternManager.flushCompileCacheWrites();
+    await rt.storageManager.synced();
+    await rt.dispose();
+
+    rt = openRuntime(signer);
+    const reopened = rt.getCell<Result>(space, "cold");
+    expect(await startAndReadSlots(reopened)).toEqual(SLOT_VALUES);
+
+    expect(reopened.getMetaRaw("patternSetupBuild")).toBe(stamp);
+    expect(reopened.getRaw()).toEqual(projection);
+    expect(reopened.getMetaRaw("internal")).toEqual(manifest);
+  });
+
+  describe("for a principal with READ access to the space", () => {
+    // The repair commits as whoever starts the piece. A READ member cannot
+    // make that commit, and a start whose only failure is the repair's is a
+    // start the member is still entitled to: the piece runs for them over
+    // the stored setup, the stamp stays as it was, and the next start by a
+    // writer repairs it.
+
+    const AUDIENCE = "did:key:z6Mk-runner-stored-setup-build-repair-audience";
+
+    /** Opens each session on the one in-process server, as `signer`. */
+    class LoopbackSessionFactory implements SessionFactory {
+      readonly supportsAclBootstrap = true;
+      readonly #server: MemoryV2Server.Server;
+
+      constructor(server: MemoryV2Server.Server) {
+        this.#server = server;
+      }
+
+      async create(
+        space: MemorySpace,
+        signer?: Signer,
+        requested: MemoryV2Client.MountOptions = {},
+      ) {
+        const client = await MemoryV2Client.connect({
+          transport: MemoryV2Client.loopback(this.#server),
+        });
+        const session = await client.mount(
+          space,
+          requested,
+          (_space, _session, context) => ({
+            invocation: {
+              aud: context.audience,
+              challenge: context.challenge.value,
+            },
+            authorization: { principal: signer?.did() },
+          }),
+        );
+        return { client, session };
+      }
+    }
+
+    class TestStorageManager extends StorageManager {
+      static overServer(
+        options: Omit<Options, "memoryHost">,
+        factory: SessionFactory,
+      ): TestStorageManager {
+        return new TestStorageManager(
+          { ...options, memoryHost: new URL("memory://") },
+          factory,
+        );
+      }
+    }
+
+    let enforcing: MemoryV2Server.Server;
+    let runtimes: Runtime[];
+
+    const openAs = (identity: Identity): Runtime => {
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: TestStorageManager.overServer(
+          { as: identity },
+          new LoopbackSessionFactory(enforcing),
+        ),
+      });
+      runtimes.push(runtime);
+      return runtime;
+    };
+
+    beforeEach(() => {
+      enforcing = new MemoryV2Server.Server({
+        store: new URL(
+          `memory://stored-setup-build-repair-${crypto.randomUUID()}`,
+        ),
+        authorizeSessionOpen: authorizeLoopbackSessionOpen,
+        sessionOpenAuth: { audience: AUDIENCE },
+        acl: { mode: "enforce" },
+        subscriptionRefreshDelayMs: 0,
+      });
+      runtimes = [];
+    });
+
+    afterEach(async () => {
+      for (const runtime of runtimes) await runtime.dispose();
+      await enforcing.close();
+    });
+
+    it("starts a piece whose stored setup is another build's, without re-staging it", async () => {
+      const owner = await Identity.fromPassphrase("build repair owner");
+      const reader = await Identity.fromPassphrase("build repair reader");
+      const ownerRt = openAs(owner);
+      const shared = await ownerRt.createSpace({
+        grants: { [reader.did()]: "READ" },
+      });
+      const tx = ownerRt.edit();
+      const pattern = await ownerRt.patternManager.compilePattern(PROGRAM, {
+        space: shared,
+        tx,
+      }) as Pattern;
+      const owned = ownerRt.getCell<Result>(shared, "shared", undefined, tx);
+      const running = ownerRt.run(tx, pattern, { input: INPUT }, owned);
+      await tx.commit().settled;
+      await running.pull();
+      await ownerRt.idle();
+      ownerRt.runner.stop(owned);
+      const stampTx = ownerRt.edit();
+      owned.withTx(stampTx).setMetaRaw(
+        "patternSetupBuild",
+        "another build",
+        rawMetaWriteAuthorization,
+      );
+      expect((await stampTx.commit().settled).error).toBeUndefined();
+      await ownerRt.patternManager.flushCompileCacheWrites();
+      await ownerRt.storageManager.synced();
+
+      const readerRt = openAs(reader);
+      const read = readerRt.getCell<Result>(shared, "shared");
+      // Rejects when the start's commit fails, through the retry a refused
+      // repair takes.
+      expect(await readerRt.runner.startWithCommit(read)).toBe(true);
+      await read.pull();
+      await readerRt.idle();
+
+      expect(readerRt.runner.isRunning(read)).toBe(true);
+      expect((read.getAsQueryResult() as Result).$UI.children).toEqual(
+        SLOT_VALUES,
+      );
+      expect(read.getMetaRaw("patternSetupBuild")).toBe("another build");
+    });
   });
 });
