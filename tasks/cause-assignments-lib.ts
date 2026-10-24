@@ -72,7 +72,10 @@ export interface MovedCell extends RenumberedCell {
  * number so that which cell went where cannot be told.
  */
 export interface AmbiguousCells extends AmbiguousDescription {
+  /** The pattern's key, as `pattern-files.ts` names it. */
   pattern: string;
+
+  /** The level's key, as {@link AssignmentLevel} gives it. */
   level: string;
 }
 

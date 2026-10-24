@@ -86,7 +86,10 @@ export interface Comparison {
     ambiguous: AmbiguousCells[];
   }[];
 
-  /** The patterns whose moves an accepted entry forgives. */
+  /**
+   * The patterns whose moves, and cells that cannot be matched, an accepted
+   * entry forgives.
+   */
   forgiven: string[];
 
   /** The accepted entries that forgave nothing. */
