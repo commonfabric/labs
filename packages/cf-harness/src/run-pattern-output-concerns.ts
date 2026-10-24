@@ -50,6 +50,7 @@
 
 import type { JSONSchema } from "@commonfabric/api";
 import { isObjectNotArray } from "@commonfabric/utils/types";
+import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 /** What an output says about itself. */
 export type OutputConcernKind = "error-branch" | "no-rows" | "pending";
@@ -152,6 +153,12 @@ const reportsFailure = (key: string, value: unknown): boolean =>
  * empty list a result happens to carry rather than the emptiness of a read.
  * Framework keys (`$NAME`, `$UI`) are not outputs and are left alone.
  *
+ * Outputs are named in the order the JSON codec writes a record's keys,
+ * `utf8SortedKeysOf()`, rather than the order `value` holds them in. A result
+ * read back from storage holds its keys in the codec's order, and the same
+ * result read in this realm holds them in the order they were written, so
+ * either way it reports the same list.
+ *
  * A result reporting itself `pending` gets a pending concern rather than an
  * emptiness concern. Its failures are reported either way.
  *
@@ -173,8 +180,9 @@ export const observedOutputsIn = (
     ERROR_KEYS.some((name) => declared.has(name));
   const pending = value[PENDING_KEY] === true;
   const observed: ObservedOutput[] = [];
-  for (const [key, member] of Object.entries(value)) {
+  for (const key of utf8SortedKeysOf(value)) {
     if (key.startsWith("$") || !declared.has(key)) continue;
+    const member = value[key];
     const concern: OutputConcernKind | undefined = reportsFailure(key, member)
       ? "error-branch"
       : key === PENDING_KEY && member === true
