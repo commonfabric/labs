@@ -359,11 +359,13 @@ and most runtime code runs in a web worker, so its loggers are in a separate
 // and structure sizes
 await commonfabric.rt.getLoggerCounts()
 // .compileCache = { hits, misses, byIdentityHits }; the `pattern-manager`
-// timing rows `compile-cache/load-by-identity/<outcome>` (hit, entry-absent,
-// entry-unverified, closure-refused, coverage-missing, eval-failed,
-// no-version) and `compile-cache/cold-load/<outcome>` (compiled, shared —
-// the load reused a compile of the same identity already in flight —
-// source-unavailable, compile-failed, eval-failed) name the pattern in each
+// timing rows `compile-cache/load-by-identity/<outcome>` (memory — the
+// in-memory artifact index served the load, with no storage read, which is
+// also how the runner resolves a live pattern when it starts a piece — hit,
+// entry-absent, entry-unverified, closure-refused, coverage-missing,
+// eval-failed, no-version) and `compile-cache/cold-load/<outcome>` (compiled,
+// shared — the load reused a compile of the same identity already in flight
+// — source-unavailable, compile-failed, eval-failed) name the pattern in each
 // row's `slowest` details
 
 // Counts of the worker's live structures right now: scheduler nodes and
