@@ -650,7 +650,8 @@ function filterAsCell(schema: JSONSchema | undefined): JSONSchema | undefined {
  * schema, a stream, which a read reaches as the stream itself, one whose
  * `cid:` closure `space` does not hold complete (ignored, as link resolution
  * ignores it when narrowing, `ensureExternalSchemaClosure()`), or one that
- * constrains nothing once the handle kind is off. `space` is that of the
+ * constrains nothing once the handle kind is off, by the rule the schema view
+ * uses (`isTrueSchema()`). `space` is that of the
  * document holding the link, where its closure travels.
  */
 export function declaredShape(
@@ -664,31 +665,13 @@ export function declaredShape(
   const resolved = resolveSchema(schema);
   if (!isObjectNotArray(resolved)) return undefined;
   const shape = filterAsCell(resolved);
-  return isObjectNotArray(shape) && isNontrivialSchema(shape)
+  // Constrains nothing by the rule the schema view hands a position on by
+  // (`isTrueSchema()`): an annotation or a `default` alone declares no shape,
+  // and adopting one would hand the position straight back here.
+  return isObjectNotArray(shape) && isNontrivialSchema(shape) &&
+      !ContextualFlowControl.isTrueSchema(shape)
     ? shape
     : undefined;
-}
-
-/**
- * Whether `shape` selects among a record's keys: it names `properties` and
- * admits no additional ones. A read under it reads those keys and no other,
- * as the schema view does (`#traverseObjectWithSchema`).
- */
-export function selectsKeys(
-  shape: JSONSchemaObj | undefined,
-): shape is JSONSchemaObj {
-  if (shape === undefined || !isObjectNotArray(shape.properties)) return false;
-  const additional = shape.additionalProperties;
-  return additional === undefined || additional === false;
-}
-
-/** Whether a read of a record under `shape` reads its key `key`. */
-export function declaresKey(
-  shape: JSONSchemaObj | undefined,
-  key: string,
-): boolean {
-  return !selectsKeys(shape) ||
-    Object.hasOwn(shape.properties as object, key);
 }
 
 /**

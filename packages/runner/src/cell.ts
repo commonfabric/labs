@@ -181,11 +181,9 @@ import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
 import {
   type CellViewRef,
   declaredShape,
-  declaresKey,
   processDefaultValue,
   resolveSchema,
   schemaHasIfc,
-  selectsKeys,
   validateAndTransform,
 } from "./schema.ts";
 import { isCellScope, narrowerScopeCap, normalizeCellScope } from "./scope.ts";
@@ -5559,10 +5557,9 @@ export function convertCellsToLinks(
  * A cell's value in the form the worker hands it to a host: each cell inside
  * it as the link it names, carrying the display form of that cell's label
  * view with every caveat's source redacted, and each query result read out
- * into the data behind it, following its links. Behind a link whose stored
- * schema declares what its target holds, the target is read out as that
- * schema names it, and a key it does not name is left out
- * (`readOutView()`). A sigil link already in the
+ * into the data behind it, following its links, and behind a link whose
+ * stored schema declares what its target holds, the target read as a read
+ * under that schema reads it (`readOutView()`). A sigil link already in the
  * value is rebuilt as the container it is, view and all; stored data carries
  * no view on a link, the persist seam having stripped it, so the minted links
  * are where a view crosses. What a host is sent is
@@ -5746,7 +5743,9 @@ function convertOneToLinks(
         // its own, resolve its link and derive its label view for a member
         // that is then only copied.
         const readOut = viewReadOut(value);
-        if (readOut !== undefined) return readOutView(readOut, options, stack);
+        if (readOut !== undefined) {
+          return readOutView(readOut, options, stack, ancestors);
+        }
         // A subclass fails the prototype check, and is read out into a plain
         // copy first, which is a valid `FabricValueLayer` already and so wants
         // no further conversion. Objects need this as much as arrays do -- the
@@ -5852,9 +5851,6 @@ function convertOneToLinks(
   }
 }
 
-/** A read of a container's shape alone: its keys, not what they hold. */
-const SHAPE_READ = { nonRecursive: true } as const;
-
 /**
  * Reads the document a view describes out as the data the view reads, in
  * place of walking the view member by member: the stored value is frozen,
@@ -5864,19 +5860,17 @@ const SHAPE_READ = { nonRecursive: true } as const;
  * The document is read once, whole, through the view's own checked read, so
  * a document that no longer holds what the view was built over refuses as
  * every access through the view does; the read registers every position
- * under it, where reading through the view registers each as it is reached.
- * A stored link is followed where it sits, as the view follows one on
- * access, with the same resolution, so the dereference traces and labeled
- * crossings it records are the ones the view's reads record. What the link
- * declares of its target (`declaredShape()`, from the stored schema the
- * resolution carries) is what the walk reads there, as a shaped read
- * crossing the link reads it: a record whose declaration selects keys is
- * read at its shape and at each key it names, and a key it does not name is
- * left out, unread. The declaration comes from the link alone, not from the
- * view, which reads alike for every reader that reaches it. A link that
- * returns to a position the walk is inside yields a back-link to it, as a
- * cycle does elsewhere in the walk. A stream position yields the link to the
- * stream, carrying the label view a view of it would carry.
+ * under it, where reading through the view registers each as it is reached. A stored link is followed where it sits, as the view follows
+ * one on access, with the same resolution, so the dereference traces and
+ * labeled crossings it records are the ones the view's reads record. A link
+ * that returns to a position the walk is inside yields a back-link to it, as
+ * a cycle does elsewhere in the walk. A link whose stored schema declares
+ * what its target holds (`declaredShape()`) is read as a shapeless read of
+ * its position reads it, through the schema materializer under that schema
+ * (`validateAndTransform()`), and what that returns is converted as any
+ * value is, through `ancestors`: the walk carries no schema semantics of its
+ * own. A stream position yields the link to the stream, carrying the label
+ * view a view of it would carry.
  *
  * `stack` is the path to the view from the walk's root, pushed to and popped
  * from as {@link convertOneToLinks} does, so a back-link made here names a
@@ -5886,6 +5880,7 @@ function readOutView(
   view: ViewReadOut,
   options: CellLinkOptions,
   stack: string[],
+  ancestors: IndexTrackingStack<object>,
 ): FabricValue {
   const { runtime } = view;
   return view.atEpoch(() => {
@@ -5906,31 +5901,19 @@ function readOutView(
 
     // What `stored` holds, which sits at `position` inside the document
     // `document` names, under the label view `cfcLabelView` carries for that
-    // document position, under the declaration `declaration` a followed link
-    // made of it, or none. `stored` is the value at `position` as read: at its
-    // shape alone where `declaration` selects keys, else whole. `position` is
-    // pushed to and popped from in step with `stack`.
+    // document position. `position` is pushed to and popped from in step with
+    // `stack`.
     const walk = (
       stored: unknown,
       document: NormalizedFullLink,
       position: string[],
       cfcLabelView: CfcLabelView | undefined,
-      declaration: (JSONSchema & object) | undefined,
     ): FabricValue => {
       if (isSigilLink(stored)) {
-        // Followed from this position under its own declaration, which the
-        // resolution carries onto the target where the stored link declares
-        // nothing: the document's schema describes the document, not the
-        // member the link sits at.
-        const { schema: _documentSchema, ...address } = document;
         const resolved = resolveLinkTracingDereferences(
           runtime,
           tx,
-          {
-            ...address,
-            path: [...document.path, ...position],
-            ...(declaration !== undefined && { schema: declaration }),
-          },
+          { ...document, path: [...document.path, ...position] },
           "value",
           { markIfcCrossings: true },
         );
@@ -5946,26 +5929,39 @@ function readOutView(
         if (depth !== undefined) {
           return deepFreeze(linkRefFrom({ path: stack.slice(0, depth) }));
         }
-        // What the link followed last declares of its target, carried onto
-        // the resolved link; its closure lives in the space of the document
-        // holding that link.
-        const targetDeclaration = declaredShape(
+        // What the link declares of its target, carried onto the resolved
+        // link; its closure lives in the space of the document holding the
+        // link.
+        const declared = declaredShape(
           tx,
           resolved.traces.length > 0
             ? resolved.traces[resolved.traces.length - 1].source.space
             : document.space,
           target.schema,
         );
-        return walk(
-          tx.readValueOrThrow(
-            target,
-            selectsKeys(targetDeclaration) ? SHAPE_READ : undefined,
-          ),
-          target,
-          [],
-          targetView,
-          targetDeclaration,
-        );
+        if (declared !== undefined) {
+          const materialized = validateAndTransform(
+            runtime,
+            tx,
+            {
+              link: {
+                ...document,
+                path: [...document.path, ...position],
+                schema: declared,
+              },
+              cfcLabelView: rebaseCfcLabelView(cfcLabelView, position),
+            },
+            [],
+            { viewChild: true },
+          );
+          return convertOneToLinks(
+            materialized as CellLinkInput,
+            options,
+            stack,
+            ancestors,
+          );
+        }
+        return walk(tx.readValueOrThrow(target), target, [], targetView);
       }
       if (isStreamValue(stored)) {
         return streamLink(
@@ -5982,38 +5978,16 @@ function readOutView(
         // `query-result-proxy.ts` says what closes this.
         return Object.freeze({});
       }
-      // The declaration a member at `key` is read under: this one's schema
-      // for the key, where there is one.
-      const memberDeclaration = (key: string) =>
-        declaration === undefined ? undefined : declaredShape(
-          tx,
-          document.space,
-          ContextualFlowControl.getSchemaAtPath(declaration, [key]),
-        );
-      const member = (
-        key: string,
-        value: unknown,
-        memberDeclared: (JSONSchema & object) | undefined,
-      ): FabricValue => {
+      const member = (key: string, value: unknown): FabricValue => {
         stack.push(key);
         position.push(key);
         try {
-          return walk(value, document, position, cfcLabelView, memberDeclared);
+          return walk(value, document, position, cfcLabelView);
         } finally {
           position.pop();
           stack.pop();
         }
       };
-      // A member of a record read at its shape is read on its own: at its
-      // shape in turn where its declaration selects keys, else whole.
-      const readMember = (
-        key: string,
-        memberDeclared: (JSONSchema & object) | undefined,
-      ): unknown =>
-        tx.readValueOrThrow(
-          { ...document, path: [...document.path, ...position, key] },
-          selectsKeys(memberDeclared) ? SHAPE_READ : undefined,
-        );
       // The container is an ancestor of everything below it for as long as
       // the walk is inside it, and nothing else: a value reached again on
       // another branch is shared, and is read out again there.
@@ -6025,41 +5999,20 @@ function readOutView(
       try {
         if (Array.isArray(stored)) {
           return Object.freeze(
-            stored.map((element, index) => {
-              const key = String(index);
-              return member(key, element, memberDeclaration(key));
-            }),
+            stored.map((element, index) => member(String(index), element)),
           );
-        }
-        if (selectsKeys(declaration)) {
-          return Object.freeze(Object.fromEntries(
-            Object.keys(stored).filter((key) => declaresKey(declaration, key))
-              .map((key) => {
-                const memberDeclared = memberDeclaration(key);
-                return [
-                  key,
-                  member(key, readMember(key, memberDeclared), memberDeclared),
-                ];
-              }),
-          ));
         }
         return Object.freeze(Object.fromEntries(
           Object.entries(stored).map((
             [key, value],
-          ) => [key, member(key, value, memberDeclaration(key))]),
+          ) => [key, member(key, value)]),
         ));
       } finally {
         entered.delete(here);
       }
     };
 
-    return walk(
-      view.readDocument(),
-      view.link,
-      [],
-      view.cfcLabelView,
-      undefined,
-    );
+    return walk(view.readDocument(), view.link, [], view.cfcLabelView);
   });
 }
 

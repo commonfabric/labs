@@ -12,6 +12,7 @@ import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 
 import { type Cell, hostValueOf, sinkProjected } from "../src/cell.ts";
+import { isSigilLink } from "../src/link-types.ts";
 import { KeepAsCell } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -131,6 +132,17 @@ describe("a shapeless read of a position holding a link carrying a schema", () =
     });
   });
 
+  it("reads everything behind a link whose schema declares no shape, as a default alone", async () => {
+    await using docs = await documents({ default: {} });
+
+    expect(hostValueOf(docs.message.key("authorProfile").get())).toEqual({
+      name: "an author",
+      avatar: "a",
+      extra: "not declared",
+      inbox: { catalog: { entries: {} }, offers: [] },
+    });
+  });
+
   it("subscribes to what the link's schema names alone", async () => {
     await using docs = await documents();
     const names: unknown[] = [];
@@ -235,6 +247,86 @@ describe("a host's read-out of a link it follows", () => {
         list: [{ [field]: `text ${field}` }],
         [field]: `text ${field}`,
       });
+    }
+  });
+
+  it("reads a link as the direct read of its position does: a union, a default, a nested handle", async () => {
+    const declarations = {
+      union: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              avatar: { type: "string" },
+            },
+          },
+          { type: "null" },
+        ],
+      },
+      defaulted: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          avatar: { type: "string", default: "none" },
+        },
+      },
+      handle: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          inbox: { type: "object", asCell: ["cell"] },
+        },
+      },
+    } as const;
+    for (const [kind, schema] of Object.entries(declarations)) {
+      await using docs = await documents(schema);
+      if (kind === "defaulted") {
+        await docs.write(space, "profile", {
+          name: "an author",
+          extra: "not declared",
+        }, schema);
+      }
+      const direct = hostValueOf(
+        docs.message.key("authorProfile").get(),
+      ) as Record<string, unknown>;
+      const readOut = (hostValueOf(docs.message.get()) as {
+        authorProfile: Record<string, unknown>;
+      }).authorProfile;
+
+      expect(readOut).toEqual(direct);
+      expect(readOut.extra).toBeUndefined();
+      if (kind === "union") expect(readOut.inbox).toBeUndefined();
+      if (kind === "defaulted") expect(readOut.avatar).toBe("none");
+      if (kind === "handle") expect(isSigilLink(readOut.inbox)).toBe(true);
+    }
+  });
+
+  it("subscribes through the read-out to nothing a link's schema leaves out", async () => {
+    // A union declaration, so the walk has a branch to select.
+    await using docs = await documents({
+      anyOf: [
+        {
+          type: "object",
+          properties: { name: { type: "string" }, avatar: { type: "string" } },
+        },
+        { type: "null" },
+      ],
+    });
+    const deliveries: unknown[] = [];
+    const cancel = sinkProjected(docs.message, hostValueOf, (value) => {
+      deliveries.push(value);
+    });
+    try {
+      expect(deliveries).toHaveLength(1);
+      await docs.write(elsewhere, "catalog", { entries: { added: true } });
+      await docs.write(elsewhere, "inbox", {
+        catalog: docs.runtime.getCell(elsewhere, "catalog").getAsLink(),
+        offers: [{ from: "someone" }],
+      });
+      expect(deliveries).toHaveLength(1);
+    } finally {
+      cancel();
     }
   });
 
