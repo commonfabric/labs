@@ -111,6 +111,15 @@ describe("logic", () => {
       );
     });
 
+    it("returns longer text cut before a word the cut falls within", () => {
+      // The cut falls within "afternoon", which is left out whole.
+      const text =
+        "Where should we go for the team lunch on Friday afternoon, and who books?";
+      expect(threadExcerpt(text)).toBe(
+        "Where should we go for the team lunch on Friday…",
+      );
+    });
+
     it("returns a word that ends right at the cut whole", () => {
       // 49 characters of whole words, then a space and more.
       const words = "aaaa ".repeat(9) + "bbbb";

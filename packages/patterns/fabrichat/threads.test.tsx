@@ -24,7 +24,7 @@ import {
   readValue,
   textContent,
 } from "../test/vnode-helpers.ts";
-import { type MessagesValue } from "./room-records.tsx";
+import { type MessageRecord, type MessagesValue } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
 import {
   CHAT_SEND_ACTION,
@@ -96,6 +96,12 @@ const threadLinkText = (root: unknown, text: string): string => {
 const controlDisplay = (root: unknown, text: string, label: string) =>
   displayOf(findNode(rowIn(root, MAIN, text), isButton(label)));
 
+/** A message, as an event names it. */
+function messageOf(cell: unknown): Writable<MessageRecord>;
+function messageOf(cell: unknown): unknown {
+  return cell;
+}
+
 const ALL = ["Root", "Other", "First reply", "Second reply"];
 
 export default pattern(() => {
@@ -109,6 +115,8 @@ export default pattern(() => {
   const alice = FabriChatRoomCore(
     { myProfile: aliceProfile, ...records } as RoomArg,
   );
+  // The first message, as an event names it.
+  const root = messageOf(messages.key(0));
   const bob = FabriChatRoomCore(
     { myProfile: bobProfile, ...records } as RoomArg,
   );
@@ -208,7 +216,7 @@ export default pattern(() => {
         action: bob.sendMessage,
         event: {
           body: "Both ways",
-          replyTo: { thread: messages.key(0), shownIn: "both" },
+          replyTo: { thread: root, shownIn: "both" },
         },
         trustedUi: sendGesture,
       },

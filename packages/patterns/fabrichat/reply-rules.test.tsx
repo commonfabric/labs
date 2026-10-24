@@ -65,7 +65,7 @@ const codeOf = (outcome: SetThreadTitleOutcome | undefined) =>
   outcome?.status === "refused" ? outcome.code : undefined;
 
 const LONG =
-  "Where should we go for the team lunch on Friday, and who is booking it?";
+  "Where should we go for the team lunch on Friday afternoon, and who books?";
 
 export default pattern(() => {
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
@@ -172,7 +172,7 @@ export default pattern(() => {
             Writable.equalLinks(planning.messages[2], ownCell(messages, 3)) &&
             planning.hasOlder === false &&
             lunch?.title ===
-              "Where should we go for the team lunch on Friday,…" &&
+              "Where should we go for the team lunch on Friday…" &&
             lunch.replyCount === 1;
         }),
       },
