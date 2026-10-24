@@ -10,7 +10,6 @@ import {
   decodeBaseline,
   encodeBaseline,
   type Finding,
-  incompatibilityIssues,
   parseArgs,
   partitionAcceptedBreaks,
   type PatternContract,
@@ -95,6 +94,27 @@ describe("checkPattern", () => {
         detail: "result.body: existing result field was removed",
       },
     ]);
+  });
+
+  it("reports the whole path of a field whose name holds `: `", () => {
+    const current = contract(EMPTY_ARGUMENT, {
+      type: "object",
+      properties: {},
+    });
+    const findings = checkPattern("system/home.tsx", current, [
+      baseline("v1", EMPTY_ARGUMENT, {
+        type: "object",
+        properties: { "foo: bar": { type: "string" } },
+      }),
+    ]);
+
+    expect(findings.filter((f) => f.kind === "incompatible")).toEqual([{
+      kind: "incompatible",
+      pattern: "system/home.tsx",
+      baseline: "v1",
+      path: "result.foo: bar",
+      detail: "result.foo: bar: existing result field was removed",
+    }]);
   });
 
   it("reports a missing baseline for a contract no file records", () => {
@@ -447,49 +467,6 @@ describe("selectItems", () => {
   });
 });
 
-describe("incompatibilityIssues", () => {
-  it("reads the path off each issue line", () => {
-    expect(incompatibilityIssues(
-      "Pattern schemas are not backward compatible:\n" +
-        "- argument.topics[]: defaults changed below a constraint\n" +
-        "- result.crossrefs: existing result field was removed",
-    )).toEqual([
-      {
-        path: "argument.topics[]",
-        detail: "argument.topics[]: defaults changed below a constraint",
-      },
-      {
-        path: "result.crossrefs",
-        detail: "result.crossrefs: existing result field was removed",
-      },
-    ]);
-  });
-
-  it("returns an unparseable issue line whole as its path, so it matches no accepted path", () => {
-    expect(incompatibilityIssues("- previous argument has an invalid schema"))
-      .toEqual([{
-        path: "previous argument has an invalid schema",
-        detail: "previous argument has an invalid schema",
-      }]);
-  });
-
-  it("returns one issue blaming no path for a message with no issue lines", () => {
-    expect(incompatibilityIssues("something else entirely")).toEqual([
-      { path: undefined, detail: "something else entirely" },
-    ]);
-  });
-
-  it("reads a root issue as the bare role", () => {
-    // `schemaSubsetIssues` appends `.<property>` as it descends, so an issue
-    // about the schema itself carries the role it started with and no pointer.
-    // An entry forgiving one has to name it the same way.
-    expect(incompatibilityIssues(
-      "Pattern schemas are not backward compatible:\n" +
-        "- result: ifc changed",
-    )).toEqual([{ path: "result", detail: "result: ifc changed" }]);
-  });
-});
-
 describe("partitionAcceptedBreaks", () => {
   const incompatible = (
     pattern: string,
@@ -534,14 +511,14 @@ describe("partitionAcceptedBreaks", () => {
   });
 
   it("keeps a finding that blames no path at all", () => {
-    // Fails closed: an unrecognized message shape is not forgiven on the
-    // strength of a format assumption.
+    // An issue at no path, such as a baseline schema invalid on its own
+    // terms, names nothing an entry could accept.
     const finding: Finding = {
       kind: "incompatible",
       pattern: "a.tsx",
       baseline: "old",
       path: undefined,
-      detail: "something this parser cannot read",
+      detail: "previous result has an invalid schema: bad",
     };
     const { standing } = partitionAcceptedBreaks([finding], accepted);
     expect(standing).toEqual([finding]);

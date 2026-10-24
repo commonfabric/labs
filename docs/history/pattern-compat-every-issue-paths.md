@@ -55,7 +55,9 @@ change its paths trace to, and the evidence that they share that change's cause.
 
 - **Joins:** the four `fabrichat/room.tsx` entries citing
   `fabrichat-pushed-messages-break.md` (4, 31, 7, and 29 baselines): 94, 94,
-  100, and 108 paths.
+  100, and 108 paths, 396 in all. The registry lists 94, 98, 104, and 112
+  paths under those entries' pointer to this record, because the three newer
+  entries also carry the four participant scopes of the per-user group below.
 - **Change:** #8998, which that record decides.
 - **Paths:** the `requestId` and `version` of every send, edit, delete,
   obliterate, and reaction verb's event; the `earlierVersions` and `editedAt` of

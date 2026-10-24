@@ -20,6 +20,7 @@ import {
   assertPatternSchemasBackwardCompatible,
   assertSchemaSubset,
   DEFAULT_INERT_SUBSCHEMA_KEYS,
+  patternSchemaIncompatibilities,
   schemasHaveSameContract,
 } from "../src/schema-compatibility.ts";
 
@@ -6066,6 +6067,19 @@ describe("piece schema compatibility", () => {
       );
       expect(refusalIssues(previous, candidate)).toEqual([
         "- result.item: asCell changed",
+      ]);
+    });
+
+    it("returns each issue's path whole, a `: ` in a field name included", () => {
+      const named = (properties: Record<string, JSONSchema>): Pattern =>
+        pattern(previous.argumentSchema, { type: "object", properties });
+      expect(
+        patternSchemaIncompatibilities(
+          named({ "a: b": { type: "string" } }),
+          named({}),
+        ),
+      ).toEqual([
+        { path: "result.a: b", reason: "existing result field was removed" },
       ]);
     });
 

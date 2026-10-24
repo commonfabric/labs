@@ -11,8 +11,9 @@
  * (docs/specs/pattern-imports/pattern-updates.md, "The specialized system-source
  * updater does not perform the complete pre-apply structural comparison").
  * An incompatible schema that merges is therefore applied silently to every
- * running piece. CI is the only gate, so this reuses the exact function
- * `setsrc` enforces rather than reimplementing the rule.
+ * running piece. CI is the only gate, so this reuses the exact proof `setsrc`
+ * enforces rather than reimplementing the rule, taking its issues as data
+ * (`patternSchemaIncompatibilities`) rather than as the lines of its refusal.
  *
  * This module is the pure core: no compiling, no filesystem, no git. The task
  * shell (`pattern-compat.ts`) supplies the compiled contracts and the baseline
@@ -27,14 +28,17 @@ import {
   fabricFromJsonValue,
   jsonFromFabricValue,
 } from "@commonfabric/data-model/codecs";
-import { assertPatternSchemasBackwardCompatible } from "../packages/piece/src/schema-compatibility.ts";
+import {
+  formatSchemaIncompatibility,
+  patternSchemaIncompatibilities,
+} from "../packages/piece/src/schema-compatibility.ts";
 import { readOnlyArguments } from "./only-arguments.ts";
 import type { AcceptedContractBreak } from "./pattern-compat-accepted-breaks.ts";
 import { matchesPatternFilter } from "./pattern-files.ts";
 
 /**
  * The two schemas that constitute a pattern's update contract. Nothing else
- * about a pattern participates: `assertPatternSchemasBackwardCompatible` reads
+ * about a pattern participates: `patternSchemaIncompatibilities` reads
  * exactly these four values across its two arguments, which is why a baseline
  * can be a small JSON file rather than a compiled artifact.
  */
@@ -55,9 +59,9 @@ export type Finding =
   | { kind: "missing-baseline"; pattern: string; hash: string }
   /**
    * One issue that stops the current contract being applied over a deployed
-   * one. `path` is the schema path it blames, `undefined` when the refusal
-   * named none this module could read; `detail` is the issue as the proof
-   * states it.
+   * one. `path` is the schema path it blames, `undefined` for an issue at no
+   * path, such as a baseline schema invalid on its own terms; `detail` is the
+   * issue as the proof states it.
    */
   | {
     kind: "incompatible";
@@ -163,7 +167,7 @@ export function decodeBaseline(text: string): StoredBaseline {
 }
 
 /**
- * `assertPatternSchemasBackwardCompatible` takes two `Pattern`s but reads only
+ * `patternSchemaIncompatibilities` takes two `Pattern`s but reads only
  * their `argumentSchema` and `resultSchema`. The remaining fields are filled
  * with empty values so a stored contract can be checked without recovering the
  * compiled artifact it came from.
@@ -234,23 +238,18 @@ export function checkPattern(
     // An identical contract needs no proof: "can C be applied over C" is
     // trivially yes.
     if (contractHash(baseline.contract) === hash) continue;
-    try {
-      assertPatternSchemasBackwardCompatible(
-        asPattern(baseline.contract),
-        candidate,
-      );
-    } catch (error) {
-      const issues = incompatibilityIssues(
-        error instanceof Error ? error.message : String(error),
-      );
-      for (const issue of issues) {
-        findings.push({
-          kind: "incompatible",
-          pattern,
-          baseline: baseline.label,
-          ...issue,
-        });
-      }
+    const issues = patternSchemaIncompatibilities(
+      asPattern(baseline.contract),
+      candidate,
+    );
+    for (const issue of issues) {
+      findings.push({
+        kind: "incompatible",
+        pattern,
+        baseline: baseline.label,
+        path: issue.path,
+        detail: formatSchemaIncompatibility(issue),
+      });
     }
   }
 
@@ -353,34 +352,6 @@ export function shouldRecord(findings: readonly Finding[]): boolean {
  */
 export const acceptedBreakKey = (pattern: string, baseline: string): string =>
   `${pattern}\x00${baseline}`;
-
-/**
- * The issues a refusal of `assertPatternSchemasBackwardCompatible` names, each
- * with the schema path it blames.
- *
- * The refusal lists every issue the proof found as a `- <path>: <reason>`
- * line, which is what lets an acceptance be scoped to the paths it was granted
- * for, and each line becomes a finding of its own.
- *
- * A line with no `: ` in it comes back with the whole line as its path,
- * deliberately. That matches no accepted path, so an unrecognized line shape
- * fails closed — the finding stands — rather than being forgiven on the
- * strength of a format assumption. A refusal with no issue lines at all comes
- * back as one issue blaming no path, for the same reason.
- */
-export function incompatibilityIssues(
-  message: string,
-): { path: string | undefined; detail: string }[] {
-  const issues: { path: string | undefined; detail: string }[] = [];
-  for (const line of message.split("\n")) {
-    const issue = line.trimStart();
-    if (!issue.startsWith("- ")) continue;
-    const body = issue.slice(2);
-    const cut = body.indexOf(": ");
-    issues.push({ path: cut === -1 ? body : body.slice(0, cut), detail: body });
-  }
-  return issues.length > 0 ? issues : [{ path: undefined, detail: message }];
-}
 
 /**
  * Split findings into the ones that stand and the accepted breaks among them.
