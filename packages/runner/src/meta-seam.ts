@@ -46,9 +46,9 @@ export const META_FIELDS = Object.freeze(
     "pattern", // retired; see above
     "patternIdentity", // content-addressed {identity, symbol} pattern reference
     "patternSetupIdentity", // setup-completion {identity, symbol} marker
-    "patternSetupBuild", // digest of the build whose internal cells and
-    // result projection setup staged; a start that loads a build digesting
-    // differently re-stages them
+    "patternSetupBuild", // the record of the build whose internal cells and
+    // result projection setup staged (`stored-setup-build.ts`); a start holds
+    // the build it loads against it
     "patternSource", // active web or `cf:` source origin
     "pieceSourceHistory", // append-only source revisions and retention roots
     "pieceReconciliation", // what following the active origin last did:

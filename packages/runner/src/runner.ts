@@ -24,7 +24,18 @@ import {
   usesLocalReads,
   validateLocalReadBasis,
 } from "./storage/local-read-policy.ts";
+import {
+  type NumberedCell,
+  numberedCells,
+  type RenumberedCell,
+} from "./cause-assignment.ts";
 import { keepRefusedArgumentSlots } from "./refused-argument-slots.ts";
+import {
+  compareStoredSetupBuild,
+  readStoredSetupBuild,
+  type StoredSetupBuild,
+  storedSetupBuildOf,
+} from "./stored-setup-build.ts";
 import { STORED_ARGUMENT_SCHEMA_REFUSAL } from "./stored-argument-refusal.ts";
 import {
   storedArgumentSlotIssues,
@@ -1132,34 +1143,34 @@ function isPositionalPartialCause(partialCause: unknown): boolean {
 }
 
 /**
- * The digests of the builds this runtime has digested, by pattern object. A
- * built pattern is immutable, so its digest is computed once.
+ * The description of a build a runtime has described, by pattern object and
+ * by the identity it was described for: the record setup stamps as
+ * `patternSetupBuild`, and the positional cells it was built from. A built
+ * pattern is immutable, so each is computed once.
  */
-const buildDigests = new WeakMap<Pattern, string>();
+const describedBuilds = new WeakMap<
+  Pattern,
+  Map<string, { record: StoredSetupBuild; cells: NumberedCell[] }>
+>();
 
 /**
- * The digest of the build of `pattern`: its derived internal cells in build
- * order, each by partial cause, kind, scope and schema. Two builds of one
- * pattern source that number or shape an internal cell differently digest
- * differently. Setup stamps it as `patternSetupBuild`, and a start compares
- * the build it loads against the stamp (`Runner.#storedSetupAgrees`).
+ * What a start owes the setup stored on a piece, held against the build it
+ * loaded (`Runner.#storedSetupVerdict`): nothing, where they agree; a
+ * repair, where re-staging the internal cells and result projection puts
+ * them in agreement; or a hold, where re-staging would read a cell holding
+ * state as another cell's, so the stored setup is left as it is.
  */
-function buildDigestOf(pattern: Pattern): string {
-  let digest = buildDigests.get(pattern);
-  if (digest === undefined) {
-    digest = hashStringOf(
-      fabricFromConvertibleJsValue(
-        (pattern.derivedInternalCells ?? []).map((descriptor) => ({
-          partialCause: descriptor.partialCause,
-          ...(descriptor.kind !== undefined && { kind: descriptor.kind }),
-          ...(descriptor.scope !== undefined && { scope: descriptor.scope }),
-          ...(descriptor.schema !== undefined && { schema: descriptor.schema }),
-        })),
-      ),
-    );
-    buildDigests.set(pattern, digest);
-  }
-  return digest;
+interface StoredSetupVerdict {
+  owed: "nothing" | "repair" | "hold";
+
+  /** The cells holding state that moved, where the verdict is a hold. */
+  moved: RenumberedCell[];
+
+  /**
+   * Whether the stored manifest lacks a derived internal cell of the build:
+   * the sign that no setup for this version ran over the document.
+   */
+  lacks: boolean;
 }
 
 /**
@@ -4630,13 +4641,15 @@ export class Runner {
         }, rawMetaWriteAuthorization);
       }
       // The build whose internal cells and result projection were staged just
-      // now, by digest, which a start compares against the build it loads
-      // (`#storedSetupAgrees`). Stamped whether or not the completion marker
+      // now, described as a start holds it against the build it loads
+      // (`#storedSetupVerdict`). Stamped whether or not the completion marker
       // is: the marker is about the argument, which a repair leaves alone,
       // and this is about what every setup writes.
       resultCell.withTx(tx).setMetaRaw(
         "patternSetupBuild",
-        buildDigestOf(pattern),
+        fabricFromConvertibleJsValue(
+          this.#describedBuild(pattern, durableEntryRef).record,
+        ),
         rawMetaWriteAuthorization,
       );
       // The durable stamps staged above supersede a keyless session pointer
@@ -5193,35 +5206,68 @@ export class Runner {
   }
 
   /**
-   * Whether the setup state stored on `resultCell` is the setup of `pattern`
-   * as this runtime builds it. `false` turns on the start repair in
-   * `#startCore()`, which re-stages the pattern's internal cells and result
-   * projection.
-   *
-   * Three things settle it, each a disagreement setup never leaves behind.
-   * The internal-cell manifest names every derived internal cell of
-   * `pattern`, by partial cause and kind. It names no cell `pattern` lacks: a
-   * cell the build no longer has is one an earlier build of the same pattern
-   * had. And the build digest setup stamped, where it stamped one, is this
-   * build's (`buildDigestOf`). The two manifest checks are all a document set
-   * up before the digest existed is judged by; they see a root the build
-   * added or dropped, which moves every positional cause after it, and miss
-   * only a change that keeps the manifest's causes and kinds, which the
-   * digest sees.
-   *
-   * Why a document failing any of them cannot be trusted: a derived internal
-   * cell is named by its partial cause, and an anonymous cause is a position
-   * in the build. The result projection stores one link per slot, to the cell
-   * the build that set the piece up numbered for that slot. A build that
-   * numbers the slot differently writes the slot's value to another cell, and
-   * the stored projection reads that cell as another slot.
+   * The description of `pattern`'s build for the identity `ref`: the record
+   * setup stamps as `patternSetupBuild`, and the positional cells it
+   * describes. A sub-pattern child is described by its own pattern's
+   * identity, which this runtime's pattern manager knows.
    */
-  #storedSetupAgrees(resultCell: Cell<unknown>, pattern: Pattern): boolean {
+  #describedBuild(
+    pattern: Pattern,
+    ref: { identity: string; symbol: string },
+  ): { record: StoredSetupBuild; cells: NumberedCell[] } {
+    let byRef = describedBuilds.get(pattern);
+    if (byRef === undefined) {
+      byRef = new Map();
+      describedBuilds.set(pattern, byRef);
+    }
+    const key = patternIdentityKey(ref);
+    let described = byRef.get(key);
+    if (described === undefined) {
+      const entryRefOf = (artifact: object) =>
+        this.#runtime.patternManager.getArtifactEntryRef(artifact);
+      described = {
+        record: storedSetupBuildOf(pattern, ref, entryRefOf),
+        cells: numberedCells(pattern, entryRefOf),
+      };
+      byRef.set(key, described);
+    }
+    return described;
+  }
+
+  /**
+   * What a start owes the setup stored on `resultCell`, holding it against
+   * `pattern` as this runtime builds it for the identity `ref`. A repair,
+   * the start repair in `#startCore()`, re-stages the pattern's internal
+   * cells and result projection.
+   *
+   * Why a stored setup can disagree with the build: a derived internal cell
+   * is named by its partial cause, and an anonymous cause is a position in
+   * the build. The result projection stores one link per slot, to the cell
+   * the build that set the piece up numbered for that slot. A build that
+   * numbers the slot differently writes the slot's value to another cell,
+   * and the stored projection reads that cell as another slot.
+   *
+   * Three things decide it. The internal-cell manifest has to name every
+   * derived internal cell of `pattern`, by partial cause and kind, and no
+   * cell `pattern` lacks: a cell the build no longer has is one an earlier
+   * build of the same pattern had. The record setup stamped, where it
+   * stamped one for this identity, has to describe this build
+   * (`compareStoredSetupBuild`); where it describes another, the cells
+   * holding state decide between a repair and a hold, since re-staging
+   * restores a derived cell and misplaces a stateful one. A document with no
+   * record of this identity is judged by its manifest alone, and where that
+   * disagrees, by whether the build has any cell holding state at all: with
+   * none, re-staging can misplace nothing.
+   */
+  #storedSetupVerdict(
+    resultCell: Cell<unknown>,
+    pattern: Pattern,
+    ref: { identity: string; symbol: string },
+  ): StoredSetupVerdict {
     const descriptors = pattern.derivedInternalCells ?? [];
     const stored = convertibleJsFromFabricValue(
       resultCell.getMetaRaw("internal", { meta: ignoreReadForScheduling }),
     );
-    if (descriptors.length > 0 && !Array.isArray(stored)) return false;
     const manifest = Array.isArray(stored)
       ? stored as InternalCellDescriptor[]
       : [];
@@ -5230,21 +5276,68 @@ export class Runner {
       b: { partialCause: JSONValue; kind?: EntityKind },
     ): boolean =>
       deepEqual(a.partialCause, b.partialCause) && a.kind === b.kind;
-    if (
-      !descriptors.every((descriptor) =>
-        manifest.some((entry) => sameCell(entry, descriptor))
-      ) ||
-      !manifest.every((entry) =>
+    const lacks = !descriptors.every((descriptor) =>
+      manifest.some((entry) => sameCell(entry, descriptor))
+    );
+    const manifestAgrees = !lacks &&
+      manifest.every((entry) =>
         descriptors.some((descriptor) => sameCell(descriptor, entry))
-      )
-    ) {
-      return false;
+      );
+    const { record, cells } = this.#describedBuild(pattern, ref);
+    const stamped = readStoredSetupBuild(
+      resultCell.getMetaRaw("patternSetupBuild", {
+        meta: ignoreReadForScheduling,
+      }),
+    );
+    if (stamped === undefined || !samePatternRef(stamped.pattern, ref)) {
+      if (manifestAgrees) return { owed: "nothing", moved: [], lacks };
+      return {
+        owed: cells.some((cell) => cell.holdsState) ? "hold" : "repair",
+        moved: [],
+        lacks,
+      };
     }
-    const stampedBuild = resultCell.getMetaRaw("patternSetupBuild", {
-      meta: ignoreReadForScheduling,
-    });
-    return stampedBuild === undefined ||
-      stampedBuild === buildDigestOf(pattern);
+    const comparison = compareStoredSetupBuild(stamped, record, cells);
+    switch (comparison.kind) {
+      case "same":
+        return {
+          owed: manifestAgrees ? "nothing" : "repair",
+          moved: [],
+          lacks,
+        };
+      case "renumbered":
+        return { owed: "repair", moved: comparison.moved, lacks };
+      case "held":
+        return { owed: "hold", moved: comparison.moved, lacks };
+    }
+  }
+
+  /**
+   * What a plain start of `resultCell` owes its stored setup, for `pattern`
+   * pinned as `ref`: the verdict of `#storedSetupVerdict()`, except that a
+   * manifest lacking one of this version's cells under a completion marker
+   * naming another version, or none, is a repair whatever the cells holding
+   * state: that is a version whose setup never ran over the document, which
+   * the repair materializes, and the positional-child guard in setup is what
+   * judges its children.
+   */
+  #startOwes(
+    resultCell: Cell<unknown>,
+    pattern: Pattern,
+    ref: { identity: string; symbol: string },
+  ): StoredSetupVerdict {
+    const verdict = this.#storedSetupVerdict(resultCell, pattern, ref);
+    if (
+      verdict.owed === "hold" && verdict.lacks &&
+      storedSetupMarker(
+          resultCell,
+          ref,
+          this.#sessionPatternPointer(resultCell),
+        ) !== "matches"
+    ) {
+      return { ...verdict, owed: "repair" };
+    }
+    return verdict;
   }
 
   /** Convert a module to pattern format */
@@ -5646,6 +5739,7 @@ export class Runner {
     // already has.
     let setupRepair: {
       pattern: Pattern;
+      ref: { identity: string; symbol: string };
       stage: (tx: IExtendedStorageTransaction) => void;
     } | undefined;
     // The work the pattern watcher has in flight following a move of the
@@ -5676,7 +5770,8 @@ export class Runner {
       // for it, so its seal and any refusal of it are attributed to the repair
       // rather than to an ordinary instantiation.
       const repair = shouldCommit && setupRepair?.pattern === pattern &&
-          !this.#storedSetupAgrees(resultCell, pattern)
+          this.#startOwes(resultCell, pattern, setupRepair.ref).owed ===
+            "repair"
         ? setupRepair
         : undefined;
       const startActionId = `${
@@ -6693,17 +6788,20 @@ export class Runner {
     // among them.
     //
     // The trigger is that stored state and nothing else: the stored setup
-    // disagrees with the pattern as this runtime builds it
-    // (`#storedSetupAgrees`) — a manifest missing one of the pattern's
-    // derived internal cells, a manifest naming a cell the build no longer
-    // has, or a build digest that is not this build's. The setup-completion
-    // marker does not decide it. The marker names an identity, and one
-    // identity's source builds differently under different compilers, so a
-    // marker that matches can stand over a projection whose links name the
-    // cells of another build. A keyless piece is not repaired here: its
-    // identity never reaches durable state, and the precondition below
-    // re-reads a durable identity it never had. The repair moves no durable
-    // identity pointer; it replays the pattern the pointer already names
+    // disagrees with the pattern as this runtime builds it (`#startOwes`) —
+    // a manifest missing one of the pattern's derived internal cells, a
+    // manifest naming a cell the build no longer has, or a stamped record
+    // describing another build. The setup-completion marker does not decide
+    // it. The marker names an identity, and one identity's source builds
+    // differently under different compilers, so a marker that matches can
+    // stand over a projection whose links name the cells of another build.
+    // A disagreement re-staging cannot put right, a cell holding state that
+    // another build numbered differently, is a hold: the piece runs over its
+    // stored setup as it did, which is reported, and nothing is written. A
+    // keyless piece is not repaired here: its identity never reaches durable
+    // state, and the precondition below re-reads a durable identity it never
+    // had. The repair moves no durable identity pointer; it replays the
+    // pattern the pointer already names
     // (samePattern=true: materializes the missing internal cells but leaves
     // the existing argument — the piece's data — untouched; no roll-forward,
     // no user-data rewrite). It stages into the instantiation's own
@@ -6719,20 +6817,35 @@ export class Runner {
       ref: { identity: string; symbol: string } | undefined,
       useTx?: IExtendedStorageTransaction,
     ) => {
-      if (
-        useTx === undefined &&
-        ref !== undefined &&
-        !PatternManager.isKeylessPatternIdentity(ref.identity) &&
-        !this.#storedSetupAgrees(resultCell, pattern)
-      ) {
+      const owed = useTx === undefined && ref !== undefined &&
+          !PatternManager.isKeylessPatternIdentity(ref.identity)
+        ? this.#startOwes(resultCell, pattern, ref)
+        : undefined;
+      if (owed?.owed === "hold" && ref !== undefined) {
+        logger.warn("piece-start-repair-held", () => [
+          `piece ${resultCell.sourceURI} was set up by another build of ` +
+          `${ref.identity}#${ref.symbol}, and its stored setup is left as ` +
+          "it is, since re-staging would read a cell holding state as " +
+          "another cell's: " +
+          (owed.moved.length === 0
+            ? "the piece carries no record of the build that set it up, " +
+              "and the build has cells holding state"
+            : owed.moved.map((cell) =>
+              `${cell.description} moved from ${cell.from} to ${cell.to}`
+            ).join("; ")),
+        ]);
+      }
+      if (owed?.owed === "repair" && ref !== undefined) {
         setupRepair = {
           pattern,
+          ref,
           stage: (repairTx) => {
             // A retry re-stages what a refused commit rolled back; once a
             // commit has landed the stored setup agrees with the pattern and
             // there is nothing left to stage.
             if (
-              this.#storedSetupAgrees(resultCell.withTx(repairTx), pattern)
+              this.#startOwes(resultCell.withTx(repairTx), pattern, ref)
+                .owed !== "repair"
             ) {
               return;
             }

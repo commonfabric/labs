@@ -58,8 +58,8 @@ fakes and stored-document fixtures, 48 test files in all.
 by name. The cold-start repairs do not key on that reader. A start repairs a
 piece when the setup stored on it disagrees with the build the runtime loads
 (`Runner.#storedSetupAgrees`): a manifest missing one of the build's internal
-cells or naming one the build lacks, or a stamped build digest that is not
-this build's. The controller hands a stopped root whose marker names another
+cells or naming one the build lacks, or a stamped record describing another
+build. The controller hands a stopped root whose marker names another
 version to the same repair. Nothing about a stream's stored value enters those
 triggers, so a stream's document can carry nothing but its `result` back-link.
 
@@ -272,7 +272,7 @@ than what the list first said, the item says what it does now and why.
       stay, on structural triggers rather than the marker: a start repairs a
       piece whose stored setup disagrees with the build it loads (a manifest
       missing one of the build's internal cells or naming one the build
-      lacks, or a build digest that is not this build's), and the controller
+      lacks, or a stamped record describing another build), and the controller
       refuses a stopped root whose marker names another version and hands it
       to the existing repair (`Runner.isRunning()` keeps a running root out
       of it).
