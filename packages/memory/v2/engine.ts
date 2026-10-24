@@ -4318,24 +4318,13 @@ ORDER BY r.seq DESC, r.op_index DESC
 };
 
 /**
- * Whether `patch`, a write to the document a served handler's read named,
- * left what the read observed as it was: a tail append to a stream sidecar's
- * entries — an `append` or `add-unique` at `/value/entries` — creates only
- * new indices, so a read of an entry at a numeric index below `entries`
- * observed nothing it changed. Every other write stales a read it overlaps.
+ * Whether `patch` is a tail append to a stream sidecar's entries: an `append`
+ * or `add-unique` at `/value/entries`, which creates only new indices.
  */
-export const streamTailAppendCommutes = (
-  readId: EntityId,
-  readPath: readonly string[],
-  patch: PatchOp,
-): boolean => {
-  if (!String(readId).startsWith(STREAM_ENTRIES_DOC_PREFIX)) return false;
+export const isStreamTailAppend = (patch: PatchOp): boolean => {
   if (patch.op !== "append" && patch.op !== "add-unique") return false;
-  const patchPath = parsePointer(patch.path);
-  return patchPath.length === 2 && patchPath[0] === "value" &&
-    patchPath[1] === "entries" && readPath.length > 2 &&
-    readPath[0] === "value" && readPath[1] === "entries" &&
-    String(Number(readPath[2])) === String(readPath[2]);
+  const path = parsePointer(patch.path);
+  return path.length === 2 && path[0] === "value" && path[1] === "entries";
 };
 
 /**
@@ -4351,17 +4340,64 @@ export type WaveHandlerRead = {
 };
 
 /**
- * Like `findStaleReadSeq()`, for a served handler's read: the stream tail
- * append `streamTailAppendCommutes()` names is excepted, and `holder`'s own
- * derived commits are exempt.
+ * Helper for `findHandlerStaleReadSeq()`, which returns the entry index a
+ * read of a stream sidecar names — a path at or below `/value/entries/<i>`
+ * on a sidecar document — or `undefined` for any other read.
+ */
+const streamEntryIndexOf = (read: WaveHandlerRead): number | undefined => {
+  if (!String(read.id).startsWith(STREAM_ENTRIES_DOC_PREFIX)) return undefined;
+  if (
+    read.path.length <= 2 || read.path[0] !== "value" ||
+    read.path[1] !== "entries"
+  ) {
+    return undefined;
+  }
+  const index = Number(read.path[2]);
+  return Number.isInteger(index) && index >= 0 &&
+      String(index) === read.path[2]
+    ? index
+    : undefined;
+};
+
+/**
+ * Helper for `findHandlerStaleReadSeq()`, which returns whether the sidecar
+ * `read` names held an entry at `index` as of the read's seq.
+ */
+const sidecarHeldEntryAt = (
+  engine: Engine,
+  read: WaveHandlerRead,
+  index: number,
+  branch: BranchName | undefined,
+): boolean => {
+  const value = readState(engine, {
+    id: read.id,
+    scopeKey: read.scopeKey,
+    seq: read.seq,
+    ...(branch === undefined ? {} : { branch }),
+  })?.document?.value;
+  return isObjectOrArray(value) && Array.isArray(value.entries) &&
+    index < value.entries.length;
+};
+
+/**
+ * Like `findStaleReadSeq()`, for a served handler's read, with `holder`'s
+ * own derived commits exempt and one write excepted: a tail append to a
+ * stream sidecar's entries, for a read of an entry the sidecar held at the
+ * read's seq. The append creates only new indices, so it changed nothing
+ * that read observed. A read of an index the sidecar did not hold then
+ * observed an absence the append may have filled, and is held to it like
+ * any other read.
  */
 export const findHandlerStaleReadSeq = (
   engine: Engine,
   read: WaveHandlerRead,
   holder: string | undefined,
   branch?: BranchName,
-): number | null =>
-  findStaleReadSeq(engine, {
+): number | null => {
+  const entryIndex = streamEntryIndexOf(read);
+  const readHeldEntry = entryIndex !== undefined &&
+    sidecarHeldEntryAt(engine, read, entryIndex, branch);
+  return findStaleReadSeq(engine, {
     ...(branch === undefined ? {} : { branch }),
     id: read.id,
     scopeKey: read.scopeKey,
@@ -4371,8 +4407,9 @@ export const findHandlerStaleReadSeq = (
       ? {}
       : { nonRecursive: read.nonRecursive }),
     ...(holder === undefined ? {} : { holder }),
-    commutes: (patch) => streamTailAppendCommutes(read.id, read.path, patch),
+    commutes: (patch) => readHeldEntry && isStreamTailAppend(patch),
   });
+};
 
 /**
  * One admitted commit as the serving loop's subscription sees it
