@@ -16,6 +16,7 @@ import {
   principalClaimSubject,
   representsPrincipalSubject,
 } from "@commonfabric/runner/cfc/represents-principal";
+import type { JSONSchema } from "@commonfabric/runner/shared";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
@@ -112,6 +113,53 @@ const AUTHOR_DISPLAY_FIELDS = [
   "label",
   "username",
 ] as const;
+
+/** A claim's own value, or one of its fields: a primitive. */
+const PRIMITIVE_CLAIM_SCHEMA = {
+  anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }],
+} as const;
+
+/**
+ * The shape an author cell is read under: a primitive, which is its own
+ * claim, or a record of the fields a claim is read from (`AUTHOR_FIELDS` and
+ * `AUTHOR_DISPLAY_FIELDS`), each a primitive. A read under it reaches those
+ * fields and nothing else the author's document holds or links. Without it
+ * a cell bound with no schema reads whole, following every link in it: an
+ * author profile reads together with its inbox and whatever that reaches,
+ * and a change anywhere in that closure runs the observation again.
+ */
+export const AUTHOR_CLAIM_SCHEMA: JSONSchema = {
+  anyOf: [
+    ...PRIMITIVE_CLAIM_SCHEMA.anyOf,
+    {
+      type: "object",
+      properties: Object.fromEntries(
+        [...new Set<string>([...AUTHOR_FIELDS, ...AUTHOR_DISPLAY_FIELDS])]
+          .map((field) => [field, PRIMITIVE_CLAIM_SCHEMA]),
+      ),
+    },
+  ],
+};
+
+/** A cell that can be read under a schema of the reader's choosing. */
+type SchemaNarrowableValue = {
+  asSchema(schema: JSONSchema): unknown;
+};
+
+const hasSchemaNarrowing = (
+  value: unknown,
+): value is SchemaNarrowableValue =>
+  isObjectOrArray(value) &&
+  typeof (value as { asSchema?: unknown }).asSchema === "function";
+
+/**
+ * `author` as the observation reads it: narrowed to
+ * {@link AUTHOR_CLAIM_SCHEMA} when it is a cell that can be, else as given.
+ * A plain value is its own claim, and a cell that offers no narrowing is
+ * read as it is bound.
+ */
+const asClaimReader = (author: unknown): unknown =>
+  hasSchemaNarrowing(author) ? author.asSchema(AUTHOR_CLAIM_SCHEMA) : author;
 
 const hasLabelQuery = (value: unknown): value is CfcLabelQueryableValue =>
   isObjectOrArray(value) &&
@@ -497,8 +545,11 @@ export const authorshipStateForLabel = (
  * `value` is the content whose authorship is in question and `author` the
  * claim, each usually a `CellHandle` as a render binds one (`$value` and
  * `$author` on `cf-cfc-authorship`). Either may also be a plain value, which
- * has no label to load. A label counts as loaded once a read of it has
- * finished with nothing left waiting: the value's own label, or that of the
+ * has no label to load. An author cell is read under
+ * {@link AUTHOR_CLAIM_SCHEMA}, the fields a claim is read from and no more,
+ * whatever schema it was bound with. A label counts as loaded once a read of
+ * it has finished with nothing left waiting: the value's own label, or that
+ * of the
  * cell it resolves to, is read, from the subscription's update when that
  * delivers the label the worker read with the value and from the worker
  * otherwise; when the resolved cell's label reads as missing, the
@@ -569,7 +620,7 @@ class AuthorshipObservationState {
     authorName: string | undefined,
   ) {
     this.#value = value;
-    this.#author = author;
+    this.#author = asClaimReader(author);
     this.#onState = onState;
     this.#kind = kind;
     this.#authorName = authorName;
