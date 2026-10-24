@@ -2495,9 +2495,12 @@ export class PatternManager {
    * serves, in a space this session has not written the compiled closure
    * into, also copies the closure there from a space it has written into
    * (`#copyClosureForLoadFromMemory()`), fire-and-forget, so the next
-   * session's load in that space finds it. Every load records a
-   * `compile-cache/load-by-identity/<outcome>` timing row naming the pattern;
-   * one the index serves records `memory`.
+   * session's load in that space finds it. A load the index serves and a
+   * load the storage path serves each record a
+   * `compile-cache/load-by-identity/<outcome>` timing row naming the pattern,
+   * the former under `memory`; the returns ahead of both — a keyless
+   * identity, enforcement disabled, a memoized compile failure — record
+   * none, consulting neither.
    *
    * Returns the pattern, or `undefined` when the by-identity load is
    * unavailable (CFC not enforcing / closure absent or incomplete / invalid /
