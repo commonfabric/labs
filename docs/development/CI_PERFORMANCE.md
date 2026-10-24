@@ -294,8 +294,9 @@ as its `fingerprint` output. The cache step then references that step's output.
 This is the shape [Cache Keys And Post-Job Saves](#cache-keys-and-post-job-saves)
 prescribes, and it buys two things here. The
 post-job save re-evaluates the key without walking the fingerprinted trees a
-second time. And the CI key and the runtime version become one value computed
-once, rather than two descriptions of one list of inputs that can drift apart.
+second time. And the CI key is the one value `tasks/compile-cache-key.ts`
+defines, computed once, rather than a second description of the same list of
+inputs that can drift from it.
 
 `COMPILE_FINGERPRINT_INPUTS` in
 `packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts` is the list
