@@ -140,7 +140,24 @@ describe("cause-assignments-lib", () => {
           "cell, computed, written by sub-pattern child-identi#Child",
         before: [0, 1],
         after: [0],
+        holdsState: true,
       }]);
+    });
+
+    it("returns, as holding no state, a description of lifts whose count differs", () => {
+      expect(
+        ambiguousCells(
+          assignment([{ lift: true }, { lift: true }, { child: CHILD }]),
+          assignment([{ lift: true }, { child: CHILD }]),
+        ).map(({ description, before, after, holdsState }) => [
+          description,
+          before,
+          after,
+          holdsState,
+        ]),
+      ).toEqual([
+        ["cell, computed, written by function", [0, 1], [0], false],
+      ]);
     });
 
     it("returns nothing for a level only one side has", () => {

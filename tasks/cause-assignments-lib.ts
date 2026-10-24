@@ -68,8 +68,8 @@ export interface MovedCell extends RenumberedCell {
 }
 
 /**
- * A description of cells holding state whose cells two builds of one source
- * number so that which cell went where cannot be told.
+ * A description of cells whose cells two builds of one source number so that
+ * which cell went where cannot be told.
  */
 export interface AmbiguousCells extends AmbiguousDescription {
   /** The pattern's key, as `pattern-files.ts` names it. */
@@ -77,6 +77,9 @@ export interface AmbiguousCells extends AmbiguousDescription {
 
   /** The level's key, as {@link AssignmentLevel} gives it. */
   level: string;
+
+  /** Whether the cells hold state, as {@link NumberedCell} says. */
+  holdsState: boolean;
 }
 
 type Unknown = Readonly<Record<string, unknown>>;
@@ -173,10 +176,12 @@ export function movedCells(
 }
 
 /**
- * The descriptions of cells holding state, in each level of one pattern built
- * from one source by two compilers, whose cells `ambiguousDescriptions()`
- * says cannot be matched across `base` and `head`, each level matched to the
- * level of `base` under the same key.
+ * The descriptions, in each level of one pattern built from one source by
+ * two compilers, whose cells cannot be matched across `base` and `head`,
+ * each level matched to the level of `base` under the same key. For cells
+ * holding state and for cells holding none alike, these are the descriptions
+ * `ambiguousDescriptions()` names. The gate fails on those of cells holding
+ * state, and lists those of cells holding none in its report only.
  */
 export function ambiguousCells(
   base: PatternAssignment,
@@ -188,7 +193,24 @@ export function ambiguousCells(
     const before = baseLevels.get(level.key);
     if (before === undefined) continue;
     for (const found of ambiguousDescriptions(before.cells, level.cells)) {
-      ambiguous.push({ pattern: head.pattern, level: level.key, ...found });
+      ambiguous.push({
+        pattern: head.pattern,
+        level: level.key,
+        holdsState: true,
+        ...found,
+      });
+    }
+    for (
+      const found of ambiguousDescriptions(before.cells, level.cells, {
+        hasState: false,
+      })
+    ) {
+      ambiguous.push({
+        pattern: head.pattern,
+        level: level.key,
+        holdsState: false,
+        ...found,
+      });
     }
   }
   return ambiguous;

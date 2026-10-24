@@ -1,55 +1,67 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-ffi --allow-net=127.0.0.1
 
 /**
- * Prints the compile-cache version this tree's compiler earns, or bakes it
- * into the tree's version module.
+ * Prints the compile-cache version this tree's compiler earns, or records it
+ * as the tree's memo.
  *
  * The version is a hash of what the compiler emits for the corpus under every
- * persisted cache variant (`compile-cache-output-version.deno.ts`), so it is
- * the value a build bakes into the artifact it ships: `build-binaries` and
- * the shell's production bundle compute it themselves. `--bake` is for a tree
- * that runs from source but ships as it stands, which is how loom runs its
- * vendored copy of this repository: it writes the version into
- * `compile-cache-version.ts`, which every Deno source run from that tree
- * reads. A bundle takes its version from its build's
- * `__cfCompileCacheRuntimeVersion` define instead, so a bundle build that
- * defines it from the baked module gives the daemon's runtimes and the worker
- * one version. Compiling the corpus takes a minute or two.
+ * persisted cache variant (`compile-cache-output-version.deno.ts`): the value
+ * a build bakes into the artifact it ships, which `build-binaries` and the
+ * shell's production bundle compute for themselves. `--memo` is for a
+ * checkout that runs from source as it stands, which is how loom runs its
+ * vendored copy of this repository. It records the version beside a
+ * fingerprint of the tree (`compile-cache-output-memo.deno.ts`), and the
+ * tree's source runs take that version for as long as the fingerprint
+ * matches. A tree that already records a memo for itself is left as it is and
+ * nothing is compiled; otherwise compiling the corpus takes a minute or two.
  *
- * Usage: deno task compile-cache-version [--bake]
+ * Usage: deno task compile-cache-version [--memo]
  */
 
-import { dirname, fromFileUrl, join } from "@std/path";
+import { dirname, fromFileUrl } from "@std/path";
+import {
+  type MemoizedOutputVersion,
+  memoizeOutputVersion,
+  OUTPUT_VERSION_MEMO_PATH,
+} from "../packages/runner/src/compilation-cache/compile-cache-output-memo.deno.ts";
 import { computeCompilerOutputVersion } from "../packages/runner/src/compilation-cache/compile-cache-output-version.deno.ts";
-import { renderVersionModule } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
-/** Where a tree's version module lives, repository-relative. */
-export const VERSION_MODULE_PATH =
-  "packages/runner/src/compilation-cache/compile-cache-version.ts";
+const USAGE = "Usage: deno task compile-cache-version [--memo]";
 
-/**
- * Write `version` into the version module of the tree at `repoRoot`, as a
- * binary build writes the version it bakes.
- */
-export async function bakeVersionModule(
-  repoRoot: string,
-  version: string,
-): Promise<void> {
-  await Deno.writeTextFile(
-    join(repoRoot, VERSION_MODULE_PATH),
-    renderVersionModule(version),
-  );
+/** What `main()` runs for each form; a test passes its own. */
+export interface CompileCacheVersionCommands {
+  /** Compute the version of this tree. */
+  print(): Promise<string>;
+
+  /** Record the version of this tree as its memo. */
+  memoize(): Promise<MemoizedOutputVersion>;
 }
 
-export async function main(args: readonly string[]): Promise<number> {
-  const version = await computeCompilerOutputVersion(REPO_ROOT);
-  if (args.includes("--bake")) {
-    await bakeVersionModule(REPO_ROOT, version);
-    console.log(`${VERSION_MODULE_PATH}: baked ${version}.`);
+const COMMANDS: CompileCacheVersionCommands = {
+  print: () => computeCompilerOutputVersion(REPO_ROOT),
+  memoize: () => memoizeOutputVersion(REPO_ROOT, computeCompilerOutputVersion),
+};
+
+export async function main(
+  args: readonly string[],
+  commands: CompileCacheVersionCommands = COMMANDS,
+): Promise<number> {
+  const unknown = args.find((arg) => arg !== "--memo");
+  if (unknown !== undefined) {
+    console.error(`Unknown argument ${JSON.stringify(unknown)}. ${USAGE}`);
+    return 2;
+  }
+  if (args.includes("--memo")) {
+    const { version, recorded } = await commands.memoize();
+    console.log(
+      recorded
+        ? `${OUTPUT_VERSION_MEMO_PATH}: recorded ${version}.`
+        : `${OUTPUT_VERSION_MEMO_PATH}: already records ${version} for this tree.`,
+    );
   } else {
-    console.log(version);
+    console.log(await commands.print());
   }
   return 0;
 }

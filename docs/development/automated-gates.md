@@ -161,7 +161,10 @@ Each of these gates fails CI on its own, and none of them run as part of
   without moving anything. Cells holding state that share a description are
   told apart by their order, so where their count or their numbers change,
   which cell went where cannot be told: the gate fails on that as well, and
-  reports each build's numbers for them. A pattern that fails to compile on
+  reports each build's numbers for them, or names them added or removed where
+  only one build has any. Cells holding no state that share a description are
+  reported the same way, but fail the gate only through a move the pairing
+  reports among them. A pattern that fails to compile on
   either side fails the gate, unless that side's own
   `tasks/pattern-compat-unevaluable.ts` lists it. The gate
   compiles only for a change touching `packages/js-compiler/`,

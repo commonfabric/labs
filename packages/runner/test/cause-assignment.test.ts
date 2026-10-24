@@ -316,6 +316,41 @@ describe("cause-assignment", () => {
     });
   });
   describe("ambiguousDescriptions()", () => {
+    // Two lifts and three children of one pattern, with the first lift and the
+    // first child removed: both descriptions change their count.
+    const mixedBefore = () =>
+      cells([{ lift: true }, { lift: true }, { child: CHILD }, {
+        child: CHILD,
+      }, { child: CHILD }]);
+    const mixedAfter = () =>
+      cells([{ lift: true }, { child: CHILD }, { child: CHILD }]);
+
+    it("returns only descriptions of cells holding state, by default", () => {
+      expect(ambiguousDescriptions(mixedBefore(), mixedAfter())).toEqual([
+        {
+          description:
+            "cell, computed, written by sub-pattern child-identi#Child",
+          before: [2, 3, 4],
+          after: [1, 2],
+        },
+      ]);
+    });
+
+    it("returns only descriptions of cells holding no state, given `hasState: false`", () => {
+      expect(
+        ambiguousDescriptions(mixedBefore(), mixedAfter(), {
+          hasState: false,
+        }),
+      )
+        .toEqual([
+          {
+            description: "cell, computed, written by function",
+            before: [0, 1],
+            after: [0],
+          },
+        ]);
+    });
+
     it("returns a description of children whose count differs, where the pairing by order reports no move", () => {
       // Three children of one pattern, and the first is removed: the other two
       // move 1 to 0 and 2 to 1, and the pairing reads them as unmoved.
