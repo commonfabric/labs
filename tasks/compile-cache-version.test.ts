@@ -3,35 +3,52 @@ import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
 import {
   compileCorpus,
+  compileCorpusVariants,
+  type CompiledOutput,
   compiledOutputOf,
+  type CompiledVariant,
   CORPUS_DIR,
   CORPUS_ENTRIES,
-  mintCompilerVersion,
   outputFingerprintOf,
   staleness,
 } from "./compile-cache-version.ts";
 import {
   COMMITTED_COMPILER_VERSION,
+  computeCompilerFingerprint,
   FINGERPRINT_LENGTH,
   VERSION_NAMESPACE,
 } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
+import {
+  cacheVariantName,
+  PERSISTED_CACHE_VARIANTS,
+} from "../packages/runner/src/compilation-cache/cache-variants.ts";
 import type { CacheableModule } from "../packages/runner/src/harness/types.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
+const PLAIN = { patternCoverage: false, instanceNames: false };
+const COVERAGE = { patternCoverage: true, instanceNames: false };
+const NAMED = { patternCoverage: false, instanceNames: true };
+
 // A corpus small enough to compile in a test, with one entry importing a
-// second module, so the fingerprint covers more than the entry's own body.
+// second module and a `const`-bound sub-pattern instance, so every variant
+// has something to transform: the coverage mode instruments the branches,
+// and the naming mode names `inner`.
 const TINY_CORPUS: Record<string, string> = {
   "main.tsx": [
     "import { pattern } from 'commonfabric';",
-    "import { double } from './double.ts';",
+    "import { Double } from './double.tsx';",
     "export default pattern<{ value: number }>(({ value }) => {",
-    "  return { result: double(value) };",
+    "  const inner = Double({ value });",
+    "  return { result: inner.result };",
     "});",
   ].join("\n"),
-  "double.ts": [
-    "import { lift } from 'commonfabric';",
-    "export const double = lift<number>((x) => x * 2);",
+  "double.tsx": [
+    "import { lift, pattern } from 'commonfabric';",
+    "const double = lift<number>((x) => x > 0 ? x * 2 : 0);",
+    "export const Double = pattern<{ value: number }>(({ value }) => {",
+    "  return { result: double(value) };",
+    "});",
   ].join("\n"),
 };
 
@@ -54,6 +71,33 @@ function cacheable(overrides: Partial<CacheableModule>): CacheableModule {
     imports: [],
     ...overrides,
   };
+}
+
+/** `variants` with one module of one variant's first entry patched. */
+function withModule(
+  variants: readonly CompiledVariant[],
+  at: { variant: number; module: number },
+  patch: Partial<CompiledOutput>,
+): CompiledVariant[] {
+  return variants.map((variant, v) =>
+    v !== at.variant ? variant : {
+      ...variant,
+      entries: variant.entries.map((entry, e) =>
+        e !== 0 ? entry : {
+          ...entry,
+          modules: entry.modules.map((module, m) =>
+            m !== at.module ? module : { ...module, ...patch }
+          ),
+        }
+      ),
+    }
+  );
+}
+
+/** The entry module's emitted body under one compiled variant. */
+function entryBody(variant: CompiledVariant): string {
+  return variant.entries[0].modules
+    .find((module) => module.filename === "/main.tsx")!.js;
 }
 
 describe("compile-cache-version", () => {
@@ -81,38 +125,62 @@ describe("compile-cache-version", () => {
   });
 
   describe("outputFingerprintOf()", () => {
-    const entries = [{
-      entry: "b.tsx",
-      modules: [
-        { filename: "/b.tsx", js: "b", artifact: "" },
-        { filename: "/a.ts", js: "a", artifact: "" },
-      ],
+    const variants: CompiledVariant[] = [{
+      variant: "pattern-coverage",
+      entries: [{
+        entry: "b.tsx",
+        modules: [
+          { filename: "/b.tsx", js: "b", artifact: "" },
+          { filename: "/a.ts", js: "a", artifact: "" },
+        ],
+      }],
     }, {
-      entry: "a.tsx",
-      modules: [{ filename: "/a.tsx", js: "a", artifact: "x" }],
+      variant: "",
+      entries: [{
+        entry: "a.tsx",
+        modules: [{ filename: "/a.tsx", js: "a", artifact: "x" }],
+      }],
     }];
 
     it("returns a fingerprint of the key's length", () => {
-      expect(outputFingerprintOf(entries)).toHaveLength(FINGERPRINT_LENGTH);
+      expect(outputFingerprintOf(variants)).toHaveLength(FINGERPRINT_LENGTH);
     });
 
-    it("ignores the order entries and modules arrive in", () => {
-      const reordered = [...entries].reverse().map((entry) => ({
-        ...entry,
-        modules: [...entry.modules].reverse(),
+    it("ignores the order variants, entries and modules arrive in", () => {
+      const reordered = [...variants].reverse().map((variant) => ({
+        ...variant,
+        entries: variant.entries.map((entry) => ({
+          ...entry,
+          modules: [...entry.modules].reverse(),
+        })),
       }));
-      expect(outputFingerprintOf(reordered)).toBe(outputFingerprintOf(entries));
+      expect(outputFingerprintOf(reordered)).toBe(
+        outputFingerprintOf(variants),
+      );
     });
 
     it("changes with an emitted body, a stored artifact field, or the epoch", () => {
-      const base = outputFingerprintOf(entries);
-      const body = structuredClone(entries);
-      body[0].modules[1] = { ...body[0].modules[1], js: "a2" };
+      const base = outputFingerprintOf(variants);
+      const body = withModule(variants, { variant: 0, module: 1 }, {
+        js: "a2",
+      });
       expect(outputFingerprintOf(body)).not.toBe(base);
-      const artifact = structuredClone(entries);
-      artifact[1].modules[0] = { ...artifact[1].modules[0], artifact: "y" };
+      const artifact = withModule(variants, { variant: 1, module: 0 }, {
+        artifact: "y",
+      });
       expect(outputFingerprintOf(artifact)).not.toBe(base);
-      expect(outputFingerprintOf(entries, 2)).not.toBe(base);
+      expect(outputFingerprintOf(variants, 2)).not.toBe(base);
+    });
+
+    it("changes when one variant's bytes change and the others' do not", () => {
+      // A change confined to one mode's transform shows up only under that
+      // mode's variant, and that is enough to move the version.
+      const base = outputFingerprintOf(variants);
+      const coverageOnly = withModule(variants, { variant: 0, module: 0 }, {
+        js: "b-instrumented-differently",
+      });
+      expect(outputFingerprintOf(coverageOnly)).not.toBe(base);
+      expect(outputFingerprintOf(variants.slice(1))).not.toBe(base);
     });
   });
 
@@ -148,29 +216,50 @@ describe("compile-cache-version", () => {
     });
 
     it("compiles each entry with its closure and reports the same bytes twice", async () => {
-      const first = await compileCorpus(corpus, ["main.tsx"]);
-      const second = await compileCorpus(corpus, ["main.tsx"]);
+      const first = await compileCorpus(corpus, PLAIN, ["main.tsx"]);
+      const second = await compileCorpus(corpus, PLAIN, ["main.tsx"]);
 
-      expect(first).toHaveLength(1);
+      expect(first.variant).toBe("");
+      expect(first.entries).toHaveLength(1);
       // The closure, plus whatever module the compiler injects beside it.
-      expect(first[0].modules.map((module) => module.filename)).toEqual(
-        expect.arrayContaining(["/double.ts", "/main.tsx"]),
+      expect(first.entries[0].modules.map((module) => module.filename))
+        .toEqual(expect.arrayContaining(["/double.tsx", "/main.tsx"]));
+      expect(outputFingerprintOf([second])).toBe(outputFingerprintOf([first]));
+    });
+
+    it("emits different bytes under the coverage and instance-naming variants", async () => {
+      // Each mode's transform reaches the corpus, so a change to it moves
+      // that variant's bytes and, through them, the version.
+      const plain = await compileCorpus(corpus, PLAIN, ["main.tsx"]);
+      const coverage = await compileCorpus(corpus, COVERAGE, ["main.tsx"]);
+      const named = await compileCorpus(corpus, NAMED, ["main.tsx"]);
+
+      expect(coverage.variant).toBe(cacheVariantName(COVERAGE));
+      expect(named.variant).toBe(cacheVariantName(NAMED));
+      expect(entryBody(coverage)).not.toBe(entryBody(plain));
+      expect(entryBody(named)).not.toBe(entryBody(plain));
+      expect(entryBody(named)).toContain("nameInstance");
+    });
+
+    it("compiles the corpus once per persisted variant", async () => {
+      const variants = await compileCorpusVariants(corpus, ["main.tsx"]);
+      expect(variants.map((variant) => variant.variant)).toEqual(
+        PERSISTED_CACHE_VARIANTS.map(cacheVariantName),
       );
-      expect(outputFingerprintOf(second)).toBe(outputFingerprintOf(first));
     });
 
     it("moves the fingerprint when a corpus file's source changes", async () => {
-      const before = outputFingerprintOf(
-        await compileCorpus(corpus, ["main.tsx"]),
-      );
+      const before = outputFingerprintOf([
+        await compileCorpus(corpus, PLAIN, ["main.tsx"]),
+      ]);
       const edited = await writeCorpus({
         ...TINY_CORPUS,
-        "double.ts": TINY_CORPUS["double.ts"].replace("x * 2", "x * 3"),
+        "double.tsx": TINY_CORPUS["double.tsx"].replace("x * 2", "x * 3"),
       });
       try {
-        const after = outputFingerprintOf(
-          await compileCorpus(edited, ["main.tsx"]),
-        );
+        const after = outputFingerprintOf([
+          await compileCorpus(edited, PLAIN, ["main.tsx"]),
+        ]);
         expect(after).not.toBe(before);
       } finally {
         await Deno.remove(edited, { recursive: true });
@@ -187,11 +276,14 @@ describe("compile-cache-version", () => {
       }
     });
 
-    it("mints the committed version for the committed inputs", async () => {
-      // The gate itself, run as a test: the version module says what this
-      // compiler emits for this corpus, and what inputs it was measured on.
-      const minted = await mintCompilerVersion(REPO_ROOT);
-      expect(staleness(COMMITTED_COMPILER_VERSION, minted)).toBeUndefined();
+    it("records the inputs fingerprint of this tree", async () => {
+      // The cheap half of the gate: the committed version was minted against
+      // the compiler this tree holds. Whether that compiler still emits the
+      // bytes the version names takes the corpus compile, which is the gate
+      // task's own job (`deno task check-compile-cache-version`).
+      expect(COMMITTED_COMPILER_VERSION.inputs).toBe(
+        await computeCompilerFingerprint(REPO_ROOT),
+      );
     });
   });
 });

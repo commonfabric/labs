@@ -148,9 +148,9 @@ Each of these gates fails CI on its own, and none of them run as part of
 - `deno task check-compile-cache-version` — a compiler whose compile-cache
   version nobody has minted. The durable compile cache keys every compiled
   pattern by a version that is a hash of what the compiler emits for a frozen
-  corpus (`packages/runner/test/fixtures/compile-cache-corpus`), so a change
-  that emits the same bytes keeps every cache and one that moves a byte
-  recompiles everything once. The version module records the compiler-input
+  corpus (`packages/runner/test/fixtures/compile-cache-corpus`) under every
+  persisted cache variant, so a change that emits the same bytes in every mode
+  keeps every cache and one that moves a byte recompiles everything once. The version module records the compiler-input
   fingerprint it was minted against; a change under `COMPILE_FINGERPRINT_INPUTS`
   (the compiler, the transformers, the schema generator, the pattern-facing
   types, the lockfile), to the corpus, or to `COMPILE_CACHE_EPOCH` runs

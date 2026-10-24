@@ -20,12 +20,13 @@ import {
  * invalidates the compiled set when any of those change.
  *
  * The version is a hash of what the compiler EMITS, not of its source: the
- * output of a fixed corpus of patterns, minted into `compile-cache-version.ts`
- * by `deno task compile-cache-version` and held there by the
+ * output of a fixed corpus of patterns under every persisted cache variant
+ * (`cache-variants.ts`), minted into `compile-cache-version.ts` by
+ * `deno task compile-cache-version` and held there by the
  * `check-compile-cache-version` gate. A change to the compiler that emits the
- * same bytes for the corpus keeps the version, and every compiled document in
- * every space stays valid across it; a change that moves any emitted byte
- * moves the version and invalidates them all.
+ * same bytes for the corpus in every mode keeps the version, and every
+ * compiled document in every space stays valid across it; a change that moves
+ * any emitted byte in any mode moves the version and invalidates them all.
  *
  * The compiler-input fingerprint, a content hash over
  * {@link COMPILE_FINGERPRINT_INPUTS}, is what makes the committed version safe

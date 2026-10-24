@@ -7,8 +7,10 @@
  * version (`compileCache:<version>/<identity>`), and a version move
  * recompiles every pattern in every space on every machine the next time it
  * loads. The version is therefore a hash of what the compiler emits for a
- * fixed corpus of patterns rather than of the compiler's source: a change
- * that emits the same bytes keeps the version and every cache with it.
+ * fixed corpus of patterns, under every persisted cache variant, rather than
+ * of the compiler's source: a change that emits the same bytes in every mode
+ * keeps the version and every cache with it, and a change confined to one
+ * mode's transform moves it the way any other does.
  *
  * Without `--write`, the task is the gate. It fails when the tree's
  * compiler-input fingerprint is not the one the committed version was minted
@@ -18,7 +20,8 @@
  * to the corpus nor a bump of `COMPILE_CACHE_EPOCH` goes unrecorded. With
  * `--write`, it compiles the corpus and writes the version module: the
  * inputs fingerprint it measured, and a version that moves only when the
- * emitted bytes did.
+ * emitted bytes did. Compiling the corpus under every variant takes about
+ * two minutes.
  *
  * Usage: deno task compile-cache-version [--write]
  */
@@ -27,10 +30,16 @@ import { dirname, fromFileUrl, join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { hashStringOf } from "@commonfabric/data-model";
 import { utf8Compare } from "@commonfabric/utils/utf8";
+import { PatternCoverageCollector } from "../packages/runner/src/pattern-coverage.ts";
 import { Runtime } from "../packages/runner/src/runtime.ts";
 import { StorageManager } from "../packages/runner/src/storage/cache.deno.ts";
 import { resolveLocalProgram } from "../packages/runner/src/harness/local-program.deno.ts";
 import type { CacheableModule } from "../packages/runner/src/harness/types.ts";
+import {
+  cacheVariantName,
+  type CacheVariantOptions,
+  PERSISTED_CACHE_VARIANTS,
+} from "../packages/runner/src/compilation-cache/cache-variants.ts";
 import {
   COMMITTED_COMPILER_VERSION,
   type CommittedCompilerVersion,
@@ -113,6 +122,13 @@ export interface CompiledEntry {
   readonly modules: readonly CompiledOutput[];
 }
 
+/** The corpus compiled under one cache variant. */
+export interface CompiledVariant {
+  /** The variant's cache-key suffix (`cacheVariantName()`), `""` for plain. */
+  readonly variant: string;
+  readonly entries: readonly CompiledEntry[];
+}
+
 /** Reduce a compiled module to the fields the output fingerprint covers. */
 export function compiledOutputOf(module: CacheableModule): CompiledOutput {
   const {
@@ -137,41 +153,55 @@ export function compiledOutputOf(module: CacheableModule): CompiledOutput {
 }
 
 /**
- * The output fingerprint of a set of compiled entries: a hash over every
- * module's emitted body and stored artifact fields, in a fixed order, folded
- * with `epoch`. Same bytes, same fingerprint, whatever compiled them.
+ * The output fingerprint of the corpus compiled under each variant: a hash
+ * over every variant's every module's emitted body and stored artifact
+ * fields, in a fixed order, folded with `epoch`. Same bytes in every mode,
+ * same fingerprint, whatever compiled them.
  */
 export function outputFingerprintOf(
-  entries: readonly CompiledEntry[],
+  variants: readonly CompiledVariant[],
   epoch: number = COMPILE_CACHE_EPOCH,
 ): string {
-  const sorted = [...entries].sort((a, b) => utf8Compare(a.entry, b.entry));
+  const sorted = [...variants].sort((a, b) =>
+    utf8Compare(a.variant, b.variant)
+  );
   const digest = hashStringOf({
     v: OUTPUT_TAG,
     epoch,
-    entries: sorted.map((entry) => [
-      entry.entry,
-      [...entry.modules]
-        .sort((a, b) => utf8Compare(a.filename, b.filename))
-        .map((module) => [module.filename, module.js, module.artifact]),
+    variants: sorted.map((variant) => [
+      variant.variant,
+      [...variant.entries]
+        .sort((a, b) => utf8Compare(a.entry, b.entry))
+        .map((entry) => [
+          entry.entry,
+          [...entry.modules]
+            .sort((a, b) => utf8Compare(a.filename, b.filename))
+            .map((module) => [module.filename, module.js, module.artifact]),
+        ]),
     ]),
   });
   return digest.slice(0, FINGERPRINT_LENGTH);
 }
 
 /**
- * Compile every corpus entry under `root`, as the runtime compiles a pattern,
- * and reduce the result to what the output fingerprint covers.
+ * Compile every corpus entry under `root` in the modes `variant` names, as a
+ * runtime in those modes compiles a pattern, and reduce the result to what
+ * the output fingerprint covers.
  */
 export async function compileCorpus(
   root: string,
+  variant: CacheVariantOptions,
   entries: readonly string[] = CORPUS_ENTRIES,
-): Promise<CompiledEntry[]> {
+): Promise<CompiledVariant> {
   const signer = await Identity.fromPassphrase("compile-cache version");
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL("http://127.0.0.1:0/"),
     storageManager,
+    ...(variant.patternCoverage
+      ? { patternCoverage: new PatternCoverageCollector() }
+      : {}),
+    experimental: { instanceNames: variant.instanceNames },
   });
   try {
     const compiled: CompiledEntry[] = [];
@@ -182,14 +212,29 @@ export async function compileCorpus(
       );
       const { modules } = await runtime.harness.compileToRecordGraph(program, {
         fabricImports: { space: signer.did() },
+        ...(runtime.patternCoverage === undefined
+          ? {}
+          : { patternCoverage: runtime.patternCoverage }),
       });
       compiled.push({ entry, modules: modules.map(compiledOutputOf) });
     }
-    return compiled;
+    return { variant: cacheVariantName(variant), entries: compiled };
   } finally {
     await runtime.dispose();
     await storageManager.close();
   }
+}
+
+/** The corpus under `root` compiled under every persisted cache variant. */
+export async function compileCorpusVariants(
+  root: string,
+  entries: readonly string[] = CORPUS_ENTRIES,
+): Promise<CompiledVariant[]> {
+  const variants: CompiledVariant[] = [];
+  for (const variant of PERSISTED_CACHE_VARIANTS) {
+    variants.push(await compileCorpus(root, variant, entries));
+  }
+  return variants;
 }
 
 /** The version and inputs the tree at `repoRoot` mints right now. */
@@ -198,7 +243,7 @@ export async function mintCompilerVersion(
   epoch: number = COMPILE_CACHE_EPOCH,
 ): Promise<CommittedCompilerVersion> {
   const inputs = await computeCompilerFingerprint(repoRoot);
-  const compiled = await compileCorpus(join(repoRoot, CORPUS_DIR));
+  const compiled = await compileCorpusVariants(join(repoRoot, CORPUS_DIR));
   return {
     version: versionOfFingerprint(outputFingerprintOf(compiled, epoch)),
     inputs,

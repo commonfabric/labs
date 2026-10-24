@@ -3,9 +3,11 @@
 A frozen copy of pattern sources, each entry with its import closure, that
 `deno task compile-cache-version` compiles to mint the durable compile cache's
 version (`packages/runner/src/compilation-cache/compile-cache-version.ts`). The
-version is a hash of the bytes the compiler emits for these files, so a compiler
-change that emits the same bytes keeps every compiled document in every space
-valid, and one that moves any byte recompiles them all once.
+version is a hash of the bytes the compiler emits for these files under every
+persisted cache variant (plain, instance-naming, coverage-instrumented, and
+both), so a compiler change that emits the same bytes in every mode keeps every
+compiled document in every space valid, and one that moves any byte recompiles
+them all once.
 
 The entries are named in `tasks/compile-cache-version.ts` (`CORPUS_ENTRIES`);
 the other files here are the modules those entries import. They are copies of
