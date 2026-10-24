@@ -17,9 +17,14 @@
  * version only while the key still matches the tree; otherwise it takes the
  * compiler-input version. A memo the tree has moved away from is never read.
  * So a checkout that runs as it stands, as loom's vendored copy of this
- * repository does, keeps its compiled documents across a compiler change that
- * compiles the corpus to the same output, and falls back to the compiler-input
- * version as soon as anything the memo depends on changes.
+ * repository does, keeps the compiled documents of every construct the corpus
+ * exercises across a compiler change that compiles the corpus to the same
+ * output, and falls back to the compiler-input version as soon as anything
+ * the memo depends on changes. With a memo, such a checkout takes on the
+ * output version's blind spot too: a compiler change confined to a construct
+ * the corpus does not exercise leaves the version where it was, which the
+ * corpus's breadth and `COMPILE_CACHE_EPOCH` answer, as they do for a built
+ * artifact.
  *
  * `deno task compile-cache-version --memo` records the memo. Reading it
  * compiles nothing, so the runtime reaches this module from

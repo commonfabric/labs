@@ -530,7 +530,8 @@ linked data:
    it stands, loom's vendored copy of the runtime among them, keeps the output
    version without a tracked file that could outlive its compiler. A compiler
    change that compiles the
-   corpus to the same documents keeps a built artifact's `runtimeVersion`, and with it
+   corpus to the same documents keeps a built artifact's `runtimeVersion`, or a
+   memo's, and with it
    the compiled documents of every construct the corpus exercises; one that
    moves a byte, or an epoch bump, moves it, and the compiled set misses and
    recompiles from the source set. A construct the corpus lacks is the
