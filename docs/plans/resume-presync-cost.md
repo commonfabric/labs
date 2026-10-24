@@ -232,12 +232,18 @@ Exit: a plan's inputs document is hashed over its links, not its schemas.
       preparation does, and loads nothing, and a caller-owned setup, which
       seeds the defaults in the caller's transaction, is not held at all.
       Any other absent cell owed a default holds the start for the whole
-      preparation, since the store may hold a value for it. On a served
-      FabriChat send burst, each new message row is started once per viewing
-      session and owes that session's instance of `pickerOpen` a default;
-      with both changes the rows' starts ran no pre-sync, where a burst's
-      ran 2 to 24, and the burst's time did not move (3.3, 3.9 and 3.3 s
-      against 3.1, 4.3 and 2.9 s). A tree whose rows owe a per-session
+      preparation, since the store may hold a value for it. A user- or
+      session-scoped cell of a family no pre-sync named whose absence the
+      store confirmed holds the start the same way, with nothing to seed: the
+      start runs apart from the caller's transaction, since a served
+      derivation that set the piece up there would read that instance before
+      the serving loop produced it, and be withdrawn until it was
+      (`unproducedScopedInstance`), which only that start would do. On a
+      served FabriChat send burst, each new message row is started once per
+      viewing session and owes that session's instance of `pickerOpen` a
+      default; with both changes the rows' starts ran no pre-sync, where a
+      burst's ran 2 to 24, and the burst's time did not move (3.3, 3.9 and
+      3.3 s against 3.1, 4.3 and 2.9 s). A tree whose rows owe a per-session
       default, named by a synced run in a caller's transaction on a replica
       with the read-through, pays no name-sync for any row
       (`packages/runner/test/resume-presync-plan-count.test.ts`). The record
