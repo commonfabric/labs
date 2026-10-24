@@ -618,7 +618,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "3inbDnomq6f2FyXV9DdecHh-62hKJ4uc0xe8svsMWY8",
+                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
                   "path": [
                     "commitSend"
                   ]
@@ -637,7 +637,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "3inbDnomq6f2FyXV9DdecHh-62hKJ4uc0xe8svsMWY8",
+                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
                   "path": [
                     "commitComposerSend"
                   ]
@@ -656,7 +656,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "3inbDnomq6f2FyXV9DdecHh-62hKJ4uc0xe8svsMWY8",
+                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
                   "path": [
                     "commitThreadSend"
                   ]
@@ -675,7 +675,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "3inbDnomq6f2FyXV9DdecHh-62hKJ4uc0xe8svsMWY8",
+                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
                   "path": [
                     "commitReply"
                   ]
@@ -694,7 +694,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "3inbDnomq6f2FyXV9DdecHh-62hKJ4uc0xe8svsMWY8",
+                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
                   "path": [
                     "commitEdit"
                   ]
@@ -713,7 +713,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "3inbDnomq6f2FyXV9DdecHh-62hKJ4uc0xe8svsMWY8",
+                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
                   "path": [
                     "commitDelete"
                   ]
@@ -732,7 +732,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "3inbDnomq6f2FyXV9DdecHh-62hKJ4uc0xe8svsMWY8",
+                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
                   "path": [
                     "commitObliterate"
                   ]
@@ -766,7 +766,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "3inbDnomq6f2FyXV9DdecHh-62hKJ4uc0xe8svsMWY8",
+                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -785,7 +785,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "3inbDnomq6f2FyXV9DdecHh-62hKJ4uc0xe8svsMWY8",
+                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
                   "path": [
                     "commitDeleteReaction"
                   ]
@@ -824,7 +824,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/manager.tsx",
-              "moduleIdentity": "oO1pA5KRyTugCWpFsvMIYh6QJEJNCOUJGMKijO8uqQM",
+              "moduleIdentity": "z9-nSeNbMmy9CDnO6Vp9nw_qfoiyIIrpE4aUwx8NpZk",
               "path": [
                 "commitStart"
               ]
@@ -874,7 +874,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/room-records.tsx",
-              "moduleIdentity": "3inbDnomq6f2FyXV9DdecHh-62hKJ4uc0xe8svsMWY8",
+              "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
               "path": [
                 "commitSetTitle"
               ]
@@ -1398,7 +1398,7 @@
             "items": {
               "$ref": "#/$defs/ParticipantEntry"
             },
-            "scope": "session",
+            "scope": "user",
             "type": "array"
           },
           "participantPrincipals": {
@@ -1406,7 +1406,7 @@
             "items": {
               "type": "string"
             },
-            "scope": "session",
+            "scope": "user",
             "type": "array"
           },
           "participants": {
@@ -2001,7 +2001,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "3inbDnomq6f2FyXV9DdecHh-62hKJ4uc0xe8svsMWY8",
+                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -2020,7 +2020,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "3inbDnomq6f2FyXV9DdecHh-62hKJ4uc0xe8svsMWY8",
+                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
                   "path": [
                     "commitDeleteReaction"
                   ]
@@ -2251,7 +2251,7 @@
         "items": {
           "$ref": "#/$defs/ParticipantEntry"
         },
-        "scope": "session",
+        "scope": "user",
         "type": "array"
       },
       "participantPrincipals": {
@@ -2259,7 +2259,7 @@
         "items": {
           "type": "string"
         },
-        "scope": "session",
+        "scope": "user",
         "type": "array"
       },
       "participants": {
