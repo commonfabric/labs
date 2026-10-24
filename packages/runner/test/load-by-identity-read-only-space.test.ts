@@ -8,6 +8,7 @@ import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { getLogger } from "@commonfabric/utils/logger";
 
+import { setCompileCacheRuntimeVersionForTesting } from "../src/compilation-cache/cell-cache.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -96,6 +97,14 @@ const counter = (key: string, level: "debug" | "error") => {
   return () => read() - base;
 };
 
+/** How many lines `logger` has logged at error level, under any key, since `errorCounter` was called. */
+const errorCounter = () => {
+  const read = () =>
+    Object.values(logger.countsByKey).reduce((n, { error }) => n + error, 0);
+  const base = read();
+  return () => read() - base;
+};
+
 describe("pattern-manager", () => {
   let server: MemoryV2Server.Server;
   let runtimes: Runtime[];
@@ -128,13 +137,8 @@ describe("pattern-manager", () => {
     await server.close();
   });
 
-  /**
-   * A reader whose session compiled `PROGRAM` into its own home, and a space
-   * an owner holds that grants the reader `access`. The reader's session has
-   * written the closure into its home, so a load of the program in the
-   * owner's space is served from memory.
-   */
-  const readerWithCompiledProgram = async (access: "READ" | "WRITE") => {
+  /** A reader, and a space an owner holds that grants the reader `access`. */
+  const readerOf = async (access: "READ" | "WRITE") => {
     const owner = await Identity.fromPassphrase("read-only copy owner");
     const reader = await Identity.fromPassphrase("read-only copy reader");
     const { runtime: ownerRuntime } = open(owner);
@@ -142,6 +146,16 @@ describe("pattern-manager", () => {
       grants: { [reader.did()]: access },
     });
     const { runtime, factory } = open(reader);
+    return { runtime, factory, shared };
+  };
+
+  /**
+   * As `readerOf`, where the reader's session compiled `PROGRAM` into its own
+   * home. The session has written the closure into its home, so a load of the
+   * program in the owner's space is served from memory.
+   */
+  const readerWithCompiledProgram = async (access: "READ" | "WRITE") => {
+    const { runtime, factory, shared } = await readerOf(access);
     const home = await runtime.createSpace();
     const compiled = await runtime.patternManager.compilePattern(PROGRAM, {
       space: home,
@@ -162,7 +176,7 @@ describe("pattern-manager", () => {
   describe("a load served from memory, whose closure copy a space refuses", () => {
     it("copies nothing into a space the session may only read, and logs the refusal quietly, once", async () => {
       const reader = await readerWithCompiledProgram("READ");
-      const failed = counter("closure-replication-failed", "error");
+      const errors = errorCounter();
       const refused = counter("closure-copy-refused", "debug");
 
       expect(await reader.load()).toBe(reader.compiled);
@@ -171,7 +185,7 @@ describe("pattern-manager", () => {
       await reader.runtime.patternManager.flushCompileCacheWrites();
 
       expect(refused()).toBe(1);
-      expect(failed()).toBe(0);
+      expect(errors()).toBe(0);
     });
 
     it("logs a copy that fails for any other reason as a failed replication", async () => {
@@ -181,19 +195,26 @@ describe("pattern-manager", () => {
           ? new Error("The store is unavailable.")
           : undefined;
       const failed = counter("closure-replication-failed", "error");
+      const writebackFailed = counter(
+        "compile-cache-writeback-failed",
+        "error",
+      );
       const refused = counter("closure-copy-refused", "debug");
 
       expect(await reader.load()).toBe(reader.compiled);
       await reader.runtime.patternManager.flushCompileCacheWrites();
 
       expect(failed()).toBe(1);
+      expect(writebackFailed()).toBe(1);
       expect(refused()).toBe(0);
     });
 
-    it("logs a refused replication a caller asked for as a failed replication", async () => {
+    it("logs a refused replication a caller asked for as one failed replication", async () => {
       // Only a copy a load issues on its own is expected to meet a space its
       // session may not write; a caller that names the space chose it.
+
       const reader = await readerWithCompiledProgram("READ");
+      const errors = errorCounter();
       const failed = counter("closure-replication-failed", "error");
       const refused = counter("closure-copy-refused", "debug");
 
@@ -205,7 +226,40 @@ describe("pattern-manager", () => {
       await reader.runtime.patternManager.flushCompileCacheWrites();
 
       expect(failed()).toBe(1);
+      expect(errors()).toBe(1);
       expect(refused()).toBe(0);
+    });
+  });
+
+  describe("a compile into a space its session may only read", () => {
+    // The write-back logs a refusal for want of a grant at debug and leaves
+    // its caller to report it; a compile reports it by failing.
+
+    const compileInto = async () => {
+      const reader = await readerOf("READ");
+      const errors = errorCounter();
+      await expect(
+        reader.runtime.patternManager.compilePattern(PROGRAM, {
+          space: reader.shared,
+        }),
+      ).rejects.toMatchObject({ name: "AuthorizationError" });
+      return errors();
+    };
+
+    it("rejects with the space's refusal, and logs no error", async () => {
+      expect(await compileInto()).toBe(0);
+    });
+
+    it("rejects with the space's refusal, and logs no error, when it caches source alone", async () => {
+      // With no runtime version, a compile caches its source and no compiled
+      // bytes, through the source write-back.
+
+      const restore = setCompileCacheRuntimeVersionForTesting(undefined);
+      try {
+        expect(await compileInto()).toBe(0);
+      } finally {
+        restore();
+      }
     });
   });
 });

@@ -3624,10 +3624,18 @@ export class PatternManager {
     });
     logger.time(writebackStart, "compile-cache", "source-writeback");
     if (error) {
-      logger.error("source-cache-writeback-failed", () => [
-        `entry=${entryIdentity}`,
-        error.message,
-      ]);
+      // As in `#writeBackCompileCache()`.
+      if (isPermanentAuthorizationRefusal(error)) {
+        logger.debug("source-cache-writeback-refused", () => [
+          `entry=${entryIdentity}`,
+          error.message,
+        ]);
+      } else {
+        logger.error("source-cache-writeback-failed", () => [
+          `entry=${entryIdentity}`,
+          error.message,
+        ]);
+      }
       throw throwableStorageError(error);
     }
     this.#runtime.registerModuleDelegations(space, committedModuleDelegations);
@@ -3639,7 +3647,8 @@ export class PatternManager {
    * `editWithRetry` so a commit conflict (e.g. the cache write racing the
    * pattern's own space writes) retries rather than silently dropping the
    * entry. A final failure throws because persisted refs-only pattern JSON
-   * requires a durable closure behind every `$patternRef`.
+   * requires a durable closure behind every `$patternRef`, and is logged at
+   * error level unless the space refused it for want of a grant.
    */
   async #writeBackCompileCache(
     space: MemorySpace,
@@ -3715,11 +3724,22 @@ export class PatternManager {
       }, writebackMaxRetries);
       if (error) {
         logger.time(writebackStart, "compile-cache", "writeback");
-        logger.error("compile-cache-writeback-failed", () => [
-          `entry=${entryIdentity}`,
-          `chunkModules=${chunk.length}/${modules.length}`,
-          error.message,
-        ]);
+        // A space that refuses the write for want of a grant is logged at
+        // debug: only the caller knows whether the session was meant to
+        // write there, and each caller reports the error thrown here on its
+        // own terms.
+        if (isPermanentAuthorizationRefusal(error)) {
+          logger.debug("compile-cache-writeback-refused", () => [
+            `entry=${entryIdentity}`,
+            error.message,
+          ]);
+        } else {
+          logger.error("compile-cache-writeback-failed", () => [
+            `entry=${entryIdentity}`,
+            `chunkModules=${chunk.length}/${modules.length}`,
+            error.message,
+          ]);
+        }
         throw throwableStorageError(error);
       }
       for (const [identity, predecessors] of chunkDelegations) {
