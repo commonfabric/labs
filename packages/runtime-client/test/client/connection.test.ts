@@ -572,8 +572,12 @@ describe("connection", () => {
         cfcLabel: label("alice"),
         current: false,
       }]);
-      // The dropped update reached no subscriber.
-      expect(holding.heard).toEqual(heardBefore);
+      // A label-aware subscriber hears what its handle holds once more, as
+      // not current.
+      expect(holding.heard).toEqual([
+        ...heardBefore,
+        { cfcLabel: label("alice"), current: false },
+      ]);
       holding.cancel();
       seeded.cancel();
       await connection.dispose();
@@ -654,6 +658,96 @@ describe("connection", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(states).toEqual(["unknown"]);
+      cancel();
+      watching.cancel();
+      await connection.dispose();
+    });
+
+    it("hands a label-aware subscriber what the handle holds once more, as not current, when the worker reports the cell undefined", async () => {
+      // The connection drops the update, so the handle keeps the value and
+      // label the worker has read past. A second such update changes nothing
+      // more.
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const holder = new CellHandle<string>(runtime, ref);
+      const holding = listen(holder);
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("alice") }),
+      );
+
+      transport.emit("message", posted({ value: undefined }));
+      transport.emit("message", posted({ value: undefined }));
+
+      expect(holding.heard).toEqual([
+        { cfcLabel: undefined, current: false },
+        { cfcLabel: label("alice"), current: true },
+        { cfcLabel: label("alice"), current: false },
+      ]);
+      expect(holder.get()).toBe("by alice");
+      holding.cancel();
+      await connection.dispose();
+    });
+
+    it("calls a value-only subscriber no more when the worker reports the cell undefined, though the label its handle holds is then not current", async () => {
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const labeled = listen(new CellHandle<string>(runtime, ref));
+      const valueOnly = new CellHandle<string>(runtime, ref);
+      const values: Array<string | undefined> = [];
+      const valueOnlyCancel = valueOnly.subscribe((value) => {
+        values.push(value);
+      }, { onRefused: () => {} });
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("alice") }),
+      );
+      expect(valueOnly.cfcLabelCurrent).toBe(true);
+
+      transport.emit("message", posted({ value: undefined }));
+
+      expect(values).toEqual([undefined, "by alice"]);
+      expect(valueOnly.cfcLabelCurrent).toBe(false);
+      labeled.cancel();
+      valueOnlyCancel();
+      await connection.dispose();
+    });
+
+    it("reports a message whose author the worker reports as undefined as unknown on a handle seeded before the report arrived", async () => {
+      // A view opened while the worker's update emptying `authorProfile` is
+      // still on its way is seeded with the profile and its
+      // `represents-principal` label, as current, and verifies. Once the
+      // update arrives, the label is the worker's no longer, and the worker,
+      // asked, reads none.
+      const transport = new FakeTransport([], {
+        [RequestType.CellGetCfcLabel]: { cfcLabel: undefined },
+        [RequestType.CellResolveAsCell]: { cell: ref },
+      });
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const watching = listen(new CellHandle<string>(runtime, ref));
+      transport.emit(
+        "message",
+        posted({ value: { name: "Alice" }, cfcLabel: profileLabel }),
+      );
+      const states: string[] = [];
+      const cancel = observeAuthorship(
+        { getCfcLabel: () => Promise.resolve(label("did:key:alice")) },
+        new CellHandle<string>(runtime, ref),
+        (observation) => states.push(observation.state),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(states).toEqual(["verified"]);
+
+      transport.emit(
+        "message",
+        posted({ value: undefined, cfcLabel: label("did:key:alice") }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(states).toEqual(["verified", "unknown"]);
       cancel();
       watching.cancel();
       await connection.dispose();

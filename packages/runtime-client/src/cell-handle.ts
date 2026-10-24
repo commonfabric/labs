@@ -129,7 +129,11 @@ export type CellDelivery = {
    * read with the value: it is for a delivery the worker made with its label,
    * and is not for a value-only delivery or a local write, which carry the
    * label the handle last received, nor once the handle has left the cell's
-   * subscription and joined it again, until the worker delivers a label.
+   * subscription and joined it again, until the worker delivers a label. Nor
+   * is it once the worker has sent an update the connection dropped, one
+   * holding nothing, since the handle then holds a value and label the worker
+   * has read past; a handle delivering labels tells its subscribers so with
+   * what it holds.
    */
   readonly cfcLabelCurrent: boolean;
 };
@@ -218,10 +222,13 @@ export class CellHandle<T = unknown> {
   #cfcLabel: CfcLabelView | undefined;
 
   /**
-   * Whether `#cfcLabel` is the label the worker read with `#value`: set by a
-   * delivery that carried a label, and cleared by a value that arrived
-   * without one, by a local write, by a refusal, and when the last
-   * subscriber leaves, since the handle then stops hearing of the label.
+   * Whether `#value` and `#cfcLabel` are the worker's latest read of the
+   * cell, the label being the one it read with that value: set by a delivery
+   * that carried a label, and cleared by a value that arrived without one, by
+   * a local write, by a refusal, by an update the connection dropped, and
+   * when the handle leaves the cell's subscription, as its last subscriber
+   * leaving and an upgrade to labels do, since it then stops hearing of the
+   * label.
    */
   #cfcLabelCurrent = false;
 
@@ -1089,8 +1096,11 @@ export class CellHandle<T = unknown> {
    * worker sends one for a document it has not loaded too), so a handle on a
    * cell that holds nothing stays unread until a read answers it. After that,
    * `callback` is called whenever the value changes, and `onRefused` with
-   * each refusal. The callback's return value, if a Cancel function, is
-   * called before the next value, when a refusal drops the value it was
+   * each refusal. A subscriber that asked for the label is called again with
+   * the value the handle holds when the label changes, and when an update
+   * the connection dropped leaves the label no longer current
+   * ({@link CellDelivery}). The callback's return value, if a Cancel function,
+   * is called before the next value, when a refusal drops the value it was
    * given, and when the subscription is cancelled.
    *
    * A change reaches `callback` through an update, or through what a read
@@ -1608,10 +1618,21 @@ export class CellHandle<T = unknown> {
   /**
    * Handles an update of the cell the connection dropped. The handle keeps
    * the value and label it holds, but the worker has read the cell since, so
-   * the label is no longer the one the worker read with the cell's value.
+   * the label is no longer the one the worker read with the cell's value. A
+   * handle delivering labels hands its subscribers what it holds again,
+   * saying so: one that took the label as the worker's read, as
+   * `observeAuthorship()` does, would otherwise hear nothing more, since no
+   * later update need come.
    */
   [$onCellUpdateDropped](): void {
+    if (!this.#cfcLabelCurrent) return;
     this.#cfcLabelCurrent = false;
+    if (!this.#wantsCfcLabel) return;
+    for (const { onValue } of this.#callbacks.values()) {
+      onValue(this.#value as Readonly<T>, this.#cfcLabel, {
+        cfcLabelCurrent: false,
+      });
+    }
   }
 
   /**
