@@ -6,9 +6,8 @@ description: >
 outputs:
   fingerprint:
     description: >
-      The compiler-input fingerprint: base64url, and the part that identifies
-      the compiler in the runtime's own `cf/esm-compile/<fingerprint>` version
-      axis.
+      The compiler-input fingerprint: base64url, moving with every input that
+      can change what the compiler emits.
     value: ${{ steps.fingerprint.outputs.value }}
 runs:
   using: "composite"

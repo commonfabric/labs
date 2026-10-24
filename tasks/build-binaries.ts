@@ -4,8 +4,8 @@ import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
 import {
   COMPILE_FINGERPRINT_INPUTS,
-  computeCompilerVersion,
   renderVersionModule,
+  resolveCompilerVersion,
 } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import { CONNECTOR_PATTERN_SOURCES } from "../packages/connectors/pattern-sources.ts";
 import { CF_PERMISSION_FLAGS } from "../packages/cli/lib/cf-permissions.ts";
@@ -571,10 +571,10 @@ export async function prepareWorkspace(
     );
   }
 
-  // Write the current compile-cache version before compiling binaries. The value
-  // is computed before `deno.jsonc` changes so it reflects the committed
+  // Write the resolved compile-cache version before compiling binaries. The
+  // value is computed before `deno.jsonc` changes so it reflects the committed
   // compiler options.
-  const compileCacheVersion = await computeCompilerVersion(config.root);
+  const compileCacheVersion = await resolveCompilerVersion(config.root);
   await Deno.writeTextFile(
     config.compileCacheVersionPath(),
     renderVersionModule(compileCacheVersion),

@@ -2,39 +2,59 @@ import { walk } from "@std/fs";
 import { fromFileUrl, join, relative } from "@std/path";
 import { hashStringOf } from "@commonfabric/data-model";
 import { utf8Compare } from "@commonfabric/utils/utf8";
-import { SOURCE_COMPILE_CACHE_RUNTIME_VERSION } from "./compile-cache-version.ts";
+import {
+  COMMITTED_COMPILE_CACHE_VERSION,
+  COMMITTED_COMPILE_CACHE_VERSION_INPUTS,
+  SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
+} from "./compile-cache-version.ts";
 
 /**
- * Build-time fingerprint of the inputs that shape the compiler's emitted bytes.
+ * The compile-cache version a source checkout resolves to, and the
+ * compiler-input fingerprint that decides whether the committed one applies.
  *
  * The durable compile cache keys compiled documents by
  * `compileCache:<version>/<identity>`, where `<identity>` is a Merkle hash of a
  * module's authored source plus its imports' identities. That identity
  * deliberately does NOT cover the compiler, transformer, schema-generator, or
  * the root compiler options, so the `<version>` axis is the only thing that
- * invalidates the compiled set when any of those change. This module computes
- * that version as a content hash of the compiler inputs, so it moves
- * automatically instead of being bumped by hand.
+ * invalidates the compiled set when any of those change.
+ *
+ * The version is a hash of what the compiler EMITS, not of its source: the
+ * output of a fixed corpus of patterns, minted into `compile-cache-version.ts`
+ * by `deno task compile-cache-version` and held there by the
+ * `check-compile-cache-version` gate. A change to the compiler that emits the
+ * same bytes for the corpus keeps the version, and every compiled document in
+ * every space stays valid across it; a change that moves any emitted byte
+ * moves the version and invalidates them all.
+ *
+ * The compiler-input fingerprint, a content hash over
+ * {@link COMPILE_FINGERPRINT_INPUTS}, is what makes the committed version safe
+ * to trust: the committed module records the fingerprint the version was
+ * minted against, and a checkout whose inputs hash differently is running a
+ * compiler nobody has measured, so it falls back to a version of its own,
+ * `cf/esm-compile/<input fingerprint>`, which no committed compiler shares.
+ * That is the state of a working tree with an unminted compiler edit, and of
+ * a pull request that touched the inputs before `--write` was run.
  *
  * Deno-only: it walks and reads the source tree. Deno source runs call this
  * module through `getCompileCacheRuntimeVersion()`. Binary builds use it to
- * write a fingerprint literal before `deno compile`.
+ * write the resolved version literal before `deno compile`, and the shell's
+ * bundle build defines it into the worker.
  */
 
 /**
- * Repo-relative inputs hashed into the fingerprint: the source that determines
- * the compiler's emitted bytes and cached coverage span metadata, plus the
- * lockfile and root compiler options. Directory inputs are hashed whole, so the
- * version also moves when a test, fixture, or doc under them changes, and the
- * whole-file `deno.lock` moves it on any dependency bump. The result
- * over-invalidates rather than under-invalidates: a redundant recompile, never
- * a stale read.
+ * Repo-relative inputs hashed into the compiler-input fingerprint: the source
+ * that determines the compiler's emitted bytes and cached coverage span
+ * metadata, plus the lockfile and root compiler options. Directory inputs are
+ * hashed whole, so the fingerprint also moves when a test, fixture, or doc
+ * under them changes, and the whole-file `deno.lock` moves it on any dependency
+ * bump. The fingerprint over-invalidates rather than under-invalidates: a
+ * compiler nobody has measured is never mistaken for one somebody has.
  *
  * This is the single definition of the input set. CI keys its pattern compile
  * byte caches on the fingerprint itself, which `tasks/compile-cache-key.ts`
- * prints and a workflow step hands to the cache action. The runtime's version
- * axis is `cf/esm-compile/` followed by that same fingerprint, so the two move
- * together rather than describing one list of inputs twice.
+ * prints and a workflow step hands to the cache action, and the committed
+ * compile-cache version records the fingerprint it was minted against.
  *
  *  - `packages/ts-transformers` — the CF transformer pipeline, including the
  *    `SchemaGeneratorTransformer` that bakes schemas into the emitted bytes;
@@ -72,6 +92,18 @@ export const COMPILE_FINGERPRINT_INPUTS: readonly string[] = [
 ];
 
 /**
+ * A number folded into the compile-cache version beside the corpus output.
+ *
+ * The version moves on its own when the corpus's emitted bytes move. Bump this
+ * for a change the corpus cannot see but stored compiled documents cannot
+ * survive: a contract between emitted code and the runtime modules it calls
+ * into, say, changed on both sides at once so that the corpus still compiles
+ * to the same bytes while bytes compiled earlier no longer run. The bump moves
+ * the version everywhere, and every compiled document recompiles once.
+ */
+export const COMPILE_CACHE_EPOCH = 1;
+
+/**
  * Render {@link COMPILE_FINGERPRINT_INPUTS} as path globs. A directory input
  * becomes a `<dir>/**` tree; a file input, which is one with a `.` in its last
  * path segment, is passed through. `tasks/build-binaries.test.ts` builds its
@@ -93,7 +125,7 @@ export const VERSION_NAMESPACE = "cf/esm-compile";
 const FINGERPRINT_TAG = "cf/compile-fingerprint/v1";
 
 /** Length of the base64url fingerprint kept in the key (96 bits). */
-const FINGERPRINT_LENGTH = 16;
+export const FINGERPRINT_LENGTH = 16;
 
 interface FingerprintFile {
   /** Path relative to the repo root, with forward slashes. */
@@ -148,28 +180,75 @@ export async function computeCompilerFingerprint(
   return digest.slice(0, FINGERPRINT_LENGTH);
 }
 
-/** The full `cf/esm-compile/<fingerprint>` version string for `repoRoot`. */
+/** The `cf/esm-compile/<fingerprint>` version string for a fingerprint. */
+export function versionOfFingerprint(fingerprint: string): string {
+  return `${VERSION_NAMESPACE}/${fingerprint}`;
+}
+
+/**
+ * The compiler-input version for `repoRoot`: `cf/esm-compile/` followed by its
+ * compiler-input fingerprint. It is the version a checkout whose compiler
+ * nobody has measured runs under (see {@link resolveCompilerVersion}), and
+ * the key CI names its compile byte caches by.
+ */
 export async function computeCompilerVersion(
   repoRoot: string,
   inputs: readonly string[] = COMPILE_FINGERPRINT_INPUTS,
 ): Promise<string> {
   const fingerprint = await computeCompilerFingerprint(repoRoot, inputs);
-  return `${VERSION_NAMESPACE}/${fingerprint}`;
+  return versionOfFingerprint(fingerprint);
 }
 
-/** The compiler-input version for the repository containing this module. */
+/** The committed compile-cache version and the inputs it was minted against. */
+export interface CommittedCompilerVersion {
+  /** The output-based version, `cf/esm-compile/<output fingerprint>`. */
+  readonly version: string;
+
+  /** The compiler-input fingerprint of the tree the version was minted on. */
+  readonly inputs: string;
+}
+
+/** What `compile-cache-version.ts` commits. */
+export const COMMITTED_COMPILER_VERSION: CommittedCompilerVersion = {
+  version: COMMITTED_COMPILE_CACHE_VERSION,
+  inputs: COMMITTED_COMPILE_CACHE_VERSION_INPUTS,
+};
+
+/**
+ * The compile-cache version the compiler at `repoRoot` runs under: the
+ * committed output-based version when the tree's compiler-input fingerprint
+ * is the one that version was minted against, and otherwise the tree's own
+ * compiler-input version, which no committed compiler shares.
+ */
+export async function resolveCompilerVersion(
+  repoRoot: string,
+  committed: CommittedCompilerVersion = COMMITTED_COMPILER_VERSION,
+  inputs: readonly string[] = COMPILE_FINGERPRINT_INPUTS,
+): Promise<string> {
+  const fingerprint = await computeCompilerFingerprint(repoRoot, inputs);
+  return fingerprint === committed.inputs
+    ? committed.version
+    : versionOfFingerprint(fingerprint);
+}
+
+/** The compile-cache version for the repository containing this module. */
 export async function computeCurrentCompilerVersion(): Promise<string> {
   const repoRoot = fromFileUrl(new URL("../../../../", import.meta.url));
-  return await computeCompilerVersion(repoRoot);
+  return await resolveCompilerVersion(repoRoot);
 }
 
 /**
  * Render the full text of `compile-cache-version.ts` for a given active
- * version. The checked-in source marker and the binary build output use this
- * format. Output is `deno fmt`-clean so the committed file and the rendering
- * stay byte-identical.
+ * version and committed record. The checked-in module, which `deno task
+ * compile-cache-version` writes, carries the source marker as its active
+ * version; a binary build writes the resolved version in its place. Output is
+ * `deno fmt`-clean so the committed file and the rendering stay
+ * byte-identical.
  */
-export function renderVersionModule(version: string): string {
+export function renderVersionModule(
+  version: string,
+  committed: CommittedCompilerVersion = COMMITTED_COMPILER_VERSION,
+): string {
   const activeVersionDeclaration =
     version === SOURCE_COMPILE_CACHE_RUNTIME_VERSION
       ? `export const COMPILE_CACHE_RUNTIME_VERSION =
@@ -178,14 +257,24 @@ export function renderVersionModule(version: string): string {
         JSON.stringify(version)
       };`;
   return `// Version axis of the durable compile cache: the \`<version>\` segment of
-// \`compileCache:<version>/<identity>\` keys. The checked-in value is a stable
-// source marker. Deno source runs resolve it to the current compiler-input
-// fingerprint at runtime. Runtimes without repository file access skip the
-// compiled cache until a binary build writes the computed fingerprint here.
+// \`compileCache:<version>/<identity>\` keys. The checked-in active value is a
+// stable source marker. Deno source runs resolve it to the committed version
+// below, or to the current compiler-input fingerprint when the tree's compiler
+// is not the one that version was minted against. Runtimes without repository
+// file access skip the compiled cache until a binary build writes the resolved
+// version here.
+//
+// The committed version and the inputs it was minted against are written by
+// \`deno task compile-cache-version\` and held by \`check-compile-cache-version\`.
 export const SOURCE_COMPILE_CACHE_RUNTIME_VERSION = ${
     JSON.stringify(SOURCE_COMPILE_CACHE_RUNTIME_VERSION)
   };
 ${activeVersionDeclaration}
+export const COMMITTED_COMPILE_CACHE_VERSION =
+  ${JSON.stringify(committed.version)};
+export const COMMITTED_COMPILE_CACHE_VERSION_INPUTS = ${
+    JSON.stringify(committed.inputs)
+  };
 `;
 }
 

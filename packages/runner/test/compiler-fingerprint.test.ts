@@ -3,11 +3,13 @@ import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
 import {
+  COMMITTED_COMPILER_VERSION,
   COMPILE_FINGERPRINT_INPUTS,
   computeCompilerFingerprint,
-  computeCompilerVersion,
   computeCurrentCompilerVersion,
+  FINGERPRINT_LENGTH,
   renderVersionModule,
+  resolveCompilerVersion,
   VERSION_NAMESPACE,
 } from "../src/compilation-cache/compiler-fingerprint.deno.ts";
 import type * as cellCacheModule from "../src/compilation-cache/cell-cache.ts";
@@ -136,15 +138,39 @@ describe("compile-cache version axis", () => {
     expect(COMPILE_CACHE_RUNTIME_VERSION).toBe(`${VERSION_NAMESPACE}/source`);
   });
 
-  it("from-source runtime version resolves to the real compiler-input fingerprint", async () => {
-    const version = await computeCompilerVersion(
-      repoRoot,
-      COMPILE_FINGERPRINT_INPUTS,
-    );
+  it("from-source runtime version resolves the committed version against the tree's inputs", async () => {
+    const version = await resolveCompilerVersion(repoRoot);
     expect(await getCompileCacheRuntimeVersion()).toBe(version);
     expect(await computeCurrentCompilerVersion()).toBe(version);
     expect(version.startsWith(`${VERSION_NAMESPACE}/`)).toBe(true);
     expect(version).not.toBe(SOURCE_COMPILE_CACHE_RUNTIME_VERSION);
+  });
+
+  it("resolves to the committed version only for the inputs it was minted against", async () => {
+    const fingerprint = await computeCompilerFingerprint(repoRoot);
+    const committed = {
+      version: `${VERSION_NAMESPACE}/committed-output`,
+      inputs: fingerprint,
+    };
+    expect(await resolveCompilerVersion(repoRoot, committed)).toBe(
+      committed.version,
+    );
+    expect(
+      await resolveCompilerVersion(repoRoot, {
+        ...committed,
+        inputs: "another-tree",
+      }),
+    ).toBe(`${VERSION_NAMESPACE}/${fingerprint}`);
+  });
+
+  it("commits a version of the namespace and the inputs it was minted against", () => {
+    expect(
+      COMMITTED_COMPILER_VERSION.version.startsWith(`${VERSION_NAMESPACE}/`),
+    ).toBe(true);
+    expect(COMMITTED_COMPILER_VERSION.version).not.toBe(
+      SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
+    );
+    expect(COMMITTED_COMPILER_VERSION.inputs).toHaveLength(FINGERPRINT_LENGTH);
   });
 
   it("skips the compiled cache when source fingerprint files cannot be read", async () => {

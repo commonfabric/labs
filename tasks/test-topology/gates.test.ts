@@ -158,7 +158,10 @@ describe("the repository's gate suites", () => {
       "check-docs-history-index",
     ]);
     expect(reached("mise.toml")).toEqual(["check-deno-pins"]);
-    expect(reached("deno.lock")).toEqual(["check-single-copy-deps"]);
+    expect(reached("deno.lock")).toEqual([
+      "check-compile-cache-version",
+      "check-single-copy-deps",
+    ]);
     // An ordinary source file reaches no gate. What runs for it is what
     // the score chose, which is what keeps this feature a fraction of a
     // lane rather than the bulk of one.

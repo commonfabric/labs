@@ -41,8 +41,8 @@ import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isol
 import { type Config, ResolvedConfig } from "../packages/felt/interface.ts";
 import {
   compileFingerprintGlobs,
-  computeCompilerVersion,
   renderVersionModule,
+  resolveCompilerVersion,
   VERSION_NAMESPACE,
 } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import { SOURCE_COMPILE_CACHE_RUNTIME_VERSION } from "../packages/runner/src/compilation-cache/compile-cache-version.ts";
@@ -130,7 +130,7 @@ async function writeFile(filePath: string, contents: string): Promise<void> {
 }
 
 async function renderComputedVersionModule(root: string): Promise<string> {
-  return renderVersionModule(await computeCompilerVersion(root));
+  return renderVersionModule(await resolveCompilerVersion(root));
 }
 
 /**
@@ -881,7 +881,9 @@ Deno.test("prepareWorkspace writes the fingerprint; revertWorkspace restores the
   try {
     await prepareWorkspace(config);
 
-    // The version module holds the compiler-input fingerprint baked into binaries.
+    // The version module holds the resolved compile-cache version baked into
+    // binaries: the fake tree's inputs are not the committed ones, so its own
+    // compiler-input version.
     const stamped = await Deno.readTextFile(versionPath);
     assertEquals(stamped, computedModule);
     assertNotEquals(stamped, sourceModule);
