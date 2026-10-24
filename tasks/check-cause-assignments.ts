@@ -11,8 +11,8 @@
  * the compiler can do this, so the gate compiles every pattern with the base
  * revision's compiler and with the change's, and compares the two builds of
  * each pattern whose source files are the same on both sides.
- * `cause-assignments-lib.ts` describes how a cell is told apart from its
- * neighbors across the two builds.
+ * `packages/runner/src/cause-assignment.ts` describes how a cell is told
+ * apart from its neighbors across the two builds.
  *
  * A move the repository decides to ship is declared in
  * `cause-assignments-accepted-moves.ts`.
