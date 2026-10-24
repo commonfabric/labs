@@ -1,7 +1,9 @@
 /**
  * A read with no shape of its own, where it crosses a stored link carrying a
- * schema: the view behind the link shows what that schema names, a host's
- * read-out reads the same, and a subscription through it depends on no more.
+ * schema: the view behind the link reads the keys that schema names through
+ * views of their own and the rest as stored, following no link under them; a
+ * host's read-out reads the same; and a subscription through it depends on
+ * nothing a link under an unnamed key reaches.
  */
 
 import { expect } from "@std/expect";
@@ -10,6 +12,7 @@ import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 
 import { type Cell, hostValueOf, sinkProjected } from "../src/cell.ts";
+import { isSigilLink } from "../src/link-types.ts";
 import { KeepAsCell } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -83,27 +86,42 @@ async function documents(schema: unknown = profileSchema) {
 }
 
 describe("a view behind a link carrying a schema", () => {
-  it("shows the keys the schema names, and no other", async () => {
+  it("reads the keys the schema names, and the rest as stored with no link followed", async () => {
     await using docs = await documents();
     const view = docs.message.get() as { authorProfile: Profile };
 
-    expect(Object.keys(view.authorProfile)).toEqual(["avatar", "name"]);
+    expect(Object.keys(view.authorProfile)).toEqual([
+      "avatar",
+      "extra",
+      "inbox",
+      "name",
+    ]);
     expect(view.authorProfile.name).toBe("an author");
-    expect("extra" in view.authorProfile).toBe(false);
-    expect(view.authorProfile.extra).toBeUndefined();
-    expect(view.authorProfile.inbox).toBeUndefined();
+    expect(view.authorProfile.extra).toBe("not declared");
+    // The unnamed `inbox` holds a link, which stays one: the inbox is not
+    // read, so nothing of it, or of the catalog it links, is here.
+    expect(isSigilLink(view.authorProfile.inbox)).toBe(true);
     expect(
-      Object.getOwnPropertyDescriptor(view.authorProfile, "extra"),
-    ).toBeUndefined();
+      Object.getOwnPropertyDescriptor(view.authorProfile, "inbox")?.value,
+    ).toEqual(view.authorProfile.inbox);
   });
 
-  it("reads out for a host as the schema names it", async () => {
+  it("reads out for a host the same way", async () => {
     await using docs = await documents();
+    const value = hostValueOf(docs.message.get()) as {
+      authorProfile: Profile;
+      body: string;
+    };
 
-    expect(hostValueOf(docs.message.get())).toEqual({
-      authorProfile: { avatar: "a", name: "an author" },
-      body: "hello",
-    });
+    expect(value.body).toBe("hello");
+    expect(Object.keys(value.authorProfile)).toEqual([
+      "avatar",
+      "extra",
+      "inbox",
+      "name",
+    ]);
+    expect(value.authorProfile.name).toBe("an author");
+    expect(isSigilLink(value.authorProfile.inbox)).toBe(true);
   });
 
   it("shows every key behind a link carrying no schema", async () => {
@@ -120,56 +138,53 @@ describe("a view behind a link carrying a schema", () => {
     });
   });
 
-  it("shows every key where the schema admits additional properties", async () => {
+  it("follows every link where the schema admits additional properties", async () => {
     await using docs = await documents({
       ...profileSchema,
       additionalProperties: true,
     });
-    const view = docs.message.get() as { authorProfile: Profile };
 
-    expect(Object.keys(view.authorProfile)).toEqual([
-      "avatar",
-      "extra",
-      "inbox",
-      "name",
-    ]);
-    expect(view.authorProfile.extra).toBe("not declared");
+    expect(hostValueOf(docs.message.get())).toEqual({
+      authorProfile: {
+        name: "an author",
+        avatar: "a",
+        extra: "not declared",
+        inbox: { catalog: { entries: {} }, offers: [] },
+      },
+      body: "hello",
+    });
   });
 
-  it("subscribes through the link to the named keys alone", async () => {
+  it("subscribes through the link to nothing an unnamed key links", async () => {
     await using docs = await documents();
-    const values: unknown[] = [];
+    const names: unknown[] = [];
     const cancel = sinkProjected(
       docs.message.key("authorProfile"),
       hostValueOf,
       (value) => {
-        values.push(value);
+        names.push((value as Profile).name);
       },
     );
     try {
-      expect(values).toEqual([{ avatar: "a", name: "an author" }]);
+      expect(names).toEqual(["an author"]);
 
-      // What the unnamed keys hold or link changes: nothing is delivered.
+      // What the unnamed `inbox` links changes, and what that links: nothing
+      // is delivered.
       await docs.write(elsewhere, "catalog", { entries: { added: true } });
-      await docs.write(space, "profile", {
-        name: "an author",
-        avatar: "a",
-        extra: "changed",
-        inbox: docs.runtime.getCell(elsewhere, "inbox").getAsLink(),
-      }, profileSchema);
-      expect(values).toHaveLength(1);
+      await docs.write(elsewhere, "inbox", {
+        catalog: docs.runtime.getCell(elsewhere, "catalog").getAsLink(),
+        offers: [{ from: "someone" }],
+      });
+      expect(names).toEqual(["an author"]);
 
       // A named key changes: the new value is delivered.
       await docs.write(space, "profile", {
         name: "a renamed author",
         avatar: "a",
-        extra: "changed",
+        extra: "not declared",
         inbox: docs.runtime.getCell(elsewhere, "inbox").getAsLink(),
       }, profileSchema);
-      expect(values).toEqual([
-        { avatar: "a", name: "an author" },
-        { avatar: "a", name: "a renamed author" },
-      ]);
+      expect(names).toEqual(["an author", "a renamed author"]);
     } finally {
       cancel();
     }

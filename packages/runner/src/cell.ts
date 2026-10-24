@@ -5861,15 +5861,15 @@ function convertOneToLinks(
  * every access through the view does; the read registers every position
  * under it, where reading through the view registers each as it is reached.
  * Under a declaration that selects among a record's keys (the view's own, or
- * a followed link's, `declaredShape`), the record is read at its shape and
- * each named member on its own, as the view reads them, and nothing behind
- * an unnamed key is read or followed. A stored link is followed where it
- * sits, as the view follows one on access, with the same resolution, so the
- * dereference traces and labeled crossings it records are the ones the
- * view's reads record. A link that returns to a position the walk is inside
- * yields a back-link to it, as a cycle does elsewhere in the walk. A stream
- * position yields the link to the stream, carrying the label view a view of
- * it would carry.
+ * a followed link's, `declaredShape`), the record is read at its shape, each
+ * named member on its own and each other member as stored, with no link
+ * under it followed, as the view reads them. A stored link is followed
+ * where it sits, as the view follows one on access, with the same
+ * resolution, so the dereference traces and labeled crossings it records are
+ * the ones the view's reads record. A link that returns to a position the
+ * walk is inside yields a back-link to it, as a cycle does elsewhere in the
+ * walk. A stream position yields the link to the stream, carrying the label
+ * view a view of it would carry.
  *
  * `stack` is the path to the view from the walk's root, pushed to and popped
  * from as {@link convertOneToLinks} does, so a back-link made here names a
@@ -5987,8 +5987,9 @@ function readOutView(
           stack.pop();
         }
       };
-      // A member of a record read at its shape is read on its own, at its
-      // shape in turn where its declaration selects keys, else whole.
+      // A member of a record read at its shape is read on its own: at its
+      // shape in turn where its declaration selects keys, else whole. A member
+      // the declaration does not name is read whole and kept as stored.
       const readMember = (
         key: string,
         memberDeclared: (JSONSchema & object) | undefined,
@@ -6016,14 +6017,16 @@ function readOutView(
         }
         if (selectsKeys(declaration)) {
           return Object.freeze(Object.fromEntries(
-            Object.keys(stored).filter((key) => declaresKey(declaration, key))
-              .map((key) => {
-                const memberDeclared = memberDeclaration(key);
-                return [
-                  key,
-                  member(key, readMember(key, memberDeclared), memberDeclared),
-                ];
-              }),
+            Object.keys(stored).map((key) => {
+              if (!declaresKey(declaration, key)) {
+                return [key, readMember(key, undefined) as FabricValue];
+              }
+              const memberDeclared = memberDeclaration(key);
+              return [
+                key,
+                member(key, readMember(key, memberDeclared), memberDeclared),
+              ];
+            }),
           ));
         }
         return Object.freeze(Object.fromEntries(

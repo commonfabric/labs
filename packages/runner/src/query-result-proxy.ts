@@ -264,10 +264,11 @@ export function declaredShape(
 }
 
 /**
- * Whether a record view declared as `shape` shows its key `key`: every key
- * under no declaration, under one naming no `properties`, or under one
- * admitting additional properties; otherwise the named ones alone, as the
- * schema view selects them (`#traverseObjectWithSchema`).
+ * Whether a record view declared as `shape` reads its key `key` through a
+ * child view: every key under no declaration, under one naming no
+ * `properties`, or under one admitting additional properties; otherwise the
+ * named ones, the rest being read as stored, as the schema view's query
+ * creator includes them (`#traverseObjectWithSchema`).
  */
 export function declaresKey(
   shape: (JSONSchema & object) | undefined,
@@ -280,8 +281,9 @@ export function declaresKey(
 /**
  * Whether `shape` selects among a record's keys at all: it names
  * `properties` and admits no additional ones. A view under such a shape reads
- * its container's shape and each named member, where one under any other
- * reads the container whole.
+ * its container's shape, each named member through a view of its own and
+ * each other member as stored, where one under any other shape reads the
+ * container whole.
  */
 export function selectsKeys(
   shape: (JSONSchema & object) | undefined,
@@ -494,11 +496,14 @@ function createViewProxy<T>(
   // resolution followed last, whose schema it carries onto the resolved link,
   // or by the view above this one, which narrowed its own declaration to this
   // key. A view reads under it, as a shaped read crossing the link does
-  // (`combineSchemaForLink`): it shows the keys the declaration names and no
-  // other, and each child view reads under the declaration's schema for its
-  // key, so nothing behind an unnamed key is read or followed. The
-  // declaration's closure lives in the space of the document that holds the
-  // link.
+  // (`combineSchemaForLink`), by the rule the schema view applies to a
+  // record whose schema names `properties` and admits no additional ones
+  // (`#traverseObjectWithSchema`): a key the declaration names is read
+  // through a child view under the declaration's schema for it, and a key it
+  // does not name is read as stored, whole, with no link under it followed.
+  // So a link behind an unnamed key stays a link, and nothing it reaches is
+  // read. The declaration's closure lives in the space of the document that
+  // holds the link.
   const declared = declaredShape(
     viewTx,
     resolved.traces.length > 0
@@ -621,11 +626,17 @@ function createViewProxy<T>(
       ...(child !== undefined && { schema: child }),
     };
   };
-  // Whether the view shows `key`. An array's indices are all shown; a
-  // record's keys as its declaration names them.
-  const shows = (key: string | symbol): boolean =>
+  // Whether `key` is read through a child view: every index of an array,
+  // and every key of a record its declaration names, or does not select
+  // among. Any other key is read as stored.
+  const declares = (key: string | symbol): boolean =>
     typeof key === "symbol" || boundKind === "array" ||
     declaresKey(declared, key);
+  // The value stored at `key`, read whole, as a key the declaration does not
+  // name is read: a recursive read, so a change inside it runs the reader
+  // again, and no resolution, so a link inside it stays a link.
+  const rawMember = (key: string): unknown =>
+    readTx().readValueOrThrow(childLink(key));
 
   // The value the document holds now, read through the transaction, with the
   // kind check every trap starts from. The read is the one the caller was
@@ -941,7 +952,7 @@ function createViewProxy<T>(
           return Reflect.get(value, prop);
         }
 
-        if (!shows(prop)) return undefined;
+        if (!declares(prop)) return rawMember(prop);
         const accessTx = childViewTx();
         if (readStatsActive) recordProxyAccess(accessTx);
         return createViewProxy(
@@ -979,7 +990,7 @@ function createViewProxy<T>(
           currentValue();
           return [];
         }
-        const keys = Reflect.ownKeys(currentValue() as object).filter(shows);
+        const keys = Reflect.ownKeys(currentValue() as object);
         if (boundKind === "array") {
           // Enumerating an array's keys (`Object.keys`/`values`/`entries`, a spread,
           // `for...in`) observes which index keys are present. For a dense array
@@ -1046,7 +1057,15 @@ function createViewProxy<T>(
         // record never had, and every read-modify-write against a cell failed
         // (loom CT-1949). The `has` trap below keeps `in` -- there it is correct,
         // being the `in` operator's own trap.
-        if (Object.hasOwn(current, prop) && shows(prop)) {
+        if (Object.hasOwn(current, prop)) {
+          if (!declares(prop)) {
+            return {
+              configurable: true,
+              enumerable: true,
+              writable: false,
+              value: rawMember(prop),
+            };
+          }
           const accessTx = childViewTx();
           if (readStatsActive) recordProxyAccess(accessTx);
           return {
@@ -1083,7 +1102,7 @@ function createViewProxy<T>(
         if (boundKind === "array" && /^\d+$/.test(prop)) {
           readTx().readValueOrThrow(link, { meta: ignoreReadForScheduling });
         }
-        return shows(prop) && prop in current;
+        return prop in current;
       }),
     // A query-result proxy is a live, transaction-backed view: reads resolve
     // through the get trap on every access. Structural mutations (freeze, seal,
