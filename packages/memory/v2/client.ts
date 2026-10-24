@@ -721,6 +721,9 @@ export class Client {
     (space: string, principal: string) => void
   >();
 
+  /** Observers of restored connections, as `subscribeReconnected()` added. */
+  #reconnectedObservers = new Set<() => void>();
+
   readonly #transport: Transport;
 
   private constructor(
@@ -791,6 +794,22 @@ export class Client {
     this.#admissibleObservers.add(observer);
     return () => {
       this.#admissibleObservers.delete(observer);
+    };
+  }
+
+  /**
+   * Calls `observer` each time the client has its connection back after
+   * losing it: a reconnect has finished its handshake and restored every
+   * session it holds, apart from those a retriable denial holds, which
+   * restore on their own. The connection `connect()` opens is not one, and
+   * neither is a reconnect attempt that fails, so a connection that keeps
+   * failing calls it once per time it comes back and no oftener. Returns the
+   * function that ends the subscription.
+   */
+  subscribeReconnected(observer: () => void): () => void {
+    this.#reconnectedObservers.add(observer);
+    return () => {
+      this.#reconnectedObservers.delete(observer);
     };
   }
 
@@ -2225,6 +2244,7 @@ export class Client {
             if (![...this.#spaces].some((session) => session.held)) {
               this.#restarts = 0;
             }
+            this.#noteReconnected();
             return;
           } catch (error) {
             const err = error instanceof Error
@@ -2322,6 +2342,21 @@ export class Client {
     const waiting = this.#stateChanged;
     this.#stateChanged = null;
     waiting?.resolve();
+  }
+
+  /**
+   * Helper for the reconnect loop, which tells every `subscribeReconnected()`
+   * observer that the connection is back. One that throws is reported and
+   * does not keep the rest from hearing.
+   */
+  #noteReconnected(): void {
+    for (const observer of [...this.#reconnectedObservers]) {
+      try {
+        observer();
+      } catch (cause) {
+        console.error("reconnected subscriber threw:", cause);
+      }
+    }
   }
 
   #rejectPending(error: Error): void {

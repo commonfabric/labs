@@ -29,6 +29,7 @@ import {
   NAME,
   pattern,
   type PerSession,
+  type PerUser,
   principalOf,
   SELF,
   spaceAccess,
@@ -346,7 +347,7 @@ export interface RoomManager extends JoiningManager {
    * The people the viewer's rooms list, other than the viewer: by principal,
    * the profiles attesting it.
    */
-  people: PerSession<Record<string, ProfileCell[]>>;
+  people: PerUser<Record<string, ProfileCell[]>>;
 }
 
 /** Each of the viewer's adds' outcomes, by its `requestId`. */
@@ -657,7 +658,7 @@ export interface AddMemberInput {
   manager?: RoomManager;
 
   /** The principals of those already in the room, whom the picker leaves out. */
-  present: PerSession<string[]>;
+  present: PerUser<string[]>;
 }
 
 /** What the control adding a member to a room provides. */
@@ -741,8 +742,10 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
       shown === "" ? "none" : "block"
     );
     // Each person the manager lists who isn't in the room, by the first
-    // profile attesting them, per session, as the manager's people are.
-    const candidates = computed((): PerSession<ProfileCell[]> =>
+    // profile attesting them, per user, as the manager's people are. The
+    // binding's name is the value's cause, the identity of the document that
+    // stores it, so renaming it moves its data.
+    const candidatesForUser = computed((): PerUser<ProfileCell[]> =>
       Object.entries(manager?.people ?? {}).flatMap(
         ([principal, profiles]): ProfileCell[] =>
           present.includes(principal) || profiles[0] === undefined
@@ -751,7 +754,7 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
       )
     );
     const candidatesDisplay = computed((): ChatDisplay =>
-      candidates.length === 0 ? "none" : "block"
+      candidatesForUser.length === 0 ? "none" : "block"
     );
 
     return {
@@ -783,7 +786,7 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
               <cf-text variant="caption">
                 Or add people from your chats:
               </cf-text>
-              {candidates.map((profile) => (
+              {candidatesForUser.map((profile) => (
                 <cf-hstack
                   gap="2"
                   align="center"
@@ -1007,13 +1010,13 @@ export interface ChatRoomView {
    * attests none or the label can't be read where the list is derived. Like
    * `participants`, it is not proof of access.
    */
-  participantEntries: PerSession<ParticipantEntry[]>;
+  participantEntries: PerUser<ParticipantEntry[]>;
 
   /**
    * The principals `participantEntries` holds, each once, in the order of
    * `participants`.
    */
-  participantPrincipals: PerSession<string[]>;
+  participantPrincipals: PerUser<string[]>;
 
   /**
    * Adds a profile to those who joined the room, once. Any participant may add
@@ -1342,14 +1345,16 @@ export const FabriChatRoomCore = pattern<
   );
   const participants = computed(() => participantsOf(listed, facts.authors));
   // A profile lives in its owner's own space, and attests no one to a reader
-  // that space refuses, so the entries, and the principals taken from them,
-  // are derived per session: one instance for every reader is one their
-  // runtimes hold differently.
-  const participantEntries = computed((): PerSession<ParticipantEntry[]> =>
+  // that space refuses. That access is the reader's principal's, so the
+  // entries, and the principals taken from them, are derived per user: one
+  // instance for every reader is one their runtimes hold differently. Each
+  // binding's name is its value's cause, the identity of the document that
+  // stores it, so renaming one moves its data.
+  const participantEntriesForUser = computed((): PerUser<ParticipantEntry[]> =>
     participantEntriesOf(participants)
   );
-  const participantPrincipals = computed((): PerSession<string[]> =>
-    principalsOf(participantEntries)
+  const participantPrincipalsForUser = computed((): PerUser<string[]> =>
+    principalsOf(participantEntriesForUser)
   );
   const join = addParticipant({ roster });
   const canSend = computed(() => canActIn(messages, myProfile));
@@ -1361,7 +1366,7 @@ export const FabriChatRoomCore = pattern<
     requests: addRequests,
     self,
     manager,
-    present: participantPrincipals,
+    present: participantPrincipalsForUser,
   });
   // The composers' `disabled`. It defaults to `true`, which is what a
   // composer renders until this has computed: without a default the prop is
@@ -1547,8 +1552,8 @@ export const FabriChatRoomCore = pattern<
     about: aboutView,
     participants,
     roster: joined,
-    participantEntries,
-    participantPrincipals,
+    participantEntries: participantEntriesForUser,
+    participantPrincipals: participantPrincipalsForUser,
     addParticipant: join,
     messages: facts.list,
     canSend,

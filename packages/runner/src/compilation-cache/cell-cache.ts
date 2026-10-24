@@ -363,13 +363,16 @@ export function moduleDelegationsFromDocs(
  * transformer pipeline or SES verifier that alters emitted bytes (the source
  * set, keyed by content identity alone, persists across the change).
  *
- * The value is generated from a hash of the compiler inputs defined in
- * `compiler-fingerprint.deno.ts`. Editing those inputs moves the tag and
- * invalidates stale compiled docs. Deno source runs resolve the checked-in
- * source marker to that hash at runtime. Runtimes without repository file access
- * skip the compiled cache until a binary build bakes the hash into
- * `compile-cache-version.ts`. See `getCompileCacheRuntimeVersion()` and
- * `compiler-fingerprint.deno.ts`.
+ * A built artifact carries a version that is a hash of what its compiler
+ * emits for a fixed corpus (`compile-cache-output-version.deno.ts`), baked in
+ * at build time: a compiler change that compiles the corpus to the same
+ * documents keeps the tag, and one that changes any of them (a body, a stored
+ * field, an import edge), or an epoch bump, moves it. A Deno source run
+ * resolves the checked-in source marker to a hash of the compiler inputs
+ * (`compiler-fingerprint.deno.ts`) instead, which moves on any edit to them.
+ * Runtimes without repository file access skip the compiled cache until a
+ * build bakes a version into `compile-cache-version.ts` or defines one. See
+ * `getCompileCacheRuntimeVersion()`.
  */
 export {
   COMPILE_CACHE_RUNTIME_VERSION,
