@@ -7004,31 +7004,6 @@ export class Runner {
     const initialRef = getPatternIdentityRef(resultCellForRead) ??
       this.#sessionPatternPointer(resultCellForRead);
 
-    // Without cleanup after a start that throws, the piece stays registered
-    // in `this.#cancels`, so every later start() reports "already running"
-    // for a piece that has no nodes or event handlers — events sent to it are
-    // then dropped, and a piece whose start was refused is never judged
-    // again.
-    //
-    // Cleanup runs every registered cancel, any of which may itself throw.
-    // Letting that escape would REPLACE the error being handled, so what
-    // surfaced would describe the cleanup rather than the failure that caused
-    // it — and a cancel running against half-initialized state fails in ways
-    // that look nothing like the original. Report it, and let the caller
-    // rethrow what actually went wrong.
-    const cleanUpAfterFailedStart = () => {
-      try {
-        cleanup();
-      } catch (cleanupError) {
-        logger.warn(
-          "start",
-          "Cleanup failed while handling a start error; reporting the " +
-            "start error, which is the one that matters.",
-          cleanupError,
-        );
-      }
-    };
-
     // Determine initial pattern
     if (givenPattern) {
       currentPatternKey = initialRef ? patternIdentityKey(initialRef) : KEYLESS;
@@ -7050,7 +7025,27 @@ export class Runner {
           : undefined;
         runningPattern = givenPattern;
       } catch (error) {
-        cleanUpAfterFailedStart();
+        // Without cleanup the piece stays registered in `this.#cancels`, so
+        // every later start() reports "already running" for a piece that has
+        // no nodes or event handlers — events sent to it are then dropped,
+        // and a piece whose start was refused is never judged again.
+        //
+        // Cleanup runs every registered cancel, any of which may itself throw.
+        // Letting that escape would REPLACE the error being handled, so what
+        // surfaced would describe the cleanup rather than the failure that
+        // caused it — and a cancel running against half-initialized state
+        // fails in ways that look nothing like the original. Report it and
+        // rethrow what actually went wrong.
+        try {
+          cleanup();
+        } catch (cleanupError) {
+          logger.warn(
+            "start",
+            "Cleanup failed while handling a start error; reporting the " +
+              "start error, which is the one that matters.",
+            cleanupError,
+          );
+        }
         throw error;
       }
       if (!doNotUpdateOnPatternChange) {
@@ -7082,12 +7077,7 @@ export class Runner {
     currentPatternKey = patternIdentityKey(initialRef);
     instantiatedPatternKey = currentPatternKey;
     const initialPattern = this.#resolveToPattern(initialResolved);
-    try {
-      instantiateInitialPattern(initialPattern, initialRef, tx);
-    } catch (error) {
-      cleanUpAfterFailedStart();
-      throw error;
-    }
+    instantiateInitialPattern(initialPattern, initialRef, tx);
     runningRef = initialRef;
     runningPattern = initialPattern;
     if (!doNotUpdateOnPatternChange) {
