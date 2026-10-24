@@ -274,11 +274,13 @@ over `packages/patterns` and `packages/generated-patterns`. The fingerprint is
 the compiler-input fingerprint, which moves with every input that can change
 what the compiler emits. A cache entry CI names by it therefore holds bytes the
 compiler now running emitted, and an entry from any other compiler is one the
-lanes never ask for. (The runtime's own version axis,
+lanes never ask for. (A shipped build's own version axis,
 `compileCache:cf/esm-compile/<version>/<identity>`, is coarser on purpose: it
-is a hash of what the compiler emits for a fixed corpus, so it stays put across
-compiler changes that emit the same bytes; `tasks/compile-cache-version.ts`
-mints it.) The prefix lets
+is a hash of what the compiler emits for a fixed corpus, baked in at build time,
+so it stays put across compiler changes that emit the same bytes. The lanes'
+test binaries take the input fingerprint instead, which costs no corpus
+compile; `CF_COMPILE_CACHE_VERSION` in `tasks/build-binaries.ts` is the
+switch.) The prefix lets
 a lane restore a cache another lane or an earlier commit saved. That costs only
 the restore time, because a compiled pattern is reused only where its source is
 unchanged. The hash of the pattern sources is what makes a

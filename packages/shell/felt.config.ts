@@ -6,7 +6,24 @@ import { computeCurrentCompilerVersion } from "../runner/src/compilation-cache/c
 
 const PRODUCTION = !!Deno.env.get("PRODUCTION");
 const ENVIRONMENT = PRODUCTION ? "production" : "development";
-const COMPILE_CACHE_RUNTIME_VERSION = await computeCurrentCompilerVersion();
+// A production bundle ships, so it names its compiler by what it emits (a
+// corpus compile, about two minutes); a development bundle takes the
+// compiler-input fingerprint, which costs nothing. `CF_COMPILE_CACHE_VERSION`
+// (`output` or `inputs`) overrides the choice either way.
+const COMPILE_CACHE_VERSION_SOURCE = Deno.env.get("CF_COMPILE_CACHE_VERSION") ??
+  (PRODUCTION ? "output" : "inputs");
+// A binary build that embeds this shell hands over the version it baked, so
+// the two name one compiler and the corpus compiles once per build.
+const COMPILE_CACHE_RUNTIME_VERSION =
+  Deno.env.get("CF_COMPILE_CACHE_RUNTIME_VERSION") ??
+    (COMPILE_CACHE_VERSION_SOURCE === "output"
+      // deno-lint-ignore cf-imports/no-inline-module-import -- the corpus compile brings the whole runtime with it, which a development build has no reason to load
+      ? await (await import(
+        "../runner/src/compilation-cache/compile-cache-output-version.deno.ts"
+      )).computeCompilerOutputVersion(
+        new URL("../../", import.meta.url).pathname,
+      )
+      : await computeCurrentCompilerVersion());
 
 const SHELL_PORT = parseInt(
   Deno.env.get("SHELL_PORT") || String(ports.shell),

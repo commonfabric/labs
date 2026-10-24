@@ -296,13 +296,13 @@ The compiler-input fingerprint intentionally hashes a broad set of compiler,
 transformer, schema, harness, sandbox, API, compiler-option, and dependency
 inputs. Version 1 uses that value as a mandatory input even though it can
 over-invalidate executable identities. It is deliberately not the compile-cache
-`runtimeVersion`, which [`getCompileCacheRuntimeVersion()`][c14] resolves: that
-version is a hash of what the compiler emits for a fixed corpus, so it stays put
-across a compiler change that emits the same bytes, and a cache keyed by it
-survives such a change while the executable fingerprint still rolls. A
-compiler, transformer, generated-schema, runtime-module, sandbox,
-execution-policy, or scheduler-semantics change must roll the executable runtime
-fingerprint.
+`runtimeVersion` a built artifact carries, which
+[`getCompileCacheRuntimeVersion()`][c14] resolves: that version is a hash of
+what the compiler emits for a fixed corpus, so it stays put across a compiler
+change that emits the same bytes, and a cache keyed by it survives such a
+change while the executable fingerprint still rolls. A compiler, transformer,
+generated-schema, runtime-module, sandbox, execution-policy, or
+scheduler-semantics change must roll the executable runtime fingerprint.
 
 The provider and its input catalogs are required production work. Once the
 provider is enabled, inability to calculate its value fails closed. The empty
@@ -515,17 +515,17 @@ linked data:
    check, so no separate label is needed.
 2. **Compiled set — `compileCache:<runtimeVersion>/<identity>`.** Compiled and
    verified JS, keyed by `(runtimeVersion, identity)` ([`compiledDocKey`][c14]).
-   `runtimeVersion` is the compile-cache version: a hash of the bytes the
-   compiler emits for a fixed corpus, minted into `compile-cache-version.ts` by
-   `deno task compile-cache-version` together with the compiler-input
-   fingerprint it was minted against, and resolved by
-   [`getCompileCacheRuntimeVersion()`][c14] — to the committed value when the
-   tree's inputs fingerprint matches, and to the tree's own input fingerprint
-   otherwise, so a compiler nobody has measured never shares a version. A
-   compiler change that emits the same bytes keeps `runtimeVersion` and every
-   compiled document with it; one that moves a byte moves `runtimeVersion` and
-   the compiled set misses and recompiles from the source set. Under the
-   version-1 executable-fingerprint rule the compiler-input fingerprint rolls
+   `runtimeVersion` is the compile-cache version
+   [`getCompileCacheRuntimeVersion()`][c14] resolves. A built artifact — a
+   binary, the worker bundle, loom's vendored copy of the runtime — carries a
+   version that is a hash of the bytes its compiler emits for a fixed corpus,
+   under every persisted cache variant, computed by the build and baked in
+   (`compile-cache-output-version.deno.ts`); a Deno source run takes the
+   compiler-input fingerprint instead. A compiler change that emits the same
+   bytes keeps a built artifact's `runtimeVersion` and every compiled document
+   with it; one that moves a byte, or an epoch bump, moves it, and the compiled
+   set misses and recompiles from the source set. Under the version-1
+   executable-fingerprint rule the compiler-input fingerprint rolls
    `runtimeFingerprint` either way, which creates a new executable identity for
    an affected module and writes a new source set.
 
@@ -953,9 +953,9 @@ index's restart-stable `action` column,
   re-verification.
 - A compile-cache `runtimeVersion` move misses the compiled set and recompiles
   while the source set (`pattern:<identity>`) persists; a compiler change that
-  emits the same corpus bytes keeps `runtimeVersion`, and the compiled set
-  serves warm loads across it. Version 1 rolls the executable runtime
-  fingerprint on the compiler-input fingerprint either way.
+  emits the same corpus bytes keeps a built artifact's `runtimeVersion`, and
+  the compiled set serves warm loads across it. Version 1 rolls the executable
+  runtime fingerprint on the compiler-input fingerprint either way.
 - A `runtimeFingerprint` bump gives an affected entry module a new executable
   identity and writes a new source set. The prior source set remains retained
   for history. Tests compare the runtime-neutral digest to classify this as a

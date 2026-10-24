@@ -200,11 +200,11 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
   {
     tree: "packages/runner/test/fixtures/compile-cache-corpus",
     because: "the compile-cache version's corpus: frozen copies of pattern " +
-      "sources that `deno task compile-cache-version` compiles through the " +
-      "runtime harness, under the classic-`h` JSX runtime patterns compile " +
-      "under, to hash what the compiler emits. They are data for that task " +
-      "rather than modules the repository builds, and they stand as they " +
-      "were copied rather than as the tree now authors them.",
+      "sources that a build compiles through the runtime harness, under " +
+      "the classic-`h` JSX runtime patterns compile under, to hash what the " +
+      "compiler emits. They are data for that build step rather than " +
+      "modules the repository builds, and they stand as they were copied " +
+      "rather than as the tree now authors them.",
   },
   {
     tree: "packages/static/assets/types",

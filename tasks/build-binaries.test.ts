@@ -26,6 +26,7 @@ import {
   BuildConfig,
   type BuildDependencies,
   type BuildSignalApi,
+  computeShippedCompileCacheVersion,
   defaultBuildDependencies,
   embedArgs,
   installBuildSignalCleanup,
@@ -41,8 +42,8 @@ import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isol
 import { type Config, ResolvedConfig } from "../packages/felt/interface.ts";
 import {
   compileFingerprintGlobs,
+  computeCompilerVersion,
   renderVersionModule,
-  resolveCompilerVersion,
   VERSION_NAMESPACE,
 } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import { SOURCE_COMPILE_CACHE_RUNTIME_VERSION } from "../packages/runner/src/compilation-cache/compile-cache-version.ts";
@@ -130,7 +131,7 @@ async function writeFile(filePath: string, contents: string): Promise<void> {
 }
 
 async function renderComputedVersionModule(root: string): Promise<string> {
-  return renderVersionModule(await resolveCompilerVersion(root));
+  return renderVersionModule(await computeCompilerVersion(root));
 }
 
 /**
@@ -881,9 +882,7 @@ Deno.test("prepareWorkspace writes the fingerprint; revertWorkspace restores the
   try {
     await prepareWorkspace(config);
 
-    // The version module holds the resolved compile-cache version baked into
-    // binaries: the fake tree's inputs are not the committed ones, so its own
-    // compiler-input version.
+    // The version module holds the compiler-input fingerprint baked into binaries.
     const stamped = await Deno.readTextFile(versionPath);
     assertEquals(stamped, computedModule);
     assertNotEquals(stamped, sourceModule);
@@ -1069,6 +1068,52 @@ Deno.test("each build step throws naming its output when its command fails", asy
       assert(!(await exists(config.distPath(binary))), binary);
     }
   } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("runBuildBinaries bakes the output-based version unless asked for the inputs one", async () => {
+  const root = await makeFakeRepo();
+  const original = Deno.env.get("CF_COMPILE_CACHE_VERSION");
+  try {
+    const configs: BuildConfig[] = [];
+    const runBuild = (config: BuildConfig) => {
+      configs.push(config);
+      return Promise.resolve();
+    };
+    Deno.env.delete("CF_COMPILE_CACHE_VERSION");
+    await runBuildBinaries(["cf"], { root, runBuild });
+    Deno.env.set("CF_COMPILE_CACHE_VERSION", "inputs");
+    await runBuildBinaries(["cf"], { root, runBuild });
+
+    assertEquals(configs.length, 2);
+    assertEquals(
+      configs[0].compileCacheVersion,
+      computeShippedCompileCacheVersion,
+    );
+    assertEquals(configs[1].compileCacheVersion, computeCompilerVersion);
+  } finally {
+    if (original === undefined) {
+      Deno.env.delete("CF_COMPILE_CACHE_VERSION");
+    } else {
+      Deno.env.set("CF_COMPILE_CACHE_VERSION", original);
+    }
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("prepareWorkspace keeps the version it baked for the shell build", async () => {
+  const root = await makeFakeRepo();
+  const config = new BuildConfig({ root, toolshedFlags: [], cliOnly: true });
+  // Read before the workspace changes: `deno.jsonc` is a compiler input, and
+  // the build rewrites it after computing the version.
+  const expected = await computeCompilerVersion(root);
+  try {
+    assertEquals(config.bakedCompileCacheVersion(), undefined);
+    await prepareWorkspace(config);
+    assertEquals(config.bakedCompileCacheVersion(), expected);
+  } finally {
+    await revertWorkspace(config);
     await Deno.remove(root, { recursive: true });
   }
 });

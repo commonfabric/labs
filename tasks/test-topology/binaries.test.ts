@@ -63,6 +63,17 @@ describe("the binary build suites", () => {
     });
   });
 
+  it("builds a lane's binary on the compiler-input fingerprint", () => {
+    // A lane's binary is a test fixture: it takes the cheap version rather
+    // than the corpus compile a shipped build pays for.
+    return byId("binaries").command(
+      [{ unit: "cf", skip: [] }],
+      { root: "/repo", outputDir: "/out", spoolDir: "/spool" },
+    ).then((made) => {
+      expect(made[0]!.env?.CF_COMPILE_CACHE_VERSION).toBe("inputs");
+    });
+  });
+
   it("builds the server-execution shell with the define set", () => {
     const opposite = serverExecutionCiLane("opposite");
     return byId("binaries-opposite").command(

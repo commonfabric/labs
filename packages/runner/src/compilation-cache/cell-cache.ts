@@ -363,18 +363,15 @@ export function moduleDelegationsFromDocs(
  * transformer pipeline or SES verifier that alters emitted bytes (the source
  * set, keyed by content identity alone, persists across the change).
  *
- * The value is a hash of what the compiler emits for a fixed corpus, folded
- * with `COMPILE_CACHE_EPOCH` and minted into `compile-cache-version.ts` beside
- * the compiler-input fingerprint it was minted against. Deno source runs
- * resolve the checked-in source marker to that committed version when the
- * tree's inputs fingerprint matches the recorded one, and to the tree's own
- * input-fingerprint version otherwise. So a compiler change that emits the
- * same bytes keeps the tag once the version is re-minted against it, a
- * change that moves a byte moves the tag at the mint, and an epoch bump moves
- * it without a byte changing. Runtimes without repository file access skip
- * the compiled cache until a binary build bakes the resolved version into
- * `compile-cache-version.ts`. See `getCompileCacheRuntimeVersion()` and
- * `compiler-fingerprint.deno.ts`.
+ * A built artifact carries a version that is a hash of what its compiler
+ * emits for a fixed corpus (`compile-cache-output-version.deno.ts`), baked in
+ * at build time: a compiler change that emits the same bytes keeps the tag,
+ * and one that moves a byte, or an epoch bump, moves it. A Deno source run
+ * resolves the checked-in source marker to a hash of the compiler inputs
+ * (`compiler-fingerprint.deno.ts`) instead, which moves on any edit to them.
+ * Runtimes without repository file access skip the compiled cache until a
+ * build bakes a version into `compile-cache-version.ts` or defines one. See
+ * `getCompileCacheRuntimeVersion()`.
  */
 export {
   COMPILE_CACHE_RUNTIME_VERSION,

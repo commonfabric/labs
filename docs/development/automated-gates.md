@@ -19,14 +19,16 @@ and one left out by accident look identical in a list of paths, so the record is
 what separates them: a tree nobody decided about fails the test rather than
 passing in silence. Adding an exemption means adding an entry that says why.
 
-Four trees are recorded as unchecked. `packages/schema-generator/test/fixtures`
+Five trees are recorded as unchecked. `packages/schema-generator/test/fixtures`
 and `packages/ts-transformers/test/fixtures` are fixture corpora — the inputs
-those tests feed their transformer, and the outputs they compare against — and
-`packages/static/assets/types` is the ambient environment a pattern compiles
-against, handed to the in-memory compiler. What earns all three the exemption is
-holding data rather than modules this repository builds; neither corpus compiles
-as a unit, though files within one may well compile alone. The fourth is
-`packages/patterns`, which the next paragraph covers.
+those tests feed their transformer, and the outputs they compare against —
+`packages/runner/test/fixtures/compile-cache-corpus` is the frozen pattern
+corpus a build compiles to hash the compiler's output into the compile-cache
+version, and `packages/static/assets/types` is the ambient environment a
+pattern compiles against, handed to the in-memory compiler. What earns all four
+the exemption is holding data rather than modules this repository builds;
+neither test corpus compiles as a unit, though files within one may well compile
+alone. The fifth is `packages/patterns`, which the next paragraph covers.
 
 An exemption's reason is held to being true of every file it matches, which is
 what decides how wide the entry may be. Two entries divide `packages/patterns`,
@@ -145,19 +147,6 @@ Each of these gates fails CI on its own, and none of them run as part of
 - `deno task check-local-program` — a program built from local files by hand
   rather than through `resolveLocalProgram`, which silently drops any data files
   the caller attached
-- `deno task check-compile-cache-version` — a compiler whose compile-cache
-  version nobody has minted. The durable compile cache keys every compiled
-  pattern by a version that is a hash of what the compiler emits for a frozen
-  corpus (`packages/runner/test/fixtures/compile-cache-corpus`) under every
-  persisted cache variant, so a change that emits the same bytes in every mode
-  keeps every cache and one that moves a byte recompiles everything once. The version module records the compiler-input
-  fingerprint it was minted against; a change under `COMPILE_FINGERPRINT_INPUTS`
-  (the compiler, the transformers, the schema generator, the pattern-facing
-  types, the lockfile), to the corpus, or to `COMPILE_CACHE_EPOCH` runs
-  `deno task compile-cache-version --write` and commits the module it rewrites.
-  A change that lands without the mint costs only the version's benefit: a tree
-  whose inputs are not the committed ones resolves to its own compiler-input
-  version, which no committed compiler shares
 - `deno task check-baselines-append-only` — a pattern baseline that was deleted
   rather than added to
 - `deno task check-cause-assignments` — a change to how patterns are built

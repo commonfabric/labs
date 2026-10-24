@@ -239,25 +239,6 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     ],
   },
   {
-    name: "check-compile-cache-version",
-    kind: "gate",
-    run: ["task", "check-compile-cache-version"],
-    // The module holding the committed version, the corpus it hashes the
-    // output of, the task that mints and checks it, and the two root files
-    // among the compiler inputs. The compiler's own trees run to a large
-    // part of the repository and are left to the score; a change there
-    // that lands unminted costs nothing but the version's benefit, since
-    // a tree whose inputs are not the committed ones resolves to its own
-    // compiler-input version, and the next run of the gate says so.
-    reachedBy: [
-      "packages/runner/src/compilation-cache/",
-      "packages/runner/test/fixtures/compile-cache-corpus/",
-      "deno.jsonc",
-      "deno.lock",
-      "tasks/compile-cache-version.ts",
-    ],
-  },
-  {
     name: "check-pattern-tiers",
     kind: "gate",
     run: ["task", "check-pattern-tiers"],

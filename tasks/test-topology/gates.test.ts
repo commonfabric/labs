@@ -159,10 +159,7 @@ describe("the repository's gate suites", () => {
       "check-docs-history-index",
     ]);
     expect(reached("mise.toml")).toEqual(["check-deno-pins"]);
-    expect(reached("deno.lock")).toEqual([
-      "check-compile-cache-version",
-      "check-single-copy-deps",
-    ]);
+    expect(reached("deno.lock")).toEqual(["check-single-copy-deps"]);
     // The compiler a pattern's numbering is built by reaches the gate
     // comparing it with the base revision's, and the patterns it builds do
     // not: an edited pattern is never compared.

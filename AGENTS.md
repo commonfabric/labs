@@ -258,8 +258,6 @@ leaves out; read it when one fails, or before adding a check exemption.
   describes
 - `check-local-program` — a program built from local files without
   `resolveLocalProgram`
-- `check-compile-cache-version` — a compiler change whose compile-cache version
-  nobody has minted
 - `check-baselines-append-only` — a pattern baseline deleted rather than added
   to
 - `check-cause-assignments` — a compiler change that renumbers an unchanged
