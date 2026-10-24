@@ -1125,16 +1125,20 @@ export class RuntimeProcessor {
         }
       });
     // An access change is a denial or a recovery, and only a recovery leaves
-    // the space with no access error.
+    // the space with no access error. A storage manager that cannot say what
+    // the error is cannot tell the two apart, so nothing is posted for it.
     const storage = runtime.storageManager;
-    this.#cancelSpaceAccessRestored = storage?.subscribeSpaceAccessChange?.(
-      (space) => {
-        if (storage.spaceAccessError?.(space) !== undefined) return;
-        for (const client of clients()) {
-          client.post({ type: NotificationType.SpaceAccessRestored, space });
-        }
-      },
-    );
+    const accessError = storage?.spaceAccessError?.bind(storage);
+    if (accessError !== undefined) {
+      this.#cancelSpaceAccessRestored = storage?.subscribeSpaceAccessChange?.(
+        (space) => {
+          if (accessError(space) !== undefined) return;
+          for (const client of clients()) {
+            client.post({ type: NotificationType.SpaceAccessRestored, space });
+          }
+        },
+      );
+    }
     this.#cancelConnectionRestored = runtime.storageManager
       ?.subscribeConnectionRestored?.(() => {
         for (const client of clients()) {

@@ -104,6 +104,54 @@ describe("space-access-restored", () => {
     }
   });
 
+  it("is not posted by the processor over a storage manager that cannot say whether a space is refused", async () => {
+    const identity = await Identity.fromPassphrase(
+      "processor space access restored without errors",
+    );
+    const storage = StorageManager.emulate({ as: identity });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://fabric.example"),
+      storageManager: storage,
+    });
+    const observers = new Set<(space: MemorySpace) => void>();
+    Object.defineProperty(storage, "spaceAccessError", {
+      value: undefined,
+      configurable: true,
+    });
+    const subscribe = stub(
+      storage,
+      "subscribeSpaceAccessChange",
+      (observer) => {
+        observers.add(observer);
+        return () => observers.delete(observer);
+      },
+    );
+    const notices: IPCRemotePost[] = [];
+    const post = stub(ownerClient, "post", (notice) => {
+      notices.push(notice);
+      return true;
+    });
+    const processor = buildProcessor({
+      runtime,
+      identity,
+      space: identity.did(),
+    });
+    try {
+      // The change is a denial, which nothing here can tell from a recovery.
+      for (const observer of [...observers]) {
+        observer("did:key:z6Mk-access-restored-unknown" as MemorySpace);
+      }
+
+      expect(notices.filter(isSpaceAccessRestoredNotification)).toEqual([]);
+    } finally {
+      await processor.dispose();
+      subscribe.restore();
+      post.restore();
+      Reflect.deleteProperty(storage, "spaceAccessError");
+      await storage.close();
+    }
+  });
+
   it("reaches the client's `spaceaccessrestored` listeners with its space, and none of its `error` ones", async () => {
     const identity = await Identity.fromPassphrase(
       "space access restored client event",

@@ -233,8 +233,9 @@ that fails.
 The `spaceaccessrestored` event reports that a space which refused the runtime's
 principal, as `spaceaccesslost` reported, has admitted it again. It carries the
 `space`. It is sent for every admission, whoever asked for the retry that
-decided it: the runtime itself, on the memory server's `session/admissible`, or
-a host through `retrySpaceAccess()`.
+decided it: the runtime itself, on the memory server's `session/admissible`; the
+renderer's Retry button on a refused space's placeholder; or a host through
+`retrySpaceAccess()`.
 
 `RuntimeInternals` in `@commonfabric/lib-shell` drops the loads it remembers as
 failed, every space's on `connectionrestored` and the one space's on
