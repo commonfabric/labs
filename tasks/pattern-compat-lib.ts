@@ -29,6 +29,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { assertPatternSchemasBackwardCompatible } from "../packages/piece/src/schema-compatibility.ts";
 import { readOnlyArguments } from "./only-arguments.ts";
+import type { AcceptedContractBreak } from "./pattern-compat-accepted-breaks.ts";
 import { matchesPatternFilter } from "./pattern-files.ts";
 
 /**
@@ -52,11 +53,17 @@ export type Finding =
 
   /** The current contract is not recorded, so nothing pins it for the next PR. */
   | { kind: "missing-baseline"; pattern: string; hash: string }
-  /** The current contract cannot be applied over a deployed one. */
+  /**
+   * One issue that stops the current contract being applied over a deployed
+   * one. `path` is the schema path it blames, `undefined` when the refusal
+   * named none this module could read; `detail` is the issue as the proof
+   * states it.
+   */
   | {
     kind: "incompatible";
     pattern: string;
     baseline: string;
+    path: string | undefined;
     detail: string;
   }
   /** The current contract is not a well-formed schema on its own terms. */
@@ -233,12 +240,17 @@ export function checkPattern(
         candidate,
       );
     } catch (error) {
-      findings.push({
-        kind: "incompatible",
-        pattern,
-        baseline: baseline.label,
-        detail: error instanceof Error ? error.message : String(error),
-      });
+      const issues = incompatibilityIssues(
+        error instanceof Error ? error.message : String(error),
+      );
+      for (const issue of issues) {
+        findings.push({
+          kind: "incompatible",
+          pattern,
+          baseline: baseline.label,
+          ...issue,
+        });
+      }
     }
   }
 
@@ -343,27 +355,31 @@ export const acceptedBreakKey = (pattern: string, baseline: string): string =>
   `${pattern}\x00${baseline}`;
 
 /**
- * The schema paths an incompatibility finding blames.
+ * The issues a refusal of `assertPatternSchemasBackwardCompatible` names, each
+ * with the schema path it blames.
  *
- * `assertPatternSchemasBackwardCompatible` throws one error listing its issues
- * as `- <path>: <reason>` lines, so a finding's `detail` names which paths
- * failed rather than only that something did. That is what lets an acceptance
- * be scoped to the removal it was granted for.
+ * The refusal lists every issue the proof found as a `- <path>: <reason>`
+ * line, which is what lets an acceptance be scoped to the paths it was granted
+ * for, and each line becomes a finding of its own.
  *
- * A line that does not parse comes back whole, deliberately. It matches no
- * accepted path, so an unrecognised message shape fails closed — the finding
- * stands — rather than being forgiven on the strength of a format assumption.
+ * A line with no `: ` in it comes back with the whole line as its path,
+ * deliberately. That matches no accepted path, so an unrecognized line shape
+ * fails closed — the finding stands — rather than being forgiven on the
+ * strength of a format assumption. A refusal with no issue lines at all comes
+ * back as one issue blaming no path, for the same reason.
  */
-export function incompatibilityPaths(detail: string): string[] {
-  const paths: string[] = [];
-  for (const line of detail.split("\n")) {
+export function incompatibilityIssues(
+  message: string,
+): { path: string | undefined; detail: string }[] {
+  const issues: { path: string | undefined; detail: string }[] = [];
+  for (const line of message.split("\n")) {
     const issue = line.trimStart();
     if (!issue.startsWith("- ")) continue;
     const body = issue.slice(2);
     const cut = body.indexOf(": ");
-    paths.push(cut === -1 ? body : body.slice(0, cut));
+    issues.push({ path: cut === -1 ? body : body.slice(0, cut), detail: body });
   }
-  return paths;
+  return issues.length > 0 ? issues : [{ path: undefined, detail: message }];
 }
 
 /**
@@ -374,12 +390,12 @@ export function incompatibilityPaths(detail: string): string[] {
  * that outlived their source — describes work still to do, and an accepted
  * break says nothing about any of them.
  *
- * A finding is forgiven only when EVERY path it blames is one the entry named.
- * The pair alone is not enough: one finding carries every issue the proof found
- * against that baseline, so forgiving by pair would also suppress an unintended
- * break that landed in the same change — and `--update` would then record the
- * broken contract as the new baseline. A finding whose paths cannot be read
- * yields none, which is not a match either.
+ * A finding is forgiven only when the path it blames is one the entry named
+ * for its pair. The pair alone is not enough: the proof reports every issue it
+ * found against that baseline, so forgiving by pair would also suppress an
+ * unintended break that landed in the same change — and `--update` would then
+ * record the broken contract as the new baseline. A finding blaming no path is
+ * not a match either.
  *
  * The forgiven ones come back rather than being dropped, because an exemption
  * nobody sees is an exemption nobody reviews: the run prints what it forgave,
@@ -399,10 +415,64 @@ export function partitionAcceptedBreaks(
     const paths = accepted.get(
       acceptedBreakKey(finding.pattern, finding.baseline),
     );
-    const blamed = incompatibilityPaths(finding.detail);
-    const isAccepted = paths !== undefined && blamed.length > 0 &&
-      blamed.every((path) => paths.has(path));
+    const isAccepted = finding.path !== undefined &&
+      paths?.has(finding.path) === true;
     (isAccepted ? forgiven : standing).push(finding);
   }
   return { standing, forgiven };
+}
+
+/**
+ * The parts of accepted breaks that forgave nothing in a run: each pair no
+ * finding was forgiven against, and for each entry, the paths it names that
+ * no forgiven finding over its pairs blamed.
+ *
+ * An entry forgives exactly the paths it names. The proof reports every issue
+ * it finds, so a named path that none of the entry's pairs blames is an
+ * exemption outliving its break, the same as a pair that needs no forgiving,
+ * and kept, it would silently forgive a later break at that path against the
+ * pairs the entry lists.
+ *
+ * Only entries for the patterns in `examined` are judged, because a run given
+ * `--only` sees no finding for any other pattern, and the run that examined a
+ * pattern is the one that can say what its entries forgave.
+ */
+export function unusedAcceptances(
+  entries: readonly AcceptedContractBreak[],
+  examined: ReadonlySet<string>,
+  forgiven: readonly Finding[],
+): {
+  pairs: string[];
+  paths: { pattern: string; record: string; paths: string[] }[];
+} {
+  const usedPairs = new Set<string>();
+  const usedPaths = new Set<string>();
+  for (const finding of forgiven) {
+    if (finding.kind !== "incompatible" || finding.path === undefined) continue;
+    const pair = acceptedBreakKey(finding.pattern, finding.baseline);
+    usedPairs.add(pair);
+    usedPaths.add(`${pair}\x00${finding.path}`);
+  }
+  const pairs: string[] = [];
+  const paths: { pattern: string; record: string; paths: string[] }[] = [];
+  for (const entry of entries) {
+    if (!examined.has(entry.pattern)) continue;
+    const entryPairs = entry.baselines.map((baseline) =>
+      acceptedBreakKey(entry.pattern, baseline)
+    );
+    for (const pair of entryPairs) {
+      if (!usedPairs.has(pair)) pairs.push(pair);
+    }
+    const unblamed = entry.paths.filter((path) =>
+      !entryPairs.some((pair) => usedPaths.has(`${pair}\x00${path}`))
+    );
+    if (unblamed.length > 0) {
+      paths.push({
+        pattern: entry.pattern,
+        record: entry.record,
+        paths: unblamed,
+      });
+    }
+  }
+  return { pairs, paths };
 }

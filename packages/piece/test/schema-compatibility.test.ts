@@ -5967,6 +5967,131 @@ describe("piece schema compatibility", () => {
         .toThrow(/type object is not accepted/);
     });
   });
+  describe("the issues a refusal lists", () => {
+    /** Returns the issue lines of the refusal, or `[]` when there is none. */
+    const refusalIssues = (previous: Pattern, candidate: Pattern): string[] => {
+      try {
+        assertPatternSchemasBackwardCompatible(previous, candidate);
+      } catch (error) {
+        return String((error as Error).message).split("\n")
+          .filter((line) => line.startsWith("- "));
+      }
+      return [];
+    };
+
+    const item: JSONSchema = {
+      type: "object",
+      properties: { label: { type: "string" } },
+      required: ["label"],
+    };
+    const previous = pattern(
+      { type: "object", properties: { seed: { type: "number" } } },
+      {
+        type: "object",
+        properties: {
+          total: { type: "number" },
+          label: { type: "string" },
+          item,
+          items: { type: "array", items: item },
+        },
+        required: ["total", "label", "item", "items"],
+      },
+    );
+
+    it("lists every field that breaks, in both roles, in the order the proof visits them", () => {
+      const candidate = pattern(
+        {
+          type: "object",
+          properties: {
+            seed: { type: "number" },
+            first: { type: "string" },
+            second: { type: "string" },
+          },
+          required: ["first", "second"],
+        },
+        {
+          type: "object",
+          properties: {
+            item: { type: "object", properties: {} },
+            items: { type: "array", items: { type: "object", properties: {} } },
+          },
+          required: ["item", "items"],
+        },
+      );
+      expect(refusalIssues(previous, candidate)).toEqual([
+        "- argument.first: newly required argument field has no default",
+        "- argument.second: newly required argument field has no default",
+        "- result.total: existing result field was removed",
+        "- result.label: existing result field was removed",
+        "- result.item.label: existing result field was removed",
+        "- result.items[].label: existing result field was removed",
+      ]);
+    });
+
+    it("reports a removed field once, not again for what it held", () => {
+      const candidate = pattern(
+        previous.argumentSchema,
+        {
+          type: "object",
+          properties: {
+            total: { type: "number" },
+            label: { type: "string" },
+            items: { type: "array", items: item },
+          },
+          required: ["total", "label", "items"],
+        },
+      );
+      expect(refusalIssues(previous, candidate)).toEqual([
+        "- result.item: existing result field was removed",
+      ]);
+    });
+
+    it("reports a node that fails at its own level once, without descending into it", () => {
+      const candidate = pattern(
+        previous.argumentSchema,
+        {
+          type: "object",
+          properties: {
+            total: { type: "number" },
+            label: { type: "string" },
+            item: {
+              type: "object",
+              properties: {},
+              asCell: ["cell"],
+            },
+            items: { type: "array", items: item },
+          },
+          required: ["total", "label", "item", "items"],
+        },
+      );
+      expect(refusalIssues(previous, candidate)).toEqual([
+        "- result.item: asCell changed",
+      ]);
+    });
+
+    it("lists no issue for a compatible candidate", () => {
+      expect(refusalIssues(previous, previous)).toEqual([]);
+    });
+
+    it("keeps a durable-link subset proof to its first issue", () => {
+      const source: JSONSchema = {
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "string" } },
+      };
+      const target: JSONSchema = {
+        type: "object",
+        properties: { a: { type: "number" }, b: { type: "number" } },
+      };
+      let message = "";
+      try {
+        assertSchemaSubset(source, target);
+      } catch (error) {
+        message = String((error as Error).message);
+      }
+      expect(message).toMatch(/value\.a: /);
+      expect(message).not.toMatch(/value\.b/);
+    });
+  });
 });
 
 describe("verb event closed-world transitions", () => {
