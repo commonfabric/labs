@@ -32,6 +32,7 @@ import {
   isRoutedIdentifier,
   parseRoutedJson,
   ROUTED_DEFAULT_SLOT_LIMIT,
+  ROUTED_EXPANDED_LIMIT,
   ROUTED_HOLDINGS_LIMIT,
   ROUTED_PART_BYTES,
   ROUTED_QUEUE_LIMIT,
@@ -2670,13 +2671,19 @@ export class RoutedMemoryHost {
               !context.closed && !selected.link.closed &&
               context.spaces.has(space) &&
               context.spaces.get(space) === this.#options.ownership(space),
-            // A sync that one message could not carry, past the 8 MiB a
-            // message may take or the frame cap, is split for a client that
-            // takes one in parts.
+            // A sync that one message could not carry, past the frame cap or
+            // the bytes a message may take, is split for a client that takes
+            // one in parts. A compressed message may take the 16 MiB its
+            // receiver expands it to, as text the 8 MiB on the socket; read
+            // at each send, since a client can turn compression off.
             {
               bytes: ROUTED_PART_BYTES,
               values: this.#limits.frameSlots,
-              whole: ROUTED_RAW_LIMIT,
+              get whole() {
+                return sendCompression
+                  ? ROUTED_EXPANDED_LIMIT
+                  : ROUTED_RAW_LIMIT;
+              },
             },
           );
           context.backend = backend;

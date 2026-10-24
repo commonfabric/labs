@@ -38,6 +38,7 @@ import { listenRoutedMemory } from "../v2/routed-listener.ts";
 import {
   decodeRoutedFrame,
   encodeRoutedFrame,
+  ROUTED_EXPANDED_LIMIT,
   ROUTED_QUEUE_LIMIT,
   ROUTED_RAW_LIMIT,
   routedFlags,
@@ -5278,6 +5279,37 @@ describe("routed close diagnostics", () => {
       ...(more ? { more: true } : {}),
     },
   } as ServerMessage);
+
+  it("splits a sync only past what one message may take: 16 MiB compressed, 8 MiB as text", async () => {
+    for (
+      const [name, whole, options] of [
+        ["compressed", ROUTED_EXPANDED_LIMIT, {}],
+        ["text", ROUTED_RAW_LIMIT, {
+          negotiatedFlags: { messageCompressionV1: false },
+        }],
+      ] as const
+    ) {
+      const f = await fixture(`split-whole-${name}`, options);
+      const connect = f.server.connectRouted.bind(f.server);
+      let limits: { whole?: number } | undefined;
+      const connected = stub(
+        f.server,
+        "connectRouted",
+        (sender, owns, parts) => {
+          limits = parts;
+          return connect(sender, owns, parts);
+        },
+      );
+      try {
+        const socket = await f.dataSocket(await f.issueTicket());
+        await socket.take();
+        expect(limits?.whole).toBe(whole);
+      } finally {
+        connected.restore();
+        await f.close();
+      }
+    }
+  });
 
   it("bounds the parts of split syncs together, apart from other output", async () => {
     const o = await outputFixture("output-split-sync", {
