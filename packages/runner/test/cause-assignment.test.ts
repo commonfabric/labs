@@ -136,23 +136,23 @@ describe("cause-assignment", () => {
         {
           number: 0,
           description: "cell, computed, written by function",
-          holdsState: false,
+          hasState: false,
         },
         {
           number: 1,
           description:
             "cell, computed, written by sub-pattern child-identi#Child",
-          holdsState: true,
+          hasState: true,
         },
         {
           number: 2,
           description: "stream, not computed, no writer",
-          holdsState: false,
+          hasState: false,
         },
         {
           number: 3,
           description: "cell, not computed, no writer",
-          holdsState: true,
+          hasState: true,
         },
       ]);
     });
@@ -181,7 +181,7 @@ describe("cause-assignment", () => {
       ).toEqual([{
         number: 0,
         description: "cell, computed, no writer",
-        holdsState: false,
+        hasState: false,
       }]);
     });
 
@@ -212,13 +212,13 @@ describe("cause-assignment", () => {
         {
           description:
             "cell, computed, written by sub-pattern child-identi#Child",
-          holdsState: true,
+          hasState: true,
           from: 1,
           to: 0,
         },
         {
           description: "stream, not computed, no writer",
-          holdsState: false,
+          hasState: false,
           from: 2,
           to: 1,
         },

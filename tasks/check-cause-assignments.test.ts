@@ -32,7 +32,7 @@ const build = (
     cells: cells.map((description, number) => ({
       number,
       description,
-      holdsState: description === CHILD,
+      hasState: description === CHILD,
     })),
   }],
 });
@@ -70,8 +70,8 @@ describe("check-cause-assignments", () => {
         comparison.failing.map(({ pattern, moved }) => ({
           pattern,
           moved: moved.map((
-            { from, to, holdsState },
-          ) => [from, to, holdsState]),
+            { from, to, hasState },
+          ) => [from, to, hasState]),
         })),
       ).toEqual([{ pattern: "room.tsx", moved: [[1, 0, true]] }]);
     });
@@ -108,7 +108,7 @@ describe("check-cause-assignments", () => {
       expect(
         comparison.failing.map(({ moved, ambiguous }) => ({
           moved,
-          ambiguous: ambiguous.filter(({ holdsState }) => holdsState).map((
+          ambiguous: ambiguous.filter(({ hasState }) => hasState).map((
             { before, after },
           ) => [before, after]),
         })),
@@ -152,8 +152,8 @@ describe("check-cause-assignments", () => {
               to,
             ]),
             ambiguous: ambiguous.map((
-              { description, before, after, holdsState },
-            ) => [description, before, after, holdsState]),
+              { description, before, after, hasState },
+            ) => [description, before, after, hasState]),
           })),
         ).toEqual([{
           moved: [[IF_ELSE, 1, 2]],
@@ -171,15 +171,15 @@ describe("check-cause-assignments", () => {
 
         expect(
           comparison.failing.map(({ moved, ambiguous }) => ({
-            moved: moved.map(({ from, to, holdsState }) => [
+            moved: moved.map(({ from, to, hasState }) => [
               from,
               to,
-              holdsState,
+              hasState,
             ]),
-            ambiguous: ambiguous.map(({ before, after, holdsState }) => [
+            ambiguous: ambiguous.map(({ before, after, hasState }) => [
               before,
               after,
-              holdsState,
+              hasState,
             ]),
           })),
         ).toEqual([{

@@ -157,7 +157,7 @@ export function compareDumps(
     // those cells are to be matched is settled; the case is pinned in
     // `check-cause-assignments.test.ts`.
     if (
-      pairedMoves.length === 0 && !ambiguous.some((found) => found.holdsState)
+      pairedMoves.length === 0 && !ambiguous.some((found) => found.hasState)
     ) {
       continue;
     }
@@ -249,9 +249,7 @@ export function describeFailures(comparison: Comparison): string {
     lines.push(`${pattern} (base build ${base}, this build ${head}):`);
     for (const cell of moved) {
       lines.push(
-        `  ${cell.from} -> ${cell.to}${
-          cell.holdsState ? ", holds state" : ""
-        }` +
+        `  ${cell.from} -> ${cell.to}${cell.hasState ? ", holds state" : ""}` +
           `: ${cell.description} (${where(cell.level)})`,
       );
     }
@@ -262,7 +260,7 @@ export function describeFailures(comparison: Comparison): string {
         ? ["added", list(cells.after)]
         : ["ambiguous", `${list(cells.before)} -> ${list(cells.after)}`];
       lines.push(
-        `  ${kind}${cells.holdsState ? ", holds state" : ""}: ${numbers}: ` +
+        `  ${kind}${cells.hasState ? ", holds state" : ""}: ${numbers}: ` +
           `${cells.description} (${where(cells.level)})`,
       );
     }
