@@ -152,9 +152,9 @@ export function compareDumps(
     const ambiguous = ambiguousCells(prior, after);
     const pairedMoves = movedCells(prior, after);
     // TODO(danfuzz): A shift among cells holding no state that the pairing
-    // reports no move for passes here, though the cells are listed as
-    // ambiguous where the pattern fails for another reason. Fail it too, once
-    // how those cells are to be matched is settled; the case is pinned in
+    // reports no move for passes here, though the cells are listed in the
+    // report where the pattern fails for another reason. Fail it too, once how
+    // those cells are to be matched is settled; the case is pinned in
     // `check-cause-assignments.test.ts`.
     if (
       pairedMoves.length === 0 && !ambiguous.some((found) => found.holdsState)
