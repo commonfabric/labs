@@ -184,6 +184,74 @@ describe("a view behind a link carrying a schema", () => {
     }
   });
 
+  it("keeps views under declarations that differ only below the root apart, whichever is read first", async () => {
+    // Two declarations naming the same keys at the root and different ones
+    // below: a record's `child` with `a` or with `b` declared, and a `list`
+    // whose items declare `a` or `b`. Each declared field holds a link to
+    // its text, which is followed only under the declaration naming it.
+    const declaring = (field: "a" | "b") => ({
+      type: "object",
+      properties: {
+        child: {
+          type: "object",
+          properties: { [field]: { type: "string" } },
+        },
+        list: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { [field]: { type: "string" } },
+          },
+        },
+      },
+    });
+    const build = async () => {
+      const docs = await documents();
+      const a = await docs.write(space, "a", "text a");
+      const b = await docs.write(space, "b", "text b");
+      const record = await docs.write(space, "record", {
+        a: a.getAsLink(),
+        b: b.getAsLink(),
+      });
+      const target = await docs.write(space, "target", {
+        child: record.getAsLink(),
+        list: [record.getAsLink()],
+      });
+      const link = (field: "a" | "b") =>
+        docs.runtime.getCell(space, "target", declaring(field) as never)
+          .getAsLink({ includeSchema: true, keepAsCell: KeepAsCell.All });
+      await docs.write(space, "holder", { one: link("a"), two: link("b") });
+      void target;
+      return docs;
+    };
+    type Shaped = {
+      child: { a?: unknown; b?: unknown };
+      list: { a?: unknown; b?: unknown }[];
+    };
+    {
+      await using docs = await build();
+      const holder = docs.runtime.getCell(space, "holder").get() as {
+        one: Shaped;
+        two: Shaped;
+      };
+      expect(holder.one.child.a).toBe("text a");
+      expect(holder.one.list[0].a).toBe("text a");
+      expect(holder.two.child.b).toBe("text b");
+      expect(holder.two.list[0].b).toBe("text b");
+    }
+    {
+      await using docs = await build();
+      const holder = docs.runtime.getCell(space, "holder").get() as {
+        one: Shaped;
+        two: Shaped;
+      };
+      expect(holder.two.child.b).toBe("text b");
+      expect(holder.two.list[0].b).toBe("text b");
+      expect(holder.one.child.a).toBe("text a");
+      expect(holder.one.list[0].a).toBe("text a");
+    }
+  });
+
   it("reads a linked member under the member's own declaration, not the document's", async () => {
     // The profile's `child` is an untyped link to a record whose `title`
     // is a link to its text. The profile's declaration names `child.title`

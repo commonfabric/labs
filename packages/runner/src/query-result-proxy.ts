@@ -161,23 +161,79 @@ export class ViewDriftError extends Error {
 }
 
 /**
- * What a view does with `declaration` at its own level, as a cache key
- * term: nothing (`null`), read every member through a view (`"open"`), or
- * read the named members through views and the rest as stored (the names,
- * sorted). One declaration reaches a position spelled two ways, with local
- * `#/$defs` references from a reader's own schema and with `cid:` references
- * from a stored link, so the schema object cannot be the term: a link back
- * to a position already viewed has to find that view. Two declarations that
- * select alike at this level share a view, and its children's declarations
- * are the first one's narrowed; where those select differently below, the
- * children's own keys tell them apart only by their selections in turn.
+ * `declaration` as a cache key term: a fingerprint of the whole schema with
+ * every reference followed, so that one declaration spelled two ways is one
+ * term. A declaration reaches a position spelled with local `#/$defs`
+ * references from a reader's own schema and with `cid:` references from a
+ * stored link, and a link back to a position already viewed has to find
+ * that view; two declarations that differ anywhere, in a member's schema or
+ * an array's items as much as at the root, must not share one, since the
+ * view's children read under the declaration it was built with.
+ *
+ * The walk emits each schema's keys in sorted order, leaving out what a view
+ * does not read by: `$defs`, inert except through the references it
+ * resolves, and the annotations and handle flags (`INERT_TO_A_VIEW`), which
+ * a stored document may carry differently from a reader's schema, a link's
+ * sanitized schema dropping `asCell` among them. A `$ref` is replaced by
+ * what it resolves to, and a definition the walk is already inside is
+ * emitted as the depth it was entered at, which is what makes a recursive
+ * schema finite. A reference nothing resolves is emitted as its spelling.
+ * Kept per declaration object; a declaration is interned, so the walk runs
+ * once for each.
  */
+const INERT_TO_A_VIEW = new Set([
+  "$defs",
+  "$comment",
+  "asCell",
+  "default",
+  "description",
+  "examples",
+  "ifc",
+  "title",
+]);
+const declarationTerms = new WeakMap<object, string>();
 const declarationTerm = (
   declaration: (JSONSchema & object) | undefined,
-): string[] | string | null => {
+): string | null => {
   if (declaration === undefined) return null;
-  if (!selectsKeys(declaration)) return "open";
-  return Object.keys(declaration.properties as object).sort();
+  const known = declarationTerms.get(declaration);
+  if (known !== undefined) return known;
+  const entered = new Map<object, number>();
+  const walk = (node: unknown, root: JSONSchema): string => {
+    if (!isObjectOrArray(node)) return JSON.stringify(node) ?? "undefined";
+    if (Array.isArray(node)) {
+      return "[" + node.map((item) => walk(item, root)).join(",") + "]";
+    }
+    if (typeof node.$ref === "string") {
+      const resolved = ContextualFlowControl.resolveSchemaRefs(
+        node as JSONSchema & object,
+        root,
+      );
+      if (!isObjectOrArray(resolved) || Array.isArray(resolved)) {
+        return resolved === undefined
+          ? "ref(" + node.$ref + ")"
+          : walk(resolved, root);
+      }
+      const depth = entered.get(resolved);
+      if (depth !== undefined) return "@" + depth;
+      entered.set(resolved, entered.size);
+      try {
+        return walk(resolved, resolved);
+      } finally {
+        entered.delete(resolved);
+      }
+    }
+    return "{" + Object.keys(node).filter((key) => !INERT_TO_A_VIEW.has(key))
+      .sort()
+      .map((key) =>
+        JSON.stringify(key) + ":" +
+        walk((node as Record<string, unknown>)[key], root)
+      ).join(",") +
+      "}";
+  };
+  const term = walk(declaration, declaration);
+  declarationTerms.set(declaration, term);
+  return term;
 };
 
 const proxyCacheKey = (
@@ -193,8 +249,8 @@ const proxyCacheKey = (
   // one built over the old kind refuses (`ViewDriftError`).
   kind: ViewKind,
   // Two views over one position under different declarations read it
-  // differently: which members are views and which are read as stored. Each
-  // is its own view; one under no declaration is the view there always was.
+  // differently, and so do their children. Each is its own view; one under
+  // no declaration is the view there always was.
   declaration: (JSONSchema & object) | undefined,
 ): string =>
   JSON.stringify([
