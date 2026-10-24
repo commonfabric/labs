@@ -150,6 +150,18 @@ A named instance also records, as its descriptor's `legacyPartialCause`, the
 number, so every other anonymous root keeps the number it would have without
 instance names.
 
+A parent's `instanceChildren` meta lists, as `{ name, child }` entries, the
+child a named instance runs in place of the one minted at its own spot, with
+`child` a link (`{ space, id, scope }`). The name is a value rather than a
+record key, since an instance may take any name a `const` can, among them
+names a stored record may not use as a key, such as `constructor` and
+`__proto__`; an entry repeating an earlier entry's name is ignored. Binding reads it on every setup and start: a named
+instance it records a child for runs that child, and any other named instance
+runs the child at its own spot. The record is how a deployed parent's
+positional child can become a named instance's child without moving to a new
+document. No part of the runtime writes it yet: carrying a deployed parent's
+positional children over to their names is what will.
+
 A sub-pattern instance with a positional cause moves to another child's state
 when a cell is added ahead of it, since its child is the one minted from
 whatever number it now takes. A parent's setup refuses
@@ -159,6 +171,9 @@ naming whichever of the two pattern identities it knows, to set up a child:
 - at a positional spot or a named instance's spot, over a stored child stamped
   with another instance's name, whatever the two pattern identities, and
   whether or not the stored child records one;
+- at a positional spot or a named instance's spot, over a stored child the
+  parent's `instanceChildren` records for another named instance, whatever the
+  two pattern identities;
 - at a positional spot, over a stored child of another pattern identity, when a
   child of the incoming pattern identity runs at another positional spot of the
   parent; or
@@ -173,7 +188,9 @@ whenever its own source does, so none of the rules blocks an ordinary update of
 a child's source. Only positional spots are judged by the last two: a spot a
 result key, a node input, `.for()` or an instance name names does not shift. A
 spot a result key, a node input or `.for()` names is not judged at all, since
-only a named instance stamps the child it sets up. No rule judges a child that
+only a named instance stamps a child or has one recorded for it. For a named
+instance, the guard judges the child `instanceChildren` records for it, where it
+records one, rather than the one at its own spot. No rule judges a child that
 is its space's root, which its space's genesis places whatever its cause, or a
 child managed independently in a space of its own, which its parent resumes
 rather than sets up. A spot whose node sets up a space's root is not counted as
@@ -188,8 +205,9 @@ move. A parent that runs whichever pattern a computation returns, such as a
 pointer does not yet name, and an unrelated pattern there is no sign that its
 children moved. The guard reads a child only at a positional spot or a named
 instance's spot that the parent's stored manifest of internal cells records,
-since no child can be set up at any other, so a fresh parent's setup reads no
-child at all.
+or a child the parent's `instanceChildren` records for a named instance, since
+no child can be set up at any other, so a fresh parent's setup reads no child
+at all.
 
 The refusal comes before anything the setup stages commits, so a refused
 update changes none of the piece's state. A live update the guard refuses

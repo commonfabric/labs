@@ -81,6 +81,13 @@ export interface Observation {
 
   /** Where it ran, which is what a new real test failure there is worth. */
   place: NewRealTestFailurePlace;
+
+  /**
+   * What a passing execution on a lane's runner took, in milliseconds,
+   * which is what its cost is measured from. Absent for any other
+   * execution.
+   */
+  durationMs?: number;
 }
 
 /**
@@ -218,7 +225,7 @@ export interface PendingMainFailure {
  * of them; an aggregate carrying none was written before the stamps
  * began. It is stored under the name `catchRule`.
  */
-export const NEW_REAL_TEST_FAILURE_RULE = 4;
+export const NEW_REAL_TEST_FAILURE_RULE = 5;
 
 /** One day's new real test failures of one identity. */
 export interface NewRealTestFailureDay {
@@ -879,6 +886,12 @@ export interface FoldOptions {
 
   /** What earlier batches of the same stream saw. */
   context?: FoldContext;
+
+  /**
+   * Called with the duration of each passing execution a state counts, by
+   * identity key and day, for an observation that carries one.
+   */
+  sampled?: (key: string, day: string, durationMs: number) => void;
 }
 
 /**
@@ -921,6 +934,21 @@ export function foldObservations(
     return state;
   };
 
+  // Only the default branch says which tests there are, so a record from
+  // anywhere else is evidence about an identity the default branch
+  // recorded before it, and about nothing else. This says, observation by
+  // observation, which records that leaves: every one from the default
+  // branch, and the rest whose identity a state already held or the
+  // default branch recorded earlier in the batch. Every pass walks the
+  // batch in the same order and asks one of its own.
+  const counting = () => {
+    const recorded = new Set<string>();
+    return (key: string, observation: Observation): boolean => {
+      if (observation.place === "main") recorded.add(key);
+      return states.has(key) || recorded.has(key);
+    };
+  };
+
   // Same-commit disagreement, and the sources a failing identity appeared
   // on inside the environmental window, both need the whole batch in view
   // before any one observation can be judged.
@@ -937,9 +965,11 @@ export function foldObservations(
   // against whatever `main` happened to say last in this batch.
   const mainAtCommit = new Map<string, "pass" | "fail" | "skip">();
   const failedHere = new Set<string>();
+  const witnessing = counting();
   for (const observation of observations) {
     const key = testIdentityKey(observation.test);
-    if (observation.outcome === "fail") failedHere.add(key);
+    const counted = witnessing(key, observation);
+    if (observation.outcome === "fail" && counted) failedHere.add(key);
     if (observation.place !== "main" || observation.outcome === "skip") {
       continue;
     }
@@ -983,15 +1013,24 @@ export function foldObservations(
   // Each failure is also recorded here for `environmental`, which reads
   // the record only after this pass. A failure elsewhere that the default
   // branch was already failing is marked as such.
+  //
+  // A record `counting` passes over still counts toward its run's crowd,
+  // which says how much the run broke rather than anything about one test,
+  // and toward nothing else. Its identity reaches neither `failures` nor
+  // `outcomesAtCommit`, so no rule sets its failure aside, and a failure
+  // the default branch was not already failing is always in its run's
+  // crowd.
   const crowds = context.crowds;
   const lastMainOf = new Map<string, MainOutcomes>();
   const hasFailed = (key: string) => failures.has(key) || failedHere.has(key);
+  const evidencing = counting();
   for (const observation of observations) {
+    const key = testIdentityKey(observation.test);
+    const counted = evidencing(key, observation);
     // A skip is a test that deliberately did not run, so it agrees with
     // nothing and contradicts nothing; counting it as disagreement would
     // read a skip beside a failure as the test disagreeing with itself.
     if (observation.outcome === "skip") continue;
-    const key = testIdentityKey(observation.test);
     const said = lastMainOf.get(key) ?? states.get(key)?.lastMainByOrder;
     const lastMain = lastMainIn(said, observation.seed);
     if (observation.place === "main") {
@@ -1005,13 +1044,15 @@ export function foldObservations(
       const continued = onMain
         ? lastMain === "fail"
         : brokenOnMain(key, observation, lastMain);
-      const list = failures.get(key) ?? [];
-      list.push({
-        day: observation.day,
-        source: observation.source,
-        ...(continued && !onMain ? { brokenOnMain: true as const } : {}),
-      });
-      failures.set(key, list);
+      if (counted) {
+        const list = failures.get(key) ?? [];
+        list.push({
+          day: observation.day,
+          source: observation.source,
+          ...(continued && !onMain ? { brokenOnMain: true as const } : {}),
+        });
+        failures.set(key, list);
+      }
       if (!continued) {
         const run = runOf(observation);
         let crowd = crowds.get(run);
@@ -1022,6 +1063,7 @@ export function foldObservations(
         crowd.identities.add(key);
       }
     }
+    if (!counted) continue;
     const point = pointOf(observation);
     let seen = outcomesAtCommit.get(point);
     if (seen === undefined) {
@@ -1096,8 +1138,10 @@ export function foldObservations(
   // counts once.
   const credited = context.credited;
 
+  const keeping = counting();
   for (const observation of observations) {
     const key = testIdentityKey(observation.test);
+    if (!keeping(key, observation)) continue;
     const state = stateOf(key);
     const day = observation.day;
 
@@ -1111,6 +1155,9 @@ export function foldObservations(
     if (observation.outcome === "skip") continue;
 
     bump(state.runsByDay, day);
+    if (observation.durationMs !== undefined) {
+      options.sampled?.(key, day, observation.durationMs);
+    }
     const lastMain = lastMainIn(state.lastMainByOrder, observation.seed);
     // Whether `main` has run this identity in this order, which decides
     // whether what it last said is about this order or about another.
@@ -1208,7 +1255,7 @@ export interface DaySamples {
  * but equality is asked of them; a day carrying none was sealed before
  * the stamps began, under the first set.
  */
-export const COST_RULE = 3;
+export const COST_RULE = 4;
 
 /** The largest duration a bucket counts, in milliseconds. */
 function bucketBound(bucket: number): number {

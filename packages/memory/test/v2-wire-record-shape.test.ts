@@ -134,26 +134,28 @@ describe("wire record shape", () => {
         })))).toBe(null);
       });
 
-      it(`returns \`null\` for a \`session.open\` whose \`session\` is ${label}`, () => {
+      // A message that decodes but fails its shape check is refused on the
+      // request it named, so the client settles that request.
+      it(`refuses on \`r\` a \`session.open\` whose \`session\` is ${label}`, () => {
         expect(parseClientMessage(frameFor((session) => ({
           type: "session.open",
           requestId: "r",
           space: SPACE,
           session,
-        })))).toBe(null);
+        })))).toEqual({ type: "invalid", requestId: "r" });
       });
 
-      it(`returns \`null\` for a \`transact\` whose \`commit\` is ${label}`, () => {
+      it(`refuses on \`r\` a \`transact\` whose \`commit\` is ${label}`, () => {
         expect(parseClientMessage(frameFor((commit) => ({
           type: "transact",
           requestId: "r",
           space: SPACE,
           sessionId: "s",
           commit,
-        })))).toBe(null);
+        })))).toEqual({ type: "invalid", requestId: "r" });
       });
 
-      it(`returns \`null\` for a \`sqlite.query\` whose \`db\` is ${label}`, () => {
+      it(`refuses on \`r\` a \`sqlite.query\` whose \`db\` is ${label}`, () => {
         expect(parseClientMessage(frameFor((db) => ({
           type: "sqlite.query",
           requestId: "r",
@@ -161,10 +163,10 @@ describe("wire record shape", () => {
           sessionId: "s",
           sql: "SELECT 1",
           db,
-        })))).toBe(null);
+        })))).toEqual({ type: "invalid", requestId: "r" });
       });
 
-      it(`returns \`null\` for a \`sqlite.query\` whose \`db.tables\` is ${label}`, () => {
+      it(`refuses on \`r\` a \`sqlite.query\` whose \`db.tables\` is ${label}`, () => {
         expect(parseClientMessage(frameFor((tables) => ({
           type: "sqlite.query",
           requestId: "r",
@@ -172,10 +174,10 @@ describe("wire record shape", () => {
           sessionId: "s",
           sql: "SELECT 1",
           db: { id: "db", tables },
-        })))).toBe(null);
+        })))).toEqual({ type: "invalid", requestId: "r" });
       });
 
-      it(`returns \`null\` for a \`sqlite.query\` whose \`reader\` is ${label}`, () => {
+      it(`refuses on \`r\` a \`sqlite.query\` whose \`reader\` is ${label}`, () => {
         expect(parseClientMessage(frameFor((reader) => ({
           type: "sqlite.query",
           requestId: "r",
@@ -184,7 +186,7 @@ describe("wire record shape", () => {
           sql: "SELECT 1",
           db: { id: "db" },
           reader,
-        })))).toBe(null);
+        })))).toEqual({ type: "invalid", requestId: "r" });
       });
 
       it(`drops a \`sqlite.query\` \`params\` that is ${label}`, () => {

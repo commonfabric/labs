@@ -16,7 +16,8 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
   list in the order the room recorded them, each message an object pushed onto
   it and so a document of its own. Each message links a list of its own
   reactions, a document the send that made the message makes, which each
-  reaction is pushed onto.
+  reaction is pushed onto, and links each file it attaches, an entry of its
+  space's store, which the send reads to check it and the room never writes.
 - Those who joined the room: profile links, in the order they were added, a
   roster only `addParticipant` writes
   (`packages/patterns/loom/participants.tsx`).
@@ -53,10 +54,25 @@ under their own access, which every session of theirs shares.
 The contract's derived `PerUser` values are `participantEntries` and
 `participantPrincipals`.
 
-The room's `[UI]` keeps its composer's state, the draft and the reply being
-composed, as a `PerSession` value of its own, so two placements of the same room
-open in one session show the same composer state, as one conversation shown
-twice should.
+The room's `[UI]` keeps its composer's state, the draft, the reply and the
+attachments being composed, as a `PerSession` value of its own, so two
+placements of the same room open in one session show the same composer state,
+as one conversation shown twice should.
+
+The main composer attaches files. Its attach control sends the room's
+`ensureFileStore` as it opens its file picker, so that the space has a store by
+the time a file is picked. Each file it stores in the blob store it adds to the
+space's store with `add`, under its own name or a free one
+([FabriFile's clients](../fabrifile/clients.md#adding-a-file)), and keeps in the
+composer as that request, which the composer shows as being attached, attached,
+or refused with the store's reason. A file can be taken out before the send,
+and its entry stays in the store. The composer's send attaches the entries the
+store added, in the order the files were picked, leaves out any the store
+refused, and waits, refusing the send, while a file is still being added; it
+reads each request's outcome by its id alone. A send ends the composer's
+attachments. Picking more files than the room's `maxAttachments`, or picking
+any in a space that still has no store, is refused. The thread composer
+attaches nothing.
 
 ## Writers
 
@@ -205,10 +221,12 @@ each setting at an initial value:
 | How long an entry stays in `recentActivity` | `recentActivityWindowNsec` | 10 minutes |
 | How many of the newest messages `messages.latest` holds | `maxWindowCount` | 100 |
 | The most message windows a session can have open | `maxOpenWindows` | 50 |
+| The most attachments a message may have | `maxAttachments` | 10 |
 
 These are the first build's values. Once the configuration exists, rooms can
 differ from them. The room reads `ownersMayObliterate`,
-`deletionIsObliteration`, and `maxWindowCount`; the other keys are stated for
+`deletionIsObliteration`, `maxWindowCount`, and `maxAttachments`; the other
+keys are stated for
 the policy's shape, which a user's Home carries, and read by nothing. `ownersMayObliterate` is there for a group room with many
 OWNERs; a direct room is set up without it, and its two people each obliterate
 only their own messages. The room's kind picks which policy document

@@ -42,7 +42,10 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import type { FileStoreOutput } from "../fabrifile/schemas.tsx";
+import type {
+  FileRequestOutcome,
+  FileStoreOutput,
+} from "../fabrifile/schemas.tsx";
 import {
   ensureFileStore,
   type FileStoreRecord,
@@ -57,6 +60,7 @@ import { profileKeyOf } from "../system/private-inbox.tsx";
 import { type ShownIn, type ViewPlace, viewPlaces } from "./logic.ts";
 import {
   canActIn,
+  commitAttach,
   commitComposerSend,
   commitDelete,
   commitDeleteReaction,
@@ -66,7 +70,10 @@ import {
   commitSendReaction,
   commitSetTitle,
   commitThreadSend,
+  type ComposerAttachment,
+  type ComposerCell,
   type ComposerState,
+  dropAttachment,
   FABRICHAT_POLICY,
   isOwnerOf,
   type JoiningManager,
@@ -78,6 +85,7 @@ import {
   type MessagesValue,
   NO_MESSAGE_RIGHTS,
   ownersMayObliterateIn,
+  prepareAttach,
   rightsOf,
   type RoomStreamEvent,
   type SetTitleEvent,
@@ -968,7 +976,9 @@ const viewerProfileOf = (
 
 /** What a room's reader may do to one of its messages. */
 export interface ChatMessageRights extends MessageRights {
-  /** The message, as `messages.latest` links it. */
+  /**
+   * The message's own cell, the link every field of the room naming it holds.
+   */
   message: MessageCell;
 }
 
@@ -1207,6 +1217,57 @@ export interface FabriChatRoomCoreOutput extends ChatRoomOutput {
   threadComposerSend: Stream<RoomStreamEvent>;
 }
 
+/** What one file a composer is attaching renders. */
+interface AttachingFileInput {
+  /** The file, as the request adding it to the space's store. */
+  file: ComposerAttachment;
+
+  /** The space's file store, which records the request's outcome. */
+  store: Cell<FileStoreOutput> | undefined;
+
+  /** The session's composer state, which the file's remove control changes. */
+  composer: ComposerCell;
+}
+
+/**
+ * One file the composer is attaching: its name, whether the store has added
+ * it yet, under which name, or why it refused it, and a control that takes it
+ * out of the next send.
+ */
+const FabriChatAttachingFile = pattern<AttachingFileInput, { [UI]: VNode }>(
+  ({ file, store, composer }) => {
+    // The store's outcome for this file's request, read by its id alone.
+    const outcome = computed(() =>
+      store?.key("requests").key(file.requestId).get() as
+        | FileRequestOutcome
+        | undefined
+    );
+    const status = computed(() =>
+      outcome === undefined
+        ? `${file.name}: attaching…`
+        : outcome.status === "refused"
+        ? `${file.name}: ${outcome.reason}`
+        : outcome.name === file.name
+        ? file.name
+        : `${file.name}, as ${outcome.name}`
+    );
+    return {
+      [UI]: (
+        <cf-hstack gap="1" align="center">
+          <cf-text variant="caption">{status}</cf-text>
+          <cf-button
+            size="sm"
+            variant="ghost"
+            onClick={dropAttachment({ composer, requestId: file.requestId })}
+          >
+            Remove
+          </cf-button>
+        </cf-hstack>
+      ),
+    };
+  },
+);
+
 /**
  * A conversation with a composer that sends as the viewer: the whole of
  * `ChatRoomOutput`, given the viewer's profile.
@@ -1426,14 +1487,43 @@ export const FabriChatRoomCore = pattern<
     alsoToMain.get() ? "both" : "thread"
   );
 
+  // A room that is its space's root names its space's store itself; any other
+  // uses the one its space's root names.
+  const rootFileStore = container?.key("fileStoreRecord");
+  const rootKeepsFileStore = computed(() => rootFileStore?.get() !== undefined);
+  const spaceFileStore = computed((): Cell<FileStoreOutput> | undefined =>
+    ownSpace ? fileStore?.get().store : rootFileStore?.get()?.store
+  );
+  const ensureFileStoreHere = ensureSpaceFileStore({
+    ownSpace,
+    rootKeeps: rootKeepsFileStore,
+    own: ensureFileStore({ fileStore }),
+    root: ensureFileStore({ fileStore: rootFileStore }),
+  });
+
   // Each handler is bound to the cells it uses and no others.
   const sendMessage = commitSend({ myProfile, messages, joined: tellJoined });
   const composeSend = commitComposerSend({
     myProfile,
     messages,
     composer,
+    store: spaceFileStore,
     joined: tellJoined,
   });
+  const openAttach = prepareAttach({ ensureFileStore: ensureFileStoreHere });
+  const attachFiles = commitAttach({
+    composer,
+    store: spaceFileStore,
+    hasStore: computed(() =>
+      (ownSpace ? fileStore?.get().store : rootFileStore?.get()?.store) !==
+        undefined
+    ),
+  });
+  // The files this session's composer is attaching, a list of the session's
+  // own, so that each session's rows are its own.
+  const attachingFiles = computed((): PerSession<ComposerAttachment[]> =>
+    composer.get()?.attaching ?? []
+  );
   const sendThreadReply = commitThreadSend({
     myProfile,
     messages,
@@ -1458,13 +1548,6 @@ export const FabriChatRoomCore = pattern<
     }),
     deleteReaction: commitDeleteReaction({ myProfile, room: messages }),
   };
-  // A room that is its space's root names its space's store itself; any other
-  // uses the one its space's root names.
-  const rootFileStore = container?.key("fileStoreRecord");
-  const rootKeepsFileStore = computed(() => rootFileStore?.get() !== undefined);
-  const spaceFileStore = computed((): Cell<FileStoreOutput> | undefined =>
-    ownSpace ? fileStore?.get().store : rootFileStore?.get()?.store
-  );
   const view = {
     about: aboutView,
     participants,
@@ -1483,12 +1566,7 @@ export const FabriChatRoomCore = pattern<
     setTitle,
     titleRequests,
     fileStore: spaceFileStore,
-    ensureFileStore: ensureSpaceFileStore({
-      ownSpace,
-      rootKeeps: rootKeepsFileStore,
-      own: ensureFileStore({ fileStore }),
-      root: ensureFileStore({ fileStore: rootFileStore }),
-    }),
+    ensureFileStore: ensureFileStoreHere,
     fileStoreRecord: ownSpace ? fileStore : undefined,
   };
   const closeThread = action(() => composer.key("thread").set(undefined));
@@ -1604,6 +1682,25 @@ export const FabriChatRoomCore = pattern<
             onClick={composeSend}
           />
         </div>
+        <cf-vstack id="fabrichat-attachments" gap="1">
+          {attachingFiles.map((file) => (
+            <FabriChatAttachingFile
+              file={file}
+              store={spaceFileStore}
+              composer={composer}
+            />
+          ))}
+          <cf-file-input
+            multiple
+            showPreview={false}
+            buttonText="📎 Attach"
+            variant="ghost"
+            size="sm"
+            disabled={cannotSend}
+            oncf-click={openAttach}
+            oncf-change={attachFiles}
+          />
+        </cf-vstack>
 
         <cf-vstack
           id="fabrichat-thread"

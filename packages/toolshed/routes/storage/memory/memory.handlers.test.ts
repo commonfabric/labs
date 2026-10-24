@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { afterAll, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import {
   decodeMemoryBoundary,
@@ -30,7 +31,7 @@ const HELLO = encodeMemoryBoundary({
 });
 
 class FakeSocket extends EventTarget {
-  readyState: number = WebSocket.OPEN;
+  readyState: WebSocket["readyState"] = WebSocket.OPEN;
   binaryType: BinaryType = "blob";
   readonly sent: EncodedMemoryMessage[] = [];
   closedWith: { code?: number; reason?: string } | undefined;
@@ -69,7 +70,7 @@ class FakeSocket extends EventTarget {
 // memory-server connection.
 const runHelloThroughPipeline = async (
   fake: FakeSocket,
-  readyStateAtReply: number,
+  readyStateAtReply: WebSocket["readyState"],
 ): Promise<void> => {
   const socket = fake as unknown as WebSocket;
   const negotiation = bufferTextMessagesUntilNegotiated(socket);
@@ -162,6 +163,112 @@ describe("memory.handlers", () => {
   });
 
   describe("attachMemorySocketPipeline", () => {
+    for (const commitLabelTableV1 of [false, true]) {
+      it(`traces inline and compact writes identically while preserving admission with commitLabelTableV1=${commitLabelTableV1}`, async () => {
+        const envGet = Deno.env.get.bind(Deno.env);
+        using _env = stub(
+          Deno.env,
+          "get",
+          (name) =>
+            name === "CF_DEBUG_MEMORY_WRITES"
+              ? "1"
+              : name === "CF_DEBUG_MEMORY_WRITE_VALUES"
+              ? "0"
+              : envGet(name),
+        );
+        const lines: string[] = [];
+        using _console = stub(console, "error", (...args: unknown[]) => {
+          if (typeof args[0] === "string" && args[0].startsWith("[memwrite]")) {
+            lines.push(args[0]);
+          }
+        });
+        const fake = new FakeSocket();
+        const socket: Partial<WebSocket> = fake;
+        const negotiation = bufferTextMessagesUntilNegotiated(
+          socket as WebSocket,
+        );
+        const handedOff = Promise.withResolvers<void>();
+        const handoff = negotiation.handoff;
+        negotiation.handoff = (handlers) => {
+          handoff(handlers);
+          handedOff.resolve();
+        };
+        const hello = encodeMemoryBoundary({
+          type: "hello",
+          protocol: MEMORY_PROTOCOL,
+          flags: {
+            ...getMemoryProtocolFlags(),
+            messageCompressionV1: false,
+            commitLabelTableV1,
+          },
+        });
+        try {
+          fake.dispatchEvent(new MessageEvent("message", { data: hello }));
+          await negotiation.firstMessage;
+          expect(
+            attachMemorySocketPipeline(socket as WebSocket, negotiation, hello),
+          ).toBe(true);
+          await handedOff.promise;
+          const label = { confidentiality: ["recipe"], integrity: [] };
+          const path = ["ingredients"];
+          for (const compact of [false, true]) {
+            fake.dispatchEvent(
+              new MessageEvent("message", {
+                data: encodeMemoryBoundary({
+                  type: "transact",
+                  requestId: compact ? "compact" : "inline",
+                  space: "did:key:diagnostic",
+                  sessionId: "missing-session",
+                  commit: {
+                    localSeq: 1,
+                    reads: { confirmed: [], pending: [] },
+                    ...(compact
+                      ? { labelTable: [label], labelPathTable: [path] }
+                      : {}),
+                    operations: [{
+                      op: "set",
+                      id: "of:donuts",
+                      value: {
+                        value: { ingredients: "chocolate" },
+                        cfc: {
+                          labelMap: {
+                            entries: [{
+                              label: compact ? 0 : label,
+                              path: compact ? 0 : path,
+                            }],
+                          },
+                        },
+                      },
+                    }],
+                  },
+                }),
+              }),
+            );
+            await fake.whenSent(compact ? 3 : 2);
+          }
+          expect(lines).toHaveLength(2);
+          expect(lines[1]).toBe(lines[0]);
+          expect(lines[0]).toContain("op=set id=of:donuts");
+          const response = fake.sent[2];
+          if (typeof response !== "string") {
+            throw new Error("Expected text response");
+          }
+          // Either refusal answers on the request's own id: an unsolicited
+          // table fails parsing, a negotiated one reaches session admission.
+          expect(decodeMemoryBoundary(response)).toMatchObject({
+            type: "response",
+            requestId: "compact",
+            error: {
+              name: commitLabelTableV1 ? "SessionError" : "InvalidMessageError",
+            },
+          });
+        } finally {
+          fake.dispatchEvent(new CloseEvent("close"));
+          negotiation.dispose();
+        }
+      });
+    }
+
     it("sends the hello reply while the socket is OPEN", async () => {
       const fake = new FakeSocket();
 

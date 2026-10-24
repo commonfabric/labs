@@ -66,9 +66,9 @@ export interface PublishedDocument {
  * the label entry the panel declares there names the same principal when the
  * root wrote it. Of the root's handlers only `admitPanel` writes either, and
  * once it has written a panel no other handler may. An occurrence it creates
- * records `addedByProfile` when its event names a profile, and otherwise
- * `addedBy` when the event acted for a principal, so a run that acts for no
- * one records neither. An occurrence a caller made may hold an
+ * records `addedByProfile` when its event names a profile of its actor's own,
+ * and otherwise `addedBy` when the event acted for a principal, so a run that
+ * acts for no one records neither. An occurrence a caller made may hold an
  * `addedBy` the root never wrote: the value is its writer's claim, and a label
  * entry there names the writer, not the principal the value names. A panel
  * with neither names no adder.
@@ -248,8 +248,10 @@ export interface PrivatePanel {
 }
 
 /**
- * The profile under which the person adding a panel acts. Without one, the
- * root records the principal the event acted for; an event never names it.
+ * The profile under which the person adding a panel acts, which is one of
+ * their own: the root refuses a profile whose label does not attest the
+ * principal the event acts for. Without one, the root records that principal;
+ * an event never names it.
  */
 export interface PanelAdder {
   as?: ParticipantProfile;

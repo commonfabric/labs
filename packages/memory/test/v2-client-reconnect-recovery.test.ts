@@ -2,9 +2,15 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
+import type { FabricPlainObject } from "@commonfabric/api";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import { isPlainObject } from "@commonfabric/utils/types";
+
 import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,
+  getMemoryProtocolFlags,
+  MEMORY_PROTOCOL,
   toDocumentPath,
 } from "../v2.ts";
 import {
@@ -32,6 +38,8 @@ function reconnectableTransport(
     /** Resolve a send once the frame is handed over, as a socket does,
      * rather than once the server has handled it. */
     sendResolvesOnWrite?: boolean;
+    malformedReopenError?: { name?: number; message: string };
+    holdProbe?: boolean;
   } = {},
 ) {
   let connection: ReturnType<Server["connect"]> | undefined;
@@ -47,6 +55,11 @@ function reconnectableTransport(
   let loseOpenResponse = false;
   let refusedWrites = 0;
   const inFlight = new Set<Promise<unknown>>();
+  let refusedReopen = false;
+  let corruptEffect: FabricPlainObject | undefined;
+  let deliverDiscardedEffect = () => {};
+  const probeSent = Promise.withResolvers<void>();
+  const sent: Array<{ connection: number; message: FabricPlainObject }> = [];
   const reset = () => {
     connection?.close();
     connection = undefined;
@@ -58,6 +71,34 @@ function reconnectableTransport(
         connections++;
         const opened = server.connect((message) => {
           if (connection !== opened || holding) return;
+          if (
+            message.type === "session/effect" && corruptEffect !== undefined
+          ) {
+            const malformed = {
+              ...message,
+              effect: { ...message.effect, ...corruptEffect },
+            };
+            corruptEffect = undefined;
+            deliverDiscardedEffect = () => {
+              if (connection !== opened) return;
+              receiver(encodeMemoryBoundary({
+                ...message,
+                effect: {
+                  ...message.effect,
+                  toSeq: 999,
+                  upserts: [{
+                    branch: "",
+                    id: "of:watched",
+                    seq: 999,
+                    doc: { value: "stale frame" },
+                  }],
+                },
+              }));
+            };
+            receiver(encodeMemoryBoundary(malformed));
+            deliverDiscardedEffect();
+            return;
+          }
           const encoded = encodeMemoryBoundary(message);
           receiver(encoded);
           const response = decodeMemoryBoundary(encoded) as {
@@ -69,11 +110,31 @@ function reconnectableTransport(
         });
         connection = opened;
       }
-      const message = decodeMemoryBoundary(payload) as {
+      const decoded = decodeMemoryBoundary(payload);
+      if (!isPlainObject(decoded)) throw new Error("Expected a request record");
+      sent.push({ connection: connections, message: decoded });
+      if (options.holdProbe && decoded.type === "test.pending") {
+        probeSent.resolve();
+        return;
+      }
+      const message = decoded as {
         type: string;
+        requestId?: string;
         commit?: { localSeq: number };
         watches?: { id: string }[];
       };
+      if (
+        options.malformedReopenError && !refusedReopen && connections > 1 &&
+        message.type === "session.open"
+      ) {
+        refusedReopen = true;
+        receiver(encodeMemoryBoundary({
+          type: "response",
+          requestId: message.requestId,
+          error: options.malformedReopenError,
+        }));
+        return;
+      }
       const refusal = options.refuseWritesOf;
       if (
         refusal &&
@@ -151,6 +212,17 @@ function reconnectableTransport(
     duplicateHello: duplicateHello.promise,
     resetCalled: resetCalled.promise,
     transactSent: transactSent.promise,
+    probeSent: probeSent.promise,
+    sent,
+    corruptNextEffect(fields: FabricPlainObject) {
+      corruptEffect = fields;
+    },
+    deliverDiscardedEffect() {
+      deliverDiscardedEffect();
+    },
+    receive(payload: string) {
+      receiver(payload);
+    },
     get connections() {
       return connections;
     },
@@ -180,6 +252,252 @@ function reconnectableTransport(
 }
 
 describe("v2-client-reconnect-recovery", () => {
+  for (const helloFirst of [false, true]) {
+    it(`rejects a synchronous malformed handshake frame with hello already delivered=${helloFirst}`, async () => {
+      let receiver = (_payload: string) => {};
+      let sends = 0;
+      let resets = 0;
+      const transport: Transport = {
+        send() {
+          sends++;
+          if (helloFirst) {
+            receiver(encodeMemoryBoundary({
+              type: "hello.ok",
+              protocol: MEMORY_PROTOCOL,
+              flags: getMemoryProtocolFlags(),
+              sessionOpen: {
+                audience: "did:key:handshake-test",
+                challenge: { value: "handshake-test", expiresAt: 9999999999 },
+              },
+            }));
+          }
+          receiver("malformed boundary");
+          return Promise.resolve();
+        },
+        setReceiver(next) {
+          receiver = next;
+        },
+        reset() {
+          resets++;
+        },
+        close() {
+          return Promise.resolve();
+        },
+      };
+      await expect(connect({ transport })).rejects.toMatchObject({
+        name: "InvalidMessageError",
+      });
+      expect(sends).toBe(1);
+      expect(resets).toBe(0);
+    });
+  }
+
+  it("fails sessions and pending requests after a malformed effect on a transport without reset", async () => {
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://malformed-effect-without-reset"),
+    });
+    const wire = reconnectableTransport(server, { holdProbe: true });
+    const client = await connect({
+      transport: { ...wire.transport, reset: undefined },
+    });
+    try {
+      const session = await client.mount(
+        "did:key:malformed-effect-without-reset",
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const pending = client.request({
+        type: "test.pending",
+        requestId: "pending",
+      });
+      pending.catch(() => {});
+      await wire.probeSent;
+      wire.receive(encodeMemoryBoundary({
+        type: "session/effect",
+        effect: { type: "sync", labelTable: [null] },
+      }));
+      await expect(pending).rejects.toMatchObject({
+        name: "InvalidMessageError",
+      });
+      await expect(session.whenRestored()).rejects.toMatchObject({
+        name: "InvalidMessageError",
+      });
+      expect(client.connectionState).toBe("failed");
+      wire.receive("malformed boundary");
+      expect(wire.connections).toBe(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  for (const failure of ["label table", "nested schema reference"]) {
+    it(`restores after a malformed pushed ${failure} and fences later frames from that connection`, async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://invalid-pushed-metadata"),
+      });
+      const wire = reconnectableTransport(server, { holdProbe: true });
+      const client = await connect({ transport: wire.transport });
+      const writerClient = await connect({ transport: loopback(server) });
+      try {
+        const space = "did:key:invalid-pushed-metadata";
+        const writer = await writerClient.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const session = await client.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const write = (version: number) =>
+          writer.transact({
+            localSeq: version,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: "of:watched",
+              value: { value: { version } },
+            }],
+          });
+        await write(1);
+        const { view } = await session.watchAddSync([{
+          id: "watched",
+          kind: "graph",
+          query: {
+            roots: [{ id: "of:watched", selector: { path: [], schema: true } }],
+          },
+        }]);
+        const updates = view.subscribeSync();
+        const pending = client.request({
+          type: "test.pending",
+          requestId: "pending",
+        });
+        pending.catch(() => {});
+        await wire.probeSent;
+        wire.corruptNextEffect({
+          labelTable: failure === "label table" ? [null] : [{
+            integrity: [{
+              source: linkRefFrom({
+                id: "of:policy",
+                path: [],
+                schema: "schema-ref@2:missing",
+              }),
+            }],
+          }],
+        });
+        await write(2);
+        await expect(pending).rejects.toMatchObject({
+          name: "ConnectionError",
+        });
+        await wire.resetCalled;
+        expect(
+          view.entities.find((entry) => entry.id === "of:watched")?.document,
+        )
+          .toEqual({ value: { version: 1 } });
+        expect(
+          wire.sent.filter(({ connection, message }) =>
+            connection === 1 && message.type === "session.ack" &&
+            typeof message.seenSeq === "number" && message.seenSeq >= 2
+          ),
+        ).toEqual([]);
+        await client.restoreConnection();
+        await session.whenRestored();
+        expect(
+          view.entities.find((entry) => entry.id === "of:watched")?.document,
+        )
+          .toEqual({ value: { version: 2 } });
+        const restored = await updates.next();
+        expect(restored.done).toBe(false);
+        if (restored.done) throw new Error("Expected the restored sync");
+        expect(restored.value.toSeq).toBe(2);
+        expect(
+          restored.value.upserts.find((entry) => entry.id === "of:watched")
+            ?.doc,
+        )
+          .toEqual({ value: { version: 2 } });
+        wire.deliverDiscardedEffect();
+        expect(
+          view.entities.find((entry) => entry.id === "of:watched")?.document,
+        )
+          .toEqual({ value: { version: 2 } });
+        expect(wire.connections).toBe(2);
+        expect(client.connectionState).toBe("connected");
+      } finally {
+        await client.close();
+        await writerClient.close();
+        await server.close();
+      }
+    });
+  }
+
+  for (const name of [undefined, 7]) {
+    it(`resets after a remote reopen error with ${name === undefined ? "a missing" : "a numeric"} name and settles retained work on recovery`, async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL(`memory://reconnect-malformed-error-${name}`),
+      });
+      const wire = reconnectableTransport(server, {
+        holdFirstTransact: true,
+        malformedReopenError: {
+          ...(name === undefined ? {} : { name }),
+          message: "synthetic reopen failure",
+        },
+      });
+      const client = await connect({ transport: wire.transport });
+      try {
+        const session = await client.mount(
+          "did:key:z6Mk-reconnect-malformed-error",
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const pending = session.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{ op: "set", id: "of:retained", value: { value: 7 } }],
+        });
+        pending.catch(() => {});
+        await wire.transactSent;
+        wire.drop();
+        const restored = client.restoreConnection();
+        restored.catch(() => {});
+        const watched = session.watchAddSync([{
+          id: "retained",
+          kind: "graph",
+          query: {
+            roots: [{
+              id: "of:retained",
+              selector: { path: [], schema: false },
+            }],
+          },
+        }]);
+        watched.catch(() => {});
+        expect(
+          await Promise.race([
+            wire.resetCalled.then(() => "reset"),
+            restored.then(() => "restored", () => "failed"),
+          ]),
+        ).toBe("reset");
+        await restored;
+        await expect(pending).resolves.toMatchObject({ seq: 1 });
+        expect((await watched).view.entities).toEqual([
+          expect.objectContaining({
+            id: "of:retained",
+            document: { value: 7 },
+          }),
+        ]);
+        expect(wire.connections).toBe(3);
+        expect(client.connectionState).toBe("connected");
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+  }
+
   it("rejects pending writes with the restoration error when the transport cannot reset", async () => {
     const server = new Server({
       ...testSessionOpenServerOptions,

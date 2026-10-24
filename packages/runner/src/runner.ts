@@ -282,7 +282,12 @@ import {
   setRunnableName,
 } from "./runner-utils.ts";
 import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
-import { narrowestScope, normalizeCellScope, scopeRank } from "./scope.ts";
+import {
+  isCellScope,
+  narrowestScope,
+  normalizeCellScope,
+  scopeRank,
+} from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
@@ -1123,6 +1128,42 @@ function isPositionalPartialCause(partialCause: unknown): boolean {
   return isObjectNotArray(partialCause) &&
     typeof partialCause.$generated === "number" &&
     Object.keys(partialCause).length === 1;
+}
+
+/**
+ * The children a parent's `instanceChildren` meta records, by instance name:
+ * for each, the child that named instance runs in place of the one at its own
+ * spot. The meta is a list of `{ name, child }` entries rather than a record
+ * keyed by name, since an instance may take any name a `const` can, among
+ * them names a stored record may not use as a key, such as `constructor` and
+ * `__proto__`. An entry that is malformed, or that repeats a name an earlier
+ * entry gave, is skipped.
+ */
+function readInstanceChildren(
+  parent: Cell<any>,
+): Map<string, NormalizedFullLink> {
+  const raw = convertibleJsFromFabricValue(
+    parent.getMetaRaw("instanceChildren", { meta: ignoreReadForScheduling }),
+  );
+  const children = new Map<string, NormalizedFullLink>();
+  if (!Array.isArray(raw)) return children;
+  for (const entry of raw) {
+    if (!isObjectNotArray(entry) || typeof entry.name !== "string") continue;
+    const child = entry.child;
+    if (
+      children.has(entry.name) || !isObjectNotArray(child) ||
+      typeof child.space !== "string" || typeof child.id !== "string"
+    ) {
+      continue;
+    }
+    children.set(entry.name, {
+      space: child.space as MemorySpace,
+      id: child.id as URI,
+      path: [],
+      scope: isCellScope(child.scope) ? child.scope : "space",
+    });
+  }
+  return children;
 }
 
 /**
@@ -14539,15 +14580,22 @@ export class Runner {
     if (outputRedirect === undefined) {
       return { ...io, childResultCell: undefined, sendToBindings: true };
     }
+    // A named instance the parent's `instanceChildren` records a child for
+    // runs that child, wherever its own spot would mint one.
+    const recordedChild = instanceName === undefined
+      ? undefined
+      : readInstanceChildren(resultCell.withTx(tx)).get(instanceName);
     return {
       ...io,
-      childResultCell: this.#mintChildResultCell(
-        tx,
-        module,
-        child,
-        outputRedirect,
-        resultCell,
-      ),
+      childResultCell: recordedChild !== undefined
+        ? this.#runtime.getCellFromLink(recordedChild, child.resultSchema, tx)
+        : this.#mintChildResultCell(
+          tx,
+          module,
+          child,
+          outputRedirect,
+          resultCell,
+        ),
       sendToBindings: true,
       ...(instanceName !== undefined && { instanceName }),
     };
@@ -14618,7 +14666,9 @@ export class Runner {
    * named sub-pattern node of `pattern` would set its child up over a child
    * the parent `resultCell` keeps elsewhere (`#refuseDisplacedChild()`), for
    * each such node whose child this parent owns: not a child that is its
-   * space's root, nor one managed in a space of its own.
+   * space's root, nor one managed in a space of its own. A named instance's
+   * child is the one the parent's `instanceChildren` records for it, where it
+   * records one.
    *
    * Only a parent its updater has pointed at `pattern` is judged: its stored
    * `patternIdentity` already names `pattern`, while its setup marker names
@@ -14649,25 +14699,29 @@ export class Runner {
     const manifest = storedManifestOf(parent);
     const recorded = recordedPositionalSpots(manifest);
     const recordedInstances = recordedInstanceNames(manifest);
+    const recordedChildren = readInstanceChildren(parent);
     for (const { module, partialCause } of subPatternNodes(pattern)) {
-      // Only a spot the stored manifest records can hold a child already, and
-      // only a positional or named one can hold another's: a spot a result
-      // key, a node input or `.for()` names does not shift with its siblings,
-      // and no instance stamps the child there.
+      // Only a spot the stored manifest records, or a child the parent's
+      // `instanceChildren` records for a named instance, can hold a child
+      // already, and only a positional or named one can hold another's: a
+      // spot a result key, a node input or `.for()` names does not shift with
+      // its siblings, and no instance stamps the child there.
       const instanceName = instanceNameOfPartialCause(partialCause);
       const judged = isPositionalPartialCause(partialCause)
         ? recorded.has(positionalNumber(partialCause))
-        : instanceName !== undefined && recordedInstances.has(instanceName);
+        : instanceName !== undefined &&
+          (recordedInstances.has(instanceName) ||
+            recordedChildren.has(instanceName));
       if (!judged) continue;
       // A space's root sits where its space's genesis reserved it, whatever
       // the node's cause, so no shift between this parent's spots moves it.
       if (module.targetSpaceRoot) continue;
-      const child = this.#childAtPartialCause(
-        tx,
-        resultCell,
-        module,
-        partialCause,
-      );
+      const link = instanceName === undefined
+        ? undefined
+        : recordedChildren.get(instanceName);
+      const child = link !== undefined
+        ? this.#runtime.getCellFromLink(link, undefined, tx)
+        : this.#childAtPartialCause(tx, resultCell, module, partialCause);
       if (resumesIndependently(child, resultCell)) continue;
       this.#refuseDisplacedChild(
         tx,
@@ -14685,14 +14739,15 @@ export class Runner {
    * Throws rather than let the child of `childPattern`, at the positional or
    * named spot `partialCause` names, set up over `storedChild` when that cell
    * holds a different child the parent `resultCell` keeps elsewhere: a child
-   * stamped with another instance's name, or, where `partialCause` is
-   * positional, a sign that the parent's positional children have moved
-   * spots, which is `storedChild` running another pattern identity while
-   * either a child of `childPattern`'s identity runs at another positional
-   * spot, or another positional spot of `pattern` sets up the identity
-   * `storedChild` runs. A child is looked for only at the positional spots in
-   * `recorded`, the ones the parent's stored manifest records, and no spot
-   * whose node sets up a space's root is counted. A child whose identity
+   * stamped with another instance's name, a child the parent's
+   * `instanceChildren` records for another named instance, or, where
+   * `partialCause` is positional, a sign that the parent's positional children
+   * have moved spots, which is `storedChild` running another pattern identity
+   * while either a child of `childPattern`'s identity runs at another
+   * positional spot, or another positional spot of `pattern` sets up the
+   * identity `storedChild` runs. A child is looked for only at the positional
+   * spots in `recorded`, the ones the parent's stored manifest records, and no
+   * spot whose node sets up a space's root is counted. A child whose identity
    * differs with no such sign is the same child under a newer version of its
    * own source.
    */
@@ -14717,28 +14772,36 @@ export class Runner {
     );
     const describe = (ref: { identity: string; symbol: string }) =>
       `${ref.identity}#${ref.symbol}`;
-    // The stamp alone decides this refusal, so it holds for a child whose
-    // pattern identity was never stored; the identities only name the two
-    // sides in the message.
+    const holder = instanceName !== undefined
+      ? `instance "${instanceName}"`
+      : "a positional spot";
+    const settingUp = incoming !== undefined
+      ? describe(incoming)
+      : "a pattern with no identity";
+    const over = stored !== undefined
+      ? `the child of ${describe(stored)}`
+      : "a child with no stored pattern identity";
+    // The stamp and the parent's `instanceChildren` record alone decide these
+    // refusals, so they hold for a child whose pattern identity was never
+    // stored, and whatever the two identities; the identities only name the
+    // two sides in the message.
     const stamped = getInstanceNameStamp(storedChild);
     if (stamped !== undefined && stamped !== instanceName) {
-      const holder = instanceName !== undefined
-        ? `instance "${instanceName}"`
-        : "a positional spot";
-      const settingUp = incoming !== undefined
-        ? describe(incoming)
-        : "a pattern with no identity";
-      const over = stored !== undefined
-        ? `the child of ${describe(stored)}`
-        : "a child with no stored pattern identity";
       throw new Error(
         `refusing to set up ${settingUp} for ${holder} over ${over} that ` +
           `instance "${stamped}" set up`,
       );
     }
+    const storedKey = documentKey(storedChild.getAsNormalizedFullLink());
+    for (const [name, link] of readInstanceChildren(resultCell.withTx(tx))) {
+      if (name === instanceName || documentKey(link) !== storedKey) continue;
+      throw new Error(
+        `refusing to set up ${settingUp} for ${holder} over ${over} that ` +
+          `instance "${name}" carries`,
+      );
+    }
     if (stored === undefined || incoming === undefined) return;
     if (!positional || samePatternRef(stored, incoming)) return;
-    const storedKey = documentKey(storedChild.getAsNormalizedFullLink());
     for (const { module, partialCause } of subPatternNodes(pattern)) {
       // A space's root child sits at its space's genesis address rather than
       // at a spot of this parent, so it shows nothing about how the parent's

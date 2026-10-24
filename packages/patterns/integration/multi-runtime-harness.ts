@@ -82,7 +82,10 @@ import {
 } from "./multi-runtime-ipc.ts";
 import { awaitAdmitted } from "../../runner/test/support/serving-waits.ts";
 
-import type { initializePiecesController } from "./pieces-controller.ts";
+import {
+  type initializePiecesController,
+  moduleByteCache,
+} from "./pieces-controller.ts";
 
 /** Host CFC settings carried into each independent test runtime. */
 export type MultiRuntimeCfcOptions = Pick<
@@ -217,6 +220,19 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  * pipelined storm, small against the suite timeouts a wedged consequence
  * would otherwise eat. */
 const SERVED_SETTLE_QUIESCENCE_BUDGET_MS = 10_000;
+
+/**
+ * The execution-lease TTL of the serving loop the harness hosts. That loop
+ * shares the test's thread, and a pattern compile there does not yield, so on
+ * a slow runner one compile can hold the thread past the production TTL. Every
+ * space the loop serves then loses its lease at once, any wave in flight
+ * aborts, and a space that parks over it compiles again when it reactivates.
+ * Two minutes is well clear of the longest stall between renewals seen (22 s
+ * on a developer machine, with coverage on), and nothing in the harness
+ * contends for a lease, so a longer tenure costs no failover. A stall that
+ * outlasts it still loses the lease.
+ */
+const SERVED_LEASE_TTL_MS = 120_000;
 
 /**
  * The claims harnesses in this process hold on its pattern environment,
@@ -843,7 +859,16 @@ export class MultiRuntimeHarness {
     const server = options.apiUrl !== undefined
       ? undefined
       : serverExecutionOn
-      ? await listenServingMemoryServer({ serve, aclMode })
+      ? await listenServingMemoryServer({
+        serve,
+        aclMode,
+        // The suite's compile byte cache, the one `pieces-controller.ts`
+        // holds for this realm, shared by every serving runtime: a space that
+        // reactivates, or another space serving the same program, skips the
+        // transform-and-emit step on this thread.
+        moduleByteCache,
+        policy: { leaseTtlMs: SERVED_LEASE_TTL_MS },
+      })
       : StandaloneMemoryServer.start({
         serve,
         ...(aclMode !== undefined ? { acl: { mode: aclMode } } : {}),
