@@ -119,6 +119,7 @@ import {
 import { caseFold } from "unicode-case-folding";
 
 import { isHandlerCell } from "../../fuse/callables.ts";
+import { resolveCliGitSha } from "./build-info.ts";
 import { executeCallableCommand } from "./callable-command.ts";
 import {
   buildPieceDescription,
@@ -174,6 +175,9 @@ import {
 import { throwOnSpaceAuthorizationError } from "./utils.ts";
 import { startVersionCheck } from "./version-check.ts";
 import { noteWroteTo } from "./write-receipt.ts";
+
+/** Commit captured when this CLI module loads, retained across runtime opens. */
+const clientGitSha = await resolveCliGitSha();
 
 export interface EntryConfig {
   mainPath: string;
@@ -692,6 +696,7 @@ export async function loadPieces(
           memoryHost,
           storageManager: StorageManager.open({
             as: session.as,
+            clientBuild: { application: "cf", gitSha: clientGitSha },
             memoryHost,
           }),
           experimental,

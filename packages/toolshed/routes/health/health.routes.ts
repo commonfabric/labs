@@ -214,6 +214,13 @@ export const documentInterests = createRoute({
         truncated: z.boolean(),
         sessions: z.array(z.object({
           sessionId: z.string(),
+          client: z.object({
+            application: z.string().min(1).max(64),
+            gitSha: z.string().nullable(),
+            instanceId: z.string().min(1).max(128),
+            generation: z.number().int().positive(),
+            startedAt: z.number().int().nonnegative(),
+          }).nullable(),
           principal: z.string().nullable(),
           actingPrincipal: z.string().nullable(),
           connectionId: z.string().nullable(),

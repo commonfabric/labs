@@ -21,6 +21,7 @@ import type {
   PresenceFacets,
   PresenceRecord,
 } from "@commonfabric/memory/v2";
+import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import type { MetaField, RuntimeSizes } from "@commonfabric/runner";
 import type {
   CfcConfClause,
@@ -813,6 +814,9 @@ export type BaseRequest = {
  * lifetime -- nothing here can be changed by a later request.
  */
 export type InitializationData = {
+  /** Loaded labs build reported by the embedding application. */
+  clientBuild?: ClientBuild;
+
   /**
    * The backend server. It serves the HTTP APIs, patterns, LLM requests and
    * the health check, and is the default storage host when `memoryUrl` is

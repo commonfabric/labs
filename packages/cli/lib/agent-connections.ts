@@ -6,7 +6,11 @@ import {
   settingsForDeployedClient,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { resolveCliGitSha } from "./build-info.ts";
 import { loadIdentity } from "./identity.ts";
+
+/** Build of the CLI modules loaded by this process. */
+const clientGitSha = await resolveCliGitSha();
 
 /**
  * Opens a record host without changing the process's home deployment. Memory
@@ -27,6 +31,7 @@ export async function openAgentStorageHost(
     memoryHost,
     storageManager: StorageManager.open({
       as: await loadIdentity(identityPath),
+      clientBuild: { application: "cf", gitSha: clientGitSha },
       memoryHost,
     }),
     experimental,

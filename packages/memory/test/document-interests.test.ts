@@ -3,6 +3,7 @@ import { toFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
 import { toValuePath, type WatchSpec } from "../v2.ts";
+import { createClientInfo } from "../v2/client-info.ts";
 import { close, open } from "../v2/engine.ts";
 import { toDocKey, trackGraph } from "../v2/query.ts";
 import { cacheKeyForEntity } from "../v2/server-sync.ts";
@@ -24,6 +25,47 @@ function watch(branch = "", scope: "space" | "user" = "space"): WatchSpec {
 }
 
 describe("document-interests", () => {
+  it("retains detached identity and replaces it on each admitted resume", () => {
+    const registry = new SessionRegistry();
+    const client = { ...createClientInfo({ application: "cf", gitSha: null }) };
+    const opened = registry.open(space, { client }, 0, "first", "owner");
+    registry.peek(space, opened.sessionId)!.watches = [watch()];
+    registry.detach(space, opened.sessionId, "first");
+    const detached = registry.documentInterests({ space, id }).sessions[0];
+    expect(detached.client).toEqual(client);
+    expect(detached.connectionId).toBeNull();
+    client.application = "mutated caller";
+    detached.client!.application = "mutated response";
+    expect(
+      registry.documentInterests({ space, id }).sessions[0].client?.application,
+    ).toBe("cf");
+    const nextClient = createClientInfo({ application: "shell", gitSha: null });
+    const resumed = registry.open(
+      space,
+      {
+        sessionId: opened.sessionId,
+        sessionToken: opened.sessionToken,
+        client: nextClient,
+      },
+      0,
+      "second",
+      "owner",
+    );
+    expect(resumed.resumed).toBe(true);
+    expect(registry.documentInterests({ space, id }).sessions[0].client)
+      .toEqual(nextClient);
+    const legacy = registry.open(
+      space,
+      { sessionId: resumed.sessionId, sessionToken: resumed.sessionToken },
+      0,
+      "third",
+      "owner",
+    );
+    expect(legacy.resumed).toBe(true);
+    expect(registry.documentInterests({ space, id }).sessions[0].client)
+      .toBeNull();
+  });
+
   it("separates spaces, branches and scope instances and bounds attribution", () => {
     const registry = new SessionRegistry();
     for (
@@ -96,6 +138,7 @@ describe("document-interests", () => {
     expect(report.totalMatches).toBe(1);
     expect(report.sessions[0]).toEqual({
       sessionId: opened.sessionId,
+      client: null,
       principal: "service",
       actingPrincipal: "delegated-user",
       connectionId: null,

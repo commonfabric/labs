@@ -4468,6 +4468,8 @@ export class RuntimeProcessor {
 
     const storageManager = StorageManager.open({
       as: identity,
+      clientBuild: data.clientBuild ??
+        { application: "runtime-client", gitSha: null },
       memoryHost,
       spaceHostMap: data.spaceHostMap,
       // Host dogfood toggle (commonfabric.concurrentWatchRefresh): overlap

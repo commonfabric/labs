@@ -152,6 +152,7 @@ import {
   executionLeaseHolder,
   liveExecutionLeaseHolder,
 } from "./execution-lease.ts";
+import { parseClientInfo } from "./client-info.ts";
 import { respondToHello } from "./handshake.ts";
 import {
   createDefaultOperationCodecRegistry,
@@ -2622,6 +2623,9 @@ export class Server {
    */
   #serverExecutionObserver: ServerExecutionObserver | undefined;
 
+  /** Startup admission floor, unchanged for this server instance. */
+  readonly #minimumClientGeneration: number;
+
   /**
    * Additive watchers of the same admission hook, independent of the host's
    * observer above: any number attach, and each sees every notice.
@@ -2704,6 +2708,10 @@ export class Server {
   constructor(
     readonly options: {
       sessions?: SessionRegistry;
+
+      /** Minimum reported client generation; `0` admits unidentified clients. */
+      minimumClientGeneration?: number;
+
       store?: URL;
       /** Synchronous authoritative fence, checked in protected engine turns. */
       ownsSpace?: (space: string) => boolean;
@@ -2847,6 +2855,13 @@ export class Server {
       };
     },
   ) {
+    const minimum = options.minimumClientGeneration ?? 0;
+    if (!Number.isSafeInteger(minimum) || minimum < 0) {
+      throw new RangeError(
+        "Minimum client generation must be a nonnegative safe integer",
+      );
+    }
+    this.#minimumClientGeneration = minimum;
     this.#sessions = options.sessions ?? new SessionRegistry();
     this.#sessions.setObserver((event) => this.#notifySessionChanged(event));
     this.#store = options.store;
@@ -5155,6 +5170,14 @@ export class Server {
         : await this.options.authorizeSessionOpen(message, authContext);
       if (authContext !== undefined) {
         connection.consumeSessionOpenChallenge(authContext.challenge);
+      }
+      const minimum = this.#minimumClientGeneration;
+      if ((message.session.client?.generation ?? 0) < minimum) {
+        throw authorizationError(
+          `Client update required: this deployment requires client generation ${minimum}. ` +
+            "Reload the browser tab or update and restart the application or CLI. " +
+            "Check any unconfirmed writes before restarting.",
+        );
       }
       // Mode A: a DID with no store here names a space nobody has created
       // here. Only its own key may create it, and only where `createsSpace`
@@ -11047,6 +11070,10 @@ const parseDecodedClientMessage = (
       parsed.session.spaceKind !== undefined &&
       !isSpaceKind(parsed.session.spaceKind)
     ) return null;
+    const client = parsed.session.client === undefined
+      ? undefined
+      : parseClientInfo(parsed.session.client);
+    if (client === null) return null;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
     const readCeiling = parseSessionReadCeiling(parsed.session.readCeiling);
@@ -11060,6 +11087,7 @@ const parseDecodedClientMessage = (
         : { principal: parsed.principal }),
       ...(holdings === undefined ? {} : { holdings }),
       session: {
+        ...(client === undefined ? {} : { client }),
         sessionId: typeof parsed.session.sessionId === "string"
           ? parsed.session.sessionId
           : undefined,
