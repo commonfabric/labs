@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  AUTHOR_CLAIM_SCHEMA,
   authorClaimLabel,
   type AuthorshipObservation,
   authorshipStateForLabel,
@@ -862,6 +863,54 @@ describe("authorship", () => {
         subject: "did:example:alice",
         name: "Alice Updated",
       });
+    });
+
+    it("reads an author cell that can be narrowed under the claim schema, and nothing through the cell as bound", async () => {
+      const schemas: unknown[] = [];
+      let notify: (() => void) | undefined;
+      // What the cell holds under the claim schema: the name, and none of
+      // the rest of the profile.
+      const narrowed = {
+        get: () => ({ name: "Alice Nguyen" }),
+        getCfcLabel: () =>
+          Promise.resolve(representsLabel("did:example:alice")),
+        subscribe: (callback: () => void) => {
+          notify = callback;
+          callback();
+          return () => {};
+        },
+      };
+      const bound = {
+        asSchema: (schema: unknown) => {
+          schemas.push(schema);
+          return narrowed;
+        },
+        get: () => {
+          throw new Error("the author was read as bound");
+        },
+        getCfcLabel: () => {
+          throw new Error("the author's label was read as bound");
+        },
+        subscribe: () => {
+          throw new Error("the author was subscribed to as bound");
+        },
+      };
+      const observation = observe(
+        {
+          getCfcLabel: () =>
+            Promise.resolve(authoredByLabel("did:example:alice")),
+        },
+        bound,
+      );
+      await settle();
+
+      expect(schemas).toEqual([AUTHOR_CLAIM_SCHEMA]);
+      expect(observation.state).toBe("verified");
+      expect(observation.authorClaim).toEqual({
+        subject: "did:example:alice",
+        name: "Alice Nguyen",
+      });
+      expect(notify).toBeDefined();
     });
 
     it("names a principal claim by `authorName` when the author cell holds no name", async () => {

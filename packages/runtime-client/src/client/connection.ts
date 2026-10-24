@@ -51,7 +51,12 @@ import {
 import { assertNoKeyMaterial } from "@/shared/key-material.ts";
 import { RuntimeTransport } from "./transport.ts";
 import { EventEmitter } from "./emitter.ts";
-import { $onCellRefused, $onCellUpdate, CellHandle } from "@/cell-handle.ts";
+import {
+  $onCellRefused,
+  $onCellUpdate,
+  $onCellUpdateDropped,
+  CellHandle,
+} from "@/cell-handle.ts";
 import { cellRefToKey } from "@/shared/utils.ts";
 
 const ipcLogger = getLogger("runtime-client");
@@ -716,7 +721,15 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       // document it has not loaded yet, and after a conflict, before the
       // settled value. A handle cannot tell these apart, so the update is
       // dropped and the handle holds what it held: one that has read
-      // nothing stays unread until a read answers it.
+      // nothing stays unread until a read answers it. The label it holds
+      // is no longer the worker's read of the cell, so it is marked not
+      // current. A handle delivering labels hands its subscribers what it
+      // holds again, saying so, and a subscriber added to the handle later,
+      // or a handle seeded from it, is handed the label as not current; an
+      // authorship observation then asks the worker.
+      for (const instance of subscribed ?? []) {
+        instance[$onCellUpdateDropped]();
+      }
       return;
     }
 
