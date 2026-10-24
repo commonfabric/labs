@@ -182,8 +182,8 @@ describe("stored-setup-build-repair", () => {
   // projection reads as another slot. Setup stamps a record of the build it
   // staged, `Runner.#storedSetupVerdict()` holds a stored setup against the
   // build a start loads, and `#startCore()` re-stages the internal cells and
-  // the projection where that puts them right, and leaves the piece as it is
-  // where a cell holding state moved.
+  // the projection where that puts them right, and leaves the stored setup
+  // as it is where a cell holding state moved.
 
   let server: ReturnType<typeof newLoopbackServer>;
   let rt: Runtime;
@@ -369,8 +369,9 @@ describe("stored-setup-build-repair", () => {
     return (cell.getAsQueryResult() as Result).$UI.children;
   };
 
-  // How many times a start has logged a hold. A hold writes nothing, so the
-  // log line is its one signal; `describeHold()` is what it says.
+  // How many times a start has logged a hold. A hold's start writes no
+  // setup, so the log line is its one signal; `describeHold()` is what it
+  // says.
   const holdsLogged = (): number =>
     (getLoggerCountsBreakdown().runner?.["piece-start-repair-held"] as
       | { warn?: number }
@@ -475,9 +476,9 @@ describe("stored-setup-build-repair", () => {
 
   it("holds a piece whose cell holding state another build numbered differently, writing nothing", async () => {
     // Re-staging would link the writable's slot to the cell the current build
-    // numbers for it, where another cell's state sits. The piece runs over
-    // its stored setup instead, and the setup stays for a repair that can
-    // move the state.
+    // numbers for it, where another cell's state sits. The start writes no
+    // setup instead, so the stored setup stays as the evidence of what
+    // moved, for a repair that can move the state.
     const { cell, pattern, ref } = await setUpAndStop("held", STATEFUL);
     await storeAsBuild(cell, pattern, ref, (n) => n + 1);
     const stored = storedSetupOf(cell);
@@ -574,7 +575,8 @@ describe("stored-setup-build-repair", () => {
 
   it("holds a piece with no record whose build has a cell holding state", async () => {
     // With no record of the build that set the piece up, nothing says which
-    // cells moved, and a build with a cell holding state is left as it is.
+    // cells moved, and the stored setup of a build with a cell holding state
+    // is left as it is.
     const { cell, pattern, ref } = await setUpAndStop(
       "unrecorded-stateful",
       STATEFUL,

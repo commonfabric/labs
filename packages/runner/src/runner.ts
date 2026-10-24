@@ -6825,8 +6825,12 @@ export class Runner {
     // differently under different compilers, so a marker that matches can
     // stand over a projection whose links name the cells of another build.
     // A disagreement re-staging cannot put right, a cell holding state that
-    // another build numbered differently, is a hold: the piece runs over its
-    // stored setup as it did, which is reported, and nothing is written. A
+    // another build numbered differently, is a hold: the start writes no
+    // setup, so the stored setup, its record and the moves the log reports
+    // stay as evidence. The piece still instantiates below, at the loaded
+    // build's numbers, so a moved cell reads, and anything the running piece
+    // writes lands in, its neighbor's document, as it does with no record at
+    // all; a start that refuses is what would stop that. A
     // keyless piece is not repaired here: its identity never reaches durable
     // state, and the precondition below re-reads a durable identity it never
     // had. The repair moves no durable identity pointer; it replays the
