@@ -26,9 +26,9 @@ its own, `threadInfo`, which a send that starts a thread and a retitle write.
 
 ## What the gate reports
 
-Against twenty-five of the room's recorded baselines, from
+Against twenty-seven of the room's recorded baselines, from
 `20261016T053638Z-KQKz6B5ir-i_b2SS` through
-`20261024T145618Z-Gv5sfeYUA8vf1ZMN`, the pattern-update proof reports
+`20261024T171044Z-nGvvC4U9_mwy0apw`, the pattern-update proof reports
 `result.$VIEWS.room.deleteMessage.message.replyTo.message: existing result
 field was removed`. Every message the room's views hand on is typed by its
 record, so a stored reply's `message` is gone from each of them; the proof
@@ -37,6 +37,12 @@ baselines report the breaks already recorded against them
 (`fabrichat-pushed-messages-break.md`), ahead of this one. The argument's
 messages narrow no stored value: a stored reply's `message` is a key the new
 schema doesn't declare, and its schemas set no `additionalProperties`.
+
+Twenty-five of those also report the scope the room's `participantEntries`
+declares, which `fabrichat-view-scopes-per-user-break.md` records, and so does
+the baseline recorded with this change before that scope reached it. The proof
+reports one issue per role, so one entry names both paths for all of them, in
+place of that break's own entry for the room.
 
 `threadInfo` is a new argument field with a default, so it breaks nothing.
 Its records' write policy names `commitSend`, `commitThreadSend` and
@@ -73,5 +79,5 @@ counted and hidden, and that "details about old rooms don't matter. we will
 abandon them eventually." Breaking old rooms is acceptable as long as it is
 neither silent nor a spiral of work, so no compatibility reading of `message`
 is kept. The entry in `tasks/pattern-compat-accepted-breaks.ts` forgives the
-removed field against those twenty-five baselines, and the contract recorded
+removed field against those baselines, and the contract recorded
 with this change is gated as usual from then on.

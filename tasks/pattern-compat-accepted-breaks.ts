@@ -1446,6 +1446,13 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // views hand on; the proof reports it first at `deleteMessage`'s event.
     // Rooms keep their stored replies, which the room counts and shows as
     // replying to nothing.
+    //
+    // These baselines also report the scope the room's `participantEntries`
+    // declares, which `fabrichat-view-scopes-per-user-break.md` records, in
+    // the result role: the proof reports one issue per role. The entry names
+    // both paths: the baseline recorded with the reply split reports the
+    // scope alone, and the two recorded with the scope report the reply
+    // alone.
     pattern: "fabrichat/room.tsx",
     baselines: [
       "20261016T053638Z-KQKz6B5ir-i_b2SS",
@@ -1468,13 +1475,19 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261022T220214Z-LuSDquW0A2n4QZ8w",
       "20261023T213239Z-wQjScvFleK2bL80b",
       "20261024T000756Z-dKtPP_2-Aa_KMMvf",
+      "20261024T002137Z-Vy-7CaW79knps1fr",
       "20261024T003401Z-xURqZ9DluSiRDXhB",
       "20261024T014452Z-fKwRjY5cCkMEpatS",
       "20261024T022151Z-IsyaJEIMyiypxAgF",
       "20261024T022626Z-fQTNhQDagiuXxPOO",
       "20261024T145618Z-Gv5sfeYUA8vf1ZMN",
+      "20261024T154554Z-Bj6AuJ00TzMD7yZs",
+      "20261024T171044Z-nGvvC4U9_mwy0apw",
     ],
-    paths: ["result.$VIEWS.room.deleteMessage.message.replyTo.message"],
+    paths: [
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message",
+      "result.$VIEWS.room.participantEntries",
+    ],
     reason:
       "a message's reply names its thread and its quote apart, in place of the one message a reply named; stored replies are left as they are, counted and shown as replying to nothing",
     record: "docs/history/fabrichat-reply-split-break.md",
@@ -1558,42 +1571,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: ["result.$VIEWS.chats.people"],
     reason:
       "the manager's views derived under the reader's access are stored per user rather than per session, in documents of their own; a manager rolled forward lists its rooms",
-    record: "docs/history/fabrichat-view-scopes-per-user-break.md",
-  },
-  {
-    // The room's `participantEntries` and `participantPrincipals` are
-    // declared per user where they were declared per session.
-    pattern: "fabrichat/room.tsx",
-    baselines: [
-      "20261016T053638Z-KQKz6B5ir-i_b2SS",
-      "20261016T153436Z-pRy5c_bxbuVZdFhZ",
-      "20261016T163240Z-VzSSk0EfxY0KC9hS",
-      "20261016T164542Z-Og9yZmA1u5WeXwCN",
-      "20261016T165510Z-vsc_lFnf0kuiGOzM",
-      "20261016T171911Z-UsM9ehwli7eo6Otm",
-      "20261016T174740Z-dgRxrNv4zwPax9H2",
-      "20261016T183810Z-M-epGFTqdJCXqpdY",
-      "20261016T184531Z-gbZC3T21TeTxRvo-",
-      "20261016T193302Z-sc2O1lFUsZPJ_mQb",
-      "20261016T230431Z-g8_CPlpZxyagr5NX",
-      "20261016T232234Z-thh7FfVQXJz1jvma",
-      "20261016T234919Z-CoEadoaDhwXNTNly",
-      "20261018T030554Z-M6esswMg1IIMlLJ1",
-      "20261018T072351Z--tm-zMdGue1lcFC9",
-      "20261018T181024Z-8qQmq6MV1Ik7_eO5",
-      "20261019T231845Z-Vj5dqYA2toFthDOE",
-      "20261022T220214Z-LuSDquW0A2n4QZ8w",
-      "20261023T213239Z-wQjScvFleK2bL80b",
-      "20261024T000756Z-dKtPP_2-Aa_KMMvf",
-      "20261024T003401Z-xURqZ9DluSiRDXhB",
-      "20261024T014452Z-fKwRjY5cCkMEpatS",
-      "20261024T022151Z-IsyaJEIMyiypxAgF",
-      "20261024T022626Z-fQTNhQDagiuXxPOO",
-      "20261024T145618Z-Gv5sfeYUA8vf1ZMN",
-    ],
-    paths: ["result.$VIEWS.room.participantEntries"],
-    reason:
-      "the room's participant entries and principals are stored per user rather than per session, in documents of their own; a room rolled forward lists them",
     record: "docs/history/fabrichat-view-scopes-per-user-break.md",
   },
   {
