@@ -6,8 +6,9 @@
  * what it quotes alone. The room refuses a reply whose links don't fit where
  * it is shown, a root that is in a thread itself, and a quote outside the
  * thread it joins. A thread is titled by the send that starts it, by a
- * retitle, or else by the start of its root's text. Every refused send below
- * is required, each by its reason, and no other runtime error.
+ * retitle, or else by the start of its root's text. The room's view says
+ * which reply shape it takes. Every refused send below is required, each by
+ * its reason, and no other runtime error.
  */
 import {
   type AddIntegrity,
@@ -135,6 +136,12 @@ export default pattern(() => {
         trustedUi: sendGesture,
       },
 
+      // The room says which reply shape it takes.
+      {
+        assertion: assert(() =>
+          alice[VIEWS].room.replyShape === "thread-quotes"
+        ),
+      },
       // Each stores the links it was sent with, as the messages' own cells.
       {
         assertion: assert(() =>

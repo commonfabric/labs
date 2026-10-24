@@ -113,6 +113,7 @@ import {
   type AddMemberRefusalCode,
   CHAT_ADD_MEMBER_ACTION,
   CHAT_ADD_MEMBER_SURFACE,
+  CHAT_REPLY_SHAPE,
   CHAT_RETITLE_ACTION,
   CHAT_RETITLE_SURFACE,
   CHAT_SEND_ACTION,
@@ -122,6 +123,7 @@ import {
   type ChatContainer,
   type ChatDisplay,
   type ChatProfile,
+  type ChatReplyShape,
   type ChatRequestOutcome,
   type ChatRoomAbout,
   type ChatRoomKind,
@@ -1076,6 +1078,12 @@ export interface ChatRoomView {
   about: ChatRoomAbout;
 
   /**
+   * The shape of `replyTo` the room reads and stores, which a client sends a
+   * reply in. A room offering none takes a reply that names one `message`.
+   */
+  replyShape: ChatReplyShape;
+
+  /**
    * The room's participants: for a room that is its space's root, those who
    * joined it; for any other, its space's participants as the space's root
    * lists them, then those who joined the room itself; and then any author
@@ -1712,6 +1720,7 @@ export const FabriChatRoomCore = pattern<
   };
   const view = {
     about: aboutView,
+    replyShape: CHAT_REPLY_SHAPE,
     participants,
     roster: joined,
     participantEntries: participantEntriesForUser,
@@ -2072,6 +2081,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       [NAME]: room[NAME],
       [VIEWS]: room[VIEWS],
       about: room.about,
+      replyShape: room.replyShape,
       participants: room.participants,
       roster: room.roster,
       participantEntries: room.participantEntries,

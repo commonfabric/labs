@@ -176,6 +176,17 @@ export interface ChatDeletedBody {
 export type ChatReplyShownIn = "main" | "thread" | "both";
 
 /**
+ * The shape of `replyTo` a room reads and stores, named by the fields it
+ * holds beside `shownIn`. `thread-quotes`: a reply names the thread it joins
+ * as `thread` and the message it answers as `quotes` (see `ChatReply`). A room
+ * that takes another shape names it here with another value.
+ */
+export type ChatReplyShape = "thread-quotes";
+
+/** The shape of `replyTo` this room reads and stores. */
+export const CHAT_REPLY_SHAPE: ChatReplyShape = "thread-quotes";
+
+/**
  * Which thread a message joins, which message it quotes, and where it is
  * shown. A plain post in a thread names its `thread` alone, a reply in a
  * thread names both, and a reply in the main conversation names what it

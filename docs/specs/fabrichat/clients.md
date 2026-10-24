@@ -116,6 +116,12 @@ A client that draws natively MUST:
   shows an entry removed from its store as removed, and fetches and shows the
   bytes as FabriFile's clients do (see [showing a
   file](../fabrifile/clients.md#showing-a-file)).
+- **Send a reply in the shape the room takes**, which its `replyShape` names
+  (see [`ChatRoomOutput`](ChatRoomOutput.md)). A client that sends to rooms
+  whose view offers no `replyShape` as well sends both shapes in one
+  `replyTo`: `thread` and `quotes`, and beside them `message`, holding the
+  message it `quotes` or, for a plain post in a thread, the `thread`'s root.
+  Each room stores the fields it reads and drops the others.
 - **Show replies where they say they are shown**: the main conversation and each
   thread, derived from `replyTo` as [`ChatReply`](ChatReply.md#the-two-views)
   states, with flat threads, each message showing the message it `quotes`. A

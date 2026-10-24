@@ -12,6 +12,9 @@ same role. Everything in this document binds every implementation.
 interface ChatRoomOutput {
   about: ChatRoomAbout;
 
+  /** The shape of `replyTo` the room reads and stores. */
+  replyShape: "thread-quotes";
+
   /** The room's participants, plus any author it doesn't list. */
   participants: Cell<ChatProfile>[];
 
@@ -182,6 +185,14 @@ space.
   created. Its `title` changes through
   [`setTitle`](#settitlerequestid-string-title-string), and the rest of it
   never does.
+- **`replyShape`** names the shape of `replyTo` the room reads and stores, by
+  the fields it holds beside `shownIn`, which is the shape a client sends a
+  reply in. `"thread-quotes"`: a reply names the thread it joins as `thread`
+  and the message it answers as `quotes` (see [`ChatReply`](ChatReply.md)). It
+  never changes for a room that offers it, and a room that takes another shape
+  names it with another value. A room whose view offers no `replyShape` takes
+  a reply that names one `message`, both the message it answers and, for a
+  reply in a thread, the message whose thread it joins.
 - **Messages.** The room holds its [`ChatMessage`](ChatMessage.md)s, in the
   order it recorded them, each identified by its cell. A client reads the
   newest of them from `messages`, and the rest from the stored messages
@@ -744,7 +755,7 @@ it takes no `requestId`, since a repeat changes nothing, and it is in
 - **`[UI]`** is the room's own rendering, with its reviewed surfaces. An
   adapter's rendering embeds it, so a composer is always the room's own surface.
 - **`[VIEWS]`** holds a `room` group with the facts and streams above, for hosts
-  that draw natively. It includes `messages`, `canSend`, `viewer`,
+  that draw natively. It includes `replyShape`, `messages`, `canSend`, `viewer`,
   `messageRights`, `addMember` with `canAdd` and
   `addRequests`, `setTitle` with `titleRequests`, `setThreadTitle` with
   `threadTitleRequests`, and `ensureFileStore` with
