@@ -153,11 +153,13 @@ const reportsFailure = (key: string, value: unknown): boolean =>
  * empty list a result happens to carry rather than the emptiness of a read.
  * Framework keys (`$NAME`, `$UI`) are not outputs and are left alone.
  *
- * Outputs are named in the order the JSON codec writes a record's keys,
- * `utf8SortedKeysOf()`, rather than the order `value` holds them in. A result
- * read back from storage holds its keys in the codec's order, and the same
- * result read in this realm holds them in the order they were written, so
- * either way it reports the same list.
+ * Outputs are named in canonical key order, `utf8SortedKeysOf()`, which is
+ * the order the JSON codec is specified to write a record's keys in, rather
+ * than the order `value` lists them in. That order depends on how `value` was
+ * made: a result read in this realm lists its keys in the order they were
+ * written, and one decoded from storage lists them in canonical order, except
+ * that JavaScript lists an integer-like key ahead of the rest. Either way the
+ * same result reports the same list.
  *
  * A result reporting itself `pending` gets a pending concern rather than an
  * emptiness concern. Its failures are reported either way.
