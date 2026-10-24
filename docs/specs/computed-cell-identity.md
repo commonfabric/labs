@@ -120,6 +120,14 @@ The manifest of materialized internal cells is stored in result-cell
 metadata and matched by partial cause plus kind
 (`packages/runner/src/runner.ts`, `materializeDerivedInternalCells`).
 
+A `{ $generated: N }` cause moves with the compiler as well as with the
+source: a transformer change that adds or removes an anonymous cell ahead of
+another renumbers it under a pattern identity that did not change, and a
+deployed piece then reads the moved cell's state from the document another
+cell wrote. `deno task check-cause-assignments` holds the compiler to the
+base revision's numbering of every in-tree pattern whose source is unchanged
+(`docs/development/automated-gates.md`).
+
 ### Sub-pattern instance identity
 
 A sub-pattern instance runs under a child result cell minted from the

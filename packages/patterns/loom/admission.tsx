@@ -9,6 +9,7 @@ import {
   currentPrincipal,
   type DID,
   handler,
+  principalOf,
   principalsOf,
   type RepresentsCurrentUser,
   spaceAccess,
@@ -38,11 +39,12 @@ export type PanelAdderDid = AuthoredByCurrentUser<
 /**
  * The profile under which the person who added a panel acted.
  *
- * Only `admitPanel` writes it. The runtime stores a declared label entry at
- * the field carrying `represents-principal` for the principal whose action
- * wrote it, resolving that principal itself. The panel also stores copies of
- * the linked profile's label, marked `origin: "link"`, which name the
- * profile's owner; the README says how a reader tells the two apart.
+ * Only `admitPanel` writes it, and only with a profile whose own label
+ * attests the principal its event acts for. The runtime stores a declared
+ * label entry at the field carrying `represents-principal` for the principal
+ * whose action wrote it, resolving that principal itself. The panel also
+ * stores copies of the linked profile's label, marked `origin: "link"`, which
+ * name the profile's owner; the README says how a reader tells the two apart.
  */
 export type PanelAdderProfile = RepresentsCurrentUser<
   Cfc<
@@ -127,8 +129,8 @@ function containsPiece(
 
 /**
  * The adder fields a new occurrence takes: the profile the event acts under,
- * or else the principal the event acted for. A run that acts for no one
- * records neither.
+ * which {@link assertOwnProfile} has already checked, or else the principal
+ * the event acted for. A run that acts for no one records neither.
  */
 function adderFields(
   event: PanelAdmission,
@@ -140,6 +142,26 @@ function adderFields(
   }
   const principal = currentPrincipal();
   return principal === undefined ? {} : { addedBy: principal };
+}
+
+/**
+ * Throws unless `event` names no profile in `as`, or names one that represents
+ * the principal the event acts for, as
+ * `principalOf(as, "represents-principal")` returns it. A profile it returns
+ * no principal for represents no one, whether its label names nobody, names
+ * more than one principal, or holds a claim the reader refuses, and a run that
+ * acts for no one has no profile of its own.
+ */
+function assertOwnProfile(event: PanelAdmission): void {
+  if (event.as === undefined) return;
+  const actor = currentPrincipal();
+  if (
+    actor !== undefined &&
+    principalOf(event.as, "represents-principal") === actor
+  ) return;
+  throw new Error(
+    "A panel can be added under a profile only by the principal that profile represents",
+  );
 }
 
 /**
@@ -159,33 +181,47 @@ function attestedAdders(panel: Writable<Panel>): DID[] | undefined {
 /**
  * Throws unless the principal the running event acts for may remove `panel`
  * for everyone: an occurrence its label attests to that principal alone, one
- * it attests to nobody, or, for an OWNER of the Loom's space, one it attests
- * to a principal the Loom's access list no longer admits. `panels` is the
- * Loom's list, which anchors both access reads in the Loom's space: an
+ * that records no adder at all, or, for an OWNER of the Loom's space, one it
+ * attests to a principal the Loom's access list no longer admits, or one whose
+ * label does not settle on an adder. `panels` is
+ * the Loom's list, which anchors both access reads in the Loom's space: an
  * occurrence `addPanel` linked may live in another space, whose list says
  * nothing about who belongs to the Loom. The adder is read from the runtime's
  * stamps on the occurrence's own fields, `authored-by` at `addedBy` and
  * `represents-principal` at `addedByProfile`, where the stamp names whoever
- * acted under the profile, never the linked profile's owner. An `addedBy`
- * value no stamp names is its writer's claim, and protects nothing. Nor does
- * a field whose claims name two principals, or hold one in a form no runtime
- * mints: a label a runtime did not mint is trusted in neither direction, and
- * falling open is what keeps such a panel from sticking. The other field's
- * stamp, when it is well formed, still names the adder.
+ * acted under the profile, never the linked profile's owner.
+ *
+ * An occurrence records no adder when it holds no profile and no stamp names
+ * anyone at `addedBy`, whose value is then its writer's claim and protects
+ * nothing. Every other occurrence whose stamps do not settle on one adder is
+ * an OWNER's alone to remove: one whose stamps name two principals, one
+ * holding a claim in a form no runtime mints, which a runtime did not write,
+ * and one that holds a profile no stamp says anyone acted under, since
+ * `admitPanel` stamps every profile it records. No participant's claim to it
+ * can be read, so none is protected, and the OWNER is who clears it up.
  */
 export function assertRemovable(
   panel: Writable<Panel>,
   panels: Writable<Writable<Panel>[]>,
 ): void {
-  const adders = [
-    ...new Set([
-      ...(attestedAdders(panel) ?? []),
-      ...(principalsOf(panel.key("addedByProfile"), "represents-principal", {
-        label: "written",
-      }) ?? []),
-    ]),
-  ];
-  if (adders.length !== 1) return;
+  const byDid = attestedAdders(panel);
+  const byProfile = principalsOf(
+    panel.key("addedByProfile"),
+    "represents-principal",
+    { label: "written" },
+  );
+  const adders = byDid === undefined || byProfile === undefined
+    ? undefined
+    : [...new Set([...byDid, ...byProfile])];
+  if (adders?.length === 0 && panel.get().addedByProfile === undefined) {
+    return;
+  }
+  if (adders?.length !== 1) {
+    if (spaceAccess(panels) === "OWNER") return;
+    throw new Error(
+      "A panel whose label does not settle on one adder can be removed only by an OWNER of the Loom",
+    );
+  }
   const [adder] = adders;
   const actor = currentPrincipal();
   if (adder === actor) return;
@@ -242,16 +278,20 @@ function admitCopy(
  * It is the only handler that may write a panel's `addedByProfile` or
  * `addedBy`, so every stream that adds a panel is a binding of it, and `mode`
  * says which. An event's `as` is the profile under which the person adding
- * acts; it is linked into an occurrence this handler creates, never into a
- * document the caller passed, and the runtime labels it with the principal who
- * acted. An occurrence this handler creates without `as` records that
- * principal in `addedBy` instead, attested the same way. Nothing in the event
- * names the adder.
+ * acts, and its own label must attest that person; an event naming any other
+ * profile is refused. It is linked into an occurrence this handler creates,
+ * never into a document the caller passed, and the runtime labels it with the
+ * principal who acted. An occurrence this handler creates without `as` records
+ * that principal in `addedBy` instead, attested the same way. Nothing in the
+ * event names the adder.
  */
 export const admitPanel = handler<
   PanelAdmission,
   { panels: Writable<Writable<Panel>[]>; mode: AdmissionMode }
 >((event, { panels, mode }) => {
+  // Checked first, so an event naming a profile that is not the actor's is
+  // refused even where it would change nothing.
+  assertOwnProfile(event);
   const list = panels.get();
   if (mode === "piece") {
     const piece = event.piece;

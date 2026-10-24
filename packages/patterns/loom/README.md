@@ -44,12 +44,16 @@ the root renders it as a shared text field.
 A panel records who added it in one of two fields. `addedByProfile` links the
 profile under which the person adding it acted, and the runtime labels that link
 with `represents-principal` for the principal who acted, which it resolves
-itself: no caller chooses the one the label names. The linked profile is the
-actor's claim, as in the roster, since any participant may link any profile, and
-a Fabric profile carries its own owner's `represents-principal`. An occurrence
-added without a profile records the principal who acted in `addedBy` instead, as
-the DID `currentPrincipal()` returns, and the runtime labels the field
-`authored-by` for that same principal. Nothing in an event names the adder.
+itself: no caller chooses the one the label names. The profile is the actor's
+own: `admitPanel` refuses an event whose `as` names a profile unless
+`principalOf(as, "represents-principal")` returns the principal the event acts
+for. A Fabric profile carries its own owner's `represents-principal`, so an
+event naming another principal's profile is refused, and so is one naming a
+profile from which `principalOf()` reads no principal, and one that acts for no
+one. An occurrence added without a profile records the principal who acted in
+`addedBy` instead, as the DID `currentPrincipal()` returns, and the runtime
+labels the field `authored-by` for that same principal. Nothing in an event
+names the adder.
 
 The actor is read from the panel document's own stored label map, with
 `readStoredCfcMetadata` on the panel's document, which resolves a label map
@@ -59,10 +63,11 @@ exactly `["addedByProfile"]` and whose `origin` is not `"link"`. Entries with
 label and name its owner, not the actor. A merged label view, such as
 `cfcLabelViewForCell` on the field, unions the two without saying which is
 which, and a document that links the panel, such as the panels list, holds all
-of them as link copies; neither can name the actor. A reader shows the linked
-profile as the adder only when that profile's own `represents-principal` names
-the actor; otherwise the panel was added by the actor under someone else's
-profile. The runtime does not refuse that combination.
+of them as link copies; neither can name the actor. The root admits no panel
+under a profile its actor does not own, but the runtime does not refuse that
+combination, so a reader shows the linked profile as the adder only when that
+profile's own `represents-principal` names the actor; otherwise the panel was
+added by the actor under someone else's profile.
 
 `admission.tsx` holds `admitPanel`, the only handler the two fields' write
 contracts admit, so `addPiece`, `addPanel`, and `duplicatePanel` are all
@@ -90,11 +95,12 @@ holds its adder, if any, only as its writer's claim. So a removed occurrence
 that names a profile, another principal's adder, several adders, or an adder in
 a form no runtime mints is added back by adding a new occurrence, with `as` or
 through `addPiece`; `duplicatePanel` copies only an occurrence still in the
-Loom. The runtime links an unlabeled document passed as `as` into the field when
-the panel's document holds no stored write contract yet, as when the write
-creates the panel: it checks a new link's source only under a write contract
-outside a union branch, and this one sits inside each of `Panel`'s branches.
-That does not change whose principal the label names.
+Loom. The root's own check is what holds the profile to its actor. The runtime
+checks a new link's source only under a write contract outside a union branch,
+and this one sits inside each of `Panel`'s branches, so it would link any
+document passed as `as` into the field when the panel's document holds no stored
+write contract yet, as when the write creates the panel. That does not change
+whose principal the label names.
 
 `addedBy` is the DID of the principal who added the panel. On an occurrence
 `admitPanel` creates without `as`, through `addPiece` or `duplicatePanel`, it is
@@ -120,7 +126,9 @@ alone only where no entry exists. A panel with neither field names no adder.
 
 The root's own Duplicate button acts under the session's `actingProfile` in
 `viewerState` when it holds one, and otherwise under the viewer's `#profile`;
-with neither, the copy records the principal the duplication acted for.
+with neither, the copy records the principal the duplication acted for. A
+duplication under a profile that is not the viewer's own is refused, as any
+other event naming one is.
 
 `pieceRegistry` derives from piece panels in order, including duplicates.
 `addPiece({piece, as?})` idempotently adds a registration occurrence; for a
@@ -137,19 +145,22 @@ is retried. `removePanel` removes only one occurrence and its presentation
 references. `removePiece` unregisters every occurrence of the specified complete
 piece link. Neither operation deletes the target.
 
-Only the principal who added an occurrence removes it, unless they have left.
-`removePanel` reads the adder from the runtime's stamps on the occurrence's own
-fields, with `principalsOf` and `label: "written"`: `authored-by` at `addedBy`,
-whatever the field holds, and `represents-principal` at `addedByProfile`, which
-names whoever acted under the profile rather than the profile's owner. It
-removes an occurrence those stamps attest to the principal the event acts for
-alone. It removes one they attest to nobody whose contribution the rule could
-keep: an occurrence with no adder, one that holds its adder only as its writer's
-claim in `addedBy`, and one whose stamps name more than one principal. A field
-whose claims hold one in a form no runtime mints names nobody either: a label a
-runtime did not mint is trusted in neither direction, and the rule falls open
-there because the alternative is a panel nobody can remove; the other field's
-stamp, when well formed, still names the adder. It refuses one attested to
+Only the principal who added an occurrence removes it, unless they have left or
+its label does not say who added it. `removePanel` reads the adder from the
+runtime's stamps on the occurrence's own fields, with `principalsOf` and
+`label: "written"`: `authored-by` at `addedBy`, whatever the field holds, and
+`represents-principal` at `addedByProfile`, which names whoever acted under the
+profile rather than the profile's owner. It removes an occurrence those stamps
+attest to the principal the event acts for alone. It removes, for anyone, one
+that records no adder: an occurrence that holds no profile and whose `addedBy`
+no stamp names, which holds its adder, if any, only as its writer's claim. One
+whose stamps do not settle on one adder is an OWNER's alone to remove: one whose
+stamps name more than one principal, one where either field holds a claim in a
+form no runtime mints, which a runtime did not write and is trusted in neither
+direction, and one that holds a profile no stamp says anyone acted under, since
+`admitPanel` stamps every profile it records. No participant's claim to such an
+occurrence can be read, so none is protected, and an OWNER of the Loom's space,
+by `spaceAccess(panels)`, is who clears it up. It refuses one attested to
 another principal, with one exception: an OWNER of the Loom's space, by
 `spaceAccess(panels)`, removes an occurrence whose attested adder the Loom's
 access list grants nothing, by `spaceAccessOf(panels, adder)`, so that what a
@@ -341,7 +352,7 @@ owner-authorized workflow. A root without `bindMeeting` is unsupported for that
 workflow: a caller must not infer support from an absent key, replace the root,
 or overwrite its contents to adopt it.
 
-Run and attach all sixteen tests when deploying or updating source:
+Run and attach all seventeen tests when deploying or updating source:
 
 ```sh
 deno task cf test packages/patterns/loom/style.test.tsx
@@ -352,6 +363,7 @@ deno task cf test packages/patterns/loom/multi-user.test.tsx
 deno task cf test packages/patterns/loom/participant-labels.test.tsx
 deno task cf test packages/patterns/loom/url-view.test.tsx
 deno task cf test packages/patterns/loom/adder-profile.test.tsx
+deno task cf test packages/patterns/loom/adder-profile-owner.test.tsx
 deno task cf test packages/patterns/loom/actor-attribution.test.tsx
 deno task cf test packages/patterns/loom/chat-room.test.tsx
 deno task cf test packages/patterns/loom/ensure-chat-room.test.tsx
@@ -371,6 +383,7 @@ deno task cf piece new packages/patterns/loom/main.tsx \
   --test packages/patterns/loom/participant-labels.test.tsx \
   --test packages/patterns/loom/url-view.test.tsx \
   --test packages/patterns/loom/adder-profile.test.tsx \
+  --test packages/patterns/loom/adder-profile-owner.test.tsx \
   --test packages/patterns/loom/actor-attribution.test.tsx \
   --test packages/patterns/loom/chat-room.test.tsx \
   --test packages/patterns/loom/ensure-chat-room.test.tsx \

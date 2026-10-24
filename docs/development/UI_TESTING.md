@@ -304,6 +304,11 @@ await waitForCondition(page, (probe) =>
   probe.collect("cf-modal[open]").length > 0);
 ```
 
+To read the page as a wait reads it without waiting for anything, for a report
+or an assertion on a state already reached, `readWithProbe(page, reader)`
+evaluates `reader` once against the same probe a predicate is handed, so the
+read and the wait agree on what is visible.
+
 Pattern integration tests can use the higher-level wrappers in
 `packages/patterns/integration/cfc-browser-helpers.ts` — `waitForText`,
 `fillCfInput`, `clickCfButton`, `clickCfButtonAndWaitForText` — which bundle

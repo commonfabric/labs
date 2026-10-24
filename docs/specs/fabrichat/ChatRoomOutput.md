@@ -224,10 +224,10 @@ space.
   claims, not proof of access.
 - **`messageRights`** says what the reader may do to each of the room's
   messages: one entry per message, oldest first, holding the `message`, as the
-  link `messages.latest` holds for it, and `canEdit`, `canDelete`, and
-  `canObliterate`, decided by the rules the streams below admit an event by, so
-  a client offers exactly the acts the room would take. Every entry is all
-  `false` while `canSend` doesn't hold.
+  link to its own cell that every field of the room naming it holds, and
+  `canEdit`, `canDelete`, and `canObliterate`, decided by the rules the streams
+  below admit an event by, so a client offers exactly the acts the room would
+  take. Every entry is all `false` while `canSend` doesn't hold.
 - **`canAdd`** says whether the reader can add someone to the room's space: the
   room is a group room in a space of its own, and their access is OWNER. It is
   false in a direct room, whose space keeps its two members, and in a space's

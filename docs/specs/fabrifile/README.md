@@ -221,5 +221,6 @@ the Loom's space uses the Loom's (see
   `ensureFileStore` are what a root keeps its store with
   ([`FileStore.md`](FileStore.md#where-it-lives)). A room offers its space's
   store, and a FabriChat message's attachments link its entries
-  ([`ChatMessage`](../fabrichat/ChatMessage.md#fields)). A room's composer
-  doesn't attach files yet.
+  ([`ChatMessage`](../fabrichat/ChatMessage.md#fields)), which a room's
+  composer adds to the store as it attaches them
+  ([`FabriChatRoom`](../fabrichat/FabriChatRoom.md#state)).

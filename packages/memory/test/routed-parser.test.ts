@@ -1,11 +1,16 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { assert } from "@std/assert";
 import { Identity, isCanonicalEd25519DID } from "@commonfabric/identity";
 import { gzipSync } from "fflate";
 import {
+  compressRoutedPayload,
   decodeRoutedFrame,
+  decodeRoutedFrameAsync,
   encodeRoutedFrame,
   parseRoutedJson,
+  ROUTED_EXPANDED_LIMIT,
+  ROUTED_RAW_LIMIT,
   routedFlags,
 } from "../v2/routed-parser.ts";
 import { DEFAULT_ROUTED_HOST_LIMITS } from "../v2/routed-host.ts";
@@ -95,6 +100,39 @@ describe("routed untrusted parsers", () => {
       .toBeDefined();
     expect(() => parseRoutedJson("[".repeat(65) + "0" + "]".repeat(65), SLOTS))
       .toThrow();
+  });
+  it("disables only the value-count check for a null slot cap", () => {
+    const payload = routedFrameOf(231_438);
+    expect(() => decodeRoutedFrame(payload, false, 150_000)).toThrow();
+    expect(decodeRoutedFrame(payload, false, null).payload).toBe(payload);
+    const compressed = encodeRoutedFrame(payload, null);
+    expect(compressed).toBeInstanceOf(Uint8Array);
+    expect(decodeRoutedFrame(compressed, true, null).payload).toBe(payload);
+    expect(() => decodeRoutedFrame(compressed, true, 150_000)).toThrow();
+    for (
+      const malformed of [
+        '{"a":1,"a":2}',
+        '{"a":1,"\\u0061":2}',
+        '{"__proto__":{}}',
+        '{"constructor":1}',
+        '{"prototype":1}',
+        '"\\ud800"',
+        '{"x":1e999}',
+        "[".repeat(65) + "0" + "]".repeat(65),
+      ]
+    ) {
+      expect(() => parseRoutedJson(malformed, null)).toThrow();
+    }
+    const oversized = 'fvj1:{"type":"response","ok":"' +
+      "x".repeat(ROUTED_RAW_LIMIT) + '"}';
+    expect(() => decodeRoutedFrame(oversized, false, null)).toThrow();
+    expect(() =>
+      decodeRoutedFrame(
+        'fvj1:{"type":"response","space":"not-a-did"}',
+        false,
+        null,
+      )
+    ).toThrow();
   });
   it("applies the sender's and the receiver's slot cap to a whole frame", () => {
     const cap = 2000;
@@ -261,9 +299,8 @@ describe("routed untrusted parsers", () => {
       const invalid of [
         { ...flags, connectionAuth: false },
         { ...flags, routedAuthV1: false },
-        { ...flags, stableExpressionResultIds: false },
         { ...flags, modernCellRep: "true" },
-        { ...flags, arbitraryFutureAuthority: true },
+        { ...flags, arbitraryFutureAuthority: 42 },
         { ...flags, "/tag": true },
       ]
     ) expect(() => routedFlags(invalid)).toThrow();
@@ -278,6 +315,125 @@ describe("routed untrusted parsers", () => {
       })
     }`;
     expect(() => encodeRoutedFrame(payload, SLOTS)).toThrow();
+  });
+  it("decodes with the platform gzip exactly as the reference decoder does", async () => {
+    const payload = `fvj1:${
+      JSON.stringify({
+        type: "session/effect",
+        space,
+        sessionId: "s1",
+        effect: {
+          upserts: Array.from({ length: 200 }, (_, i) => ({
+            id: `of:${i}`,
+            doc: { text: `entry ${i} `.repeat(20) },
+          })),
+        },
+      })
+    }`;
+    const seed = encodeRoutedFrame(payload, null);
+    assert(seed instanceof Uint8Array);
+    const outcome = async (decode: () => unknown) => {
+      try {
+        return { ok: ((await decode()) as { payload: string }).payload };
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        return { refused: true };
+      }
+    };
+    const both = async (bytes: Uint8Array, compression = true) => {
+      const reference = await outcome(() =>
+        decodeRoutedFrame(bytes, compression, null)
+      );
+      const platform = await outcome(() =>
+        decodeRoutedFrameAsync(bytes, compression, null)
+      );
+      expect(platform).toEqual(reference);
+      return platform;
+    };
+    expect(await both(seed)).toEqual({ ok: payload });
+    // Compression not negotiated, truncated, trailing bytes, a second member.
+    expect(await both(seed, false)).toEqual({ refused: true });
+    expect(await both(seed.subarray(0, seed.length - 1))).toEqual({
+      refused: true,
+    });
+    expect(await both(new Uint8Array([...seed, 0, 0, 0, 0]))).toEqual({
+      refused: true,
+    });
+    expect(
+      await both(
+        new Uint8Array([...seed, ...gzipSync(new TextEncoder().encode("x"))]),
+      ),
+    ).toEqual({ refused: true });
+    // The same two, ending in the declared size, so that the trailer check
+    // is not what refuses them: the platform decoder refuses data after the
+    // member.
+    const expanded = new TextEncoder().encode(payload).length;
+    const size = new Uint8Array(4);
+    new DataView(size.buffer).setUint32(0, expanded, true);
+    expect(await both(new Uint8Array([...seed, 1, 2, 3, 4, ...size])))
+      .toEqual({ refused: true });
+    expect(
+      await both(
+        new Uint8Array([...seed, ...gzipSync(new Uint8Array(expanded))]),
+      ),
+    ).toEqual({ refused: true });
+    // A declared size one more or one less than the content.
+    for (const delta of [1, -1]) {
+      const lying = seed.slice();
+      const view = new DataView(lying.buffer);
+      view.setUint32(5, view.getUint32(5) + delta);
+      expect(await both(lying)).toEqual({ refused: true });
+    }
+    for (let i = 0; i < 600; i++) {
+      const bytes = seed.slice();
+      bytes[(i * 7) % bytes.length] ^= (i % 255) + 1;
+      await both(bytes);
+    }
+    // Text frames take the reference path.
+    expect(await both(new TextEncoder().encode(payload), false)).toEqual({
+      refused: true,
+    });
+    expect((await decodeRoutedFrameAsync(payload, true, null)).payload).toBe(
+      payload,
+    );
+  });
+  it("compresses a routed message only when the envelope is smaller and within the receiver's bounds", async () => {
+    const message = (value: string) =>
+      `fvj1:${JSON.stringify({ type: "session/effect", space, value })}`;
+    const encode = (payload: string) =>
+      compressRoutedPayload(
+        payload,
+        new TextEncoder().encode(payload),
+        space,
+      );
+    // Under 1 KiB, and past the 32x expansion bound: text.
+    const small = message("x".repeat(900));
+    expect(encode(small)).toBe(small);
+    const repetitive = message("a".repeat(1024 * 1024));
+    expect(encode(repetitive)).toBe(repetitive);
+    // Ordinary JSON: an envelope that both decoders expand to the payload,
+    // with the frame's space as the hint.
+    const ordinary = message(
+      Array.from({ length: 2000 }, (_, i) => `word${i % 300}`).join(" "),
+    );
+    const envelope = encode(ordinary);
+    assert(envelope instanceof Uint8Array);
+    expect(envelope.length).toBeLessThan(ordinary.length);
+    expect(decodeRoutedFrame(envelope, true, null).payload).toBe(ordinary);
+    expect((await decodeRoutedFrameAsync(envelope, true, null)).payload).toBe(
+      ordinary,
+    );
+    // Past the expanded bound the text is returned, for the caller's raw bound.
+    const huge = message(
+      Array.from(
+        { length: ROUTED_EXPANDED_LIMIT / 5 },
+        (_, i) => `w${i % 9000}`,
+      ).join(" "),
+    );
+    expect(new TextEncoder().encode(huge).length).toBeGreaterThan(
+      ROUTED_EXPANDED_LIMIT,
+    );
+    expect(encode(huge)).toBe(huge);
   });
   it("mutation exercises binary and JSON parsers without parser panics", () => {
     const seed = envelope(

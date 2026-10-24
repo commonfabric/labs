@@ -99,9 +99,12 @@ A client that draws natively MUST:
   ones the client wouldn't offer itself.
 - **Follow the room through its messages**: `messages.latest` and
   `messages.count`, which stay current as messages arrive.
-- **Use each message's cell as its identity**, compared with `equals()`, and
-  never its `sentAt`, which is not unique (see
-  [times](ChatMessage.md#times)).
+- **Use each message's cell as its identity**, and never its `sentAt`, which
+  is not unique (see [times](ChatMessage.md#times)). Every field of the room
+  that names a message holds the link to that message's own cell, never to its
+  place in the room's messages, so two such links name the same message
+  exactly when they are equal, whether a client compares them as links or with
+  `equals()`.
 - **Show edits and deletions.** A client shows a deleted message as deleted,
   and marks a message with `editedAt` as edited. A message keeps no earlier
   text.

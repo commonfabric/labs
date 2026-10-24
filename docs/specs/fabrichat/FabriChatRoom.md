@@ -54,10 +54,25 @@ derived under its own access.
 The `PerSession` values in the contract are `participantEntries` and
 `participantPrincipals`.
 
-The room's `[UI]` keeps its composer's state, the draft and the reply being
-composed, as a `PerSession` value of its own, so two placements of the same room
-open in one session show the same composer state, as one conversation shown
-twice should.
+The room's `[UI]` keeps its composer's state, the draft, the reply and the
+attachments being composed, as a `PerSession` value of its own, so two
+placements of the same room open in one session show the same composer state,
+as one conversation shown twice should.
+
+The main composer attaches files. Its attach control sends the room's
+`ensureFileStore` as it opens its file picker, so that the space has a store by
+the time a file is picked. Each file it stores in the blob store it adds to the
+space's store with `add`, under its own name or a free one
+([FabriFile's clients](../fabrifile/clients.md#adding-a-file)), and keeps in the
+composer as that request, which the composer shows as being attached, attached,
+or refused with the store's reason. A file can be taken out before the send,
+and its entry stays in the store. The composer's send attaches the entries the
+store added, in the order the files were picked, leaves out any the store
+refused, and waits, refusing the send, while a file is still being added; it
+reads each request's outcome by its id alone. A send ends the composer's
+attachments. Picking more files than the room's `maxAttachments`, or picking
+any in a space that still has no store, is refused. The thread composer
+attaches nothing.
 
 ## Writers
 
