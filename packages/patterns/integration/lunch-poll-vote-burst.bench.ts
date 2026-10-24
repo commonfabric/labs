@@ -143,12 +143,8 @@ async function burst(round: number): Promise<void> {
       )
     ),
   );
-  // A measured burst ends only after its served consequences arrive. The
-  // harness's budgeted settle can return while those consequences are pending.
-  await Promise.all(voters.map(async (voter) => {
-    await voter.idle();
-    await voter.awaitEventConsequences();
-  }));
+  // A measured burst ends once `settle()` has every served consequence of it
+  // back at the session that fired it.
   await harness.settle();
 }
 

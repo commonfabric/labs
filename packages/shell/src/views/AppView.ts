@@ -408,6 +408,13 @@ export class XAppView extends BaseView {
     | undefined = undefined;
 
   /**
+   * The runtime this view is listening to for `connectionrestored` and
+   * `spaceaccessrestored`: the view's runtime, from the update that brought
+   * it until the view leaves the document.
+   */
+  #recoveryListenerRt: RuntimeInternals | undefined = undefined;
+
+  /**
    * The revision the slug watch bumps to make the selection run again, which
    * a test reads to tell a reload from a resolution that changed nothing.
    */
@@ -961,6 +968,71 @@ export class XAppView extends BaseView {
     this.pieceTitle = titleOf(event.detail) ?? "";
   };
 
+  /**
+   * Handler for the runtime's `connectionrestored`, which runs again each
+   * load whose failure the view is showing, and each load still in flight
+   * that goes on to fail. The runtime has dropped every failed load by then,
+   * and keeps none that was in flight, so the run reaches the worker, and a
+   * failure the lost connection caused can heal. A load the view shows as
+   * loaded is left alone, so a restored connection reloads nothing on
+   * screen, and one that fails again stays failed until the next restored
+   * connection.
+   */
+  #onConnectionRestored = (): void => {
+    this.#runAgainIfFailed(this._selectedPattern);
+    this.#runAgainIfFailed(this._spaceRootPattern);
+  };
+
+  /**
+   * Handler for the runtime's `spaceaccessrestored`, which does what
+   * {@link XAppView.#onConnectionRestored} does when the space that admitted
+   * the runtime's principal again is the one the view shows. The runtime
+   * drops that space's failed loads alone, so a run for any other space
+   * would reach only the failure it already has.
+   */
+  #onSpaceAccessRestored = (event: Event): void => {
+    const { space } = (event as CustomEvent<{ space: DID }>).detail;
+    if (space !== this.space) return;
+    this.#runAgainIfFailed(this._selectedPattern);
+    this.#runAgainIfFailed(this._spaceRootPattern);
+  };
+
+  /**
+   * Helper for the recovery handlers, which runs `task` again if it has
+   * failed, or once it fails if it is running. A run asked for in between,
+   * whichever way it ends, is the one this waits on, and a task already
+   * running again by then is left to it.
+   */
+  #runAgainIfFailed(task: Task<readonly unknown[], unknown>): void {
+    if (task.status === TaskStatus.ERROR) {
+      task.run();
+    } else if (task.status === TaskStatus.PENDING) {
+      task.taskComplete.catch(() => {
+        if (task.status === TaskStatus.ERROR) task.run();
+      });
+    }
+  }
+
+  /**
+   * Listens for `connectionrestored` and `spaceaccessrestored` on `rt` and on
+   * no other runtime, so a replaced runtime's recoveries run nothing here.
+   */
+  #listenForRecoveries(rt: RuntimeInternals | undefined): void {
+    const previous = this.#recoveryListenerRt;
+    if (rt === previous) return;
+    previous?.removeEventListener(
+      "connectionrestored",
+      this.#onConnectionRestored,
+    );
+    previous?.removeEventListener(
+      "spaceaccessrestored",
+      this.#onSpaceAccessRestored,
+    );
+    this.#recoveryListenerRt = rt;
+    rt?.addEventListener("connectionrestored", this.#onConnectionRestored);
+    rt?.addEventListener("spaceaccessrestored", this.#onSpaceAccessRestored);
+  }
+
   #replacePieceUrlWithSlug(view: typeof this.app.view, slug: string) {
     try {
       validateSlug(slug);
@@ -986,9 +1058,15 @@ export class XAppView extends BaseView {
     replaceNavigation(view);
   }
 
+  override connectedCallback() {
+    super.connectedCallback();
+    this.#listenForRecoveries(this.rt);
+  }
+
   override disconnectedCallback() {
     super.disconnectedCallback();
     this.#stopSlugWatch();
+    this.#listenForRecoveries(undefined);
   }
 
   override updated(changedProperties: Map<string, unknown>) {
@@ -1014,6 +1092,10 @@ export class XAppView extends BaseView {
     // Update debugger controller with runtime
     if (changedProperties.has("rt") && this.rt) {
       this.#debuggerController.setRuntime(this.rt);
+    }
+
+    if (changedProperties.has("rt")) {
+      this.#listenForRecoveries(this.rt);
     }
 
     // Update debugger visibility from app state

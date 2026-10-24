@@ -3501,16 +3501,17 @@ describe("piece source reconciliation", () => {
       // pattern its own space retains no source for: what the origin names
       // now is the only code that space can give it, so it takes that in the
       // same revision that records the origin, and keeps the identity it
-      // displaced. The pattern stays live in this runtime's index, compiled
-      // into another space, because the index answers by identity alone and
-      // an answer from there is not this space holding the source.
+      // displaced. The pattern stays live in this runtime's index, because
+      // the index answers by identity alone and an answer from there is not
+      // this space holding the source. It is compiled into no space at all:
+      // a closure this runtime had written into another space it would copy
+      // into the piece's space on that load, and the space would then hold
+      // the source.
       const v1Identity = await identityFor(source("v1"));
       const v2Identity = await identityFor(source("v2"));
       createRuntime(servingFetch(() => v2Identity, () => source("v2")));
-      const elsewhere = (await Identity.fromPassphrase("another space")).did();
       const v1 = await runtime.patternManager.compilePattern(
         parentProgram(source("v1")),
-        { space: elsewhere },
       );
       const piece = runtime.getCell<{ marker?: string }>(
         signer.did(),
