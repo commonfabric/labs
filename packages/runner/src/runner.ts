@@ -7547,7 +7547,11 @@ export class Runner {
    * (`ownedCellOwesSeed`), each one the store read-through reported holding
    * nothing for, needs no name-sync, which could deliver none of them. Its
    * run is held for the seeds alone, which `seeds` names, and not at all in
-   * a caller-owned setup, which seeds them in the caller's transaction.
+   * a caller-owned setup, which seeds them in the caller's transaction. A
+   * piece whose other absences are user- or session-scoped cells the store
+   * reported holding nothing at is held the same way, their instances in
+   * `seeds` too, so that its start runs apart from the caller's transaction
+   * (`#familyAbsent` says why).
    */
   #patternToNameBeforeRun(
     patternOrModule: Pattern | Module | undefined,
@@ -7718,9 +7722,14 @@ export class Runner {
    * (`ownedCellOwesSeed`) that the store reported holding nothing at is not
    * an absence a name-sync delivers either, so its owning instance is added
    * to `seeds`, the instances whose defaults a start seeds before it runs,
-   * and the cell holds the run no further. Any other absent cell owed a
-   * default holds it, whatever the replica examined, since the store may
-   * hold a value for it.
+   * and the cell holds the run no further. A user- or session-scoped cell
+   * of a family no pre-sync named that the store reported holding nothing at
+   * adds its instance to `seeds` too, so that the start runs apart from the
+   * caller's transaction: a served derivation that sets the piece up there
+   * reads that instance before the serving loop has produced it, and is
+   * withdrawn until it is produced (`unproducedScopedInstance`), which only
+   * this start would do. Any other absent cell owed a default holds it,
+   * whatever the replica examined, since the store may hold a value for it.
    */
   #familyAbsent(
     pattern: Pattern,
@@ -7829,6 +7838,7 @@ export class Runner {
       const { pattern: owner, resultCell: ownerCell } = instance;
       const ownerScope = ownerCell.getAsNormalizedFullLink().scope;
       let owesSeed = false;
+      let startsApart = false;
       for (const descriptor of owner.derivedInternalCells ?? []) {
         const link = getDerivedInternalCell(ownerCell, descriptor)
           .getAsNormalizedFullLink();
@@ -7842,11 +7852,14 @@ export class Runner {
           owesSeed = true;
           continue;
         }
-        if (reportedAbsent) continue;
+        if (reportedAbsent) {
+          if (!presyncNamed && link.scope !== "space") startsApart = true;
+          continue;
+        }
         if (!presyncNamed) return hold("an owned cell");
         absent.push(link);
       }
-      if (owesSeed) seeds.push(instance);
+      if (owesSeed || startsApart) seeds.push(instance);
     }
     return absent.length > 0 && this.#absenceUnexamined(readTx, absent)
       ? hold("an owned cell")
@@ -8014,10 +8027,11 @@ export class Runner {
   /**
    * Names a piece's execution family once per pending load and records the
    * pattern whose dependencies arrived. A family held only for the defaults
-   * its instances are owed (`toName.seeds`) has everything else its run
-   * reads here already (`#familyAbsent`), so it loads nothing: its start's
-   * preparation seeds those defaults, and a speculative start, whose own
-   * transaction seeds them, has nothing to prepare.
+   * its instances are owed, or for a start apart from the caller's
+   * transaction (`toName.seeds`), has everything else its run reads here
+   * already (`#familyAbsent`), so it loads nothing: its start's preparation
+   * seeds those defaults, and a speculative start, whose own transaction
+   * seeds them, has nothing to prepare.
    */
   #nameFamilyBeforeRun(
     resultCell: Cell<any>,
