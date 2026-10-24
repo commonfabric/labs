@@ -5308,7 +5308,7 @@ export class Runner {
       const unrecorded = { moved: [], ambiguous: [], recorded: false, lacks };
       if (manifestAgrees) return { owed: "nothing", ...unrecorded };
       return {
-        owed: cells.some((cell) => cell.holdsState) ? "hold" : "repair",
+        owed: cells.some((cell) => cell.hasState) ? "hold" : "repair",
         ...unrecorded,
       };
     }

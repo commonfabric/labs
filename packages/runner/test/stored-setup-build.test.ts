@@ -33,7 +33,7 @@ const cellsOf = (cells: [number, string][]): NumberedCell[] =>
   cells.map(([number, description]) => ({
     number,
     description,
-    holdsState: description !== DERIVED,
+    hasState: description !== DERIVED,
   }));
 
 describe("stored-setup-build", () => {
@@ -68,7 +68,7 @@ describe("stored-setup-build", () => {
         compareStoredSetupBuild(stored, current, cellsOf([[0, CHILD]])),
       ).toEqual({
         kind: "held",
-        moved: [{ description: CHILD, holdsState: true, from: 1, to: 0 }],
+        moved: [{ description: CHILD, hasState: true, from: 1, to: 0 }],
         ambiguous: [],
       });
     });
@@ -176,7 +176,7 @@ describe("stored-setup-build", () => {
     it("names each moved cell and each description it could not match", () => {
       expect(
         describeHold(
-          [{ description: CHILD, holdsState: true, from: 1, to: 0 }],
+          [{ description: CHILD, hasState: true, from: 1, to: 0 }],
           [{ description: CHILD, before: [0, 1, 2], after: [0, 1] }],
         ),
       ).toBe(

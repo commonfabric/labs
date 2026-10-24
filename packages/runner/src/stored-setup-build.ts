@@ -150,7 +150,7 @@ export function storedSetupBuildOf(
     cells: hashStringOf(
       cells.map((cell) => [cell.number, cell.description]) as FabricValue,
     ),
-    state: cells.filter((cell) => cell.holdsState).map((
+    state: cells.filter((cell) => cell.hasState).map((
       cell,
     ) => [cell.number, cell.description]),
     projection: hashStringOf(projectionMap(pattern.result) as FabricValue),
@@ -227,9 +227,9 @@ export function compareStoredSetupBuild(
   const before: NumberedCell[] = stored.state.map(([number, description]) => ({
     number,
     description,
-    holdsState: true,
+    hasState: true,
   }));
-  const after = cells.filter((cell) => cell.holdsState);
+  const after = cells.filter((cell) => cell.hasState);
   const moved = renumberedCells(before, after);
   const ambiguous = ambiguousDescriptions(before, after);
   if (stored.projection !== current.projection) {
