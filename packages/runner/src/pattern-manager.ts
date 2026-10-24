@@ -475,7 +475,9 @@ type ColdCompilationResult = {
 
 /**
  * A cold compile's output, held for a repair still owed: what a write-back of
- * it into a space takes.
+ * it into a space takes. The modules are the same bytes in every space; the
+ * delegations are writer authority the one space's source closure
+ * authenticated, and are written into that space alone.
  */
 type RetainedCompile = {
   /** The compiled modules, as the compile cache stores them. */
@@ -483,6 +485,9 @@ type RetainedCompile = {
 
   /** The module delegations the verified source closure carried. */
   readonly moduleDelegations: ModuleDelegationMap;
+
+  /** The space whose verified source closure carried those delegations. */
+  readonly delegationsSpace: MemorySpace;
 
   /** The cache variant the modules compiled under. */
   readonly cacheOpts: { runtimeVersion: string };
@@ -1481,7 +1486,10 @@ export class PatternManager {
    * flight already (`#inProgressCacheRepairs`). A write-back that lands
    * clears the repair the space was owed; one that fails counts once against
    * the session's attempts for the space and keeps the compile retained for
-   * the next load's attempt.
+   * the next load's attempt. Module-update authority does not cross a space:
+   * the compile's delegations are written only into the space whose source
+   * closure authenticated them, and any other space keeps the grants already
+   * authenticated there, as a replication leaves them.
    */
   #issueCacheRepair(
     space: MemorySpace,
@@ -1496,7 +1504,9 @@ export class PatternManager {
       compile.modules,
       entryIdentity,
       compile.cacheOpts,
-      compile.moduleDelegations,
+      space === compile.delegationsSpace
+        ? compile.moduleDelegations
+        : undefined,
     ).then(() => {
       this.#failedCompileCacheRecoveries.delete(recoveryKey);
       this.#recordDeferredCacheRepair(space, compile.modules, false);
@@ -3112,6 +3122,7 @@ export class PatternManager {
           this.#retainCompile(entryIdentity, {
             modules,
             moduleDelegations,
+            delegationsSpace: space,
             cacheOpts,
           });
         } else if (
@@ -3124,12 +3135,14 @@ export class PatternManager {
           this.#retainCompile(entryIdentity, {
             modules,
             moduleDelegations,
+            delegationsSpace: space,
             cacheOpts,
           });
         } else {
           this.#issueCacheRepair(space, entryIdentity, symbol, {
             modules,
             moduleDelegations,
+            delegationsSpace: space,
             cacheOpts,
           });
         }

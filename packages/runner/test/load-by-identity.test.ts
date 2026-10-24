@@ -1549,6 +1549,63 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       }
     });
 
+    it("writes a retained compile into another space without the delegations its origin authenticated", async () => {
+      // A retained compile's delegations are writer authority the origin
+      // space's source closure authenticated. Written into another space they
+      // would grant that authority where no source update did, so that space
+      // receives the modules alone and keeps whatever grants it already holds,
+      // as a replication leaves them.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      const predecessor = "retained-origin-only-predecessor";
+      const writeTx = runtime.edit();
+      writeSourceDocs(
+        runtime,
+        space,
+        fixture.modules,
+        entryIdentity,
+        writeTx,
+        new Map([[entryIdentity, new Set([predecessor])]]),
+      );
+      runtime.prepareTxForCommit(writeTx);
+      expect((await writeTx.commit().settled).error).toBeUndefined();
+      await runtime.storageManager.synced();
+      const compiles = countColdCompiles();
+
+      // A preview in `space` retains the compile with the delegations its
+      // source carried, and persists nothing.
+      const previewed = await load(entryIdentity, space, {
+        repairCache: false,
+      });
+      expect(typeof previewed).toBe("function");
+      await flushed();
+      expect(runtime.grantsModuleDelegation(spaceB, entryIdentity, predecessor))
+        .toBe(false);
+
+      // A load served from memory in `spaceB`, which no space holds the
+      // closure for, writes the retained compile there.
+      expect(await load(entryIdentity, spaceB)).toBe(previewed);
+      await flushed();
+      expect(compiles()).toBe(1);
+      expect(await holdsClosure(spaceB, entryIdentity)).toBe(true);
+      const readTx = runtime.edit();
+      try {
+        const sourceInB = await loadVerifiedSourceClosure(
+          runtime,
+          spaceB,
+          entryIdentity,
+          readTx,
+        );
+        expect(sourceInB?.has(entryIdentity)).toBe(true);
+        expect(sourceInB?.get(entryIdentity)?.delegatedModuleIdentities)
+          .toBeUndefined();
+      } finally {
+        readTx.abort?.("delegation assertion read complete");
+      }
+      expect(runtime.grantsModuleDelegation(spaceB, entryIdentity, predecessor))
+        .toBe(false);
+    });
+
     it("copies once into a space, however many loads it serves there", async () => {
       const { entryIdentity, loaded } = await coldLoadedInSpace();
       const { compileCacheWrites } =

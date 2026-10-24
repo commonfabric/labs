@@ -851,7 +851,9 @@ cell's contents. The cache is designed around this:
   stamp replicate) and re-stamped on the child-space write by a legitimate
   child-space writer. Module-update authority does not cross that boundary:
   `delegatedModuleIdentities` from the origin is omitted during replication,
-  while any entries already authenticated in the destination are preserved.
+  and a retained compile written back into a space other than the one whose
+  source closure authenticated its delegations carries none of them, while
+  any entries already authenticated in the destination are preserved.
   Note for the server-compilation end state: a client can then no longer stamp
   replicated compiled docs, so child spaces will need server-side replication
   or by-identity source recovery instead.
