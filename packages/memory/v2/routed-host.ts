@@ -29,9 +29,12 @@ import type { MemoryCompressionControlMessage } from "./message-compression.ts";
 import {
   compressRoutedPayload,
   decodeRoutedFrameAsync,
+  isRoutedIdentifier,
   parseRoutedJson,
   ROUTED_DEFAULT_SLOT_LIMIT,
+  ROUTED_EXPANDED_LIMIT,
   ROUTED_HOLDINGS_LIMIT,
+  ROUTED_PART_BYTES,
   ROUTED_QUEUE_LIMIT,
   ROUTED_RAW_LIMIT,
   routedDeclaredExpansion,
@@ -67,6 +70,7 @@ import {
   type RouterSenderSnapshot,
 } from "./router-protocol.ts";
 import type { Server } from "./server.ts";
+import { serverMessageSync } from "./message-parts.ts";
 
 type Backend = ReturnType<Server["connectRouted"]>;
 
@@ -321,6 +325,23 @@ type RoutedSession = {
 
   /** View count, present only when a view or aggregate watch quota needs it. */
   views?: number;
+
+  /**
+   * The watch set the session is staging in parts, as the Memory server
+   * holds it, while a watch, view or holdings quota needs its counts: the
+   * parts it took, its watch IDs when those are mirrored, and its holdings
+   * and views when a part named them.
+   */
+  staged?: RoutedStagedSet;
+};
+
+/** A session's watch set staged in parts; see `RoutedSession.staged`. */
+type RoutedStagedSet = {
+  stage: string;
+  parts: number;
+  watches?: Set<string>;
+  holdings?: number;
+  views?: number;
 };
 
 /** Fixed audit categories; no socket or backend error text is retained. */
@@ -357,7 +378,8 @@ type OutputLimit = {
   /**
    * The bound that refused the send: `ROUTED_RAW_LIMIT` for a message too
    * large to send alone, else `limits.outputBytesPerSocket`, the bound on the
-   * larger queue measurement plus the attempted payload bytes.
+   * larger queue measurement plus the attempted payload bytes, or for a part
+   * of a split sync the bound on the parts retained plus the part.
    */
   readonly limitBytes: number;
 
@@ -367,9 +389,11 @@ type OutputLimit = {
   /**
    * `single-message` when the message exceeds `ROUTED_RAW_LIMIT`, which no
    * socket may send; `queued-output` when it would fit alone but not behind
-   * the output the socket already retains.
+   * the output the socket already retains; `sync-parts` when it is a part of
+   * a split sync that would fit alone but not behind the parts the socket
+   * retains, past their bound of eight times `limits.outputBytesPerSocket`.
    */
-  readonly classification: "single-message" | "queued-output";
+  readonly classification: "single-message" | "queued-output" | "sync-parts";
 
   /** Structured message kind, when the sender has a Memory message. */
   readonly messageType?: ServerMessage["type"] | "memory.compression";
@@ -797,11 +821,11 @@ export interface RoutedHostLimits {
   /**
    * Watch IDs one session may hold; its views are counted separately. A
    * watch mutation that would leave a session with more is refused for
-   * good. A client restores a session by sending its whole watch set in one
-   * `session.watch.set`, so this is sized together with `frameSlots`: that
-   * many watches must fit one frame. Must equal the router's
-   * `max_watches_per_session` (a check for the infra preflight, as for
-   * `frameSlots`).
+   * good. A client restores a session by sending its whole watch set in a
+   * `session.watch.set`, staged in parts when it does not fit one frame
+   * (`watchSetPartsV1`), so this need not be sized against `frameSlots`.
+   * Must equal the router's `max_watches_per_session` (a check for the infra
+   * preflight, as for `frameSlots`).
    */
   watchesPerSession: number | null;
 
@@ -834,9 +858,11 @@ export interface RoutedHostLimits {
    * reads of new requests and their dispatch, released when retained output
    * falls below a quarter of it, so a slow reader is back-pressured before a
    * response can exceed the bound; a message that would take retained output
-   * past the bound is still refused as `queued-output`. `null` disables the
-   * queued-output bound and leaves the 8 MiB ceiling in its place for the
-   * marks; the ceiling on one message always holds. At most `ROUTED_RAW_LIMIT`.
+   * past the bound is still refused as `queued-output`. The parts of split
+   * syncs are not counted here: they are bounded together by eight times this
+   * bound, and the pause counts them. `null` disables both bounds and leaves
+   * the 8 MiB ceiling in its place for the marks; the ceiling on one message
+   * always holds. At most `ROUTED_RAW_LIMIT`.
    */
   outputBytesPerSocket: number | null;
 }
@@ -1977,6 +2003,8 @@ export class RoutedMemoryHost {
           watches?: Set<string>;
           holdings?: number;
           views?: number;
+          /** For a staged part, what the session stages once it is held. */
+          staged?: RoutedStagedSet;
           prior?: { principal: string; count: number; holdings: number };
         }>()
         : undefined;
@@ -2168,8 +2196,53 @@ export class RoutedMemoryHost {
     socket.addEventListener("error", () => {
       fail("data-socket-error");
     }, { once: true });
+    // The parts of a split sync go out back to back, the server's in one
+    // synchronous pass. They are bounded together, apart from other output:
+    // the parts retained on the socket, of however many split syncs, by eight
+    // times the queued-output bound (none when that bound is disabled), which
+    // does not count them. A reader that falls behind is still closed.
+    const partBound = this.#limits.outputBytesPerSocket === null
+      ? null
+      : 8 * this.#limits.outputBytesPerSocket;
+    // The session whose split sync is being sent, empty when its first part
+    // named none the host knows.
+    let splitting: string | undefined;
+    /** Whether `message` is a part of a split sync, the next of one if any. */
+    const splitPart = (
+      message: ServerMessage | MemoryCompressionControlMessage,
+    ): boolean => {
+      const sync = serverMessageSync(message);
+      if (splitting !== undefined) {
+        if (
+          message.type !== "session/effect" || sync === undefined ||
+          (splitting !== "" &&
+            `${message.space} ${message.sessionId}` !== splitting)
+        ) {
+          fail("data-protocol");
+          requireRouted(false);
+        }
+        if (sync.more !== true) splitting = undefined;
+        return true;
+      }
+      if (sync?.more !== true) return false;
+      splitting = "";
+      if (message.type === "session/effect") {
+        splitting = `${message.space} ${message.sessionId}`;
+      } else if (message.type === "response") {
+        const route = dispatchRoutes.get(message.requestId);
+        const sessionId = isPlainObject(message.ok) &&
+            typeof message.ok.sessionId === "string"
+          ? message.ok.sessionId
+          : route?.sessionId;
+        if (typeof route?.space === "string" && typeof sessionId === "string") {
+          splitting = `${route.space} ${sessionId}`;
+        }
+      }
+      return true;
+    };
     const send = (
       message: ServerMessage | MemoryCompressionControlMessage,
+      encoded?: string,
     ): void => {
       if (
         failed || socket.readyState !== WebSocket.OPEN ||
@@ -2220,13 +2293,22 @@ export class RoutedMemoryHost {
               undefined,
             );
           } else if (message.error !== undefined) {
+            // A refused mutation ends the staged set here. The server ends its
+            // own when it refuses a part; a part refused before reaching it,
+            // here or by the router, leaves it parts no later part follows,
+            // since every part names its set and its place in it.
+            mutation.session.staged = undefined;
             this.#setUsage(
               ticket!.link,
               ticket!.context,
               mutation.key,
               mutation.prior,
             );
+          } else if (mutation.staged !== undefined) {
+            // A staged part changes nothing the session holds yet.
+            mutation.session.staged = mutation.staged;
           } else {
+            mutation.session.staged = undefined;
             if (this.#trackWatchIds) {
               mutation.session.watches = mutation.watches;
             }
@@ -2293,7 +2375,7 @@ export class RoutedMemoryHost {
         sessions.delete(key);
         this.#setUsage(ticket!.link, ticket!.context, key, undefined);
       }
-      const payload = encodeMemoryBoundary(message);
+      const payload = encoded ?? encodeMemoryBoundary(message);
       const bytes = new TextEncoder().encode(payload);
       // A client that negotiated `messageCompressionV1` and
       // `routedCompressionV1` receives each message of 1 KiB or more that gzip
@@ -2311,11 +2393,14 @@ export class RoutedMemoryHost {
         )
         : payload;
       const size = typeof frame === "string" ? bytes.length : frame.length;
+      const part = splitPart(message);
       checkOutput(
         socket,
         size,
-        Math.max(socket.bufferedAmount, outgoing.bufferedBytes),
-        this.#limits.outputBytesPerSocket,
+        part
+          ? outgoing.partBytes
+          : Math.max(socket.bufferedAmount, outgoing.boundedBytes),
+        part ? partBound : this.#limits.outputBytesPerSocket,
         rememberClose,
         "data",
         message.type,
@@ -2327,10 +2412,11 @@ export class RoutedMemoryHost {
             this.#limits.frameSlots,
           ),
         }),
+        part ? "sync-parts" : "queued-output",
       );
       enqueueSource = source;
       try {
-        outgoing.send(route, frame);
+        outgoing.send(route, frame, part);
       } finally {
         enqueueSource = undefined;
       }
@@ -2585,6 +2671,20 @@ export class RoutedMemoryHost {
               !context.closed && !selected.link.closed &&
               context.spaces.has(space) &&
               context.spaces.get(space) === this.#options.ownership(space),
+            // A sync that one message could not carry, past the frame cap or
+            // the bytes a message may take, is split for a client that takes
+            // one in parts. A compressed message may take the 16 MiB its
+            // receiver expands it to, as text the 8 MiB on the socket; read
+            // at each send, since a client can turn compression off.
+            {
+              bytes: ROUTED_PART_BYTES,
+              values: this.#limits.frameSlots,
+              get whole() {
+                return sendCompression
+                  ? ROUTED_EXPANDED_LIMIT
+                  : ROUTED_RAW_LIMIT;
+              },
+            },
           );
           context.backend = backend;
           if (prior !== undefined && prior !== socket) {
@@ -2787,12 +2887,36 @@ export class RoutedMemoryHost {
               ? body.watchIds
               : body.watches;
             requireRouted(Array.isArray(listed));
+            // A set staged in parts (`body.stage`, `body.part`) is checked as
+            // the set its parts so far make, starting from the parts held when
+            // this one follows them; the server refuses one that does not. A
+            // part that says more follow is held and changes nothing the
+            // session holds. The parts are seen in order, each after the one
+            // before it was answered: the router holds a session's requests
+            // behind its unanswered watch mutation, and this host dispatches a
+            // session's watch mutations one at a time.
+            const set = body.type === "session.watch.set";
+            // As the Memory server reads them from a set alone.
+            requireRouted(
+              !set ||
+                (body.part === undefined) === (body.stage === undefined) &&
+                  (body.part === undefined ||
+                    (Number.isSafeInteger(body.part) &&
+                      (body.part as number) >= 0 &&
+                      isRoutedIdentifier(body.stage))) &&
+                  (body.more === undefined ||
+                    (body.more === true && body.part !== undefined)),
+            );
+            const staging = set && body.more === true;
+            const base = set && typeof body.part === "number" &&
+                body.part > 0 && session.staged?.stage === body.stage &&
+                session.staged?.parts === body.part
+              ? session.staged
+              : undefined;
             // Mirrored only while a watch quota needs the IDs; see
             // `#trackWatchIds`.
             const watches = this.#trackWatchIds
-              ? body.type === "session.watch.set"
-                ? new Set<string>()
-                : new Set(session.watches)
+              ? set ? new Set<string>(base?.watches) : new Set(session.watches)
               : undefined;
             for (const watch of listed) {
               const id = body.type === "session.watch.remove"
@@ -2809,13 +2933,25 @@ export class RoutedMemoryHost {
             // on either change nothing the session holds, and counting them
             // would put the session's usage below what the server keeps for
             // it. On every request they must still be lists.
-            const named = (field: unknown, held: number): number => {
-              if (field === undefined) return held;
-              const length = routedListLength(field);
-              return body.type === "session.watch.set" ? length : held;
+            const named = (
+              field: unknown,
+              held: number,
+              staged: number | undefined,
+            ): number => {
+              const length = field === undefined
+                ? undefined
+                : routedListLength(field);
+              if (!set || (length === undefined && staged === undefined)) {
+                return held;
+              }
+              return (staged ?? 0) + (length ?? 0);
             };
-            const holdings = named(body.holdings, session.holdings ?? 0);
-            const views = named(body.views, session.views ?? 0);
+            const holdings = named(
+              body.holdings,
+              session.holdings ?? 0,
+              base?.holdings,
+            );
+            const views = named(body.views, session.views ?? 0, base?.views);
             // Bounds on what one session holds, refused for good: the watch
             // IDs by `limits.watchesPerSession`, the views by
             // `limits.viewsPerSession`.
@@ -2823,13 +2959,17 @@ export class RoutedMemoryHost {
             // whether it fits depends on the IDs the session already holds,
             // so it is answered and the socket stays open, as the router
             // answers it; a `session.watch.set` that names more IDs than a
-            // session may hold is answered the same way.
+            // session may hold is answered the same way. A set staged in parts
+            // names its holdings over several frames, which the frame bound on
+            // holdings does not bound, so its holdings are bounded here too.
             if (
               exceedsLimit(
                 watches?.size ?? 0,
                 this.#limits.watchesPerSession,
               ) ||
-              exceedsLimit(views, this.#limits.viewsPerSession)
+              exceedsLimit(views, this.#limits.viewsPerSession) ||
+              (body.part !== undefined &&
+                exceedsLimit(holdings, this.#limits.holdingsPerSession))
             ) {
               throw new RoutedRequestRefusal("frame-limit");
             }
@@ -2840,9 +2980,26 @@ export class RoutedMemoryHost {
               ...(this.#trackWatchIds ? { watches } : {}),
               ...(this.#trackHoldings ? { holdings } : {}),
               ...(this.#trackViews ? { views } : {}),
+              ...(staging
+                ? {
+                  staged: {
+                    stage: body.stage as string,
+                    parts: (body.part as number) + 1,
+                    ...(watches === undefined ? {} : { watches }),
+                    ...(body.holdings === undefined &&
+                        base?.holdings === undefined
+                      ? {}
+                      : { holdings }),
+                    ...(body.views === undefined && base?.views === undefined
+                      ? {}
+                      : { views }),
+                  },
+                }
+                : {}),
               prior: ticket.context.usage.get(key),
             });
-            if (countWatches || countHoldings) {
+            // A held part leaves the session's usage as it is.
+            if (!staging && (countWatches || countHoldings)) {
               this.#setUsage(ticket.link, ticket.context, key, {
                 principal: session.principal,
                 count: countWatches ? (watches?.size ?? 0) + views : 0,
@@ -3076,7 +3233,8 @@ function sendBounded(
  * message is admitted when the socket holds nothing (`bufferedBytes` is zero),
  * however large; otherwise `queueLimit`, when enabled, bounds the queued bytes
  * plus the message, so one socket's queue stays bounded while a response that
- * only fits alone (a whole-space sync) still goes out.
+ * only fits alone still goes out. A part of a split sync is checked against
+ * the parts retained and their own bound, and refused as `queued`.
  */
 function checkOutput(
   socket: WebSocket,
@@ -3087,6 +3245,7 @@ function checkOutput(
   endpoint: OutputLimit["endpoint"],
   messageType?: OutputLimit["messageType"],
   diagnostics?: () => RoutedOutputSnapshot,
+  queued: "queued-output" | "sync-parts" = "queued-output",
 ): void {
   const tooLarge = size > ROUTED_RAW_LIMIT;
   if (
@@ -3102,7 +3261,7 @@ function checkOutput(
         bufferedBytes,
         limitBytes: tooLarge ? ROUTED_RAW_LIMIT : queueLimit as number,
         endpoint,
-        classification: tooLarge ? "single-message" : "queued-output",
+        classification: tooLarge ? "single-message" : queued,
         ...(messageType === undefined ? {} : { messageType }),
         ...(diagnostics === undefined ? {} : { diagnostics: diagnostics() }),
       }),

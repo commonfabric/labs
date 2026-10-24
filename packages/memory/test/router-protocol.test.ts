@@ -541,6 +541,33 @@ describe("router-protocol", () => {
     expect(() => sender.send(route, "x")).toThrow();
   });
 
+  it("neither refuses nor counts the parts of split syncs, and bounds other output on its own", () => {
+    const { sender, errors } = heldSender(100);
+    // Three parts pass a bound smaller than they are together, and are not
+    // counted against it.
+    for (let i = 0; i < 3; i++) sender.send(route, "x".repeat(80), true);
+    expect(sender.bufferedBytes).toBe(240);
+    expect(sender.partBytes).toBe(240);
+    expect(sender.boundedBytes).toBe(0);
+    // Other output is bounded on its own: alone it may take the bound, and
+    // behind itself it may not pass it.
+    sender.send(route, "y".repeat(80));
+    expect(sender.boundedBytes).toBe(80);
+    expect(() => sender.send(route, "y".repeat(30))).toThrow();
+    expect(errors).toHaveLength(1);
+    // Closing releases the parts with everything else.
+    expect(sender.partBytes).toBe(0);
+  });
+
+  it("releases a part's bytes when its body completes", () => {
+    const { sender, ack, callbacks } = heldSender(100);
+    sender.send(route, "x".repeat(80), true);
+    sender.send(route, "y".repeat(10));
+    while (callbacks.length > 0) ack();
+    expect(sender.bufferedBytes).toBe(0);
+    expect(sender.partBytes).toBe(0);
+  });
+
   it("distinguishes retained bodies from successful record writes and measures their ages", () => {
     let now = 10;
     const { sender, writes, callbacks, inFlight } = heldSender(

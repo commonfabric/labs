@@ -172,6 +172,8 @@ describe("memory v2 flags", () => {
       routedCompressionV1: false,
       syncCrossingsV1: true,
       watchRemoveV1: true,
+      syncPartsV1: true,
+      watchSetPartsV1: true,
       syncSchemaTableV2: false,
       syncLabelTableV1: true,
       commitLabelTableV1: true,
@@ -211,6 +213,8 @@ describe("memory v2 flags", () => {
       routedCompressionV1: false,
       syncCrossingsV1: true,
       watchRemoveV1: true,
+      syncPartsV1: true,
+      watchSetPartsV1: true,
       syncSchemaTableV2: true,
       syncLabelTableV1: true,
       commitLabelTableV1: true,
@@ -254,6 +258,8 @@ describe("memory v2 flags", () => {
         routedCompressionV1: false,
         syncCrossingsV1: false,
         watchRemoveV1: false,
+        syncPartsV1: false,
+        watchSetPartsV1: false,
       },
       {
         modernCellRep: true,
@@ -289,6 +295,8 @@ describe("memory v2 flags", () => {
         routedCompressionV1: false,
         syncCrossingsV1: false,
         watchRemoveV1: false,
+        syncPartsV1: false,
+        watchSetPartsV1: false,
       },
     ));
   });
@@ -431,6 +439,8 @@ describe("parseMemoryProtocolFlags", () => {
       routedCompressionV1: false,
       syncCrossingsV1: false,
       watchRemoveV1: false,
+      syncPartsV1: false,
+      watchSetPartsV1: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
       genesisRoot: false,
@@ -463,6 +473,8 @@ describe("parseMemoryProtocolFlags", () => {
       routedCompressionV1: false,
       syncCrossingsV1: false,
       watchRemoveV1: false,
+      syncPartsV1: false,
+      watchSetPartsV1: false,
     });
   });
 
@@ -502,6 +514,8 @@ describe("parseMemoryProtocolFlags", () => {
         routedCompressionV1: false,
         syncCrossingsV1: false,
         watchRemoveV1: false,
+        syncPartsV1: false,
+        watchSetPartsV1: false,
       },
     );
   });
@@ -536,6 +550,18 @@ describe("parseMemoryProtocolFlags", () => {
       true,
     );
   });
+
+  for (const flag of ["syncPartsV1", "watchSetPartsV1"] as const) {
+    it(`accepts the ${flag} capability key`, () => {
+      assertEquals(parseMemoryProtocolFlags({})?.[flag], false);
+      assertEquals(parseMemoryProtocolFlags({ [flag]: true })?.[flag], true);
+      assertEquals(parseMemoryProtocolFlags({ [flag]: "true" }), null);
+      assertEquals(
+        wireMemoryProtocolFlags(getMemoryProtocolFlags())[flag],
+        true,
+      );
+    });
+  }
 
   it("accepts the syncCrossingsV1 capability key", () => {
     assertEquals(parseMemoryProtocolFlags({})?.syncCrossingsV1, false);
@@ -579,6 +605,8 @@ describe("parseMemoryProtocolFlags", () => {
         routedCompressionV1: false,
         syncCrossingsV1: false,
         watchRemoveV1: false,
+        syncPartsV1: false,
+        watchSetPartsV1: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
         pendingReadStacks: false,
@@ -624,6 +652,8 @@ describe("parseMemoryProtocolFlags", () => {
         routedCompressionV1: false,
         syncCrossingsV1: false,
         watchRemoveV1: false,
+        syncPartsV1: false,
+        watchSetPartsV1: false,
       },
     );
   });
@@ -664,6 +694,8 @@ describe("parseMemoryProtocolFlags", () => {
         routedCompressionV1: false,
         syncCrossingsV1: false,
         watchRemoveV1: false,
+        syncPartsV1: false,
+        watchSetPartsV1: false,
       },
     );
   });
@@ -712,6 +744,8 @@ describe("parseMemoryProtocolFlags", () => {
         routedCompressionV1: false,
         syncCrossingsV1: false,
         watchRemoveV1: false,
+        syncPartsV1: false,
+        watchSetPartsV1: false,
       },
     );
   });
@@ -753,6 +787,8 @@ describe("parseMemoryProtocolFlags", () => {
         routedCompressionV1: false,
         syncCrossingsV1: false,
         watchRemoveV1: false,
+        syncPartsV1: false,
+        watchSetPartsV1: false,
       },
     );
   });
@@ -791,6 +827,8 @@ describe("parseMemoryProtocolFlags", () => {
         routedCompressionV1: false,
         syncCrossingsV1: false,
         watchRemoveV1: false,
+        syncPartsV1: false,
+        watchSetPartsV1: false,
       },
     );
   });
@@ -813,6 +851,8 @@ describe("parseMemoryProtocolFlags", () => {
         routedCompressionV1: false,
         syncCrossingsV1: false,
         watchRemoveV1: false,
+        syncPartsV1: false,
+        watchSetPartsV1: false,
       }),
       {
         genesisRoot: false,
@@ -845,6 +885,8 @@ describe("parseMemoryProtocolFlags", () => {
         routedCompressionV1: false,
         syncCrossingsV1: false,
         watchRemoveV1: false,
+        syncPartsV1: false,
+        watchSetPartsV1: false,
       },
     );
   });
