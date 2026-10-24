@@ -1662,7 +1662,7 @@ export interface FabriChatManagerOutput {
    * other than those whose room's roster lists a profile attesting their
    * recipient.
    */
-  outgoingNotices: ChatManagerNotice[];
+  outgoingNotices: PerUser<ChatManagerNotice[]>;
 
   /**
    * The people this user's rooms list, other than this user: by the principal

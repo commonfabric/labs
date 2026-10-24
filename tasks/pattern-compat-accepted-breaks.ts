@@ -1222,10 +1222,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
       // recorded change each one comes from.
       "result.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.$VIEWS.chats.outgoingNotices",
+      "result.outgoingNotices",
     ],
     reason:
       "a manager's room link now types the room's `messages`, which the recorded link left open; every stored room link is to a room output whose `messages` the new type admits" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-room-link-messages-break.md",
   },
   {
@@ -1253,10 +1258,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
       // recorded change each one comes from.
       "result.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.$VIEWS.chats.outgoingNotices",
+      "result.outgoingNotices",
     ],
     reason:
       "a manager's index entry now types `revision`, and a refused outcome `code`, which the recorded outcomes left open; no stored request outcome holds either" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-index-revision-break.md",
   },
   {
@@ -1288,10 +1298,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // recorded change each one comes from.
       "result.requests.*",
       "result.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.$VIEWS.chats.outgoingNotices",
+      "result.outgoingNotices",
     ],
     reason:
       "a manager's room link now types the room's `roster`, which the recorded link left open; every stored room link is to a room output with no `roster` or with a list of profile links, which the new type admits" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-room-link-roster-break.md",
   },
   {
@@ -1319,10 +1334,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.people",
       "result.requests.*",
       "result.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.$VIEWS.chats.outgoingNotices",
+      "result.outgoingNotices",
     ],
     reason:
       "a manager's rooms and people declare the per-session scope they are derived in; nothing is stored at either path for a reader to refuse" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-view-scopes-break.md",
   },
   {
@@ -1361,10 +1381,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.chats.rooms",
       "result.people",
       "result.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.$VIEWS.chats.outgoingNotices",
+      "result.outgoingNotices",
     ],
     reason:
       "a room's policy states `maxAttachments`, an optional number, where its schema took any value; no stored policy holds the key" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-max-attachments-break.md",
   },
   {
@@ -1397,10 +1422,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
       // recorded change each one comes from.
       "result.chatManager.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.chatManager.$VIEWS.chats.outgoingNotices",
+      "result.chatManager.outgoingNotices",
     ],
     reason:
       "home's chat manager's rooms declare the per-session scope they are derived in; a home rolled forward still delivers them, and nothing is stored at that path for a reader to refuse" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-view-scopes-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1426,10 +1456,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.chatManager.people",
       "result.chatManager.requests.*",
       "result.chatManager.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.chatManager.$VIEWS.chats.outgoingNotices",
+      "result.chatManager.outgoingNotices",
     ],
     reason:
       "home's chat manager's rooms and people declare the per-session scope they are derived in; a home rolled forward still delivers them, and nothing is stored at either path for a reader to refuse" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-view-scopes-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1456,10 +1491,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
       // recorded change each one comes from.
       "result.chatManager.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.chatManager.$VIEWS.chats.outgoingNotices",
+      "result.chatManager.outgoingNotices",
     ],
     reason:
       "home's chat manager's rooms declare the per-session scope they are derived in, and its default profile moved under a slot cell as the slot break records; a home rolled forward still delivers both" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-view-scopes-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1493,10 +1533,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.chats.rooms",
       "result.people",
       "result.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.$VIEWS.chats.outgoingNotices",
+      "result.outgoingNotices",
     ],
     reason:
       "a manager's request outcome now types `delivery`, and a refused one the `shared-inbox` code, which the recorded outcomes left open; no stored request outcome holds either" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-add-member-offer-break.md",
   },
   {
@@ -1522,10 +1567,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
       // recorded change each one comes from.
       "result.chatManager.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.chatManager.$VIEWS.chats.outgoingNotices",
+      "result.chatManager.outgoingNotices",
     ],
     reason:
       "home's chat manager's request outcomes now type `delivery`, and a refused one the `shared-inbox` code, and its rooms declare the per-session scope they are derived in; a home rolled forward still delivers both" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-add-member-offer-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1556,10 +1606,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.chatManager.$VIEWS.chats.rooms",
       "result.chatManager.people",
       "result.chatManager.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.chatManager.$VIEWS.chats.outgoingNotices",
+      "result.chatManager.outgoingNotices",
     ],
     reason:
       "home's chat manager's request outcomes now type `delivery`, and a refused one the `shared-inbox` code, which the recorded outcomes left open; a home rolled forward still delivers them" +
-      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-add-member-offer-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -2531,9 +2586,14 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.chats.rooms",
       "result.people",
       "result.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.$VIEWS.chats.outgoingNotices",
+      "result.outgoingNotices",
     ],
     reason:
-      "the manager's views derived under the reader's access are stored per user rather than per session, in documents of their own; a manager rolled forward lists its rooms",
+      "the manager's views derived under the reader's access are stored per user rather than per session, in documents of their own; a manager rolled forward lists its rooms" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-view-scopes-per-user-break.md",
   },
   {
@@ -2613,15 +2673,61 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.chatManager.$VIEWS.chats.rooms",
       "result.chatManager.people",
       "result.chatManager.rooms",
+      // The outgoing notices, declared per user as well, which
+      // `fabrichat-outgoing-notices-per-user-break.md` records.
+      "result.chatManager.$VIEWS.chats.outgoingNotices",
+      "result.chatManager.outgoingNotices",
     ],
     reason:
-      "home's chat manager's views derived under the reader's access are stored per user rather than per session; a home rolled forward lists its chats",
+      "home's chat manager's views derived under the reader's access are stored per user rather than per session; a home rolled forward lists its chats" +
+      "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)",
     record: "docs/history/fabrichat-view-scopes-per-user-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
       on: "2026-10-23",
       reason:
         "choosing per-user scopes for FabriChat's derived views, with binding renames giving them documents of their own so a home rolled forward keeps listing its chats, and accepting the warnings an update logs once per view as it opens each piece",
+    },
+  },
+  {
+    // The manager's `outgoingNotices` is declared per user, as the value
+    // behind it already was: it leaves out a notice whose room's roster
+    // attests its recipient, and the roster is read under the reader's access.
+    // These are the baselines recorded with the other views per user, which no
+    // earlier entry names.
+    pattern: "fabrichat/manager.tsx",
+    baselines: [
+      "20261024T171043Z-W-9cfBARX4FCKpd0",
+    ],
+    paths: [
+      "result.$VIEWS.chats.outgoingNotices",
+      "result.outgoingNotices",
+    ],
+    reason:
+      "the manager's outgoing notices, derived under the reader's access, are declared per user as the value behind them is stored; a manager rolled forward lists them",
+    record: "docs/history/fabrichat-outgoing-notices-per-user-break.md",
+  },
+  {
+    // Home types its `chatManager` as the manager's output, so the manager's
+    // per-user `outgoingNotices` reaches home's contract too. Home is a
+    // required pattern, so it carries the ruling that lets it name one.
+    pattern: "system/home.tsx",
+    baselines: [
+      "20261024T002138Z-zFMiTW917nbAWd9u",
+      "20261024T171045Z-AbQ0NYaesBn-mJ1I",
+    ],
+    paths: [
+      "result.chatManager.$VIEWS.chats.outgoingNotices",
+      "result.chatManager.outgoingNotices",
+    ],
+    reason:
+      "home's chat manager's outgoing notices, derived under the reader's access, are declared per user as the value behind them is stored; a home rolled forward lists them",
+    record: "docs/history/fabrichat-outgoing-notices-per-user-break.md",
+    requiredPatternOverride: {
+      rulingBy: "Dan",
+      on: "2026-10-24",
+      reason:
+        "declaring the manager's outgoing notices per user as the follow-up to the views per user, once the update proof reports every issue in each role so the entries it needs are exact",
     },
   },
 ];

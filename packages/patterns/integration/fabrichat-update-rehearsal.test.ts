@@ -33,10 +33,10 @@
  * source, that nothing logged a refused transition, a dropped stored slot or a
  * failed start of a nested piece, that every stored slot and per-user outcome
  * reads as it did, that the updated room can edit and react to a seeded
- * message, that the manager lists its rooms and the group room its
- * participants' principals, before and after a room is started, and that
- * starting a direct chat with the same person again finds the room the
- * manager holds.
+ * message, that the manager lists its rooms and its outgoing notices and the
+ * group room its participants' principals, before and after a room is
+ * started, and that starting a direct chat with the same person again finds
+ * the room the manager holds.
  *
  * The whole rehearsal runs twice: once with the manager's and the group room's
  * views never read before the update, and once with a client showing Home and
@@ -243,6 +243,13 @@ const kindsOf = (rooms: unknown): string[] | undefined =>
     ? rooms.map((entry) => (entry as { kind?: string }).kind ?? "none").sort()
     : undefined;
 
+const recipientsOf = (notices: unknown): string[] | undefined =>
+  Array.isArray(notices)
+    ? notices.map((notice) =>
+      (notice as { recipient?: string }).recipient ?? "none"
+    ).sort()
+    : undefined;
+
 /**
  * Rehearses the update as `title`. With `readBefore`, a client shows Home and
  * reads the manager's and the group room's views before the update, as one
@@ -346,6 +353,10 @@ const rehearse = (title: string, readBefore: boolean): void => {
       entries: ((await room.key("participantEntries").pull()) as
         | { principal?: string }[]
         | undefined)?.map((entry) => entry.principal ?? "none"),
+      notices: recipientsOf(await manager.key("outgoingNotices").pull()),
+      viewedNotices: recipientsOf(
+        await manager.key("$VIEWS").key("chats").key("outgoingNotices").pull(),
+      ),
     });
     type Views = Awaited<ReturnType<typeof views>>;
     let viewsBefore: Views | undefined;
@@ -666,13 +677,17 @@ const rehearse = (title: string, readBefore: boolean): void => {
       expect(emoji.map((reaction) => reaction.emoji)).toEqual(["🎉"]);
     });
 
-    it("lists the manager's rooms and the group room's participants after the update, and a room started since", async () => {
+    it("lists the manager's rooms and outgoing notices and the group room's participants after the update, and a room started since", async () => {
       const listed = {
         rooms: ["direct", "group"],
         viewedRooms: ["direct", "group"],
         principals: [owner.did()],
         viewedPrincipals: [owner.did()],
         entries: [owner.did()],
+        // No room's roster attests anyone but the owner, so every notice is
+        // still to be delivered.
+        notices: [added, counterpart, member].sort(),
+        viewedNotices: [added, counterpart, member].sort(),
       };
       if (readBefore) expect(viewsBefore).toEqual(listed);
       expect(await views()).toEqual(listed);
@@ -692,6 +707,8 @@ const rehearse = (title: string, readBefore: boolean): void => {
       expect(await views()).toMatchObject({
         rooms: ["direct", "group", "group"],
         viewedRooms: ["direct", "group", "group"],
+        notices: [added, counterpart, member, member].sort(),
+        viewedNotices: [added, counterpart, member, member].sort(),
       });
     });
 
