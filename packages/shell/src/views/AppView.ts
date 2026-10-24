@@ -61,14 +61,6 @@ const SEMANTIC_RESOLUTION_FIELDS = {
 } as const satisfies Record<keyof Required<SlugReferenceTarget>, boolean>;
 
 /**
- * The schema the slug watch reads the slug under. The watch reads it only to
- * be woken, and re-resolves the slug when it is. The read resolves the slug's
- * redirect, which a repoint changes, and stops at the shape of what the slug
- * names, so a write inside the piece it names does not wake the watch.
- */
-const SLUG_WATCH_SCHEMA = { type: "object", properties: {} } as const;
-
-/**
  * Which fields of a refusal the view's state depends on, classified and
  * closed the same way.
  *
@@ -763,9 +755,7 @@ export class XAppView extends BaseView {
         }
         void this.#refreshSlugTarget(watch);
       };
-      watch.cancel = cell.asSchema(SLUG_WATCH_SCHEMA).subscribe(refresh, {
-        onRefused: refresh,
-      });
+      watch.cancel = cell.subscribe(refresh, { onRefused: refresh });
     }).catch((error) => {
       if (!this.#isCurrentSlugWatch(watch)) return;
       if (rt.signal.aborted) {
