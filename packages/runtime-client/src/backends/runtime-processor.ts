@@ -1083,6 +1083,7 @@ export class RuntimeProcessor {
    */
   #hostReadGate = new HostReadGate(undefined, {});
   #cancelSpaceAccessLoss?: Cancel;
+  #cancelSpaceAccessRestored?: Cancel;
   #cancelConnectionRestored?: Cancel;
 
   /**
@@ -1123,6 +1124,17 @@ export class RuntimeProcessor {
           client.post({ type: NotificationType.SpaceAccessLost, space });
         }
       });
+    // An access change is a denial or a recovery, and only a recovery leaves
+    // the space with no access error.
+    const storage = runtime.storageManager;
+    this.#cancelSpaceAccessRestored = storage?.subscribeSpaceAccessChange?.(
+      (space) => {
+        if (storage.spaceAccessError?.(space) !== undefined) return;
+        for (const client of clients()) {
+          client.post({ type: NotificationType.SpaceAccessRestored, space });
+        }
+      },
+    );
     this.#cancelConnectionRestored = runtime.storageManager
       ?.subscribeConnectionRestored?.(() => {
         for (const client of clients()) {
@@ -1449,6 +1461,8 @@ export class RuntimeProcessor {
         this.#intentOutcomeCancel?.();
         this.#cancelSpaceAccessLoss?.();
         this.#cancelSpaceAccessLoss = undefined;
+        this.#cancelSpaceAccessRestored?.();
+        this.#cancelSpaceAccessRestored = undefined;
         this.#cancelConnectionRestored?.();
         this.#cancelConnectionRestored = undefined;
         this.#spaceAccessRetries.dispose();

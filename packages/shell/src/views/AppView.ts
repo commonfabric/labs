@@ -408,11 +408,11 @@ export class XAppView extends BaseView {
     | undefined = undefined;
 
   /**
-   * The runtime this view is listening to for `connectionrestored`: the
-   * view's runtime, from the update that brought it until the view leaves the
-   * document.
+   * The runtime this view is listening to for `connectionrestored` and
+   * `spaceaccessrestored`: the view's runtime, from the update that brought
+   * it until the view leaves the document.
    */
-  #restoredListenerRt: RuntimeInternals | undefined = undefined;
+  #recoveryListenerRt: RuntimeInternals | undefined = undefined;
 
   /**
    * The revision the slug watch bumps to make the selection run again, which
@@ -984,7 +984,21 @@ export class XAppView extends BaseView {
   };
 
   /**
-   * Helper for `#onConnectionRestored()`, which runs `task` again if it has
+   * Handler for the runtime's `spaceaccessrestored`, which does what
+   * {@link XAppView.#onConnectionRestored} does when the space that admitted
+   * the runtime's principal again is the one the view shows. The runtime
+   * drops that space's failed loads alone, so a run for any other space
+   * would reach only the failure it already has.
+   */
+  #onSpaceAccessRestored = (event: Event): void => {
+    const { space } = (event as CustomEvent<{ space: DID }>).detail;
+    if (space !== this.space) return;
+    this.#runAgainIfFailed(this._selectedPattern);
+    this.#runAgainIfFailed(this._spaceRootPattern);
+  };
+
+  /**
+   * Helper for the recovery handlers, which runs `task` again if it has
    * failed, or once it fails if it is running. A run asked for in between,
    * whichever way it ends, is the one this waits on, and a task already
    * running again by then is left to it.
@@ -1000,17 +1014,23 @@ export class XAppView extends BaseView {
   }
 
   /**
-   * Listens for `connectionrestored` on `rt` and on no other runtime, so a
-   * replaced runtime's restored connections run nothing here.
+   * Listens for `connectionrestored` and `spaceaccessrestored` on `rt` and on
+   * no other runtime, so a replaced runtime's recoveries run nothing here.
    */
-  #listenForRestoredConnections(rt: RuntimeInternals | undefined): void {
-    if (rt === this.#restoredListenerRt) return;
-    this.#restoredListenerRt?.removeEventListener(
+  #listenForRecoveries(rt: RuntimeInternals | undefined): void {
+    const previous = this.#recoveryListenerRt;
+    if (rt === previous) return;
+    previous?.removeEventListener(
       "connectionrestored",
       this.#onConnectionRestored,
     );
-    this.#restoredListenerRt = rt;
+    previous?.removeEventListener(
+      "spaceaccessrestored",
+      this.#onSpaceAccessRestored,
+    );
+    this.#recoveryListenerRt = rt;
     rt?.addEventListener("connectionrestored", this.#onConnectionRestored);
+    rt?.addEventListener("spaceaccessrestored", this.#onSpaceAccessRestored);
   }
 
   #replacePieceUrlWithSlug(view: typeof this.app.view, slug: string) {
@@ -1040,13 +1060,13 @@ export class XAppView extends BaseView {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.#listenForRestoredConnections(this.rt);
+    this.#listenForRecoveries(this.rt);
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
     this.#stopSlugWatch();
-    this.#listenForRestoredConnections(undefined);
+    this.#listenForRecoveries(undefined);
   }
 
   override updated(changedProperties: Map<string, unknown>) {
@@ -1075,7 +1095,7 @@ export class XAppView extends BaseView {
     }
 
     if (changedProperties.has("rt")) {
-      this.#listenForRestoredConnections(this.rt);
+      this.#listenForRecoveries(this.rt);
     }
 
     // Update debugger visibility from app state

@@ -259,6 +259,7 @@ export const NOTIFICATION_DISPOSITIONS = {
     why: "a runtime error's message, which can quote a value",
   },
   [NotificationType.SpaceAccessLost]: lifecycle,
+  [NotificationType.SpaceAccessRestored]: lifecycle,
   [NotificationType.ConnectionRestored]: lifecycle,
   [NotificationType.Telemetry]: {
     kind: "ungated",

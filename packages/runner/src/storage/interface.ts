@@ -582,7 +582,8 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
 
   /**
    * Observes a connection to a memory server coming back after it was lost:
-   * the connection is up again and the sessions it carries are restored.
+   * the connection is up again and the sessions it carries are restored, apart
+   * from any a retriable denial holds, which restore on their own later.
    * Called once per restored connection, so a manager holding several calls
    * it once for each that comes back. The first connection to a server, and a
    * reconnect attempt that fails, do not emit. A load that failed while the

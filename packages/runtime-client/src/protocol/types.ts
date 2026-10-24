@@ -599,6 +599,12 @@ export enum NotificationType {
   SpaceAccessLost = "callback:space-access-lost",
 
   /**
+   * Reports that a space which refused the runtime principal has admitted it
+   * again, so a load that the refusal failed may succeed if asked again.
+   */
+  SpaceAccessRestored = "callback:space-access-restored",
+
+  /**
    * Reports that a connection to a memory server came back after it was
    * lost, so a load that failed while it was down may succeed if asked again.
    */
@@ -4102,6 +4108,16 @@ export type SpaceAccessLostNotification = {
 };
 
 /**
+ * The runtime principal admitted again to one space that had refused it, as
+ * a retry of the space's access decides: one the memory server's
+ * `session/admissible` notice started, or one a client asked for.
+ */
+export type SpaceAccessRestoredNotification = {
+  type: NotificationType.SpaceAccessRestored;
+  space: DID;
+};
+
+/**
  * A connection of the worker's to a memory server, back after it was lost.
  * It names no space: a load reads from more than the space it asks about, so
  * which connection it failed on is not something a client could match.
@@ -4402,6 +4418,7 @@ export type IPCRemoteNotification =
   | ErrorNotification
   | EventIntentOutcomeNotification
   | SpaceAccessLostNotification
+  | SpaceAccessRestoredNotification
   | ConnectionRestoredNotification
   | TelemetryNotification
   | VDomBatchNotification
