@@ -24,6 +24,12 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
 - The title a member last set: one keyed record, absent until a member sets
   one, which only `commitSetTitle` writes. `about.title` is computed from it
   and, where it is absent, from the title `about.record` holds.
+- What the room keeps about its threads, `threadInfo`: one keyed record per
+  thread, keyed by its root, absent until a member titles the thread, holding
+  the root's own cell and the thread's `title`. A send that starts a thread with
+  a `threadTitle` writes one, and so does `commitSetThreadTitle`. A thread's
+  summary takes its `title` from it and, where it is absent, from its root's
+  text (see [`ChatThreadSummary`](ChatThreadSummary.md#titles)).
 - Where the room keeps its space's file store, for a room that is its space's
   root: a `FileStoreRecord`, `{}` until `ensureFileStore` creates the store
   (see [`FileStore`](../fabrifile/FileStore.md#where-it-lives)), which it
@@ -90,12 +96,19 @@ Every write goes through one handler per stream:
 | `commitSendReaction` | `sendReaction` | `ChatReactSurface` |
 | `commitDeleteReaction` | `deleteReaction` | `ChatReactSurface` |
 | `commitSetTitle` | `setTitle` | `ChatRetitleSurface` |
+| `commitSetThreadTitle` | `setThreadTitle` | `ChatRetitleSurface` |
 
 The four send handlers differ only in where a send's reply comes from:
 `commitSend` takes it from the event, `commitComposerSend` from the reply the
 composer is composing, which a sent message ends, `commitThreadSend` from the
-open thread, and `commitReply` from the message its control is bound to. They
-admit and record a send alike, and are called the send handlers below. Each
+open thread and the message of it the thread composer quotes, which a sent
+message ends, and `commitReply` from the message its control is bound to, which
+it quotes, in that message's thread, or the one it roots. They admit and record
+a send alike, and are called the send handlers below. Each checks a send's
+reply before it writes: that its links fit where it is shown, that its
+`thread` is one of the room's messages in no thread, and that its `quotes` is
+one of the room's messages, in that thread where it names one (see
+[`ChatReply`](ChatReply.md#threads)), which reads at most those two messages. Each
 handler is bound to the cells it reads or writes and no others, and reads at
 most the message it acts on: nothing it does grows with the room.
 
@@ -199,7 +212,12 @@ that creates the room, so it is labeled with its creator, and `about` links it.
 own, so it is labeled with that member, and the creator's record keeps its
 label. It records each retitle's outcome in the sender's own `titleRequests`,
 kept `PerUser`, under the event's `requestId`, and a request already there
-changes nothing; a refusal writes nothing else.
+changes nothing; a refusal writes nothing else. A thread's title is stored the
+same way, labeled with the member who last set it, by `commitSetThreadTitle`,
+which records its outcomes in `threadTitleRequests`, and by `commitSend` and
+`commitThreadSend` for a send that titles the thread it starts. Its record's
+policy names those three, and a later schema can neither add a writer to a
+stored policy nor drop one.
 `canSend` is computed for each viewer from their access and whether their
 profile resolves.
 

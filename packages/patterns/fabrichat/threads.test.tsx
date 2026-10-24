@@ -200,6 +200,36 @@ export default pattern(() => {
             "inline-flex"
         ),
       },
+
+      // A post sent to both shows in the main conversation marked as in its
+      // thread, with no control starting a thread of its own, and the marker
+      // opens the thread it is in.
+      {
+        action: bob.sendMessage,
+        event: {
+          body: "Both ways",
+          replyTo: { thread: messages.key(0), shownIn: "both" },
+        },
+        trustedUi: sendGesture,
+      },
+      {
+        assertion: assert(() =>
+          controlDisplay(alice[UI], "Both ways", "In a thread") ===
+            "inline-flex" &&
+          findNode(rowIn(alice[UI], MAIN, "Both ways"), isButton("Thread")) ===
+            undefined &&
+          controlDisplay(alice[UI], "Root", "In a thread") === "none"
+        ),
+      },
+      {
+        action: action(() => clickInRow(alice[UI], "Both ways", "In a thread")),
+      },
+      {
+        assertion: assert(() =>
+          rowsIn(alice[UI], THREAD, [...ALL, "Both ways"]) ===
+            "row missing row row row"
+        ),
+      },
     ],
   };
 });
