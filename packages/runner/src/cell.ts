@@ -163,8 +163,12 @@ import { type MetaField, type RawMetaWriteAuthorization } from "./meta-seam.ts";
 import {
   type CellResult,
   createQueryResultProxy,
+  declaredShape,
+  declaresKey,
   getCellOrThrow,
   isCellResultForDereferencing,
+  selectsKeys,
+  SHAPE_READ,
   type ViewReadOut,
   viewReadOut,
 } from "./query-result-proxy.ts";
@@ -5556,7 +5560,9 @@ export function convertCellsToLinks(
  * A cell's value in the form the worker hands it to a host: each cell inside
  * it as the link it names, carrying the display form of that cell's label
  * view with every caveat's source redacted, and each query result read out
- * into the data behind it, following its links. A sigil link already in the
+ * into the data behind it, following its links, except a link under a key
+ * that the declaration of a crossed link does not name, which stays the link
+ * it is (`readOutView()`). A sigil link already in the
  * value is rebuilt as the container it is, view and all; stored data carries
  * no view on a link, the persist seam having stripped it, so the minted links
  * are where a view crosses. What a host is sent is
@@ -5855,12 +5861,17 @@ function convertOneToLinks(
  * The document is read once, whole, through the view's own checked read, so
  * a document that no longer holds what the view was built over refuses as
  * every access through the view does; the read registers every position
- * under it, where reading through the view registers each as it is reached. A stored link is followed where it sits, as the view follows
- * one on access, with the same resolution, so the dereference traces and
- * labeled crossings it records are the ones the view's reads record. A link
- * that returns to a position the walk is inside yields a back-link to it, as
- * a cycle does elsewhere in the walk. A stream position yields the link to
- * the stream, carrying the label view a view of it would carry.
+ * under it, where reading through the view registers each as it is reached.
+ * Under a declaration that selects among a record's keys (the view's own, or
+ * a followed link's, `declaredShape`), the record is read at its shape, each
+ * named member on its own and each other member as stored, with no link
+ * under it followed, as the view reads them. A stored link is followed
+ * where it sits, as the view follows one on access, with the same
+ * resolution, so the dereference traces and labeled crossings it records are
+ * the ones the view's reads record. A link that returns to a position the
+ * walk is inside yields a back-link to it, as a cycle does elsewhere in the
+ * walk. A stream position yields the link to the stream, carrying the label
+ * view a view of it would carry.
  *
  * `stack` is the path to the view from the walk's root, pushed to and popped
  * from as {@link convertOneToLinks} does, so a back-link made here names a
@@ -5890,19 +5901,30 @@ function readOutView(
 
     // What `stored` holds, which sits at `position` inside the document
     // `document` names, under the label view `cfcLabelView` carries for that
-    // document position. `position` is pushed to and popped from in step with
-    // `stack`.
+    // document position and the declaration `declaration` (read at its shape
+    // alone where the declaration selects keys, else whole). `position` is
+    // pushed to and popped from in step with `stack`.
     const walk = (
       stored: unknown,
       document: NormalizedFullLink,
       position: string[],
       cfcLabelView: CfcLabelView | undefined,
+      declaration: (JSONSchema & object) | undefined,
     ): FabricValue => {
       if (isSigilLink(stored)) {
+        // Followed from this position under its own declaration, which the
+        // resolution carries onto the target where the stored link declares
+        // nothing: the document's schema describes the document, not the
+        // member the link sits at.
+        const { schema: _documentSchema, ...address } = document;
         const resolved = resolveLinkTracingDereferences(
           runtime,
           tx,
-          { ...document, path: [...document.path, ...position] },
+          {
+            ...address,
+            path: [...document.path, ...position],
+            ...(declaration !== undefined && { schema: declaration }),
+          },
           "value",
           { markIfcCrossings: true },
         );
@@ -5918,7 +5940,26 @@ function readOutView(
         if (depth !== undefined) {
           return deepFreeze(linkRefFrom({ path: stack.slice(0, depth) }));
         }
-        return walk(tx.readValueOrThrow(target), target, [], targetView);
+        // What the link followed last declares of its target, carried onto
+        // the resolved link; its closure lives in the space of the document
+        // holding that link.
+        const targetDeclaration = declaredShape(
+          tx,
+          resolved.traces.length > 0
+            ? resolved.traces[resolved.traces.length - 1].source.space
+            : document.space,
+          target.schema,
+        );
+        return walk(
+          tx.readValueOrThrow(
+            target,
+            selectsKeys(targetDeclaration) ? SHAPE_READ : undefined,
+          ),
+          target,
+          [],
+          targetView,
+          targetDeclaration,
+        );
       }
       if (isStreamValue(stored)) {
         return streamLink(
@@ -5935,16 +5976,39 @@ function readOutView(
         // `query-result-proxy.ts` says what closes this.
         return Object.freeze({});
       }
-      const member = (key: string, value: unknown): FabricValue => {
+      // The declaration a member at `key` is read under: this one's schema
+      // for the key, where there is one.
+      const memberDeclaration = (key: string) =>
+        declaration === undefined ? undefined : declaredShape(
+          tx,
+          document.space,
+          ContextualFlowControl.getSchemaAtPath(declaration, [key]),
+        );
+      const member = (
+        key: string,
+        value: unknown,
+        memberDeclared: (JSONSchema & object) | undefined,
+      ): FabricValue => {
         stack.push(key);
         position.push(key);
         try {
-          return walk(value, document, position, cfcLabelView);
+          return walk(value, document, position, cfcLabelView, memberDeclared);
         } finally {
           position.pop();
           stack.pop();
         }
       };
+      // A member of a record read at its shape is read on its own: at its
+      // shape in turn where its declaration selects keys, else whole. A member
+      // the declaration does not name is read whole and kept as stored.
+      const readMember = (
+        key: string,
+        memberDeclared: (JSONSchema & object) | undefined,
+      ): unknown =>
+        tx.readValueOrThrow(
+          { ...document, path: [...document.path, ...position, key] },
+          selectsKeys(memberDeclared) ? SHAPE_READ : undefined,
+        );
       // The container is an ancestor of everything below it for as long as
       // the walk is inside it, and nothing else: a value reached again on
       // another branch is shared, and is read out again there.
@@ -5956,20 +6020,44 @@ function readOutView(
       try {
         if (Array.isArray(stored)) {
           return Object.freeze(
-            stored.map((element, index) => member(String(index), element)),
+            stored.map((element, index) => {
+              const key = String(index);
+              return member(key, element, memberDeclaration(key));
+            }),
           );
+        }
+        if (selectsKeys(declaration)) {
+          return Object.freeze(Object.fromEntries(
+            Object.keys(stored).map((key) => {
+              if (!declaresKey(declaration, key)) {
+                return [key, readMember(key, undefined) as FabricValue];
+              }
+              const memberDeclared = memberDeclaration(key);
+              return [
+                key,
+                member(key, readMember(key, memberDeclared), memberDeclared),
+              ];
+            }),
+          ));
         }
         return Object.freeze(Object.fromEntries(
           Object.entries(stored).map((
             [key, value],
-          ) => [key, member(key, value)]),
+          ) => [key, member(key, value, memberDeclaration(key))]),
         ));
       } finally {
         entered.delete(here);
       }
     };
 
-    return walk(view.readDocument(), view.link, [], view.cfcLabelView);
+    const declaration = view.declaration;
+    return walk(
+      view.readDocument(!selectsKeys(declaration)),
+      view.link,
+      [],
+      view.cfcLabelView,
+      declaration,
+    );
   });
 }
 

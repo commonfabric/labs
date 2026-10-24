@@ -3,18 +3,25 @@ import {
   FabricPrimitive,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
+import {
+  internSchema,
+  isNontrivialSchema,
+} from "@commonfabric/data-model-schema";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";
-import { isStreamValue } from "./builder/types.ts";
+import { isStreamValue, type JSONSchema } from "./builder/types.ts";
 import { type BackToCellInternals, toCell } from "./back-to-cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import { resolveLinkTracingDereferences } from "./link-resolution.ts";
 import { type NormalizedFullLink } from "./link-utils.ts";
 import { type Cell, createCell } from "./cell.ts";
 import { type Runtime } from "./runtime.ts";
+import { resolveSchema } from "./schema.ts";
+import { ensureExternalSchemaClosure } from "./schema-ifc.ts";
 import {
   type IExtendedStorageTransaction,
   type IReadOptions,
+  type MemorySpace,
 } from "./storage/interface.ts";
 import { ignoreReadForScheduling } from "./storage/reactivity-log.ts";
 import {
@@ -32,9 +39,10 @@ const MAX_RECURSION_DEPTH = 100;
 // array length) are recorded as nonRecursive so the engine applies shallow
 // (shape-only) conflict granularity to them — matching how the scheduler
 // reader-dirty index already treats nonRecursive reads. Value materialization
-// (leaf scalars via child-proxy creation, array methods that consume elements)
-// stays recursive.
-const SHAPE_READ: IReadOptions = { nonRecursive: true };
+// (leaf scalars via child-proxy creation, array methods that consume elements,
+// and a member a view's declaration does not name, which `get` and
+// `getOwnPropertyDescriptor` hand over as stored) stays recursive.
+export const SHAPE_READ: IReadOptions = { nonRecursive: true };
 
 // Cache of target objects to their proxies, scoped by ReactivityLog.
 //
@@ -152,6 +160,26 @@ export class ViewDriftError extends Error {
   }
 }
 
+/**
+ * What a view does with `declaration` at its own level, as a cache key
+ * term: nothing (`null`), read every member through a view (`"open"`), or
+ * read the named members through views and the rest as stored (the names,
+ * sorted). One declaration reaches a position spelled two ways, with local
+ * `#/$defs` references from a reader's own schema and with `cid:` references
+ * from a stored link, so the schema object cannot be the term: a link back
+ * to a position already viewed has to find that view. Two declarations that
+ * select alike at this level share a view, and its children's declarations
+ * are the first one's narrowed; where those select differently below, the
+ * children's own keys tell them apart only by their selections in turn.
+ */
+const declarationTerm = (
+  declaration: (JSONSchema & object) | undefined,
+): string[] | string | null => {
+  if (declaration === undefined) return null;
+  if (!selectsKeys(declaration)) return "open";
+  return Object.keys(declaration.properties as object).sort();
+};
+
 const proxyCacheKey = (
   link: NormalizedFullLink,
   cfcLabelView: CfcLabelView | undefined,
@@ -164,6 +192,10 @@ const proxyCacheKey = (
   // document that changes kind gets a new view on its next read, while the
   // one built over the old kind refuses (`ViewDriftError`).
   kind: ViewKind,
+  // Two views over one position under different declarations read it
+  // differently: which members are views and which are read as stored. Each
+  // is its own view; one under no declaration is the view there always was.
+  declaration: (JSONSchema & object) | undefined,
 ): string =>
   JSON.stringify([
     link.space,
@@ -172,6 +204,7 @@ const proxyCacheKey = (
     cfcLabelView ?? null,
     epoch ?? null,
     kind,
+    declarationTerm(declaration),
   ]);
 
 /** Whether a transaction can still answer a read. */
@@ -235,6 +268,64 @@ const arrayMethods: { [key: string]: ArrayMethodType } = {
   toString: ArrayMethodType.ReadOnly,
   toLocaleString: ArrayMethodType.ReadOnly,
 };
+
+/**
+ * The declaration a view at a position reads under: `schema`, a stored
+ * link's declaration carried onto a resolved link or a parent view's
+ * narrowed to this key, resolved to its structural form and interned, when
+ * it says something about the value beyond the handle kind and its `cid:`
+ * closure is complete. The closure is looked for in the registry first and
+ * then in `space`: a crossed link's closure travels with the document holding
+ * the link, and adopting the link's declaration registers all of it, so a
+ * member's part of it resolves from the registry wherever the member's
+ * document lives. A declaration that constrains nothing describes nothing,
+ * and one whose closure is missing or corrupt is ignored, as link resolution
+ * ignores it when narrowing (`ensureExternalSchemaClosure`); a view under
+ * either reads as it would under none.
+ */
+export function declaredShape(
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+  schema: JSONSchema | undefined,
+): (JSONSchema & object) | undefined {
+  if (!isObjectOrArray(schema)) return undefined;
+  if (!ensureExternalSchemaClosure(tx, space, schema)) return undefined;
+  const resolved = resolveSchema(schema);
+  if (!isObjectOrArray(resolved)) return undefined;
+  const { asCell: _asCell, ...shape } = resolved;
+  return isNontrivialSchema(shape) ? internSchema(resolved) : undefined;
+}
+
+/**
+ * Whether a record view declared as `shape` reads its key `key` through a
+ * child view: every key under no declaration, under one naming no
+ * `properties`, or under one admitting additional properties; otherwise the
+ * named ones, the rest being read as stored, as the schema view's query
+ * creator includes them (`#traverseObjectWithSchema`).
+ */
+export function declaresKey(
+  shape: (JSONSchema & object) | undefined,
+  key: string,
+): boolean {
+  if (!selectsKeys(shape)) return true;
+  return Object.hasOwn(shape.properties as object, key);
+}
+
+/**
+ * Whether `shape` selects among a record's keys at all: it names
+ * `properties` and admits no additional ones. A view under such a shape reads
+ * its container's shape, each named member through a view of its own and
+ * each other member as stored, where one under any other shape reads the
+ * container whole.
+ */
+export function selectsKeys(
+  shape: (JSONSchema & object) | undefined,
+): shape is JSONSchema & object {
+  if (shape === undefined) return false;
+  if (!isObjectOrArray(shape.properties)) return false;
+  const additional = shape.additionalProperties;
+  return additional === undefined || additional === false;
+}
 
 /**
  * Builds a read-only JS proxy view over a stored cell. Read traps resolve
@@ -434,6 +525,26 @@ function createViewProxy<T>(
     );
   }
 
+  // What this position is declared to hold: by the stored link the
+  // resolution followed last, whose schema it carries onto the resolved link,
+  // or by the view above this one, which narrowed its own declaration to this
+  // key. A view reads under it, as a shaped read crossing the link does
+  // (`combineSchemaForLink`), by the rule the schema view applies to a
+  // record whose schema names `properties` and admits no additional ones
+  // (`#traverseObjectWithSchema`): a key the declaration names is read
+  // through a child view under the declaration's schema for it, and a key it
+  // does not name is read as stored, whole, with no link under it followed.
+  // So a link behind an unnamed key stays a link, and nothing it reaches is
+  // read. The declaration's closure lives in the space of the document that
+  // holds the link.
+  const declared = declaredShape(
+    viewTx,
+    resolved.traces.length > 0
+      ? resolved.traces[resolved.traces.length - 1].source.space
+      : link.space,
+    link.schema,
+  );
+
   const value = viewTx.readValueOrThrow(link, SHAPE_READ) as any;
 
   // The SHAPE_READ above only tracks the container's shape, but the stream
@@ -535,6 +646,30 @@ function createViewProxy<T>(
     ? (Array.isArray(value) ? new Array(value.length) : {})
     : value;
   const boundKind = viewKindOf(value)!;
+  // The link a child view at `key` is built over: this view's declaration
+  // narrowed to the key, where there is one, else this view's own link
+  // extended.
+  const childLink = (key: string): NormalizedFullLink => {
+    if (declared === undefined) return { ...link, path: [...link.path, key] };
+    const { schema: _schema, ...rest } = link;
+    const child = ContextualFlowControl.getSchemaAtPath(declared, [key]);
+    return {
+      ...rest,
+      path: [...link.path, key],
+      ...(child !== undefined && { schema: child }),
+    };
+  };
+  // Whether `key` is read through a child view: every index of an array,
+  // and every key of a record its declaration names, or does not select
+  // among. Any other key is read as stored.
+  const declares = (key: string | symbol): boolean =>
+    typeof key === "symbol" || boundKind === "array" ||
+    declaresKey(declared, key);
+  // The value stored at `key`, read whole, as a key the declaration does not
+  // name is read: a recursive read, so a change inside it runs the reader
+  // again, and no resolution, so a link inside it stays a link.
+  const rawMember = (key: string): unknown =>
+    readTx().readValueOrThrow(childLink(key));
 
   // The value the document holds now, read through the transaction, with the
   // kind check every trap starts from. The read is the one the caller was
@@ -623,15 +758,23 @@ function createViewProxy<T>(
   // one cache per transaction — which is right, because it describes the instant
   // that transaction saw.
   const txCache = getProxyCache(tx, runtime);
-  const cacheKey = proxyCacheKey(link, cfcLabelView, epoch, boundKind);
+  const cacheKey = proxyCacheKey(
+    link,
+    cfcLabelView,
+    epoch,
+    boundKind,
+    declared,
+  );
 
   // Check if we already have a proxy for this target in the cache.
   // The cache key is the original `value` (not the stub), ensuring that
-  // the same frozen object always maps to the same proxy instance.
+  // the same frozen object always maps to the same proxy instance. The
+  // by-value index holds the views under no declaration alone: a view under
+  // one reads the value differently from the view of it there always was.
+  const sharesByValue = cfcLabelView === undefined && epoch === undefined &&
+    declared === undefined;
   const existingProxy = txCache.byLink.get(cacheKey) ??
-    (cfcLabelView === undefined && epoch === undefined
-      ? txCache.byValue.get(value)
-      : undefined);
+    (sharesByValue ? txCache.byValue.get(value) : undefined);
   if (existingProxy) return remember(existingProxy);
 
   const proxy = new Proxy(proxyTarget as object, {
@@ -694,10 +837,7 @@ function createViewProxy<T>(
                           runtime,
                           accessTx,
                           tx,
-                          {
-                            ...link,
-                            path: [...link.path, String(index)],
-                          },
+                          childLink(String(index)),
                           depth + 1,
                           childLabelView(cfcLabelView, String(index)),
                           pinned,
@@ -770,7 +910,7 @@ function createViewProxy<T>(
                     runtime,
                     accessTx,
                     tx,
-                    { ...link, path: [...link.path, String(i)] },
+                    childLink(String(i)),
                     depth + 1,
                     childLabelView(cfcLabelView, String(i)),
                     pinned,
@@ -853,13 +993,14 @@ function createViewProxy<T>(
           return Reflect.get(value, prop);
         }
 
+        if (!declares(prop)) return rawMember(prop);
         const accessTx = childViewTx();
         if (readStatsActive) recordProxyAccess(accessTx);
         return createViewProxy(
           runtime,
           accessTx,
           tx,
-          { ...link, path: [...link.path, prop] },
+          childLink(prop),
           depth + 1,
           childLabelView(cfcLabelView, String(prop)),
           pinned,
@@ -958,6 +1099,14 @@ function createViewProxy<T>(
         // (loom CT-1949). The `has` trap below keeps `in` -- there it is correct,
         // being the `in` operator's own trap.
         if (Object.hasOwn(current, prop)) {
+          if (!declares(prop)) {
+            return {
+              configurable: true,
+              enumerable: true,
+              writable: false,
+              value: rawMember(prop),
+            };
+          }
           const accessTx = childViewTx();
           if (readStatsActive) recordProxyAccess(accessTx);
           return {
@@ -968,7 +1117,7 @@ function createViewProxy<T>(
               runtime,
               accessTx,
               tx,
-              { ...link, path: [...link.path, prop as string] },
+              childLink(prop as string),
               depth + 1,
               childLabelView(cfcLabelView, String(prop)),
               pinned,
@@ -1040,16 +1189,17 @@ function createViewProxy<T>(
     readTx,
     atEpoch,
     link,
-    readDocument: () => currentValue(true),
+    readDocument: (recursive = true) => currentValue(recursive),
+    declaration: declared,
     cfcLabelView,
   });
 
   // Cache the proxy in the appropriate cache before returning
   txCache.byLink.set(cacheKey, proxy);
-  // Not the by-value index for a pinned view: it names a value rather than an
-  // instant, so it would hand a view taken at one epoch to a reader asking at
-  // another.
-  if (cfcLabelView === undefined && epoch === undefined) {
+  // Not the by-value index for a pinned view, which names a value rather than
+  // an instant and would hand a view taken at one epoch to a reader asking at
+  // another, nor for a view under a declaration.
+  if (sharesByValue) {
     txCache.byValue.set(value, proxy);
   }
   return remember(proxy);
@@ -1144,11 +1294,18 @@ export type ViewReadOut = {
   readonly link: NormalizedFullLink;
 
   /**
-   * Reads the whole value at the view's position, as a recursive read, with
-   * the check every trap makes: a document that no longer holds a container
-   * of the kind the view was built over refuses with `ViewDriftError`.
+   * Reads the value at the view's position, as a recursive read, or as a
+   * read of the container's shape alone when `recursive` is false, with the
+   * check every trap makes: a document that no longer holds a container of
+   * the kind the view was built over refuses with `ViewDriftError`.
    */
-  readonly readDocument: () => unknown;
+  readonly readDocument: (recursive?: boolean) => unknown;
+
+  /**
+   * The declaration the view reads under (`declaredShape`), which names the
+   * keys it shows, or `undefined` for a view that shows every key.
+   */
+  readonly declaration: (JSONSchema & object) | undefined;
 
   /** The label view the view carries, rebased to its position. */
   readonly cfcLabelView: CfcLabelView | undefined;
