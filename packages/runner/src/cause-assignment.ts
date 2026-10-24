@@ -16,9 +16,9 @@
  * unchanged source: whether it is a stream, its entity kind, and what writes
  * it, a sub-pattern child named by its child's pattern identity. Its schema is
  * left out, since the schema generator reshapes schemas without moving any
- * cell. Two cells of one level with the same description are told apart by
- * their order, which a change elsewhere in the walk does not disturb, so a
- * swap of two such cells goes unseen.
+ * cell. Cells of one level with the same description are paired across two
+ * builds by their order, so a cell added or removed among them, or two of
+ * them trading places, reads as no move, even where the cells after it shift.
  */
 
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
@@ -195,7 +195,8 @@ export function numberedCells(
  * for one pattern level built from one source by two compilers. A cell is
  * matched across the two by its description and its ordinal among the cells
  * of its level that share the description. A cell only one side has is not a
- * move.
+ * move, and neither is the shift it causes among the cells after it that
+ * share its description.
  */
 export function renumberedCells(
   before: readonly NumberedCell[],

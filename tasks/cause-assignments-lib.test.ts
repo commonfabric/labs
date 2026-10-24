@@ -34,31 +34,19 @@ const entryRefOf = (artifact: object) =>
     : undefined;
 
 /** The parts a test pattern is made of, each taking the next number. */
-type Part =
-  | { lift: true; schema?: unknown }
-  | { child: Built }
-  | { stream: true }
-  | { seeded: true };
+type Part = { lift: true } | { child: Built } | { stream: true };
 
-/**
- * A pattern holding `parts`, numbered in order, where `named` gives a
- * part's index the instance name it takes in place of its number.
- */
-function built(parts: readonly Part[], named: Map<number, string> = new Map()) {
+/** A pattern holding `parts`, numbered in order. */
+function built(parts: readonly Part[]) {
   const nodes: unknown[] = [];
   const cells: unknown[] = [];
   parts.forEach((part, number) => {
-    const generated: Record<string, unknown> = "stream" in part
+    const partialCause: Record<string, unknown> = "stream" in part
       ? { $generated: number, $kind: "stream" }
       : { $generated: number };
-    const name = named.get(number);
-    const partialCause = name === undefined ? generated : { $instance: name };
     cells.push({
       partialCause,
-      ...(name !== undefined && { legacyPartialCause: generated }),
       ...(("lift" in part || "child" in part) && { kind: "computed" }),
-      ...("lift" in part && part.schema !== undefined &&
-        { schema: part.schema }),
     });
     if ("lift" in part) {
       nodes.push({
@@ -82,13 +70,10 @@ function built(parts: readonly Part[], named: Map<number, string> = new Map()) {
   };
 }
 
-const assignment = (
-  parts: readonly Part[],
-  named?: Map<number, string>,
-): PatternAssignment => ({
+const assignment = (parts: readonly Part[]): PatternAssignment => ({
   pattern: "test.tsx",
   source: "source",
-  levels: assignmentLevels(built(parts, named), entryRefOf),
+  levels: assignmentLevels(built(parts), entryRefOf),
 });
 
 describe("cause-assignments-lib", () => {
