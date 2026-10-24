@@ -252,6 +252,55 @@ describe("a view behind a link carrying a schema", () => {
     }
   });
 
+  it("keeps views apart whose declarations name fields spelled like schema annotations, whichever is read first", async () => {
+    // `title` and `description` are property names here, each holding a link
+    // to its text; one declaration names the first, the other the second.
+    const declaring = (field: "title" | "description") => ({
+      type: "object",
+      properties: { [field]: { type: "string" } },
+    });
+    const build = async () => {
+      const docs = await documents();
+      const title = await docs.write(space, "title-text", "the title");
+      const description = await docs.write(
+        space,
+        "description-text",
+        "the description",
+      );
+      await docs.write(space, "target", {
+        title: title.getAsLink(),
+        description: description.getAsLink(),
+      });
+      const link = (field: "title" | "description") =>
+        docs.runtime.getCell(space, "target", declaring(field) as never)
+          .getAsLink({ includeSchema: true, keepAsCell: KeepAsCell.All });
+      await docs.write(space, "holder", {
+        titled: link("title"),
+        described: link("description"),
+      });
+      return docs;
+    };
+    type Shaped = { title?: unknown; description?: unknown };
+    {
+      await using docs = await build();
+      const holder = docs.runtime.getCell(space, "holder").get() as {
+        titled: Shaped;
+        described: Shaped;
+      };
+      expect(holder.titled.title).toBe("the title");
+      expect(holder.described.description).toBe("the description");
+    }
+    {
+      await using docs = await build();
+      const holder = docs.runtime.getCell(space, "holder").get() as {
+        titled: Shaped;
+        described: Shaped;
+      };
+      expect(holder.described.description).toBe("the description");
+      expect(holder.titled.title).toBe("the title");
+    }
+  });
+
   it("reads a linked member under the member's own declaration, not the document's", async () => {
     // The profile's `child` is an untyped link to a record whose `title`
     // is a link to its text. The profile's declaration names `child.title`

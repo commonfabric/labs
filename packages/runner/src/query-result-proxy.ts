@@ -7,6 +7,15 @@ import {
   internSchema,
   isNontrivialSchema,
 } from "@commonfabric/data-model-schema";
+import {
+  ARRAY_SUBSCHEMA_KEYS,
+  forEachSubschema,
+  RECORD_SUBSCHEMA_KEYS,
+  SINGLE_SUBSCHEMA_KEYS,
+  type SubschemaKeyword,
+  UNUSED_RECORD_SUBSCHEMA_KEYS,
+  UNUSED_SINGLE_SUBSCHEMA_KEYS,
+} from "@commonfabric/data-model-schema/schema-walk";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";
 import { isStreamValue, type JSONSchema } from "./builder/types.ts";
@@ -170,19 +179,21 @@ export class ViewDriftError extends Error {
  * an array's items as much as at the root, must not share one, since the
  * view's children read under the declaration it was built with.
  *
- * The walk emits each schema's keys in sorted order, leaving out what a view
- * does not read by: `$defs`, inert except through the references it
- * resolves, and the annotations and handle flags (`INERT_TO_A_VIEW`), which
- * a stored document may carry differently from a reader's schema, a link's
- * sanitized schema dropping `asCell` among them. A `$ref` is replaced by
- * what it resolves to, and a definition the walk is already inside is
- * emitted as the depth it was entered at, which is what makes a recursive
- * schema finite. A reference nothing resolves is emitted as its spelling.
- * Kept per declaration object; a declaration is interned, so the walk runs
- * once for each.
+ * The walk emits a schema node as its keywords in sorted order: a keyword
+ * holding data (`type`, `required`, `enum`, ...) as that data, a keyword
+ * holding subschemas (`forEachSubschema`'s vocabulary) as their fingerprints,
+ * a record of named subschemas such as `properties` with every name kept,
+ * since a name is data, not a keyword. Left out are `$defs`, inert except
+ * through the references it resolves, and the annotations and handle flags a
+ * view does not read by (`INERT_TO_A_VIEW`), which a stored document may
+ * carry differently from a reader's schema, a link's sanitized schema
+ * dropping `asCell` among them. A `$ref` is replaced by what it resolves to,
+ * and a definition the walk is already inside is emitted as the depth it
+ * was entered at, which is what makes a recursive schema finite. A reference
+ * nothing resolves is emitted as its spelling. Kept per declaration object;
+ * a declaration is interned, so the walk runs once for each.
  */
 const INERT_TO_A_VIEW = new Set([
-  "$defs",
   "$comment",
   "asCell",
   "default",
@@ -190,6 +201,15 @@ const INERT_TO_A_VIEW = new Set([
   "examples",
   "ifc",
   "title",
+]);
+const SUBSCHEMA_KEYWORDS = new Set<string>([
+  "$defs",
+  "definitions",
+  ...SINGLE_SUBSCHEMA_KEYS,
+  ...ARRAY_SUBSCHEMA_KEYS,
+  ...RECORD_SUBSCHEMA_KEYS,
+  ...UNUSED_SINGLE_SUBSCHEMA_KEYS,
+  ...UNUSED_RECORD_SUBSCHEMA_KEYS,
 ]);
 const declarationTerms = new WeakMap<object, string>();
 const declarationTerm = (
@@ -199,20 +219,15 @@ const declarationTerm = (
   const known = declarationTerms.get(declaration);
   if (known !== undefined) return known;
   const entered = new Map<object, number>();
-  const walk = (node: unknown, root: JSONSchema): string => {
-    if (!isObjectOrArray(node)) return JSON.stringify(node) ?? "undefined";
-    if (Array.isArray(node)) {
-      return "[" + node.map((item) => walk(item, root)).join(",") + "]";
+  const walk = (node: JSONSchema, root: JSONSchema): string => {
+    if (!isObjectOrArray(node) || Array.isArray(node)) {
+      return JSON.stringify(node) ?? "undefined";
     }
     if (typeof node.$ref === "string") {
-      const resolved = ContextualFlowControl.resolveSchemaRefs(
-        node as JSONSchema & object,
-        root,
-      );
+      const resolved = ContextualFlowControl.resolveSchemaRefs(node, root);
+      if (resolved === undefined) return "ref(" + node.$ref + ")";
       if (!isObjectOrArray(resolved) || Array.isArray(resolved)) {
-        return resolved === undefined
-          ? "ref(" + node.$ref + ")"
-          : walk(resolved, root);
+        return walk(resolved, root);
       }
       const depth = entered.get(resolved);
       if (depth !== undefined) return "@" + depth;
@@ -223,13 +238,53 @@ const declarationTerm = (
         entered.delete(resolved);
       }
     }
-    return "{" + Object.keys(node).filter((key) => !INERT_TO_A_VIEW.has(key))
-      .sort()
-      .map((key) =>
-        JSON.stringify(key) + ":" +
-        walk((node as Record<string, unknown>)[key], root)
-      ).join(",") +
-      "}";
+    // The subschemas below each keyword, in the walker's vocabulary: one, a
+    // list by index, or a record by name.
+    const below = new Map<
+      SubschemaKeyword,
+      { single?: string; list: string[]; record: Map<string, string> }
+    >();
+    forEachSubschema(node, (child, keyword, key, index) => {
+      let entry = below.get(keyword);
+      if (entry === undefined) {
+        entry = { list: [], record: new Map() };
+        below.set(keyword, entry);
+      }
+      const term = walk(child, root);
+      if (key !== undefined) entry.record.set(key, term);
+      else if (index !== undefined) entry.list[index] = term;
+      else entry.single = term;
+      return false;
+    }, { includeUnused: true });
+    const parts: string[] = [];
+    for (const key of Object.keys(node).sort()) {
+      if (
+        INERT_TO_A_VIEW.has(key) || key === "$defs" || key === "definitions"
+      ) {
+        continue;
+      }
+      const entry = below.get(key as SubschemaKeyword);
+      if (entry === undefined || !SUBSCHEMA_KEYWORDS.has(key)) {
+        // Data, or a subschema keyword holding something the walker does not
+        // read as subschemas: emitted as it is.
+        parts.push(
+          JSON.stringify(key) + ":" +
+            JSON.stringify((node as Record<string, unknown>)[key]),
+        );
+      } else if (entry.single !== undefined) {
+        parts.push(JSON.stringify(key) + ":" + entry.single);
+      } else if (entry.record.size > 0) {
+        parts.push(
+          JSON.stringify(key) + ":{" +
+            [...entry.record.keys()].sort().map((name) =>
+              JSON.stringify(name) + ":" + entry.record.get(name)
+            ).join(",") + "}",
+        );
+      } else {
+        parts.push(JSON.stringify(key) + ":[" + entry.list.join(",") + "]");
+      }
+    }
+    return "{" + parts.join(",") + "}";
   };
   const term = walk(declaration, declaration);
   declarationTerms.set(declaration, term);
