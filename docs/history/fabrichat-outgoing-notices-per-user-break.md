@@ -30,10 +30,12 @@ are the ones the per-user record already gave them.
 
 The per-user change left this field undeclared on purpose. The pattern-update
 proof then reported at most one issue per role for each baseline. Declaring the
-field put a new `scope changed` ahead of a named path on 26 manager baselines
-and 50 of Home's, so 85 accepted-break entries would have forgiven nothing until
-each named the path as well. Each of those entries would then have forgiven,
-behind the path it named, every later break the proof did not report.
+field puts a new `scope changed` first in the result role for every manager and
+Home pair the registry held: 26 manager baselines and 49 of Home's, 75 pairs in
+13 entries (RUN: the one-issue proof over this change's contracts and `main`'s
+registry). Under that proof those 13 entries would have forgiven nothing until
+each named the path as well. Each would then have forgiven, behind the path it
+named, every later break the proof did not report.
 
 `pattern-compat-every-issue-paths.md` records the proof reporting every issue,
 and an entry naming exactly the paths its pairs blame. With that in place, this
