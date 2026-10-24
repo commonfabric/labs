@@ -1264,10 +1264,11 @@ const performManagerAct = (
     // A member named by principal alone is offered the room through the
     // profiles `people` lists for them, so a person this user shares no room
     // with is offered nothing.
-    // TODO(danfuzz): A served run can't read the user's instance of
-    // `people`, and finds none listed, so under server execution such a
-    // member gets a notice. Offer through `people` there too, once a served
-    // handler can read a per-user instance of its user's.
+    // TODO(danfuzz): Under server execution a served run finds a member in
+    // `people` only where a runtime of this user's, such as a page listing
+    // its rooms, has derived the rooms `people` is drawn from; where none has,
+    // it finds no one, and the member gets a notice. Offer through `people`
+    // there too, once a served run derives what it reads.
     const profiles = named === undefined
       ? [...(state.people?.[member] ?? [])]
       : [named];
