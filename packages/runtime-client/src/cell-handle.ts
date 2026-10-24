@@ -244,7 +244,8 @@ export class CellHandle<T = unknown> {
 
   /**
    * Whether any subscriber asked for the CFC label. Sticky: once a label-aware
-   * subscription exists on this handle, label changes also fire its callbacks.
+   * subscription exists on this handle, label changes, and changes in whether
+   * the label is current, also fire its callbacks.
    */
   #wantsCfcLabel = false;
 
@@ -1097,10 +1098,11 @@ export class CellHandle<T = unknown> {
    * worker sends one for a document it has not loaded too), so a handle on a
    * cell that holds nothing stays unread until a read answers it. After that,
    * `callback` is called whenever the value changes, and `onRefused` with
-   * each refusal. A subscriber that asked for the label is called again with
-   * the value the handle holds when the label changes, and when it stops or
-   * starts being current, as an update the connection dropped and the
-   * worker's next labeled update make it ({@link CellDelivery}). The
+   * each refusal. Once any subscriber has asked for the label, every
+   * subscriber of the handle is called again with the value it holds when the
+   * label changes, and when the label stops or starts being current, as an
+   * update the connection dropped and the worker's next labeled update make
+   * it ({@link CellDelivery}). The
    * callback's return value, if a Cancel function, is called before the next
    * value, when a refusal drops the value it was given, and when the
    * subscription is cancelled.

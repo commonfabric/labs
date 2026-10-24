@@ -719,7 +719,7 @@ describe("connection", () => {
       await connection.dispose();
     });
 
-    it("calls a value-only subscriber no more when the worker reports the cell undefined and then restores it, though the currency of the label its handle holds changes", async () => {
+    it("calls the subscriber of a handle that never asked for labels no more when the worker reports the cell undefined and then restores it, though the currency of the label the handle holds changes", async () => {
       const transport = new FakeTransport();
       const connection = await initializedConnection(transport);
       const runtime = runtimeOf(connection);
