@@ -81,10 +81,10 @@ export interface AmbiguousDescription {
 /** Options for `ambiguousDescriptions()`. */
 export interface AmbiguousDescriptionsOptions {
   /**
-   * Whether the cells considered are those holding state, as by default, or
-   * those holding none.
+   * Whether the cells considered are those that have state, as by default,
+   * or those that have none.
    */
-  holdingState?: boolean;
+  hasState?: boolean;
 }
 
 /** The pattern identity of a builder artifact, where one is known. */
@@ -269,7 +269,7 @@ export function renumberedCells(
 }
 
 /**
- * The descriptions of cells holding state, or, given `{ holdingState: false }`,
+ * The descriptions of cells holding state, or, given `{ hasState: false }`,
  * of cells holding none, in one pattern level built from one source by two
  * compilers, for which the pairing by order that `renumberedCells()` makes
  * cannot say which cell went where. Such a description is either one whose
@@ -283,7 +283,7 @@ export function renumberedCells(
 export function ambiguousDescriptions(
   before: readonly NumberedCell[],
   after: readonly NumberedCell[],
-  { holdingState = true }: AmbiguousDescriptionsOptions = {},
+  { hasState = true }: AmbiguousDescriptionsOptions = {},
 ): AmbiguousDescription[] {
   const numbers = new Map<string, AmbiguousDescription>();
   const entry = (description: string): AmbiguousDescription => {
@@ -295,12 +295,12 @@ export function ambiguousDescriptions(
     return found;
   };
   for (const cell of after) {
-    if (cell.holdsState === holdingState) {
+    if (cell.holdsState === hasState) {
       entry(cell.description).after.push(cell.number);
     }
   }
   for (const cell of before) {
-    if (cell.holdsState === holdingState) {
+    if (cell.holdsState === hasState) {
       entry(cell.description).before.push(cell.number);
     }
   }

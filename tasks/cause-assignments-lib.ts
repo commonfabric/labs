@@ -202,7 +202,7 @@ export function ambiguousCells(
     }
     for (
       const found of ambiguousDescriptions(before.cells, level.cells, {
-        holdingState: false,
+        hasState: false,
       })
     ) {
       ambiguous.push({
