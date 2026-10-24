@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
+  ambiguousDescriptions,
   type NumberedCell,
   numberedCells,
   type PatternLevel,
@@ -272,12 +273,13 @@ describe("cause-assignment", () => {
     });
 
     describe("with a cell added or removed among cells of its description", () => {
-      // TODO(danfuzz): These pin the pairing by order as it stands, not as it
-      // should be. Each later cell of the description is paired with a
-      // neighbor's number, so the moves returned are not the cells' own.
-      // Invert each to the moves the cells make once how two builds' cells are
-      // to be matched is settled; `renumberedCells()` carries the matching
-      // `TODO`.
+      // TODO(danfuzz): These pin the pairing by order as it stands for cells
+      // that hold no state, not as it should be: each later cell of the
+      // description is paired with a neighbor's number, so the moves returned
+      // are not the cells' own. Invert each to the moves the cells make once
+      // how those cells are to be matched is settled; `renumberedCells()`
+      // carries the matching `TODO`. For cells holding state,
+      // `ambiguousDescriptions()` names the description instead.
 
       it("returns a later cell of the description under a neighbor's number, where a cell of another description sits between", () => {
         // Function cells `a` and `b` sit around a child, and a function cell
@@ -311,6 +313,133 @@ describe("cause-assignment", () => {
           ["cell, computed, written by function", 1, 2],
         ]);
       });
+    });
+  });
+  describe("ambiguousDescriptions()", () => {
+    it("returns a description of children whose count differs, where the pairing by order reports no move", () => {
+      // Three children of one pattern, and the first is removed: the other two
+      // move 1 to 0 and 2 to 1, and the pairing reads them as unmoved.
+      const before = cells([{ child: CHILD }, { child: CHILD }, {
+        child: CHILD,
+      }]);
+      const after = cells([{ child: CHILD }, { child: CHILD }]);
+
+      expect(renumberedCells(before, after)).toEqual([]);
+      expect(ambiguousDescriptions(before, after)).toEqual([
+        {
+          description:
+            "cell, computed, written by sub-pattern child-identi#Child",
+          before: [0, 1, 2],
+          after: [0, 1],
+        },
+      ]);
+    });
+
+    it("returns a description of children whose count differs, where a cell of another description sits between them", () => {
+      // A child is added ahead of two children of its pattern, with a lift
+      // between them: the pairing reads the later child under its neighbor's
+      // number.
+      expect(
+        ambiguousDescriptions(
+          cells([{ child: CHILD }, { lift: true }, { child: CHILD }]),
+          cells([{ child: CHILD }, { child: CHILD }, { lift: true }, {
+            child: CHILD,
+          }]),
+        ),
+      ).toEqual([
+        {
+          description:
+            "cell, computed, written by sub-pattern child-identi#Child",
+          before: [0, 2],
+          after: [0, 1, 3],
+        },
+      ]);
+    });
+
+    it("returns a description of two or more children whose numbers changed", () => {
+      expect(
+        ambiguousDescriptions(
+          cells([{ lift: true }, { child: CHILD }, { child: CHILD }]),
+          cells([{ child: CHILD }, { child: CHILD }]),
+        ),
+      ).toEqual([
+        {
+          description:
+            "cell, computed, written by sub-pattern child-identi#Child",
+          before: [1, 2],
+          after: [0, 1],
+        },
+      ]);
+    });
+
+    it("returns a description of children whose count differs, where every number the earlier build gives them holds", () => {
+      // A child is added after two children of its pattern: the pairing by
+      // order keeps both at their numbers, and the count alone shows the
+      // change.
+      const before = cells([{ child: CHILD }, { child: CHILD }]);
+      const after = cells([{ child: CHILD }, { child: CHILD }, {
+        child: CHILD,
+      }]);
+
+      expect(renumberedCells(before, after)).toEqual([]);
+      expect(ambiguousDescriptions(before, after)).toEqual([
+        {
+          description:
+            "cell, computed, written by sub-pattern child-identi#Child",
+          before: [0, 1],
+          after: [0, 1, 2],
+        },
+      ]);
+    });
+
+    it("returns a description of cells that are not computed whose count differs", () => {
+      expect(
+        ambiguousDescriptions(
+          cells([{ seeded: true }, { seeded: true }]),
+          cells([{ seeded: true }]),
+        ),
+      ).toEqual([
+        {
+          description: "cell, not computed, no writer",
+          before: [0, 1],
+          after: [0],
+        },
+      ]);
+    });
+
+    it("returns nothing for one child that moves, which the pairing reports", () => {
+      expect(
+        ambiguousDescriptions(
+          cells([{ lift: true }, { child: CHILD }]),
+          cells([{ child: CHILD }]),
+        ),
+      ).toEqual([]);
+    });
+
+    it("returns nothing for cells holding no state whose count differs", () => {
+      expect(
+        ambiguousDescriptions(
+          cells([{ lift: true }, { lift: true }, { stream: true }]),
+          cells([{ lift: true }, { stream: true }]),
+        ),
+      ).toEqual([]);
+    });
+
+    it("returns nothing for two builds that number every cell alike", () => {
+      const parts: Part[] = [{ child: CHILD }, { lift: true }, {
+        child: CHILD,
+      }];
+
+      expect(ambiguousDescriptions(cells(parts), cells(parts))).toEqual([]);
+    });
+
+    it("returns nothing for children of two patterns that keep their numbers while a lift after them is removed", () => {
+      expect(
+        ambiguousDescriptions(
+          cells([{ child: CHILD }, { child: OTHER_CHILD }, { lift: true }]),
+          cells([{ child: CHILD }, { child: OTHER_CHILD }]),
+        ),
+      ).toEqual([]);
     });
   });
 });

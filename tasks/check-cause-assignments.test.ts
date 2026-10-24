@@ -49,6 +49,11 @@ const NOTHING_UNEVALUABLE = {
 const NUMBERED = build("room.tsx", "s", [LIFT, CHILD]);
 const RENUMBERED = build("room.tsx", "s", [CHILD]);
 
+// Three children of one pattern, and the first removed: the pairing by order
+// reads the other two as unmoved.
+const THREE_CHILDREN = build("lobby.tsx", "s", [CHILD, CHILD, CHILD]);
+const TWO_CHILDREN = build("lobby.tsx", "s", [CHILD, CHILD]);
+
 describe("check-cause-assignments", () => {
   describe("compareDumps()", () => {
     it("returns a failure for a pattern whose child moves under the same source", () => {
@@ -68,6 +73,60 @@ describe("check-cause-assignments", () => {
           ) => [from, to, holdsState]),
         })),
       ).toEqual([{ pattern: "room.tsx", moved: [[1, 0, true]] }]);
+    });
+
+    it("returns a failure for a pattern whose count of children of one pattern differs, where the pairing reports no move", () => {
+      const comparison = compareDumps(
+        dump(THREE_CHILDREN),
+        dump(TWO_CHILDREN),
+        [],
+        NOTHING_UNEVALUABLE,
+      );
+
+      expect(
+        comparison.failing.map(({ pattern, moved, ambiguous }) => ({
+          pattern,
+          moved,
+          ambiguous: ambiguous.map(({ before, after }) => [before, after]),
+        })),
+      ).toEqual([{
+        pattern: "lobby.tsx",
+        moved: [],
+        ambiguous: [[[0, 1, 2], [0, 1]]],
+      }]);
+    });
+
+    it("returns no move for children of one pattern whose cells cannot be matched, only their numbers on each side", () => {
+      const comparison = compareDumps(
+        dump(build("lobby.tsx", "s", [LIFT, CHILD, CHILD])),
+        dump(TWO_CHILDREN),
+        [],
+        NOTHING_UNEVALUABLE,
+      );
+
+      expect(
+        comparison.failing.map(({ moved, ambiguous }) => ({
+          moved,
+          ambiguous: ambiguous.map(({ before, after }) => [before, after]),
+        })),
+      ).toEqual([{ moved: [], ambiguous: [[[1, 2], [0, 1]]] }]);
+    });
+
+    it("returns as forgiven children of one pattern whose count differs, where an accepted entry names both builds' digests", () => {
+      const comparison = compareDumps(
+        dump(THREE_CHILDREN),
+        dump(TWO_CHILDREN),
+        [{
+          pattern: "lobby.tsx",
+          base: assignmentDigest(THREE_CHILDREN),
+          head: assignmentDigest(TWO_CHILDREN),
+          reason: "test",
+        }],
+        NOTHING_UNEVALUABLE,
+      );
+
+      expect(comparison.failing).toEqual([]);
+      expect(comparison.forgiven).toEqual(["lobby.tsx"]);
     });
 
     it("returns no failure for a pattern numbered alike on both sides", () => {
@@ -260,6 +319,21 @@ describe("check-cause-assignments", () => {
         }, this build ${assignmentDigest(RENUMBERED)}):`,
       );
       expect(text).toContain(`  1 -> 0, holds state: ${CHILD} (entry pattern)`);
+    });
+
+    it("returns each description of cells holding state that cannot be matched, with both builds' numbers for it", () => {
+      const text = describeFailures(
+        compareDumps(
+          dump(THREE_CHILDREN),
+          dump(TWO_CHILDREN),
+          [],
+          NOTHING_UNEVALUABLE,
+        ),
+      );
+
+      expect(text).toContain(
+        `  ambiguous, holds state: [0, 1, 2] -> [0, 1]: ${CHILD} (entry pattern)`,
+      );
     });
   });
 });

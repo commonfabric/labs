@@ -23,6 +23,8 @@
 import { join } from "@std/path";
 import { collectAllPatternFiles } from "./pattern-files.ts";
 import {
+  type AmbiguousCells,
+  ambiguousCells,
   assignmentDigest,
   type MovedCell,
   movedCells,
@@ -70,15 +72,24 @@ export const GATE_PATHS: readonly string[] = [
 
 /** The verdict on one comparison of two dumps. */
 export interface Comparison {
-  /** The moves no accepted entry forgives, by pattern. */
+  /**
+   * The moves no accepted entry forgives, by pattern, and the descriptions of
+   * cells holding state whose cells cannot be matched. A move among the
+   * cells of such a description is not among `moved`, since the pairing that
+   * found it is not to be trusted there.
+   */
   failing: {
     pattern: string;
     base: string;
     head: string;
     moved: MovedCell[];
+    ambiguous: AmbiguousCells[];
   }[];
 
-  /** The patterns whose moves an accepted entry forgives. */
+  /**
+   * The patterns whose moves, and cells that cannot be matched, an accepted
+   * entry forgives.
+   */
   forgiven: string[];
 
   /** The accepted entries that forgave nothing. */
@@ -136,8 +147,16 @@ export function compareDumps(
     const prior = before.get(after.pattern);
     if (prior === undefined || prior.source !== after.source) continue;
     comparison.compared++;
-    const moved = movedCells(prior, after);
-    if (moved.length === 0) continue;
+    const ambiguous = ambiguousCells(prior, after);
+    const ambiguousKeys = new Set(
+      ambiguous.map(({ level, description }) =>
+        JSON.stringify([level, description])
+      ),
+    );
+    const moved = movedCells(prior, after).filter(({ level, description }) =>
+      !ambiguousKeys.has(JSON.stringify([level, description]))
+    );
+    if (moved.length === 0 && ambiguous.length === 0) continue;
     const baseDigest = assignmentDigest(prior);
     const headDigest = assignmentDigest(after);
     const entry = accepted.find((candidate) =>
@@ -153,6 +172,7 @@ export function compareDumps(
         base: baseDigest,
         head: headDigest,
         moved,
+        ambiguous,
       });
     }
   }
@@ -205,18 +225,27 @@ export function describeFailures(comparison: Comparison): string {
     "A compiler change moves anonymous cells of these patterns to new " +
     "numbers while their source stays the same. A deployed piece set up " +
     "before the change would read each moved cell's state from the document " +
-    "another cell wrote.",
+    "another cell wrote. Where cells holding state share a description and " +
+    "their count or their numbers changed, which cell went where cannot be " +
+    "told, so the report gives each build's numbers for them.",
     "",
   ];
-  for (const { pattern, base, head, moved } of comparison.failing) {
+  const where = (level: string) => level === "" ? "entry pattern" : level;
+  for (const { pattern, base, head, moved, ambiguous } of comparison.failing) {
     lines.push(`${pattern} (base build ${base}, this build ${head}):`);
     for (const cell of moved) {
-      const where = cell.level === "" ? "entry pattern" : cell.level;
       lines.push(
         `  ${cell.from} -> ${cell.to}${
           cell.holdsState ? ", holds state" : ""
         }` +
-          `: ${cell.description} (${where})`,
+          `: ${cell.description} (${where(cell.level)})`,
+      );
+    }
+    for (const cells of ambiguous) {
+      lines.push(
+        `  ambiguous, holds state: [${cells.before.join(", ")}] -> ` +
+          `[${cells.after.join(", ")}]: ${cells.description} ` +
+          `(${where(cells.level)})`,
       );
     }
   }
