@@ -6,9 +6,11 @@ build compiles to compute the durable compile cache's version
 The version is a hash of the bytes the compiler emits for these files under
 every persisted cache variant (plain, instance-naming, coverage-instrumented,
 and both), so a compiler change that emits the same bytes in every mode keeps
-every compiled document in every space valid, and one that moves any byte
-recompiles them all once. `tasks/build-binaries.ts` bakes the version into a
-binary, the shell's production bundle defines it, and
+the compiled documents of every construct these files exercise valid, in every
+space, and one that moves any byte recompiles them all once. A construct these
+files do not exercise is the version's blind spot, which is why the corpus is
+wide and why `COMPILE_CACHE_EPOCH` exists. `tasks/build-binaries.ts` bakes the
+version into a binary, the shell's production bundle defines it, and
 `deno task compile-cache-version --bake` writes it into a tree that runs from
 source but ships as it stands, as loom's vendored copy does.
 

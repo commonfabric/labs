@@ -26,8 +26,11 @@ import {
  * recompiles every pattern in every space on every machine the next time it
  * loads. A version named by the compiler's output rather than its source
  * moves only when the emitted bytes do: a change to the compiler that emits
- * the same bytes keeps every compiled document in every space valid across
- * it. A build computes this version for the tree it builds from and bakes it
+ * the same bytes for the corpus keeps the compiled documents of every
+ * construct the corpus exercises valid across it, in every space. A construct
+ * the corpus lacks is the version's blind spot, which is what the corpus's
+ * breadth and {@link COMPILE_CACHE_EPOCH} are for. A build computes this
+ * version for the tree it builds from and bakes it
  * into the artifact (`tasks/build-binaries.ts` into a binary,
  * `packages/shell/felt.config.ts` into the worker bundle's define, loom into
  * its vendored `compile-cache-version.ts`), so the version always names the

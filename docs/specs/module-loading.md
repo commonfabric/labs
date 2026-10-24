@@ -522,9 +522,11 @@ linked data:
    under every persisted cache variant, computed by the build and baked in
    (`compile-cache-output-version.deno.ts`); a Deno source run takes the
    compiler-input fingerprint instead. A compiler change that emits the same
-   bytes keeps a built artifact's `runtimeVersion` and every compiled document
-   with it; one that moves a byte, or an epoch bump, moves it, and the compiled
-   set misses and recompiles from the source set. Under the version-1
+   bytes for the corpus keeps a built artifact's `runtimeVersion`, and with it
+   the compiled documents of every construct the corpus exercises; one that
+   moves a byte, or an epoch bump, moves it, and the compiled set misses and
+   recompiles from the source set. A construct the corpus lacks is the
+   version's blind spot, which the corpus's breadth and the epoch answer. Under the version-1
    executable-fingerprint rule the compiler-input fingerprint rolls
    `runtimeFingerprint` either way, which creates a new executable identity for
    an affected module and writes a new source set.
