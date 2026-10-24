@@ -3,18 +3,22 @@ import {
   FabricPrimitive,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
+import { isNontrivialSchema } from "@commonfabric/data-model-schema";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";
-import { isStreamValue } from "./builder/types.ts";
+import { isStreamValue, type JSONSchema } from "./builder/types.ts";
 import { type BackToCellInternals, toCell } from "./back-to-cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import { resolveLinkTracingDereferences } from "./link-resolution.ts";
 import { type NormalizedFullLink } from "./link-utils.ts";
 import { type Cell, createCell } from "./cell.ts";
 import { type Runtime } from "./runtime.ts";
+import { resolveSchema } from "./schema.ts";
+import { ensureExternalSchemaClosure } from "./schema-ifc.ts";
 import {
   type IExtendedStorageTransaction,
   type IReadOptions,
+  type MemorySpace,
 } from "./storage/interface.ts";
 import { ignoreReadForScheduling } from "./storage/reactivity-log.ts";
 import {
@@ -34,7 +38,7 @@ const MAX_RECURSION_DEPTH = 100;
 // reader-dirty index already treats nonRecursive reads. Value materialization
 // (leaf scalars via child-proxy creation, array methods that consume elements)
 // stays recursive.
-const SHAPE_READ: IReadOptions = { nonRecursive: true };
+export const SHAPE_READ: IReadOptions = { nonRecursive: true };
 
 // Cache of target objects to their proxies, scoped by ReactivityLog.
 //
@@ -237,6 +241,58 @@ const arrayMethods: { [key: string]: ArrayMethodType } = {
 };
 
 /**
+ * The declaration a view at a position reads under: `schema`, a stored
+ * link's declaration carried onto a resolved link or a parent view's
+ * narrowed to this key, resolved to its structural form, when it says
+ * something about the value beyond the handle kind and its `cid:` closure is
+ * complete in `space`. A declaration that constrains nothing describes
+ * nothing, and one whose closure is missing or corrupt is ignored, as link
+ * resolution ignores it when narrowing (`ensureExternalSchemaClosure`); a
+ * view under either reads as it would under none.
+ */
+export function declaredShape(
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+  schema: JSONSchema | undefined,
+): (JSONSchema & object) | undefined {
+  if (!isObjectOrArray(schema)) return undefined;
+  if (!ensureExternalSchemaClosure(tx, space, schema)) return undefined;
+  const resolved = resolveSchema(schema);
+  if (!isObjectOrArray(resolved)) return undefined;
+  const { asCell: _asCell, ...shape } = resolved;
+  return isNontrivialSchema(shape) ? resolved : undefined;
+}
+
+/**
+ * Whether a record view declared as `shape` shows its key `key`: every key
+ * under no declaration, under one naming no `properties`, or under one
+ * admitting additional properties; otherwise the named ones alone, as the
+ * schema view selects them (`#traverseObjectWithSchema`).
+ */
+export function declaresKey(
+  shape: (JSONSchema & object) | undefined,
+  key: string,
+): boolean {
+  if (!selectsKeys(shape)) return true;
+  return Object.hasOwn(shape.properties as object, key);
+}
+
+/**
+ * Whether `shape` selects among a record's keys at all: it names
+ * `properties` and admits no additional ones. A view under such a shape reads
+ * its container's shape and each named member, where one under any other
+ * reads the container whole.
+ */
+export function selectsKeys(
+  shape: (JSONSchema & object) | undefined,
+): shape is JSONSchema & object {
+  if (shape === undefined) return false;
+  if (!isObjectOrArray(shape.properties)) return false;
+  const additional = shape.additionalProperties;
+  return additional === undefined || additional === false;
+}
+
+/**
  * Builds a read-only JS proxy view over a stored cell. Read traps resolve
  * links and wrap nested values; every write refuses.
  *
@@ -434,6 +490,23 @@ function createViewProxy<T>(
     );
   }
 
+  // What this position is declared to hold: by the stored link the
+  // resolution followed last, whose schema it carries onto the resolved link,
+  // or by the view above this one, which narrowed its own declaration to this
+  // key. A view reads under it, as a shaped read crossing the link does
+  // (`combineSchemaForLink`): it shows the keys the declaration names and no
+  // other, and each child view reads under the declaration's schema for its
+  // key, so nothing behind an unnamed key is read or followed. The
+  // declaration's closure lives in the space of the document that holds the
+  // link.
+  const declared = declaredShape(
+    viewTx,
+    resolved.traces.length > 0
+      ? resolved.traces[resolved.traces.length - 1].source.space
+      : link.space,
+    link.schema,
+  );
+
   const value = viewTx.readValueOrThrow(link, SHAPE_READ) as any;
 
   // The SHAPE_READ above only tracks the container's shape, but the stream
@@ -535,6 +608,24 @@ function createViewProxy<T>(
     ? (Array.isArray(value) ? new Array(value.length) : {})
     : value;
   const boundKind = viewKindOf(value)!;
+  // The link a child view at `key` is built over: this view's declaration
+  // narrowed to the key, where there is one, else this view's own link
+  // extended.
+  const childLink = (key: string): NormalizedFullLink => {
+    if (declared === undefined) return { ...link, path: [...link.path, key] };
+    const { schema: _schema, ...rest } = link;
+    const child = ContextualFlowControl.getSchemaAtPath(declared, [key]);
+    return {
+      ...rest,
+      path: [...link.path, key],
+      ...(child !== undefined && { schema: child }),
+    };
+  };
+  // Whether the view shows `key`. An array's indices are all shown; a
+  // record's keys as its declaration names them.
+  const shows = (key: string | symbol): boolean =>
+    typeof key === "symbol" || boundKind === "array" ||
+    declaresKey(declared, key);
 
   // The value the document holds now, read through the transaction, with the
   // kind check every trap starts from. The read is the one the caller was
@@ -694,10 +785,7 @@ function createViewProxy<T>(
                           runtime,
                           accessTx,
                           tx,
-                          {
-                            ...link,
-                            path: [...link.path, String(index)],
-                          },
+                          childLink(String(index)),
                           depth + 1,
                           childLabelView(cfcLabelView, String(index)),
                           pinned,
@@ -770,7 +858,7 @@ function createViewProxy<T>(
                     runtime,
                     accessTx,
                     tx,
-                    { ...link, path: [...link.path, String(i)] },
+                    childLink(String(i)),
                     depth + 1,
                     childLabelView(cfcLabelView, String(i)),
                     pinned,
@@ -853,13 +941,14 @@ function createViewProxy<T>(
           return Reflect.get(value, prop);
         }
 
+        if (!shows(prop)) return undefined;
         const accessTx = childViewTx();
         if (readStatsActive) recordProxyAccess(accessTx);
         return createViewProxy(
           runtime,
           accessTx,
           tx,
-          { ...link, path: [...link.path, prop] },
+          childLink(prop),
           depth + 1,
           childLabelView(cfcLabelView, String(prop)),
           pinned,
@@ -890,7 +979,7 @@ function createViewProxy<T>(
           currentValue();
           return [];
         }
-        const keys = Reflect.ownKeys(currentValue() as object);
+        const keys = Reflect.ownKeys(currentValue() as object).filter(shows);
         if (boundKind === "array") {
           // Enumerating an array's keys (`Object.keys`/`values`/`entries`, a spread,
           // `for...in`) observes which index keys are present. For a dense array
@@ -957,7 +1046,7 @@ function createViewProxy<T>(
         // record never had, and every read-modify-write against a cell failed
         // (loom CT-1949). The `has` trap below keeps `in` -- there it is correct,
         // being the `in` operator's own trap.
-        if (Object.hasOwn(current, prop)) {
+        if (Object.hasOwn(current, prop) && shows(prop)) {
           const accessTx = childViewTx();
           if (readStatsActive) recordProxyAccess(accessTx);
           return {
@@ -968,7 +1057,7 @@ function createViewProxy<T>(
               runtime,
               accessTx,
               tx,
-              { ...link, path: [...link.path, prop as string] },
+              childLink(prop as string),
               depth + 1,
               childLabelView(cfcLabelView, String(prop)),
               pinned,
@@ -994,7 +1083,7 @@ function createViewProxy<T>(
         if (boundKind === "array" && /^\d+$/.test(prop)) {
           readTx().readValueOrThrow(link, { meta: ignoreReadForScheduling });
         }
-        return prop in current;
+        return shows(prop) && prop in current;
       }),
     // A query-result proxy is a live, transaction-backed view: reads resolve
     // through the get trap on every access. Structural mutations (freeze, seal,
@@ -1040,7 +1129,8 @@ function createViewProxy<T>(
     readTx,
     atEpoch,
     link,
-    readDocument: () => currentValue(true),
+    readDocument: (recursive = true) => currentValue(recursive),
+    declaration: declared,
     cfcLabelView,
   });
 
@@ -1144,11 +1234,18 @@ export type ViewReadOut = {
   readonly link: NormalizedFullLink;
 
   /**
-   * Reads the whole value at the view's position, as a recursive read, with
-   * the check every trap makes: a document that no longer holds a container
-   * of the kind the view was built over refuses with `ViewDriftError`.
+   * Reads the value at the view's position, as a recursive read, or as a
+   * read of the container's shape alone when `recursive` is false, with the
+   * check every trap makes: a document that no longer holds a container of
+   * the kind the view was built over refuses with `ViewDriftError`.
    */
-  readonly readDocument: () => unknown;
+  readonly readDocument: (recursive?: boolean) => unknown;
+
+  /**
+   * The declaration the view reads under (`declaredShape`), which names the
+   * keys it shows, or `undefined` for a view that shows every key.
+   */
+  readonly declaration: (JSONSchema & object) | undefined;
 
   /** The label view the view carries, rebased to its position. */
   readonly cfcLabelView: CfcLabelView | undefined;
