@@ -6005,8 +6005,11 @@ export class Runner {
               ]);
               return;
             }
+            // A refused repair is recoverable whatever round the commit was
+            // on: its retry drops the repair, after which no commit of this
+            // start carries one, so it can be taken once and no more.
             const recoverable = refusal !== "terminal" &&
-              (retry === undefined ||
+              (retry === undefined || refusal === "repair" ||
                 (refusal === "basis" && retry.roundsLeft > 0) ||
                 (refusal === "absence" && retry.roundsLeft > 0 &&
                   absent.some((key) => !retry.loaded.has(key))));

@@ -53,11 +53,11 @@ fakes and stored-document fixtures, 48 test files in all.
 
 ### The load-bearing reader
 
-`#resolveJavaScriptStreamLink` (`packages/runner/src/runner.ts`) follows the
+`#handlerStreamLink` (`packages/runner/src/runner.ts`) follows the
 `$event` input through write redirects, and a lift binding `$event` is refused
 by name. The cold-start repairs do not key on that reader. A start repairs a
 piece when the setup stored on it disagrees with the build the runtime loads
-(`Runner.#storedSetupAgrees`): a manifest missing one of the build's internal
+(`Runner.#startOwes`): a manifest missing one of the build's internal
 cells or naming one the build lacks, or a stamped record describing another
 build; where re-staging would move a cell holding state, the start holds
 instead, leaving the stored setup as it is. The controller hands a stopped root whose marker names another
