@@ -405,6 +405,13 @@ type OutstandingCommit = {
   pending: PromiseWithResolvers<AppliedCommit>;
 
   /**
+   * The server's acceptance, once its response has arrived. The commit stays
+   * outstanding until its send settles as well, which a transport may report
+   * only after the frames the server sent while handling it.
+   */
+  applied?: AppliedCommit;
+
+  /**
    * How many attempts failed because the commit's own write failed on an open
    * connection. The client stops replaying the commit once this reaches
    * `MAX_OWN_WRITE_FAILURES`.
@@ -618,8 +625,14 @@ export async function settleBounded<T>(
   return results;
 }
 
+/** A request awaiting its response; see {@link Client.request}. */
+type PendingRequest = PromiseWithResolvers<unknown> & {
+  /** Hears the response as the client handles it, before any frame after it. */
+  onResponse?: (response: ResponseMessage<unknown>) => void;
+};
+
 export class Client {
-  #pending = new Map<string, PromiseWithResolvers<unknown>>();
+  #pending = new Map<string, PendingRequest>();
   #spaces = new Set<SpaceSession>();
   #nextRequest = 1;
   #helloPending:
@@ -885,10 +898,18 @@ export class Client {
    * reconnect, unless `options.whileConnected` is set, in which case it
    * throws a `ConnectionError`: a request a session's restore makes would
    * otherwise wait for the reconnect that is running that restore.
+   *
+   * The request settles once its send has too, which a transport may report
+   * only after the server has handled the request, and so after the frames
+   * the server sent while handling it. `options.onResponse` hears the
+   * response as the client handles it, before any frame after it.
    */
   async request<Result>(
     message: FabricPlainObject,
-    options: { whileConnected?: boolean } = {},
+    options: {
+      whileConnected?: boolean;
+      onResponse?: (response: ResponseMessage<Result>) => void;
+    } = {},
   ): Promise<Result> {
     if (options.whileConnected === true && !this.#connected) {
       throw connectionLostWhileRestoring();
@@ -913,7 +934,12 @@ export class Client {
       ? compressClientMessageLabels(message)
       : message;
     const encoded = encodeMemoryBoundary(prepared);
-    const pending = Promise.withResolvers<unknown>();
+    const pending: PendingRequest = Promise.withResolvers<unknown>();
+    const { onResponse } = options;
+    if (onResponse !== undefined) {
+      pending.onResponse = (response) =>
+        onResponse(response as ResponseMessage<Result>);
+    }
     // The rejection handler below only attaches after the transport send
     // completes, and send suspends across event-loop turns on any real
     // transport — close()'s rejectPending() can fire in that window with
@@ -2119,6 +2145,11 @@ export class Client {
       if (pending) {
         pending.resolve(message);
         this.#pending.delete(message.requestId);
+        try {
+          pending.onResponse?.(message);
+        } catch (cause) {
+          console.error("request response observer threw:", cause);
+        }
       }
     }
   }
@@ -3584,8 +3615,10 @@ export class SpaceSession {
   }
 
   /**
-   * Close this session terminally with `error`: reject its outstanding commits
-   * and caught-up waiters, forget it from the client, and drop its watch state.
+   * Close this session terminally with `error`: settle its outstanding commits,
+   * one the server has accepted with its verdict and the rest by rejecting
+   * them, reject its caught-up waiters, forget it from the client, and drop its
+   * watch state.
    * The stored error is what `#assertOpen()` rethrows for any later call, so a
    * storage subscriber observes the real cause on its next watch or transact.
    * Shared by session revocation, a permanent reopen authorization denial,
@@ -3609,7 +3642,14 @@ export class SpaceSession {
     this.#readyOnConnection = false;
     this.#client.forgetSession(this);
     for (const pending of this.#outstandingCommits.values()) {
-      pending.pending.reject(error);
+      // A commit whose acceptance has arrived settles with it: a session the
+      // commit's own ACL write revokes is told so right after the verdict,
+      // and that can reach it before the commit's send settles.
+      if (pending.applied !== undefined) {
+        pending.pending.resolve(pending.applied);
+      } else {
+        pending.pending.reject(error);
+      }
     }
     this.#rejectCaughtUpLocalSeqWaiters(error);
     this.#outstandingCommits.clear();
@@ -4376,6 +4416,10 @@ export class SpaceSession {
           space: this.space,
           sessionId: this.#sessionId,
           commit: pendingCommit.commit,
+        }, {
+          onResponse: (response) => {
+            if (response.ok !== undefined) pendingCommit.applied = response.ok;
+          },
         });
         this.#noteResult(applied.seq);
         if (this.#outstandingCommits.get(localSeq) === pendingCommit) {

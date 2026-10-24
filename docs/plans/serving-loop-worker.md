@@ -83,9 +83,13 @@ server's frames back. The port's transport is the in-process one's pump
 reaches the client on a turn of its own, frames held at close are dropped, and
 `delivered()` waits for the frames held. The client holds to that discipline,
 a session's deferred self-revocation among the things that depend on a frame
-staged at close going nowhere, so a transport over the port keeps it. The
-protocol, the signed `session.open`, and the service principal are unchanged,
-which is what keeps the read-row admission's holder matching intact.
+staged at close going nowhere, so a transport over the port keeps it. A send
+over the port settles once the main thread has handled it, after the frames
+that handling sent, so a session's revocation that follows a commit's verdict
+can arrive while the commit is still outstanding: the client keeps the verdict
+as it arrives and settles the commit with it. The protocol, the signed
+`session.open`, and the service principal are unchanged, which is what keeps
+the read-row admission's holder matching intact.
 
 **The server's observer crosses as events, its queries as requests.** The main
 thread installs the `ServerExecutionObserver` and forwards `commitAdmitted`,
