@@ -2851,63 +2851,79 @@ describe("ExtendedStorageTransaction CFC gate", () => {
   });
 
   it("lifts an item write to a missing container the stored envelope gives only annotations", async () => {
-    // `list` is declared by its label, a description and a default alone,
-    // which constrain no shape, so the storage write's array answers: the
-    // first item write's input lands at the array, and the next item write,
-    // at the array the document then holds, merges with it.
-    const storageManager = StorageManager.emulate({ as: signer });
-    const runtime = new Runtime({
-      apiUrl: new URL("https://example.com"),
-      storageManager,
-    });
-    try {
-      const seed = runtime.edit();
-      const doc = runtime.getCell(
-        signer.did(),
-        "cfc-missing-annotated-container",
-        {
-          type: "object",
-          properties: {
-            // A labeled sibling, so the document stores an envelope.
-            title: { type: "string", ifc: { confidentiality: ["title"] } },
-            list: {
-              description: "labeled, shapeless",
-              ifc: { confidentiality: ["secret"] },
+    // `list` is declared by its label and one annotation alone, which
+    // constrain no shape, so the storage write's array answers: the first
+    // item write's input lands at the array, and the next item write, at the
+    // array the document then holds, merges with it. Each annotation is one
+    // `cfcSchemaGivesNoShape()` sets aside, among them the Common Fabric
+    // extensions the schema generator emits.
+    const annotations: Record<string, JSONSchema> = {
+      description: { description: "labeled, shapeless" },
+      tags: { tags: ["list"] },
+      tier: { tier: "wrapper" },
+      $schema: { $schema: "https://json-schema.org/draft/2020-12/schema" },
+    };
+    for (const [name, annotation] of Object.entries(annotations)) {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+      });
+      try {
+        const seed = runtime.edit();
+        const doc = runtime.getCell(
+          signer.did(),
+          `cfc-missing-annotated-container-${name}`,
+          {
+            type: "object",
+            properties: {
+              // A labeled sibling, so the document stores an envelope.
+              title: { type: "string", ifc: { confidentiality: ["title"] } },
+              list: {
+                ...(annotation as object),
+                ifc: { confidentiality: ["secret"] },
+              },
             },
           },
-        },
-        seed,
-      );
-      doc.set({ title: "t" });
-      expect((await seed.commit().settled).error).toBeUndefined();
+          seed,
+        );
+        doc.set({ title: "t" });
+        expect((await seed.commit().settled).error).toBeUndefined();
 
-      const item = {
-        type: "string",
-        ifc: { confidentiality: ["secret"] },
-      } as const satisfies JSONSchema;
-      for (const [index, value] of [["0", "a"], ["1", "b"]]) {
-        const tx = runtime.edit();
-        runtime.getCellFromLink(
-          { ...doc.getAsNormalizedFullLink(), path: ["list", index] },
-          item,
-          tx,
-        ).set(value);
-        expect((await tx.commit().settled).error).toBeUndefined();
+        const item = {
+          type: "string",
+          ifc: { confidentiality: ["secret"] },
+        } as const satisfies JSONSchema;
+        for (const [index, value] of [["0", "a"], ["1", "b"]]) {
+          const tx = runtime.edit();
+          runtime.getCellFromLink(
+            { ...doc.getAsNormalizedFullLink(), path: ["list", index] },
+            item,
+            tx,
+          ).set(value);
+          expect((await tx.commit().settled).error, name).toBeUndefined();
+        }
+
+        const replica = storageManager.open(signer.did())
+          .replica as unknown as {
+            getDocument(id: string): {
+              value?: unknown;
+              cfc?: { labelMap?: { entries: { path: string[] }[] } };
+            } | undefined;
+          };
+        const persisted = replica.getDocument(parseLink(doc.getAsLink()).id!);
+        expect(persisted?.value, name).toEqual({
+          title: "t",
+          list: ["a", "b"],
+        });
+        expect(
+          persisted?.cfc?.labelMap?.entries.map((entry) => entry.path),
+          name,
+        ).toContainEqual(["list", "*"]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
       }
-
-      const replica = storageManager.open(signer.did()).replica as unknown as {
-        getDocument(id: string): {
-          value?: unknown;
-          cfc?: { labelMap?: { entries: { path: string[] }[] } };
-        } | undefined;
-      };
-      const persisted = replica.getDocument(parseLink(doc.getAsLink()).id!);
-      expect(persisted?.value).toEqual({ title: "t", list: ["a", "b"] });
-      expect(persisted?.cfc?.labelMap?.entries.map((entry) => entry.path))
-        .toContainEqual(["list", "*"]);
-    } finally {
-      await runtime.dispose();
-      await storageManager.close();
     }
   });
 

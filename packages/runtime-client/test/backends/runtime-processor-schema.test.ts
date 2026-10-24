@@ -18,6 +18,13 @@ describe("subscriptionSchemaGivesShape", () => {
       false,
     );
     expect(subscriptionSchemaGivesShape({ asCell: ["cell"] })).toBe(false);
+    expect(subscriptionSchemaGivesShape({ tags: ["profile"] })).toBe(false);
+    expect(subscriptionSchemaGivesShape({ tier: "wrapper" })).toBe(false);
+    expect(
+      subscriptionSchemaGivesShape({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+      }),
+    ).toBe(false);
   });
 
   it("gives a shape for a schema that constrains its value", () => {

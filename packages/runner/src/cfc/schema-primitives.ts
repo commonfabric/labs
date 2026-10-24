@@ -48,15 +48,23 @@ export const cfcSchemaIsTrue = (schema: JSONSchema): boolean => {
     );
 };
 
-/** Keywords that annotate a schema and constrain no value. */
+/**
+ * Keywords that annotate a schema and constrain no value: JSON Schema's own
+ * annotations, and the Common Fabric extensions `tags` and `tier` that
+ * `JSONSchemaObj` declares, which the schema generator emits as discovery
+ * hashtags and a verb listing mark.
+ */
 export const CFC_SCHEMA_ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
   "title",
   "description",
   "$comment",
+  "$schema",
   "examples",
   "deprecated",
   "readOnly",
   "writeOnly",
+  "tags",
+  "tier",
 ]);
 
 /**
