@@ -2670,9 +2670,14 @@ export class RoutedMemoryHost {
               !context.closed && !selected.link.closed &&
               context.spaces.has(space) &&
               context.spaces.get(space) === this.#options.ownership(space),
-            // A sync is split for a client that takes one in parts into
-            // messages its frame cap admits.
-            { bytes: ROUTED_PART_BYTES, values: this.#limits.frameSlots },
+            // A sync that one message could not carry, past the 8 MiB a
+            // message may take or the frame cap, is split for a client that
+            // takes one in parts.
+            {
+              bytes: ROUTED_PART_BYTES,
+              values: this.#limits.frameSlots,
+              whole: ROUTED_RAW_LIMIT,
+            },
           );
           context.backend = backend;
           if (prior !== undefined && prior !== socket) {

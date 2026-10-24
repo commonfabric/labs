@@ -13,17 +13,21 @@ import {
   ROUTED_DEFAULT_SLOT_LIMIT,
   ROUTED_HOLDINGS_LIMIT,
   ROUTED_PART_BYTES,
+  ROUTED_QUEUE_LIMIT,
 } from "./routed-limits.ts";
 import { requireRouted } from "./routed-wire.ts";
 
-export { ROUTED_DEFAULT_SLOT_LIMIT, ROUTED_HOLDINGS_LIMIT, ROUTED_PART_BYTES };
+export {
+  ROUTED_DEFAULT_SLOT_LIMIT,
+  ROUTED_HOLDINGS_LIMIT,
+  ROUTED_PART_BYTES,
+  ROUTED_QUEUE_LIMIT,
+};
 
 /** Maximum raw public-stage frame bytes. */
 export const ROUTED_RAW_LIMIT = 8 * 1024 * 1024;
 /** Maximum expanded public-stage frame bytes. */
 export const ROUTED_EXPANDED_LIMIT = 16 * 1024 * 1024;
-/** Maximum queued bytes on one ticketed data socket. */
-export const ROUTED_QUEUE_LIMIT = 4 * 1024 * 1024;
 /** Maximum JSON nesting in any routed input; the router's `DEPTH_LIMIT`. */
 export const ROUTED_DEPTH_LIMIT = 64;
 

@@ -469,10 +469,14 @@ usual 32 KiB records; no message over 8 MiB is sent on any socket. A refusal
 closes the socket with an `output-limit` verdict classified `single-message`
 (over 8 MiB) or `queued-output`.
 
-The toolshed splits a sync whose encoding exceeds 1 MiB (`ROUTED_PART_BYTES`)
-or `limits.frameSlots` into parts, for a client that advertised `syncPartsV1`
+The toolshed splits a sync that one message could not carry, past the 8 MiB a
+message may take or `limits.frameSlots`, into parts of at most 1 MiB
+(`ROUTED_PART_BYTES`), for a client that advertised `syncPartsV1`
 ([04-protocol.md](04-protocol.md) section 4.2.3), and sends them back to back
-on its socket; the router forwards each as a message of its own, so other
+on its socket. Splitting costs the toolshed's thread more than sending whole:
+on the rehearsal's 300-topic Topics board, splitting every sync past 1 MiB
+took the board's toolshed 18.8 s over one benchmark run, up to 746 ms for a
+sync whose whole encoding took 370 ms, so a sync that fits goes whole; the router forwards each as a message of its own, so other
 toolsheds' messages for the connection go out between them. The
 `outputBytesPerSocket` bound neither refuses nor counts parts. The parts a data
 socket retains, of however many split syncs, are bounded together by eight
@@ -641,7 +645,7 @@ streamed bodies are checked at the toolshed and SDK. The SDK refuses to send a
 frame exceeding the advertised cap and closes on receiving one. Endpoint
 exposure is also bounded by the byte caps (8 MiB raw, 16 MiB expanded, 8 MiB
 for one message sent alone and 4 MiB of output queued behind other output per
-data socket), including when value counting is disabled. A sync past 1 MiB or
+data socket), including when value counting is disabled. A sync past 8 MiB or
 the value cap is sent in parts to a client that takes one in parts, so these
 bounds apply to each part; a single document past them still cannot be
 delivered.
@@ -712,8 +716,9 @@ is `max_watches_per_session == watchesPerSession`, the watch IDs one session may
 hold, default 2,048, which may not exceed `watchesPerContext` when both are
 enabled. Matching a disabled watch quota means `null` on both sides. The two are
 sized together: a session is restored by a `session.watch.set` that names its
-whole watch set with its selectors, views and holdings. A set past 1 MiB or
-the frame cap the SDK learned is staged in parts
+whole watch set with its selectors, views and holdings. A set past the 4 MiB
+a request may take or the frame cap the SDK learned is staged in parts of at
+most 1 MiB
 ([04-protocol.md](04-protocol.md) section 4.3.5), which the router and the
 toolshed count as the set the parts make, so the restore of a set within the
 watch limit fits however many frames it takes. A server that does not

@@ -1640,8 +1640,9 @@ the per-epic implementation notes).
 >   both peers. A client advertising it handles a session sync sent as
 >   several messages as the one sync they divide (the memory protocol
 >   chapter's section 4.2.3), and a server splits a sync for such a client on
->   a connection whose transport bounds its messages: the routed host, to the
->   routed frame cap and 1 MiB a part. A direct server advertises it and
+>   a connection whose transport bounds its messages: the routed host splits a
+>   sync past the 8 MiB a message may take or the routed frame cap, in parts of
+>   1 MiB. A direct server advertises it and
 >   sends every sync whole. A peer that omits it parses as `false`, and is
 >   sent every sync whole. It is permanent.
 > - **`watchSetPartsV1`** is a build-inherent capability, hardwired to
@@ -1649,8 +1650,9 @@ the per-epic implementation notes).
 >   in parts as one set (the memory protocol chapter's section 4.3.5). Only
 >   the server advertises it; a client reads it from `hello.ok` and never
 >   offers it. A client stages a set whose encoding exceeds its connection's
->   bounds: on a routed connection the frame cap and 1 MiB a part, on a
->   direct one the server's limit on the slots of a client message. Older
+>   bounds: on a routed connection the 4 MiB a request may take or the frame
+>   cap, in parts of 1 MiB; on a direct one the server's limit on the slots of
+>   a client message. Older
 >   servers omit it, which parses as `false`, and a client then sends every
 >   set whole. It is permanent.
 > - **`admissionNotice`** is a build-inherent capability, hardwired to `true`

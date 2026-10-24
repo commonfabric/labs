@@ -76,6 +76,7 @@ import {
   ROUTED_DEFAULT_SLOT_LIMIT,
   ROUTED_HOLDINGS_LIMIT,
   ROUTED_PART_BYTES,
+  ROUTED_QUEUE_LIMIT,
 } from "./routed-limits.ts";
 import {
   isPresenceRoom,
@@ -97,6 +98,7 @@ import {
   splitWatchSetRequest,
   SyncPartAssembler,
   type SyncPartSession,
+  wholeLimits,
 } from "./message-parts.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 
@@ -655,9 +657,10 @@ export class Client {
   /** Whether both peers advertised `syncPartsV1`. */
   #syncParts = false;
   /**
-   * The bounds a watch set is staged in parts to fit on this connection: a
-   * routed connection's frame cap and part size, and a direct server's slot
-   * limit on a client message.
+   * The bounds a watch set is staged in parts to fit on this connection: on
+   * a routed connection, the frame cap and the 4 MiB a request may take, in
+   * parts of 1 MiB; on a direct one, the server's slot limit on a client
+   * message.
    */
   #requestLimits: PartLimits | undefined;
   /** The split syncs whose last part has not arrived, by session. */
@@ -1054,7 +1057,7 @@ export class Client {
     const limits = this.#requestLimits;
     const parts = limits !== undefined &&
         this.#serverFlags?.watchSetPartsV1 === true &&
-        !payloadFits(encoded, limits)
+        !payloadFits(encoded, wholeLimits(limits))
       ? splitWatchSetRequest(message, limits)
       : [message];
     if (parts.length === 1) {
@@ -2144,6 +2147,7 @@ export class Client {
             values: helloOk.routerFrameSlots === undefined
               ? ROUTED_DEFAULT_SLOT_LIMIT
               : helloOk.routerFrameSlots,
+            whole: ROUTED_QUEUE_LIMIT,
           }
           : this.#transport.messageLimits ?? {
             bytes: Number.MAX_SAFE_INTEGER,
