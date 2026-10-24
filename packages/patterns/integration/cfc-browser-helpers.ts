@@ -5,6 +5,7 @@ import {
   Page,
   presentationInteractions,
   type ProbeApi,
+  readWithProbe,
   waitForCondition,
 } from "@commonfabric/integration";
 import type { RequestOutcome } from "@commonfabric/runtime-client";
@@ -2925,70 +2926,27 @@ type GraphNode = {
   };
 };
 
+/**
+ * Whether some element `selector` resolves to on `page` holds `text`, read
+ * through the probe a wait's predicate is handed, so that this check and the
+ * waits agree on what is visible. `false` when the page cannot be read.
+ */
 async function textIsPresent(
   page: Page,
   selector: string,
   text: string,
 ): Promise<boolean> {
   try {
-    return await page.evaluate((targetSelector, targetText) => {
-      function collect(root: Document | ShadowRoot, result: Element[]): void {
-        for (const element of root.querySelectorAll("*")) {
-          try {
-            if (element.matches(targetSelector)) {
-              result.push(element);
-            }
-          } catch {
-            // Invalid selectors are reported through the empty probe.
-          }
-          if (element.shadowRoot) {
-            collect(element.shadowRoot, result);
-          }
-        }
-      }
-
-      function deepText(root: ParentNode): string {
-        const parts: string[] = [];
-        if (root instanceof HTMLElement) {
-          const style = globalThis.getComputedStyle(root);
-          const hidden = root instanceof HTMLStyleElement ||
-            root instanceof HTMLScriptElement ||
-            root.hidden ||
-            style.visibility === "hidden" ||
-            style.display === "none";
-          if (!hidden) {
-            const innerText = root.innerText ?? "";
-            parts.push(
-              innerText.trim().length > 0 ? innerText : root.textContent ?? "",
-            );
-          }
-          if (root instanceof HTMLSlotElement) {
-            for (const assigned of root.assignedElements({ flatten: true })) {
-              parts.push(deepText(assigned));
-            }
-          }
-          if (root.shadowRoot) {
-            parts.push(deepText(root.shadowRoot));
-          }
-        } else if (root instanceof Document || root instanceof ShadowRoot) {
-          for (const child of root.children) {
-            if (child instanceof HTMLElement) {
-              parts.push(deepText(child));
-            }
-          }
-        }
-        for (const element of root.querySelectorAll("*")) {
-          if (element.shadowRoot) {
-            parts.push(deepText(element.shadowRoot));
-          }
-        }
-        return parts.join(" ");
-      }
-
-      const matches: Element[] = [];
-      collect(document, matches);
-      return matches.some((element) => deepText(element).includes(targetText));
-    }, { args: [selector, text] });
+    const answer = await readWithProbe(
+      page,
+      (probe, targetSelector: string, targetText: string) => ({
+        present: probe.collect(targetSelector).some((element) =>
+          probe.deepText(element).includes(targetText)
+        ),
+      }),
+      { args: [selector, text] as const },
+    );
+    return answer.present;
   } catch {
     return false;
   }
@@ -3469,126 +3427,52 @@ async function readAimProgress(
 
 /**
  * What `selector` resolves to on `page`, for a failure report: every match
- * through shadow roots, each with the text a wait's predicate reads through
- * `probe.deepText`, its box, whether it is visible, and whether it declines a
- * click; plus the page's body text where there is no match at all.
+ * through shadow roots, each with its text, its box, whether it is visible, and
+ * whether it declines a click; plus the page's body text where there is no
+ * match at all. The matches, their text and their visibility are read through
+ * the probe a wait's predicate is handed, so the report shows the page as the
+ * failed wait saw it. Whether a match declines a click is resolved as a click
+ * helper's finder resolves it.
  *
  * The helpers here build their own failure messages with it. A test building
  * one of its own reaches for it rather than walking the shadow roots again,
  * which would report a different traversal from the one its wait was reading.
+ *
+ * @throws If the page cannot be read.
  */
 export async function readTextProbe(
   page: Page,
   selector: string,
 ): Promise<TextProbe> {
-  return await page.evaluate((targetSelector) => {
-    function collect(
-      root: Document | ShadowRoot,
-      result: Element[],
-    ): void {
-      for (const element of root.querySelectorAll("*")) {
-        try {
-          if (element.matches(targetSelector)) {
-            result.push(element);
-          }
-        } catch {
-          // Invalid selectors are reported through the empty probe.
-        }
-        if (element.shadowRoot) {
-          collect(element.shadowRoot, result);
-        }
-      }
-    }
-
-    function isVisible(element: HTMLElement): boolean {
-      const rect = element.getBoundingClientRect();
-      const style = globalThis.getComputedStyle(element);
-      return rect.width > 0 && rect.height > 0 &&
-        rect.bottom >= 0 && rect.right >= 0 &&
-        rect.top <= globalThis.innerHeight &&
-        rect.left <= globalThis.innerWidth &&
-        style.visibility !== "hidden" &&
-        style.display !== "none";
-    }
-
-    // Resolved the way a click helper's finder resolves it, so a match a wait
-    // is holding for reports the state that wait is testing. A control that is
-    // rendered and visible and still not clicked is what this answers for.
-    // Spelled out rather than taken from `probe`, which a plain page evaluate
-    // is not handed.
-    function isDisabled(element: HTMLElement): boolean {
-      const declines = (candidate: Element): boolean =>
-        candidate.hasAttribute("disabled") ||
-        candidate.getAttribute("aria-disabled") === "true";
-      const inner = element.shadowRoot?.querySelector("[data-cf-button]") ??
-        element;
-      return declines(element) || declines(inner);
-    }
-
-    function deepText(root: ParentNode): string {
-      const parts: string[] = [];
-      if (root instanceof HTMLElement) {
-        const style = globalThis.getComputedStyle(root);
-        const hidden = root instanceof HTMLStyleElement ||
-          root instanceof HTMLScriptElement ||
-          root.hidden ||
-          style.visibility === "hidden" ||
-          style.display === "none";
-        if (!hidden) {
-          const innerText = root.innerText ?? "";
-          parts.push(
-            innerText.trim().length > 0 ? innerText : root.textContent ?? "",
-          );
-        }
-        if (root instanceof HTMLSlotElement) {
-          for (const assigned of root.assignedElements({ flatten: true })) {
-            parts.push(deepText(assigned));
-          }
-        }
-        if (root.shadowRoot) {
-          parts.push(deepText(root.shadowRoot));
-        }
-      } else if (root instanceof Document || root instanceof ShadowRoot) {
-        for (const child of root.children) {
-          if (child instanceof HTMLElement) {
-            parts.push(deepText(child));
-          }
-        }
-      }
-      for (const element of root.querySelectorAll("*")) {
-        if (element.shadowRoot) {
-          parts.push(deepText(element.shadowRoot));
-        }
-      }
-      return parts.join(" ");
-    }
-
-    const matches: Element[] = [];
-    collect(document, matches);
-    return {
-      selector: targetSelector,
-      matches: matches.map((element) => {
-        const target = element as HTMLElement;
-        const rect = target.getBoundingClientRect();
-        return {
-          tagName: target.tagName.toLowerCase(),
-          text: deepText(target).trim().slice(
-            0,
-            500,
-          ),
-          rect: {
-            width: rect.width,
-            height: rect.height,
-            top: rect.top,
-            left: rect.left,
-          },
-          visible: isVisible(target),
-          disabled: isDisabled(target),
-        };
-      }),
-      bodyText: document.body === null
-        ? ""
-        : deepText(document.body).trim().slice(0, 1_000),
-    };
-  }, { args: [selector] });
+  return await readWithProbe(
+    page,
+    (probe, targetSelector: string) => {
+      return {
+        selector: targetSelector,
+        matches: probe.collect(targetSelector).map((element) => {
+          const rect = element.getBoundingClientRect();
+          // A control declines a click through its own `disabled` or
+          // `aria-disabled`, or through the button inside its shadow root.
+          const inner = element.shadowRoot?.querySelector("[data-cf-button]") ??
+            element;
+          return {
+            tagName: element.tagName.toLowerCase(),
+            text: probe.deepText(element).trim().slice(0, 500),
+            rect: {
+              width: rect.width,
+              height: rect.height,
+              top: rect.top,
+              left: rect.left,
+            },
+            visible: probe.isVisible(element),
+            disabled: probe.isDisabled(element) || probe.isDisabled(inner),
+          };
+        }),
+        bodyText: document.body === null
+          ? ""
+          : probe.deepText(document.body).trim().slice(0, 1_000),
+      };
+    },
+    { args: [selector] as const },
+  );
 }

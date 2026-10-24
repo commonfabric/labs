@@ -32,6 +32,8 @@ import {
   collectBrowserLoadSummary,
   fillCfInput,
   fillCfTextarea,
+  readTextProbe,
+  settleView,
   waitForRuntimeIdle,
   waitForSettledText,
   waitForText,
@@ -286,15 +288,19 @@ describe("fabrichat-join", () => {
     // TODO(danfuzz): Expect `offered` under server execution too, and the
     // room in the person's chats below, once a served handler can read a
     // per-session instance of its user's.
+    const outcome = SERVER_EXECUTION
+      ? `Added ${addedAddress}. Your chats remind you to send them this chat's link.`
+      : `Added ${addedAddress}, and offered them this chat.`;
     await fillCfInput(adder, "#fabrichat-add-member-address", addedAddress);
     await clickTrustedAction(adder, ADD_MEMBER_ACTION);
-    await waitForSettledText(
-      adder,
-      "#fabrichat-add-member-outcome",
-      SERVER_EXECUTION
-        ? `Added ${addedAddress}. Your chats remind you to send them this chat's link.`
-        : `Added ${addedAddress}, and offered them this chat.`,
-    );
+    await waitForSettledText(adder, "#fabrichat-add-member-outcome", outcome);
+    // The page goes on saying so once it has settled.
+    await waitForRuntimeIdle(adder);
+    await settleView(adder);
+    expect(
+      (await readTextProbe(adder, "#fabrichat-add-member-outcome")).matches
+        .map((match) => match.text),
+    ).toEqual([outcome]);
 
     // The adds the room records are the adder's own: the adder reads theirs
     // through the room, and the person added, a member of the room now, reads

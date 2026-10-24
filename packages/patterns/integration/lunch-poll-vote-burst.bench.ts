@@ -227,9 +227,12 @@ async function burst(round: number): Promise<void> {
   );
 }
 
-/** What a burst leaves pending outside its measured end, before a check. */
+/**
+ * What a burst leaves pending outside its measured end, before a check:
+ * `settle()` has every served consequence of it back at the session that
+ * fired it.
+ */
 async function afterBurst(): Promise<void> {
-  await Promise.all(voters.map((voter) => voter.awaitEventConsequences()));
   await harness.settle();
 }
 

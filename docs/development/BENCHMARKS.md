@@ -801,9 +801,10 @@ the round's rows: each voter's vote on each option at the value cast this
 round, and no other row. The predicate runs after that client's `idle()` inside
 the timed burst. The rows are locally visible and may include speculation; this
 endpoint is not a proof of durable serving coverage. Outside the interval,
-`afterBurst()` waits for event consequences and the harness's budgeted `settle()`.
-Then every replica must contain the expected vote count and color distribution
-for every option, or the run fails.
+`afterBurst()` runs the harness's `settle()`, which waits for every writer's
+event consequences to arrive before the replica barriers. Then every replica
+must contain the expected vote count and color distribution for every option,
+or the run fails.
 
 Four things follow from that shape:
 

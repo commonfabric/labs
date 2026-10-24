@@ -147,6 +147,26 @@ Each of these gates fails CI on its own, and none of them run as part of
   the caller attached
 - `deno task check-baselines-append-only` — a pattern baseline that was deleted
   rather than added to
+- `deno task check-cause-assignments` — a change to how patterns are built
+  that moves an anonymous cell of an in-tree pattern to a new
+  `{ $generated: N }` number while the pattern's source stays the same. The runtime mints such a cell's id from
+  its number, so a deployed piece would read each moved cell's state from the
+  document another cell wrote, under a pattern identity that did not change.
+  The gate compiles every pattern with the merge base's compiler and with the
+  change's, without type checking, and compares the builds of each pattern
+  whose source files match, telling a cell apart from its neighbors by what
+  writes it rather than by its schema, which the schema generator reshapes
+  without moving anything. A pattern that fails to compile on either side
+  fails the gate, unless that side's own `tasks/pattern-compat-unevaluable.ts`
+  lists it. The gate
+  compiles only for a change touching `packages/js-compiler/`,
+  `packages/runner/src/builder/`, `packages/runner/src/builtins/`,
+  `packages/runner/src/harness/`, `packages/schema-generator/src/` or
+  `packages/ts-transformers/src/`, or its own files (`COMPILER_PATHS` and
+  `GATE_PATHS` in `tasks/check-cause-assignments.ts`), and passes any other
+  change without compiling. A move that has to ship is declared in
+  `tasks/cause-assignments-accepted-moves.ts`, naming the two builds by the
+  digests the failure prints and giving a reason
 - `deno task check-test-aliases` — a test-identity alias line that was edited or
   removed rather than appended, mapped an identity twice, or formed a cycle. The
   lines live under `tasks/test-identity-aliases/`, in files named after the last

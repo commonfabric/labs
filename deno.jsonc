@@ -66,6 +66,7 @@
     "pattern-compat": "deno run -A ./tasks/pattern-compat.ts",
     "pattern-vintage": "deno run -A ./tasks/pattern-vintage.ts",
     "check-baselines-append-only": "deno run --allow-read --allow-run=git ./tasks/check-baselines-append-only.ts",
+    "check-cause-assignments": "deno run -A ./tasks/check-cause-assignments.ts",
     "check-bench-workflow": "deno run --allow-read ./tasks/check-bench-workflow.ts",
     "check-test-aliases": "deno run --allow-read --allow-run=git ./tasks/check-test-aliases.ts",
     "check-test-topology": "deno run --allow-read --allow-env --allow-net --allow-run=git ./tasks/check-test-topology.ts",

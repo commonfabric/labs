@@ -80,6 +80,7 @@ import {
   type SnapshotShareAudienceRef,
   type SnapshotSharePreview,
   type SpaceAccessLostNotification,
+  type SpaceAccessRestoredNotification,
   type SpaceAclCapability,
   type SpaceAclView,
   TelemetryNotification,
@@ -169,6 +170,21 @@ export type RuntimeClientEvents = {
   navigaterequest: [{ cell: CellHandle }];
   error: [ErrorNotification];
   spaceaccesslost: [{ space: DID }];
+
+  /**
+   * A space that refused the runtime principal admitted it again. A load the
+   * refusal failed may succeed if asked again, and this is the word to ask
+   * on for that space.
+   */
+  spaceaccessrestored: [{ space: DID }];
+
+  /**
+   * A connection of the worker's to a memory server came back after it was
+   * lost. A load that failed while it was down may succeed if asked again,
+   * and this is the word to ask on: nothing else says when.
+   */
+  connectionrestored: [];
+
   telemetry: [RuntimeTelemetryMarkerResult];
   pendingwriteschange: [{ pending: boolean }];
   eventneedsattention: [EventAttentionNotice];
@@ -433,6 +449,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#conn.on("navigaterequest", this.#onNavigateRequest);
     this.#conn.on("error", this.#onError);
     this.#conn.on("spaceaccesslost", this.#onSpaceAccessLost);
+    this.#conn.on("spaceaccessrestored", this.#onSpaceAccessRestored);
+    this.#conn.on("connectionrestored", this.#onConnectionRestored);
     this.#conn.on("eventintentoutcome", this.#onEventIntentOutcome);
     this.#conn.on("telemetry", this.#onTelemetry);
     this.#conn.on("pendingwriteschange", this.#onPendingWritesChange);
@@ -1841,6 +1859,16 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   #onSpaceAccessLost = ({ space }: SpaceAccessLostNotification): void => {
     this.emit("spaceaccesslost", { space });
+  };
+
+  #onSpaceAccessRestored = (
+    { space }: SpaceAccessRestoredNotification,
+  ): void => {
+    this.emit("spaceaccessrestored", { space });
+  };
+
+  #onConnectionRestored = (): void => {
+    this.emit("connectionrestored");
   };
 
   #onTelemetry = (data: TelemetryNotification): void => {

@@ -130,6 +130,22 @@ function deterministicCompileStep<T>(step: () => T): T {
   }
 }
 
+/**
+ * {@link deterministicCompileStep} for a step that yields to the event loop
+ * between its stages (the interleaved compile driver): the rejection is the
+ * failure to classify, and the same stack-depth reasoning applies at each
+ * resumption.
+ */
+async function deterministicCompileStepAsync<T>(
+  step: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await step();
+  } catch (error) {
+    throw markDeterministicCompileFailure(error);
+  }
+}
+
 // Extends a TypeScript program with 3P module types, if referenced.
 export class EngineProgramResolver extends InMemoryProgram {
   #runtimeModuleTypes: Record<string, string> | undefined;
@@ -364,6 +380,16 @@ interface CompilerInternals {
 
 export interface EngineOptions {
   hideInternalStackFrames?: boolean;
+
+  /**
+   * Drive cold compiles through the per-module interleaved compiler driver,
+   * yielding a macrotask turn between pipeline steps. Defaults to
+   * {@link COMPILE_INTERLEAVES_EVENT_LOOP}: on in the browser runtime worker,
+   * where a synchronous compile stalls every queued IPC delivery for its whole
+   * duration, off in Deno batch compiles, where the turns are pure overhead.
+   * A test sets it to pin either arm from Deno.
+   */
+  interleaveCompile?: boolean;
 }
 
 export class Engine extends EventTarget {
@@ -385,12 +411,17 @@ export class Engine extends EventTarget {
 
   readonly #options: EngineOptions;
 
+  /** See {@link EngineOptions.interleaveCompile}. */
+  readonly #interleaveCompile: boolean;
+
   constructor(
     ctRuntime: Runtime,
     options: EngineOptions = {},
   ) {
     super();
     this.#options = options;
+    this.#interleaveCompile = options.interleaveCompile ??
+      COMPILE_INTERLEAVES_EVENT_LOOP;
     this.#ctRuntime = ctRuntime;
   }
 
@@ -726,6 +757,8 @@ export class Engine extends EventTarget {
         // nothing latency-sensitive shares the loop, so the yields would be
         // pure overhead (~2x wall) — run the synchronous driver instead.
         // Both drain the same generator, so the emitted output is identical.
+        // `compileResolvedToRecordGraph` makes the same choice for the
+        // by-identity recompile.
         const compileOptions: TypeScriptCompilerOptions = {
           noCheck: options.noCheck,
           runtimeModules: Engine.runtimeModuleNames(),
@@ -760,7 +793,7 @@ export class Engine extends EventTarget {
             };
           },
         };
-        const modules = COMPILE_INTERLEAVES_EVENT_LOOP
+        const modules = this.#interleaveCompile
           ? await compiler.compileToModulesInterleaved(
             resolvedForCompile,
             compileOptions,
@@ -1327,47 +1360,62 @@ export class Engine extends EventTarget {
       sourceFiles: pristineSourceFiles,
     });
 
-    const emitted = deterministicCompileStep(() =>
-      compiler.compileToModules(resolvedForCompile, {
-        runtimeModules: Engine.runtimeModuleNames(),
-        specifierAliases,
-        // These bytes are durable stored source nobody can re-author;
-        // authoring-hygiene diagnostics (a now-unused @ts-expect-error) must
-        // not brick the reload (CT-1916).
-        storedSource: true,
-        authoredSource: authoredSourceForCompile({
-          id: undefined,
-          mounts,
-          sourceFiles: pristineSourceFiles,
-        }),
-        beforeTransformers: (program) => {
-          const pipeline = new (compilerStack()
-            .CommonFabricTransformerPipeline)({
-            instanceNames: namesInstances(this.#ctRuntime.experimental),
-            patternCoverage,
-            builderSourceSites,
-            // The transformer-level twin of `storedSource` above: pattern
-            // shape gates (opaque reserved result keys, `unknown` result
-            // fields) demote to warnings here, so a rule added after these
-            // bytes were admitted cannot brick their reload. The identity
-            // check below already guarantees this compile reconstructs
-            // rather than admits.
-            storedSource: true,
-            moduleIdentities: identityByPath,
-            // Names on this path are already stored-shaped (no `/<id>`
-            // prefix); only mount paths need unmapping to authored spellings.
-            canonicalWriterIdentityFile: (name) =>
-              storedFilenameFor(name, undefined, mounts),
-          });
-          return {
-            factories: pipeline.toFactories(program),
-            getDiagnostics: () => pipeline.getDiagnostics(),
-            getBuilderSourceSites: () => pipeline.getBuilderSourceSites(),
-            getPolicyManifests: () => pipeline.getPolicyManifests(),
-          };
-        },
-      })
-    );
+    const compileOptions: TypeScriptCompilerOptions = {
+      runtimeModules: Engine.runtimeModuleNames(),
+      specifierAliases,
+      // These bytes are durable stored source nobody can re-author;
+      // authoring-hygiene diagnostics (a now-unused @ts-expect-error) must
+      // not brick the reload (CT-1916).
+      storedSource: true,
+      authoredSource: authoredSourceForCompile({
+        id: undefined,
+        mounts,
+        sourceFiles: pristineSourceFiles,
+      }),
+      beforeTransformers: (program) => {
+        const pipeline = new (compilerStack()
+          .CommonFabricTransformerPipeline)({
+          instanceNames: namesInstances(this.#ctRuntime.experimental),
+          patternCoverage,
+          builderSourceSites,
+          // The transformer-level twin of `storedSource` above: pattern
+          // shape gates (opaque reserved result keys, `unknown` result
+          // fields) demote to warnings here, so a rule added after these
+          // bytes were admitted cannot brick their reload. The identity
+          // check below already guarantees this compile reconstructs
+          // rather than admits.
+          storedSource: true,
+          moduleIdentities: identityByPath,
+          // Names on this path are already stored-shaped (no `/<id>`
+          // prefix); only mount paths need unmapping to authored spellings.
+          canonicalWriterIdentityFile: (name) =>
+            storedFilenameFor(name, undefined, mounts),
+        });
+        return {
+          factories: pipeline.toFactories(program),
+          getDiagnostics: () => pipeline.getDiagnostics(),
+          getBuilderSourceSites: () => pipeline.getBuilderSourceSites(),
+          getPolicyManifests: () => pipeline.getPolicyManifests(),
+        };
+      },
+    };
+    // The same driver choice as `compileToRecordGraph`, for the same reason:
+    // after a runtime-version bump this is the compile the browser worker runs
+    // for every pattern it reloads by identity, often several programs in a
+    // row, and a synchronous run would stall every queued IPC delivery for a
+    // whole program at a time. Interleaved, the stall is bounded by a single
+    // module's step. The deterministic-failure classification covers the
+    // rejection the way it covers the synchronous throw.
+    const emitted = this.#interleaveCompile
+      ? await deterministicCompileStepAsync(() =>
+        compiler.compileToModulesInterleaved(
+          resolvedForCompile,
+          compileOptions,
+        )
+      )
+      : deterministicCompileStep(() =>
+        compiler.compileToModules(resolvedForCompile, compileOptions)
+      );
     for (const file of moduleFiles) {
       if (!emitted.has(file.name)) {
         throw deterministicCompileError(

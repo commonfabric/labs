@@ -838,6 +838,12 @@ cell's contents. The cache is designed around this:
   space (`Factory.inSpace(...)`), the runner replicates the child pattern's
   source + compiled closures into the child's space so the piece is
   independently loadable there (`PatternManager.replicatePatternToSpace`).
+  The same replication runs for a load the runner's in-memory artifact
+  index serves: the index is cross-space, so a space whose loads of an
+  identity are all served from it never receives the compiled closure, and
+  compiles cold in its next session. When the runner has written that
+  closure into another space in the same session, such a load copies it
+  into its own space from there.
   Chain-of-custody holds — compiled docs are read through the integrity-gated
   loader ([`loadCompiledClosure`][c14]; only docs already carrying the compiler
   stamp replicate) and re-stamped on the child-space write by a legitimate
