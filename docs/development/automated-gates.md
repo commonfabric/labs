@@ -19,14 +19,16 @@ and one left out by accident look identical in a list of paths, so the record is
 what separates them: a tree nobody decided about fails the test rather than
 passing in silence. Adding an exemption means adding an entry that says why.
 
-Four trees are recorded as unchecked. `packages/schema-generator/test/fixtures`
+Five trees are recorded as unchecked. `packages/schema-generator/test/fixtures`
 and `packages/ts-transformers/test/fixtures` are fixture corpora — the inputs
-those tests feed their transformer, and the outputs they compare against — and
-`packages/static/assets/types` is the ambient environment a pattern compiles
-against, handed to the in-memory compiler. What earns all three the exemption is
-holding data rather than modules this repository builds; neither corpus compiles
-as a unit, though files within one may well compile alone. The fourth is
-`packages/patterns`, which the next paragraph covers.
+those tests feed their transformer, and the outputs they compare against —
+`packages/runner/test/fixtures/compile-cache-corpus` is the frozen pattern
+corpus a build compiles to hash the compiler's output into the compile-cache
+version, and `packages/static/assets/types` is the ambient environment a
+pattern compiles against, handed to the in-memory compiler. What earns all four
+the exemption is holding data rather than modules this repository builds;
+neither test corpus compiles as a unit, though files within one may well compile
+alone. The fifth is `packages/patterns`, which the next paragraph covers.
 
 An exemption's reason is held to being true of every file it matches, which is
 what decides how wide the entry may be. Two entries divide `packages/patterns`,
@@ -46,7 +48,7 @@ by a file's shape while the reason beside it names a lane, the two agreeing in
 the middle and parting at the edges.
 
 The reasons that do not name another gate say what a tree _is_ rather than
-asserting a property of each file in it. That is why the three above are
+asserting a property of each file in it. That is why the four above are
 described as corpora and as an ambient environment: none is a set of modules the
 repository builds, which is what earns the exemption. Individual files in them
 may well compile alone, so a reason claiming that none of them does would be

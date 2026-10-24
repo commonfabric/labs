@@ -16,9 +16,19 @@ import { SOURCE_COMPILE_CACHE_RUNTIME_VERSION } from "./compile-cache-version.ts
  * that version as a content hash of the compiler inputs, so it moves
  * automatically instead of being bumped by hand.
  *
+ * This is the version of a source run, which cannot afford to compile anything
+ * at startup. A built artifact names its compiler by what it emits instead:
+ * `compile-cache-output-version.deno.ts` hashes the compiler's output for a
+ * fixed corpus, and a build bakes that version into the binary, the worker
+ * bundle's define, or loom's vendored copy of `compile-cache-version.ts`, so
+ * that a compiler change that compiles the corpus to the same output keeps
+ * the compiled documents of every construct the corpus exercises valid across
+ * it. A construct the corpus lacks is that version's blind spot; the corpus
+ * is wide for that reason, and `COMPILE_CACHE_EPOCH` is the hand-turned move
+ * for a change the corpus cannot see.
+ *
  * Deno-only: it walks and reads the source tree. Deno source runs call this
- * module through `getCompileCacheRuntimeVersion()`. Binary builds use it to
- * write a fingerprint literal before `deno compile`.
+ * module through `getCompileCacheRuntimeVersion()`.
  */
 
 /**
@@ -93,7 +103,7 @@ export const VERSION_NAMESPACE = "cf/esm-compile";
 const FINGERPRINT_TAG = "cf/compile-fingerprint/v1";
 
 /** Length of the base64url fingerprint kept in the key (96 bits). */
-const FINGERPRINT_LENGTH = 16;
+export const FINGERPRINT_LENGTH = 16;
 
 interface FingerprintFile {
   /** Path relative to the repo root, with forward slashes. */
@@ -148,13 +158,42 @@ export async function computeCompilerFingerprint(
   return digest.slice(0, FINGERPRINT_LENGTH);
 }
 
+/** The `cf/esm-compile/<fingerprint>` version string for a fingerprint. */
+export function versionOfFingerprint(fingerprint: string): string {
+  return `${VERSION_NAMESPACE}/${fingerprint}`;
+}
+
+/** What a build names its compiler by: what it emits for the corpus, or its inputs. */
+export type CompileCacheVersionSource = "output" | "inputs";
+
+/**
+ * The version source `CF_COMPILE_CACHE_VERSION` names, given its value:
+ * `output` for the corpus output a shipped build earns, `inputs` for the
+ * compiler-input fingerprint a test fixture keeps, and `fallback` when it is
+ * unset. The binary build and the shell bundle both read the variable through
+ * here, so one spelling means one thing to both, and any other spelling is
+ * refused rather than read as either.
+ */
+export function compileCacheVersionSourceOf(
+  value: string | undefined,
+  fallback: CompileCacheVersionSource,
+): CompileCacheVersionSource {
+  if (value === undefined) return fallback;
+  if (value === "output" || value === "inputs") return value;
+  throw new Error(
+    `CF_COMPILE_CACHE_VERSION is ${
+      JSON.stringify(value)
+    }; it takes "output" or "inputs".`,
+  );
+}
+
 /** The full `cf/esm-compile/<fingerprint>` version string for `repoRoot`. */
 export async function computeCompilerVersion(
   repoRoot: string,
   inputs: readonly string[] = COMPILE_FINGERPRINT_INPUTS,
 ): Promise<string> {
   const fingerprint = await computeCompilerFingerprint(repoRoot, inputs);
-  return `${VERSION_NAMESPACE}/${fingerprint}`;
+  return versionOfFingerprint(fingerprint);
 }
 
 /** The compiler-input version for the repository containing this module. */

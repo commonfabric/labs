@@ -23,6 +23,10 @@ import { readStoredCfcMetadata } from "./cfc/metadata.ts";
 import type { CfcMetadata } from "./cfc/types.ts";
 import { ColdLoadNegativeMemo } from "./cold-load-negative-memo.ts";
 import {
+  isPatternCoverageCacheRuntimeVersion,
+  moduleByteCacheRuntimeVersion,
+} from "./compilation-cache/cache-variants.ts";
+import {
   buildSourceDocs,
   type ClosureLoadTally,
   COMPILED_INTEGRITY_ATOM,
@@ -133,13 +137,6 @@ const MAX_PARKED_FAILED_REPLICATIONS = 64;
 // bundle is ~10 modules), and entries are cheap (a reference to an already-live
 // namespace).
 const MAX_EVALUATED_MODULE_CACHE_SIZE = 1000;
-const PATTERN_COVERAGE_CACHE_VARIANT = "pattern-coverage";
-
-/**
- * The compiled-code cache variant of a compile that names `const`-bound
- * sub-pattern instances (`namesInstances()`).
- */
-const INSTANCE_NAMES_CACHE_VARIANT = "instance-names";
 
 /**
  * The compiler's hoist namespace. `builder-call-hoisting` mints
@@ -214,26 +211,6 @@ function throwableStorageError(error: CommitError): Error {
     name: error.name,
     cause: error,
   });
-}
-
-function moduleByteCacheRuntimeVersion(
-  runtimeVersion: string | undefined,
-  options: { patternCoverage: boolean; instanceNames: boolean },
-): string | undefined {
-  if (runtimeVersion === undefined) return undefined;
-  // A compile that names instances emits different bytes for the same source,
-  // so it keeps a variant of its own. It goes ahead of the coverage suffix,
-  // which `isPatternCoverageCacheRuntimeVersion()` reads at the end.
-  const named = options.instanceNames
-    ? `${runtimeVersion}/${INSTANCE_NAMES_CACHE_VARIANT}`
-    : runtimeVersion;
-  return options.patternCoverage
-    ? `${named}/${PATTERN_COVERAGE_CACHE_VARIANT}`
-    : named;
-}
-
-function isPatternCoverageCacheRuntimeVersion(runtimeVersion: string): boolean {
-  return runtimeVersion.endsWith(`/${PATTERN_COVERAGE_CACHE_VARIANT}`);
 }
 
 /**
@@ -484,6 +461,26 @@ function byIdentityLoadDetail(
 }
 
 /**
+ * Records the timing row of a by-identity load the in-memory artifact index
+ * served, begun at `loadStart`: outcome `memory` beside the storage-backed
+ * outcomes, naming the pattern, so a capture counts the loads that read no
+ * storage as well as the ones that did.
+ */
+function recordLoadFromMemory(
+  entryIdentity: string,
+  symbol: string,
+  loadStart: number,
+): void {
+  logger.timeDetailed(
+    () => `${entryIdentity}#${symbol}`,
+    loadStart,
+    "compile-cache",
+    "load-by-identity",
+    "memory",
+  );
+}
+
+/**
  * Helper for the program caches, which hashes a detached program in its
  * compilation context. Space-aware compilation uses a separate entry because it
  * resolves fabric imports in that space and can produce a durable closure.
@@ -661,6 +658,32 @@ export class PatternManager {
   readonly #pendingCacheWriteBacks = new Set<Promise<unknown>>();
 
   /**
+   * Spaces a closure persist is in flight into, by module identity — every
+   * identity of the persisting set, as `#persistedClosureSpaces` records
+   * them once the persist is durable — with the count of persists into each.
+   * A load served from memory consults both (`#copyClosureForLoadFromMemory()`):
+   * a space in either needs no copy, and a space in either can be a copy's
+   * origin, since a replication awaits the in-flight persists before it
+   * reads. A space leaves an identity's entry when the last persist into it
+   * under that identity settles, whichever way it settled.
+   */
+  readonly #closurePersistsInFlight = new Map<
+    string,
+    Map<MemorySpace, number>
+  >();
+
+  /**
+   * Copies issued for loads served from memory, by `(space, identity)` for
+   * every module the copied program evaluated with — one copy per space
+   * and program for the session. A copy that fails for want of a supplier
+   * parks and re-issues as any replication does; one whose write fails
+   * logs once, and a later session that writes the closure supplies the
+   * space. Growth: bounded by the spaces × the module identities of the
+   * programs copied into them.
+   */
+  readonly #closureCopiesIssued = new Set<string>();
+
+  /**
    * In-flight replications keyed by _target_ space, ordered by a monotonic
    * ticket. A replication's origin may itself be mid-supply by an earlier
    * replication _into_ it (e.g. the content-cache hit's fire-and-forget sibling
@@ -691,6 +714,10 @@ export class PatternManager {
    * index serves patterns with no per-space persist, so a running piece's space
    * can lack the closure entirely — while the closure is content-addressed, so
    * any recorded persist target holds byte-identical, integrity-gated docs.
+   * A load served from memory consults it too, with
+   * `#closurePersistsInFlight`, to tell whether its own space holds the
+   * closure and which space to copy it from
+   * (`#copyClosureForLoadFromMemory()`).
    * Growth: monotonic for the session, bounded by the module identities ×
    * spaces this manager actually persisted (strings plus small DID sets).
    */
@@ -1308,6 +1335,56 @@ export class PatternManager {
     });
     this.#compileCacheWrites.add(replication);
     replication.finally(() => this.#compileCacheWrites.delete(replication));
+  }
+
+  /**
+   * Helper for `loadPatternByIdentity()`, which gives `space` the compiled
+   * closure behind a load served from memory. The artifact index is
+   * cross-space, so such a load reads nothing from `space`, and a space
+   * whose every load of an identity is served that way never receives the
+   * closure and pays a cold compile in its next session. When this session
+   * has written that closure into another space, or is writing it, the load
+   * copies it into `space` from there: fire-and-forget, tracked in
+   * `#compileCacheWrites`, once per space and program for the session. The
+   * decision reads the session-local records alone — no load served from
+   * memory reads storage to find out — so a session that writes no closure
+   * copies none (a space lacking it since before the session began is
+   * supplied by the next session that writes it), and a space the session
+   * has written into, or is writing into, is copied into no more. A
+   * preview load (`repairCache: false`) persists nothing and copies
+   * nothing.
+   */
+  #copyClosureForLoadFromMemory(
+    entryIdentity: string,
+    space: MemorySpace,
+    options: { repairCache?: boolean },
+  ): void {
+    if (options.repairCache === false) return;
+    const durable = this.#persistedClosureSpaces.get(entryIdentity);
+    const inFlight = this.#closurePersistsInFlight.get(entryIdentity);
+    if (durable?.has(space) || inFlight?.has(space)) return;
+    // A durable origin ahead of one still writing, whose write may yet fail.
+    const origin = durable?.values().next().value ??
+      inFlight?.keys().next().value;
+    if (origin === undefined) return;
+    const key = (identity: string) => stringTupleKey([space, identity]);
+    if (this.#closureCopiesIssued.has(key(entryIdentity))) return;
+    // The copy carries every module the entry's program evaluated with, so
+    // a load of any of them served from memory in `space` needs no copy of
+    // its own.
+    for (
+      const identity of this.#programModules.get(entryIdentity) ??
+        [entryIdentity]
+    ) {
+      this.#closureCopiesIssued.add(key(identity));
+    }
+    logger.debug("closure-replication-issued", () => [
+      `entry=${entryIdentity}`,
+      `from=${origin}`,
+      `to=${space}`,
+      "trigger=load-from-memory",
+    ]);
+    this.#issueReplication(entryIdentity, origin, space, undefined);
   }
 
   /**
@@ -2391,7 +2468,16 @@ export class PatternManager {
    * closure → cold recompile from the verified `pattern:<identity>` source-doc
    * closure (`#tryColdLoadByIdentity()`, which survives a
    * runtime-version change). No TypeScript program in hand, no meta cell — the
-   * source docs are the single durable source.
+   * source docs are the single durable source. A load the in-memory index
+   * serves, in a space this session has not written the compiled closure
+   * into, also copies the closure there from a space it has written into
+   * (`#copyClosureForLoadFromMemory()`), fire-and-forget, so the next
+   * session's load in that space finds it. A load the index serves and a
+   * load the storage path serves each record a
+   * `compile-cache/load-by-identity/<outcome>` timing row naming the pattern,
+   * the former under `memory`; the returns ahead of both — a keyless
+   * identity, enforcement disabled, a memoized compile failure — record
+   * none, consulting neither.
    *
    * Returns the pattern, or `undefined` when the by-identity load is
    * unavailable (CFC not enforcing / closure absent or incomplete / invalid /
@@ -2404,6 +2490,7 @@ export class PatternManager {
     space: MemorySpace,
     options: { repairCache?: boolean } = {},
   ): Promise<Pattern | undefined> {
+    const loadStart = performance.now();
     const recoveryKey = compileCacheRecoveryKey(space, entryIdentity);
     const retryFailedRecovery =
       this.#failedCompileCacheRecoveries.has(recoveryKey) ||
@@ -2419,6 +2506,8 @@ export class PatternManager {
       !retryFailedRecovery && indexed !== undefined && isTrustedPattern(indexed)
     ) {
       this.#esmCacheStats.byIdentityHits++;
+      recordLoadFromMemory(entryIdentity, symbol, loadStart);
+      this.#copyClosureForLoadFromMemory(entryIdentity, space, options);
       return indexed;
     }
     // A keyless identity is session-only by construction: no source or
@@ -2444,6 +2533,8 @@ export class PatternManager {
       : this.#patternFromEvaluatedModule(entryIdentity, symbol);
     if (live) {
       this.#esmCacheStats.byIdentityHits++;
+      recordLoadFromMemory(entryIdentity, symbol, loadStart);
+      this.#copyClosureForLoadFromMemory(entryIdentity, space, options);
       return live;
     }
     // Check before single-flight: follower retries re-enter from the top and
@@ -3143,6 +3234,29 @@ export class PatternManager {
   }
 
   /**
+   * Like `artifactFromIdentitySync()`, except that a hit is a load served
+   * from memory in `space`, as `loadPatternByIdentity()`'s in-memory hit is:
+   * when `space` is due the closure, it is copied there
+   * (`#copyClosureForLoadFromMemory()`), and the hit records the `memory`
+   * timing row as that one does. For the paths that start or follow a piece
+   * in `space` and resolve its pattern synchronously while the module is
+   * live, loading asynchronously only on a miss.
+   */
+  artifactFromIdentitySyncInSpace(
+    identity: string,
+    symbol: string,
+    space: MemorySpace,
+  ): unknown {
+    const loadStart = performance.now();
+    const artifact = this.artifactFromIdentitySync(identity, symbol);
+    if (artifact !== undefined) {
+      recordLoadFromMemory(identity, symbol, loadStart);
+      this.#copyClosureForLoadFromMemory(identity, space, {});
+    }
+    return artifact;
+  }
+
+  /**
    * Best-effort authored program for a live pattern by its content
    * `{ identity, symbol }` — the source-viewing debug surface
    * (`getPatternSources`). Returns the program rather than its files, so a
@@ -3217,6 +3331,10 @@ export class PatternManager {
       modules.map((module) => module.identity),
       moduleDelegations,
     );
+    const identities = [
+      entryIdentity,
+      ...modules.map((module) => module.identity),
+    ];
     const predecessor = this.#inProgressCompileCacheWrites.get(
       persistenceSlotKey,
     );
@@ -3247,10 +3365,7 @@ export class PatternManager {
           this.#failedCompileCacheRecoveries.delete(
             compileCacheRecoveryKey(space, entryIdentity),
           );
-          this.#recordPersistedClosureSpaces(
-            [entryIdentity, ...modules.map((module) => module.identity)],
-            space,
-          );
+          this.#recordPersistedClosureSpaces(identities, space);
           return;
         }
         this.#persistedCompileCacheClosures.delete(persistenceSlotKey);
@@ -3274,16 +3389,13 @@ export class PatternManager {
       this.#failedCompileCacheRecoveries.delete(
         compileCacheRecoveryKey(space, entryIdentity),
       );
-      this.#recordPersistedClosureSpaces(
-        [entryIdentity, ...modules.map((module) => module.identity)],
-        space,
-      );
+      this.#recordPersistedClosureSpaces(identities, space);
     })();
     this.#inProgressCompileCacheWrites.set(persistenceSlotKey, {
       closureSignature,
       persistence,
     });
-    this.#trackCacheWriteBack(space, entryIdentity, persistence);
+    this.#trackCacheWriteBack(space, entryIdentity, identities, persistence);
     try {
       await persistence;
     } finally {
@@ -3293,21 +3405,37 @@ export class PatternManager {
       if (current?.persistence === persistence) {
         this.#inProgressCompileCacheWrites.delete(persistenceSlotKey);
       }
-      this.#untrackCacheWriteBack(space, entryIdentity, persistence);
+      this.#untrackCacheWriteBack(
+        space,
+        entryIdentity,
+        identities,
+        persistence,
+      );
     }
   }
 
   /**
    * Helper for the write-back steps, which enters `write` into both in-flight
-   * sets and emits the `pattern.cache-write-back.start` marker for it.
+   * sets, counts it as a persist in flight into `space` under each of
+   * `identities`, and emits the `pattern.cache-write-back.start` marker for
+   * it.
    */
   #trackCacheWriteBack(
     space: MemorySpace,
     entryIdentity: string,
+    identities: readonly string[],
     write: Promise<unknown>,
   ): void {
     this.#compileCacheWrites.add(write);
     this.#pendingCacheWriteBacks.add(write);
+    for (const identity of identities) {
+      let spaces = this.#closurePersistsInFlight.get(identity);
+      if (spaces === undefined) {
+        spaces = new Map();
+        this.#closurePersistsInFlight.set(identity, spaces);
+      }
+      spaces.set(space, (spaces.get(space) ?? 0) + 1);
+    }
     this.#runtime.telemetry.submit({
       type: "pattern.cache-write-back.start",
       space,
@@ -3317,16 +3445,29 @@ export class PatternManager {
 
   /**
    * Helper for the write-back steps, which removes `write` from both
-   * in-flight sets once it has settled and emits the
+   * in-flight sets once it has settled, uncounts it from the persists in
+   * flight into `space` under each of `identities`, and emits the
    * `pattern.cache-write-back.complete` marker for it.
    */
   #untrackCacheWriteBack(
     space: MemorySpace,
     entryIdentity: string,
+    identities: readonly string[],
     write: Promise<unknown>,
   ): void {
     this.#compileCacheWrites.delete(write);
     this.#pendingCacheWriteBacks.delete(write);
+    for (const identity of identities) {
+      const spaces = this.#closurePersistsInFlight.get(identity);
+      const count = spaces?.get(space);
+      if (spaces === undefined || count === undefined) continue;
+      if (count > 1) {
+        spaces.set(space, count - 1);
+        continue;
+      }
+      spaces.delete(space);
+      if (spaces.size === 0) this.#closurePersistsInFlight.delete(identity);
+    }
     this.#runtime.telemetry.submit({
       type: "pattern.cache-write-back.complete",
       space,
@@ -3391,6 +3532,10 @@ export class PatternManager {
     moduleDelegations: ModuleDelegationMap = new Map(),
     delegated?: WritebackDelegation,
   ): Promise<void> {
+    const identities = [
+      entryIdentity,
+      ...modules.map((module) => module.identity),
+    ];
     const writeBack = this.#writeBackSourceCache(
       space,
       modules,
@@ -3398,15 +3543,12 @@ export class PatternManager {
       moduleDelegations,
       delegated,
     );
-    this.#trackCacheWriteBack(space, entryIdentity, writeBack);
+    this.#trackCacheWriteBack(space, entryIdentity, identities, writeBack);
     try {
       await writeBack;
-      this.#recordPersistedClosureSpaces(
-        [entryIdentity, ...modules.map((module) => module.identity)],
-        space,
-      );
+      this.#recordPersistedClosureSpaces(identities, space);
     } finally {
-      this.#untrackCacheWriteBack(space, entryIdentity, writeBack);
+      this.#untrackCacheWriteBack(space, entryIdentity, identities, writeBack);
     }
   }
 

@@ -47,6 +47,9 @@ jobs:
         env:
           COMMIT_SHA: ${{ github.sha }}
           EXPERIMENTAL_SERVER_EXECUTION: "false"
+          # A benchmark's binary is not a release: the compiler-input
+          # fingerprint spares it the corpus compile a shipped build pays for.
+          CF_COMPILE_CACHE_VERSION: inputs
 
       - name: 🔌 Start Toolshed server for the browser benchmark
         env:
