@@ -28,6 +28,8 @@ import {
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
+  type AmbiguousDescription,
+  ambiguousDescriptions,
   type EntryRefOf,
   type NumberedCell,
   numberedCells,
@@ -90,11 +92,14 @@ export type StoredSetupBuildComparison =
   | { kind: "renumbered"; moved: RenumberedCell[] }
   /**
    * Re-staging would record one cell's state as another's: a cell holding
-   * state moved (`moved`), or the projection changed over cells holding
-   * state that share a description (`ambiguous`), which could have traded
-   * numbers without the pairing seeing it.
+   * state moved (`moved`), or cells holding state of one description changed
+   * in a way the pairing by order cannot resolve (`ambiguous`).
    */
-  | { kind: "held"; moved: RenumberedCell[]; ambiguous: string[] };
+  | {
+    kind: "held";
+    moved: RenumberedCell[];
+    ambiguous: AmbiguousDescription[];
+  };
 
 /** The fields of a built pattern the record reads. */
 export interface StampedPattern extends PatternLevel {
@@ -196,14 +201,18 @@ export function readStoredSetupBuild(
  * of the build a start loaded, whose positional cells are `cells`.
  *
  * The two agree when their cell and projection digests do. Otherwise the
- * cells holding state decide: each the stored record lists is paired with
- * the current build's cell of its description, in order among those of that
- * description (`renumberedCells()`), and one whose number differs is a move
- * that re-staging cannot put right. Two cells of one description trading
- * numbers is a move that pairing cannot see, and the projection map is what
- * shows it; so where the projection changed and cells holding state share a
- * description, the trade is taken to be among them. With no such move,
- * re-staging restores every cell that moved.
+ * cells holding state decide, from the stored record's `state` and the
+ * current build's cells. Each stored cell is paired with the current build's
+ * cell of its description, in order among those of that description
+ * (`renumberedCells()`), and one whose number differs is a move that
+ * re-staging cannot put right. Where that pairing cannot say which cell went
+ * where, the description is ambiguous (`ambiguousDescriptions()`): its count
+ * of cells changed, or two or more of its cells changed numbers. One case
+ * that leaves no number changed remains, two cells of one description
+ * trading places, and the projection map is what can show it; so where the
+ * projection changed, a description with two or more cells holding state is
+ * ambiguous as well. With no move and no ambiguity, re-staging restores
+ * every cell that moved.
  */
 export function compareStoredSetupBuild(
   stored: StoredSetupBuild,
@@ -222,16 +231,52 @@ export function compareStoredSetupBuild(
   }));
   const after = cells.filter((cell) => cell.holdsState);
   const moved = renumberedCells(before, after);
-  const ambiguous = stored.projection === current.projection ? [] : [
-    ...new Set(
-      stored.state.map(([, description]) => description).filter((
+  const ambiguous = ambiguousDescriptions(before, after);
+  if (stored.projection !== current.projection) {
+    const found = new Set(ambiguous.map((entry) => entry.description));
+    const numbersOf = (list: readonly NumberedCell[], description: string) =>
+      list.filter((cell) => cell.description === description).map((cell) =>
+        cell.number
+      );
+    for (const { description } of before) {
+      if (found.has(description)) continue;
+      const earlier = numbersOf(before, description);
+      if (earlier.length < 2) continue;
+      found.add(description);
+      ambiguous.push({
         description,
-        index,
-        descriptions,
-      ) => descriptions.indexOf(description) !== index),
-    ),
-  ];
+        before: earlier,
+        after: numbersOf(after, description),
+      });
+    }
+  }
   return moved.length === 0 && ambiguous.length === 0
     ? { kind: "renumbered", moved }
     : { kind: "held", moved, ambiguous };
+}
+
+/**
+ * Says, for the log of a start that held a piece, why re-staging it would
+ * misplace state: each cell holding state that moved, and each description
+ * whose cells could not be matched across the two builds, with their
+ * numbers in each. With neither, the piece carried no record of the build
+ * that set it up and the loaded build has cells holding state.
+ */
+export function describeHold(
+  moved: readonly RenumberedCell[],
+  ambiguous: readonly AmbiguousDescription[],
+): string {
+  if (moved.length === 0 && ambiguous.length === 0) {
+    return "the piece carries no record of the build that set it up, and " +
+      "the build has cells holding state";
+  }
+  return [
+    ...moved.map((cell) =>
+      `${cell.description} moved from ${cell.from} to ${cell.to}`
+    ),
+    ...ambiguous.map(({ description, before, after }) =>
+      `cells of one description, ${description}, could not be matched: ` +
+      `[${before.join(", ")}] before, [${after.join(", ")}] now`
+    ),
+  ].join("; ");
 }

@@ -25,6 +25,7 @@ import {
   validateLocalReadBasis,
 } from "./storage/local-read-policy.ts";
 import {
+  type AmbiguousDescription,
   type NumberedCell,
   numberedCells,
   type RenumberedCell,
@@ -32,6 +33,7 @@ import {
 import { keepRefusedArgumentSlots } from "./refused-argument-slots.ts";
 import {
   compareStoredSetupBuild,
+  describeHold,
   readStoredSetupBuild,
   type StoredSetupBuild,
   storedSetupBuildOf,
@@ -1167,11 +1169,10 @@ interface StoredSetupVerdict {
   moved: RenumberedCell[];
 
   /**
-   * The descriptions shared by cells holding state over which the projection
-   * changed, where the verdict is a hold: a trade among them is what the
-   * pairing cannot see.
+   * The descriptions of cells holding state the pairing by order could not
+   * match across the two builds, where the verdict is a hold.
    */
-  ambiguous: string[];
+  ambiguous: AmbiguousDescription[];
 
   /**
    * Whether a record of the pattern's identity decided the verdict. One
@@ -6854,19 +6855,7 @@ export class Runner {
           `piece ${resultCell.sourceURI} was set up by another build of ` +
           `${ref.identity}#${ref.symbol}, and its stored setup is left as ` +
           "it is, since re-staging would read a cell holding state as " +
-          "another cell's: " +
-          (owed.moved.length === 0 && owed.ambiguous.length === 0
-            ? "the piece carries no record of the build that set it up, " +
-              "and the build has cells holding state"
-            : [
-              ...owed.moved.map((cell) =>
-                `${cell.description} moved from ${cell.from} to ${cell.to}`
-              ),
-              ...owed.ambiguous.map((description) =>
-                `the projection changed over cells of one description, ` +
-                `${description}, which may have traded numbers`
-              ),
-            ].join("; ")),
+          `another cell's: ${describeHold(owed.moved, owed.ambiguous)}`,
         ]);
       }
       if (owed?.owed === "repair" && ref !== undefined) {

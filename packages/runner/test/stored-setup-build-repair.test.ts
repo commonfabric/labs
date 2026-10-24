@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import {
   convertibleJsFromFabricValue,
   fabricFromConvertibleJsValue,
@@ -368,6 +369,13 @@ describe("stored-setup-build-repair", () => {
     return (cell.getAsQueryResult() as Result).$UI.children;
   };
 
+  // How many times a start has logged a hold. A hold writes nothing, so the
+  // log line is its one signal; `describeHold()` is what it says.
+  const holdsLogged = (): number =>
+    (getLoggerCountsBreakdown().runner?.["piece-start-repair-held"] as
+      | { warn?: number }
+      | undefined)?.warn ?? 0;
+
   // The stored projection, manifest and record of `cell`, to hold a later
   // reading against.
   const storedSetupOf = (cell: Cell<unknown>) => ({
@@ -455,8 +463,11 @@ describe("stored-setup-build-repair", () => {
     );
     expect(stampOf(cell)?.cells).toBe(record?.cells);
     expect(stampOf(cell)?.projection).not.toBe(record?.projection);
+    const holdsBefore = holdsLogged();
 
     expect(await startAndReadSlots(cell)).toEqual(SLOT_VALUES);
+
+    expect(holdsLogged()).toBe(holdsBefore);
 
     expect(projectionLinkIds(cell)).toEqual(expected);
     expect(stampOf(cell)).toEqual(record);
@@ -470,6 +481,7 @@ describe("stored-setup-build-repair", () => {
     const { cell, pattern, ref } = await setUpAndStop("held", STATEFUL);
     await storeAsBuild(cell, pattern, ref, (n) => n + 1);
     const stored = storedSetupOf(cell);
+    const holdsBefore = holdsLogged();
 
     expect(await rt.start(cell)).toBe(true);
     await cell.pull();
@@ -477,6 +489,7 @@ describe("stored-setup-build-repair", () => {
 
     expect(rt.runner.isRunning(cell)).toBe(true);
     expect(storedSetupOf(cell)).toEqual(stored);
+    expect(holdsLogged()).toBe(holdsBefore + 1);
   });
 
   it("holds a piece whose cells holding state of one description another build mapped the other way", async () => {
