@@ -3,7 +3,10 @@ import {
   FabricPrimitive,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
-import { isNontrivialSchema } from "@commonfabric/data-model-schema";
+import {
+  internSchema,
+  isNontrivialSchema,
+} from "@commonfabric/data-model-schema";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";
 import { isStreamValue, type JSONSchema } from "./builder/types.ts";
@@ -36,8 +39,9 @@ const MAX_RECURSION_DEPTH = 100;
 // array length) are recorded as nonRecursive so the engine applies shallow
 // (shape-only) conflict granularity to them — matching how the scheduler
 // reader-dirty index already treats nonRecursive reads. Value materialization
-// (leaf scalars via child-proxy creation, array methods that consume elements)
-// stays recursive.
+// (leaf scalars via child-proxy creation, array methods that consume elements,
+// and a member a view's declaration does not name, which `get` and
+// `getOwnPropertyDescriptor` hand over as stored) stays recursive.
 export const SHAPE_READ: IReadOptions = { nonRecursive: true };
 
 // Cache of target objects to their proxies, scoped by ReactivityLog.
@@ -156,6 +160,26 @@ export class ViewDriftError extends Error {
   }
 }
 
+/**
+ * What a view does with `declaration` at its own level, as a cache key
+ * term: nothing (`null`), read every member through a view (`"open"`), or
+ * read the named members through views and the rest as stored (the names,
+ * sorted). One declaration reaches a position spelled two ways, with local
+ * `#/$defs` references from a reader's own schema and with `cid:` references
+ * from a stored link, so the schema object cannot be the term: a link back
+ * to a position already viewed has to find that view. Two declarations that
+ * select alike at this level share a view, and its children's declarations
+ * are the first one's narrowed; where those select differently below, the
+ * children's own keys tell them apart only by their selections in turn.
+ */
+const declarationTerm = (
+  declaration: (JSONSchema & object) | undefined,
+): string[] | string | null => {
+  if (declaration === undefined) return null;
+  if (!selectsKeys(declaration)) return "open";
+  return Object.keys(declaration.properties as object).sort();
+};
+
 const proxyCacheKey = (
   link: NormalizedFullLink,
   cfcLabelView: CfcLabelView | undefined,
@@ -168,6 +192,10 @@ const proxyCacheKey = (
   // document that changes kind gets a new view on its next read, while the
   // one built over the old kind refuses (`ViewDriftError`).
   kind: ViewKind,
+  // Two views over one position under different declarations read it
+  // differently: which members are views and which are read as stored. Each
+  // is its own view; one under no declaration is the view there always was.
+  declaration: (JSONSchema & object) | undefined,
 ): string =>
   JSON.stringify([
     link.space,
@@ -176,6 +204,7 @@ const proxyCacheKey = (
     cfcLabelView ?? null,
     epoch ?? null,
     kind,
+    declarationTerm(declaration),
   ]);
 
 /** Whether a transaction can still answer a read. */
@@ -243,12 +272,16 @@ const arrayMethods: { [key: string]: ArrayMethodType } = {
 /**
  * The declaration a view at a position reads under: `schema`, a stored
  * link's declaration carried onto a resolved link or a parent view's
- * narrowed to this key, resolved to its structural form, when it says
- * something about the value beyond the handle kind and its `cid:` closure is
- * complete in `space`. A declaration that constrains nothing describes
- * nothing, and one whose closure is missing or corrupt is ignored, as link
- * resolution ignores it when narrowing (`ensureExternalSchemaClosure`); a
- * view under either reads as it would under none.
+ * narrowed to this key, resolved to its structural form and interned, when
+ * it says something about the value beyond the handle kind and its `cid:`
+ * closure is complete. The closure is looked for in the registry first and
+ * then in `space`: a crossed link's closure travels with the document holding
+ * the link, and adopting the link's declaration registers all of it, so a
+ * member's part of it resolves from the registry wherever the member's
+ * document lives. A declaration that constrains nothing describes nothing,
+ * and one whose closure is missing or corrupt is ignored, as link resolution
+ * ignores it when narrowing (`ensureExternalSchemaClosure`); a view under
+ * either reads as it would under none.
  */
 export function declaredShape(
   tx: IExtendedStorageTransaction,
@@ -260,7 +293,7 @@ export function declaredShape(
   const resolved = resolveSchema(schema);
   if (!isObjectOrArray(resolved)) return undefined;
   const { asCell: _asCell, ...shape } = resolved;
-  return isNontrivialSchema(shape) ? resolved : undefined;
+  return isNontrivialSchema(shape) ? internSchema(resolved) : undefined;
 }
 
 /**
@@ -725,15 +758,23 @@ function createViewProxy<T>(
   // one cache per transaction — which is right, because it describes the instant
   // that transaction saw.
   const txCache = getProxyCache(tx, runtime);
-  const cacheKey = proxyCacheKey(link, cfcLabelView, epoch, boundKind);
+  const cacheKey = proxyCacheKey(
+    link,
+    cfcLabelView,
+    epoch,
+    boundKind,
+    declared,
+  );
 
   // Check if we already have a proxy for this target in the cache.
   // The cache key is the original `value` (not the stub), ensuring that
-  // the same frozen object always maps to the same proxy instance.
+  // the same frozen object always maps to the same proxy instance. The
+  // by-value index holds the views under no declaration alone: a view under
+  // one reads the value differently from the view of it there always was.
+  const sharesByValue = cfcLabelView === undefined && epoch === undefined &&
+    declared === undefined;
   const existingProxy = txCache.byLink.get(cacheKey) ??
-    (cfcLabelView === undefined && epoch === undefined
-      ? txCache.byValue.get(value)
-      : undefined);
+    (sharesByValue ? txCache.byValue.get(value) : undefined);
   if (existingProxy) return remember(existingProxy);
 
   const proxy = new Proxy(proxyTarget as object, {
@@ -1155,10 +1196,10 @@ function createViewProxy<T>(
 
   // Cache the proxy in the appropriate cache before returning
   txCache.byLink.set(cacheKey, proxy);
-  // Not the by-value index for a pinned view: it names a value rather than an
-  // instant, so it would hand a view taken at one epoch to a reader asking at
-  // another.
-  if (cfcLabelView === undefined && epoch === undefined) {
+  // Not the by-value index for a pinned view, which names a value rather than
+  // an instant and would hand a view taken at one epoch to a reader asking at
+  // another, nor for a view under a declaration.
+  if (sharesByValue) {
     txCache.byValue.set(value, proxy);
   }
   return remember(proxy);

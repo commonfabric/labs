@@ -74,10 +74,20 @@ async function documents(schema: unknown = profileSchema) {
     }),
     body: "hello",
   });
+  // The same profile linked twice from one document, under the schema and
+  // under none, so that the two views of it are built in one read.
+  const both = await write(space, "both", {
+    typed: profile.getAsLink({
+      includeSchema: true,
+      keepAsCell: KeepAsCell.All,
+    }),
+    plain: profile.getAsLink(),
+  });
   return {
     runtime,
     write,
     message,
+    both,
     async [Symbol.asyncDispose]() {
       await runtime.dispose();
       await storageManager.close();
@@ -153,6 +163,60 @@ describe("a view behind a link carrying a schema", () => {
       },
       body: "hello",
     });
+  });
+
+  it("keeps a view under a declaration apart from the view under none, whichever is read first", async () => {
+    // Both views come out of one read, so they share one view cache; a
+    // read-out would not show this, since it follows links on its own.
+    type Both = { typed: Profile; plain: Profile };
+    const inlined = (inbox: unknown) => (inbox as { catalog: unknown }).catalog;
+    {
+      await using docs = await documents();
+      const both = docs.both.get() as Both;
+      expect(isSigilLink(both.typed.inbox)).toBe(true);
+      expect(inlined(both.plain.inbox)).toEqual({ entries: {} });
+    }
+    {
+      await using docs = await documents();
+      const both = docs.both.get() as Both;
+      expect(inlined(both.plain.inbox)).toEqual({ entries: {} });
+      expect(isSigilLink(both.typed.inbox)).toBe(true);
+    }
+  });
+
+  it("reads a linked member under the member's own declaration, not the document's", async () => {
+    // The profile's `child` is an untyped link to a record whose `title`
+    // is a link to its text. The profile's declaration names `child.title`
+    // and no `title` of its own, so the record's `title` is followed only
+    // under the member's declaration; under the document's it would be an
+    // unnamed key, kept as the link it holds.
+    const schema = {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        child: {
+          type: "object",
+          properties: { title: { type: "string" } },
+        },
+      },
+    } as const;
+    await using docs = await documents(schema);
+    const text = await docs.write(space, "title", "a linked title");
+    const child = await docs.write(space, "child", {
+      title: text.getAsLink(),
+      secret: "s",
+    });
+    await docs.write(space, "profile", {
+      name: "an author",
+      child: child.getAsLink(),
+    }, schema);
+
+    type Shaped = { authorProfile: { child: { title: unknown } } };
+    const view = docs.message.get() as Shaped;
+    expect(view.authorProfile.child.title).toBe("a linked title");
+    expect(
+      (hostValueOf(docs.message.get()) as Shaped).authorProfile.child.title,
+    ).toBe("a linked title");
   });
 
   it("subscribes through the link to nothing an unnamed key links", async () => {

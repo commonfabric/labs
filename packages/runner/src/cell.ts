@@ -5560,7 +5560,9 @@ export function convertCellsToLinks(
  * A cell's value in the form the worker hands it to a host: each cell inside
  * it as the link it names, carrying the display form of that cell's label
  * view with every caveat's source redacted, and each query result read out
- * into the data behind it, following its links. A sigil link already in the
+ * into the data behind it, following its links, except a link under a key
+ * that the declaration of a crossed link does not name, which stays the link
+ * it is (`readOutView()`). A sigil link already in the
  * value is rebuilt as the container it is, view and all; stored data carries
  * no view on a link, the persist seam having stripped it, so the minted links
  * are where a view crosses. What a host is sent is
@@ -5910,10 +5912,19 @@ function readOutView(
       declaration: (JSONSchema & object) | undefined,
     ): FabricValue => {
       if (isSigilLink(stored)) {
+        // Followed from this position under its own declaration, which the
+        // resolution carries onto the target where the stored link declares
+        // nothing: the document's schema describes the document, not the
+        // member the link sits at.
+        const { schema: _documentSchema, ...address } = document;
         const resolved = resolveLinkTracingDereferences(
           runtime,
           tx,
-          { ...document, path: [...document.path, ...position] },
+          {
+            ...address,
+            path: [...document.path, ...position],
+            ...(declaration !== undefined && { schema: declaration }),
+          },
           "value",
           { markIfcCrossings: true },
         );
