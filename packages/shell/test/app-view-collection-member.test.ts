@@ -199,6 +199,9 @@ interface StubRuntime {
   /** How many times the slug subscription has been cancelled. */
   cancels: number;
 
+  /** The schema of each handle the watch made of the slug cell, in order. */
+  watchSchemas: unknown[];
+
   /** Answer every resolution from here on with `next`. */
   answer(next: Resolved | Refused | Error): void;
 
@@ -249,6 +252,7 @@ function stubRuntime(
     resolved,
     started,
     cancels: 0,
+    watchSchemas: [],
     answer: (next) => {
       answer = next;
     },
@@ -349,12 +353,18 @@ function stubRuntime(
       setBreakpoints: () => Promise.resolve(),
     }),
     getSlug: () => Promise.resolve(pieceSlug),
-    getSlugCell: () =>
-      Promise.resolve({
+    getSlugCell: () => {
+      const slugCell = {
+        asSchema: (schema: unknown) => {
+          stub.watchSchemas.push(schema);
+          return slugCell;
+        },
         subscribe: () => () => {
           stub.cancels++;
         },
-      }),
+      };
+      return Promise.resolve(slugCell);
+    },
     invalidatePattern: () => {},
   };
   // Replaced, never scheduled: the poll is the subject, and firing it by
@@ -527,6 +537,28 @@ describe("AppView collection members", () => {
       expect(stub.started).toEqual([
         [SPACE, "fid1:member-42", { scope: "space" }],
       ]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("watches the slug under a schema that stops at the shape of what it names", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+
+      // The watch reads the slug only to be woken: a read under no schema
+      // would follow the redirect into the piece and wake on every write to
+      // it.
+      expect(stub.watchSchemas).toEqual([{ type: "object", properties: {} }]);
     } finally {
       restore();
     }

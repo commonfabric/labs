@@ -5300,6 +5300,51 @@ describe("runtime-processor", () => {
 
       expect(diagnostics).toHaveLength(1);
     });
+
+    it("logs an empty-schema subscription for a ref read under `true`, once however often it delivers", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const cell = runtime.getCell(
+          cfcSigner.did(),
+          "true-schema-subscribe",
+          schema,
+        );
+        const write = async (x: number) => {
+          const tx = runtime.edit();
+          cell.withTx(tx).set({ state: { shapes: [{ x }] } });
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await runtime.idle();
+        };
+        await write(1);
+        const { schema: _schema, ...address } = createCellRef(cell);
+        const posted: unknown[] = [];
+        using errors = stub(console, "error");
+
+        buildProcessor({ runtime }).handleCellSubscribe({
+          type: RequestType.CellSubscribe,
+          cell: { ...address, path: ["state", "shapes"], schema: true },
+        }, {
+          id: 1,
+          post: (message) => {
+            posted.push(message);
+            return true;
+          },
+        });
+        // The sink posts from a microtask.
+        await Promise.resolve();
+        await write(2);
+        await Promise.resolve();
+
+        const diagnostics = errors.calls.map(({ args }) => String(args[0]))
+          .filter((message) => message.includes("EMPTY SCHEMA SUBSCRIPTION"));
+        expect(posted.length).toBeGreaterThanOrEqual(2);
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]).toContain("schema: true");
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
   });
 
   describe("`RuntimeProcessor` cell fields IPC", () => {
