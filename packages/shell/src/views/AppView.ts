@@ -347,17 +347,18 @@ export class XAppView extends BaseView {
   /**
    * The answer the view is SHOWING and the reference it answers: the
    * resolution whose piece is on screen, or whose refusal is the error on
-   * screen, under the address that reached it. Undefined before the first run
-   * of the selection reports; the answer within it is undefined where a run
-   * reached nothing to show, a load that could not finish among them.
+   * screen, or whose load's failure is the error on screen, under the address
+   * that reached it. Undefined before the first run of the selection reports;
+   * the answer within it is undefined where a run reached no answer at all,
+   * as a resolution that faulted does.
    *
    * One fact, not several about one thing. What was resolved, whether it was
    * applied, which piece it reached, and which answer is newest are all read
    * off this — so there is no second slot for one of them to disagree with,
    * and a re-resolution asks one question: is this what the view is showing?
    * A no is the whole of the work to do, whether the reference moved, a
-   * member arrived, a refusal changed, or a load failed and left the view on
-   * something else.
+   * member arrived, a refusal changed, or a resolution faulted and left the
+   * view on something else.
    *
    * Written only by {@link XAppView.#markShown}, and only from the answer the
    * writer itself resolved — never from whatever is current when it finishes,
@@ -598,11 +599,13 @@ export class XAppView extends BaseView {
           try {
             pattern = await rt.getPattern(space, pieceId, { scope });
           } catch (error) {
-            // Around the load alone. The run's outer catch also takes the
-            // refusal's own throw, and recording nothing there would undo
-            // the mark a refusal just made — leaving every poll to re-resolve
-            // an answer the view is already showing.
-            this.#markShown(reference, undefined, signal);
+            // Around the load alone, since the run's outer catch also takes
+            // the refusal's own throw. A load that fails leaves this answer's
+            // failure on screen, and that IS the view showing this answer:
+            // recorded as shown, a poll reaching the same answer is no news,
+            // and the failing piece is not fetched and started again on
+            // every tick. An answer that differs still reloads.
+            this.#markShown(reference, landed, signal);
             throw error;
           }
           // `landed` and not whatever is current: this run finished THIS
@@ -805,7 +808,8 @@ export class XAppView extends BaseView {
    * that same run's, for the same reason.
    *
    * Every outcome of a run is reported through here — the piece it loaded,
-   * the refusal it was given, and the load it could not finish. That is what
+   * the refusal it was given, the load it could not finish, and the
+   * resolution that faulted before it reached an answer. That is what
    * lets one comparison stand for all of them: an outcome that wrote nothing
    * would leave the answer before it standing as though it were still what
    * the view had settled on.
@@ -906,12 +910,13 @@ export class XAppView extends BaseView {
     // the reference beside it: a piece already on screen wants no reload
     // however the view came to be showing it. A difference covers every
     // reason the view could be behind — the reference moved, a member
-    // arrived, a refusal changed, a load failed and left the view on an error
-    // — because each of them is the same fact: what the view settled on is
-    // not this. That holds because every outcome of a run is recorded, a load
-    // that could not finish among them; an outcome that recorded nothing
-    // would leave the answer before it reading as settled, and the retry it
-    // needs would never be asked for.
+    // arrived, a refusal changed, a resolution faulted and left the view on an
+    // error — because each of them is the same fact: what the view settled on
+    // is not this. That holds because every outcome of a run is recorded; an
+    // outcome that recorded nothing would leave the answer before it reading
+    // as settled, and the reload it needs would never be asked for. A load
+    // that failed is recorded under the answer it was loading, so the same
+    // answer again is no news and the failure stands until the answer moves.
     const shown = this.#shownResolution?.answer;
     if (shown && slugResolutionKey(shown) === slugResolutionKey(landed)) return;
     this.#handleSlugCellUpdate(watch);

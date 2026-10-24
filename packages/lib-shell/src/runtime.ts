@@ -387,10 +387,21 @@ export function createRuntimeClientOptions({
   };
 }
 
-/** One loaded piece, and whether the load started it. */
+/** One loaded piece, whether the load started it, and whether it failed. */
 interface PatternCacheEntry {
-  promise: Promise<PieceHandle<NameSchema>>;
-  started: boolean;
+  /** The load, as every caller asking for this address is handed it. */
+  readonly promise: Promise<PieceHandle<NameSchema>>;
+
+  /** Whether the load asked the worker to start the piece. */
+  readonly started: boolean;
+
+  /**
+   * Whether the load has rejected. A failed load answers every caller,
+   * whichever start mode it was asked in: starting does everything a load
+   * without starting does and more, so a starting caller has no better
+   * chance of success than the load that already failed.
+   */
+  failed: boolean;
 }
 
 /** Where a slug reference lands, as a page address can carry it. */
@@ -468,7 +479,8 @@ export class RuntimeInternals extends EventTarget {
    *
    * An entry carries whether the load was STARTED: a started piece answers a
    * caller that only reads it, while one loaded without starting does not
-   * answer a caller that needs it running.
+   * answer a caller that needs it running. A load that failed is an entry
+   * like any other, and answers with its failure until it is invalidated.
    */
   #patternCache: Map<
     DID,
@@ -613,7 +625,16 @@ export class RuntimeInternals extends EventTarget {
    *
    * Cached per (space, scope, id) — a pattern's whole address. A cache entry
    * created with `start: false` is upgraded (re-fetched with start) when a
-   * starting caller asks for the same pattern.
+   * starting caller asks for the same pattern, unless that load failed.
+   *
+   * A load that fails is cached too, and every later request for that
+   * address rejects with the same error without asking the worker again,
+   * whether or not it asks to start the piece, until
+   * {@link RuntimeInternals.invalidatePattern} or
+   * {@link RuntimeInternals.refreshPattern} drops it. So a failing piece is
+   * fetched once however often it is asked for, which is what keeps a caller
+   * that asks on a schedule of its own from repeating the failure on that
+   * schedule.
    */
   getPattern(
     space: DID,
@@ -627,7 +648,7 @@ export class RuntimeInternals extends EventTarget {
     const scope = options?.scope ?? "space";
     const byId = this.#patternCacheSlot(space, scope);
     const cached = byId.get(id);
-    if (cached && (cached.started || !start)) {
+    if (cached && (cached.started || cached.failed || !start)) {
       return cached.promise;
     }
     const promise = (async () => {
@@ -642,11 +663,10 @@ export class RuntimeInternals extends EventTarget {
       }
       return piece;
     })();
-    const entry: PatternCacheEntry = { promise, started: start };
+    const entry: PatternCacheEntry = { promise, started: start, failed: false };
     byId.set(id, entry);
-    // Evict on rejection so the next request retries.
     promise.catch(() => {
-      if (byId.get(id) === entry) this.#dropPattern(space, scope, id);
+      entry.failed = true;
     });
     return promise;
   }
@@ -669,7 +689,7 @@ export class RuntimeInternals extends EventTarget {
    * Drop one loaded piece, and any level of the cache it was the last thing
    * in. A nested map holds a level per address component, so a level left
    * empty is a space or a scope the runtime goes on holding for a piece it
-   * no longer has — and a run of failed lookups is a run of them.
+   * no longer has — and a run of invalidated lookups is a run of them.
    */
   #dropPattern(space: DID, scope: CellScope, id: string): void {
     const byScope = this.#patternCache.get(space);
