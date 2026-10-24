@@ -46,7 +46,8 @@ import {
   type ParticipantRosterCell,
   rosterProfiles,
 } from "../loom/participants.tsx";
-import { isInMain, type ShownIn, viewPlaces } from "./logic.ts";
+import { profileKeyOf } from "../system/private-inbox.tsx";
+import { type ShownIn, type ViewPlace, viewPlaces } from "./logic.ts";
 import {
   canActIn,
   commitComposerSend,
@@ -59,7 +60,6 @@ import {
   commitSetTitle,
   commitThreadSend,
   type ComposerState,
-  entryFor,
   FABRICHAT_POLICY,
   isOwnerOf,
   type JoiningManager,
@@ -67,16 +67,18 @@ import {
   messageEntries,
   type MessageEntry,
   type MessageRights,
-  messageRightsOf,
   type MessagesCell,
+  type MessagesValue,
   NO_MESSAGE_RIGHTS,
   ownersMayObliterateIn,
+  rightsOf,
   type RoomStreamEvent,
   type SetTitleEvent,
   type StoredAbout,
   tellManagerJoined,
   TITLE_KEY,
   type TitlesCell,
+  viewKeyOf,
 } from "./room-records.tsx";
 import { bodyText, FabriChatMessageRow } from "./message-row.tsx";
 import {
@@ -110,18 +112,18 @@ import {
 /**
  * The room's participants: those listed, then every author not among them,
  * each once, in the order each first appears. Two are the same person when
- * their profiles are the same cell.
+ * their profiles are the same cell. `authors` holds each author once already,
+ * so what is compared here is the listed profiles against each other and
+ * against the authors, which is as many comparisons as the room has people,
+ * however many messages it holds.
  */
 export const participantsOf = (
   listed: readonly ProfileCell[],
-  entries: readonly MessageEntry[],
+  authors: readonly ProfileCell[],
 ): ProfileCell[] =>
-  [
-    ...listed,
-    ...entries.map((entry) => entry.record.authorProfile),
-  ].reduce<ProfileCell[]>(
+  [...listed, ...authors].reduce<ProfileCell[]>(
     (found, profile) =>
-      profile === undefined || found.some((known) => equals(known, profile))
+      found.some((known) => equals(known, profile))
         ? found
         : [...found, profile],
     [],
@@ -804,6 +806,84 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
 );
 
 /**
+ * What the room derives from its messages, in one walk of the list. Each
+ * derivation over the whole list — the entries, their places, the main
+ * conversation, the authors, and the message facts the view offers — re-runs
+ * when the list changes, so they are one computation rather than several that
+ * each read the entries again: the list's records are read once, into
+ * `entries`, and everything else is derived from those plain values in the
+ * same run. A view that needs one of these reads that one, and a row reads its
+ * own message's place by key.
+ */
+export interface MessageFacts {
+  /** Every stored message, in the order recorded. */
+  entries: MessageEntry[];
+
+  /**
+   * Every message's place in the views, by the message's key. Each row reads
+   * its own message's, so no row scans the list, and a change to one message
+   * re-runs only the rows whose places changed.
+   */
+  places: Record<string, ViewPlace>;
+
+  /**
+   * The main conversation's messages, in the order recorded: those that reply
+   * to nothing, or whose reply is shown there. The main list maps these, so a
+   * message outside the main conversation has no row there.
+   */
+  main: MessageCell[];
+
+  /**
+   * Every author, each once, in the order each first appears, as
+   * `messageEntries()` finds them.
+   */
+  authors: ProfileCell[];
+
+  /** The room's messages as the view offers them. */
+  list: ChatMessageList;
+}
+
+/**
+ * `MessageFacts` for `messages`. The views keep the order the room recorded
+ * the messages in: a time is the handler clock's reading, and nothing sorts
+ * by it. A thread's root is always in the main conversation, so the main
+ * conversation's entries, in order, name every root.
+ */
+export const messageFacts = (
+  messages: Cell<MessagesValue>,
+): MessageFacts => {
+  const { entries, authors } = messageEntries(messages);
+  const places = viewPlaces(entries);
+  const mainEntries = entries.filter((entry) => entry.inMain);
+  const main = mainEntries.map((entry) => entry.cell);
+  const first = entries[0];
+  const last = entries[entries.length - 1];
+  return {
+    entries,
+    places,
+    main,
+    authors,
+    list: {
+      count: entries.length,
+      ...(first === undefined ? {} : { oldestAt: epochNsec(first.sentAt) }),
+      ...(last === undefined ? {} : { newestAt: epochNsec(last.sentAt) }),
+      latest: {
+        messages: main.slice(-FABRICHAT_POLICY.maxWindowCount),
+        hasOlder: main.length > FABRICHAT_POLICY.maxWindowCount,
+      },
+      threads: mainEntries.flatMap((entry) => {
+        const place = places[entry.key];
+        return place?.latestReplyAt === undefined ? [] : [{
+          root: entry.cell,
+          replyCount: place.replies,
+          latestReplyAt: epochNsec(place.latestReplyAt),
+        }];
+      }),
+    },
+  };
+};
+
+/**
  * A thread, as the main conversation shows it beside its root: how many
  * replies it holds, and when the newest was sent. A deleted or obliterated
  * reply stays in its thread, so it is counted, and its `sentAt` can be the
@@ -1130,39 +1210,10 @@ export const FabriChatRoomCore = pattern<
   });
   const alsoToMain = new Writable.perSession(false);
 
-  const entries = computed(() => messageEntries(messages));
-  // Every message's place in the views, derived once for the whole list. Each
-  // row reads its own message's entry, so no row scans the list, and a change
-  // to one message re-runs only the rows whose entries changed.
-  const places = computed(() =>
-    viewPlaces(
-      entries.map(({ key, sentAt, replyTo }) => ({ key, sentAt, replyTo })),
-    )
-  );
-  // The views keep the order the room recorded the messages in: a time is
-  // the handler clock's reading, and nothing sorts by it.
-  const mainEntries = computed(() => entries.filter(isInMain));
-  const latest = computed(() => ({
-    messages: mainEntries.slice(-FABRICHAT_POLICY.maxWindowCount).map((
-      entry,
-    ) => entry.cell),
-    hasOlder: mainEntries.length > FABRICHAT_POLICY.maxWindowCount,
-  }));
-  // A thread's root is always in the main conversation, so its entries, in
-  // order, name every root.
-  const threads = computed((): ChatThreadSummary[] =>
-    mainEntries.flatMap((entry) => {
-      const place = places[entry.key];
-      return place?.latestReplyAt === undefined ? [] : [{
-        root: entry.cell,
-        replyCount: place.replies,
-        latestReplyAt: epochNsec(place.latestReplyAt),
-      }];
-    })
-  );
-  const count = computed(() => entries.length);
-  const oldestAt = computed(() => entries[0]?.record.sentAt);
-  const newestAt = computed(() => entries[entries.length - 1]?.record.sentAt);
+  // Everything the room derives from its messages, in one walk (see
+  // `MessageFacts`).
+  const facts = computed(() => messageFacts(messages));
+  const places = facts.places;
   // The space's participants as its root lists them, for a room that isn't
   // that root. A root room's `#default` is the room itself, so it reads only
   // its own; a space whose root isn't there yet lists none.
@@ -1173,7 +1224,7 @@ export const FabriChatRoomCore = pattern<
   const listed = computed((): ProfileCell[] =>
     ownSpace ? [...joined] : [...(space.result?.participants ?? []), ...joined]
   );
-  const participants = computed(() => participantsOf(listed, entries));
+  const participants = computed(() => participantsOf(listed, facts.authors));
   // A profile lives in its owner's own space, and attests no one to a reader
   // that space refuses, so the entries, and the principals taken from them,
   // are derived per session: one instance for every reader is one their
@@ -1196,7 +1247,12 @@ export const FabriChatRoomCore = pattern<
     manager,
     present: participantPrincipals,
   });
-  const cannotSend = computed(() => !canSend);
+  // The composers' `disabled`. It defaults to `true`, which is what a
+  // composer renders until this has computed: without a default the prop is
+  // absent then, so a composer would show enabled, disable itself until the
+  // viewer's profile and access resolve, and enable again, dropping what was
+  // typed or clicked meanwhile.
+  const cannotSend = computed((): boolean | Default<true> => !canSend);
   const isOwner = computed(() => isOwnerOf(messages));
   const viewer = computed((): ChatRoomViewer => {
     const profile = viewerProfileOf(myProfile);
@@ -1211,15 +1267,20 @@ export const FabriChatRoomCore = pattern<
     };
   });
   // Every message's rights for the reader, by the rule the handlers admit an
-  // act by, derived once for the whole list as `places` is.
+  // act by, derived once for the whole list from each entry's author and
+  // whether it is live. The reader is the author of a message whose author's
+  // key is the reader's profile's: both are Home's `profileKeyOf()` of the
+  // profile's resolved link, which is what `equals()` compares.
   const messageRights = computed((): ChatMessageRights[] => {
     const profile = viewerProfileOf(myProfile);
-    return entries.map((entry) => ({
+    const readerKey = profile === undefined ? undefined : profileKeyOf(profile);
+    return facts.entries.map((entry) => ({
       message: entry.cell,
-      ...(canSend && profile !== undefined
-        ? messageRightsOf(
-          entry.record,
-          profile,
+      ...(canSend && readerKey !== undefined
+        ? rightsOf(
+          entry.authorKey === readerKey,
+          entry.live,
+          entry.authorKey !== undefined,
           kind,
           isOwner,
           ownersMayObliterate,
@@ -1266,12 +1327,13 @@ export const FabriChatRoomCore = pattern<
   const titleRefusalDisplay = computed((): ChatDisplay =>
     titleRefusal.get() === "" ? "none" : "block"
   );
-  // The key of the session's open thread's root; `""` while no thread is
-  // open.
+  // The key of the session's open thread's root, a message of the room;
+  // `""` while no thread is open. The root's key is read from the root
+  // itself, and the places say whether it is in the room.
   const openThreadKey = computed(() => {
     const root = composer.get()?.thread;
-    return (root?.get() === undefined ? undefined : entryFor(entries, root))
-      ?.key ?? "";
+    const key = root?.get() === undefined ? undefined : viewKeyOf(root);
+    return key !== undefined && places[key] !== undefined ? key : "";
   });
   const hasThread = computed(() => openThreadKey !== "");
   // The session's open thread: its root, and every message in the thread the
@@ -1283,7 +1345,7 @@ export const FabriChatRoomCore = pattern<
   const threadMessages = computed((): PerSession<MessageCell[]> =>
     openThreadKey === ""
       ? []
-      : entries.filter((entry) =>
+      : facts.entries.filter((entry) =>
         entry.key === openThreadKey ||
         places[entry.key]?.thread === openThreadKey
       ).map((entry) => entry.cell)
@@ -1297,7 +1359,7 @@ export const FabriChatRoomCore = pattern<
   const threadDisplay = computed(
     (): ChatDisplay => (hasThread ? "flex" : "none"),
   );
-  const isEmpty = computed(() => mainEntries.length === 0);
+  const isEmpty = computed(() => facts.main.length === 0);
   // Per session, so hidden by a prop rather than a branch (see
   // `FabriChatMessageRow`).
   const threadShownIn = computed((): ShownIn =>
@@ -1336,13 +1398,6 @@ export const FabriChatRoomCore = pattern<
     }),
     deleteReaction: commitDeleteReaction({ myProfile, room: messages }),
   };
-  const messageList = {
-    count,
-    oldestAt,
-    newestAt,
-    latest,
-    threads,
-  };
   const view = {
     about: aboutView,
     participants,
@@ -1350,7 +1405,7 @@ export const FabriChatRoomCore = pattern<
     participantEntries,
     participantPrincipals,
     addParticipant: join,
-    messages: messageList,
+    messages: facts.list,
     canSend,
     viewer,
     messageRights,
@@ -1427,7 +1482,7 @@ export const FabriChatRoomCore = pattern<
           gap="3"
           style={{ minHeight: "160px" }}
         >
-          {messages.map((message) => (
+          {facts.main.map((message) => (
             <FabriChatMessageRow
               message={message}
               inThread={false}

@@ -26,6 +26,7 @@ import {
 } from "@commonfabric/ts-transformers/runtime-contract";
 import { getLogger } from "@commonfabric/utils/logger";
 
+import { namesInstances } from "../builder/instance-name.ts";
 import { isTrustedBuilderArtifact } from "../builder/pattern-metadata.ts";
 import { popFrame, pushFrame } from "../builder/pattern.ts";
 import { validateCfcPolicyArtifactManifest } from "../cfc/policy.ts";
@@ -742,6 +743,7 @@ export class Engine extends EventTarget {
           beforeTransformers: (program) => {
             const pipeline = new (compilerStack()
               .CommonFabricTransformerPipeline)({
+              instanceNames: namesInstances(this.#ctRuntime.experimental),
               patternCoverage,
               builderSourceSites,
               moduleIdentities: identityByPath,
@@ -1076,6 +1078,7 @@ export class Engine extends EventTarget {
             );
             const pipeline = new (compilerStack()
               .CommonFabricTransformerPipeline)({
+              instanceNames: namesInstances(this.#ctRuntime.experimental),
               moduleIdentities,
               // The union carries a different `/<id>` prefix per batched
               // program; strip whichever one matches.
@@ -1340,6 +1343,7 @@ export class Engine extends EventTarget {
         beforeTransformers: (program) => {
           const pipeline = new (compilerStack()
             .CommonFabricTransformerPipeline)({
+            instanceNames: namesInstances(this.#ctRuntime.experimental),
             patternCoverage,
             builderSourceSites,
             // The transformer-level twin of `storedSource` above: pattern

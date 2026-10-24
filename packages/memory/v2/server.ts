@@ -9,6 +9,7 @@ import {
   valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
+import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 import { StagedMap } from "@commonfabric/utils/staged-map";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
@@ -227,6 +228,12 @@ import { assertReadOnly } from "./sqlite/guard.ts";
 import { ReadConnectionPool } from "./sqlite/read-pool.ts";
 import type { TableSchema } from "./sqlite/schema.ts";
 import { resolveSpaceStoreUrl } from "./storage-path.ts";
+import { compressServerMessageLabels } from "./sync-label-table.ts";
+import {
+  compressServerMessageCommitLabels,
+  expandClientMessageLabels,
+  hasClientMessageLabelMetadata,
+} from "./commit-label-table.ts";
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 import {
@@ -1158,6 +1165,8 @@ class Connection {
   #ready = false;
   #closed = false;
   #syncSchemaTable = false;
+  #syncLabelTable = false;
+  #commitLabelTable = false;
   #stableExpressionResultIds = false;
   #admissionNotice = false;
   #elidedVerdicts = false;
@@ -1215,10 +1224,26 @@ class Connection {
   #send(message: ServerMessage): void {
     if (message.type === "response") this.#answered.add(message.requestId);
     try {
+      let prepared = message;
+      if (this.#syncLabelTable) {
+        const labelStart = performance.now();
+        prepared = compressServerMessageLabels(prepared);
+        timing.time(labelStart, "memory", "response", "prepareLabels");
+      }
+      if (this.#commitLabelTable) {
+        const commitLabelStart = performance.now();
+        prepared = compressServerMessageCommitLabels(prepared);
+        timing.time(
+          commitLabelStart,
+          "memory",
+          "response",
+          "prepareCommitLabels",
+        );
+      }
       const schemaStart = performance.now();
-      const prepared = this.#syncSchemaTable
-        ? compressServerMessageSchemas(message)
-        : message;
+      if (this.#syncSchemaTable) {
+        prepared = compressServerMessageSchemas(prepared);
+      }
       timing.time(schemaStart, "memory", "response", "prepareSchemas");
       const sendStart = performance.now();
       this.#sendRaw(prepared);
@@ -1581,7 +1606,9 @@ class Connection {
   }
 
   async receive(payload: string): Promise<void> {
-    const parsed = parseClientMessage(payload);
+    const parsed = parseClientMessage(payload, {
+      commitLabelTableV1: this.#commitLabelTable,
+    });
     // A presence message or a session report is handled as it is handed
     // over, not behind the frames already queued here: it carries no seq and
     // settles nothing, and the space a report describes is often the one
@@ -1719,7 +1746,7 @@ class Connection {
    * the lost message would have told it.
    */
   #answerFailedRequest(
-    parsed: ClientMessage | OversizedClientMessage | null,
+    parsed: ClientMessage | RejectedClientMessage | null,
     error: unknown,
   ): boolean {
     const requestId = requestIdOf(parsed);
@@ -1837,16 +1864,19 @@ class Connection {
   }
 
   async #receiveOrdered(
-    parsed: ClientMessage | OversizedClientMessage | null,
+    parsed: ClientMessage | RejectedClientMessage | null,
   ): Promise<void> {
     if (this.#closed) {
       return;
     }
 
-    if (parsed === null) {
+    if (parsed === null || parsed.type === "invalid") {
+      // Answered on the request the envelope named when it named one the
+      // reply may echo, so the client settles that request instead of
+      // waiting for its connection to close.
       this.#send({
         type: "response",
-        requestId: "invalid",
+        requestId: parsed?.requestId ?? "invalid",
         error: toError(
           "InvalidMessageError",
           "Unable to parse memory message",
@@ -1897,6 +1927,10 @@ class Connection {
         serverFlags?.elidedVerdicts === true;
       this.#syncSchemaTable = clientFlags?.syncSchemaTableV2 === true &&
         serverFlags?.syncSchemaTableV2 === true;
+      this.#syncLabelTable = clientFlags?.syncLabelTableV1 === true &&
+        serverFlags?.syncLabelTableV1 === true;
+      this.#commitLabelTable = clientFlags?.commitLabelTableV1 === true &&
+        serverFlags?.commitLabelTableV1 === true;
       this.#ready = true;
       return;
     }
@@ -2372,7 +2406,7 @@ class Connection {
  * at a time however many spaces the opens name.
  */
 const spaceOfFrame = (
-  message: ClientMessage | OversizedClientMessage | null,
+  message: ClientMessage | RejectedClientMessage | null,
 ): string | undefined => {
   if (message === null || !("space" in message)) return undefined;
   if (message.type === "session.open" && message.principal === undefined) {
@@ -2386,14 +2420,14 @@ const spaceOfFrame = (
  * could not be read, or a `hello`.
  */
 const requestIdOf = (
-  message: ClientMessage | OversizedClientMessage | null,
+  message: ClientMessage | RejectedClientMessage | null,
 ): string | undefined => {
   if (message === null || !("requestId" in message)) return undefined;
   return typeof message.requestId === "string" ? message.requestId : undefined;
 };
 
 const isPresenceClientMessage = (
-  message: ClientMessage | OversizedClientMessage,
+  message: ClientMessage | RejectedClientMessage,
 ): message is
   | PresenceJoinRequest
   | PresencePublishRequest
@@ -2412,7 +2446,7 @@ type ImmediateClientMessage =
   | SessionReportRequest;
 
 const isImmediateClientMessage = (
-  message: ClientMessage | OversizedClientMessage,
+  message: ClientMessage | RejectedClientMessage,
 ): message is ImmediateClientMessage =>
   isPresenceClientMessage(message) || message.type === "session.report";
 
@@ -2953,6 +2987,7 @@ export class Server {
       operationCodecs: this.#operationCodecs.ids(),
       connectionAuth: this.options.authorizeConnection !== undefined,
       routedAuthV1: false,
+      routedCompressionV1: false,
     };
   }
 
@@ -10884,23 +10919,29 @@ function isSqliteNamedParamEntries(
 }
 
 /**
- * A client message refused for standing for more than
- * `MAX_UNTRUSTED_MESSAGE_SLOTS` slots, with the id of the request it carried
- * so that the refusal can be answered on that request.
+ * A client message refused before it was understood, with the id of the
+ * request it carried so that the refusal can be answered on that request:
+ * `oversized` for one standing for more than `MAX_UNTRUSTED_MESSAGE_SLOTS`
+ * slots, `invalid` for one that decoded but failed metadata expansion or
+ * request-shape validation.
  */
-export type OversizedClientMessage = {
-  type: "oversized";
+export type RejectedClientMessage = {
+  type: "oversized" | "invalid";
   requestId: string;
 };
 
 /**
- * Decodes and validates one message from a client. Returns `null` for a
- * message that is malformed, or that is refused for its size without carrying
- * a request id to answer it on.
+ * Decodes and validates one message from a client. A message that decodes but
+ * is then refused is reported as `invalid` on its root `requestId` when that
+ * is a bounded identifier (see `isRoutedIdentifier()`); the result is `null`
+ * for a message that cannot be decoded, or that is refused without a usable
+ * request id to answer it on. Negotiated commit metadata expands after bounded
+ * wire decoding and before request-shape validation or downstream CFC checks.
  */
 export const parseClientMessage = (
   payload: string,
-): ClientMessage | OversizedClientMessage | null => {
+  options: { commitLabelTableV1?: boolean } = {},
+): ClientMessage | RejectedClientMessage | null => {
   let parsed: FabricValue;
   try {
     parsed = decodeMemoryBoundary(payload);
@@ -10913,7 +10954,26 @@ export const parseClientMessage = (
     }
     return null;
   }
+  const requestId = isFabricPlainObject(parsed) ? parsed.requestId : undefined;
+  const rejected: RejectedClientMessage | null = isRoutedIdentifier(requestId)
+    ? { type: "invalid", requestId }
+    : null;
+  try {
+    if (options.commitLabelTableV1 === true) {
+      parsed = expandClientMessageLabels(parsed);
+    } else if (hasClientMessageLabelMetadata(parsed)) {
+      return rejected;
+    }
+  } catch {
+    return rejected;
+  }
+  return parseDecodedClientMessage(parsed) ?? rejected;
+};
 
+/** Helper for `parseClientMessage()`, which checks a decoded message's shape. */
+const parseDecodedClientMessage = (
+  parsed: FabricValue,
+): ClientMessage | null => {
   if (!isFabricPlainObject(parsed)) {
     return null;
   }

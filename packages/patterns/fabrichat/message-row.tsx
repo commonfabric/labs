@@ -1,7 +1,7 @@
 /**
  * One message of a FabriChat room, rendered: `FabriChatMessageRow`, with its
  * reviewed surfaces for reacting, editing, deleting, and obliterating, and the
- * reaction tallies and body text it shows.
+ * reaction tallies, body text and attachments it shows.
  */
 import {
   action,
@@ -16,6 +16,7 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
+import type { FileEntry } from "../fabrifile/schemas.tsx";
 import type { ViewPlace } from "./logic.ts";
 import {
   commitDelete,
@@ -121,6 +122,84 @@ export const bodyText = (record: RepliedMessage | undefined): string =>
 
 /** How a reaction's emoji is drawn. */
 const EMOJI_STYLE = { fontSize: "18px", lineHeight: "1" };
+
+/** What one attachment of a message renders. */
+interface AttachmentInput {
+  /** The file, an entry of the message's space's store. */
+  entry: Cell<FileEntry>;
+}
+
+/**
+ * One file a message attaches: a preview where it is an image, and a link that
+ * downloads it, each read through the entry under the viewer's own access; a
+ * note that the entry was removed from its store, once it is; or a note that
+ * the file can't be shown, to a viewer who can't read the entry. Which of
+ * them shows differs by viewer, so each is in the tree and shown or hidden
+ * through a prop, as the row's own controls are.
+ */
+const FabriChatAttachment = pattern<AttachmentInput, { [UI]: VNode }>(
+  ({ entry }) => {
+    const name = computed(() => entry.get()?.name ?? "");
+    const mediaType = computed(() => entry.get()?.mediaType ?? "");
+    const blob = computed(() => entry.get()?.blob);
+    const shown = computed((): "file" | "removed" | "unreadable" => {
+      const value = entry.get();
+      return value === undefined
+        ? "unreadable"
+        : value.removedAt !== undefined
+        ? "removed"
+        : "file";
+    });
+    const fileDisplay = computed((): ChatDisplay =>
+      shown === "file" ? "flex" : "none"
+    );
+    const imageDisplay = computed((): ChatDisplay =>
+      shown === "file" && (entry.get()?.mediaType ?? "").startsWith("image/")
+        ? "block"
+        : "none"
+    );
+    const removedDisplay = computed((): ChatDisplay =>
+      shown === "removed" ? "block" : "none"
+    );
+    const unreadableDisplay = computed((): ChatDisplay =>
+      shown === "unreadable" ? "block" : "none"
+    );
+    return {
+      [UI]: (
+        <div>
+          <div
+            hidden
+            style={{
+              display: fileDisplay,
+              flexDirection: "column",
+              gap: "0.25rem",
+            }}
+          >
+            <div hidden style={{ display: imageDisplay }}>
+              <cf-image
+                blob={blob}
+                media-type={mediaType}
+                alt={name}
+                style="max-width: 16rem; max-height: 16rem;"
+              />
+            </div>
+            <cf-blob-link blob={blob} name={name}>{name}</cf-blob-link>
+          </div>
+          <div hidden style={{ display: removedDisplay }}>
+            <cf-text variant="caption" style={{ fontStyle: "italic" }}>
+              This file was removed.
+            </cf-text>
+          </div>
+          <div hidden style={{ display: unreadableDisplay }}>
+            <cf-text variant="caption" style={{ fontStyle: "italic" }}>
+              This file can't be shown.
+            </cf-text>
+          </div>
+        </div>
+      ),
+    };
+  },
+);
 
 /** What a message row needs. */
 export interface FabriChatMessageRowInput {
@@ -271,6 +350,9 @@ export const FabriChatMessageRow = pattern<
     return editing !== undefined && equals(editing, message);
   });
   const text = computed(() => bodyText(message.get()));
+  const attachments = computed((): Cell<FileEntry>[] =>
+    message.get()?.attachments ?? []
+  );
   const isEdited = computed(() => {
     const record = message.get();
     return record?.editedAt !== undefined && typeof record.body === "string";
@@ -436,6 +518,9 @@ export const FabriChatMessageRow = pattern<
                     </cf-text>
                   </cf-cfc-authorship>
                 )}
+              {attachments.map((entry) => (
+                <FabriChatAttachment entry={entry} />
+              ))}
               {isEdited ? <cf-text variant="caption">(edited)</cf-text> : null}
               <div
                 data-ui-pattern={CHAT_EDIT_SURFACE}

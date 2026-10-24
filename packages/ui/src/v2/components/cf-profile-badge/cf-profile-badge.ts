@@ -1,6 +1,8 @@
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
+import { isWrittenProfileName } from "@commonfabric/runner/cfc/represents-principal";
 import { ProfileBadgeSchema } from "@commonfabric/runner/component-read-contract";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import { consume } from "@lit/context";
 import { css, html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -741,7 +743,11 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       // fires after a re-bind/detach.
       this._unsubscribe = named.subscribe((val, cfcLabel) => {
         this._applyValue(val);
-        this._deriveVerification(cfcLabel, generation);
+        this._deriveVerification(
+          cfcLabel,
+          generation,
+          isWrittenProfileName(isObjectNotArray(val) ? val.name : undefined),
+        );
       }, {
         includeCfcLabel: true,
         onRefused: () => this._applyRefusal(generation),
@@ -833,6 +839,9 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
    * attestation → the badge stays in the plain "presented" state (a pattern can
    * mimic the chrome but cannot mint the label that unlocks the seal).
    *
+   * `nameWritten` says whether the profile's value holds a name its owner
+   * wrote, which narrows the fields whose atoms count to the root and `name`.
+   *
    * `generation` is captured by the subscription callback in `_resolve`; a
    * callback that fires after a re-bind/detach (which bumps the generation)
    * bails before writing `_state`/`_seal`, so it can't leak onto a stale or
@@ -841,12 +850,13 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   private _deriveVerification(
     cfcLabel: CfcLabelView | undefined,
     generation: number,
+    nameWritten: boolean,
   ): void {
     if (generation !== this._resolveGeneration || !this.isConnected) return;
     // The label is the runtime-attested, display-redacted view delivered over
     // the subscription; redaction strips Caveat.source but keeps the
     // `represents-principal` integrity atom that unlocks the seal.
-    const owner = ownerPrincipalFromLabel(cfcLabel);
+    const owner = ownerPrincipalFromLabel(cfcLabel, nameWritten);
     if (owner) {
       this._seal = identitySeal(owner);
       this._state = "verified";

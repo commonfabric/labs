@@ -180,14 +180,18 @@ export function getTransactionWriteDetails(
 }
 
 /**
- * The spaces `tx` recorded a write in, including one whose every write
- * returned to where it started. A write elided as equal to the current value
- * is never recorded and names no space. Throws when `tx` offers no record of
- * its writes at all.
+ * The spaces `tx` targets for commit, including one named only by a commit
+ * precondition or SQLite operation and one whose every document write returned
+ * to where it started. With an exact target surface, an otherwise elided write
+ * can name a space too; older fallbacks can report only recorded attempts.
+ * Throws when `tx` offers no record of its commit targets or writes at all.
  */
 export function getTransactionWrittenSpaces(
   tx: TxLike,
 ): readonly MemorySpace[] {
+  const targetSpaces = unwrap(tx).getWriteTargetSpaces?.();
+  if (targetSpaces !== undefined) return targetSpaces;
+
   // Asked of the inner transaction: an extended one reports an empty attempt
   // log where its inner transaction keeps none, which would read as "wrote
   // nothing".

@@ -29,6 +29,11 @@ subscriber that was given a value learns that the cell now holds nothing. A
 `sync()` waits for no loads, and one that finds nothing leaves a value the
 handle holds in place, telling no subscriber.
 
+A subscription's read that finds the value and label the worker last sent for it
+sends nothing: a change elsewhere in what the read depends on, which runs the
+read again, is no change to what the host holds. The first value admitted after
+a refusal is always sent.
+
 ## Refused reads
 
 The worker builds every answer to a host's read of a cell's value, whether

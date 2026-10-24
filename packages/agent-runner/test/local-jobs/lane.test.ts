@@ -322,6 +322,23 @@ describe("local-jobs/lane", () => {
       ).toEqual([]);
     });
 
+    it("reports a read-only command's admitted output", () => {
+      expect(localJobEventsOf(event(
+        answer({
+          status: "executed",
+          outcome: { ok: true, id: "loom.inspect" },
+          entry: {
+            status: "admitted",
+            value: { ok: true, outputs: { title: "Trip" } },
+          },
+        }, "run_read_command"),
+        [calling("run_read_command")],
+      ))).toEqual([{
+        kind: "command",
+        body: { command: "loom.inspect", ok: true, outputs: { title: "Trip" } },
+      }]);
+    });
+
     it("reports a command for each executed call of a batch, in order, and nothing for one the host never ran", () => {
       const call = {
         role: "assistant" as const,

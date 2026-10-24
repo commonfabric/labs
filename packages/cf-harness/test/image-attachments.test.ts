@@ -4,11 +4,13 @@ import {
   assertNotEquals,
   assertRejects,
   assertStringIncludes,
+  assertThrows,
 } from "@std/assert";
 import { encodeBase64 } from "@std/encoding/base64";
 import { join } from "@std/path";
 import {
   createHarnessImageAttachment,
+  decodeHarnessInlineImage,
   isRelativePathWithinWorkspace,
   materializeImageAttachmentContentPart,
 } from "../src/image-attachments.ts";
@@ -19,6 +21,25 @@ const pngBytes = (...payload: number[]): Uint8Array =>
 
 const dataUrl = (bytes: Uint8Array): string =>
   `data:image/png;base64,${encodeBase64(bytes)}`;
+
+Deno.test("inline images reject noncanonical padding bits for the same bytes", () => {
+  assertEquals(
+    decodeHarnessInlineImage({
+      mediaType: "image/png",
+      base64: "iVBORw0KGgo=",
+    }),
+    pngBytes(),
+  );
+  assertThrows(
+    () =>
+      decodeHarnessInlineImage({
+        mediaType: "image/png",
+        base64: "iVBORw0KGgp=",
+      }),
+    Error,
+    "canonical base64",
+  );
+});
 
 const makeWorkspaceImage = async (
   bytes: Uint8Array,

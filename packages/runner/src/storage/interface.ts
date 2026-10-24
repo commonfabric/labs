@@ -1846,6 +1846,14 @@ export interface IStorageTransaction {
   getWriteAttemptLog?(): readonly IWriteAttempt[];
 
   /**
+   * Optional exact write-target spaces in commit order. Unlike the
+   * write-attempt log, this includes targets claimed only by commit
+   * preconditions, create marks, folded SQLite operations, or an otherwise
+   * elided write.
+   */
+  getWriteTargetSpaces?(): readonly MemorySpace[];
+
+  /**
    * Optional write details for the given space.
    *
    * V2 transactions can provide the current and previous values directly

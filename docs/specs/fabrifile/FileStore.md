@@ -27,10 +27,23 @@ in one space would be two sets of files with no rule for which a file belongs
 in, so a root MUST NOT replace its store, and nothing else in the space creates
 one.
 
-A space whose root is a FabriChat room
-([`FabriChatRoom`](../fabrichat/FabriChatRoom.md)) keeps its attachments in its
-own store, named by the room. A message's attachment links an entry of that
-store (see [`clients.md`](clients.md#attaching-a-file)).
+Two roots keep one this way: a FabriChat room that is its space's root
+([`FabriChatRoom`](../fabrichat/FabriChatRoom.md)), in its `fileStore` input,
+and the Loom (`packages/patterns/loom/`), in its own. The two offer the same
+shape: each links the store as `fileStore`, creates it with `ensureFileStore`,
+and offers the record itself as `fileStoreRecord`, which FabriChat's
+`ChatContainer` declares. A FabriChat room that isn't its space's root uses the
+store its root keeps: it reads its store from the record its root offers, and
+creates it there. A root that offers no record gives its room no store, and the
+room's `ensureFileStore` does nothing. A root offers the record rather than a
+stream to create the store with, because a declared stream reads as present
+whether or not the root has one (see
+[handlers](../../common/concepts/handler.md#exporting-handlers-as-streams)), so
+only a value can say whether the root keeps a store.
+
+A FabriChat room's attachments go in its space's store, the one its `fileStore`
+links. A message's attachment links an entry of that store (see
+[`clients.md`](clients.md#attaching-a-file)).
 
 ## State
 

@@ -146,8 +146,9 @@ export interface AggregateState {
   states: Record<string, IdentityState>;
 
   /**
-   * The file each identity's records named, by identity key, for the
-   * identities whose records named one at all. Everything else about an
+   * The file each identity's records from `main` named, by identity key,
+   * for the identities whose records from `main` named one at all. No
+   * other record says where an identity runs. Everything else about an
    * identity's surface follows from the identity, and an identity absent
    * here is its own invocation unit.
    *
@@ -502,15 +503,17 @@ export function provenance(
 export interface ReadReport {
   observations: Observation[];
 
-  /** Where each identity in it runs, by identity key. */
+  /**
+   * Where each identity the default branch recorded in it runs, by
+   * identity key. See `Fold` for why no other record says.
+   */
   surfaces: Map<string, Surface>;
 
   /**
-   * Every passing duration a continuous-integration runner measured, by
-   * identity key and then by day. A workstation's are left out, since a
-   * cost predicts what a lane's runner will spend. What a unit's hooks took
-   * in a passing batch is here too, by the name of the lane measurement
-   * that names the unit, which no identity key is.
+   * What each unit's hooks took in a passing batch on a lane's runner, by
+   * the name of the lane measurement that names the unit and then by day.
+   * A test's own durations travel on its observations instead, so that
+   * they reach its cost only where its run is counted.
    */
   durations: Map<string, Map<string, number[]>>;
 
@@ -594,14 +597,20 @@ export function readReport(
       }
       const test = resolver.resolve(record.test, day);
       const key = testIdentityKey(test);
-      // A record with no file names its own identity as the unit, which
-      // is all an unmapped record can say. Where another record of the
-      // same identity did carry a file, that is the better answer and the
-      // unmapped one must not overwrite it: the suites are mid-migration
-      // onto the preload, so one identity can have records of both kinds.
-      const surface = recordSurface(test, record.file);
-      const known = surfaces.get(key);
-      if (known === undefined || surface.fromFile) surfaces.set(key, surface);
+      // Only the default branch's records say where an identity runs, as
+      // `Fold` describes. A record with no file names its own identity as
+      // the unit, which is all an unmapped record can say. Where another
+      // record of the same identity did carry a file, that is the better
+      // answer and the unmapped one must not overwrite it: the suites are
+      // mid-migration onto the preload, so one identity can have records
+      // of both kinds.
+      if (where.place === "main") {
+        const surface = recordSurface(test, record.file);
+        const known = surfaces.get(key);
+        if (known === undefined || surface.fromFile) {
+          surfaces.set(key, surface);
+        }
+      }
       observations.push({
         test,
         outcome: record.outcome,
@@ -613,16 +622,17 @@ export function readReport(
           : { seed: group.context.shuffleSeed }),
         source: where.source,
         place: where.place,
+        // A cost predicts what a lane will spend running this test again,
+        // and only a passing execution measures that. A failure ended
+        // where the failure was reached, and where a wait's safety net
+        // ended it, its duration is that net's bound. And only a lane's
+        // runner measures what a lane will spend: a workstation is another
+        // machine, faster or slower by however it differs, so its record
+        // counts as evidence about the test and not about its cost.
+        ...(record.outcome === "pass" && where.place !== "local"
+          ? { durationMs: record.durationMs }
+          : {}),
       });
-      // A cost predicts what a lane will spend running this test again,
-      // and only a passing execution measures that. A failure ended
-      // where the failure was reached, and where a wait's safety net
-      // ended it, its duration is that net's bound. And only a lane's
-      // runner measures what a lane will spend: a workstation is another
-      // machine, faster or slower by however it differs, so its record
-      // counts as evidence about the test and not about its cost.
-      if (record.outcome !== "pass" || where.place === "local") continue;
-      addDuration(durations, key, day, record.durationMs);
     }
   }
   return { observations, surfaces, durations, lanes, declinedDays };
@@ -1053,7 +1063,20 @@ function absorb(into: Contributions, batch: Contributions): void {
   into.declined += batch.declined;
 }
 
-/** A fold in progress, which the caller feeds reports to in time order. */
+/**
+ * A fold in progress, which the caller feeds reports to in time order.
+ *
+ * Only the default branch says which tests exist and where each one
+ * lives: the identities a fold holds, and the file each one's records
+ * named, come from `main`'s records alone. A workstation or a pull
+ * request may be running a tree that adds, renames, or moves tests, and
+ * a manifest that took its word would describe that tree rather than the
+ * one the lanes run. So a record from anywhere else is evidence about an
+ * identity whose `main` record the fold has already folded, and about
+ * nothing else, which is what `foldObservations` holds every batch to. A
+ * test a change adds enters once `main` records it, which is once the
+ * change lands.
+ */
 export class Fold {
   readonly #states: Map<string, IdentityState>;
   readonly #context: FoldContext;
@@ -1094,10 +1117,11 @@ export class Fold {
     );
     const files = { ...aggregate.files };
     this.#resolved = resolveHistory(this.#states, files, resolver);
-    // A record produces a state and a surface together, so an identity
-    // the aggregate holds a state for has a surface, and the file its
-    // records named is the only part of that surface the identity does
-    // not already say. Seeding these is what makes the manifest hold
+    // A record from `main` produces a state and a surface together, and
+    // no other record produces either, so an identity the aggregate holds
+    // a state for has a surface, and the file its records from `main`
+    // named is the only part of that surface the identity does not
+    // already say. Seeding these is what makes the manifest hold
     // every identity the aggregate scores rather than the ones whose
     // records this run happened to read.
     this.#held = noContributions();
@@ -1137,7 +1161,7 @@ export class Fold {
     this.#today = today;
   }
 
-  /** How many executions have been folded in. */
+  /** How many executions have been read into the fold. */
   get observations(): number {
     return this.#observations;
   }
@@ -1253,10 +1277,7 @@ export class Fold {
       Date.parse(a.startedAt) - Date.parse(b.startedAt)
     );
     this.#observations += observations.length;
-    foldObservations(observations, {
-      prior: this.#states,
-      context: this.#context,
-    });
+    this.#fold(observations);
     // The two cross-batch rules reach back a couple of days, so what is
     // older cannot change a verdict and is dropped rather than carried
     // through a bootstrap's whole read.
@@ -1312,13 +1333,47 @@ export class Fold {
     this.#intact = false;
     absorb(this.#held, batch);
     this.#observations += observations.count;
-    foldObservations(observations, {
-      prior: this.#states,
-      context: this.#context,
-    });
+    this.#fold(observations);
     if (observations.newestDay !== undefined) {
       trimContext(this.#context, observations.newestDay);
     }
+  }
+
+  /**
+   * Folds a batch's observations into this fold's states, sampling the
+   * duration of each passing run the states count.
+   */
+  #fold(observations: Iterable<Observation>): void {
+    foldObservations(observations, {
+      prior: this.#states,
+      context: this.#context,
+      sampled: (key, day, durationMs) =>
+        this.#sample(this.#held, key, day, durationMs),
+    });
+  }
+
+  /** Adds one passing duration to what `into` holds of a key's day. */
+  #sample(
+    into: Contributions,
+    key: string,
+    day: string,
+    durationMs: number,
+  ): void {
+    // A day past the cost window is sealed and then dropped again by the
+    // same `finish` that sealed it, so sampling it buys nothing and a
+    // bootstrap holds sixty days of it at once.
+    if (daysBetween(day, this.#today) > COST_WINDOW_DAYS) return;
+    let known = into.samples.get(key);
+    if (known === undefined) {
+      known = new Map();
+      into.samples.set(key, known);
+    }
+    let samples = known.get(day);
+    if (samples === undefined) {
+      samples = emptySamples();
+      known.set(day, samples);
+    }
+    sampleDuration(samples, durationMs);
   }
 
   /**
@@ -1430,20 +1485,11 @@ export class Fold {
     for (const lane of read.lanes) {
       if (this.#withinCostWindow(lane)) into.lanes.push(lane);
     }
-    for (const [key, byDay] of read.durations) {
-      let known = into.samples.get(key);
+    for (const [name, byDay] of read.durations) {
       for (const [day, sampled] of byDay) {
-        // A day past the cost window is sealed and then dropped again
-        // by the same `finish` that sealed it, so sampling it buys
-        // nothing and a bootstrap holds sixty days of it at once.
-        if (daysBetween(day, this.#today) > COST_WINDOW_DAYS) continue;
-        if (known === undefined) {
-          known = new Map();
-          into.samples.set(key, known);
+        for (const durationMs of sampled) {
+          this.#sample(into, name, day, durationMs);
         }
-        const samples = known.get(day) ?? emptySamples();
-        for (const durationMs of sampled) sampleDuration(samples, durationMs);
-        known.set(day, samples);
       }
     }
     for (const day of read.declinedDays) {

@@ -1,0 +1,1452 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AboutRecord": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "How the room was created."
+          },
+          "title": {
+            "description": "The title a group room was created with.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ChatIndexEntry": {
+        "properties": {
+          "counterpart": {
+            "description": "A direct room's other member, by principal.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "The room's kind, as its `about.kind` says."
+          },
+          "revision": {
+            "description": "The opaque revision supplied by `rooms` for its membership or discovery\nsource. A request to forget uses that view's revision; direct mappings\nand act outcomes may omit it.",
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The room."
+          },
+          "since": {
+            "description": "When first listed for this user, using catalog admission for discovery.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "room",
+          "kind",
+          "since"
+        ],
+        "type": "object"
+      },
+      "ChatManagerNotice": {
+        "properties": {
+          "id": {
+            "description": "The notice's id, unique in the manager.",
+            "type": "string"
+          },
+          "recipient": {
+            "description": "The DID of the person admitted.",
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The room the recipient was admitted to."
+          }
+        },
+        "required": [
+          "id",
+          "room",
+          "recipient"
+        ],
+        "type": "object"
+      },
+      "ChatManagerProfile": {
+        "properties": {
+          "avatar": {
+            "description": "The person's avatar: a URL or a glyph, if they have set one.",
+            "type": "string"
+          },
+          "inbox": {
+            "$ref": "#/$defs/ProfileInbox",
+            "description": "Where the person's offers are delivered, as the profile types its pointer:\na link naming nothing of the inbox but its name. An inbox labels its\noffers confidential to its owner, and a run reading the pointer as a link\nto more of the inbox, or untyped, takes that label on, which then refuses\nits sends."
+          },
+          "name": {
+            "description": "The person's display name, if they have set one.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatOfferDelivery": {
+        "enum": [
+          "offered",
+          "noticed"
+        ]
+      },
+      "ChatRefusalCode": {
+        "enum": [
+          "space-own-chat",
+          "shared-inbox"
+        ]
+      },
+      "ChatRequestOutcome": {
+        "anyOf": [
+          {
+            "properties": {
+              "status": {
+                "description": "The request has not finished.",
+                "enum": [
+                  "pending"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "delivery": {
+                "$ref": "#/$defs/ChatOfferDelivery",
+                "description": "How `offerRoom` told the member of the room; absent for the others."
+              },
+              "entry": {
+                "$ref": "#/$defs/ChatIndexEntry",
+                "description": "The entry it produced; absent for `forget` and `offerRoom`."
+              },
+              "status": {
+                "description": "The request finished.",
+                "enum": [
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/ChatRefusalCode",
+                "description": "Which refusal it is, for a client to act on, where a client has one to\ntake; absent for the others."
+              },
+              "reason": {
+                "description": "Why, for a person to read.",
+                "type": "string"
+              },
+              "status": {
+                "description": "The request was refused.",
+                "enum": [
+                  "refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ChatRoomAbout": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created; absent for a space's own chat.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "`\"direct\"` if created as a direct room; `\"group\"` otherwise."
+          },
+          "policy": {
+            "$ref": "#/$defs/ChatRoomPolicy",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The room's policy, stated correctly, in a document of its own."
+          },
+          "record": {
+            "$ref": "#/$defs/AboutRecord",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The record the room's creator wrote, whose label names them; absent for a\nspace's own chat, which no one created as a room."
+          },
+          "title": {
+            "description": "The room's title, which every member shares: the one a member last set,\nor else the one the room was created with. A direct room has none until a\nmember sets one, and a space's own chat has none.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "ChatRoomKind": {
+        "enum": [
+          "direct",
+          "group"
+        ]
+      },
+      "ChatRoomLink": {
+        "properties": {
+          "about": {
+            "$ref": "#/$defs/ChatRoomAbout",
+            "description": "What the room says about itself."
+          },
+          "messages": {
+            "description": "Where the conversation stands: what of `messages` every member shares.",
+            "properties": {
+              "count": {
+                "description": "How many messages the room holds, obliterated tombstones included.",
+                "type": "number"
+              },
+              "newestAt": {
+                "description": "The newest message's `sentAt`; absent while there are none.",
+                "type": "FabricEpochNsec"
+              }
+            },
+            "required": [
+              "count"
+            ],
+            "type": "object"
+          },
+          "roster": {
+            "description": "The profiles of those who joined the room, in the order they joined, as a\nmanager reads them: each a link, whose profile is read only through it.",
+            "items": {
+              "$ref": "#/$defs/ChatManagerProfile",
+              "asCell": [
+                "cell"
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ChatRoomPolicy": {
+        "properties": {
+          "deletionIsObliteration": {
+            "description": "Whether a sender's deletion of their own message obliterates it.",
+            "type": "boolean"
+          },
+          "keepsHistory": {
+            "description": "Stated for the policy's shape, and read by nothing: a message keeps no history.",
+            "type": "boolean"
+          },
+          "maxAttachments": {
+            "description": "The most attachments a message may have; absent for\n`DEFAULT_MAX_ATTACHMENTS`.",
+            "type": "number"
+          },
+          "maxOpenWindows": {
+            "description": "Stated for the policy's shape, and read by nothing: the room offers no windows.",
+            "type": "number"
+          },
+          "maxWindowCount": {
+            "description": "How many of the newest messages `messages.latest` holds.",
+            "type": "number"
+          },
+          "ownersMayObliterate": {
+            "description": "Whether an OWNER may obliterate messages.",
+            "type": "boolean"
+          },
+          "proposedTimeMaxAgeNsec": {
+            "description": "Stated for the policy's shape, and read by nothing: a sender proposes no time.",
+            "type": "FabricDurationNsec"
+          },
+          "proposedTimeMaxLeadNsec": {
+            "description": "Stated for the policy's shape, and read by nothing: a sender proposes no time.",
+            "type": "FabricDurationNsec"
+          },
+          "recentActivityWindowNsec": {
+            "description": "Stated for the policy's shape, and read by nothing: the room keeps no activity log.",
+            "type": "FabricDurationNsec"
+          }
+        },
+        "required": [
+          "ownersMayObliterate",
+          "keepsHistory",
+          "deletionIsObliteration",
+          "proposedTimeMaxAgeNsec",
+          "proposedTimeMaxLeadNsec",
+          "recentActivityWindowNsec",
+          "maxWindowCount",
+          "maxOpenWindows"
+        ],
+        "type": "object"
+      },
+      "ProfileInbox": {
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The owner's share inbox piece."
+          }
+        },
+        "type": "object"
+      },
+      "ShareInboxPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SharedSpaceCatalogStorage": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "description": "What a manager stores. Every field has a default.",
+    "properties": {
+      "direct": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ChatIndexEntry"
+        },
+        "asCell": [
+          "cell"
+        ],
+        "default": {},
+        "description": "The direct room shared with each counterpart, for the rooms this manager\ncreated or accepted, the ones its user's host accepted for them included.",
+        "properties": {},
+        "type": "object"
+      },
+      "outgoingNotices": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "Notices waiting for a client to deliver them.",
+        "items": {
+          "$ref": "#/$defs/ChatManagerNotice"
+        },
+        "type": "array"
+      },
+      "requests": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ChatRequestOutcome"
+        },
+        "asCell": [
+          "cell"
+        ],
+        "default": {},
+        "description": "Each request's outcome.",
+        "properties": {},
+        "type": "object"
+      },
+      "sharedSpaceCatalog": {
+        "$ref": "#/$defs/SharedSpaceCatalogStorage",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "entries": {},
+          "offers": {}
+        },
+        "description": "The user's catalog for standalone membership and container discovery:\nin a user's home space, Home's. A manager given none keeps one of its own."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "fabrichat/manager.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AboutRecord": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "How the room was created."
+          },
+          "title": {
+            "description": "The title a group room was created with.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "AddFileEvent": {
+        "properties": {
+          "blob": {
+            "$ref": "#/$defs/BlobRef",
+            "description": "The blob holding the bytes."
+          },
+          "mediaType": {
+            "description": "The media type the blob was stored with.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The new entry's name, the name its blob was stored under.",
+            "type": "string"
+          },
+          "onConflict": {
+            "$ref": "#/$defs/NameConflict",
+            "description": "What to do when `name` is taken; `refuse` when absent."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          },
+          "size": {
+            "description": "The size of the file, in bytes.",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "BlobRef": {
+        "properties": {
+          "id": {
+            "description": "The blob's id: `fid1:` and the hash of its name, media type and bytes.",
+            "type": "string"
+          },
+          "space": {
+            "description": "The DID of the space whose blob store holds the bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "space",
+          "id"
+        ],
+        "type": "object"
+      },
+      "ChatContainer": {
+        "properties": {
+          "chatRoom": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "description": "The declared conversation, wherever its room lives."
+          },
+          "fileStoreRecord": {
+            "$ref": "#/$defs/FileStoreRecord",
+            "description": "Where the container keeps its space's file store."
+          }
+        },
+        "type": "object"
+      },
+      "ChatIndexEntry": {
+        "properties": {
+          "counterpart": {
+            "description": "A direct room's other member, by principal.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "The room's kind, as its `about.kind` says."
+          },
+          "revision": {
+            "description": "The opaque revision supplied by `rooms` for its membership or discovery\nsource. A request to forget uses that view's revision; direct mappings\nand act outcomes may omit it.",
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "description": "The room."
+          },
+          "since": {
+            "description": "When first listed for this user, using catalog admission for discovery.",
+            "type": "FabricEpochNsec"
+          }
+        },
+        "required": [
+          "room",
+          "kind",
+          "since"
+        ],
+        "type": "object"
+      },
+      "ChatManagerNotice": {
+        "properties": {
+          "id": {
+            "description": "The notice's id, unique in the manager.",
+            "type": "string"
+          },
+          "recipient": {
+            "description": "The DID of the person admitted.",
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "description": "The room the recipient was admitted to."
+          }
+        },
+        "required": [
+          "id",
+          "room",
+          "recipient"
+        ],
+        "type": "object"
+      },
+      "ChatManagerProfile": {
+        "properties": {
+          "avatar": {
+            "description": "The person's avatar: a URL or a glyph, if they have set one.",
+            "type": "string"
+          },
+          "inbox": {
+            "$ref": "#/$defs/ProfileInbox",
+            "description": "Where the person's offers are delivered, as the profile types its pointer:\na link naming nothing of the inbox but its name. An inbox labels its\noffers confidential to its owner, and a run reading the pointer as a link\nto more of the inbox, or untyped, takes that label on, which then refuses\nits sends."
+          },
+          "name": {
+            "description": "The person's display name, if they have set one.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatOfferDelivery": {
+        "enum": [
+          "offered",
+          "noticed"
+        ]
+      },
+      "ChatRefusalCode": {
+        "enum": [
+          "space-own-chat",
+          "shared-inbox"
+        ]
+      },
+      "ChatRequestOutcome": {
+        "anyOf": [
+          {
+            "properties": {
+              "status": {
+                "description": "The request has not finished.",
+                "enum": [
+                  "pending"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "delivery": {
+                "$ref": "#/$defs/ChatOfferDelivery",
+                "description": "How `offerRoom` told the member of the room; absent for the others."
+              },
+              "entry": {
+                "$ref": "#/$defs/ChatIndexEntry",
+                "description": "The entry it produced; absent for `forget` and `offerRoom`."
+              },
+              "status": {
+                "description": "The request finished.",
+                "enum": [
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/ChatRefusalCode",
+                "description": "Which refusal it is, for a client to act on, where a client has one to\ntake; absent for the others."
+              },
+              "reason": {
+                "description": "Why, for a person to read.",
+                "type": "string"
+              },
+              "status": {
+                "description": "The request was refused.",
+                "enum": [
+                  "refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ChatRoomAbout": {
+        "properties": {
+          "createdAt": {
+            "description": "When the room was created; absent for a space's own chat.",
+            "type": "FabricEpochNsec"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "`\"direct\"` if created as a direct room; `\"group\"` otherwise."
+          },
+          "policy": {
+            "$ref": "#/$defs/ChatRoomPolicy",
+            "description": "The room's policy, stated correctly, in a document of its own."
+          },
+          "record": {
+            "$ref": "#/$defs/AboutRecord",
+            "description": "The record the room's creator wrote, whose label names them; absent for a\nspace's own chat, which no one created as a room."
+          },
+          "title": {
+            "description": "The room's title, which every member shares: the one a member last set,\nor else the one the room was created with. A direct room has none until a\nmember sets one, and a space's own chat has none.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "ChatRoomKind": {
+        "enum": [
+          "direct",
+          "group"
+        ]
+      },
+      "ChatRoomLink": {
+        "properties": {
+          "about": {
+            "$ref": "#/$defs/ChatRoomAbout",
+            "description": "What the room says about itself."
+          },
+          "messages": {
+            "description": "Where the conversation stands: what of `messages` every member shares.",
+            "properties": {
+              "count": {
+                "description": "How many messages the room holds, obliterated tombstones included.",
+                "type": "number"
+              },
+              "newestAt": {
+                "description": "The newest message's `sentAt`; absent while there are none.",
+                "type": "FabricEpochNsec"
+              }
+            },
+            "required": [
+              "count"
+            ],
+            "type": "object"
+          },
+          "roster": {
+            "description": "The profiles of those who joined the room, in the order they joined, as a\nmanager reads them: each a link, whose profile is read only through it.",
+            "items": {
+              "$ref": "#/$defs/ChatManagerProfile"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ChatRoomPolicy": {
+        "properties": {
+          "deletionIsObliteration": {
+            "description": "Whether a sender's deletion of their own message obliterates it.",
+            "type": "boolean"
+          },
+          "keepsHistory": {
+            "description": "Stated for the policy's shape, and read by nothing: a message keeps no history.",
+            "type": "boolean"
+          },
+          "maxAttachments": {
+            "description": "The most attachments a message may have; absent for\n`DEFAULT_MAX_ATTACHMENTS`.",
+            "type": "number"
+          },
+          "maxOpenWindows": {
+            "description": "Stated for the policy's shape, and read by nothing: the room offers no windows.",
+            "type": "number"
+          },
+          "maxWindowCount": {
+            "description": "How many of the newest messages `messages.latest` holds.",
+            "type": "number"
+          },
+          "ownersMayObliterate": {
+            "description": "Whether an OWNER may obliterate messages.",
+            "type": "boolean"
+          },
+          "proposedTimeMaxAgeNsec": {
+            "description": "Stated for the policy's shape, and read by nothing: a sender proposes no time.",
+            "type": "FabricDurationNsec"
+          },
+          "proposedTimeMaxLeadNsec": {
+            "description": "Stated for the policy's shape, and read by nothing: a sender proposes no time.",
+            "type": "FabricDurationNsec"
+          },
+          "recentActivityWindowNsec": {
+            "description": "Stated for the policy's shape, and read by nothing: the room keeps no activity log.",
+            "type": "FabricDurationNsec"
+          }
+        },
+        "required": [
+          "ownersMayObliterate",
+          "keepsHistory",
+          "deletionIsObliteration",
+          "proposedTimeMaxAgeNsec",
+          "proposedTimeMaxLeadNsec",
+          "recentActivityWindowNsec",
+          "maxWindowCount",
+          "maxOpenWindows"
+        ],
+        "type": "object"
+      },
+      "FabriChatManagerView": {
+        "properties": {
+          "accept": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Records a room this user has been admitted to."
+          },
+          "createGroup": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Creates a group room."
+          },
+          "delivered": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Reports a notice delivered."
+          },
+          "direct": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatIndexEntry"
+            },
+            "description": "The direct room this user shares with each counterpart, by principal.",
+            "properties": {},
+            "type": "object"
+          },
+          "forget": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Removes a room from this user's list."
+          },
+          "joinRoom": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Makes a room this user has entered one of their chats: lists it, or\nlists it again once forgotten, and adds them to its participants. A room\ntheir chats list already is left as it is."
+          },
+          "offerRoom": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Offers someone added to a room the room, where this user may add people\nto it, and records how they were told of it."
+          },
+          "openDirect": {
+            "$ref": "#/$defs/ManagerStreamEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Finds or creates the direct room with a person."
+          },
+          "outgoingNotices": {
+            "description": "Notices this user's requests have produced that no one has delivered,\nother than those whose room's roster lists a profile attesting their\nrecipient.",
+            "items": {
+              "$ref": "#/$defs/ChatManagerNotice"
+            },
+            "type": "array"
+          },
+          "people": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/$defs/ChatManagerProfile"
+              },
+              "type": "array"
+            },
+            "description": "The people this user's rooms list, other than this user: by the principal\neach one's profile attests, the profiles attesting it, each once, in the\norder the rooms, newest first, list them.",
+            "properties": {},
+            "scope": "session",
+            "type": "object"
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ChatRequestOutcome"
+            },
+            "description": "The outcome of each request, by the `requestId` its caller chose.",
+            "properties": {},
+            "type": "object"
+          },
+          "roomMembership": {
+            "description": "Explicit room membership, including forgotten conversations.",
+            "items": {
+              "$ref": "#/$defs/RoomMembership"
+            },
+            "type": "array"
+          },
+          "rooms": {
+            "description": "Every room this user belongs to and hasn't forgotten, newest first.",
+            "items": {
+              "$ref": "#/$defs/ChatIndexEntry"
+            },
+            "scope": "session",
+            "type": "array"
+          },
+          "sharedSpaceCatalog": {
+            "$ref": "#/$defs/SharedSpaceCatalogStorage",
+            "description": "The stored catalog used for standalone membership and container discovery.\n`rooms` combines those discoveries with individual `roomMembership` choices;\na reader can inspect catalog membership here without computing the view."
+          }
+        },
+        "required": [
+          "rooms",
+          "sharedSpaceCatalog",
+          "roomMembership",
+          "direct",
+          "requests",
+          "outgoingNotices",
+          "people",
+          "openDirect",
+          "createGroup",
+          "offerRoom",
+          "accept",
+          "joinRoom",
+          "forget",
+          "delivered"
+        ],
+        "type": "object"
+      },
+      "FileEntry": {
+        "properties": {
+          "addedAt": {
+            "description": "When the file was added.",
+            "type": "FabricEpochNsec"
+          },
+          "addedBy": {
+            "$ref": "#/$defs/FileProfile",
+            "description": "The profile of whoever added it."
+          },
+          "blob": {
+            "$ref": "#/$defs/BlobRef",
+            "description": "The blob holding the bytes."
+          },
+          "mediaType": {
+            "description": "The media type of the bytes.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the store finds this file by, and its blob's name.",
+            "type": "string"
+          },
+          "removedAt": {
+            "description": "When the file was removed from its store, if it has been.",
+            "type": "FabricEpochNsec"
+          },
+          "size": {
+            "description": "The size of the file, in bytes.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "mediaType",
+          "blob",
+          "size",
+          "addedAt",
+          "addedBy"
+        ],
+        "type": "object"
+      },
+      "FileProfile": {
+        "properties": {
+          "avatar": {
+            "description": "A URL of their picture.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the person goes by.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FileRefusalCode": {
+        "enum": [
+          "invalid-request",
+          "invalid-name",
+          "name-taken",
+          "other-space",
+          "no-blob",
+          "not-found",
+          "not-permitted"
+        ]
+      },
+      "FileRequestOutcome": {
+        "anyOf": [
+          {
+            "properties": {
+              "entry": {
+                "$ref": "#/$defs/FileEntry",
+                "description": "The entry the request added or changed."
+              },
+              "name": {
+                "description": "The name the request gave the entry.",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "entry",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/FileRefusalCode",
+                "description": "Why, as a code a client can act on."
+              },
+              "reason": {
+                "description": "Why, as prose for a person.",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "code"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FileStoreFiles": {
+        "properties": {
+          "add": {
+            "$ref": "#/$defs/AddFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Adds a file, for a blob already in the store's space."
+          },
+          "byName": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileEntry"
+            },
+            "description": "The same files, by name.",
+            "properties": {},
+            "type": "object"
+          },
+          "entries": {
+            "description": "Every file in the store, in the order they were added.",
+            "items": {
+              "$ref": "#/$defs/FileEntry"
+            },
+            "type": "array"
+          },
+          "remove": {
+            "$ref": "#/$defs/RemoveFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Takes a file out of the store, and marks it removed."
+          },
+          "rename": {
+            "$ref": "#/$defs/RenameFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Changes a file's name, and its blob with it."
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileRequestOutcome"
+            },
+            "description": "The outcome of each request, by its `requestId`.",
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "entries",
+          "byName",
+          "requests",
+          "add",
+          "remove",
+          "rename"
+        ],
+        "type": "object"
+      },
+      "FileStoreOutput": {
+        "properties": {
+          "$VIEWS": {
+            "properties": {
+              "files": {
+                "$ref": "#/$defs/FileStoreFiles"
+              }
+            },
+            "required": [
+              "files"
+            ],
+            "type": "object"
+          },
+          "add": {
+            "$ref": "#/$defs/AddFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Adds a file, for a blob already in the store's space."
+          },
+          "byName": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileEntry"
+            },
+            "description": "The same files, by name.",
+            "properties": {},
+            "type": "object"
+          },
+          "entries": {
+            "description": "Every file in the store, in the order they were added.",
+            "items": {
+              "$ref": "#/$defs/FileEntry"
+            },
+            "type": "array"
+          },
+          "remove": {
+            "$ref": "#/$defs/RemoveFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Takes a file out of the store, and marks it removed."
+          },
+          "rename": {
+            "$ref": "#/$defs/RenameFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Changes a file's name, and its blob with it."
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileRequestOutcome"
+            },
+            "description": "The outcome of each request, by its `requestId`.",
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "$VIEWS",
+          "entries",
+          "byName",
+          "requests",
+          "add",
+          "remove",
+          "rename"
+        ],
+        "type": "object"
+      },
+      "FileStoreRecord": {
+        "properties": {
+          "store": {
+            "$ref": "#/$defs/FileStoreOutput",
+            "description": "The store; absent while the root names none."
+          }
+        },
+        "type": "object"
+      },
+      "ManagerStreamEvent": {
+        "properties": {
+          "container": {
+            "$ref": "#/$defs/ChatContainer",
+            "description": "The container whose explicit `chatRoom` declaration names the room."
+          },
+          "counterpart": {
+            "description": "The DID of a direct room's other member.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The id of a notice delivered.",
+            "type": "string"
+          },
+          "joinableByLink": {
+            "description": "Whether a new group room admits anyone who has its link; absent for a room\nadmitting its members alone.",
+            "type": "boolean"
+          },
+          "keepArchived": {
+            "description": "Whether accepting a room leaves its entry archived, when it is; absent,\naccepting the room restores it.",
+            "type": "boolean"
+          },
+          "member": {
+            "description": "The DID of a member added to a room, whom `offerRoom` offers it to.",
+            "type": "string"
+          },
+          "members": {
+            "description": "The DIDs of a new group room's other members.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "messageAct": {
+            "description": "Whether a `joinRoom` comes from a message or a reaction the user sent in\nthe room, which leaves the title the catalog lists an already listed room\nunder as it is.",
+            "type": "boolean"
+          },
+          "profile": {
+            "$ref": "#/$defs/ChatManagerProfile",
+            "description": "A direct room's other member's profile, through whose share inbox a new\nroom, or a found one that was offered them nothing, is offered to them, or\nthe profile of a member added to a room, through whose share inbox\n`offerRoom` offers it."
+          },
+          "profiles": {
+            "description": "The profiles of more of a new group room's other members, each naming its\nmember with its `represents-principal` label, through whose share inbox\nthe room is offered to them.",
+            "items": {
+              "$ref": "#/$defs/ChatManagerProfile"
+            },
+            "type": "array"
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the outcome is recorded under it, except for a start\nthat would create a room without its reviewed `ChatStart`, which is\nrefused whole and records none.",
+            "type": "string"
+          },
+          "revision": {
+            "description": "The revision of a room's entry, as the list the request was made from\nshowed it, for a room to forget.",
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "description": "A room to offer, accept, join, or forget."
+          },
+          "target": {
+            "description": "A rendered control's text, or the profile it starts a direct room with.",
+            "properties": {
+              "dataset": {
+                "description": "The principal an older room's chip names the person by.",
+                "properties": {
+                  "counterpart": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "name": {
+                "$ref": "#/$defs/ChatManagerProfile",
+                "description": "The profile of the person a participant's chip starts a chat with."
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "title": {
+            "description": "A new group room's title.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NameConflict": {
+        "enum": [
+          "refuse",
+          "rename"
+        ]
+      },
+      "ProfileInbox": {
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "description": "The owner's share inbox piece."
+          }
+        },
+        "type": "object"
+      },
+      "RemoveFileEvent": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/FileEntry",
+            "description": "The entry to remove."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RenameFileEvent": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/FileEntry",
+            "description": "The entry to rename."
+          },
+          "name": {
+            "description": "The entry's new name.",
+            "type": "string"
+          },
+          "onConflict": {
+            "$ref": "#/$defs/NameConflict",
+            "description": "What to do when `name` is taken; `refuse` when absent."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RoomMembership": {
+        "properties": {
+          "catalogRevision": {
+            "description": "A standalone catalog revision, which keeps the catalog authoritative.",
+            "type": "string"
+          },
+          "container": {
+            "$ref": "#/$defs/ChatContainer",
+            "description": "The root declaring a conversation joined through a container."
+          },
+          "counterpart": {
+            "description": "A direct room's other member, by principal.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ChatRoomKind",
+            "description": "The room's kind, as its `about.kind` says."
+          },
+          "revision": {
+            "description": "The event that last changed membership.",
+            "type": "string"
+          },
+          "room": {
+            "$ref": "#/$defs/ChatRoomLink",
+            "description": "The room."
+          },
+          "since": {
+            "description": "When first listed for this user, using catalog admission for discovery.",
+            "type": "FabricEpochNsec"
+          },
+          "state": {
+            "description": "Whether the user keeps the conversation in their chats.",
+            "enum": [
+              "saved",
+              "archived"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "revision",
+          "room",
+          "kind",
+          "since"
+        ],
+        "type": "object"
+      },
+      "ShareInboxPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SharedSpaceCatalogStorage": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "description": "What a manager offers: `ChatManagerOutput`.",
+    "properties": {
+      "$NAME": {
+        "description": "The manager's name, for lists of pieces.",
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json",
+        "description": "The manager's rendering."
+      },
+      "$VIEWS": {
+        "description": "The manager's data face, as one group.",
+        "properties": {
+          "chats": {
+            "$ref": "#/$defs/FabriChatManagerView"
+          }
+        },
+        "required": [
+          "chats"
+        ],
+        "type": "object"
+      },
+      "accept": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Records a room this user has been admitted to."
+      },
+      "createGroup": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Creates a group room."
+      },
+      "delivered": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Reports a notice delivered."
+      },
+      "direct": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ChatIndexEntry"
+        },
+        "description": "The direct room this user shares with each counterpart, by principal.",
+        "properties": {},
+        "type": "object"
+      },
+      "forget": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Removes a room from this user's list."
+      },
+      "joinRoom": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Makes a room this user has entered one of their chats: lists it, or\nlists it again once forgotten, and adds them to its participants. A room\ntheir chats list already is left as it is."
+      },
+      "offerRoom": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Offers someone added to a room the room, where this user may add people\nto it, and records how they were told of it."
+      },
+      "openDirect": {
+        "$ref": "#/$defs/ManagerStreamEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Finds or creates the direct room with a person."
+      },
+      "outgoingNotices": {
+        "description": "Notices this user's requests have produced that no one has delivered,\nother than those whose room's roster lists a profile attesting their\nrecipient.",
+        "items": {
+          "$ref": "#/$defs/ChatManagerNotice"
+        },
+        "type": "array"
+      },
+      "people": {
+        "additionalProperties": {
+          "items": {
+            "$ref": "#/$defs/ChatManagerProfile"
+          },
+          "type": "array"
+        },
+        "description": "The people this user's rooms list, other than this user: by the principal\neach one's profile attests, the profiles attesting it, each once, in the\norder the rooms, newest first, list them.",
+        "properties": {},
+        "scope": "session",
+        "type": "object"
+      },
+      "requests": {
+        "additionalProperties": {
+          "$ref": "#/$defs/ChatRequestOutcome"
+        },
+        "description": "The outcome of each request, by the `requestId` its caller chose.",
+        "properties": {},
+        "type": "object"
+      },
+      "roomMembership": {
+        "description": "Explicit room membership, including forgotten conversations.",
+        "items": {
+          "$ref": "#/$defs/RoomMembership"
+        },
+        "type": "array"
+      },
+      "rooms": {
+        "description": "Every room this user belongs to and hasn't forgotten, newest first.",
+        "items": {
+          "$ref": "#/$defs/ChatIndexEntry"
+        },
+        "scope": "session",
+        "type": "array"
+      },
+      "sharedSpaceCatalog": {
+        "$ref": "#/$defs/SharedSpaceCatalogStorage",
+        "description": "The stored catalog used for standalone membership and container discovery.\n`rooms` combines those discoveries with individual `roomMembership` choices;\na reader can inspect catalog membership here without computing the view."
+      }
+    },
+    "required": [
+      "rooms",
+      "sharedSpaceCatalog",
+      "roomMembership",
+      "direct",
+      "requests",
+      "outgoingNotices",
+      "people",
+      "openDirect",
+      "createGroup",
+      "offerRoom",
+      "accept",
+      "joinRoom",
+      "forget",
+      "delivered",
+      "$NAME",
+      "$UI",
+      "$VIEWS"
+    ],
+    "type": "object"
+  }
+}

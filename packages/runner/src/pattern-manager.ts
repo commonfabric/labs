@@ -17,6 +17,7 @@ import {
   setPatternProgram,
   setPatternSourcePath,
 } from "./builder/pattern-metadata.ts";
+import { namesInstances } from "./builder/instance-name.ts";
 import { Module, Pattern } from "./builder/types.ts";
 import { readStoredCfcMetadata } from "./cfc/metadata.ts";
 import type { CfcMetadata } from "./cfc/types.ts";
@@ -134,6 +135,12 @@ const MAX_EVALUATED_MODULE_CACHE_SIZE = 1000;
 const PATTERN_COVERAGE_CACHE_VARIANT = "pattern-coverage";
 
 /**
+ * The compiled-code cache variant of a compile that names `const`-bound
+ * sub-pattern instances (`namesInstances()`).
+ */
+const INSTANCE_NAMES_CACHE_VARIANT = "instance-names";
+
+/**
  * The compiler's hoist namespace. `builder-call-hoisting` mints
  * `__cfPattern_<n>` (n counting from 1) for the anonymous sub-patterns it
  * derives, and registers them through `__cfReg` — never as exports.
@@ -210,12 +217,18 @@ function throwableStorageError(error: CommitError): Error {
 
 function moduleByteCacheRuntimeVersion(
   runtimeVersion: string | undefined,
-  options: { patternCoverage: boolean },
+  options: { patternCoverage: boolean; instanceNames: boolean },
 ): string | undefined {
   if (runtimeVersion === undefined) return undefined;
-  return options.patternCoverage
-    ? `${runtimeVersion}/${PATTERN_COVERAGE_CACHE_VARIANT}`
+  // A compile that names instances emits different bytes for the same source,
+  // so it keeps a variant of its own. It goes ahead of the coverage suffix,
+  // which `isPatternCoverageCacheRuntimeVersion()` reads at the end.
+  const named = options.instanceNames
+    ? `${runtimeVersion}/${INSTANCE_NAMES_CACHE_VARIANT}`
     : runtimeVersion;
+  return options.patternCoverage
+    ? `${named}/${PATTERN_COVERAGE_CACHE_VARIANT}`
+    : named;
 }
 
 function isPatternCoverageCacheRuntimeVersion(runtimeVersion: string): boolean {
@@ -1284,7 +1297,10 @@ export class PatternManager {
     // key (and vice versa).
     const runtimeVersion = moduleByteCacheRuntimeVersion(
       await getCompileCacheRuntimeVersion(),
-      { patternCoverage: this.#runtime.patternCoverage !== undefined },
+      {
+        patternCoverage: this.#runtime.patternCoverage !== undefined,
+        instanceNames: namesInstances(this.#runtime.experimental),
+      },
     );
 
     /** One origin's verified closure read, complete or classified.
@@ -1588,7 +1604,10 @@ export class PatternManager {
       }
       const runtimeVersion = moduleByteCacheRuntimeVersion(
         await getCompileCacheRuntimeVersion(),
-        { patternCoverage: this.#patternCoverageFor() !== undefined },
+        {
+          patternCoverage: this.#patternCoverageFor() !== undefined,
+          instanceNames: namesInstances(this.#runtime.experimental),
+        },
       );
       const prepared = Object.freeze({}) as PreparedSourceUpdate;
       this.#sourceUpdates.set(prepared, {
@@ -1840,7 +1859,10 @@ export class PatternManager {
         ? undefined
         : moduleByteCacheRuntimeVersion(
           await getCompileCacheRuntimeVersion(),
-          { patternCoverage: patternCoverage !== undefined },
+          {
+            patternCoverage: patternCoverage !== undefined,
+            instanceNames: namesInstances(this.#runtime.experimental),
+          },
         );
     if (
       persistenceSpace === undefined &&
@@ -1929,7 +1951,10 @@ export class PatternManager {
     // shared — a coverage run reuses the persisted source and only recompiles.
     const runtimeVersion = moduleByteCacheRuntimeVersion(
       await getCompileCacheRuntimeVersion(),
-      { patternCoverage: patternCoverage !== undefined },
+      {
+        patternCoverage: patternCoverage !== undefined,
+        instanceNames: namesInstances(this.#runtime.experimental),
+      },
     );
     if (runtimeVersion === undefined) {
       const { id, graph, mainSpecifier, entryIdentity, modules } = await harness
@@ -2367,7 +2392,10 @@ export class PatternManager {
     const key = `${space}\0${entryIdentity}`;
     const runtimeVersion = moduleByteCacheRuntimeVersion(
       await getCompileCacheRuntimeVersion(),
-      { patternCoverage: this.#patternCoverageFor() !== undefined },
+      {
+        patternCoverage: this.#patternCoverageFor() !== undefined,
+        instanceNames: namesInstances(this.#runtime.experimental),
+      },
     );
     if (this.#coldLoadNegativeMemo.suppresses(key, runtimeVersion)) {
       return undefined;
@@ -2434,7 +2462,10 @@ export class PatternManager {
     // here would serve uninstrumented bodies for an instrumented run.
     const runtimeVersion = moduleByteCacheRuntimeVersion(
       await getCompileCacheRuntimeVersion(),
-      { patternCoverage: patternCoverage !== undefined },
+      {
+        patternCoverage: patternCoverage !== undefined,
+        instanceNames: namesInstances(this.#runtime.experimental),
+      },
     );
     if (runtimeVersion === undefined) {
       record("no-version");

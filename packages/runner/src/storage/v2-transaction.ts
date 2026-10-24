@@ -1295,6 +1295,10 @@ export class V2StorageTransaction implements IStorageTransaction {
     return this.#writeAttemptLog;
   }
 
+  getWriteTargetSpaces(): readonly MemorySpace[] {
+    return this.#orderedCommitSpaces();
+  }
+
   getReactivityLog() {
     this.#reactivityLogCache ??= this.#buildReactivityLog();
     return this.#reactivityLogCache;

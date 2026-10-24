@@ -450,6 +450,20 @@ export interface ExperimentalOptions {
    * not write changes. Defaults to off.
    */
   localFold?: boolean | undefined;
+
+  /**
+   * Compile a pattern factory call bound to a `const` as a named sub-pattern
+   * instance, whose identity is the binding's name rather than its position
+   * among its parent's anonymous roots
+   * (`docs/specs/computed-cell-identity.md`, "Sub-pattern instance identity").
+   * Defaults to off, which compiles every instance positionally. Turning it on
+   * moves every deployed `const`-bound child from its positional identity to a
+   * named one, where it starts fresh unless something carries the deployed
+   * child over, and needs every runtime that opens the same space to run the
+   * same naming mode first, so no environment variable reaches it
+   * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`).
+   */
+  instanceNames?: boolean | undefined;
 }
 
 /**
@@ -1925,6 +1939,10 @@ export class Runtime {
     this.experimental.lazyMaterialization ??= true;
     this.experimental.agentBuiltin ??= true;
     this.experimental.localFold ??= false;
+    // TODO(danfuzz): Turn this on only once a deployed parent's positional
+    // children are carried over to their names, and a runtime whose naming
+    // mode differs from a space's data is kept away from that space.
+    this.experimental.instanceNames ??= false;
     this.experimental.localSessionDocuments ??= false;
 
     // Propagate experimental flags to their ambient control points, then read

@@ -162,25 +162,27 @@ if any holds something else, so the value checked is the value committed.
 ### Seats
 
 A pattern holds a member's profile, never the member's DID. So a seat may be a
-reference to a cell whose stored label attests one principal: a
-`represents-principal` integrity atom at the cell's root or on one of its
-top-level fields, as a profile's owner-protected fields carry their owner's.
-This is the evidence `cf-cfc-authorship` reads an author claim from. A runtime
-binds the subject of an atom in the form `{kind, subject}` to its acting
-principal and refuses a literal DID there, so in that form a cell attests only
-the principal whose runtime wrote it. The seal counts only that form: an atom
-whose subject is exactly a well-formed DID, with no other key, on any label
-entry at the cell or one of its top-level fields, whatever that entry's origin. Any other
-spelling that names a principal, the `represents-principal:<did>` string form
-or a subject padded with spaces among them, gets past the runtime's refusal,
-and the seal refuses a seat whose cell carries one. The seal resolves the cell
-the reference names, reads its label, and refuses a cell that attests no
-principal or more than one, and a cell whose own label carries a clause
+reference to a cell whose stored label attests one principal through its
+`represents-principal` integrity atoms, as a profile's owner-protected fields
+carry their owner's. Which entries count is the profile rule every reader of a
+profile's principal shares (`representsPrincipalEntries()` in
+`packages/runner/src/cfc/represents-principal.ts`): for a cell whose `name`
+holds a name its owner wrote, the entries on `name` and the root's own; for any
+other cell, every entry its label holds. This is the evidence
+`cf-cfc-authorship` reads an author claim from. A runtime binds the subject of
+an atom in the form `{kind, subject}` to its acting principal and refuses a
+literal DID there, so in that form a cell attests only the principal whose
+runtime wrote it. The seal counts only that form: an atom whose subject is
+exactly a well-formed DID, with no other key, on an entry that rule counts. Any
+other spelling that names a principal, the `represents-principal:<did>` string
+form or a subject padded with spaces among them, gets past the runtime's
+refusal, and the seal refuses a seat whose cell carries one. The seal resolves
+the cell the reference names, reads its label, and refuses a cell that attests
+no principal or more than one, and a cell whose own label carries a clause
 neither `Space(S)` nor `P` satisfies, since the DID it attests is shown to every
-reader of the room; the read is evidence the entry's transaction
-verifies, so a seat that attests another principal before the entry is written
-refuses the seal. Only `seats` may hold references; the other fields are read
-as values.
+reader of the room; the read is evidence the entry's transaction verifies, so a
+seat that attests another principal before the entry is written refuses the
+seal. Only `seats` may hold references; the other fields are read as values.
 
 Naming a seat grants the named member nothing and takes nothing from them: only
 that member can seal into it, since the seal requires the storage signer to be

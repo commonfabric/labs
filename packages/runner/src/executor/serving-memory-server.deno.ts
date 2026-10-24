@@ -167,9 +167,16 @@ const temporaryStore = async (): Promise<TemporaryStore> => {
   };
 };
 
-/** Whether `options` select the worker, by their own say or the environment. */
-const runsInWorker = (options: ServingMemoryServerOptions): boolean =>
-  options.worker ?? Deno.env.get("SERVER_EXECUTION_WORKER") === "true";
+/**
+ * Whether a serving memory server given `options` runs its loop in a worker,
+ * by their own `worker` or else by the environment. A caller that hands the
+ * loop a closure only where the loop shares its thread asks this first.
+ */
+export function runsInWorker(
+  options: Pick<ServingMemoryServerOptions, "worker"> = {},
+): boolean {
+  return options.worker ?? Deno.env.get("SERVER_EXECUTION_WORKER") === "true";
+}
 
 /** The longest delay a timer takes; a longer one fires at once. */
 const TIMER_DELAY_MAX_MS = 2_147_483_647;

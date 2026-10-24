@@ -2,8 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
-  byDayThenName,
-  chunksByRun,
+  CHUNK,
   dayPartitions,
   inputChoice,
   livePrevious,
@@ -308,67 +307,6 @@ describe("test-selection-publish", () => {
       expect(
         inputChoice({ settled: false, foldedRaw: false, rollup: false }),
       ).toBe("raw");
-    });
-  });
-
-  describe("byDayThenName()", () => {
-    it("interleaves the two areas by the day they recorded", () => {
-      // Sorted by name alone, every local object lands after every
-      // continuous-integration one, and the fold would judge a
-      // workstation's failure against a state from days later.
-      const ordered = [
-        LOCAL("2026/08/20", "ianh"),
-        CI("2026/08/18", "1"),
-        LOCAL("2026/08/19", "ianh"),
-        CI("2026/08/20", "2"),
-      ].sort(byDayThenName);
-      expect(ordered.map(partitionOf)).toEqual([
-        "2026/08/18",
-        "2026/08/19",
-        "2026/08/20",
-        "2026/08/20",
-      ]);
-    });
-
-    it("falls back to the name inside one day", () => {
-      const ordered = [CI("2026/08/20", "2"), CI("2026/08/20", "1")]
-        .sort(byDayThenName);
-      expect(ordered[0]).toBe(CI("2026/08/20", "1"));
-    });
-  });
-
-  describe("chunksByRun()", () => {
-    const lane = (run: string, n: number) =>
-      `labs/test-records/submissions/ci/v1/2026/08/20/run-${run}-tests-${n}-a1.ndjson`;
-
-    it("holds a workflow run's objects in one chunk", () => {
-      // The second chunk would otherwise begin part way through run 2,
-      // and the fold would judge what that run broke in two halves.
-      const names = [lane("1", 1), lane("2", 1), lane("2", 2), lane("3", 1)];
-      expect([...chunksByRun(names, 2)]).toEqual([
-        [lane("1", 1), lane("2", 1), lane("2", 2)],
-        [lane("3", 1)],
-      ]);
-    });
-
-    it("cuts at the size where a run ends there", () => {
-      const names = [lane("1", 1), lane("1", 2), lane("2", 1), lane("3", 1)];
-      expect([...chunksByRun(names, 2)]).toEqual([
-        [lane("1", 1), lane("1", 2)],
-        [lane("2", 1), lane("3", 1)],
-      ]);
-    });
-
-    it("reads each workstation object as a run of its own", () => {
-      const names = [
-        LOCAL("2026/08/20", "a"),
-        LOCAL("2026/08/20", "b"),
-        LOCAL("2026/08/20", "c"),
-      ];
-      expect([...chunksByRun(names, 2)]).toEqual([
-        names.slice(0, 2),
-        names.slice(2),
-      ]);
     });
   });
 });
@@ -2936,5 +2874,61 @@ describe("the baselines a publish carries", () => {
       },
       carried,
     ]);
+  });
+});
+
+describe("publish() over a day read from its raw objects", () => {
+  const NOW = new Date("2026-08-20T23:00:00.000Z");
+
+  /**
+   * The failures of the test the aggregate holds once a day of raw
+   * objects is folded: main's first record of the test at 14:00, a
+   * chunk's worth of main's runs of another test, and a workstation's
+   * failure of the test at `at`. The workstation's object sorts after
+   * every other by name, whenever it ran, so it is read in a later chunk.
+   */
+  async function failuresWith(at: string) {
+    const others = Object.fromEntries(
+      Array.from({ length: CHUNK }, (_, index) => [
+        CI(DAY, `2${index}`),
+        object(
+          `o${index}`,
+          "pass",
+          "2026-08-20T13:00:00.000Z",
+          "main",
+          undefined,
+          "another",
+        ),
+      ]),
+    );
+    const { store, created } = fakeStore({
+      [CI(DAY, "1")]: object("c1", "pass", "2026-08-20T14:00:00.000Z"),
+      ...others,
+      [LOCAL(DAY, "ianh")]: localObject("c9", at),
+    });
+    expect(
+      await publish(
+        ["--bootstrap", "--days", "1"],
+        store,
+        NOW,
+        suites,
+        noPrevious,
+      ),
+    ).toBe(0);
+    const written = [...created.keys()].find((name) =>
+      name.startsWith(statePrefix())
+    )!;
+    return parseAggregate(await gunzipToText(created.get(written)!))!
+      .states[JSON.stringify(["unit", "memory", "space > writes"])]!
+      .failuresByDay;
+  }
+
+  it("counts a workstation's failure from after main recorded the test", async () => {
+    expect(await failuresWith("2026-08-20T15:00:00.000Z"))
+      .toEqual({ "2026-08-20": 1 });
+  });
+
+  it("counts none from before it, though its object is read after", async () => {
+    expect(await failuresWith("2026-08-20T09:00:00.000Z")).toEqual({});
   });
 });

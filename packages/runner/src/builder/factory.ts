@@ -224,7 +224,9 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     assertCapture,
     assertRenderParts,
 
-    // Names a sub-pattern instance, for its identity.
+    // Names a sub-pattern instance bound to a `const`, for its identity. The
+    // reactive-variable transformer stage emits the calls when its
+    // `instanceNames` option is on; authored code does not call it.
     nameInstance,
 
     // Built-in modules

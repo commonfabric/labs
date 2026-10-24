@@ -1,0 +1,2 @@
+{"date":"2026-10-22","from":{"k":"unit","s":"ui","n":"ownerPrincipalFromLabel > names no owner from an atom below the top-level fields"},"to":{"k":"unit","s":"ui","n":"ownerPrincipalFromLabel > names the owner an atom below the top-level fields names, only when no name is written"}}
+{"date":"2026-10-22","from":{"k":"unit","s":"ui","n":"ownerPrincipalFromLabel > names no owner from an entry a link carries"},"to":{"k":"unit","s":"ui","n":"ownerPrincipalFromLabel > names the owner an entry a link carries names, only when no name is written"}}

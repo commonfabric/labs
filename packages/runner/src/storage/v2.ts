@@ -5018,6 +5018,18 @@ export class SpaceReplica
    */
   readonly #owedWatches = new Map<string, SessionSync["removes"][number]>();
 
+  /**
+   * The documents a pushed frame retracted while something held them, by
+   * doc key. The server no longer delivers them, and nothing asks it to
+   * again: each keeps its value, unwatched, for the holder that read it,
+   * and the first pass that finds it held by nothing drops it, unless a
+   * frame for it arrives first.
+   */
+  readonly #retractedHeld = new Map<
+    string,
+    SessionSync["removes"][number]
+  >();
+
   readonly #isRead: (address: LocalDocAddress) => boolean;
   readonly #onDocumentsDropped:
     | ((addresses: readonly LocalDocAddress[]) => void)
@@ -7240,6 +7252,11 @@ export class SpaceReplica
       if (this.#holds(removedAddress(remove))) this.#watchAgain(remove);
       else this.#dropReleased(remove);
     }
+    for (const [key, remove] of this.#retractedHeld) {
+      if (this.#holds(removedAddress(remove))) continue;
+      this.#retractedHeld.delete(key);
+      this.#dropReleased(remove);
+    }
     if (this.#sessionClient === undefined) return [];
     const releasable = (root: RootWatches) =>
       root.pulledInPass < pass &&
@@ -7313,30 +7330,12 @@ export class SpaceReplica
       // A document something began to hold while the removal was on its way
       // keeps its value and is watched again on its own; the answer to that
       // watch brings it up to date.
-      const heldSince = new Set(
-        sync.removes.filter((remove) => this.#holds(removedAddress(remove))),
+      const { sync: applied, held } = this.#keepHeld(
+        this.#withoutLocalSessionDocuments(sync),
       );
-      for (const remove of heldSince) {
-        const key = this.#docKeyOf(removedAddress(remove));
-        // The session no longer keeps it current, so nothing may count it
-        // as delivered until the answer to its own watch arrives.
-        this.#delivered.delete(key);
-        this.#watchedIds.delete(key);
-        if ((this.#docs.get(key)?.pending.length ?? 0) === 0) continue;
-        // The session reports nothing about the document until it is
-        // watched again, so a foreign change in between is hidden: the
-        // sentinel 1 holds W until the shadow clears.
-        let seqs = this.#shadowedForeignSeqs.get(key);
-        if (seqs === undefined) {
-          seqs = new Set();
-          this.#shadowedForeignSeqs.set(key, seqs);
-        }
-        seqs.add(1);
-      }
-      const removes = sync.removes.filter((remove) => !heldSince.has(remove));
-      this.#integrateWatchMutation(view, precedingSyncs, { ...sync, removes });
-      this.#forgetRemoved(removes);
-      for (const remove of heldSince) this.#watchAgain(remove);
+      this.#integrateWatchMutation(view, precedingSyncs, applied);
+      this.#forgetRemoved(applied.removes);
+      for (const remove of held) this.#watchAgain(remove);
     } catch (error) {
       if (!this.#closed) {
         logger.warn("release-watches-failed", () => [
@@ -7377,6 +7376,47 @@ export class SpaceReplica
   }
 
   /**
+   * Splits a frame's removals into the ones to apply and the ones of
+   * documents the replica holds (`#holds()`), which keep their value for the
+   * caller to settle: watched again on their own when the frame answers a
+   * removal of this replica's (`#watchAgain()`), or kept unwatched until
+   * nothing holds them when the server pushed it (`#retractedHeld`). A held
+   * document loses its delivery record and its watched mark here: the
+   * session no longer keeps it current, so nothing may count it as
+   * delivered. One with a local write pending is shadowed, since the
+   * session reports nothing about it from here on: the sentinel 1 holds W
+   * until the shadow clears.
+   */
+  #keepHeld(
+    sync: SessionSync,
+  ): { sync: SessionSync; held: SessionSync["removes"][number][] } {
+    const held = sync.removes.filter((remove) =>
+      this.#holds(removedAddress(remove))
+    );
+    if (held.length === 0) return { sync, held };
+    for (const remove of held) {
+      const key = this.#docKeyOf(removedAddress(remove));
+      this.#delivered.delete(key);
+      this.#watchedIds.delete(key);
+      if ((this.#docs.get(key)?.pending.length ?? 0) === 0) continue;
+      let seqs = this.#shadowedForeignSeqs.get(key);
+      if (seqs === undefined) {
+        seqs = new Set();
+        this.#shadowedForeignSeqs.set(key, seqs);
+      }
+      seqs.add(1);
+    }
+    const kept = new Set(held);
+    return {
+      sync: {
+        ...sync,
+        removes: sync.removes.filter((remove) => !kept.has(remove)),
+      },
+      held,
+    };
+  }
+
+  /**
    * Watches on its own a document a release removed after something began to
    * hold it. If that fails, the document keeps its value and the next pass
    * tries again (`#owedWatches`), since a reader of it need not load it
@@ -7400,7 +7440,12 @@ export class SpaceReplica
         error,
       ]);
       if (isPermanentAuthorizationFailure(error)) this.#dropReleased(remove);
-      else this.#owedWatches.set(key, remove);
+      // A retraction pushed meanwhile has settled the document: it stays
+      // unwatched for its holder, and the pass that finds it held by
+      // nothing drops it.
+      else if (!this.#retractedHeld.has(key)) {
+        this.#owedWatches.set(key, remove);
+      }
     });
   }
 
@@ -8209,7 +8254,25 @@ export class SpaceReplica
       }
       const applyStart = performance.now();
       try {
-        this.#applySessionSync(next.value, "integrate");
+        // A pushed frame retracts what a re-walk stopped reaching, and
+        // the retraction stands: the document leaves the watch list. One
+        // the replica holds keeps its value for its holder until the pass
+        // after the holder lets go; the rest are emptied and dropped, so a
+        // later read loads them again.
+        const { sync, held } = this.#keepHeld(
+          this.#withoutLocalSessionDocuments(next.value),
+        );
+        // Recorded before the frame applies, so a frame that fails to
+        // apply leaves no held document kept without the pass that drops
+        // it. The retraction supersedes a re-watch a release still owes
+        // the document.
+        for (const remove of held) {
+          const key = this.#docKeyOf(removedAddress(remove));
+          this.#owedWatches.delete(key);
+          this.#retractedHeld.set(key, remove);
+        }
+        this.#applySessionSync(sync, "integrate");
+        if (sync.removes.length > 0) this.#forgetRemoved(sync.removes);
       } catch (error) {
         // The background consumer must never die wholesale on one bad
         // frame (OW61: a validation throw here was an unhandled rejection
@@ -8233,6 +8296,28 @@ export class SpaceReplica
         logger.time(applyStart, "watchPush", "applySessionSync");
       }
     }
+  }
+
+  /**
+   * `sync` without the entries for documents held only in this replica,
+   * which a server frame has nothing to say about: a frame is read through
+   * this before anything acts on its entries, the application of it and the
+   * drop or keeping of what it removes alike.
+   */
+  #withoutLocalSessionDocuments(sync: SessionSync): SessionSync {
+    if (!this.#localSessionDocuments()) return sync;
+    return {
+      ...sync,
+      upserts: sync.upserts.filter((entry) =>
+        !this.#isLocalSessionDocument(entry)
+      ),
+      removes: sync.removes.filter((entry) =>
+        !this.#isLocalSessionDocument(entry)
+      ),
+      crossings: sync.crossings?.filter((entry) =>
+        !this.#isLocalSessionDocument(entry)
+      ),
+    };
   }
 
   /** Returns whether an address is held only in this replica. */
@@ -10001,21 +10086,10 @@ export class SpaceReplica
     // that would integrate a second frame from inside this one.
     this.#frameApplyDepth += 1;
     try {
-      if (this.#localSessionDocuments()) {
-        sync = {
-          ...sync,
-          upserts: sync.upserts.filter((entry) =>
-            !this.#isLocalSessionDocument(entry)
-          ),
-          removes: sync.removes.filter((entry) =>
-            !this.#isLocalSessionDocument(entry)
-          ),
-          crossings: sync.crossings?.filter((entry) =>
-            !this.#isLocalSessionDocument(entry)
-          ),
-        };
-      }
-      this.#applySessionSyncFrame(sync, type);
+      this.#applySessionSyncFrame(
+        this.#withoutLocalSessionDocuments(sync),
+        type,
+      );
     } catch (error) {
       this.#completeThroughLost = true;
       throw error;
@@ -10199,6 +10273,7 @@ export class SpaceReplica
       this.#watchedIds.add(key);
       // A frame for the document means a watch covers it again.
       this.#owedWatches.delete(key);
+      this.#retractedHeld.delete(key);
       this.#delivered.set(key, {
         id: upsert.id as URI,
         scope: upsert.scope,
@@ -10262,8 +10337,10 @@ export class SpaceReplica
       this.#watchedIds.delete(key);
       this.#delivered.delete(key);
       // A removal settles what the session keeps of the document, so a
-      // watch a release owes it is not asked for again.
+      // watch a release owes it is not asked for again, and a document kept
+      // for its holder is settled by the drop this removal is.
       this.#owedWatches.delete(key);
+      this.#retractedHeld.delete(key);
       if (record.pending.length > 0) {
         // A shadowed remove carries no seq on the wire: the sentinel 1
         // holds W entirely until the shadow clears (see the field doc).

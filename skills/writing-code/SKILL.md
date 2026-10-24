@@ -45,8 +45,9 @@ doing, not by reading the list through.
   `docs/development/EXPERIMENTAL_OPTIONS.md`, which is the registry as well as
   the guidance, and is updated in the same change.
 - **Adding a dependency** — `docs/development/DEPENDENCIES.md`.
-- **Adding a workspace package** — `AGENTS.md`, "Adding New Packages". The
-  missing `test` task is the one that hangs CI rather than failing it.
+- **Adding a workspace package** — `.claude/rules/workspace-packages.md`. A
+  missing `test` task is the edit most often forgotten; the root test runner
+  refuses to start and names the package.
 - **Writing a pattern** — the `pattern-dev` skill at
   `skills/pattern-dev/SKILL.md`, in addition to this one.
 - **Changing behavior a live document describes** — `docs/README.md`. That

@@ -372,6 +372,73 @@ describe("document-release", () => {
     expect(failed()).toBe(before + 1);
   });
 
+  it("keeps a document a refresh retracts while something reads it, unwatched, and drops it once nothing does", async () => {
+    await write("child", 1);
+    const tx = writer.edit();
+    writer.getCell(space, "parent", parentSchema, tx).set({
+      child: writer.getCell(space, "child", counterSchema, tx),
+    });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await delivered();
+    const child = idOf("child");
+    const parent = idOf("parent");
+    await load(parent, parentSchema);
+    expect(held(child)).toEqual({ value: { n: 1 } });
+    // The replica asks the reader about the child as it meets the
+    // retraction, which is when it decides to keep the child.
+    const retracting = defer<void>();
+    const reading = readerStorage.addDocumentReader((address) => {
+      if (address.id !== child) return false;
+      retracting.resolve();
+      return true;
+    });
+
+    // The link goes: the refresh retracts the child, which the reader
+    // holds, so the replica keeps its value for the reader, with no watch
+    // of its own: a later write does not reach it.
+    const unlink = writer.edit();
+    writer.getCell(space, "parent", parentSchema, unlink).set({});
+    expect((await unlink.commit().settled).error).toBeUndefined();
+    await delivered();
+    await retracting.promise;
+    expect(held(child)).toEqual({ value: { n: 1 } });
+    expect(readerReplica().getSizes?.().watchedDocuments).toBe(1);
+    await write("child", 2);
+    expect(held(child)).toEqual({ value: { n: 1 } });
+
+    // Kept through a pass while read, dropped by the pass after the reader
+    // lets go; a read then loads it as it now stands.
+    await releaseTwice();
+    expect(held(child)).toEqual({ value: { n: 1 } });
+    reading();
+    await releaseTwice();
+    expect(loaded(child)).toBe(false);
+    const cell = reader.getCell(space, "child", counterSchema);
+    await cell.pull();
+    expect(cell.get()).toEqual({ n: 2 });
+  });
+
+  it("drops a document a refresh retracts that nothing reads", async () => {
+    await write("child", 1);
+    const tx = writer.edit();
+    writer.getCell(space, "parent", parentSchema, tx).set({
+      child: writer.getCell(space, "child", counterSchema, tx),
+    });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await delivered();
+    const child = idOf("child");
+    const parent = idOf("parent");
+    await load(parent, parentSchema);
+    expect(loaded(child)).toBe(true);
+
+    const unlink = writer.edit();
+    writer.getCell(space, "parent", parentSchema, unlink).set({});
+    expect((await unlink.commit().settled).error).toBeUndefined();
+    await delivered();
+    expect(loaded(child)).toBe(false);
+    expect(readerReplica().getSizes?.().documents).toBe(1);
+  });
+
   it("releases what nothing reads once a piece stops, without being asked", async () => {
     await write("counter", 1);
     const id = idOf("counter");

@@ -78,7 +78,9 @@ import { harnessCredentialOwnersEqual } from "./contracts/run-manifest.ts";
 import {
   createHarnessRunReport,
   type HarnessModelAttempt,
+  type HarnessModelResponse,
   type HarnessModelTurnUsage,
+  type HarnessRunReport,
   type HarnessRunTimelineEntryInput,
   type HarnessToolActivity,
   type HarnessToolInvocationOrigin,
@@ -183,8 +185,10 @@ import {
 import type {
   HarnessModelAttemptDiagnostic,
   HarnessModelClient,
+  HarnessModelLimits,
   HarnessModelUsage,
 } from "./model/client.ts";
+import { limitHarnessModelClient } from "./model/limits.ts";
 import { OpenAICompatibleGatewayModelClient } from "./model/openai-compatible-gateway.ts";
 import { sumHarnessModelUsage } from "./model/usage.ts";
 import {
@@ -288,7 +292,7 @@ export const DEFAULT_MAX_MODEL_TURNS = 32;
 const BASH_CWD_MARKER_PREFIX = "__CF_HARNESS_CWD__";
 
 export interface CreateHarnessPromptLoopOptions
-  extends CreateHarnessEngineOptions {
+  extends CreateHarnessEngineOptions, HarnessModelLimits {
   engine?: CfHarnessEngine;
   gatewayClient?: OpenAICompatibleGatewayClient;
   modelClient?: HarnessModelClient;
@@ -299,6 +303,13 @@ export interface CreateHarnessPromptLoopOptions
 
   /** Reserves the last root model turn for a partial answer without tools. */
   finalizeOnTurnLimit?: boolean;
+
+  /**
+   * Requires `submit_result` alone in its model turn, so a host job's result
+   * never shares the turn that ends the run with another tool call. An
+   * accepted result ends every run, with or without this.
+   */
+  stopOnStructuredResult?: boolean;
 
   /**
    * Requires a library parent to name a UI piece before completing.
@@ -415,7 +426,11 @@ export interface RunHarnessTranscriptOptions {
   ) => void | Promise<void>;
 }
 
-export interface HarnessPromptLoopResult {
+export interface HarnessPromptLoopResult extends
+  Pick<
+    HarnessRunReport,
+    "actualModels" | "modelAttributionComplete" | "modelResponses"
+  > {
   model: string;
   finalAssistantText: string;
 
@@ -599,7 +614,8 @@ const annotatePromptLoopError = (
   }
 };
 
-const promptLoopModelTurnsFromError = (
+/** Turns attempted before a loop failed; absent on errors without that evidence. */
+export const promptLoopModelTurnsFromError = (
   error: unknown,
 ): number | undefined => {
   if (!isObjectOrArray(error)) {
@@ -3073,6 +3089,18 @@ const evaluateToolPolicy = (
         }),
       };
     case "enforce-strict":
+      if (
+        promptSlotBinding?.role === "context" && effectClass === "read" &&
+        descriptor.hostGrantedRead === true
+      ) {
+        // The host owns the catalog and the grant: the tool rechecks both on
+        // a fresh listing before it sends, and the broker again when it
+        // executes.
+        return {
+          allowed: true,
+          reasonCodes: ["cfc_enforce_strict_host_command_read"],
+        };
+      }
       if (directCommand) {
         return {
           allowed: true,
@@ -3096,6 +3124,7 @@ export class CfHarnessPromptLoop {
   readonly #gatewayClient?: OpenAICompatibleGatewayClient;
   readonly #maxModelTurns: number;
   readonly #finalizeOnTurnLimit: boolean;
+  readonly #stopOnStructuredResult: boolean;
   readonly #requirePieceOutput: boolean;
 
   /**
@@ -3172,6 +3201,7 @@ export class CfHarnessPromptLoop {
         this.#gatewayClient!,
       );
     }
+    this.modelClient = limitHarnessModelClient(this.modelClient, options);
     if (
       isHarnessModelProviderId(this.modelClient.providerId) &&
       this.modelClient.providerId !== this.engine.config.modelProvider
@@ -3210,6 +3240,7 @@ export class CfHarnessPromptLoop {
     }
     this.#maxModelTurns = options.maxModelTurns ?? DEFAULT_MAX_MODEL_TURNS;
     this.#finalizeOnTurnLimit = options.finalizeOnTurnLimit ?? false;
+    this.#stopOnStructuredResult = options.stopOnStructuredResult ?? false;
     this.#parentToolAllowanceMode = options.allowedToolIds === undefined
       ? "all-builtins"
       : "restricted";
@@ -3894,6 +3925,7 @@ export class CfHarnessPromptLoop {
     const maxModelTurns = options.maxModelTurns ?? this.#maxModelTurns;
     const toolActivity: HarnessToolActivity[] = [];
     const modelAttempts: HarnessModelAttempt[] = [];
+    const modelResponses: HarnessModelResponse[] = [];
     const modelUsage: HarnessModelTurnUsage[] = [];
     const allModelUsage: (HarnessModelUsage | undefined)[] = [];
     const totalUsage = () =>
@@ -3932,41 +3964,40 @@ export class CfHarnessPromptLoop {
     const persistRunReport = async (
       finalAssistantText?: string,
       taskOutcome?: HarnessTaskOutcome,
-    ): Promise<void> => {
+    ): Promise<HarnessRunReport> => {
       await this.engine.persistPolicyTrace(await buildPolicyTrace());
-      await this.engine.persistRunReport(
-        createHarnessRunReport({
-          runState: this.engine.getRunState(),
-          model,
-          ...(this.#reasoningEffort !== undefined
-            ? { reasoningEffort: this.#reasoningEffort }
-            : {}),
-          ...(this.#researchReasoningEffort !== undefined
-            ? { researchReasoningEffort: this.#researchReasoningEffort }
-            : {}),
-          ...(this.#promptCacheMode !== undefined
-            ? { promptCacheMode: this.#promptCacheMode }
-            : {}),
-          cacheAffinity: this.#cacheAffinityKey === undefined
-            ? "run"
-            : "custom",
-          modelTurns,
-          ...(finalAssistantText !== undefined ? { finalAssistantText } : {}),
-          ...(taskOutcome !== undefined ? { taskOutcome } : {}),
-          timeline: reportTimeline,
-          toolActivity,
-          modelAttempts,
-          ...(modelUsage.length > 0
-            ? {
-              modelUsage,
-              usage: sumHarnessModelUsage(
-                modelUsage.map((entry) => entry.usage),
-              ),
-            }
-            : {}),
-          totalUsage: totalUsage(),
-        }),
-      );
+      const report = createHarnessRunReport({
+        runState: this.engine.getRunState(),
+        model,
+        ...(this.#reasoningEffort !== undefined
+          ? { reasoningEffort: this.#reasoningEffort }
+          : {}),
+        ...(this.#researchReasoningEffort !== undefined
+          ? { researchReasoningEffort: this.#researchReasoningEffort }
+          : {}),
+        ...(this.#promptCacheMode !== undefined
+          ? { promptCacheMode: this.#promptCacheMode }
+          : {}),
+        cacheAffinity: this.#cacheAffinityKey === undefined ? "run" : "custom",
+        modelTurns,
+        ...(finalAssistantText !== undefined ? { finalAssistantText } : {}),
+        ...(taskOutcome !== undefined ? { taskOutcome } : {}),
+        timeline: reportTimeline,
+        toolActivity,
+        modelAttempts,
+        modelResponses,
+        ...(modelUsage.length > 0
+          ? {
+            modelUsage,
+            usage: sumHarnessModelUsage(
+              modelUsage.map((entry) => entry.usage),
+            ),
+          }
+          : {}),
+        totalUsage: totalUsage(),
+      });
+      await this.engine.persistRunReport(report);
+      return report;
     };
     const recordModelAttempt = (
       attempt: HarnessModelAttemptDiagnostic,
@@ -4172,6 +4203,10 @@ export class CfHarnessPromptLoop {
           }
           throw error;
         }
+        modelResponses.push({
+          modelTurn: modelTurns,
+          model: response.observedModel ?? null,
+        });
         if (response.usage !== undefined) {
           modelUsage.push({
             modelTurn: modelTurns,
@@ -4418,9 +4453,12 @@ export class CfHarnessPromptLoop {
         ? "budget_finalized"
         : "assistant_completed",
     );
-    await persistRunReport(finalAssistantText, taskOutcome);
+    const report = await persistRunReport(finalAssistantText, taskOutcome);
     return {
       model,
+      actualModels: report.actualModels,
+      modelAttributionComplete: report.modelAttributionComplete,
+      modelResponses: report.modelResponses,
       finalAssistantText,
       taskOutcome,
       transcript: resumableTranscript(),
@@ -4934,14 +4972,18 @@ export class CfHarnessPromptLoop {
         recordActivity,
       });
     }
-    if (toolId === "finish_task" && toolCallCount !== 1) {
+    if (
+      toolCallCount !== 1 &&
+      (toolId === "finish_task" ||
+        (this.#stopOnStructuredResult && toolId === "submit_result"))
+    ) {
       return await this.#rejectInvalidToolCall({
         toolCall,
         invalid: {
           reason: "invalid-argument",
           toolId,
           field: "toolCalls",
-          expected: "finish_task as the only tool call in this model turn",
+          expected: `${toolId} as the only tool call in this model turn`,
         },
         sequence,
         startedAt: activityStartedAt,
@@ -5792,7 +5834,10 @@ export class CfHarnessPromptLoop {
         ),
       };
     }
-    if (toolId === "run_command" && isObjectNotArray(output)) {
+    if (
+      (toolId === "run_command" || toolId === "run_read_command") &&
+      isObjectNotArray(output)
+    ) {
       // A command's answer is measured like a retrieval row: the model sees
       // the entry, and the answer's label stays on the artifact as the
       // observation the run's model context accumulates — for a batch, each

@@ -940,9 +940,12 @@ changed, so a trend that took a cold run's figure beside a warm one's would show
 a drop the next warm run takes back.
 
 The pattern-integration process owns one shared cache in
-`packages/patterns/integration/pieces-controller.ts`. Its controller helper and
-the capability-gate controller both inject that cache into every runtime they
-create. A custom runtime in this suite must do the same. Setting
+`packages/patterns/integration/pieces-controller.ts`. Its controller helper, the
+capability-gate controller, and the serving loop the multi-runtime harness hosts
+on the test's thread all inject that cache into every runtime they create. A
+custom runtime in this suite must do the same. A serving loop that
+`SERVER_EXECUTION_WORKER` puts in a worker cannot, since a worker takes no
+closure, and its runtimes compile without the cache. Setting
 `CF_COMPILE_CACHE_FILE` only tells the test-support cache where to persist its
 bytes; a runtime uses those bytes only when it receives the cache through its
 `moduleByteCache` option.

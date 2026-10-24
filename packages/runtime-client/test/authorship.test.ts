@@ -966,11 +966,55 @@ describe("authorship", () => {
 
     it("does not verify on the claim's own id when the profile's label names two principals", async () => {
       // Without the label's principal, the observation would read an author
-      // id from the claim's value, which here names the sender.
+      // id from the claim's value, which here names the sender. The profile
+      // holds no written name, so every field's claim counts.
       const observation = observe(
         {
           getCfcLabel: () =>
             Promise.resolve(authoredByLabel("did:example:mallory")),
+        },
+        {
+          get: () => ({ id: "did:example:mallory" }),
+          getCfcLabel: () =>
+            Promise.resolve({
+              version: 1 as const,
+              entries: [
+                ...authoredByLabel("did:example:mallory").entries,
+                {
+                  path: ["name"],
+                  label: {
+                    integrity: [{
+                      kind: "represents-principal",
+                      subject: "did:example:alice",
+                    }],
+                  },
+                },
+                {
+                  path: ["avatar"],
+                  label: {
+                    integrity: [{
+                      kind: "represents-principal",
+                      subject: "did:example:bob",
+                    }],
+                  },
+                },
+              ],
+            }),
+        },
+      );
+      await settle();
+
+      expect(observation.authorClaim).toBeUndefined();
+      expect(observation.state).toBe("unknown");
+    });
+
+    it("verifies the owner a written name names, though another field also names someone else", async () => {
+      // A written name is its owner's own claim about whose the profile is,
+      // so only its claim counts; the sender is the one it names.
+      const observation = observe(
+        {
+          getCfcLabel: () =>
+            Promise.resolve(authoredByLabel("did:example:alice")),
         },
         {
           get: () => ({ id: "did:example:mallory", name: "Alice" }),
@@ -1003,8 +1047,59 @@ describe("authorship", () => {
       );
       await settle();
 
-      expect(observation.authorClaim).toBeUndefined();
-      expect(observation.state).toBe("unknown");
+      expect(observation.authorClaim).toEqual({
+        subject: "did:example:alice",
+        name: "Alice",
+      });
+      expect(observation.state).toBe("verified");
+    });
+
+    it("verifies the owner a written name names when the profile holds its name as a handle", async () => {
+      // A written name is its owner's own claim about whose the profile is,
+      // so only its claim counts; the sender is the one it names.
+      const observation = observe(
+        {
+          getCfcLabel: () =>
+            Promise.resolve(authoredByLabel("did:example:alice")),
+        },
+        {
+          get: () => ({
+            id: "did:example:mallory",
+            name: { get: () => "Alice" },
+          }),
+          getCfcLabel: () =>
+            Promise.resolve({
+              version: 1 as const,
+              entries: [
+                ...authoredByLabel("did:example:mallory").entries,
+                {
+                  path: ["name"],
+                  label: {
+                    integrity: [{
+                      kind: "represents-principal",
+                      subject: "did:example:alice",
+                    }],
+                  },
+                },
+                {
+                  path: ["avatar"],
+                  label: {
+                    integrity: [{
+                      kind: "represents-principal",
+                      subject: "did:example:bob",
+                    }],
+                  },
+                },
+              ],
+            }),
+        },
+      );
+      await settle();
+
+      expect(observation.authorClaim).toMatchObject({
+        subject: "did:example:alice",
+      });
+      expect(observation.state).toBe("verified");
     });
 
     it("fails closed when a bound author claim cell changes away from the integrity subject", async () => {

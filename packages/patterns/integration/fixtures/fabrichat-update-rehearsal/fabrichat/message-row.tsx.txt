@@ -132,9 +132,9 @@ export interface FabriChatMessageRowInput {
 
   /**
    * Whether the row belongs to the open thread's list rather than the main
-   * conversation's. Every message has a row in the main conversation's list,
-   * shown only where the message belongs there. The thread's list holds a row
-   * only for a message of the session's open thread, and shows each one.
+   * conversation's. The main conversation's list holds a row for each message
+   * shown there, and the thread's list for each message of the session's open
+   * thread; a row's list decides which of the row's controls it offers.
    */
   inThread: boolean;
 
@@ -183,7 +183,7 @@ export interface FabriChatMessageRowInput {
 
 /** What a message row provides: its rendering, and its controls' streams. */
 export interface FabriChatMessageRowOutput {
-  /** The message's rendering, hidden where the message doesn't belong. */
+  /** The message's rendering. */
   [UI]: VNode;
 
   /** The message's reactions, tallied by emoji. */
@@ -251,18 +251,21 @@ export const FabriChatMessageRow = pattern<
   });
   const isDeletedNow = computed(() => isDeleted(message.get()));
   // What the viewer may do to the message, by the rule the room's handlers
-  // admit an act by, and none of it while they can't write in the room.
-  const rights = computed(() =>
-    cannotWrite || myProfile?.get() === undefined
-      ? NO_MESSAGE_RIGHTS
-      : messageRightsOf(
-        message.get(),
-        myProfile.resolveAsCell(),
-        kind,
-        isOwner === true,
-        ownersMayObliterate === true,
-      )
-  );
+  // admit an act by, and none of it while they can't write in the room. The
+  // rule reads the message's author and body, and is handed those two alone.
+  const rights = computed(() => {
+    if (cannotWrite || myProfile?.get() === undefined) return NO_MESSAGE_RIGHTS;
+    const record = message.get();
+    return messageRightsOf(
+      record === undefined
+        ? undefined
+        : { authorProfile: record.authorProfile, body: record.body },
+      myProfile.resolveAsCell(),
+      kind,
+      isOwner === true,
+      ownersMayObliterate === true,
+    );
+  });
   const isEditing = computed(() => {
     const editing = composer.get()?.editing;
     return editing !== undefined && equals(editing, message);
@@ -276,23 +279,20 @@ export const FabriChatMessageRow = pattern<
     const reply = message.get()?.replyTo;
     return reply?.shownIn === "main" ? bodyText(reply.message.get()) : "";
   });
-  // Where the views show the message. The room derives every message's place
-  // at once, from its messages alone, so whichever runtime runs the room
-  // computes them for every viewer. The row reads its own, and runs again
-  // only when that one changes.
-  const place = computed(() => {
+  // How many replies the thread the message roots holds. The room derives
+  // every message's place at once, from its messages alone, so whichever
+  // runtime runs the room computes them for every viewer. The row reads its
+  // own, and runs again only when that one changes.
+  const replies = computed(() => {
     const key = viewKeyOf(message);
-    const own = key === undefined ? undefined : places.key(key).get();
-    return { inMain: own?.inMain === true, replies: own?.replies ?? 0 };
+    return (key === undefined ? undefined : places.key(key).get())?.replies ??
+      0;
   });
-  const mainRowDisplay = computed((): ChatDisplay =>
-    place.inMain ? "block" : "none"
-  );
   const threadLabel = computed(() =>
-    place.replies === 1 ? "1 reply" : `${place.replies} replies`
+    replies === 1 ? "1 reply" : `${replies} replies`
   );
   const threadLinkDisplay = computed((): ChatDisplay =>
-    !inThread && place.replies > 0 ? "inline-flex" : "none"
+    !inThread && replies > 0 ? "inline-flex" : "none"
   );
   // What differs by viewer or by session is shown or hidden through a prop,
   // never by building a different tree: a branch chosen per viewer is stored
@@ -303,8 +303,8 @@ export const FabriChatMessageRow = pattern<
   // whose computed has yet to run stays hidden. A computed that reads the
   // viewer's or the session's state has a value only once a runtime acting
   // for that viewer runs the room, which one that only renders it does not,
-  // so a row's place in the main conversation, which every viewer is shown,
-  // is decided from the room's messages alone.
+  // so which rows the main conversation holds, which every viewer is shown,
+  // is decided from the room's messages alone, by the room.
   const editDisplay = computed((): ChatDisplay =>
     rights.canEdit ? "inline-flex" : "none"
   );
@@ -385,15 +385,10 @@ export const FabriChatMessageRow = pattern<
 
   return {
     [UI]: (
-      // A row of the main conversation takes its display from shared state
-      // alone, never the session's, or a viewer whose runtime only renders
-      // the room would have the row hidden for good. A thread row is built
-      // only for a message of the session's open thread, so it is shown
-      // wherever it exists.
-      <div
-        hidden
-        style={{ display: inThread ? "block" : mainRowDisplay }}
-      >
+      // A row is built only for a message its list shows: the main
+      // conversation's rows are the room's shared choice, and a thread row is
+      // the session's, for a message of its open thread.
+      <div>
         <cf-hover-reveal revealed={pickerOpen}>
           <div
             style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}
