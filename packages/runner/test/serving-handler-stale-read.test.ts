@@ -45,6 +45,9 @@ const recordSchema = {
   // deno-lint-ignore no-explicit-any
 } as any;
 
+/** The peer session's commit counter, one per commit it makes. */
+let peerLocalSeq = 0;
+
 /**
  * Commits `value` as `cell`'s whole value straight to `engine` from another
  * session, so no replica hears of it, and returns the commit's seq.
@@ -57,7 +60,7 @@ const commitUnseen = (
   Engine.applyCommit(engine, {
     sessionId: "session:peer",
     commit: {
-      localSeq: 1,
+      localSeq: ++peerLocalSeq,
       reads: { confirmed: [], pending: [] },
       operations: [{
         op: "set",
@@ -79,7 +82,7 @@ const patchUnseen = (
   Engine.applyCommit(engine, {
     sessionId: "session:peer",
     commit: {
-      localSeq: 2,
+      localSeq: ++peerLocalSeq,
       reads: { confirmed: [], pending: [] },
       operations: [{
         op: "patch",
@@ -290,6 +293,89 @@ describe("serving-handler-stale-read", () => {
         eventId: "mirror-2",
         docs: [{ id: counter.getAsNormalizedFullLink().id, seq: peerSeq }],
       }]);
+    });
+
+    it("requeues a handler whose reads of two docs a commit staled between the wave's check and its commit, and waits for both", async () => {
+      const { runtime, engine } = waves;
+      const counter = runtime.getCell<number>(space, "counter", counterSchema);
+      const other = runtime.getCell<number>(space, "other", counterSchema);
+      const mirror = runtime.getCell<number>(space, "mirror", counterSchema);
+      const seed = runtime.edit();
+      counter.withTx(seed).set(0);
+      other.withTx(seed).set(0);
+      mirror.withTx(seed).set(0);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      await waves.storageManager.synced();
+      waves.serve();
+
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "mirror",
+        kind: "event-handler",
+        eventId: "mirror-3",
+      });
+      mirror.withTx(tx).set(
+        counter.withTx(tx).get() + other.withTx(tx).get() + 1,
+      );
+      await tx.commit().settled;
+      let counterSeq = 0;
+      let otherSeq = 0;
+      const outcome = await waves.commitWave(
+        racing(waves.sink(), () => {
+          counterSeq = commitUnseen(engine, counter, 5);
+          otherSeq = commitUnseen(engine, other, 7);
+        }),
+      );
+
+      expect(stored(engine, mirror)).toEqual({ value: 0 });
+      expect(outcome.requeuedEventIds).toEqual(["mirror-3"]);
+      const waitsFor = outcome.requeueCatchUp
+        .filter((gate) => gate.eventId === "mirror-3")
+        .flatMap((gate) => gate.docs.map((doc) => [doc.id, doc.seq]))
+        .sort();
+      expect(waitsFor).toEqual([
+        [counter.getAsNormalizedFullLink().id, counterSeq],
+        [other.getAsNormalizedFullLink().id, otherSeq],
+      ].sort());
+    });
+
+    it("requeues the later entries of a requeued event's stream that share its commit seq", async () => {
+      const { runtime, engine } = waves;
+      const counter = runtime.getCell<number>(space, "counter", counterSchema);
+      const first = runtime.getCell<number>(space, "first", counterSchema);
+      const seed = runtime.edit();
+      counter.withTx(seed).set(0);
+      first.withTx(seed).set(0);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      await waves.storageManager.synced();
+      waves.serve();
+
+      commitUnseen(engine, counter, 5);
+      const stream = "of:stream-events:batched";
+      const head = runtime.edit();
+      stampWaveRunContext(head, {
+        actionId: "head",
+        kind: "event-handler",
+        eventId: "e1",
+        streamEntry: { sidecarId: stream, index: 0, seq: 1 },
+      });
+      const handled = counter.withTx(head);
+      handled.set(handled.get() + 1);
+      await head.commit().settled;
+      const later = runtime.edit();
+      stampWaveRunContext(later, {
+        actionId: "later",
+        kind: "event-handler",
+        eventId: "e2",
+        streamEntry: { sidecarId: stream, index: 1, seq: 1 },
+      });
+      first.withTx(later).set(1);
+      await later.commit().settled;
+      const outcome = await waves.commitWave();
+
+      expect(outcome.requeuedEventIds).toEqual(["e1", "e2"]);
+      expect(outcome.staleReadRequeues).toBe(2);
+      expect(stored(engine, first)).toEqual({ value: 0 });
     });
 
     it("requeues the later entries of a requeued event's stream with it, and no other stream's", async () => {

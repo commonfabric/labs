@@ -2628,7 +2628,9 @@ export class WaveAccumulator
           // A requeue keeps the order events.md §2 promises per stream: an
           // event-handler contribution whose durable entry sits later in
           // the same stream as a requeued one requeues with it, and its
-          // replay re-drains behind that head (§3d).
+          // replay re-drains behind that head (§3d). Later is by seq, and
+          // by position among entries one commit appended, which share a
+          // seq.
           const entry = contribution.context.streamEntry;
           const requeuedAheadInStream = (
             within: ReadonlySet<number>,
@@ -2638,7 +2640,9 @@ export class WaveAccumulator
             this.#contributions.some((c) => {
               const ahead = c.context.streamEntry;
               return within.has(c.index) && ahead !== undefined &&
-                ahead.sidecarId === entry.sidecarId && ahead.seq < entry.seq;
+                ahead.sidecarId === entry.sidecarId &&
+                (ahead.seq < entry.seq ||
+                  (ahead.seq === entry.seq && ahead.index < entry.index));
             });
           const streamOrderRequeued = requeuedAheadInStream(requeued);
           if (
@@ -2970,6 +2974,14 @@ export class WaveAccumulator
           progressed = true;
         }
       }
+      // The sink found reads stale inside its transaction: a commit landed
+      // after our own check, and each owning event requeues as it would
+      // have then (§3d). Gathered per contribution first, so the catch-up
+      // names every doc the replay waits for, not the first one found.
+      const staleByOwner = new Map<
+        number,
+        Array<{ read: WaveReadQuery; seq: number }>
+      >();
       for (const stale of rejection.staleReads ?? []) {
         const owner = stale.contribution;
         const read = batch.handlerReads
@@ -2980,14 +2992,17 @@ export class WaveAccumulator
         ) {
           continue;
         }
-        // The sink found the read stale inside its transaction: a commit
-        // landed after our own check, and the event requeues as it would
-        // have then (§3d).
+        let held = staleByOwner.get(owner);
+        if (held === undefined) {
+          held = [];
+          staleByOwner.set(owner, held);
+        }
+        held.push({ read, seq: stale.seq });
+      }
+      for (const [owner, stale] of staleByOwner) {
         requeued.add(owner);
         staleReadRequeued.add(owner);
-        this.#noteCatchUp(outcome, this.#contributions[owner], [
-          { read, seq: stale.seq },
-        ]);
+        this.#noteCatchUp(outcome, this.#contributions[owner], stale);
         progressed = true;
       }
       if (!progressed) {
