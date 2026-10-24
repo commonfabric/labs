@@ -43,15 +43,6 @@ const chatProfileSchema = {
   properties: { name: { type: "string" }, avatar: { type: "string" } },
 } as const;
 
-/** Runs `check` on each turn of the event loop until it answers `true`. */
-async function until(check: () => boolean, turns = 500): Promise<void> {
-  for (let turn = 0; turn < turns; turn++) {
-    if (check()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error("the condition did not come true");
-}
-
 /**
  * A runtime holding, in three spaces, what a message's author link reaches:
  * the message, the author's profile, the profile's inbox in the author's
@@ -164,14 +155,24 @@ describe("observeAuthorship() in the worker", () => {
     await using fixture = await messageByAProfile();
     const { runtime, ids } = fixture;
     const reports: AuthorshipObservation[] = [];
+    // Resolved as reports arrive: `reported(n)` settles once the observation
+    // has reported `n` times, at once when it already has.
+    const watchers: (() => void)[] = [];
+    const reported = (count: number): Promise<void> =>
+      new Promise((resolve) => {
+        const check = () => {
+          if (reports.length >= count) resolve();
+        };
+        check();
+        watchers.push(check);
+      });
     const { value, author } = fixture.handles();
-    const cancel = observeAuthorship(
-      value,
-      author,
-      (observation) => reports.push(observation),
-    );
+    const cancel = observeAuthorship(value, author, (observation) => {
+      reports.push(observation);
+      for (const watcher of watchers) watcher();
+    });
     try {
-      await until(() => reports.length > 0);
+      await reported(1);
       await runtime.scheduler.idleWithPendingCommits();
 
       // The worker's subscriptions that read the author's profile: the one
@@ -202,8 +203,10 @@ describe("observeAuthorship() in the worker", () => {
       }
       expect(reports.at(-1)?.authorClaim).toEqual({ name: "an author" });
 
-      // What the profile links changes: the observation hears nothing.
-      const reported = reports.length;
+      // What the profile links changes: no subscription on the message is
+      // woken. The trace is the check; a report could not show a re-run that
+      // delivered the same value again, since the gate drops those.
+      const before = reports.length;
       runtime.scheduler.setTriggerTraceEnabled(true);
       await fixture.write(home, "catalog", {
         entries: { added: runtime.getCell(home, "inbox").getAsLink() },
@@ -221,10 +224,10 @@ describe("observeAuthorship() in the worker", () => {
         )
       );
       expect(woken).toEqual([]);
-      await until(() => true);
-      expect(reports.length).toBe(reported);
 
-      // The claim itself changes: the observation reports it.
+      // The claim itself changes: the observation reports it. Its report
+      // travels the channel the writes above would have reported on, in
+      // order, so once it is here nothing of theirs is still to come.
       await fixture.write(profileSpace, "profile", {
         name: "a renamed author",
         avatar: "a",
@@ -235,12 +238,9 @@ describe("observeAuthorship() in the worker", () => {
           }),
         },
       }, chatProfileSchema);
-      await until(() =>
-        reports.some((report) =>
-          (report.authorClaim as { name?: string } | undefined)?.name ===
-            "a renamed author"
-        )
-      );
+      await reported(before + 1);
+      expect(reports.length).toBe(before + 1);
+      expect(reports.at(-1)?.authorClaim).toEqual({ name: "a renamed author" });
     } finally {
       cancel();
     }

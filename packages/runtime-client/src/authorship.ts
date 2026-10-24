@@ -43,8 +43,11 @@ export interface AuthorshipObservation {
 
   /**
    * Who the author cell claims wrote the value: the principal its label
-   * names, as `{ subject, name? }`, else the cell's own value. An author
-   * given as a plain value rather than a cell is its own claim.
+   * names, as `{ subject, name? }`, else what the cell reads as. A cell that
+   * can be narrowed reads under {@link AUTHOR_CLAIM_SCHEMA}, as the claim
+   * fields it holds and no more, so a profile reads as `{ name }` rather than
+   * whole; a cell that offers no narrowing reads whole. An author given as a
+   * plain value rather than a cell is its own claim.
    */
   readonly authorClaim: unknown;
 }
