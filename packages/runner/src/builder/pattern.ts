@@ -441,7 +441,8 @@ function factoryFromPattern<T, R>(
   });
   // The positional cause each named instance takes the place of. It still
   // consumes its number, so every other anonymous root keeps the number it
-  // has without instance names.
+  // has without instance names; the runner maps a deployed instance found
+  // under this cause onto its name.
   const legacyPartialCauses = new Map<OpaqueCell<any>, JSONValue>();
   allCells.forEach((cell) => {
     const { cell: top, path, kind, name, external } = exportCell(cell);

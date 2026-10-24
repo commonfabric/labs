@@ -41,7 +41,7 @@ was last checked against the code.
 | [`localSessionDocuments`](#localsessiondocuments) | `EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS` env / shell build define, or `RuntimeOptions.experimental`; clients adopt the deployment value | off | Bernhard Seefeld (#8919) | validate local session semantics and performance, then graduate for client execution | implemented, opt-in; requires validation-only commit support |
 | [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
-| [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | carry deployed children over to their names, exclude a runtime whose naming mode differs from its space's, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default; must not turn on before carry-over and that exclusion exist |
+| [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | exclude a runtime whose naming mode differs from its space's, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default; must not turn on before that exclusion exists |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
 | [`cfcEnforcementMode`](#cfcenforcementmode)                                 | `RuntimeOptions.cfcEnforcementMode` (`CF_CFC_MODE` in the cf-harness / fuse)                                                                    | `enforce-strict`                                                                     | Bernhard Seefeld (#3263)                              | the ladder stays; the default is at its top rung                                                                                                                                                                                  | implemented, on by default at the strictest rung                                |
@@ -959,27 +959,36 @@ holds the measurements and the conditions for revisiting.
   anonymous roots. An unrelated sibling inserted ahead of such a child then no
   longer moves it onto another child's state. With the flag off, the
   transformer names no instance, so an instance nothing else names keeps its
-  positional identity.
+  positional identity. A deployed parent's positional child is carried over to
+  its name on the first setup that names it, and recorded in the parent's
+  `instanceChildren` meta; with the flag off, carry-over, `instanceChildren`
+  and the start's pre-sync have nothing to act on.
 - **Current default and planned end state.** Off by default. The end state is
   on, with the flag and the positional compile of `const`-bound instances
-  deleted.
-- **What has to come before turning it on.** Two things, both missing today.
-  First, carrying each deployed parent's positional children over to their
-  names: without it, turning the flag on moves every deployed `const`-bound
-  child from its positional identity to a named one, where it starts fresh,
-  and its state is left where nothing reaches it. Second, keeping a runtime
-  whose naming mode differs from the one a space's data was written under, an
-  older runtime or a current one with the flag off, away from that space, by
-  one mechanism that covers runtimes already connected (long-lived browser
-  tabs and backends among them) as well as new admissions, in place before
-  naming writes any data. A manifest entry an older guard reads is not enough
-  on its own: an older runtime's plain reopen of a parent is never judged by
-  its guard.
-- **Status on 2026-10-23.** The transformer's off arm is held to `main`'s
-  output by the golden fixtures and `pipeline-regressions.test.ts`, and both
-  arms by `transform.test.ts`. That compiled code is never shared between the
-  two modes is pinned by `packages/runner/test/instance-naming-modes.test.ts`,
-  and the plumbing by `packages/runner/test/experimental-options.test.ts` and
+  deleted. Turning it on is one-way for the data it writes: a parent whose
+  children have been carried over binds them through `instanceChildren`, which
+  a runtime with naming off does not read.
+- **What has to come before turning it on.** A runtime whose naming mode
+  differs from the one a space's data was written under, an older runtime or a
+  current one with the flag off, must be kept away from that space by one
+  mechanism, and that mechanism must be in place before naming writes any data.
+  It has to cover runtimes already connected, long-lived browser tabs and
+  backends among them, not only new admissions. A manifest entry an older
+  guard reads is not enough on its own: an older runtime's plain reopen of a
+  parent is never judged by its guard. What a runtime with naming off does to a
+  parent a naming runtime carried over is pinned by
+  `packages/runner/test/instance-naming-modes.test.ts`: its reopen runs the
+  inserted sibling on the carried child's document and the named instance on a
+  fresh one, and its update shows the carried child's state under the sibling,
+  with no refusal in either.
+- **Status on 2026-10-23.** The carry-over and naming cases in
+  `packages/runner/test/instance-carry-over.test.ts` and the Home upgrade case
+  in `packages/patterns/integration/home-interface-upgrade.test.ts` run with
+  the flag on. The transformer's off arm is held to `main`'s output by the
+  golden fixtures and `pipeline-regressions.test.ts`, and both arms by
+  `transform.test.ts`. That compiled code is never shared between the two
+  modes is pinned by `packages/runner/test/instance-naming-modes.test.ts`, and
+  the plumbing by `packages/runner/test/experimental-options.test.ts` and
   `packages/runner/test/deployment-meta.test.ts`.
 - **Path to removal.** Once on everywhere, delete the runtime option, its env,
   authority and shell-source entries, `namesInstances()`,
