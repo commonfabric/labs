@@ -3,8 +3,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { DATA_URI_MEDIA_TYPE } from "@commonfabric/data-model/codec-data-uri";
-
 import "@commonfabric/utils/equal-ignoring-symbols";
 
 import { Writable } from "@commonfabric/api";
@@ -23,6 +21,7 @@ import { TransactionWrapper } from "../src/storage/extended-storage-transaction.
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { isLinkResolutionProbe } from "../src/storage/reactivity-log.ts";
 import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
+import { hasInlineCellScheme } from "../src/immutable-cell.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -133,7 +132,7 @@ describe("resolving an inline array element as a cell", () => {
 
     const first = list.withTx(tx).key(0).resolveAsCell()
       .getAsNormalizedFullLink();
-    expect(first.id.startsWith("data:")).toBe(true);
+    expect(hasInlineCellScheme(first.id)).toBe(true);
     const hashedBefore = getContainersHashedForTestingOnly();
     const again = list.withTx(tx).key(0).resolveAsCell()
       .getAsNormalizedFullLink();
@@ -450,7 +449,7 @@ describe("plain-schema array traversal", () => {
     const trackedDataPaths: string[][] = [];
     const nativeTrackReadPaths = tx.trackReadPaths!.bind(tx);
     tx.trackReadPaths = (address, paths, options) => {
-      if (address.id.startsWith(`data:${DATA_URI_MEDIA_TYPE}`)) {
+      if (hasInlineCellScheme(address.id)) {
         for (const path of paths) trackedDataPaths.push([...path]);
       }
       return nativeTrackReadPaths(address, paths, options);

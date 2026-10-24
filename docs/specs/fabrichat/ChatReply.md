@@ -62,4 +62,6 @@ A `"both"` message appears in both. A `"main"` reply is in no thread, and quotes
 a message that the main conversation also shows.
 
 Neither view is stored. Both are derived from the room's messages, the same way
-in every client.
+in every client. So is each thread's summary: how many replies it holds, and
+when the newest was sent, which the main conversation shows beside the thread's
+root (see [`ChatThreadSummary`](ChatThreadSummary.md)).

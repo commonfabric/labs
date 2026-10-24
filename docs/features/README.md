@@ -29,6 +29,8 @@ a line for each new document to the index below.
 - [`view-scoped-client-replication.md`](view-scoped-client-replication.md) —
   visible renderer demand, server-observed input selection, and guarded local
   previews
+- [`document-release.md`](document-release.md) — when a runtime stops watching
+  a document nothing reads, what it drops, and how a later read loads it again
 
 - [`collaborative-fields.md`](collaborative-fields.md) — operation-based fields,
   CodeMirror's opt-in editor path, retained cursors and reset behavior, and
@@ -63,6 +65,8 @@ a line for each new document to the index below.
 - [`custom-space-roots.md`](custom-space-roots.md) — seal a custom
   default-pattern reservation with the initial ACL, or one leaving the root to
   the space's creator, as `inSpace(..., { root: true })` does.
+- [`meeting-room-allocation.md`](meeting-room-allocation.md) — host-local atomic
+  selection of a canonical calendar meeting Loom, without granting membership.
 - [`space-kinds.md`](space-kinds.md) — the kind a space declares in its genesis
   commit, as `inSpace(..., { spaceKind })` does: how it is sealed so that only
   its creator states it, once; who can read it; the known kinds; and what a
@@ -70,10 +74,9 @@ a line for each new document to the index below.
 - [`lazy-cell-materialization.md`](lazy-cell-materialization.md) — the
   schema-observing view a marked transaction hands back from a read, what it
   checks and when, and the rules that keep it agreeing with an eager read
-- [`data-uri-identifiers.md`](data-uri-identifiers.md) — the cell identifiers
-  that carry their own frozen value rather than naming a document in a space,
-  why the runtime keeps both a broad and a narrow test for one, and what follows
-  from there being nothing stored behind such an address
+- [`immutable-cell-identifiers.md`](immutable-cell-identifiers.md) — native
+  snapshot ownership, relative-link origins, portable value-carrying IDs, and
+  expansion at storage and transport boundaries
 
 ## Identity and people
 
@@ -102,8 +105,9 @@ a line for each new document to the index below.
 - [`space-access.md`](space-access.md) — what `spaceAccess(target)` tells a pattern
   about the access its principal holds in a space: where the level comes from,
   who the principal is, when the answer is `"none"` and when it is not known,
-  and how it stays current; and what `spaceOf(target)` returns, the DID of
-  that space
+  and how it stays current; what `spaceMembers(target)` lists, the principals
+  the space's access list names; and what `spaceOf(target)` returns, the DID
+  of that space
 - [`private-inbox.md`](private-inbox.md) — the one inbox per identity where
   others deliver offers: where it lives, who creates it, what access its space
   grants, the offer envelope it shares with loom's share inbox, what `receive`

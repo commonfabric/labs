@@ -10,6 +10,7 @@ import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
 import { recordReferencedArgumentFields } from "../../src/cfc/reference-initialization.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { labelsReached } from "../support/reached-labels.ts";
 
 const signer = await Identity.fromPassphrase("staged-reference-replacement");
 const space = signer.did();
@@ -97,7 +98,7 @@ describe("staged-reference-replacement", () => {
   });
 
   for (const labeled of [false, true]) {
-    it(`refuses stale integrity after replacement by ${labeled ? "a labeled" : "an unrecorded unlabeled"} reference`, async () => {
+    it(`refuses stale integrity after replacement by ${labeled ? "a labeled" : "an unlabeled"} reference`, async () => {
       const tx = runtime.edit();
       const holder = runtime.getCell(space, "holder", { type: "object" }, tx);
       holder.set({ slot: runtime.getCell(space, "endorsed", undefined, tx) });
@@ -116,7 +117,7 @@ describe("staged-reference-replacement", () => {
         tx.getCfcState().writePolicyInputs.filter((input) =>
           input.kind === "link-write"
         ),
-      ).toHaveLength(labeled ? 2 : 1);
+      ).toHaveLength(2);
       expect((await tx.commit().settled).error).toBeUndefined();
       expect(holder.withTx(runtime.readTx()).key("slot").key("text").get())
         .toBe("replacement");
@@ -137,6 +138,8 @@ describe("staged-reference-replacement", () => {
       expect((await consume.commit().settled).error?.message).toContain(
         "requiredIntegrity",
       );
+      // The holder stores nothing of either source; the replacement's labels
+      // are reached through the slot, and the replaced source's are not.
       const labels = readStoredCfcMetadata(
         runtime.readTx(),
         holder.getAsNormalizedFullLink(),
@@ -145,12 +148,19 @@ describe("staged-reference-replacement", () => {
         .not.toContain("old-proof");
       expect(labels.flatMap((entry) => entry.label.confidentiality ?? []))
         .not.toContain("old-secret");
-      if (labeled) {
-        expect(labels.flatMap((entry) => entry.label.integrity ?? []))
-          .toContain("new-proof");
-        expect(labels.flatMap((entry) => entry.label.confidentiality ?? []))
-          .toContain("new-secret");
-      }
+      expect(labels.flatMap((entry) => entry.label.integrity ?? []))
+        .not.toContain("new-proof");
+      expect(labels.flatMap((entry) => entry.label.confidentiality ?? []))
+        .not.toContain("new-secret");
+      const reached = labelsReached(
+        runtime,
+        holder.getAsNormalizedFullLink(),
+        ["slot"],
+      );
+      expect(reached.integrity).not.toContain("old-proof");
+      expect(reached.confidentiality).not.toContain("old-secret");
+      expect(reached.integrity).toEqual(labeled ? ["new-proof"] : []);
+      expect(reached.confidentiality).toEqual(labeled ? ["new-secret"] : []);
     });
   }
 
@@ -241,6 +251,10 @@ describe("staged-reference-replacement", () => {
       expect((await tx.commit().settled).error).toBeUndefined();
       expect(holder.withTx(runtime.readTx()).key("argument").key("text").get())
         .toBe("endorsed");
+      // The wrapper's slot carries the restored handle's own view and none
+      // of the views it replaced; neither document stores a label of either
+      // source. The read through the slot reaches the endorsed source's
+      // labels beside the restored view.
       for (const cell of [wrapper, holder]) {
         const entries = readStoredCfcMetadata(
           runtime.readTx(),
@@ -252,13 +266,25 @@ describe("staged-reference-replacement", () => {
         const confidentiality = entries.flatMap((entry) =>
           entry.label.confidentiality ?? []
         );
-        expect(integrity).toContain("old-proof");
+        expect(integrity).not.toContain("old-proof");
         expect(integrity).not.toContain("new-proof");
-        expect(confidentiality).toContain("old-secret");
-        expect(confidentiality).toContain("current-view");
+        expect(confidentiality).not.toContain("old-secret");
         expect(confidentiality).not.toContain("superseded-view");
         expect(confidentiality).not.toContain("new-secret");
+        expect(confidentiality.filter((atom) => atom === "current-view"))
+          .toEqual(cell === wrapper ? ["current-view"] : []);
       }
+      const reached = labelsReached(
+        runtime,
+        wrapper.getAsNormalizedFullLink(),
+        ["slot"],
+      );
+      expect(reached.integrity).toContain("old-proof");
+      expect(reached.integrity).not.toContain("new-proof");
+      expect(reached.confidentiality).toContain("old-secret");
+      expect(reached.confidentiality).toContain("current-view");
+      expect(reached.confidentiality).not.toContain("superseded-view");
+      expect(reached.confidentiality).not.toContain("new-secret");
       const consume = runtime.edit();
       const sink = runtime.getCell(space, "sink", {
         type: "object",
@@ -329,20 +355,36 @@ describe("staged-reference-replacement", () => {
         const stage of order === "bottom-up" ? stages : stages.toReversed()
       ) stage();
       expect((await tx.commit().settled).error).toBeUndefined();
-      for (const cell of [wrapper, holder]) {
-        const entries = readStoredCfcMetadata(
+      // The wrapper's slot carries the last handle's view; the holder, whose
+      // reference covers the wrapper, stores nothing beneath its slot. The
+      // source's labels are reached through the wrapper's slot.
+      const wrapperEntries = readStoredCfcMetadata(
+        runtime.readTx(),
+        wrapper.getAsNormalizedFullLink(),
+      )!.labelMap.entries;
+      const wrapperConfidentiality = wrapperEntries.flatMap((entry) =>
+        entry.label.confidentiality ?? []
+      );
+      expect(wrapperConfidentiality).toContain("current-view");
+      expect(wrapperConfidentiality).not.toContain("superseded-view");
+      expect(wrapperConfidentiality).not.toContain("new-secret");
+      expect(wrapperEntries.flatMap((entry) => entry.label.integrity ?? []))
+        .not.toContain("new-proof");
+      expect(
+        readStoredCfcMetadata(
           runtime.readTx(),
-          cell.getAsNormalizedFullLink(),
-        )!.labelMap.entries;
-        const confidentiality = entries.flatMap((entry) =>
-          entry.label.confidentiality ?? []
-        );
-        expect(confidentiality).toContain("current-view");
-        expect(confidentiality).toContain("new-secret");
-        expect(confidentiality).not.toContain("superseded-view");
-        expect(entries.flatMap((entry) => entry.label.integrity ?? []))
-          .toContain("new-proof");
-      }
+          holder.getAsNormalizedFullLink(),
+        )!.labelMap.entries.map((entry) => entry.path),
+      ).toEqual([[]]);
+      const reached = labelsReached(
+        runtime,
+        wrapper.getAsNormalizedFullLink(),
+        ["slot"],
+      );
+      expect(reached.confidentiality).toContain("current-view");
+      expect(reached.confidentiality).toContain("new-secret");
+      expect(reached.confidentiality).not.toContain("superseded-view");
+      expect(reached.integrity).toContain("new-proof");
     });
   }
 
@@ -419,20 +461,23 @@ describe("staged-reference-replacement", () => {
             runtime.readTx(),
             holder.getAsNormalizedFullLink(),
           )!.labelMap.entries;
+          // The holder stores its own label and nothing of either source;
+          // the replacement's labels are reached through the wrapper's slot,
+          // and the replaced source's are not.
+          expect(entries.map((entry) => entry.path)).toEqual([[]]);
           expect(entries.flatMap((entry) => entry.label.integrity ?? []))
             .toContain("holder-proof");
-          expect(entries.flatMap((entry) => entry.label.integrity ?? []))
-            .not.toContain("old-proof");
-          expect(entries.flatMap((entry) => entry.label.confidentiality ?? []))
-            .not.toContain("old-secret");
-          if (labeled) {
-            expect(entries.flatMap((entry) => entry.label.integrity ?? []))
-              .toContain("new-proof");
-            expect(
-              entries.flatMap((entry) => entry.label.confidentiality ?? []),
-            )
-              .toContain("new-secret");
-          }
+          const reached = labelsReached(
+            runtime,
+            wrapper.getAsNormalizedFullLink(),
+            ["slot"],
+          );
+          expect(reached.integrity).not.toContain("old-proof");
+          expect(reached.confidentiality).not.toContain("old-secret");
+          expect(reached.integrity).toEqual(labeled ? ["new-proof"] : []);
+          expect(reached.confidentiality).toEqual(
+            labeled ? ["new-secret"] : [],
+          );
           const consume = runtime.edit();
           const sink = runtime.getCell(space, "sink", {
             type: "object",
@@ -463,7 +508,11 @@ describe("staged-reference-replacement", () => {
   }
 
   for (const order of ["bottom-up", "top-down"] as const) {
-    it(`replaces a stored reference's descendant carried view in ${order} order`, async () => {
+    it(`persists nothing of a carried view below the root when a stored reference is rewritten in ${order} order`, async () => {
+      // A handle's carried view is the reference's own label at its root
+      // alone. A view below the root is not persisted by the staging that
+      // stored the reference nor by the one that rewrites it, and the
+      // source's labels are reached through the slot.
       const source = runtime.getCell(space, "labeled-replacement");
       const linkWithView = (confidentiality: string) =>
         linkRefFrom<CfcCellLinkRefPayload>({
@@ -516,13 +565,16 @@ describe("staged-reference-replacement", () => {
           runtime.readTx(),
           cell.getAsNormalizedFullLink(),
         )!.labelMap.entries;
-        const confidentiality = entries.flatMap((entry) =>
-          entry.label.confidentiality ?? []
-        );
-        expect(confidentiality).toContain("current-view");
-        expect(confidentiality).toContain("new-secret");
-        expect(confidentiality).not.toContain("superseded-view");
+        expect(entries.map((entry) => entry.path)).toEqual([[]]);
       }
+      const reached = labelsReached(
+        runtime,
+        wrapper.getAsNormalizedFullLink(),
+        ["slot", "text"],
+      );
+      expect(reached.confidentiality).toContain("new-secret");
+      expect(reached.confidentiality).not.toContain("current-view");
+      expect(reached.confidentiality).not.toContain("superseded-view");
       expect(
         holder.withTx(runtime.readTx()).key("argument").key("slot").key("text")
           .get(),
@@ -614,7 +666,7 @@ describe("staged-reference-replacement", () => {
     holder.set({ slot: link });
     holder.set({ slot: runtime.getCell(space, "replacement", undefined, tx) });
     expect((await tx.commit().settled).error?.message).toContain(
-      "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+      "Link CurrentPrincipal confidentiality requires a concrete reader",
     );
   });
 });

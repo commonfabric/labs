@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { dirname, fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { dispatchArms, loadCliSuites, phaseAnnouncements } from "./cli.ts";
 
@@ -7,7 +8,7 @@ const stepsForTest = (body: string): string[] =>
   [...body.matchAll(/^ {4}cf_test_step_begin (\S+)$/gm)].map((f) => f[1]!);
 import type { Suite } from "./suite.ts";
 
-const root = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
+const root = dirname(dirname(dirname(fromFileUrl(import.meta.url))));
 const suites = await loadCliSuites(root);
 const byId = (id: string): Suite => suites.find((s) => s.id === id)!;
 const context = { root, outputDir: "/out", spoolDir: "/spool" };

@@ -5,10 +5,46 @@ import { Identity } from "@commonfabric/identity";
 import { getServerExecutionConfig } from "@commonfabric/memory/v2";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { type ActiveLogLevel, getLogger } from "@commonfabric/utils/logger";
 import { withEnv } from "./utils.ts";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures");
+
+/** The logger a served fetch logs through, counted though never printed. */
+const servedFetchLogger = getLogger("cf-test-served-fetch", { enabled: false });
+
+/**
+ * Runs the `served-logger` fixture on the server-execution arm with the
+ * process's `fetch` replaced by one that logs at `level` and answers the
+ * fixture's request. The fixture's fetch is the serving loop's alone, so what
+ * that logs is the loop's.
+ */
+async function runServedFetch(
+  level: ActiveLogLevel,
+): Promise<Awaited<ReturnType<typeof runTests>>> {
+  const root = resolve(FIXTURES, "served-logger");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = () => {
+    servedFetchLogger[level]("served-fetch", "the served fetch logged");
+    return Promise.resolve(
+      new Response('{"v":7}', {
+        headers: { "content-type": "application/json" },
+      }),
+    );
+  };
+  try {
+    let outcome: Awaited<ReturnType<typeof runTests>> | undefined;
+    await withEnv("EXPERIMENTAL_SERVER_EXECUTION", "true", async () => {
+      outcome = await runTests(resolve(root, "served-fetch.test.tsx"), {
+        root,
+      });
+    });
+    return outcome!;
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
 
 describe(
   "cf test with server execution on",
@@ -72,6 +108,25 @@ describe(
       });
       expect(outcome?.results[0].runtimeErrors).toStrictEqual([
         "Error: the handler threw",
+      ]);
+    });
+
+    it("reports a serving-loop logger warning apart from the test's own, and passes", async () => {
+      const outcome = await runServedFetch("warn");
+      expect(outcome.passed).toBe(1);
+      expect(outcome.failed).toBe(0);
+      expect(outcome.results[0].consoleWarnings).toStrictEqual([]);
+      expect(outcome.results[0].servedWarnings).toStrictEqual([
+        "[served] [logger:cf-test-served-fetch] 1 warning(s) (key: served-fetch)",
+      ]);
+    });
+
+    it("fails on a serving-loop logger error, marked as served", async () => {
+      const outcome = await runServedFetch("error");
+      expect(outcome.passed).toBe(1);
+      expect(outcome.failed).toBe(1);
+      expect(outcome.results[0].consoleErrors).toStrictEqual([
+        "[served] [logger:cf-test-served-fetch] 1 error(s) (key: served-fetch)",
       ]);
     });
 

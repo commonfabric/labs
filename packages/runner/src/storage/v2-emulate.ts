@@ -3,6 +3,7 @@ import type { MemoryProtocolFlags } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { servingContextLoopback } from "../executor/serving-context.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import { type Options, type SessionFactory, StorageManager } from "./v2.ts";
 
@@ -55,7 +56,9 @@ class EmulatedSessionFactory implements SessionFactory {
     signer?: Signer,
     mountOptions: MemoryV2Client.MountOptions = {},
   ) {
-    const transport = MemoryV2Client.loopback(this.#getServer());
+    // A client session's frames are no serving loop's work, whichever
+    // session's request caused them.
+    const transport = servingContextLoopback(this.#getServer(), false);
     const client = await MemoryV2Client.connect({ transport });
     const session = await client.mount(
       space,

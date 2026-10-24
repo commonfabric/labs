@@ -542,14 +542,21 @@ batch head H once a settle's frame barrier has completed with every frame
 at or below H applied — the moment at which an idle scheduler would have
 ended the settle — and carries H across cycles until W covers it,
 lowering it to a later cycle's batch head when that drain holds a record
-back. Any later moment at which the scheduler is idle, the
-demanded-structure load the settle awaits has completed, and no re-armed
-root is pending proves H covered: everything the scheduler ran after the
-barrier, it ran to completion. The proof is clamped by the shadow floor,
-the event-visibility floor and the re-armed roots' floor read at that
-moment, as the quiescent advance is. A floor read then may lift before
-the cycle ends, over input the proof never saw applied, so the floors
-read at the cycle's end do not replace it. The advance is clamped again
+back. Any later moment at which the scheduler is idle and the
+demanded-structure load the settle awaits has completed proves H covered:
+everything the scheduler ran after the barrier, it ran to completion. The
+proof is clamped by the shadow floor, the event-visibility floor and the
+re-armed roots' floor read at that moment, as the quiescent advance is. A
+root an input re-armed holds the proof below that input until its retry
+starts, and no lower: input that re-arms a root at every barrier does not
+keep the inputs below it from being proven. The retry starts at the first
+frame barrier a settle completes after the re-arm, on either side of
+T_flush, since frame application is all it waits for. A retry that starts
+as its settle ends at T_flush outlives that settle; the next cycle joins
+it, and runs for it even with no input behind it. A floor read with the
+proof may lift before the cycle ends, over input the proof never saw
+applied, so the floors read at the cycle's end do not replace it. The
+advance is clamped again
 by the cycle's own batch head and those floors at its end. An exhausted cycle advances W to the highest head
 proved before its wave closed, sealing the advance into that wave as any
 other. A wave commit that aborts discards the carried H
@@ -1203,6 +1210,20 @@ the 2026-08-24 ruling; the owner may re-rule it).
   is what covers the gap, and its pure-derivation arm says how.
 - Failure isolation is per action: an aborted tx discards only its own
   writes; the wave keeps the rest.
+- A derivation run that read the value of a document its runtime refuses
+  by construction (protocol.md §2's foreign scoped read refusal) aborts
+  its tx rather than sealing it. What it derived came from an absence
+  that is not the document's state, and sealing it would overwrite the
+  instance a runtime that can read the document derives. The refusal is
+  the same on every run, so the abort takes no retry; the run's reads stay
+  subscribed, and a change to any other input runs it again.
+- A derivation run that read, through a link, an absent user- or
+  session-scoped instance of a document another derivation registered in
+  this runtime declares as a write (a builtin's stores included) aborts its
+  tx the same way: the serving loop has not produced that instance yet, so
+  the absence is not its state (speculation.md §2's serving-runtime
+  corollary to the scoped first-write carve-out). Its read of the instance
+  stays subscribed, so it runs again once the instance is produced.
 - On a client (OFF arm, and speculation in the ON arm) seal == commit /
   overlay-apply as today — one abstraction, two destinations. Anchor:
   `packages/runner/src/storage/extended-storage-transaction.ts`.
@@ -1263,6 +1284,47 @@ classes:
   arm rebases or requeues rather than dropping, and requeueing against
   a seq the replica has not caught up to yet is the sustained-traffic
   livelock this section forbids.
+
+**A consequence write the firing session overwrote is SUPERSEDED.** An
+event's consequence takes effect at the event's place in the order of
+the session that fired it, wherever its commit lands. That session
+committed the event and rendered the handler's speculative echo
+(speculation.md), so whatever it wrote afterward it wrote over that
+echo. Before the CAS above, each write of an `event-handler` contribution
+delivering a durable entry is checked against the authored commits of
+the entry's firing session — the `firedAt` user and session the run acts
+as — after the entry's seq. A patch at or below a path one of those
+commits overwrote is DROPPED from the consequence, and so is a whole-doc
+`set` or `delete` that one of them rewrote whole. A commit overwrites a
+path with a `set` or `delete` (the root) or with a `replace`, `add` or
+`remove` patch; a write that merges into existing content (`append`,
+`splice`, `increment`, and the like) overwrites nothing. The rule holds
+wherever the session's write fell: before the wave's basis, which is
+where a requeued or late-drained handler finds it, or mid-wave, where the
+overlap would otherwise requeue the event and the requeued run would
+write over it again. The event still completes: its other writes, its
+consequence mark and its watermark advance ride the wave commit, and
+`consequenceOf` names it, so a wave whose consequence lost every domain
+write still commits that entry's consequence, and an entry held behind
+it (events.md §5) re-drains at that wave as it would behind any other
+consequence. The patches it keeps on a doc go through this
+class's CAS without the dropped ones. The store ends where applying the
+dropped writes at the event's position and the session's writes on top
+would have left it, and nothing can have read a dropped value in
+between, since it would have committed after the write that overwrites
+it. Whatever in the wave read a doc the consequence lost writes on folds
+into the withdrawal closure, as a reader of a superseded derivation
+write does.
+
+Two cases keep commit order. Both are OPEN, awaiting @seefeldb's
+ruling:
+
+- a later write of ANOTHER session, which is concurrent with the event
+  rather than after it in any one session's order;
+- a consequence write to a path ABOVE the one the firing session
+  overwrote — a whole-object replace against the session's write to one
+  field — where superseding would take a value merge. It keeps the
+  rebase-or-requeue arm above.
 
 An event-delivery processing checkpoint is an internal
 `bookkeeping`-stamped write. A terminal error, drop, or
@@ -1785,8 +1847,8 @@ pushGrowthWakes, watchWakes, warmWakes}, settle:
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
 visibilityDeferrals, deferredRescansArmed, deferredRescansFired,
 lt1LeftoversPurged, lt1LateSealsRefused, orphanDeliveriesRefused,
-handlerNotRunDeferrals, loadParkDeferrals, loadParkFailures,
-deliveryDeferralsActive, deliveryFailuresActive,
+handlerNotRunDeferrals, arrivalHeldDeferrals, loadParkDeferrals,
+loadParkFailures, deliveryDeferralsActive, deliveryFailuresActive,
 maxAccumulatedDeliveryFailureMs, deliveryFailureWakesArmed,
 deliveryFailureWakesFired, needsAttention: {total, byPhase},
 needsAttentionSealFailures, deliveryCheckpointWriteFailures, explicitRetries,
@@ -1998,6 +2060,11 @@ The `events` block's DISPOSITION counters:
   withdrawal or a piece-start deferral (events.md §5: every deferral
   arm carries §2's barrier); `loadParkFailures` counts only heads
   whose required load actually failed.
+- `arrivalHeldDeferrals` counts the drain deferrals that spent none of
+  the deferral budget because an earlier arrival in the space was still
+  pending (events.md §5). Growing while `processed` does not, it names
+  an earlier event that is not completing and the events held behind
+  it.
 - `deliveryDeferralsActive`, `deliveryFailuresActive`, and
   `maxAccumulatedDeliveryFailureMs` expose the current durable
   checkpoint population without treating settlement as failure.

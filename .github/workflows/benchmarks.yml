@@ -6,8 +6,8 @@ name: Benchmarks
 # cadence. Scheduled runs stay on the dedicated runner group; use the manual
 # trigger to measure a specific commit.
 #
-# One of the benchmarks drives a browser against a running toolshed; the steps
-# that build and start that server are part of this job for its sake. See
+# The browser benchmarks drive a browser against a running toolshed; the steps
+# that build and start that server are part of this job for their sake. See
 # docs/development/BENCHMARKS.md.
 #
 # The group is not a machine. It has served six processor models over a
@@ -106,6 +106,10 @@ jobs:
             packages/patterns/integration/topic-board-scale.bench.ts \
             packages/patterns/integration/lunch-poll-vote-burst.bench.ts \
             packages/patterns/integration/lunch-poll-read-scale.bench.ts \
+            packages/patterns/integration/fabrichat-room.bench.ts \
+            packages/patterns/integration/fabrichat-room-scale.bench.ts \
+            packages/patterns/integration/fabrichat-send-burst.bench.ts \
+            packages/patterns/integration/piece-grid-stopped.bench.ts \
             > bench-results/results.json \
             2> >(tee bench-results/diagnostics.log >&2)
 

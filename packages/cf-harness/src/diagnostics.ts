@@ -124,6 +124,7 @@ export type HarnessFailureKind =
   | "not_a_file"
   | "permission_denied"
   | "tool_not_allowed"
+  | "subagent_profile_not_allowed"
   | "invalid_tool_call"
   | "workspace_path_confusion"
   | "timeout"
@@ -567,10 +568,11 @@ export const createHarnessFailureRecord = (
 
 export const classifyHarnessPolicyEventFailure = (
   event: HarnessPolicyEvent,
+  kind: HarnessFailureKind = "tool_not_allowed",
 ): HarnessFailureRecord | undefined =>
   event.severity === "denied"
     ? createHarnessFailureRecord({
-      kind: "tool_not_allowed",
+      kind,
       source: "policy_event",
       detail: event.detail,
       at: event.at,
@@ -989,7 +991,17 @@ export const classifyHarnessRunError = (
   });
 };
 
-const FAILURE_PRIORITY: Record<HarnessFailureKind, number> = {
+/**
+ * A delegation to a profile outside the run's grant: the model reads the
+ * refusal and the run goes on, so it is recorded but never the run's primary
+ * failure.
+ */
+type NeverPrimaryFailureKind = "subagent_profile_not_allowed";
+
+const FAILURE_PRIORITY: Record<
+  Exclude<HarnessFailureKind, NeverPrimaryFailureKind>,
+  number
+> = {
   tool_not_allowed: 60,
   timeout: 50,
   workspace_path_confusion: 40,
@@ -1006,11 +1018,22 @@ const FAILURE_PRIORITY: Record<HarnessFailureKind, number> = {
   unknown: 0,
 };
 
+const mayBePrimary = (
+  failure: HarnessFailureRecord,
+): failure is HarnessFailureRecord & {
+  kind: Exclude<HarnessFailureKind, NeverPrimaryFailureKind>;
+} => failure.kind !== "subagent_profile_not_allowed";
+
 export const selectPrimaryHarnessFailure = (
   failures: readonly HarnessFailureRecord[],
 ): HarnessFailureRecord | undefined => {
-  let best: HarnessFailureRecord | undefined;
+  let best:
+    | HarnessFailureRecord & {
+      kind: Exclude<HarnessFailureKind, NeverPrimaryFailureKind>;
+    }
+    | undefined;
   for (const failure of failures) {
+    if (!mayBePrimary(failure)) continue;
     if (
       best === undefined ||
       FAILURE_PRIORITY[failure.kind] > FAILURE_PRIORITY[best.kind]

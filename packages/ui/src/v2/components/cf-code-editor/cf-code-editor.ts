@@ -93,6 +93,10 @@ import {
   MentionableArraySchema,
   MentionableSchema,
 } from "../../core/mentionable.ts";
+import {
+  type PresenceFailureCategory,
+  presenceFailureCategory,
+} from "../../core/presence-failure.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 import {
   type CFTheme,
@@ -144,8 +148,6 @@ import {
   CARET_FACET,
   caretFacetOf,
   participantFromRecord,
-  type PresenceFailureCategory,
-  presenceFailureCategory,
 } from "./presence-facets.ts";
 
 /** A unique noteId, so notes created from a mention do not collide. */
@@ -415,8 +417,10 @@ export class CFCodeEditor extends BaseElement {
    * The nearest `<cf-theme>`'s theme. Its color scheme tells CodeMirror
    * whether it sits on a dark page, so the caret, selection, tooltips and
    * panels CodeMirror draws itself stay legible on the surface the
-   * `--cf-theme-*` tokens paint. With no `<cf-theme>` above, those tokens
-   * fall back to their light values, and so does this.
+   * `--cf-theme-*` tokens paint. With no `<cf-theme>` above, the tokens are
+   * whatever a host sets by CSS, else their light values, and this stays
+   * light either way: with the editor's `theme` not `"dark"`, CodeMirror's own
+   * chrome is light on a dark host that does not use `<cf-theme>`.
    */
   @consume({ context: cfThemeContext, subscribe: true })
   @property({ attribute: false })
@@ -1935,11 +1939,10 @@ export class CFCodeEditor extends BaseElement {
 
   private _updateEditorFromCellValue(): void {
     if (!this._editorView) return;
-    // While an operation field is active, its integrated stream is the editor
-    // authority. The ordinary Cell subscription still updates the bound value,
-    // but feeding that materialized echo back into CodeMirror would discard its
-    // unconfirmed local OT state.
-    if (this._collaboration?.active) return;
+    // The controller owns the view through the handoff to the ordinary Cell.
+    // Its confirmed operations can arrive ahead of that Cell's materialized
+    // echo, including while the stopped controller awaits a fresh Cell read.
+    if (this._collaboration !== undefined) return;
 
     const newValue = this.getValue();
     // Guard against undefined - can happen when cell isn't bound yet
@@ -2102,6 +2105,12 @@ export class CFCodeEditor extends BaseElement {
       });
       try {
         await previous.stop();
+        if (generation !== this._collaborationGeneration) return;
+        if (!this.collaborative) {
+          // Refresh the materialized channel before it takes over from the
+          // confirmed operation stream. Keep the view read-only until it lands.
+          await this._cellController.getCell()?.pull();
+        }
       } catch (cause) {
         if (generation !== this._collaborationGeneration) return;
         if (this._collaboration === previous) {
@@ -2208,12 +2217,14 @@ export class CFCodeEditor extends BaseElement {
         this._collaboration !== controller
       ) return;
       controller.dispose();
+      this._collaboration = undefined;
       const error = cause instanceof Error ? cause : new Error(String(cause));
       this._collaborationFailed = true;
       this._cleanupPresence();
       view.dispatch({
         effects: this._readonly.reconfigure(EditorState.readOnly.of(true)),
       });
+      this._updateEditorFromCellValue();
       this.emit("cf-error", { error, message: error.message });
     }
   }
@@ -2699,7 +2710,9 @@ export class CFCodeEditor extends BaseElement {
       this._editorView.dispatch({
         effects: this._readonly.reconfigure(
           EditorState.readOnly.of(
-            this.readonly || this._collaborationFailed,
+            this.readonly || this._collaborationFailed ||
+              (this._collaboration !== undefined &&
+                !this._collaboration.active),
           ),
         ),
       });

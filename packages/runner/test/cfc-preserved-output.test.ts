@@ -169,4 +169,74 @@ describe("protected runtime output preservation", () => {
     expect(readStoredCfcMetadata(inspect, output)).toEqual(stored);
     inspect.abort();
   });
+
+  describe("under a UI contract at the output's root", () => {
+    // The trusted event a UI contract asks of a write to its field is
+    // deferred, as `writeAuthorizedBy` is, for a preserved output, and
+    // discharged only by the whole envelope staying as it was.
+
+    const uiSchema = {
+      type: "string",
+      ifc: { uiContract: { helper: "UiAction", action: "TrustedSave" } },
+    } as const satisfies JSONSchema;
+    let uiOutput: NormalizedFullLink;
+
+    beforeEach(async () => {
+      const setup = runtime.edit();
+      const backing = runtime.getCell(owner.did(), "ui backing", {
+        ...uiSchema,
+        default: "saved title",
+      }, setup);
+      const result = runtime.getCell(owner.did(), "ui output", uiSchema, setup);
+      result.set(backing);
+      uiOutput = result.getAsNormalizedFullLink();
+      runtime.prepareTxForCommit(setup);
+      expect((await setup.commit().settled).error).toBeUndefined();
+    });
+
+    function sendUiOutput(tx: IExtendedStorageTransaction, generated = true) {
+      const backing = runtime.getCell(owner.did(), "ui backing", {
+        ...uiSchema,
+        default: "unused default",
+      }, tx);
+      tx.recordCfcWritePolicyInput({
+        kind: "schema",
+        target: uiOutput,
+        schema: uiSchema,
+        schemaRole: "output",
+      });
+      diffAndUpdate(
+        runtime,
+        tx,
+        uiOutput,
+        backing,
+        undefined,
+        generated ? { schemaRole: "output" } : undefined,
+      );
+    }
+
+    it("preserves the existing reference and full envelope", async () => {
+      const tx = runtime.edit();
+      const value = tx.readValueOrThrow(uiOutput);
+      const metadata = readStoredCfcMetadata(tx, uiOutput);
+      expect(metadata).toBeDefined();
+      sendUiOutput(tx);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const inspect = runtime.edit();
+      expect(inspect.readValueOrThrow(uiOutput)).toEqual(value);
+      expect(readStoredCfcMetadata(inspect, uiOutput)).toEqual(metadata);
+      inspect.abort();
+    });
+
+    it("refuses an ordinary same-reference attempt beside runtime reuse, for want of the trusted event", async () => {
+      const tx = runtime.edit();
+      sendUiOutput(tx, false);
+      sendUiOutput(tx);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error?.message).toContain(
+        "missing trusted-event policy input",
+      );
+    });
+  });
 });

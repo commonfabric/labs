@@ -10,7 +10,6 @@ import {
   resetModernCellRepConfig,
   setModernCellRepConfig,
 } from "@commonfabric/data-model/cell-rep";
-import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { legacySpaceDid } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
@@ -52,6 +51,7 @@ import type {
   Schema,
 } from "./builder/types.ts";
 import { registerBuiltins } from "./builtins/index.ts";
+import type { Cancel } from "./cancel.ts";
 import {
   type Cell,
   createCell,
@@ -106,9 +106,11 @@ import {
   runtimeWritePolicyAuthorization,
   runtimeWritePolicyAuthorized,
 } from "./cfc/types.ts";
+import { isRendererTrustedEvent } from "./cfc/ui-contract.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
 import { memoryHostForForeignOrigin } from "./deployment-meta.ts";
+import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
 import {
   type DelegatedCarriage,
   waveRunActorOf,
@@ -117,11 +119,16 @@ import {
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
+import {
+  immutableCellsFor,
+  liveImmutableSnapshotCount,
+  liveImmutableSnapshotsBySpace,
+  ownImmutableCells,
+} from "./immutable-cell.ts";
 import type { ConsoleMessage } from "./interface.ts";
 import { addressKey } from "./link-types.ts";
 import {
   CellLink,
-  inlineExternalSchemaRefsInValue,
   isCellLink,
   isNormalizedFullLink,
   isSigilLink,
@@ -129,6 +136,10 @@ import {
   NormalizedLink,
   parseLink,
 } from "./link-utils.ts";
+import {
+  ModuleDelegationRegistry,
+  type ModuleDelegationSnapshot,
+} from "./module-delegations.ts";
 import { ModuleRegistry } from "./module.ts";
 import type { PatternCoverageCollector } from "./pattern-coverage.ts";
 import {
@@ -151,6 +162,11 @@ import {
   type RunSyncedWithCommitOptions,
 } from "./runner.ts";
 import { brandRuntime } from "./runtime-brand.ts";
+import {
+  boundedCounts,
+  CfcRejectionTally,
+  type RuntimeSizes,
+} from "./runtime-sizes.ts";
 import { Action, Scheduler } from "./scheduler.ts";
 import {
   type CommitBackpressurePolicy,
@@ -261,6 +277,12 @@ const uiCellWriteLogger = getLogger("runtime.ui-cell-write", {
   level: "error",
 });
 
+// Release passes that failed; see `Runtime.#requestDocumentRelease()`.
+const documentReleaseLogger = getLogger("runtime.document-release", {
+  enabled: true,
+  level: "warn",
+});
+
 export type { IExtendedStorageTransaction, MemorySpace };
 
 export interface ConsoleHandlerOutput {
@@ -354,7 +376,7 @@ export interface ExperimentalOptions {
    * reader that touches data the schema no longer describes refuses, and the
    * run is disposed of as an argument that did not resolve. On by default; pass
    * `false` as a temporary rollback override. See
-   * `docs/plans/lazy-cell-materialization.md`.
+   * `docs/history/plans/lazy-cell-materialization.md`.
    */
   lazyMaterialization?: boolean | undefined;
 
@@ -380,6 +402,13 @@ export interface ExperimentalOptions {
    * unlike v1's SERVER_PRIMARY_EXECUTION so archived docs never alias it.
    */
   serverExecution?: boolean | undefined;
+
+  /**
+   * Keep session documents in the owning client's replica when server
+   * execution is disabled. Defaults to off. Shared reads still require
+   * server validation, including transactions whose writes are all local.
+   */
+  localSessionDocuments?: boolean | undefined;
 
   /**
    * The `agent` builtin (`docs/common/capabilities/agent.md`): a pattern's
@@ -408,6 +437,33 @@ export interface ExperimentalOptions {
    * flag. Defaults to off.
    */
   sharedMemoryConnection?: boolean | undefined;
+
+  /**
+   * A reactive computation's write that the space refuses for lack of a
+   * grant is kept as a local fold over the document's confirmed value
+   * (`docs/specs/memory-v2/03-commit-model.md` §3.8.3), where the write sits
+   * directly on the confirmed value it was made over, so that the re-run the
+   * refusal causes reads what the principal computed and settles; a write
+   * over anything else reverts. When false, such a write is reverted like
+   * any other rejection, a refusal the server marks with permanent evidence
+   * takes no retry, and the computation runs again only when an input it did
+   * not write changes. Defaults to off.
+   */
+  localFold?: boolean | undefined;
+
+  /**
+   * Compile a pattern factory call bound to a `const` as a named sub-pattern
+   * instance, whose identity is the binding's name rather than its position
+   * among its parent's anonymous roots
+   * (`docs/specs/computed-cell-identity.md`, "Sub-pattern instance identity").
+   * Defaults to off, which compiles every instance positionally. Turning it on
+   * moves every deployed `const`-bound child from its positional identity to a
+   * named one, where it starts fresh unless something carries the deployed
+   * child over, and needs every runtime that opens the same space to run the
+   * same naming mode first, so no environment variable reaches it
+   * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`).
+   */
+  instanceNames?: boolean | undefined;
 }
 
 /**
@@ -974,6 +1030,21 @@ export interface CfcRuntimeStats {
   /** Containers receiving child templates from flow persistence. */
   flowTemplateContainers: number;
 
+  /**
+   * Input-requirement verifications for which a boundary pass copied the
+   * transaction's reads. A written target takes one verification per schema
+   * that applies to it, so this counts verifications, not targets. It counts
+   * the copy of the reads alone: resolving the stored envelopes again after a
+   * write retires one is not counted.
+   */
+  inputReadViewsBuilt: number;
+
+  /**
+   * Input-requirement verifications that reused the copy of the reads a
+   * boundary pass already held.
+   */
+  inputReadViewsReused: number;
+
   cfcPreparedTx: number;
   cfcPrepareRejects: number;
   cfcDigestInvalidations: number;
@@ -1028,6 +1099,8 @@ const initialCfcRuntimeStats = (): CfcRuntimeStats => ({
   stagedReferenceCacheHits: 0,
   flowTemplateEntriesMinted: 0,
   flowTemplateContainers: 0,
+  inputReadViewsBuilt: 0,
+  inputReadViewsReused: 0,
   cfcPreparedTx: 0,
   cfcPrepareRejects: 0,
   cfcDigestInvalidations: 0,
@@ -1275,8 +1348,15 @@ export type CommitRetryPullFailure = {
  */
 export class Runtime {
   #tearingDownWrites = false;
+
+  /** The release pass waiting for the scheduler to go idle, if any. */
+  #documentRelease: Promise<void> | undefined;
+
+  /** Undoes what `#installDocumentRelease()` registered. */
+  readonly #documentReleaseCancels: Cancel[] = [];
   readonly #writeTeardown = new AbortController();
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
+  readonly #derivedInternalCellIds = new DerivedInternalCellIds();
 
   readonly id: string;
   readonly scheduler: Scheduler;
@@ -1473,6 +1553,11 @@ export class Runtime {
     return this.storageManager.scopeKeyIdentity();
   }
 
+  /** The ids of the derived internal cells this runtime's pieces own. */
+  get derivedInternalCellIds(): DerivedInternalCellIds {
+    return this.#derivedInternalCellIds;
+  }
+
   /**
    * Fires once this runtime stops minting write work, at the point in
    * `dispose()` where retries would otherwise re-run against a storage that
@@ -1509,6 +1594,11 @@ export class Runtime {
   #queues = new Map<string, AsyncSemaphoreQueue>();
   #writeDebugContext = new WriteDebugContextStorage<string>();
   #cfcStats: CfcRuntimeStats = initialCfcRuntimeStats();
+  readonly #cfcRejections = new CfcRejectionTally();
+
+  /** `editWithRetry()` calls whose commit was rejected and that are waiting
+   * to attempt again. */
+  #retryingEdits = 0;
 
   /**
    * The hooks every transaction `edit()` opens reports its CFC work through.
@@ -1524,41 +1614,28 @@ export class Runtime {
   readonly #policyManifestSpaces = new Map<string, Set<MemorySpace>>();
 
   /**
-   * Attesting space → successor module identity → direct predecessor identities
-   * whose writer authority it inherits. Entries come only from verified source
-   * closures or integrity-valid compiled closures in that same space.
-   * Transactions receive a transitive, immutable snapshot at creation so an
-   * in-flight authorization decision cannot change when another module loads,
-   * and authorization in one space can never borrow another space's delegation
-   * metadata.
+   * The writer-authority delegations this runtime has learned from verified
+   * source closures and integrity-valid compiled closures, by attesting
+   * space. `edit()` hands every transaction the registry's published
+   * transitive snapshot, so an in-flight authorization decision cannot
+   * change when another module loads, and authorization in one space can
+   * never borrow another space's delegation metadata.
    */
-  readonly #moduleDelegations = new Map<
-    MemorySpace,
-    Map<string, Set<string>>
-  >();
+  readonly #moduleDelegations = new ModuleDelegationRegistry();
 
+  /**
+   * Records that, in `space`, each successor identity in `delegations`
+   * inherits the writer authority of its predecessors. A registration that
+   * adds nothing leaves the published snapshot as it was; one that adds a
+   * delegation publishes a new snapshot, which the transactions created from
+   * then on receive, and leaves every transaction already open with the one
+   * it was created with.
+   */
   registerModuleDelegations(
     space: MemorySpace,
     delegations: ReadonlyMap<string, ReadonlySet<string>>,
   ): void {
-    if (typeof space !== "string" || space.length === 0) return;
-    const spaceDelegations = this.#moduleDelegations.get(space) ?? new Map();
-    for (const [identity, predecessors] of delegations) {
-      if (typeof identity !== "string" || identity.length === 0) continue;
-      const merged = spaceDelegations.get(identity) ?? new Set<string>();
-      for (const predecessor of predecessors) {
-        if (
-          typeof predecessor === "string" && predecessor.length > 0 &&
-          predecessor !== identity
-        ) {
-          merged.add(predecessor);
-        }
-      }
-      if (merged.size > 0) spaceDelegations.set(identity, merged);
-    }
-    if (spaceDelegations.size > 0) {
-      this.#moduleDelegations.set(space, spaceDelegations);
-    }
+    this.#moduleDelegations.register(space, delegations);
   }
 
   /**
@@ -1571,69 +1648,25 @@ export class Runtime {
     identity: string,
     predecessor: string,
   ): boolean {
-    const spaceDelegations = this.#moduleDelegations.get(space);
-    if (spaceDelegations === undefined) return false;
-    const visited = new Set<string>();
-    const pending = [...(spaceDelegations.get(identity) ?? [])];
-    while (pending.length > 0) {
-      const next = pending.pop()!;
-      if (next === predecessor) return true;
-      if (visited.has(next)) continue;
-      visited.add(next);
-      for (const ancestor of spaceDelegations.get(next) ?? []) {
-        pending.push(ancestor);
-      }
-    }
-    return false;
+    return this.#moduleDelegations.grants(space, identity, predecessor);
   }
 
-  #moduleDelegationSnapshot(sourceUpdate?: PreparedSourceUpdate): Map<
-    MemorySpace,
-    ReadonlyMap<string, readonly string[]>
-  > {
-    const snapshot = new Map<
-      MemorySpace,
-      ReadonlyMap<string, readonly string[]>
-    >();
-    const delegations = new Map(this.#moduleDelegations);
-    if (sourceUpdate !== undefined) {
-      const proposal = this.patternManager.sourceUpdateDelegations(
-        sourceUpdate,
-      );
-      const combined = new Map(delegations.get(proposal.space));
-      for (const [identity, predecessors] of proposal.delegations) {
-        combined.set(
-          identity,
-          new Set([
-            ...(combined.get(identity) ?? []),
-            ...predecessors,
-          ]),
-        );
-      }
-      delegations.set(proposal.space, combined);
-    }
-    for (const [space, spaceDelegations] of delegations) {
-      const spaceSnapshot = new Map<string, readonly string[]>();
-      for (const identity of spaceDelegations.keys()) {
-        const inherited = new Set<string>();
-        const pending = [...(spaceDelegations.get(identity) ?? [])];
-        while (pending.length > 0) {
-          const predecessor = pending.pop()!;
-          if (predecessor === identity || inherited.has(predecessor)) continue;
-          inherited.add(predecessor);
-          for (const ancestor of spaceDelegations.get(predecessor) ?? []) {
-            pending.push(ancestor);
-          }
-        }
-        if (inherited.size > 0) {
-          spaceSnapshot.set(identity, [...inherited].sort());
-        }
-      }
-      if (spaceSnapshot.size > 0) {
-        snapshot.set(space, spaceSnapshot);
-      }
-    }
-    return snapshot;
+  /**
+   * Helper for `edit()`, which picks the delegation snapshot a transaction
+   * is pinned to: the published one, or, for a transaction staging the
+   * source update `sourceUpdate`, that update's proposed delegations layered
+   * over it for the update's space alone, so the transaction can authorize
+   * the successor's writes before the update commits.
+   */
+  #moduleDelegationSnapshot(
+    sourceUpdate: PreparedSourceUpdate | undefined,
+  ): ModuleDelegationSnapshot {
+    if (sourceUpdate === undefined) return this.#moduleDelegations.snapshot;
+    const proposal = this.patternManager.sourceUpdateDelegations(sourceUpdate);
+    return this.#moduleDelegations.snapshotWith(
+      proposal.space,
+      proposal.delegations,
+    );
   }
 
   registerCfcPolicyManifests(
@@ -1844,6 +1877,7 @@ export class Runtime {
   }
 
   constructor(options: RuntimeOptions) {
+    ownImmutableCells(this);
     brandRuntime(this);
 
     // Validate-then-apply: option combinations are refused BEFORE any
@@ -1899,11 +1933,17 @@ export class Runtime {
 
     // These flags are consumed from this Runtime instance. Normalize their
     // local defaults after override logging so an omitted option does not
-    // appear as an explicit `true` override.
+    // appear as an explicit override.
     this.experimental.computedCellIds ??= true;
     this.experimental.plainResultReceipts ??= true;
     this.experimental.lazyMaterialization ??= true;
     this.experimental.agentBuiltin ??= true;
+    this.experimental.localFold ??= false;
+    // TODO(danfuzz): Turn this on only once a deployed parent's positional
+    // children are carried over to their names, and a runtime whose naming
+    // mode differs from a space's data is kept away from that space.
+    this.experimental.instanceNames ??= false;
+    this.experimental.localSessionDocuments ??= false;
 
     // Propagate experimental flags to their ambient control points, then read
     // back the effective state so `experimental.*` reflects what is actually in
@@ -2012,6 +2052,10 @@ export class Runtime {
       });
 
       this.storageManager = options.storageManager;
+      this.storageManager.setLocalSessionDocuments?.(
+        this.experimental.localSessionDocuments === true &&
+          this.experimental.serverExecution !== true,
+      );
       // Hand the storage layer the telemetry bus so it can emit the
       // storage.push/pull markers (duck-typed: only the v2 StorageManager
       // implements it; emulated/test managers simply don't have the method).
@@ -2119,6 +2163,8 @@ export class Runtime {
         options.errorHandlers,
       );
 
+      this.#installDocumentRelease();
+
       // Register built-in modules with runtime injection
       registerBuiltins(this);
 
@@ -2177,6 +2223,7 @@ export class Runtime {
       this.#defaultFrame = pushRuntimeDefaultFrame(this);
     } catch (error) {
       this.#releaseServerExecutionEnabler();
+      immutableCellsFor(this).dispose();
       throw error;
     }
   }
@@ -2477,6 +2524,7 @@ export class Runtime {
       // Exception-safe: a rejecting teardown step must not leak the
       // process-global enabler (the reset would then never fire).
       this.#releaseServerExecutionEnabler();
+      immutableCellsFor(this).dispose();
     }
 
     // Clear the current runtime reference
@@ -2484,7 +2532,15 @@ export class Runtime {
   }
 
   async #disposeInner(closeStorage: boolean): Promise<void> {
+    for (const cancel of this.#documentReleaseCancels.splice(0)) cancel();
     this.#viewReplication?.dispose();
+    // Before either drain below, each of which waits for the scheduler to go
+    // idle: a queued event waiting for its piece to become startable waits on
+    // another participant's commit, not on work of this runtime's own, and one
+    // waiting for its piece's pattern change can wait on a load that only
+    // `stopAll()` below would release.
+    this.scheduler.endPieceStartWaits();
+    this.scheduler.endPatternChangeWaits();
     try {
       // A kept store keeps RECORDING, so this path drains what could still write
       // into it. In-flight async builtin work is that shape: a fetch / llm call or
@@ -2661,6 +2717,7 @@ export class Runtime {
     const wrapped = new ExtendedStorageTransaction(
       tx,
       this.#cfcInstrumentation,
+      immutableCellsFor(this),
     );
     wrapped.setCfcEnforcementMode(this.cfcEnforcementMode);
     wrapped.setCfcFlowLabelsMode(this.cfcFlowLabels);
@@ -2676,6 +2733,9 @@ export class Runtime {
     wrapped.setCfcTrustConfig(this.cfcTrustConfig);
     wrapped.setCfcServingIdentity(
       this.servingPosture ? this.userIdentityDID : undefined,
+    );
+    wrapped.setCfcClientIdentity(
+      this.servingPosture ? undefined : this.userIdentityDID,
     );
     wrapped.setCfcModuleDelegations(
       this.#moduleDelegationSnapshot(options.sourceUpdate),
@@ -2760,6 +2820,9 @@ export class Runtime {
           refusals: [...refusal.refusals],
           terminal: refusal.terminal,
         });
+      },
+      onCommitRejected: (reasons) => {
+        this.#cfcRejections.add(reasons);
       },
       onDigestInvalidation: () => {
         this.#cfcStats.cfcDigestInvalidations += 1;
@@ -3062,6 +3125,65 @@ export class Runtime {
   #missingDocLoadKicks = new Set<string>();
 
   /**
+   * Lets the storage manager release the documents nothing reads (see
+   * `releaseUnreadDocuments()`): it asks the scheduler whether an action
+   * reads a document, and forgets a load kicked for a document it drops, so
+   * that a later read of it kicks the load again.
+   */
+  #installDocumentRelease(): void {
+    const manager = this.storageManager;
+    const cancels = [
+      manager.addDocumentReader?.((address) =>
+        this.scheduler.readsEntity(
+          entityKey(
+            { ...address, scope: normalizeCellScope(address.scope) },
+            this.scopeKeyIdentity,
+          ),
+        )
+      ),
+      manager.subscribeDocumentsDropped?.((space, addresses) => {
+        for (const address of addresses) {
+          this.#missingDocLoadKicks.delete(
+            `${space}\0${
+              address.scopeKey ??
+                resolveScopeKey(address.scope, this.scopeKeyIdentity)
+            }\0${address.id}`,
+          );
+        }
+      }),
+    ];
+    for (const cancel of cancels) {
+      if (cancel !== undefined) this.#documentReleaseCancels.push(cancel);
+    }
+  }
+
+  /**
+   * Releases the documents nothing reads, once the scheduler is next idle
+   * (`IStorageManager.releaseUnreadDocuments()`), and resolves when that
+   * pass has run. Stopping a piece asks for one. A host asks for one when
+   * something that read documents through this runtime has gone, such as a
+   * client whose subscriptions it cancelled. Calls made while a pass waits
+   * for the scheduler share it.
+   */
+  releaseUnreadDocuments(): Promise<void> {
+    this.#documentRelease ??= (async () => {
+      try {
+        await this.scheduler.idle();
+      } finally {
+        // A request made from here on asks for a pass of its own.
+        this.#documentRelease = undefined;
+      }
+      await this.storageManager.releaseUnreadDocuments?.();
+    })().catch((error) => {
+      documentReleaseLogger.warn("release-failed", () => [
+        "releasing the documents nothing reads failed:",
+        error,
+      ]);
+    });
+    return this.#documentRelease;
+  }
+
+  /**
    * Asynchronously load a link target that a read found absent from the
    * local replica. Cross-space targets (CT-1667): per-space server queries
    * cannot follow links across space boundaries, so the client must fetch
@@ -3074,7 +3196,8 @@ export class Runtime {
    * `storageManager.synced()` and `Cell.pull()`'s convergence loop can await
    * it; the absent doc is a tracked read, so the reader re-runs on arrival.
    * Deduped per (space, id): the kicked sync leaves a live subscription
-   * behind, so repeat kicks add nothing.
+   * behind, so repeat kicks add nothing until the storage manager drops the
+   * document, which forgets the kick.
    */
   ensureLinkedDocLoaded(
     link: NormalizedFullLink,
@@ -3132,6 +3255,35 @@ export class Runtime {
 
   resetCfcStats(): void {
     this.#cfcStats = initialCfcRuntimeStats();
+  }
+
+  /**
+   * The sizes of the structures this runtime holds live, most read from the
+   * structure's own count and the per-space views from one bounded pass
+   * each, so the read is safe at any moment; `runtime-sizes.ts` says what
+   * each pass costs. A tracked collection that keeps growing shows up here,
+   * and the space whose documents or snapshots grow with it; growth in a
+   * structure not counted here does not. The storage figure is `null` for a
+   * storage manager that reports no sizes.
+   */
+  getSizes(): RuntimeSizes {
+    return {
+      scheduler: this.scheduler.getSizes(),
+      storage: this.storageManager.getSizes?.() ?? null,
+      patterns: this.patternManager.getSizes(),
+      runtime: {
+        immutableSnapshots: liveImmutableSnapshotCount(),
+        pendingAsyncWork: this.#pendingAsyncWork.size,
+        retryingEdits: this.#retryingEdits,
+        modules: this.moduleRegistry.size,
+        policyManifests: this.#policyManifests.size,
+        moduleDelegations: this.#moduleDelegations.getSizes(),
+        immutableSnapshotsBySpace: boundedCounts(
+          liveImmutableSnapshotsBySpace(),
+        ),
+      },
+      cfcRejectionsByReason: this.#cfcRejections.snapshot(),
+    };
   }
 
   getWriteDebugContext(): string | undefined {
@@ -3308,10 +3460,12 @@ export class Runtime {
         if (error) {
           if (signal.aborted) return stoppedResult();
           if (maxRetries > 0 && isRetryableCommitRejection(error)) {
-            await this.awaitCommitRetryReadiness(
-              error,
-              signal,
-            );
+            this.#retryingEdits += 1;
+            try {
+              await this.awaitCommitRetryReadiness(error, signal);
+            } finally {
+              this.#retryingEdits -= 1;
+            }
             if (signal.aborted) return stoppedResult();
             return this.editWithRetry<T>(fn, maxRetries - 1, options);
           } else {
@@ -4215,7 +4369,7 @@ export class Runtime {
 
   /**
    * Makes a read-only cell whose content is `data`, carried entirely in the
-   * cell's own `data:` URI id; there is no document in a space to fetch.
+   * runtime's snapshot store behind a compact URI; there is no stored document to fetch.
    *
    * **Contract note:** `data` is an arbitrary value, deliberately NOT limited
    * to `FabricValue`. Callers pass, among other things, `Cell` objects (wish
@@ -4257,46 +4411,48 @@ export class Runtime {
     tx?: IExtendedStorageTransaction,
     cfcLabelView?: CfcLabelView,
   ): Cell<any> {
-    // Not `dataUriFromValueWithResolvedLinks()`: its link-rewriting walk is
-    // unwanted here (this data is immutable as given).
-    //
-    // Builder artifacts become their encodable form and cells become sigil
-    // links HERE rather than at each caller. Neither has a fabric
-    // representation, so both have to go before the value reaches
-    // `fabricFromConvertibleJsValue()`. This is the designed intake, and the
-    // callers are many: raw and JavaScript node inputs, wish candidates, schema
-    // defaults. Covering them one at a time was tried and is whack-a-mole --
-    // each site that is missed fails as a rejection at the conversion, or worse
-    // as a cleanup error that masks it.
-    //
-    // One walk covers both. A cell is a leaf to it -- what stands in for a cell
-    // is the link it names, not a container to descend into -- and an
-    // artifact's encodable form is walked in turn, so a cell inside one is
-    // reached as well.
-    // No write has stored the links in this data, so `space` holds no
-    // closure for a content-addressed reference among their schemas to name,
-    // and each link carries its schema inline (see
-    // `inlineExternalSchemaRefsInValue()`).
-    const asDataURI = dataUriFromValue(
-      inlineExternalSchemaRefsInValue(
-        fabricFromConvertibleJsValue(
-          flattenBuilderArtifacts(data, { replaceOther: cellAsLink }),
-        ),
+    // Builder artifacts and cells enter through their encodable forms. Frozen
+    // Fabric input remains shared. A link's schema stays in the form the
+    // caller held it: a reference among them names a closure the registry
+    // holds, and a reader of the snapshot resolves it there
+    // (`mintedFromUnstoredValue`). Renderer trust is identity-based
+    // authority, so a marked event is copied before it becomes ordinary
+    // immutable data.
+    const store = immutableCellsFor(this);
+    const readerSchema = internCellLinkSchema(schema);
+    const snapshot = store.create(
+      fabricFromConvertibleJsValue(
+        flattenBuilderArtifacts(data, {
+          isLeaf: isRendererTrustedEvent,
+          replaceOther: (value) =>
+            isRendererTrustedEvent(value)
+              ? deepFreeze(cloneIfNecessary(
+                fabricFromConvertibleJsValue(
+                  flattenBuilderArtifacts(value, {
+                    replaceOther: cellAsLink,
+                  }),
+                ),
+                { frozen: false },
+              ))
+              : cellAsLink(value),
+        }),
       ),
     );
-    return createCell(
+    const cell = createCell(
       this,
       {
         space,
         path: [],
-        id: asDataURI,
-        schema: internCellLinkSchema(schema),
+        id: snapshot.id,
+        schema: readerSchema,
       },
       tx,
       false,
       undefined,
       cfcLabelView,
     );
+    store.retainSchema(readerSchema);
+    return cell;
   }
 
   /**
@@ -4744,6 +4900,15 @@ export class Runtime {
 
   start<T = any>(resultCell: Cell<T>): Promise<boolean> {
     return this.runner.start(resultCell);
+  }
+
+  /**
+   * Starts a piece and waits for the commit of the setup writes of the graph
+   * it instantiates, rejecting when that commit failed; see
+   * `Runner.startWithCommit()`.
+   */
+  startWithCommit<T = any>(resultCell: Cell<T>): Promise<boolean> {
+    return this.runner.startWithCommit(resultCell);
   }
 
   /**

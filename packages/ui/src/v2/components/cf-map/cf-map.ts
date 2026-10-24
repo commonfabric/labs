@@ -31,32 +31,40 @@ import type {
   MapValue,
 } from "./types.ts";
 
+import {
+  clampZoom,
+  DEFAULT_CENTER,
+  DEFAULT_ZOOM,
+  featurePoints,
+  type FitSource,
+  isEmoji,
+  MoveOwnership,
+  PendingMoves,
+  StoredView,
+  validateBounds,
+  validateLatLng,
+  WaitingForSize,
+} from "./view-policy.ts";
+
 import "../cf-render/index.ts";
 
 // Default map configuration
-const DEFAULT_CENTER: LatLng = { lat: 37.7749, lng: -122.4194 }; // San Francisco
-const DEFAULT_ZOOM = 13;
 const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 const TILE_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
-// Valid coordinate and zoom ranges
-const MIN_ZOOM = 0;
-const MAX_ZOOM = 18;
-const MIN_LAT = -90;
-const MAX_LAT = 90;
-const MIN_LNG = -180;
-const MAX_LNG = 180;
-
 // Keyboard navigation constants
 const PAN_AMOUNT = 100; // pixels to pan per arrow key press
 
-// Cached emoji regex for performance (compiled once at module load)
-const EMOJI_REGEX =
-  /[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F600}-\u{1F64F}]|[\u{1F680}-\u{1F6FF}]/u;
-
 // ResizeObserver debounce delay in milliseconds
 const RESIZE_DEBOUNCE_MS = 150;
+
+/**
+ * The inputs through which a person moves the map: a drag, pinch, double
+ * click, box zoom, or zoom-control press starts with a pointer press, a wheel
+ * zoom with a wheel turn, and keyboard pans and zooms with a key press.
+ */
+const USER_INPUT_EVENTS = ["pointerdown", "wheel", "keydown"] as const;
 
 /**
  * CFMap - Interactive map component with markers, circles, and polylines
@@ -71,7 +79,7 @@ const RESIZE_DEBOUNCE_MS = 150;
  * @attr {boolean} interactive - Enable pan/zoom (default: true)
  *
  * @fires cf-click - Map background click with { lat, lng }
- * @fires cf-bounds-change - Viewport change with { bounds, center, zoom }
+ * @fires cf-bounds-change - Viewport change with { bounds, center, zoom, userInitiated }
  * @fires cf-marker-click - Marker click with { marker, index, lat, lng }
  * @fires cf-marker-drag-end - Marker drag end with { marker, index, position, oldPosition }
  * @fires cf-circle-click - Circle click with { circle, index, lat, lng }
@@ -139,15 +147,27 @@ export class CFMap extends BaseElement {
   /** Whether a programmatic update is in progress; this prevents echo loops. */
   private _isUpdatingFromCell = false;
 
+  /** Who owns the map's moves, a person or cf-map. */
+  private _moves = new MoveOwnership();
+
+  /** cf-map's own moves queued behind the move under way. */
+  private _pending = new PendingMoves();
+
+  /** Moves asked for while the map had no size. */
+  private _waitingForSize = new WaitingForSize();
+
+  /** Whether bounds the map is given now are the stored view. */
+  private _storedView = new StoredView();
+
+  /**
+   * Whether `updated()` has run once. On the first update the map was just
+   * created with the bound center and zoom and fitted to any bound bounds, so
+   * applying center and zoom again would only undo the bounds.
+   */
+  private _viewApplied = false;
+
   /** A pending click event deferred during an animation, if any. */
   private _pendingClickEvent: L.LeafletMouseEvent | null = null;
-
-  // Pending updates deferred during animations
-  // These are processed when the map stabilizes (on zoomend)
-  private _pendingCenterUpdate: LatLng | null = null;
-  private _pendingZoomUpdate: number | null = null;
-  private _pendingBoundsUpdate: Bounds | null = null;
-  private _pendingFitToBounds = false;
 
   // Cell controllers for reactive data binding
   // These manage subscriptions automatically via Lit's ReactiveController lifecycle
@@ -190,6 +210,11 @@ export class CFMap extends BaseElement {
   /** Bound keydown handler, held so it can be removed on cleanup. */
   private _boundHandleKeydown = this._handleKeydown.bind(this);
 
+  /** Marks the map's next moves as a person's; see `MoveOwnership`. */
+  private _boundMarkUserInput = (): void => {
+    this._moves.input();
+  };
+
   constructor() {
     super();
     this.fitToBounds = false;
@@ -199,11 +224,24 @@ export class CFMap extends BaseElement {
   override connectedCallback(): void {
     super.connectedCallback();
     this.addEventListener("keydown", this._boundHandleKeydown);
+    // On the host, in the capture phase, so the mark is set before any
+    // handler inside the shadow root, Leaflet's or cf-map's, moves the map.
+    for (const type of USER_INPUT_EVENTS) {
+      this.addEventListener(type, this._boundMarkUserInput, {
+        capture: true,
+        passive: true,
+      });
+    }
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.removeEventListener("keydown", this._boundHandleKeydown);
+    for (const type of USER_INPUT_EVENTS) {
+      this.removeEventListener(type, this._boundMarkUserInput, {
+        capture: true,
+      });
+    }
     this._cleanup();
   }
 
@@ -240,13 +278,13 @@ export class CFMap extends BaseElement {
     // Handle center changes - rebind controller when property changes
     if (changedProperties.has("center")) {
       this._centerController.bind(this.center, latLngSchema);
-      this._updateMapCenter();
+      if (this._viewApplied) this._updateMapCenter();
     }
 
     // Handle zoom changes - rebind controller when property changes
     if (changedProperties.has("zoom")) {
       this._zoomController.bind(this.zoom);
-      this._updateMapZoom();
+      if (this._viewApplied) this._updateMapZoom();
     }
 
     // Handle bounds changes - rebind controller when property changes
@@ -275,8 +313,15 @@ export class CFMap extends BaseElement {
 
     // Handle fitToBounds changes
     if (changedProperties.has("fitToBounds") && this.fitToBounds) {
-      this._fitMapToBounds();
+      this._fitMapToBounds("property");
     }
+    if (changedProperties.has("fitToBounds") && !this.fitToBounds) {
+      // Off means stop fitting, so a fit still waiting is dropped
+      this._pending.fitToBoundsOff();
+      this._waitingForSize.fitToBoundsOff();
+    }
+
+    this._viewApplied = true;
   }
 
   override render() {
@@ -365,6 +410,14 @@ export class CFMap extends BaseElement {
     return true;
   }
 
+  /**
+   * Whether cf-map may start a move of its own now: the map is stable and no
+   * person's move is under way. A move that may not start is queued.
+   */
+  private _canMoveMap(): boolean {
+    return this._isMapStable() && !this._moves.personMoving;
+  }
+
   //
   // Map Initialization
   //
@@ -390,6 +443,10 @@ export class CFMap extends BaseElement {
       boxZoom: this.interactive,
       keyboard: this.interactive,
       zoomControl: this.interactive,
+      // The ResizeObserver below follows every size change, the window's
+      // included; Leaflet's own window listener would move the map without
+      // cf-map knowing the move is its own.
+      trackResize: false,
     });
 
     // Add tile layer with crossOrigin for CORS compatibility
@@ -416,10 +473,14 @@ export class CFMap extends BaseElement {
     // Set up event handlers
     this._setupMapEventHandlers();
 
+    // Open on the bound bounds. Binding the bounds controller delivered them
+    // before the map existed, so that delivery could not apply them.
+    this._updateMapFromBounds(false);
+
     // Invalidate size after initialization to ensure proper tile loading
     // This is necessary when the map is rendered in Shadow DOM
     this._rafId = requestAnimationFrame(() => {
-      this._map?.invalidateSize();
+      this._resizeMap();
       this._rafId = null;
     });
 
@@ -431,7 +492,7 @@ export class CFMap extends BaseElement {
         clearTimeout(this._resizeTimeoutId);
       }
       this._resizeTimeoutId = setTimeout(() => {
-        this._map?.invalidateSize();
+        this._resizeMap();
         this._resizeTimeoutId = null;
       }, RESIZE_DEBOUNCE_MS);
     });
@@ -461,54 +522,66 @@ export class CFMap extends BaseElement {
         this._emitClickEvent(this._pendingClickEvent);
         this._pendingClickEvent = null;
       }
-
-      // Process pending map updates (queued during animation)
-      // Process in order: bounds first (most specific), then center, then zoom
-      this._processPendingUpdates();
     });
+
+    this._map.on("movestart", () => this._moves.moveStarted());
 
     // Bounds change event (moveend covers both pan and zoom)
     this._map.on("moveend", () => {
-      if (this._isUpdatingFromCell) return;
-
-      // Guard against race condition - map pane may not be ready
-      if (!this._isMapStable()) return;
-
-      // Wrap in try-catch as additional safety for Leaflet internal state issues
-      try {
-        const bounds = this._map!.getBounds();
-        const center = this._map!.getCenter();
-        const zoom = this._map!.getZoom();
-
-        const boundsData: Bounds = {
-          north: bounds.getNorth(),
-          south: bounds.getSouth(),
-          east: bounds.getEast(),
-          west: bounds.getWest(),
-        };
-
-        const centerData: LatLng = {
-          lat: center.lat,
-          lng: center.lng,
-        };
-
-        // Emit bounds change event
-        const detail: CfBoundsChangeDetail = {
-          bounds: boundsData,
-          center: centerData,
-          zoom,
-        };
-        this.emit("cf-bounds-change", detail);
-
-        // Update Cell values (bidirectional) using controllers
-        this._updateCenterCell(centerData);
-        this._updateZoomCell(zoom);
-        this._updateBoundsCell(boundsData);
-      } catch {
-        // Silently ignore errors from Leaflet internal state issues
-        // This can happen during rapid pan+click operations
-      }
+      this._reportMove();
+      const ended = this._moves.moveEnded();
+      // A resize's move, which may land in the middle of a person's, ends
+      // nothing and starts nothing.
+      if (ended === "resize") return;
+      if (ended === "person") this._pending.personMoved();
+      // Moves queued behind this one start once it is reported. A move
+      // cf-map is making from a cell leaves the queue to the move after it.
+      if (!this._isUpdatingFromCell) this._processPendingUpdates();
     });
+  }
+
+  /** Emit `cf-bounds-change` and write the view's cells for a finished move. */
+  private _reportMove(): void {
+    if (this._isUpdatingFromCell) return;
+
+    // Guard against race condition - map pane may not be ready
+    if (!this._isMapStable()) return;
+
+    // Wrap in try-catch as additional safety for Leaflet internal state issues
+    try {
+      const bounds = this._map!.getBounds();
+      const center = this._map!.getCenter();
+      const zoom = this._map!.getZoom();
+
+      const boundsData: Bounds = {
+        north: bounds.getNorth(),
+        south: bounds.getSouth(),
+        east: bounds.getEast(),
+        west: bounds.getWest(),
+      };
+
+      const centerData: LatLng = {
+        lat: center.lat,
+        lng: center.lng,
+      };
+
+      // Emit bounds change event
+      const detail: CfBoundsChangeDetail = {
+        bounds: boundsData,
+        center: centerData,
+        zoom,
+        userInitiated: this._moves.personMoving,
+      };
+      this.emit("cf-bounds-change", detail);
+
+      // Update Cell values (bidirectional) using controllers
+      this._updateCenterCell(centerData);
+      this._updateZoomCell(zoom);
+      this._updateBoundsCell(boundsData);
+    } catch {
+      // Silently ignore errors from Leaflet internal state issues
+      // This can happen during rapid pan+click operations
+    }
   }
 
   /**
@@ -533,12 +606,12 @@ export class CFMap extends BaseElement {
 
   private _getCenter(): LatLng {
     const center = this._centerController.getValue() || DEFAULT_CENTER;
-    return this._validateLatLng(center);
+    return validateLatLng(center);
   }
 
   private _getZoom(): number {
     const zoom = this._zoomController.getValue() ?? DEFAULT_ZOOM;
-    return this._clampZoom(zoom);
+    return clampZoom(zoom);
   }
 
   private _getBounds(): Bounds | null {
@@ -590,13 +663,65 @@ export class CFMap extends BaseElement {
     if (!this._map) return;
 
     const center = this._getCenter(); // Already validated by _getCenter()
+    this._waitingForSize.viewReplaced();
 
-    // If map is not stable, queue the update for when it stabilizes
-    if (!this._isMapStable()) {
-      this._pendingCenterUpdate = center;
+    // If cf-map may not move the map now, queue the update
+    if (!this._canMoveMap()) {
+      this._pending.center(center);
       return;
     }
 
+    this._setCenter(center);
+  }
+
+  private _updateMapZoom(): void {
+    if (!this._map) return;
+
+    const zoom = this._getZoom(); // Already validated by _getZoom()
+    this._waitingForSize.viewReplaced();
+
+    // If cf-map may not move the map now, queue the update
+    if (!this._canMoveMap()) {
+      this._pending.zoom(zoom);
+      return;
+    }
+
+    this._setZoom(zoom);
+  }
+
+  private _updateMapFromBounds(animate = true): void {
+    if (!this._map) return;
+
+    const bounds = this._getBounds();
+    if (!bounds) return;
+
+    // Validate bounds before applying
+    const validatedBounds = validateBounds(bounds);
+    if (!validatedBounds) return;
+
+    // The stored view yields to a fit to the features
+    if (!this._storedView.admit(this.fitToBounds)) return;
+
+    // If cf-map may not move the map now, queue the update
+    if (!this._canMoveMap()) {
+      this._pending.bounds(validatedBounds);
+      return;
+    }
+
+    // A map with no size fits any bounds at zoom 0, so wait for a size
+    if (!this._hasSize()) {
+      this._waitingForSize.bounds(validatedBounds);
+      return;
+    }
+
+    this._fitMapToCellBounds(validatedBounds, animate);
+  }
+
+  /** Center the map on a value read from the center cell, without echo. */
+  private _setCenter(center: LatLng): void {
+    if (!this._map) return;
+
+    this._moves.ownMove();
     this._isUpdatingFromCell = true;
     try {
       this._map.setView([center.lat, center.lng], this._map.getZoom(), {
@@ -607,17 +732,11 @@ export class CFMap extends BaseElement {
     }
   }
 
-  private _updateMapZoom(): void {
+  /** Zoom the map to a value read from the zoom cell, without echo. */
+  private _setZoom(zoom: number): void {
     if (!this._map) return;
 
-    const zoom = this._getZoom(); // Already validated by _getZoom()
-
-    // If map is not stable, queue the update for when it stabilizes
-    if (!this._isMapStable()) {
-      this._pendingZoomUpdate = zoom;
-      return;
-    }
-
+    this._moves.ownMove();
     this._isUpdatingFromCell = true;
     try {
       this._map.setZoom(zoom, { animate: true });
@@ -626,96 +745,99 @@ export class CFMap extends BaseElement {
     }
   }
 
-  private _updateMapFromBounds(): void {
+  /** Fit the map to bounds read from the bounds cell, without echoing them. */
+  private _fitMapToCellBounds(bounds: Bounds, animate: boolean): void {
     if (!this._map) return;
 
-    const bounds = this._getBounds();
-    if (!bounds) return;
-
-    // Validate bounds before applying
-    const validatedBounds = this._validateBounds(bounds);
-    if (!validatedBounds) return;
-
-    // If map is not stable, queue the update for when it stabilizes
-    if (!this._isMapStable()) {
-      this._pendingBoundsUpdate = validatedBounds;
-      return;
-    }
-
+    this._waitingForSize.viewReplaced();
+    this._moves.ownMove();
     this._isUpdatingFromCell = true;
     try {
       const leafletBounds = L.latLngBounds(
-        [validatedBounds.south, validatedBounds.west],
-        [validatedBounds.north, validatedBounds.east],
+        [bounds.south, bounds.west],
+        [bounds.north, bounds.east],
       );
-      this._map.fitBounds(leafletBounds, { animate: true });
+      this._map.fitBounds(leafletBounds, { animate });
     } finally {
       this._isUpdatingFromCell = false;
     }
   }
 
+  private _hasSize(): boolean {
+    if (!this._map) return false;
+    const size = this._map.getSize();
+    return size.x > 0 && size.y > 0;
+  }
+
   /**
-   * Process any pending updates that were queued during animations.
-   * Called from zoomend handler when map becomes stable.
+   * Tell Leaflet the container may have changed size, then fit the bound
+   * bounds and the features that waited for the map to have a size.
+   */
+  private _resizeMap(): void {
+    const map = this._map;
+    if (!map) return;
+
+    // A resize that changes no size moves nothing
+    const size = map.getSize();
+    const element = map.getContainer();
+    const sizeChanged = element.clientWidth !== size.x ||
+      element.clientHeight !== size.y;
+    if (!this._waitingForSize.waiting) {
+      this._moves.resize(sizeChanged, () => map.invalidateSize());
+      return;
+    }
+    if (this._moves.personMoving) {
+      // What waited for a size now waits for the person's move instead
+      this._moves.resize(sizeChanged, () => map.invalidateSize());
+      const { bounds, fit } = this._waitingForSize.take();
+      if (bounds !== null) this._pending.bounds(bounds);
+      if (fit !== null) this._pending.fit(fit);
+      return;
+    }
+
+    // The resize and the fits that waited for it are one move, reported
+    // once, as cf-map's own, with the view they end on.
+    let sized = false;
+    this._isUpdatingFromCell = true;
+    try {
+      this._moves.resize(sizeChanged, () => map.invalidateSize());
+      sized = this._hasSize();
+      if (sized) {
+        const { bounds, fit } = this._waitingForSize.take();
+        // In the order a map mounted with a size applies them: the bound
+        // bounds, then the fit to the features.
+        if (bounds !== null) this._fitMapToCellBounds(bounds, false);
+        if (fit !== null) this._fitMapToBounds(fit, false);
+      }
+    } finally {
+      this._isUpdatingFromCell = false;
+    }
+    if (sized) this._reportMove();
+  }
+
+  /**
+   * Start the next of cf-map's own moves queued behind the move just
+   * reported. Called from the moveend handler.
    */
   private _processPendingUpdates(): void {
     if (!this._map) return;
 
-    // Process bounds update (most specific - sets both center and zoom)
-    if (this._pendingBoundsUpdate) {
-      const bounds = this._pendingBoundsUpdate;
-      this._pendingBoundsUpdate = null;
-      // Clear other pending updates since bounds encompasses them
-      this._pendingCenterUpdate = null;
-      this._pendingZoomUpdate = null;
-
-      this._isUpdatingFromCell = true;
-      try {
-        const leafletBounds = L.latLngBounds(
-          [bounds.south, bounds.west],
-          [bounds.north, bounds.east],
-        );
-        this._map.fitBounds(leafletBounds, { animate: true });
-      } finally {
-        this._isUpdatingFromCell = false;
-      }
-      return; // Let the next zoomend handle any remaining updates
-    }
-
-    // Process center update
-    if (this._pendingCenterUpdate) {
-      const center = this._pendingCenterUpdate;
-      this._pendingCenterUpdate = null;
-
-      this._isUpdatingFromCell = true;
-      try {
-        this._map.setView([center.lat, center.lng], this._map.getZoom(), {
-          animate: true,
-        });
-      } finally {
-        this._isUpdatingFromCell = false;
-      }
-      return; // Let the next zoomend handle zoom update if any
-    }
-
-    // Process zoom update
-    if (this._pendingZoomUpdate !== null) {
-      const zoom = this._pendingZoomUpdate;
-      this._pendingZoomUpdate = null;
-
-      this._isUpdatingFromCell = true;
-      try {
-        this._map.setZoom(zoom, { animate: true });
-      } finally {
-        this._isUpdatingFromCell = false;
-      }
-      return;
-    }
-
-    // Process fitToBounds
-    if (this._pendingFitToBounds) {
-      this._pendingFitToBounds = false;
-      this._fitMapToBounds();
+    const move = this._pending.next();
+    if (move === null) return;
+    // The next moveend starts the move after this one
+    switch (move.kind) {
+      case "bounds":
+        this._fitMapToCellBounds(move.bounds, true);
+        return;
+      case "center":
+        this._setCenter(move.center);
+        return;
+      case "zoom":
+        this._setZoom(move.zoom);
+        return;
+      case "fit":
+        this._fitMapToBounds(move.source);
+        return;
     }
   }
 
@@ -770,7 +892,7 @@ export class CFMap extends BaseElement {
 
     // Handle fitToBounds
     if (this.fitToBounds) {
-      this._fitMapToBounds();
+      this._fitMapToBounds("features");
     }
   }
 
@@ -829,7 +951,7 @@ export class CFMap extends BaseElement {
 
       // Create marker icon - always use divIcon to avoid Leaflet default icon issues in Shadow DOM
       let markerIcon: L.DivIcon;
-      if (icon && this._isEmoji(icon)) {
+      if (icon && isEmoji(icon)) {
         // Create a span element safely to prevent XSS
         const span = document.createElement("span");
         span.className = "emoji-marker";
@@ -1109,210 +1231,36 @@ export class CFMap extends BaseElement {
   // Fit to Bounds
   //
 
-  private _fitMapToBounds(): void {
+  private _fitMapToBounds(source: FitSource, animate = true): void {
     if (!this._map) return;
 
-    // If map is not stable, queue the update for when it stabilizes
-    if (!this._isMapStable()) {
-      this._pendingFitToBounds = true;
+    // If cf-map may not move the map now, queue the fit
+    if (!this._canMoveMap()) {
+      this._pending.fit(source);
       return;
     }
 
-    const value = this._getValue();
-    const allPoints: L.LatLng[] = [];
-
-    // Collect all marker positions
-    // Use traditional for loops with try-catch to avoid reactive proxy issues
-    if (value.markers) {
-      const markers = value.markers;
-      const markersLength = markers.length;
-      for (let i = 0; i < markersLength; i++) {
-        try {
-          const m = markers[i];
-          if (m) {
-            const position = m.position;
-            if (position) {
-              const lat = position.lat;
-              const lng = position.lng;
-              if (typeof lat === "number" && typeof lng === "number") {
-                allPoints.push(L.latLng(lat, lng));
-              }
-            }
-          }
-        } catch {
-          // Skip markers that throw during property access
-        }
-      }
+    // A map with no size has no zoom to fit to, so wait for a size
+    if (!this._hasSize()) {
+      this._waitingForSize.fit(source);
+      return;
     }
 
-    // Collect all circle centers (could also use circle bounds)
-    if (value.circles) {
-      const circles = value.circles;
-      const circlesLength = circles.length;
-      for (let i = 0; i < circlesLength; i++) {
-        try {
-          const c = circles[i];
-          if (c) {
-            const center = c.center;
-            if (center) {
-              const lat = center.lat;
-              const lng = center.lng;
-              if (typeof lat === "number" && typeof lng === "number") {
-                allPoints.push(L.latLng(lat, lng));
-              }
-            }
-          }
-        } catch {
-          // Skip circles that throw during property access
-        }
-      }
+    const points = featurePoints(this._getValue());
+    if (points.length === 0) return;
+
+    const bounds = L.latLngBounds(
+      points.map((point) => L.latLng(point.lat, point.lng)),
+    );
+    this._moves.ownMove();
+    this._isUpdatingFromCell = true;
+    try {
+      const options: L.FitBoundsOptions = { padding: [50, 50], maxZoom: 16 };
+      if (!animate) options.animate = false;
+      this._map.fitBounds(bounds, options);
+    } finally {
+      this._isUpdatingFromCell = false;
     }
-
-    // Collect all polyline points
-    if (value.polylines) {
-      const polylines = value.polylines;
-      const polylinesLength = polylines.length;
-      for (let i = 0; i < polylinesLength; i++) {
-        try {
-          const p = polylines[i];
-          if (p) {
-            const points = p.points;
-            if (points) {
-              const pointsLength = points.length;
-              for (let j = 0; j < pointsLength; j++) {
-                try {
-                  const pt = points[j];
-                  if (pt) {
-                    const lat = pt.lat;
-                    const lng = pt.lng;
-                    if (typeof lat === "number" && typeof lng === "number") {
-                      allPoints.push(L.latLng(lat, lng));
-                    }
-                  }
-                } catch {
-                  // Skip points that throw during property access
-                }
-              }
-            }
-          }
-        } catch {
-          // Skip polylines that throw during property access
-        }
-      }
-    }
-
-    // Fit bounds if we have points
-    if (allPoints.length > 0) {
-      const bounds = L.latLngBounds(allPoints);
-      this._isUpdatingFromCell = true;
-      try {
-        this._map.fitBounds(bounds, {
-          padding: [50, 50],
-          maxZoom: 16,
-        });
-      } finally {
-        this._isUpdatingFromCell = false;
-      }
-    }
-  }
-
-  //
-  // Utilities
-  //
-
-  private _isEmoji(str: string): boolean {
-    // Simple emoji detection - checks for emoji unicode ranges
-    // Uses module-level cached regex for performance
-    return EMOJI_REGEX.test(str);
-  }
-
-  //
-  // Coordinate Validation
-  //
-
-  /**
-   * Clamp zoom level to valid range, handling NaN/Infinity
-   */
-  private _clampZoom(zoom: number): number {
-    if (!Number.isFinite(zoom)) {
-      return DEFAULT_ZOOM;
-    }
-    return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
-  }
-
-  /**
-   * Clamp latitude to valid range, handling NaN/Infinity
-   */
-  private _clampLat(lat: number): number {
-    if (!Number.isFinite(lat)) {
-      return DEFAULT_CENTER.lat;
-    }
-    return Math.max(MIN_LAT, Math.min(MAX_LAT, lat));
-  }
-
-  /**
-   * Clamp longitude to valid range, handling NaN/Infinity
-   */
-  private _clampLng(lng: number): number {
-    if (!Number.isFinite(lng)) {
-      return DEFAULT_CENTER.lng;
-    }
-    return Math.max(MIN_LNG, Math.min(MAX_LNG, lng));
-  }
-
-  /**
-   * Validate and clamp a LatLng object
-   */
-  private _validateLatLng(latLng: LatLng): LatLng {
-    return {
-      lat: this._clampLat(latLng.lat),
-      lng: this._clampLng(latLng.lng),
-    };
-  }
-
-  /**
-   * Validate bounds data
-   * Returns null if bounds are invalid (non-finite numbers, out of range, or south > north)
-   */
-  private _validateBounds(bounds: Bounds): Bounds | null {
-    const { north, south, east, west } = bounds;
-
-    // Check that all values are finite numbers
-    if (
-      !Number.isFinite(north) ||
-      !Number.isFinite(south) ||
-      !Number.isFinite(east) ||
-      !Number.isFinite(west)
-    ) {
-      return null;
-    }
-
-    // Check latitude range
-    if (
-      north < MIN_LAT ||
-      north > MAX_LAT ||
-      south < MIN_LAT ||
-      south > MAX_LAT
-    ) {
-      return null;
-    }
-
-    // Check longitude range
-    if (
-      east < MIN_LNG ||
-      east > MAX_LNG ||
-      west < MIN_LNG ||
-      west > MAX_LNG
-    ) {
-      return null;
-    }
-
-    // Check that south <= north
-    if (south > north) {
-      return null;
-    }
-
-    return bounds;
   }
 
   //
@@ -1352,10 +1300,10 @@ export class CFMap extends BaseElement {
     this._leafletCircles = [];
     this._leafletPolylines = [];
     this._pendingClickEvent = null;
-    this._pendingCenterUpdate = null;
-    this._pendingZoomUpdate = null;
-    this._pendingBoundsUpdate = null;
-    this._pendingFitToBounds = false;
+    this._moves = new MoveOwnership();
+    this._pending = new PendingMoves();
+    this._waitingForSize = new WaitingForSize();
+    this._storedView = new StoredView();
 
     // Note: CellControllers are automatically cleaned up by Lit's reactive
     // controller system. They implement ReactiveController with
@@ -1378,21 +1326,22 @@ export class CFMap extends BaseElement {
    * Invalidate the map size (call after container resize)
    */
   invalidateSize(): void {
-    this._map?.invalidateSize();
+    this._resizeMap();
   }
 
   /**
    * Programmatically fit the map to show all features
    */
   fitBounds(): void {
-    this._fitMapToBounds();
+    this._fitMapToBounds("call");
   }
 
   /**
    * Pan to a specific location
    */
   panTo(lat: number, lng: number): void {
-    if (!this._isMapStable()) return;
+    if (!this._canMoveMap()) return;
+    this._moves.ownMove();
     this._map?.panTo([lat, lng]);
   }
 
@@ -1400,7 +1349,8 @@ export class CFMap extends BaseElement {
    * Set the map view to a specific location and zoom
    */
   setView(lat: number, lng: number, zoom: number): void {
-    if (!this._isMapStable()) return;
+    if (!this._canMoveMap()) return;
+    this._moves.ownMove();
     this._map?.setView([lat, lng], zoom);
   }
 }

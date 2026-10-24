@@ -125,7 +125,7 @@ export const searchPatternsToolDescriptor: HarnessToolDescriptor = {
   toolId: "search_patterns",
   title: "Search Patterns",
   description:
-    "Search the pattern index for published Common Fabric patterns by hashtag or free text. Answers with each pattern's id, kind, evidence quality, description, import specifier, and stopword-free match ratio; the leading results also carry declared argument and result shapes — never source. Run one with run_pattern's patternId argument.",
+    "Search the pattern index for published Common Fabric patterns by hashtag or free text. Returns each pattern's id, kind, evidence quality, description and import specifier, and for a text search its matched and query term counts; the leading results may also carry argument and result shapes, never source. Run one with run_pattern's patternId.",
   effectClass: "read",
   inputSchema: {
     type: "object",
@@ -133,13 +133,12 @@ export const searchPatternsToolDescriptor: HarnessToolDescriptor = {
       tags: {
         type: "array",
         items: { type: "string" },
-        description:
-          "Hashtags to match. Any supplied hashtag can surface a result. Omit to search on text alone.",
+        description: "Any one can surface a result.",
       },
       text: {
         type: "string",
         description:
-          "A short set of distinctive capability words. English stopwords are removed, then whole words are matched with light suffix handling against pattern descriptions, keywords, and hashtags. One content term can surface a result; adding generic words adds distant OR matches. Results carry matchedTerms out of the stopword-free queryTerms. Omit to search on tags alone.",
+          "A few distinctive capability words, matched stopword-free as whole words, with light suffix handling, against descriptions, keywords and hashtags. Any one term can surface a result, so generic words add distant matches.",
       },
     },
     additionalProperties: false,

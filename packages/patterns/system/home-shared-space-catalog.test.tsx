@@ -66,10 +66,13 @@ export default pattern(() => {
   const revision = new Writable("");
   const assert_empty_catalog = assert(() =>
     Object.keys(home.sharedSpaceCatalog.entries).length === 0 &&
-    Object.keys(home.sharedSpaceCatalog.offers).length === 0
+    Object.keys(home.sharedSpaceCatalog.offers).length === 0 &&
+    home.sharedSpaces.view.status === "ready" &&
+    home.sharedSpaces.view.saved.length === 0 &&
+    home.sharedSpaces.receipts.status === "ready"
   );
   const action_register = action(() => {
-    home.registerSharedSpace.send({
+    home.sharedSpaces.commands.register.send({
       space: SPACE,
       host: " HTTPS://ROOM.EXAMPLE:443/ ",
       kind: "loom",
@@ -84,11 +87,15 @@ export default pattern(() => {
     home.sharedSpaceCatalog.entries[SPACE]?.host === "https://room.example" &&
     home.sharedSpaceCatalog.entries[SPACE]?.from === FROM &&
     home.sharedSpaceCatalog.entries[SPACE]?.since === 1000 &&
-    home.sharedSpaceCatalog.offers[OFFER]?.space === SPACE
+    home.sharedSpaceCatalog.offers[OFFER]?.space === SPACE &&
+    home.sharedSpaces.view.status === "ready" &&
+    home.sharedSpaces.view.byKind.loom.saved[0]?.space === SPACE &&
+    home.sharedSpaces.receipts.status === "ready" &&
+    home.sharedSpaces.receipts.offers[OFFER]?.space === SPACE
   );
   const action_archive = action(() => {
     revision.set(home.sharedSpaceCatalog.entries[SPACE].revision);
-    home.changeSharedSpaceMembership.send({
+    home.sharedSpaces.commands.changeMembership.send({
       space: SPACE,
       id: "archive",
       expectedRevision: home.sharedSpaceCatalog.entries[SPACE].revision,
@@ -97,7 +104,10 @@ export default pattern(() => {
   });
   const assert_archived = assert(() =>
     home.sharedSpaceCatalog.entries[SPACE]?.state === "archived" &&
-    home.sharedSpaceCatalog.entries[SPACE]?.revision.startsWith("2:")
+    home.sharedSpaceCatalog.entries[SPACE]?.revision.startsWith("2:") &&
+    home.sharedSpaces.view.status === "ready" &&
+    home.sharedSpaces.view.saved.length === 0 &&
+    home.sharedSpaces.view.archived[0]?.space === SPACE
   );
   const action_replay_offer = action(() => {
     home.registerSharedSpace.send({
@@ -159,7 +169,7 @@ export default pattern(() => {
   );
   const action_remove_stale = action(() => {
     revision.set(home.sharedSpaceCatalog.entries[IMPORTED].revision);
-    home.removeSharedSpace.send({
+    home.sharedSpaces.imports.remove.send({
       space: IMPORTED,
       expectedRevision: "1:not-the-observed-revision",
     });

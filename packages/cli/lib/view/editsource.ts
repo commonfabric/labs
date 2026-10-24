@@ -10,6 +10,9 @@
  * `diffedit.ts`) maps the single editable text back onto the files it touches.
  */
 
+import { basename, dirname } from "@std/path";
+
+import type { BlameTarget } from "./blame.ts";
 import type { Document, Line, ViewMode } from "./model.ts";
 import type { DiffHunk, DiffModel } from "./diff.ts";
 import type { DiffCountFileContext } from "./diffcounts.ts";
@@ -233,6 +236,11 @@ export interface EditableSource {
   /** The path of the backing file, when there is a single one. The file picker
    * opens in its directory. */
   readonly path?: string;
+
+  /** What `git blame` attributes each line of `text` to, indexed by line, or
+   * null for a line with no file line behind it. Absent when no line of this
+   * source has one. */
+  blameTargets?(text: string): readonly (BlameTarget | null)[];
 }
 
 /**
@@ -320,6 +328,20 @@ export function fileSource(
     createHighlighter: (text) => language.createHighlighter(text, path),
     dirtyLabels: (original, current) =>
       original === current ? [] : [shortName(path)],
+    // The buffer is blamed as the bytes a save would write, so each line maps
+    // to itself and lines edited since the last commit read as uncommitted.
+    ...(language.input.kind === "text"
+      ? {
+        blameTargets: (text: string) => {
+          const request = {
+            cwd: dirname(path),
+            path: basename(path),
+            contents: encode(text),
+          };
+          return text.split("\n").map((_, line) => ({ request, line }));
+        },
+      }
+      : {}),
     // A plain file has no hunks, so any scope reverts the whole file.
     revert: (original, current, cursorLine) =>
       original === current ? null : {

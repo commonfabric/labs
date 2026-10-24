@@ -127,6 +127,12 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
 
   const HOST_CEILING = { renderConfidentialityCeiling: { atoms: [] } };
 
+  /** How many sinks stand at a position whose path ends with `suffix`. */
+  const sinksAt = (suffix: string): number =>
+    [...runtime.scheduler.accessForTestingOnly.nodes.nodes()].filter((node) =>
+      node.action.name.endsWith(suffix)
+    ).length;
+
   /** Mounts `tree`, settles, and returns what was emitted and the unmount. */
   const mount = async (
     tree: WorkerVNode | Cell<unknown>,
@@ -330,6 +336,34 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
           expect(page.propsSet("placeholder")).toEqual([PUBLIC]);
           expect(page.propsSet("class")).toEqual(["literal"]);
           expect(page.bindings("value")).toBe(0);
+        } finally {
+          page.cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "sets a literal style object from the props read under a ceiling, with no subscription at the style's own position",
+      async () => {
+        // A style object holding no link is part of the view the ceiling
+        // admitted, as a literal primitive is. One holding a link is read on
+        // its own, so that the ceiling decides on what that read consumes.
+        const color = await write("prop-ceiling-style-color", "red");
+        const view = await stored("prop-ceiling-literal-style", {
+          type: "vnode",
+          name: "div",
+          props: { style: { color: "red" }, title: "literal" },
+          children: [{
+            type: "vnode",
+            name: "span",
+            props: { style: { color: link(color) } },
+            children: [],
+          }],
+        });
+        const page = await mount(view, HOST_CEILING);
+        try {
+          expect(page.propsSet("style")).toEqual(["color: red", "color: red"]);
+          expect(sinksAt("/props/style")).toBe(1);
         } finally {
           page.cancel();
         }

@@ -10,7 +10,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { FabricInstance } from "@commonfabric/data-model";
+import { deepFreeze, FabricInstance } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import {
   FabricBytes,
@@ -37,6 +37,12 @@ const noCellRuntime = {
 
 describe("llm-dialog-special-objects", () => {
   describe("serializeForLLMObservation", () => {
+    it("serializes a shared frozen subtree in each sibling position", () => {
+      const child = deepFreeze({ label: "shared" });
+      const value = deepFreeze({ left: child, right: child });
+      expect(serializeForLLMObservation({ value }).value).toEqual(value);
+    });
+
     it("returns a `FabricBytes` whole rather than as an empty record", () => {
       const bytes = new FabricBytes(new Uint8Array([1, 2, 3]));
       const result = serializeForLLMObservation({ value: { payload: bytes } });

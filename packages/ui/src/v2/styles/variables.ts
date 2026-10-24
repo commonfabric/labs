@@ -3,6 +3,73 @@
  * This file exports the CSS variables for use in shadow DOM
  */
 
+// The variables below derive from `--cf-theme-*` tokens, so each is declared
+// by the components that consume it, not by every component's base styles. A
+// custom property's `var()` resolves where it is declared: declared on every
+// host, a recipe is fixed by each component to the theme around it, and a tint
+// inside that component (a nested `cf-theme`, or `--cf-theme-*` set by any
+// element) never reaches a card or a pill beneath. Declared on the consumer's
+// own host, it derives from the theme the consumer itself is in.
+
+/** The pill radius, for badges, chips and tags. */
+export const pillGeometryCSS = `
+  --cf-pill-border-radius: var(
+    --cf-theme-border-radius-full,
+    var(--cf-border-radius-full, 9999px)
+  );
+`;
+
+/** The surface recipes, for cards, modals and toasts. */
+export const surfaceRecipesCSS = `
+  /*
+   * Shared surface recipes
+   * Components like cards, modals, and toasts should consume these shared
+   * tier tokens instead of defining independent radius, padding, border,
+   * or elevation values inline.
+   */
+  --cf-surface-plain-border-radius: var(
+    --cf-theme-border-radius,
+    var(--cf-border-radius-lg, 0.5rem)
+  );
+  --cf-surface-plain-background: var(--cf-theme-color-surface, #ffffff);
+  --cf-surface-plain-border: 1px solid var(
+    --cf-theme-color-border,
+    #e5e7eb
+  );
+  --cf-surface-plain-padding: var(--cf-spacing-4);
+  --cf-surface-plain-box-shadow: var(--cf-shadow-none);
+
+  --cf-surface-elevated-border-radius: var(--cf-surface-plain-border-radius);
+  --cf-surface-elevated-background: var(--cf-surface-plain-background);
+  --cf-surface-elevated-border: var(--cf-surface-plain-border);
+  --cf-surface-elevated-padding: var(--cf-surface-plain-padding);
+  --cf-surface-elevated-box-shadow: var(
+    --cf-shadow-md,
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06)
+  );
+
+  --cf-surface-overlay-border-radius: var(--cf-surface-plain-border-radius);
+  --cf-surface-overlay-background: var(--cf-theme-color-background, #ffffff);
+  --cf-surface-overlay-border: var(--cf-surface-plain-border);
+  --cf-surface-overlay-padding: var(--cf-spacing-4) var(--cf-spacing-5);
+  --cf-surface-overlay-box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  --cf-surface-overlay-sheet-box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.15);
+
+  --cf-surface-transient-border-radius: var(--cf-surface-plain-border-radius);
+  --cf-surface-transient-background: color-mix(
+    in srgb,
+    var(--cf-theme-color-surface, #f8fafc) 85%,
+    transparent
+  );
+  --cf-surface-transient-border: 1px solid var(
+    --cf-theme-color-border,
+    #e2e8f0
+  );
+  --cf-surface-transient-padding: 0.625rem 0.875rem;
+  --cf-surface-transient-box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+`;
+
 export const variablesCSS = `
   /*
    * Canonical token namespaces:
@@ -260,10 +327,6 @@ export const variablesCSS = `
    * Badge, chip, and button[variant="pill"] keep separate semantics and
    * colors, but they should share the same compact rounded size contract.
    */
-  --cf-pill-border-radius: var(
-    --cf-theme-border-radius-full,
-    var(--cf-border-radius-full, 9999px)
-  );
   --cf-pill-xs-min-height: var(--cf-size-xs-height);
   --cf-pill-xs-padding-h: 6px;
   --cf-pill-xs-padding-v: 1px;
@@ -356,54 +419,6 @@ export const variablesCSS = `
   --cf-surface-translucent: rgba(255, 255, 255, 0.72);
   --cf-surface-translucent-strong: rgba(255, 255, 255, 0.88);
   --cf-overlay-dim: rgba(0, 0, 0, 0.4);
-
-  /*
-   * Shared surface recipes
-   * Components like cards, modals, and toasts should consume these shared
-   * tier tokens instead of defining independent radius, padding, border,
-   * or elevation values inline.
-   */
-  --cf-surface-plain-border-radius: var(
-    --cf-theme-border-radius,
-    var(--cf-border-radius-lg, 0.5rem)
-  );
-  --cf-surface-plain-background: var(--cf-theme-color-surface, #ffffff);
-  --cf-surface-plain-border: 1px solid var(
-    --cf-theme-color-border,
-    #e5e7eb
-  );
-  --cf-surface-plain-padding: var(--cf-spacing-4);
-  --cf-surface-plain-box-shadow: var(--cf-shadow-none);
-
-  --cf-surface-elevated-border-radius: var(--cf-surface-plain-border-radius);
-  --cf-surface-elevated-background: var(--cf-surface-plain-background);
-  --cf-surface-elevated-border: var(--cf-surface-plain-border);
-  --cf-surface-elevated-padding: var(--cf-surface-plain-padding);
-  --cf-surface-elevated-box-shadow: var(
-    --cf-shadow-md,
-    0 4px 6px -1px rgba(0, 0, 0, 0.1),
-    0 2px 4px -1px rgba(0, 0, 0, 0.06)
-  );
-
-  --cf-surface-overlay-border-radius: var(--cf-surface-plain-border-radius);
-  --cf-surface-overlay-background: var(--cf-theme-color-background, #ffffff);
-  --cf-surface-overlay-border: var(--cf-surface-plain-border);
-  --cf-surface-overlay-padding: var(--cf-spacing-4) var(--cf-spacing-5);
-  --cf-surface-overlay-box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-  --cf-surface-overlay-sheet-box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.15);
-
-  --cf-surface-transient-border-radius: var(--cf-surface-plain-border-radius);
-  --cf-surface-transient-background: color-mix(
-    in srgb,
-    var(--cf-theme-color-surface, #f8fafc) 85%,
-    transparent
-  );
-  --cf-surface-transient-border: 1px solid var(
-    --cf-theme-color-border,
-    #e2e8f0
-  );
-  --cf-surface-transient-padding: 0.625rem 0.875rem;
-  --cf-surface-transient-box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
 
   /* Z-index — Semantic Layers */
   --cf-z-layer-sticky: 10;

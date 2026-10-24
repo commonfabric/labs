@@ -88,9 +88,9 @@ export default pattern((__cf_pattern_input) => {
             type: "array",
             items: {
                 anyOf: [{
-                        $ref: "https://commonfabric.org/schemas/vnode.json"
-                    }, {
                         $ref: "#/$defs/UIRenderable"
+                    }, {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
                     }]
             },
             $defs: {
@@ -111,9 +111,9 @@ export default pattern((__cf_pattern_input) => {
                     type: "array",
                     items: {
                         anyOf: [{
-                                $ref: "https://commonfabric.org/schemas/vnode.json"
-                            }, {
                                 $ref: "#/$defs/UIRenderable"
+                            }, {
+                                $ref: "https://commonfabric.org/schemas/vnode.json"
                             }]
                     }
                 }],

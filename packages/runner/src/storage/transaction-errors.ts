@@ -82,8 +82,8 @@ export const WriteIsolationError = (
 });
 
 /**
- * A write was addressed to a `data:` identifier. Such an address carries its
- * own value instead of naming a document, so there is nothing to write to.
+ * A write was addressed to an immutable `snapshot:` or `data:` identifier.
+ * Such an address has no writable document.
  */
 export const ReadOnlyAddressError = (
   address: IMemoryAddress,

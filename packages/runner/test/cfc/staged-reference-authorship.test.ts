@@ -1,7 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 
@@ -22,6 +21,7 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../cfc-seed-envelope.ts";
+import { labelsReached } from "../support/reached-labels.ts";
 
 const alice = await Identity.fromPassphrase("staged-reference-author-alice");
 const bob = await Identity.fromPassphrase("staged-reference-author-bob");
@@ -236,23 +236,34 @@ describe("staged-reference-authorship", () => {
               expect(result.error?.message).toContain("write floor failed");
             }
           }
+          // The node stores nothing of what the reference reaches: no claim of
+          // either principal, and nothing of the view the handle carried below
+          // its root. The referenced content is read where it is, and no claim
+          // reaches it; the inline sibling keeps the container's.
           const entries = readStoredCfcMetadata(
             runtime.readTx(),
             node.getAsNormalizedFullLink(),
           )!
             .labelMap.entries;
+          expect(entries.filter((entry) => entry.path[0] === "argument"))
+            .toEqual([]);
+          const content = labelsReached(
+            runtime,
+            node.getAsNormalizedFullLink(),
+            ["argument", "content"],
+          );
+          expect(content.integrity).not.toContainEqual({
+            kind,
+            subject: alice.did(),
+          });
+          expect(content.integrity).not.toContainEqual({
+            kind,
+            subject: bob.did(),
+          });
           expect(
-            entries.find((entry) => entry.path.join("/") === "argument")?.label
+            labelsReached(runtime, node.getAsNormalizedFullLink(), ["own"])
               .integrity,
-          )
-            .toContainEqual(
-              expect.objectContaining({ type: CFC_ATOM_TYPE.LinkReference }),
-            );
-          expect(
-            entries.find((entry) => entry.path.join("/") === "argument/content")
-              ?.label.confidentiality,
-          )
-            .toContain("carried-secret");
+          ).toContainEqual({ kind, subject: alice.did() });
         });
       }
     }
@@ -488,33 +499,52 @@ describe("staged-reference-authorship", () => {
             stage();
           }
           expect((await tx.commit().settled).error).toBeUndefined();
+          // The holder stores nothing beneath its slot: the claims are read
+          // where they are. Bob's claim is reached through every path to the
+          // leaf, Alice's through the paths to her inline value and to the
+          // wrapper itself. A confidential slot persists its own restriction
+          // on the node that holds the reference, and nothing of the leaf's;
+          // the holder, a structure of references written as a whole, carries
+          // the attempt's join on its `*` template rather than at the slot.
           const entries = readStoredCfcMetadata(
             runtime.readTx(),
             holder.getAsNormalizedFullLink(),
           )!.labelMap.entries;
+          expect(entries.filter((entry) => entry.path[0] === "argument"))
+            .toEqual([]);
+          const reached = (path: readonly string[]) =>
+            labelsReached(runtime, holder.getAsNormalizedFullLink(), path);
           for (
             const path of [
-              "argument/first",
-              "argument/content",
-              "argument/whole/next",
+              ["argument", "first"],
+              ["argument", "content"],
+              ["argument", "whole", "next"],
             ]
           ) {
-            const integrity = entries.find((entry) =>
-              entry.path.join("/") === path
-            )
-              ?.label.integrity;
+            const { integrity } = reached(path);
             expect(integrity).toContainEqual({ kind, subject: bob.did() });
             expect(integrity).not.toContainEqual({
               kind,
               subject: alice.did(),
             });
           }
-          for (const path of ["argument/own", "argument/whole"]) {
-            expect(
-              entries.find((entry) => entry.path.join("/") === path)
-                ?.label.integrity,
-            ).toContainEqual({ kind, subject: alice.did() });
+          for (const path of [["argument", "own"], ["argument", "whole"]]) {
+            expect(reached(path).integrity).toContainEqual({
+              kind,
+              subject: alice.did(),
+            });
           }
+          const nodeEntries = readStoredCfcMetadata(
+            runtime.readTx(),
+            node.getAsNormalizedFullLink(),
+          )!.labelMap.entries;
+          expect(
+            nodeEntries.flatMap((entry) => entry.label.integrity ?? []),
+          ).not.toContainEqual({ kind, subject: bob.did() });
+          expect(
+            nodeEntries.filter((entry) => entry.path.join("/") === "first")
+              .flatMap((entry) => entry.label.confidentiality ?? []),
+          ).toEqual(confidentialSlot ? ["slot-secret"] : []);
 
           for (const principal of [alice.did(), bob.did()]) {
             const copy = runtime.edit();

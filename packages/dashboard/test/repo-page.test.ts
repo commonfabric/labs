@@ -567,7 +567,7 @@ describe("repo-page", () => {
       expect(weaver).not.toContain("/ci-gantt");
     });
 
-    it("charts as many of a source's newest runs as the recent-runs tile shows", async () => {
+    it("charts a source's newest `RECENT_DISPLAY` runs", async () => {
       const runs = Array.from(
         { length: RECENT_DISPLAY + 10 },
         (_, index) => run({ id: 100 + index, html_url: `https://example.test/runs/${100 + index}` }),

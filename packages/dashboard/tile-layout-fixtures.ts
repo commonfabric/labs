@@ -153,8 +153,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     label: "test selection",
     view: {
       status: "good",
-      value: "64%",
-      sub: "16,614 of 19,544 tests",
+      value: "2.9%",
+      sub: "16m 48s of 9h 29m test time",
       extra: history(),
       duration: 18 * DAY,
       aside: `<span class="running"><span class="rdot"></span>running</span><span class="hfacet" title="12h old">12h old</span>`,
@@ -310,7 +310,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    label: "recent main runs",
+    label: "recent commits",
     wide: true,
     view: { status: "good" },
   },

@@ -55,6 +55,9 @@ export interface HarnessLoomCommandsConfig {
 
 /** One command a host admits, as `list_commands` shows it. */
 export interface LoomCommandEntry extends HarnessCallableDescriptor {
+  /** Broker-issued permission to invoke this command under a read-only demand. */
+  readOnlyGranted?: true;
+
   /** What the command acts on: `global`, `loom`, or another host scope. */
   target: string;
 
@@ -92,6 +95,9 @@ export interface LoomCommandInvocation {
 
   /** The loom version a write requires; a stale one is refused by the host. */
   expectedVersion?: number;
+
+  /** Requires the broker to recheck a read effect and a read-only grant. */
+  readOnly?: boolean;
 }
 
 /** Why a host process produced nothing a caller can read. */
@@ -180,11 +186,12 @@ export const readLoomCommandsConfig = async (
  * Whether a manifest row's own declarations say an agent may not run it. A
  * broker-stamped run reaches the command layer as an `agent:` actor with
  * origin `session`, so a row is left out when it is a pattern's verb (an
- * agent calls a piece's verbs through the piece it holds), a developer
- * command, one whose actors are all people, one that refuses or does not
- * require the `session` origin, or one that runs only over a person's
- * consent grant. The broker's grant decides what may run; this decides only
- * what is shown, and a row the host declares nothing about is shown.
+ * agent calls a piece's verbs through `call_verb` on the piece it holds), a
+ * developer command, one whose actors are all people, one that refuses or
+ * does not require the `session` origin, or one that runs only over a
+ * person's consent grant. The broker's grant decides what may run; this
+ * decides only what is shown, and a row the host declares nothing about is
+ * shown.
  */
 export const isHiddenFromAgents = (row: Record<string, unknown>): boolean => {
   const strings = (key: string): string[] =>
@@ -262,6 +269,7 @@ export const loomCommandEntryOfRow = (
     ...(effect === "read" || effect === "change"
       ? { effect: effect as HarnessCallableEffect }
       : {}),
+    ...(row.readOnlyGranted === true ? { readOnlyGranted: true } : {}),
     target: typeof scope === "string" && scope.length > 0
       ? scope.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH)
       : "global",
@@ -420,6 +428,7 @@ export const runLoomCommand = async (
     ...(invocation.expectedVersion !== undefined
       ? ["--expect", String(invocation.expectedVersion)]
       : []),
+    ...(invocation.readOnly === true ? ["--read-only"] : []),
   ];
   const lost = (
     code: LoomCommandHostErrorCode,

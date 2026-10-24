@@ -754,9 +754,18 @@ describe("intent listener — scripted notification seam (design (e) pins 1–5,
 //  W2.1-7. F6 telemetry: depth-capped walks and thread evictions are
 //          counted (`cascadeWalkDepthCapCount` /
 //          `cascadeThreadEvictionCount`) — truncation is observable.
+//  Another space. An echo sealed into a space other than its intent's
+//          retires on the intent's mark too: a cascade child, a
+//          grandchild behind a child that wrote nothing, and the
+//          intent's own echo. Another intent's cascade there stands,
+//          and the flicker witness reads no echo outside the mark's
+//          space.
 //
 
 const W21_SIDECAR = "of:stream-events:w21-click";
+
+/** A space other than the one the scripted intents are fired in. */
+const W21_OTHER_SPACE = "did:key:z6MkIntentListenerOtherSpace" as MemorySpace;
 
 /** A destination over the scripted seam WITH the seal seam: entries
  * register through `sealNative`, the replica's retirement view reports
@@ -819,6 +828,10 @@ const cascadeDestination = () => {
       writes: string[];
       floor?: number;
 
+      /** The space the echo seals its writes into; the space the scripted
+       * intents are fired in unless given. */
+      space?: MemorySpace;
+
       /** Hold `sealInto` open until this settles — the mid-seal window
        * (the post-await re-check's subject: a mark landing while the
        * seal is in flight). */
@@ -844,7 +857,7 @@ const cascadeDestination = () => {
           return options.writes.length === 0
             ? { ok: {} }
             : collector.sealSpaceCommit(
-              SPACE,
+              options.space ?? SPACE,
               {
                 operations: options.writes.map((id) => ({
                   op: "set",
@@ -1130,6 +1143,190 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
     expect(destination.cascadeEchoRetirementCount).toBe(4);
     expect(destination.cascadeEchoRetirementUnarrivedCount).toBe(2);
     destination.close();
+  });
+
+  describe("an echo sealed into a space other than its intent's", () => {
+    // A handler that sends to a stream in another space has its cascade
+    // child's echo seal there, while the mark that makes the child jobless
+    // arrives on the sidecar in the space the intent was fired in.
+
+    it("retires a cascade child's echo in another space when its ancestor's mark arrives", async () => {
+      const {
+        destination,
+        echoOf,
+        seedAppend,
+        markConsequenced,
+        verdictOf,
+      } = cascadeDestination();
+      seedAppend(["evt-click"]);
+      destination.trackIntent(SPACE, W21_SIDECAR, "evt-click");
+      await destination.seal(echoOf("evt:client-key:0:of:receive", {
+        parentEventId: "evt-click",
+        writes: ["of:offers", "of:offer-client-entity"],
+        space: W21_OTHER_SPACE,
+      })).settled;
+      expect(destination.entryCount(W21_OTHER_SPACE)).toBe(1);
+
+      markConsequenced(0, {});
+      await flushMicrotasks();
+
+      expect(destination.pendingIntentCount).toBe(0);
+      expect(destination.entryCount(W21_OTHER_SPACE)).toBe(0);
+      expect(destination.cascadeEchoRetirementCount).toBe(1);
+      const verdict = await verdictOf(10) as {
+        withdrawn?: { superseded?: boolean };
+      };
+      expect(verdict?.withdrawn?.superseded).toBe(true);
+      destination.close();
+    });
+
+    it("retires a grandchild's echo in another space behind a child that wrote nothing", async () => {
+      const { destination, echoOf, seedAppend, markConsequenced } =
+        cascadeDestination();
+      seedAppend(["evt-click"]);
+      destination.trackIntent(SPACE, W21_SIDECAR, "evt-click");
+      await destination.seal(echoOf("evt:c:0:forward", {
+        parentEventId: "evt-click",
+        writes: [],
+      })).settled;
+      await destination.seal(echoOf("evt:c:0:receive", {
+        parentEventId: "evt:c:0:forward",
+        writes: ["of:offers", "of:offer-client-entity"],
+        space: W21_OTHER_SPACE,
+      })).settled;
+      expect(destination.entryCount(W21_OTHER_SPACE)).toBe(1);
+
+      markConsequenced(0, {});
+      await flushMicrotasks();
+
+      expect(destination.entryCount(W21_OTHER_SPACE)).toBe(0);
+      expect(destination.cascadeEchoRetirementCount).toBe(1);
+      destination.close();
+    });
+
+    it("retires an intent's own echo in every space it sealed into when its mark arrives", async () => {
+      const { destination, echoOf, seedAppend, markConsequenced } =
+        cascadeDestination();
+      seedAppend(["evt-click"]);
+      destination.trackIntent(SPACE, W21_SIDECAR, "evt-click");
+      await destination.seal(echoOf("evt-click", { writes: ["of:here"] }))
+        .settled;
+      await destination.seal(echoOf("evt-click", {
+        writes: ["of:there"],
+        space: W21_OTHER_SPACE,
+      })).settled;
+      expect(destination.entryCount(SPACE)).toBe(1);
+      expect(destination.entryCount(W21_OTHER_SPACE)).toBe(1);
+
+      markConsequenced(0, {});
+      await flushMicrotasks();
+
+      expect(destination.entryCount(SPACE)).toBe(0);
+      expect(destination.entryCount(W21_OTHER_SPACE)).toBe(0);
+      // Neither is a cascade descendant, so neither counts as one.
+      expect(destination.cascadeEchoRetirementCount).toBe(0);
+      destination.close();
+    });
+
+    it("leaves another intent's cascade echo in another space standing", async () => {
+      const { destination, echoOf, seedAppend, markConsequenced } =
+        cascadeDestination();
+      seedAppend(["evt-p", "evt-q"]);
+      destination.trackIntent(SPACE, W21_SIDECAR, "evt-p");
+      destination.trackIntent(SPACE, W21_SIDECAR, "evt-q");
+      await destination.seal(echoOf("evt:c:0:q-child", {
+        parentEventId: "evt-q",
+        writes: ["of:q-list", "of:q-entity"],
+        space: W21_OTHER_SPACE,
+      })).settled;
+
+      markConsequenced(0, {});
+      await flushMicrotasks();
+
+      expect(destination.entryCount(W21_OTHER_SPACE)).toBe(1);
+      expect(destination.cascadeEchoRetirementCount).toBe(0);
+
+      markConsequenced(1, {});
+      await flushMicrotasks();
+
+      expect(destination.entryCount(W21_OTHER_SPACE)).toBe(0);
+      expect(destination.cascadeEchoRetirementCount).toBe(1);
+      destination.close();
+    });
+
+    it("counts no echo in another space as unarrived, whatever seq its documents hold", async () => {
+      // The witness compares a written document's confirmed seq with the
+      // mark's, and a seq orders commits within one space only.
+
+      const { destination, echoOf, seedAppend, markConsequenced } =
+        cascadeDestination();
+      seedAppend(["evt-click"]);
+      destination.trackIntent(SPACE, W21_SIDECAR, "evt-click");
+      await destination.seal(echoOf("evt:c:0:receive", {
+        parentEventId: "evt-click",
+        writes: ["of:offers", "of:offer-client-entity"],
+        space: W21_OTHER_SPACE,
+      })).settled;
+
+      // No document the echo wrote has moved, which in the mark's own space
+      // would count as unarrived.
+      markConsequenced(0, {});
+      await flushMicrotasks();
+
+      expect(destination.cascadeEchoRetirementCount).toBe(1);
+      expect(destination.cascadeEchoRetirementUnarrivedCount).toBe(0);
+      destination.close();
+    });
+  });
+
+  describe("whether a run is discarded, asked before it seals", () => {
+    // A commit asks before its CFC boundary pass. A run whose intent already
+    // reached a terminal consequence reads state between its retired echo and
+    // the authoritative writes, and the pass would refuse what it read there,
+    // for writes the seal is about to drop.
+
+    it("returns `true` for a late grandchild of an intent whose mark arrived", async () => {
+      const { destination, echoOf, seedAppend, markConsequenced } =
+        cascadeDestination();
+      seedAppend(["evt-click"]);
+      destination.trackIntent(SPACE, W21_SIDECAR, "evt-click");
+      await destination.seal(echoOf("evt:c:0:forward", {
+        parentEventId: "evt-click",
+        writes: [],
+      })).settled;
+      markConsequenced(0, {});
+      await flushMicrotasks();
+
+      expect(destination.discards(echoOf("evt:c:0:point", {
+        parentEventId: "evt:c:0:forward",
+        writes: ["of:pointer"],
+      }))).toBe(true);
+      destination.close();
+    });
+
+    it("returns `false` for a grandchild of an intent still outstanding", async () => {
+      const { destination, echoOf, seedAppend } = cascadeDestination();
+      seedAppend(["evt-click"]);
+      destination.trackIntent(SPACE, W21_SIDECAR, "evt-click");
+      await destination.seal(echoOf("evt:c:0:forward", {
+        parentEventId: "evt-click",
+        writes: [],
+      })).settled;
+
+      expect(destination.discards(echoOf("evt:c:0:point", {
+        parentEventId: "evt:c:0:forward",
+        writes: ["of:pointer"],
+      }))).toBe(false);
+      destination.close();
+    });
+
+    it("returns `true` for any speculative run once the overlay is closed", () => {
+      const { destination, echoOf } = cascadeDestination();
+      destination.close();
+
+      expect(destination.discards(echoOf("evt-click", { writes: ["of:a"] })))
+        .toBe(true);
+    });
   });
 
   it("W2.1-6: the post-sealInto re-check walks the thread too (combined review 2026-08-19, F1) — P's mark landing while a SILENT child's grandchild is MID-SEAL withdraws the collected entry at the re-check instead of registering it (mutation: the re-check one level deep → the grandchild registers and strands)", async () => {

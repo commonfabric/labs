@@ -308,13 +308,17 @@ describe("wish-home-readiness", () => {
                 seed.getHomeSpaceCell().getAsNormalizedFullLink(),
               ),
             ).toBeUndefined();
+            // The helper's argument holds references to Home and the profile
+            // under no declaration of its own, so it stores no envelope: a
+            // reference's slot carries the reference's own label and nothing
+            // of its target's, whose label is read where it is.
             expect(
               readStoredCfcMetadata(
                 metadata,
                 seed.getCellFromLink(getMetaLink(helper, "argument")!)
                   .getAsNormalizedFullLink(),
               ),
-            ).toBeDefined();
+            ).toBeUndefined();
             metadata.abort();
             const helperIsRunning = () =>
               [...runtime.runner.cancels.keys()]

@@ -42,6 +42,15 @@ export interface RawBuiltinResult {
    * reconcile (Scheduler.invalidateAction) captures the wrapper here.
    */
   onActionRegistered?: (action: Action) => void;
+
+  /**
+   * The runtime-owned store documents this builtin creates as it runs, named
+   * when the node is set up so the action's write surface declares them
+   * before the first one exists. The runner declares each at every scope,
+   * since a store's instance scope is decided when the store is created. An
+   * effect takes no write surface, so an effect's stores are not declared.
+   */
+  storeWrites?: readonly NormalizedFullLink[];
 }
 
 /**
@@ -70,6 +79,11 @@ export class ModuleRegistry {
 
   constructor(runtime: Runtime) {
     this.runtime = runtime;
+  }
+
+  /** How many modules are registered. */
+  get size(): number {
+    return this.#moduleMap.size;
   }
 
   addModuleByRef(ref: string, module: Module): void {

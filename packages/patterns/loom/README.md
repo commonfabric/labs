@@ -4,8 +4,19 @@
 `schemas.tsx` defines its public contract and re-exports the participant
 roster's types from `participants.tsx`, which also holds the roster's one
 writer, `addParticipant`. The shared inputs are `title`, `panels`,
-`presentation`, `participants`, `chatRoom`, and `meeting`; `hiddenPanels` and
-`privatePanels` belong to one user, and `viewerState` to one session.
+`presentation`, `participants`, `chatRoom`, `fileStore`, `meeting`, and `style`;
+`hiddenPanels` and `privatePanels` belong to one user, and `viewerState` to one
+session.
+
+`style` is a `PerSpace` value: null, or `{id, mode}` where `id` is a portable
+catalog identifier and `mode` is `native`, `light`, or `dark`.
+`setStyle({style})` validates and replaces the pair in one write; null clears it
+for every participant. Invalid initial selections are exposed as null; invalid
+confirmation events are refused without changing the stored choice. The
+identifier uses `[a-z][a-z0-9-]{0,63}`. Viewers interpret catalog identifiers
+and fall back locally when a style is unknown. Hover previews remain ephemeral
+viewer state and send no action. Space WRITE or OWNER authority admits changes;
+READ viewers observe them.
 
 A panel is a `piece`, `document`, or HTTP(S) `url`. Piece and document targets
 are native cell references. Their complete space, scope, document, and path
@@ -33,12 +44,16 @@ the root renders it as a shared text field.
 A panel records who added it in one of two fields. `addedByProfile` links the
 profile under which the person adding it acted, and the runtime labels that link
 with `represents-principal` for the principal who acted, which it resolves
-itself: no caller chooses the one the label names. The linked profile is the
-actor's claim, as in the roster, since any participant may link any profile, and
-a Fabric profile carries its own owner's `represents-principal`. An occurrence
-added without a profile records the principal who acted in `addedBy` instead, as
-the DID `currentPrincipal()` returns, and the runtime labels the field
-`authored-by` for that same principal. Nothing in an event names the adder.
+itself: no caller chooses the one the label names. The profile is the actor's
+own: `admitPanel` refuses an event whose `as` names a profile unless
+`principalOf(as, "represents-principal")` returns the principal the event acts
+for. A Fabric profile carries its own owner's `represents-principal`, so an
+event naming another principal's profile is refused, and so is one naming a
+profile from which `principalOf()` reads no principal, and one that acts for no
+one. An occurrence added without a profile records the principal who acted in
+`addedBy` instead, as the DID `currentPrincipal()` returns, and the runtime
+labels the field `authored-by` for that same principal. Nothing in an event
+names the adder.
 
 The actor is read from the panel document's own stored label map, with
 `readStoredCfcMetadata` on the panel's document, which resolves a label map
@@ -48,10 +63,11 @@ exactly `["addedByProfile"]` and whose `origin` is not `"link"`. Entries with
 label and name its owner, not the actor. A merged label view, such as
 `cfcLabelViewForCell` on the field, unions the two without saying which is
 which, and a document that links the panel, such as the panels list, holds all
-of them as link copies; neither can name the actor. A reader shows the linked
-profile as the adder only when that profile's own `represents-principal` names
-the actor; otherwise the panel was added by the actor under someone else's
-profile. The runtime does not refuse that combination.
+of them as link copies; neither can name the actor. The root admits no panel
+under a profile its actor does not own, but the runtime does not refuse that
+combination, so a reader shows the linked profile as the adder only when that
+profile's own `represents-principal` names the actor; otherwise the panel was
+added by the actor under someone else's profile.
 
 `admission.tsx` holds `admitPanel`, the only handler the two fields' write
 contracts admit, so `addPiece`, `addPanel`, and `duplicatePanel` are all
@@ -79,11 +95,12 @@ holds its adder, if any, only as its writer's claim. So a removed occurrence
 that names a profile, another principal's adder, several adders, or an adder in
 a form no runtime mints is added back by adding a new occurrence, with `as` or
 through `addPiece`; `duplicatePanel` copies only an occurrence still in the
-Loom. The runtime links an unlabeled document passed as `as` into the field when
-the panel's document holds no stored write contract yet, as when the write
-creates the panel: it checks a new link's source only under a write contract
-outside a union branch, and this one sits inside each of `Panel`'s branches.
-That does not change whose principal the label names.
+Loom. The root's own check is what holds the profile to its actor. The runtime
+checks a new link's source only under a write contract outside a union branch,
+and this one sits inside each of `Panel`'s branches, so it would link any
+document passed as `as` into the field when the panel's document holds no stored
+write contract yet, as when the write creates the panel. That does not change
+whose principal the label names.
 
 `addedBy` is the DID of the principal who added the panel. On an occurrence
 `admitPanel` creates without `as`, through `addPiece` or `duplicatePanel`, it is
@@ -109,7 +126,9 @@ alone only where no entry exists. A panel with neither field names no adder.
 
 The root's own Duplicate button acts under the session's `actingProfile` in
 `viewerState` when it holds one, and otherwise under the viewer's `#profile`;
-with neither, the copy records the principal the duplication acted for.
+with neither, the copy records the principal the duplication acted for. A
+duplication under a profile that is not the viewer's own is refused, as any
+other event naming one is.
 
 `pieceRegistry` derives from piece panels in order, including duplicates.
 `addPiece({piece, as?})` idempotently adds a registration occurrence; for a
@@ -126,19 +145,22 @@ is retried. `removePanel` removes only one occurrence and its presentation
 references. `removePiece` unregisters every occurrence of the specified complete
 piece link. Neither operation deletes the target.
 
-Only the principal who added an occurrence removes it, unless they have left.
-`removePanel` reads the adder from the runtime's stamps on the occurrence's own
-fields, with `principalsOf` and `label: "written"`: `authored-by` at `addedBy`,
-whatever the field holds, and `represents-principal` at `addedByProfile`, which
-names whoever acted under the profile rather than the profile's owner. It
-removes an occurrence those stamps attest to the principal the event acts for
-alone. It removes one they attest to nobody whose contribution the rule could
-keep: an occurrence with no adder, one that holds its adder only as its writer's
-claim in `addedBy`, and one whose stamps name more than one principal. A field
-whose claims hold one in a form no runtime mints names nobody either: a label a
-runtime did not mint is trusted in neither direction, and the rule falls open
-there because the alternative is a panel nobody can remove; the other field's
-stamp, when well formed, still names the adder. It refuses one attested to
+Only the principal who added an occurrence removes it, unless they have left or
+its label does not say who added it. `removePanel` reads the adder from the
+runtime's stamps on the occurrence's own fields, with `principalsOf` and
+`label: "written"`: `authored-by` at `addedBy`, whatever the field holds, and
+`represents-principal` at `addedByProfile`, which names whoever acted under the
+profile rather than the profile's owner. It removes an occurrence those stamps
+attest to the principal the event acts for alone. It removes, for anyone, one
+that records no adder: an occurrence that holds no profile and whose `addedBy`
+no stamp names, which holds its adder, if any, only as its writer's claim. One
+whose stamps do not settle on one adder is an OWNER's alone to remove: one whose
+stamps name more than one principal, one where either field holds a claim in a
+form no runtime mints, which a runtime did not write and is trusted in neither
+direction, and one that holds a profile no stamp says anyone acted under, since
+`admitPanel` stamps every profile it records. No participant's claim to such an
+occurrence can be read, so none is protected, and an OWNER of the Loom's space,
+by `spaceAccess(panels)`, is who clears it up. It refuses one attested to
 another principal, with one exception: an OWNER of the Loom's space, by
 `spaceAccess(panels)`, removes an occurrence whose attested adder the Loom's
 access list grants nothing, by `spaceAccessOf(panels, adder)`, so that what a
@@ -219,14 +241,13 @@ shown. `participants.tsx` holds the roster and `addParticipant({profile})`, the
 only writer its write contract admits; a write from any other action, or from
 another pattern holding the roster cell, is refused. Adding is a mergeable set
 add, so concurrent additions all land and a listed profile is not added twice.
-The roster links only a profile whose label the runtime holds, the first entry
-included: a bare document names no principal, and adding one is refused. Any
-participant may add any profile, so the stored list is a set of claims: a
-consumer that needs the actual participants keeps only profiles whose principal
-currently holds access to the Loom's space, which hides an entry for anyone else
-and drops a removed member without deleting their entry. The root does not
-render the list: it holds claims, and only a consumer that can read the access
-list can say which are participants.
+Any participant may add any document, a bare one that names no principal
+included, so the stored list is a set of claims: a consumer that needs the
+actual participants keeps only profiles whose principal currently holds access
+to the Loom's space, which hides an entry for anyone else and drops a removed
+member without deleting their entry. The root does not render the list: it holds
+claims, and only a consumer that can read the access list can say which are
+participants.
 
 `chatRoom` links the Loom's chat room, so every member finds it in the Loom's
 shared state. It is a link to a room piece in the Loom's own space, typed as
@@ -258,6 +279,17 @@ stays named until `setChatRoom` clears it, as any link does. The input holds the
 link in a record, `{ room? }`, because a handler's cell for a field holding a
 link writes through it, so replacing the link there would write into the room.
 
+`fileStore` is where the Loom keeps its space's file store
+([`FileStore`](../../../docs/specs/fabrifile/FileStore.md#where-it-lives)): a
+`FileStoreRecord`, `{}` until the store is first needed. The output's
+`fileStore` links the store, absent while the Loom names none, and
+`ensureFileStore()` creates one as a piece in the Loom's space, unless the Loom
+names one already, in which case it changes nothing. The store is added neither
+as a panel nor to `pieceRegistry`. The output also offers the record itself as
+`fileStoreRecord`, which is how the Loom's chat room, whose container the Loom
+is, finds the store and creates it: a room in the Loom's space has the Loom's
+store as its own.
+
 `meeting` is the Loom's shared, durable meeting association, a record with an
 optional `key`. An empty record, including the default for a root whose input
 has no `meeting` field, names no meeting. The key is the existing CFS meeting
@@ -265,22 +297,52 @@ occurrence key: the lowercase 64-character hexadecimal SHA-256 of its organizer,
 iCalUID, and UTC original start time, computed by CFS. The root validates the
 key's format and stores it without recomputing it.
 
-`bindMeeting({key, reply?})` binds an empty association once. A same-key replay
-confirms the association, and a different key leaves it unchanged. The handler
-reads the association inside its transaction, so competing binds retry against
-the first committed key. If supplied, the per-event reply cell receives
-`{status: "bound", key}`, `{status: "already-bound", key}`, or
-`{status: "conflict", key}`, where a conflict names the stored key. An invalid
-request key receives `{status: "invalid-key"}`. Unrecognized stored state,
-including extra fields without a key or a malformed stored key, receives
-`{status: "invalid-state"}` and stays intact. Extra metadata alongside a valid
-key stays intact on replay or conflict. A request whose `reply` is the
-association cell itself changes nothing and receives no response, since any
-response written there would replace the association. A reply cell that lies
-within the association, such as one of its fields, or contains it is not
-detected, and the response written there changes the association; a caller
-passes a reply cell of its own. A caller omitting `reply` confirms success by
-observing the matching `meeting.key` in the root's output.
+The optional `meeting.portableIdentity` carries `scheme: "ical-uid-slot"`,
+`item_key`, and `occurrence_key`. The keys are complete lowercase hexadecimal
+SHA-256 digests computed by the caller from the opaque iCalendar UID and typed
+original slot. The root validates their scheme and format and stores these three
+fields without recomputing them. The caller retains the provider evidence and
+verifies which occurrence those keys identify. Any space member with WRITE may
+supply this evidence, so the stored identity is a claim. Readers must
+corroborate its relationship to the calendar occurrence before adopting a room
+or accepting a lookup alias.
+
+`bindMeeting({key, portableIdentity?, reply?})` binds an empty association once,
+including the portable evidence when supplied. A same-key replay can add
+portable evidence to a binding that has none; otherwise it confirms the
+association. The legacy key remains immutable. A different key or different
+supported portable keys leave the association unchanged and return a conflict.
+The handler reads the association inside its transaction, so competing binds
+retry against the first committed key. If supplied, the per-event reply cell
+receives `{status: "bound", key}`, `{status: "already-bound", key}`, or
+`{status: "conflict", key}`, where a conflict names the stored key. When the
+reply key equals the request key, the conflict is between portable keys;
+otherwise the legacy keys differ. An invalid request key receives
+`{status: "invalid-key"}`. Malformed portable request evidence, including an
+explicit `null`, receives `{status: "invalid-key"}` without binding the key.
+Unrecognized stored state, including extra fields without a key or a malformed
+stored key, receives `{status: "invalid-state"}` and stays intact. Extra
+metadata alongside a valid key stays intact on replay, enrichment, or conflict,
+including unknown fields inside an existing portable identity. A valid same-key
+request for portable evidence receives `{status: "invalid-state"}` for malformed
+or unsupported stored portable evidence and leaves it intact. A legacy replay
+omitting portable evidence still confirms the legacy key and preserves that
+stored metadata.
+
+A request whose `reply` is the association cell itself changes nothing and
+receives no response, since any response written there would replace the
+association. A reply cell that lies within the association, such as one of its
+fields, or contains it is not detected, and the response written there changes
+the association; a caller passes a reply cell of its own. A caller omitting
+`reply` confirms success by observing the matching `meeting.key` in the root's
+output.
+
+A caller using portable evidence must also observe the matching
+`meeting.portableIdentity` through the root's output. A legacy `bound` or
+`already-bound` reply alone does not establish support: a root running older
+source may ignore the optional request field. Portable evidence supplies an
+association for room lookup; binding does not allocate a room or deduplicate
+simultaneous creators.
 
 The association is meaningful shared state, independent of panels, chat, and
 each viewer's overlay. Source updates preserve it through its `PerSpace` input.
@@ -290,18 +352,22 @@ owner-authorized workflow. A root without `bindMeeting` is unsupported for that
 workflow: a caller must not infer support from an absent key, replace the root,
 or overwrite its contents to adopt it.
 
-Run and attach all thirteen tests when deploying or updating source:
+Run and attach all seventeen tests when deploying or updating source:
 
 ```sh
+deno task cf test packages/patterns/loom/style.test.tsx
+deno task cf test packages/patterns/loom/style-refusals.test.tsx
 deno task cf test packages/patterns/loom/main.test.tsx
 deno task cf test packages/patterns/loom/presentation-refusals.test.tsx
 deno task cf test packages/patterns/loom/multi-user.test.tsx
 deno task cf test packages/patterns/loom/participant-labels.test.tsx
 deno task cf test packages/patterns/loom/url-view.test.tsx
 deno task cf test packages/patterns/loom/adder-profile.test.tsx
+deno task cf test packages/patterns/loom/adder-profile-owner.test.tsx
 deno task cf test packages/patterns/loom/actor-attribution.test.tsx
 deno task cf test packages/patterns/loom/chat-room.test.tsx
 deno task cf test packages/patterns/loom/ensure-chat-room.test.tsx
+deno task cf test packages/patterns/loom/ensure-file-store.test.tsx
 deno task cf test packages/patterns/loom/retitle-retarget.test.tsx
 deno task cf test packages/patterns/loom/overlay.test.tsx
 deno task cf test packages/patterns/loom/private-panels.test.tsx
@@ -309,15 +375,19 @@ deno task cf test packages/patterns/loom/meeting.test.tsx
 
 deno task cf piece new packages/patterns/loom/main.tsx \
   --root packages/patterns \
+  --test packages/patterns/loom/style.test.tsx \
+  --test packages/patterns/loom/style-refusals.test.tsx \
   --test packages/patterns/loom/main.test.tsx \
   --test packages/patterns/loom/presentation-refusals.test.tsx \
   --test packages/patterns/loom/multi-user.test.tsx \
   --test packages/patterns/loom/participant-labels.test.tsx \
   --test packages/patterns/loom/url-view.test.tsx \
   --test packages/patterns/loom/adder-profile.test.tsx \
+  --test packages/patterns/loom/adder-profile-owner.test.tsx \
   --test packages/patterns/loom/actor-attribution.test.tsx \
   --test packages/patterns/loom/chat-room.test.tsx \
   --test packages/patterns/loom/ensure-chat-room.test.tsx \
+  --test packages/patterns/loom/ensure-file-store.test.tsx \
   --test packages/patterns/loom/retitle-retarget.test.tsx \
   --test packages/patterns/loom/overlay.test.tsx \
   --test packages/patterns/loom/private-panels.test.tsx \

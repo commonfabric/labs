@@ -139,6 +139,42 @@ export default pattern(() => {
   }],
 };
 
+/**
+ * A stand-in for a Loom, with the public composition vetting a `loom` space
+ * checks of its root: `panels`, and the `addPanel` and `removePanel` streams.
+ */
+const loomProgram: RuntimeProgram = {
+  main: "/loom.tsx",
+  files: [{
+    name: "/loom.tsx",
+    contents: `
+import { handler, pattern, Writable } from "commonfabric";
+
+type Panel = { title: string };
+
+const addPanel = handler<{ panel: Panel }, { panels: Writable<Panel[]> }>(
+  (event, { panels }) => {
+    panels.push(event.panel);
+  },
+);
+
+const removePanel = handler<{ panel: Panel }, { panels: Writable<Panel[]> }>(
+  (event, { panels }) => {
+    panels.set(panels.get().filter((each) => each.title !== event.panel.title));
+  },
+);
+
+export default pattern(() => {
+  const panels = new Writable<Panel[]>([]).for("panels");
+  return {
+    panels,
+    addPanel: addPanel({ panels }),
+    removePanel: removePanel({ panels }),
+  };
+});`,
+  }],
+};
+
 /** An offer as an inbox holds it, which a test varies field by field. */
 type Row = Record<string, unknown>;
 
@@ -249,17 +285,48 @@ describe("share-intake", () => {
     space: MemorySpace,
     reserved: boolean,
   ): Promise<void> {
+    await placeRoot(space, roomProgram, reserved);
+  }
+
+  /**
+   * A space granting `grants`, owned by the owner, whose genesis commit
+   * declares `spaceKind`, `loom` by default, or no kind for `null`, and whose
+   * root is a Loom stand-in at an address of its own, which no genesis
+   * reservation names.
+   */
+  async function loomSpace(
+    grants: ACL,
+    { spaceKind = "loom" }: { spaceKind?: string | null } = {},
+  ): Promise<MemorySpace> {
+    const space = await runtime.createSpace({
+      grants,
+      ...(spaceKind === null ? {} : { spaceKind }),
+    });
+    await placeRoot(space, loomProgram, false);
+    return space;
+  }
+
+  /**
+   * Runs `program` into `space` and links it as the space's root, at the
+   * address the space's genesis reserves when `reserved`, and at a fresh one
+   * when not.
+   */
+  async function placeRoot(
+    space: MemorySpace,
+    program: RuntimeProgram,
+    reserved: boolean,
+  ): Promise<void> {
     // Disposing a controller disposes the runtime, which `afterEach` does
     // through the Home space's controller.
-    const rooms = new PiecesController(
+    const roots = new PiecesController(
       createSession({ identity, spaceDid: space }),
       runtime,
     );
-    await rooms.synced();
+    await roots.synced();
     await installCustomRoot(
       runtime,
-      rooms,
-      roomProgram,
+      roots,
+      program,
       reserved ? { cause: inSpaceRootCause(space) } : {},
     );
   }
@@ -662,6 +729,67 @@ describe("share-intake", () => {
       );
     });
 
+    it("is registered with `kind` `loom`, and not accepted by Home's chat manager, when it offers a `loom` space", async () => {
+      const space = await loomSpace({ [sender]: "WRITE" });
+      const intake = start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "loom", { kind: "loom" }),
+      );
+
+      expect(registered).toMatchObject([{
+        space,
+        host: HOST,
+        kind: "loom",
+        title: "Room loom",
+        offer: { from: sender, id: "loom" },
+      }, { offer: { id: "barrier" } }]);
+      // The barrier's room is the one acceptance.
+      expect(await acceptedNow(intake)).toEqual([{
+        space: registered[1].space,
+        keepArchived: true,
+      }]);
+    });
+
+    it("is registered when it offers a `loom` space that declares no kind", async () => {
+      const space = await loomSpace({ [sender]: "WRITE" }, {
+        spaceKind: null,
+      });
+      start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "legacy loom", { kind: "loom" }),
+      );
+
+      expect(registeredIds(registered)).toEqual(["legacy loom", "barrier"]);
+    });
+
+    it("is registered when its inbox next changes after its `loom` space's root is linked back to a Loom", async () => {
+      const space = await loomSpace({ [sender]: "WRITE" });
+      const loom = await runtime.getSpaceCell(space).key("defaultPattern")
+        .pull();
+      await placeRoom(space, false);
+      const intake = start();
+      await deliver([offerOf(space, "re-pointed", { kind: "loom" })]);
+      await deliver([offerOf(await offeredSpace({ [sender]: "WRITE" }), "a")]);
+      await registeredThrough("a");
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "re-pointed"))
+        .toEqual(["space-root-mismatch"]);
+
+      await runtime.editWithRetry((tx) =>
+        runtime.getSpaceCell(space).withTx(tx).key("defaultPattern").set(
+          loom as never,
+        )
+      );
+      await deliver([offerOf(await offeredSpace({ [sender]: "WRITE" }), "b")]);
+
+      expect(registeredIds(await registeredThrough("b"))).toEqual([
+        "a",
+        "re-pointed",
+        "b",
+      ]);
+    });
+
     it("is registered when its inbox next changes after its space comes to grant its sender", async () => {
       const space = await offeredSpace({ [someoneElse]: "WRITE" });
       const other = await offeredSpace({ [sender]: "WRITE" });
@@ -893,19 +1021,6 @@ describe("share-intake", () => {
   });
 
   describe("an offer that is skipped", () => {
-    it("is not registered, nor logged, when its `kind` is `loom`", async () => {
-      const space = await offeredSpace({ [sender]: "WRITE" });
-      start();
-      const before = refusalsLogged();
-
-      const registered = await deliverThenBarrier(
-        offerOf(space, "loom", { kind: "loom" }),
-      );
-
-      expect(registeredIds(registered)).toEqual(["barrier"]);
-      expect(refusalsLogged()).toBe(before);
-    });
-
     it("is not registered, nor logged, when the catalog holds its receipt", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       await runtime.editWithRetry((tx) =>
@@ -1114,6 +1229,31 @@ describe("share-intake", () => {
         logged: 1,
         decisions: ["space-kind-undeclared"],
       });
+    });
+
+    it("is not registered, and is logged, when it offers as a `loom` a space declaring `fabrichat-room`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+
+      expect(await refuse(offerOf(space, "room as loom", { kind: "loom" })))
+        .toEqual({
+          ids: ["barrier"],
+          logged: 1,
+          decisions: ["space-kind-mismatch"],
+        });
+    });
+
+    it("is not registered, and is logged, when it offers a `loom` space whose root is no Loom", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" }, {
+        spaceKind: "loom",
+        root: "misplaced",
+      });
+
+      expect(await refuse(offerOf(space, "room in loom", { kind: "loom" })))
+        .toEqual({
+          ids: ["barrier"],
+          logged: 1,
+          decisions: ["space-root-mismatch"],
+        });
     });
 
     it("is not registered, and is logged, when the space's root is not at the address its genesis reserves", async () => {

@@ -14,7 +14,9 @@
  * Then someone who shares a group with another person adds them to a second
  * group from its page, by address alone; their manager offers it to the
  * person through the profile it lists for them, the room's page shows it was
- * offered, and the person's own manager lists it once they open it.
+ * offered, and the person's own manager lists it once they open it. And
+ * someone a group names by address alone, who is offered nothing, finds it in
+ * their chats once they have only opened its page, which joins them to it.
  */
 
 import type { DID } from "@commonfabric/identity";
@@ -30,6 +32,8 @@ import {
   collectBrowserLoadSummary,
   fillCfInput,
   fillCfTextarea,
+  readTextProbe,
+  settleView,
   waitForRuntimeIdle,
   waitForSettledText,
   waitForText,
@@ -80,6 +84,10 @@ describe("fabrichat-join", () => {
   let adderIdentity: Identity;
   let addedIdentity: Identity;
 
+  // A group's owner, and someone named in it by address, who only opens it.
+  let visitedOwnerIdentity: Identity;
+  let visitorIdentity: Identity;
+
   beforeAll(async () => {
     firstIdentity = await Identity.generate({ implementation: "noble" });
     secondIdentity = await Identity.generate({ implementation: "noble" });
@@ -88,6 +96,8 @@ describe("fabrichat-join", () => {
     groupMemberIdentity = await Identity.generate({ implementation: "noble" });
     adderIdentity = await Identity.generate({ implementation: "noble" });
     addedIdentity = await Identity.generate({ implementation: "noble" });
+    visitedOwnerIdentity = await Identity.generate({ implementation: "noble" });
+    visitorIdentity = await Identity.generate({ implementation: "noble" });
   });
 
   it("lets two people start a direct chat from home, join it from its link, and exchange a message", async () => {
@@ -251,11 +261,13 @@ describe("fabrichat-join", () => {
     await fillCfInput(added, "#fabrichat-message", "Hello from Grace");
     await clickTrustedAction(added, SEND_ACTION);
     await waitForText(added, "#fabrichat-messages", "Hello from Grace");
+    await waitForSettledText(adder, "cf-profile-badge", "Grace Hopper");
 
     // The adder creates a second group, of their own alone, and opens it. Its
     // add control offers the person from their chats.
     const secondTitle = "Added team";
     await openChatManager(firstShell, adderIdentity);
+    await waitForSettledText(adder, "#fabrichat-group-people", "Grace Hopper");
     await fillCfInput(adder, "#fabrichat-group-title", secondTitle);
     await clickButtonWithExactText(adder, "Create group");
     await waitForSettledText(adder, "#fabrichat-rooms", secondTitle);
@@ -278,15 +290,19 @@ describe("fabrichat-join", () => {
     // TODO(danfuzz): Expect `offered` under server execution too, and the
     // room in the person's chats below, once deriving `people` takes no
     // per-session read of a room's space.
+    const outcome = SERVER_EXECUTION
+      ? `Added ${addedAddress}. Your chats remind you to send them this chat's link.`
+      : `Added ${addedAddress}, and offered them this chat.`;
     await fillCfInput(adder, "#fabrichat-add-member-address", addedAddress);
     await clickTrustedAction(adder, ADD_MEMBER_ACTION);
-    await waitForSettledText(
-      adder,
-      "#fabrichat-add-member-outcome",
-      SERVER_EXECUTION
-        ? `Added ${addedAddress}. Your chats remind you to send them this chat's link.`
-        : `Added ${addedAddress}, and offered them this chat.`,
-    );
+    await waitForSettledText(adder, "#fabrichat-add-member-outcome", outcome);
+    // The page goes on saying so once it has settled.
+    await waitForRuntimeIdle(adder);
+    await settleView(adder);
+    expect(
+      (await readTextProbe(adder, "#fabrichat-add-member-outcome")).matches
+        .map((match) => match.text),
+    ).toEqual([outcome]);
 
     // The adds the room records are the adder's own: the adder reads theirs
     // through the room, and the person added, a member of the room now, reads
@@ -307,6 +323,39 @@ describe("fabrichat-join", () => {
       await openChatManager(secondShell, addedIdentity);
       await waitForSettledText(added, "#fabrichat-rooms", secondTitle);
     }
+  });
+  it("lists a group in the chats of someone who only opens its page", async () => {
+    const owner = firstShell.page();
+    const visitor = secondShell.page();
+
+    await gotoHome(secondShell, visitorIdentity);
+    await createProfileAtHome(visitor, "Grace Hopper");
+    await openChatManager(secondShell, visitorIdentity);
+    const visitorAddress = await readChatAddress(visitor);
+
+    // The owner names the visitor by address alone, so their manager is
+    // offered nothing, and opens the group's page.
+    const title = "Visited team";
+    await gotoHome(firstShell, visitedOwnerIdentity);
+    await createProfileAtHome(owner, "Ada Lovelace");
+    await openChatManager(firstShell, visitedOwnerIdentity);
+    await fillCfInput(owner, "#fabrichat-group-title", title);
+    await fillCfTextarea(owner, "cf-textarea", visitorAddress);
+    await clickButtonWithExactText(owner, "Create group");
+    await waitForSettledText(owner, "#fabrichat-rooms", title);
+    const roomId = await clickCellLink(owner, title);
+    const roomView = await waitForPieceSelected(owner, roomId);
+
+    // The visitor opens the group's page and writes nothing there. Visiting it
+    // joins them to it, so their manager then lists it.
+    await secondShell.goto({
+      frontendUrl: FRONTEND_URL,
+      view: roomView,
+      identity: visitorIdentity,
+    });
+    await waitForSettledText(visitor, "#fabrichat-messages", EMPTY_ROOM_TEXT);
+    await openChatManager(secondShell, visitorIdentity);
+    await waitForSettledText(visitor, "#fabrichat-rooms", title);
   });
 });
 

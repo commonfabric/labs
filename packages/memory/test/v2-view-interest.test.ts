@@ -967,8 +967,14 @@ describe("view interests", () => {
     expect(added.ok?.sync.upserts).toEqual([]);
     expect(evaluations.calls).toHaveLength(0);
     expect(session.graphs.size).toBe(graphs.size);
+    // The added root is covered by the record its query already made, so
+    // the graph tracks and delivers what it did; only the root's
+    // attribution to that record is new.
     for (const [branch, graph] of graphs) {
-      expect(session.graphs.get(branch)).toBe(graph);
+      const reused = session.graphs.get(branch)!;
+      expect([...reused.entities]).toEqual([...graph.entities]);
+      expect([...reused.tracker]).toEqual([...graph.tracker]);
+      expect(reused.coveredBy.size).toBe(1);
     }
     expect(server.viewInterestsForSpace(space)).toHaveLength(1);
     expect(

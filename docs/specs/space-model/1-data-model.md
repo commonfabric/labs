@@ -77,12 +77,20 @@ authoritative statement of these rules.
 
 #### `undefined`
 
-`undefined` has special semantics depending on context:
+`undefined` is a first-class `FabricValue`, and an encoding records it
+wherever it appears, in the tagged form `Undefined@1` (see
+`space-model-formal-spec/3-json-encoding.md` Section 3):
 
-- **Top-level**: Indicates deletion (remove the stored value)
-- **Object property**: Treated as absent (property is omitted)
+- **Top-level**: Writing `undefined` as a cell's value deletes the stored
+  value. That is the application layer's reading of the value, not a property
+  of the encoding
+- **Object property**: Stored as `undefined`, and remains distinguishable from
+  an absent property
 - **Array element**: Stored as `undefined`, and remains distinguishable from
   both a hole and a `null`
+
+See `space-model-formal-spec/1-fabric-values.md` Section 1.3 for the
+authoritative statement.
 
 #### Non-Fabric Types
 

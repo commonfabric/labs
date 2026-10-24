@@ -31,6 +31,7 @@ import { cloneSchemaMutable } from "@commonfabric/data-model-schema";
 import {
   INVALID_RESULT,
   PROVIDER_FAILURE,
+  withAgentInputAccessTools,
 } from "@commonfabric/runner/agent-run";
 import { addressKey, renderCellReference } from "@commonfabric/runner/shared";
 import type { Cell } from "@commonfabric/runner";
@@ -114,9 +115,10 @@ export async function agentRunObservationCeiling(
  *
  * The record becomes a job spec whose task binds as `context`, since a
  * pattern's text is not an operator's command, with the request's inputs as
- * input cells and its ceiling met with the host's as the fabric session's
- * read ceiling. A completed job's result is then written into the record's
- * space by `writeAgentResult`.
+ * input cells, the tools that read those cells beside whatever tools the
+ * request selects, and its ceiling met with the host's as the fabric
+ * session's read ceiling. A completed job's result is then written into the
+ * record's space by `writeAgentResult`.
  *
  * A run ends `completed` with a link to the result document; `cancelled`
  * when its signal aborted; `refused` when the space's policy refused the
@@ -166,8 +168,9 @@ export const createHarnessAgentRunExecutor = (
       // The run validates everything but the `asCell` positions, where the
       // model writes a handle token and the writer places a link.
       resultSchema: relaxAsCellPositions(resultSchema),
-      // A request naming its tools narrows the run to them.
-      tools: record.tools ?? options.allowedTools,
+      // A request naming its tools narrows the run to them, short of the
+      // tools that read the inputs it granted.
+      tools: withAgentInputAccessTools(record.tools ?? options.allowedTools),
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.loomRetrievalConfigPath !== undefined
         ? { loomRetrievalConfigPath: options.loomRetrievalConfigPath }

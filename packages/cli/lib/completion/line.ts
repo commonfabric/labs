@@ -223,11 +223,6 @@ const POSITIONAL_ADDRESS_COMMANDS: ReadonlySet<string> = new Set([
   "cell get",
   "cell set",
   "piece call",
-  // The superseded spellings, which accept the same positional for as long as
-  // they answer at all.
-  "get",
-  "set",
-  "call",
 ]);
 
 /**
@@ -247,11 +242,11 @@ function isPositionalAddress(
 /**
  * Subcommands a caller can reach, hidden ones included.
  *
- * A superseded spelling is hidden so that nothing offers it, and stays mounted
- * so that a caller who already types it still works. Completion follows that
- * split: suggestion lists only what {@link realSubcommands} returns, while
- * resolving a typed name and walking the tree for slots see everything
- * reachable — otherwise the old spelling would complete none of its own flags.
+ * A hidden command is one nothing offers, and a caller who types it is still
+ * answered. Completion follows that split: suggestion lists only what
+ * {@link realSubcommands} returns, while resolving a typed name and walking the
+ * tree for slots see everything reachable — otherwise a hidden command would
+ * complete none of its own flags.
  */
 function reachableSubcommands(command: AnyCommand): AnyCommand[] {
   return command.getCommands(true).filter((child) =>
@@ -616,8 +611,8 @@ export interface DeclaredSlots {
  * and `takesValue` decides which options have a value to complete.
  *
  * Reachable rather than suggestible, which is the same split resolving a typed
- * name follows: a superseded spelling is hidden from {@link realSubcommands},
- * so nothing offers it, and it still owns every slot below it — a caller who
+ * name follows: a hidden command is left out of {@link realSubcommands}, so
+ * nothing offers it, and it still owns every slot below it — a caller who
  * types it completes its flags, and a slot reached only through it is one the
  * provider tables have to answer for.
  *

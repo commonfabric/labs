@@ -1,5 +1,5 @@
 {
-  "specsCommit": "9e751d583760fe44780aad2f4b138edb2667fa1a",
+  "specsCommit": "0c12ccf38b92c1696b7e47bd1eab8ddf42d2d6ef",
   "sections": [
     "1",
     "1.1",
@@ -527,6 +527,25 @@
     "13.12.4",
     "13.12.5",
     "13.12.6",
+    "13.13",
+    "13.13.1",
+    "13.13.2",
+    "13.13.3",
+    "13.13.4",
+    "13.13.5",
+    "13.13.6",
+    "13.13.7",
+    "13.13.8",
+    "13.13.9",
+    "13.13.10",
+    "13.13.11",
+    "13.13.12",
+    "13.13.13",
+    "13.13.14",
+    "13.13.15",
+    "13.13.16",
+    "13.13.17",
+    "13.13.18",
     "14",
     "14.1",
     "14.1.1",
@@ -1238,6 +1257,24 @@
       "section": "8.12.6",
       "name": "propagateExpiration",
       "sha256": "928ab29914a50b74989076397cede64699b5b59f1ed981bdc878fb571237e9ef"
+    },
+    {
+      "file": "08-12-store-label-monotonicity.md",
+      "section": "8.12.7",
+      "name": "canReleaseStoredClause",
+      "sha256": "ba271dfc86a75e913129bcfb5b49a20684983f00618ef6c11daf2ef87fae3e97"
+    },
+    {
+      "file": "08-12-store-label-monotonicity.md",
+      "section": "8.12.7",
+      "name": "standsForActor",
+      "sha256": "ba271dfc86a75e913129bcfb5b49a20684983f00618ef6c11daf2ef87fae3e97"
+    },
+    {
+      "file": "08-12-store-label-monotonicity.md",
+      "section": "8.12.7",
+      "name": "ownerReleaseAt",
+      "sha256": "ba271dfc86a75e913129bcfb5b49a20684983f00618ef6c11daf2ef87fae3e97"
     },
     {
       "file": "08-13-opaque-inputs.md",

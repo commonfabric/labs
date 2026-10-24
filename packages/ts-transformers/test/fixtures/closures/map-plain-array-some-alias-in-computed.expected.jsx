@@ -97,7 +97,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, {
-        "enum": ["yes", "no"]
+        "enum": ["no", "yes"]
     } as const satisfies __cfHelpers.JSONSchema, doneToday, "yes", "no")}</span>;
 }, {
     type: "object",

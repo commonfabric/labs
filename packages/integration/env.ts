@@ -11,7 +11,8 @@ export const FRONTEND_URL = ensureTrailing(
   Deno.env.get("FRONTEND_URL") ?? API_URL,
 );
 
-export const HEADLESS = envToBool(Deno.env.get("HEADLESS"));
+/** Whether shell test browsers run headlessly; defaults to `true`. */
+export const HEADLESS = envToBool(Deno.env.get("HEADLESS") || "1");
 
 // Pipe browser console output to the test runner's console.
 export const PIPE_CONSOLE = envToBool(Deno.env.get("PIPE_CONSOLE"));

@@ -13,6 +13,8 @@ import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
 } from "../src/storage/extended-storage-transaction.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { isEnvelopeStabilityRefusal } from "../src/storage/rejection.ts";
 
 const signer = await Identity.fromPassphrase("write-policy-any-of");
 
@@ -53,6 +55,15 @@ const SCHEMA: JSONSchemaObj = {
   ifc: { writePolicyAnyOf: [policy("send", "Send"), policy("edit", "Edit")] },
 };
 
+/** How a fixture's write is made, beyond the writer and its action. */
+type WriteOptions = {
+  schema?: JSONSchema;
+  module?: string;
+  initialization?: "setup" | "default" | "seed";
+  value?: string;
+  recordedValue?: string;
+};
+
 /**
  * A runtime over an emulated store, and a way to write one protected cell as
  * a named writer of a module (`MODULE` unless named), with or without a
@@ -66,73 +77,96 @@ function fixture() {
     storageManager,
     cfcEnforcementMode: "enforce-explicit",
   });
-  return {
-    async write(
-      writer: string,
-      action?: string,
-      options: {
-        schema?: JSONSchema;
-        module?: string;
-        initialization?: "setup" | "default" | "seed";
-        value?: string;
-        recordedValue?: string;
-      } = {},
-    ) {
-      const schema = options.schema ?? SCHEMA;
-      const value = options.value ?? writer;
-      const tx = runtime.edit();
-      setCfcTrustSnapshot(tx, {
-        id: "test-trust",
-        actingPrincipal: signer.did(),
-      });
-      setCfcImplementationIdentity(tx, {
-        kind: "verified",
-        moduleIdentity: options.module ?? MODULE,
-        sourceFile: "/main.tsx",
-        bindingPath: [writer],
-      });
-      const cell = runtime.getCell(
-        signer.did(),
-        "protected-value",
-        schema,
-        tx,
-      );
-      cell.set(value);
-      const target = cell.getAsNormalizedFullLink();
-      if (options.initialization === "setup") {
-        tx.recordCfcWritePolicyInput({
-          kind: "structural-provenance",
-          claim: CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
-          target: { ...target, id: "of:setup-result" },
-          sources: [target],
-        }, runtimeWritePolicyAuthorization);
-      } else if (options.initialization !== undefined) {
-        tx.recordCfcWritePolicyInput({
-          kind: "initialization",
-          mode: options.initialization,
-          target,
-          value: options.recordedValue ?? value,
-        }, runtimeWritePolicyAuthorization);
-      }
-      if (action !== undefined) {
-        tx.recordCfcWritePolicyInput({
-          kind: "trusted-event",
-          target,
-          eventId: "test-event",
-          provenance: {
-            origin: "dom",
-            trusted: true,
-            ui: {
-              pattern: "ReviewedSurface",
-              eventIntegrity: ["ReviewedSurface"],
-              uiContractDataset: { uiAction: action },
-            },
+
+  /** Stages the write into `tx`. */
+  const stage = (
+    tx: IExtendedStorageTransaction,
+    writer: string,
+    action: string | undefined,
+    options: WriteOptions,
+  ) => {
+    const schema = options.schema ?? SCHEMA;
+    const value = options.value ?? writer;
+    setCfcTrustSnapshot(tx, {
+      id: "test-trust",
+      actingPrincipal: signer.did(),
+    });
+    setCfcImplementationIdentity(tx, {
+      kind: "verified",
+      moduleIdentity: options.module ?? MODULE,
+      sourceFile: "/main.tsx",
+      bindingPath: [writer],
+    });
+    const cell = runtime.getCell(
+      signer.did(),
+      "protected-value",
+      schema,
+      tx,
+    );
+    cell.set(value);
+    const target = cell.getAsNormalizedFullLink();
+    if (options.initialization === "setup") {
+      tx.recordCfcWritePolicyInput({
+        kind: "structural-provenance",
+        claim: CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
+        target: { ...target, id: "of:setup-result" },
+        sources: [target],
+      }, runtimeWritePolicyAuthorization);
+    } else if (options.initialization !== undefined) {
+      tx.recordCfcWritePolicyInput({
+        kind: "initialization",
+        mode: options.initialization,
+        target,
+        value: options.recordedValue ?? value,
+      }, runtimeWritePolicyAuthorization);
+    }
+    if (action !== undefined) {
+      tx.recordCfcWritePolicyInput({
+        kind: "trusted-event",
+        target,
+        eventId: "test-event",
+        provenance: {
+          origin: "dom",
+          trusted: true,
+          ui: {
+            pattern: "ReviewedSurface",
+            eventIntegrity: ["ReviewedSurface"],
+            uiContractDataset: { uiAction: action },
           },
-        });
-      }
+        },
+      });
+    }
+  };
+
+  return {
+    runtime,
+    async write(writer: string, action?: string, options: WriteOptions = {}) {
+      const tx = runtime.edit();
+      stage(tx, writer, action, options);
       tx.prepareCfc();
       return (await tx.commit().settled).error?.message;
     },
+
+    /**
+     * Makes the write through `editWithRetry`, and returns its error with
+     * how many times the write was staged. `amend` sees each attempt's
+     * transaction first.
+     */
+    async writeWithRetry(
+      writer: string,
+      action?: string,
+      options: WriteOptions = {},
+      amend?: (tx: IExtendedStorageTransaction) => void,
+    ) {
+      let runs = 0;
+      const result = await runtime.editWithRetry((tx) => {
+        runs++;
+        amend?.(tx);
+        stage(tx, writer, action, options);
+      });
+      return { runs, error: result.error };
+    },
+
     async dispose() {
       await runtime.dispose();
       await storageManager.close();
@@ -401,6 +435,151 @@ describe("cfc-write-policy-any-of", () => {
           "writePolicyAnyOf cannot join",
         );
         expect(await f.write("edit", "Edit")).toBeUndefined();
+      });
+    });
+  });
+
+  describe("a candidate that changes the stored policy", () => {
+    // `SCHEMA` with a third alternative, which the merge refuses over the two
+    // the document stores.
+
+    const widened: JSONSchemaObj = {
+      type: "string",
+      ifc: {
+        writePolicyAnyOf: [
+          ...SCHEMA.ifc!.writePolicyAnyOf!,
+          policy("tidy", "Send"),
+        ],
+      },
+    };
+
+    it("is refused with `CfcCommitRefusalError` after one run of the write", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+
+        const { runs, error } = await f.writeWithRetry("send", "Send", {
+          schema: widened,
+        });
+
+        expect(runs).toBe(1);
+        expect(error?.name).toBe("CfcCommitRefusalError");
+        expect(isEnvelopeStabilityRefusal(error)).toBe(true);
+        // The token that classifies the refusal stays out of the message,
+        // which is what a person sees, the source panel included.
+        expect(error?.message).not.toContain("cfc-envelope-stability");
+        expect(error?.message).toContain(
+          "writePolicyAnyOf must remain stable",
+        );
+      });
+    });
+
+    it("is refused with `CfcCommitRefusalError` after one run where a candidate weakens a stored claim", async () => {
+      // Not a writer policy, but the same refusal by the stored envelope: the
+      // candidate's confidentiality drops the atom the stored one requires.
+
+      const secret: JSONSchemaObj = {
+        type: "string",
+        ifc: { confidentiality: ["secret"] },
+      };
+      const other: JSONSchemaObj = {
+        type: "string",
+        ifc: { confidentiality: ["other"] },
+      };
+      await withFixture(async (f) => {
+        expect(await f.write("send", undefined, { schema: secret }))
+          .toBeUndefined();
+
+        const { runs, error } = await f.writeWithRetry("send", undefined, {
+          schema: other,
+        });
+
+        expect(runs).toBe(1);
+        expect(error?.name).toBe("CfcCommitRefusalError");
+        expect(isEnvelopeStabilityRefusal(error)).toBe(true);
+        // The token that classifies the refusal stays out of the message,
+        // which is what a person sees, the source panel included.
+        expect(error?.message).not.toContain("cfc-envelope-stability");
+        expect(error?.message).toContain("confidentiality cannot be weakened");
+      });
+    });
+
+    it("is refused with the retryable name where the stored envelope does not read back", async () => {
+      // The refusal is a verdict only where the stored envelope's document is
+      // one the transaction holds, which the verdict confirms by reading the
+      // envelope again. Each attempt here fails that read, as it fails for a
+      // document absent from the transaction's view.
+
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+
+        const { runs, error } = await f.writeWithRetry(
+          "send",
+          "Send",
+          { schema: widened },
+          (tx) => {
+            const read = tx.read.bind(tx);
+            tx.read = (address, options) =>
+              address.path[0] === "cfc"
+                ? { error: new Error("not held") } as ReturnType<typeof read>
+                : read(address, options);
+          },
+        );
+
+        expect(runs).toBeGreaterThan(1);
+        expect(error?.name).toBe("StorageTransactionAborted");
+        expect(isEnvelopeStabilityRefusal(error)).toBe(false);
+        expect(error?.message).toContain(
+          "writePolicyAnyOf must remain stable",
+        );
+      });
+    });
+
+    it("is refused with `CfcCommitRefusalError` after one run where a candidate names another lone writer", async () => {
+      const lone = (writer: string): JSONSchemaObj => ({
+        type: "string",
+        ifc: {
+          writeAuthorizedBy: writerClaim(writer),
+          uiContract: contract("Send"),
+        },
+      });
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send", { schema: lone("send") }))
+          .toBeUndefined();
+
+        const { runs, error } = await f.writeWithRetry("edit", "Send", {
+          schema: lone("edit"),
+        });
+
+        expect(runs).toBe(1);
+        expect(error?.name).toBe("CfcCommitRefusalError");
+        expect(isEnvelopeStabilityRefusal(error)).toBe(true);
+        expect(error?.message).toContain(
+          "writeAuthorizedBy must remain stable at /",
+        );
+      });
+    });
+
+    it("is not recognized as a stored envelope's refusal where the merge refuses on other grounds", async () => {
+      // Moving between a lone writer and a list is refused by the merge too,
+      // but not as a claim the stored envelope fixes.
+
+      await withFixture(async (f) => {
+        expect(
+          await f.write("send", "Send", {
+            schema: {
+              type: "string",
+              ifc: {
+                writeAuthorizedBy: writerClaim("send"),
+                uiContract: contract("Send"),
+              },
+            },
+          }),
+        ).toBeUndefined();
+
+        const { error } = await f.writeWithRetry("send", "Send");
+
+        expect(error?.message).toContain("writePolicyAnyOf cannot join");
+        expect(isEnvelopeStabilityRefusal(error)).toBe(false);
       });
     });
   });

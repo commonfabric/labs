@@ -14,9 +14,6 @@
  * file, which is why `DIALS` says which each one is.
  */
 
-/** How many jobs a pull request's tests are packed into. */
-export const LANES = 5;
-
 /**
  * What a pull-request lane is packed to finish inside, setup included. The
  * workflow's step and job timeouts sit above it and only stop a lane that
@@ -60,16 +57,30 @@ export const FULL_LANE_BUDGET_SECONDS = FULL_LANE_BOUND_SECONDS -
   LANE_PROLOGUE_SECONDS - LANE_SAFETY_SECONDS;
 
 /**
- * The most lanes the full run is split into. Half the sixty runners GitHub
- * gives the organization at once, so that one push's full run leaves room
- * for the lanes of whatever runs beside it; `tasks/ci-workflow.test.ts`
- * holds the first wave of a run to the same half. A run needing more takes
- * no more lanes, and a lane may run past its budget instead: the full
- * run's packer places every test, running a repeated one fewer times where
- * its runs fit in no lane, and putting one that fits nowhere even once in
- * the lane it leaves shortest.
+ * Seconds of tests chosen by score that a pull request runs beside the work
+ * its change makes mandatory: what the value, density and exploration
+ * passes share between them. A pull request takes the fewest lanes that
+ * hold its mandatory work and this much more, so a change that forces a
+ * great deal of work in takes more lanes rather than running nothing chosen
+ * by score. Set so that a pull request whose mandatory work fits in five
+ * lanes with room to spare most often takes five, under the cost model the
+ * manifests carry; a change with nothing mandatory takes three. A pull
+ * request labelled `ci: <n>x` runs `n` times this.
  */
-export const FULL_LANES_MAX = 30;
+export const DISCRETIONARY_SECONDS = 575;
+
+/**
+ * The most lanes any run is split into. Half the sixty runners GitHub
+ * gives the organization at once, so that one run leaves room for the
+ * lanes of whatever runs beside it; `tasks/ci-workflow.test.ts` holds the
+ * first wave of a run to the same half. A run needing more takes no more
+ * lanes. A pull request's tests chosen by score then get what room is
+ * left, and any run's mandatory work may put its lanes past their budget:
+ * the packer places every mandatory test, running a repeated one fewer
+ * times where its runs fit in no lane, and putting one that fits nowhere
+ * even once in the lane it leaves shortest.
+ */
+export const LANES_MAX = 30;
 
 /** The label that runs everything on a pull request. */
 export const FULL_RUN_LABEL = "ci: full";
@@ -85,7 +96,7 @@ export const UNMEASURED_COST_SECONDS = 1;
 /** The score of a test that has never failed anywhere. */
 export const VALUE_FLOOR = 0.05;
 
-/** The share of the score a record of catching things carries. */
+/** The share of the score a record of new real test failures carries. */
 export const WEIGHT_PROVEN = 0.55;
 
 /** The share of the score distinct reporting sources carry. */
@@ -94,31 +105,40 @@ export const WEIGHT_BREADTH = 0.25;
 /** The share of the score recent failures carry. */
 export const WEIGHT_CHURN = 0.15;
 
-/** Weighted catches at which `proven` reaches half its ceiling. */
+/**
+ * Weighted new real test failures at which `proven` reaches half its
+ * ceiling.
+ */
 export const PROVEN_SATURATION = 2;
 
-/** Days over which a catch loses half the value age can take. */
+/**
+ * Days over which a new real test failure loses half the value age can
+ * take.
+ */
 export const FRESHNESS_HALF_LIFE_DAYS = 120;
 
-/** What a catch keeps however old it gets. */
+/** What a new real test failure keeps however old it gets. */
 export const FRESHNESS_FLOOR = 0.3;
 
-/** What a catch on a workstation counts for. */
-export const CATCH_WEIGHT_LOCAL = 2.0;
+/** What a new real test failure on a workstation counts for. */
+export const NEW_REAL_TEST_FAILURE_WEIGHT_LOCAL = 2.0;
 
-/** What a catch on a pull request counts for; the other two's unit. */
-export const CATCH_WEIGHT_PR = 1.0;
+/**
+ * What a new real test failure on a pull request counts for. It is the
+ * unit of the other two.
+ */
+export const NEW_REAL_TEST_FAILURE_WEIGHT_PR = 1.0;
 
-/** What a catch on `main` counts for. */
-export const CATCH_WEIGHT_MAIN = 1.5;
+/** What a new real test failure on `main` counts for. */
+export const NEW_REAL_TEST_FAILURE_WEIGHT_MAIN = 1.5;
 
 /** Distinct sources at which `breadth` reaches half its ceiling. */
 export const BREADTH_SATURATION = 2;
 
 /**
  * Distinct sources a failure must appear across, inside
- * `CATCH_BREADTH_WINDOW_DAYS`, before it reads as the environment rather
- * than as any one change.
+ * `NEW_REAL_TEST_FAILURE_BREADTH_WINDOW_DAYS`, before it reads as the
+ * environment rather than as any one change.
  */
 export const ENVIRONMENTAL_MIN_SOURCES = 5;
 
@@ -148,7 +168,7 @@ export const FLAKE_WINDOW_DAYS = 60;
 /** Days of durations an item's cost estimate reads. */
 export const COST_WINDOW_DAYS = 7;
 
-/** The share of the run's budget spent in descending value. */
+/** The share of the discretionary target spent in descending value. */
 export const FILL_VALUE_SHARE = 0.60;
 
 /** The share spent in descending value per second. */
@@ -295,9 +315,6 @@ export const COVERAGE_COMMENT_LINES = 25;
 /** Seconds past which a measured set's units are reported as expensive. */
 export const LOCAL_COVERAGE_MAX_SECONDS = 30;
 
-/** Measured sets a change may reach and still be gated. */
-export const LOCAL_COVERAGE_MAX_SETS = 2;
-
 /**
  * How old a measured set's coverage baseline may be and still be
  * published. A publisher keeps one measured within this many days of the
@@ -306,12 +323,12 @@ export const LOCAL_COVERAGE_MAX_SETS = 2;
 export const LOCAL_COVERAGE_BASELINE_DAYS = 7;
 
 /** Days within which failures across branches read as the environment. */
-export const CATCH_BREADTH_WINDOW_DAYS = 2;
+export const NEW_REAL_TEST_FAILURE_BREADTH_WINDOW_DAYS = 2;
 
 /**
  * Days the fold remembers what an identity did at a commit, which is how
  * a rerun that disagrees with the run it repeats is read as the test
- * disagreeing with itself rather than as a catch.
+ * disagreeing with itself rather than as a new real test failure.
  *
  * Its own dial rather than the breadth window's, because the two ask
  * different questions over different spans. Breadth asks whether many
@@ -356,7 +373,8 @@ export const FLAKE_COMMIT_REACH = 8;
 /**
  * How long a commit stays reachable: how late a re-run of it may arrive
  * and still be recognized as one. Past this a repeated commit is judged
- * as though it were new, which errs toward calling its failure a catch.
+ * as though it were new, which errs toward calling its failure a new real
+ * test failure.
  */
 export const COMMIT_REACH_DAYS = 30;
 
@@ -364,8 +382,9 @@ export const COMMIT_REACH_DAYS = 30;
  * How alike two test names have to be before one is offered as the
  * other's new name, between zero and one. A rename usually keeps most of
  * a name, and below this the pairing is a guess: a wrong bridge silently
- * credits one test with another's record, and the whole score rests on
- * catch attribution, so there is no downstream check that would notice.
+ * credits one test with another's record. The whole score rests on
+ * attributing new real test failures to the right test, so there is no
+ * downstream check that would notice.
  */
 export const RENAME_SIMILARITY = 0.7;
 
@@ -429,7 +448,8 @@ const exclusions: readonly Exclusion[] = [
   {
     member: "packages/runner",
     kind: "size",
-    reason: "Its whole set is past what all five lanes hold together.",
+    reason: "Its whole set is past what the most lanes a run may take " +
+      "hold together.",
   },
   {
     member: "packages/cli",
@@ -492,19 +512,10 @@ export interface Dial {
  * Every dial, with the unit its value counts and the reason to move it.
  * The units matter because several dials are bare fractions that do not
  * mean the same thing: `WEIGHT_BREADTH` is a share of a test's score and
- * `FILL_DENSITY_SHARE` is a share of the run's budget, and naming the unit
- * is what keeps them from being compared to each other.
+ * `FILL_DENSITY_SHARE` is a share of the discretionary target, and naming
+ * the unit is what keeps them from being compared to each other.
  */
 export const DIALS: readonly Dial[] = [
-  {
-    name: "LANES",
-    value: LANES,
-    unit: "lanes",
-    setBy: "chosen",
-    why:
-      "Up when pull-request feedback is too thin and runner capacity allows " +
-      "more; down when the wave crowds other workflows off the shared runners.",
-  },
   {
     name: "LANE_BOUND_SECONDS",
     value: LANE_BOUND_SECONDS,
@@ -562,14 +573,28 @@ export const DIALS: readonly Dial[] = [
       "runner.",
   },
   {
-    name: "FULL_LANES_MAX",
-    value: FULL_LANES_MAX,
+    name: "DISCRETIONARY_SECONDS",
+    value: DISCRETIONARY_SECONDS,
+    unit: "seconds",
+    setBy: "chosen",
+    why: "Up when regressions reach the default branch past pull requests " +
+      "that did not run the test chosen by score that would have caught " +
+      "them; down when pull requests take more lanes than runner minutes " +
+      "allow. A pull request whose mandatory work fits in five lanes with " +
+      "room to spare most often takes five at this figure. The label " +
+      "`ci: <n>x` multiplies it by n for one pull request.",
+  },
+  {
+    name: "LANES_MAX",
+    value: LANES_MAX,
     unit: "lanes",
     setBy: "chosen",
-    why: "Up when the organization's runner limit rises; down when a push's " +
-      "full run crowds out the pull requests behind it. A full run needing " +
-      "more lanes than this takes this many, and a lane may then run past " +
-      "its budget.",
+    why: "Up when the lane-count job says a run needs more lanes than " +
+      "this, and the organization's runner limit has room; down when one " +
+      "run crowds out the runs behind it. A run needing more lanes than " +
+      "this takes this many: a pull request then runs fewer tests chosen " +
+      "by score, and any run's mandatory work may put its lanes past their " +
+      "budget.",
   },
   {
     name: "FULL_RUN_LABEL",
@@ -596,16 +621,16 @@ export const DIALS: readonly Dial[] = [
     setBy: "chosen",
     why:
       "Up when the cheap tail is not being swept up; down when it crowds out " +
-      "tests with a record of catching things.",
+      "tests with a record of new real test failures.",
   },
   {
     name: "WEIGHT_PROVEN",
     value: WEIGHT_PROVEN,
     unit: "share of the score",
     setBy: "chosen",
-    why:
-      "Up when a record of catching things should count for more. The three " +
-      "weights are shares of one score, so what this gains the other two lose.",
+    why: "Up when a record of new real test failures should count for more. " +
+      "The three weights are shares of one score, so what this gains the " +
+      "other two lose.",
   },
   {
     name: "WEIGHT_BREADTH",
@@ -628,34 +653,34 @@ export const DIALS: readonly Dial[] = [
   {
     name: "PROVEN_SATURATION",
     value: PROVEN_SATURATION,
-    unit: "catches",
+    unit: "new real test failures",
     setBy: "chosen",
     why: "Where the `proven` term reaches half its ceiling. Up when the " +
-      "term should go on telling eight catches from four; down when one " +
-      "catch should already be worth nearly everything a test can earn.",
+      "term should go on telling eight new real test failures from four; " +
+      "down when one new real test failure should already be worth nearly " +
+      "everything a test can earn.",
   },
   {
     name: "FRESHNESS_HALF_LIFE_DAYS",
     value: FRESHNESS_HALF_LIFE_DAYS,
     unit: "days",
     setBy: "chosen",
-    why:
-      "Up when old catches should keep more of their value; down when a test " +
-      "that caught something a year ago crowds out one that caught something " +
-      "last week.",
+    why: "Up when new real test failures should keep more of their value as " +
+      "they age; down when a test that had a new real test failure a year " +
+      "ago crowds out one that had one last week.",
   },
   {
     name: "FRESHNESS_FLOOR",
     value: FRESHNESS_FLOOR,
     unit: "multiplier",
     setBy: "chosen",
-    why:
-      "Up when a very old catch should keep more of its worth; down when age " +
-      "should be allowed to retire one almost completely.",
+    why: "Up when a very old new real test failure should keep more of its " +
+      "worth; down when age should be allowed to retire one almost " +
+      "completely.",
   },
   {
-    name: "CATCH_WEIGHT_LOCAL",
-    value: CATCH_WEIGHT_LOCAL,
+    name: "NEW_REAL_TEST_FAILURE_WEIGHT_LOCAL",
+    value: NEW_REAL_TEST_FAILURE_WEIGHT_LOCAL,
     unit: "multiplier",
     setBy: "chosen",
     why: "Up when evidence from a workstation should count for more; down if " +
@@ -663,8 +688,8 @@ export const DIALS: readonly Dial[] = [
       "they are today.",
   },
   {
-    name: "CATCH_WEIGHT_PR",
-    value: CATCH_WEIGHT_PR,
+    name: "NEW_REAL_TEST_FAILURE_WEIGHT_PR",
+    value: NEW_REAL_TEST_FAILURE_WEIGHT_PR,
     unit: "multiplier",
     setBy: "chosen",
     why:
@@ -672,8 +697,8 @@ export const DIALS: readonly Dial[] = [
       "those instead.",
   },
   {
-    name: "CATCH_WEIGHT_MAIN",
-    value: CATCH_WEIGHT_MAIN,
+    name: "NEW_REAL_TEST_FAILURE_WEIGHT_MAIN",
+    value: NEW_REAL_TEST_FAILURE_WEIGHT_MAIN,
     unit: "multiplier",
     setBy: "chosen",
     why:
@@ -695,9 +720,10 @@ export const DIALS: readonly Dial[] = [
     unit: "sources",
     setBy: "chosen",
     why: "How many distinct sources a failure must span inside " +
-      "`CATCH_BREADTH_WINDOW_DAYS` before it reads as the environment. Up " +
-      "when a genuinely broad regression is written off; down when a " +
-      "broken runner's failures still count as catches.",
+      "`NEW_REAL_TEST_FAILURE_BREADTH_WINDOW_DAYS` before it reads as the " +
+      "environment. Up when a genuinely broad regression is written off; " +
+      "down when a broken runner's failures still count as new real test " +
+      "failures.",
   },
   {
     name: "MASS_FAILURE_MIN_IDENTITIES",
@@ -705,9 +731,10 @@ export const DIALS: readonly Dial[] = [
     unit: "identities",
     setBy: "chosen",
     why: "How many identities one run must newly break before none of " +
-      "those failures is a catch. Up when a breakage that reached many " +
-      "tests still escaped the pull requests that ran some of them; down " +
-      "when one broken run still credits a catch to a whole suite.",
+      "those failures is a new real test failure. Up when a breakage that " +
+      "reached many tests still escaped the pull requests that ran some of " +
+      "them; down when one broken run still credits a new real test " +
+      "failure to a whole suite.",
   },
   {
     name: "CHURN_HALF_LIFE_DAYS",
@@ -760,7 +787,7 @@ export const DIALS: readonly Dial[] = [
   {
     name: "FILL_VALUE_SHARE",
     value: FILL_VALUE_SHARE,
-    unit: "share of the run's budget",
+    unit: "share of the discretionary target",
     setBy: "chosen",
     why: "Up when expensive high-value tests are crowded out by cheap ones; " +
       "down when a lane spends its budget on a few slow tests and runs " +
@@ -769,7 +796,7 @@ export const DIALS: readonly Dial[] = [
   {
     name: "FILL_DENSITY_SHARE",
     value: FILL_DENSITY_SHARE,
-    unit: "share of the run's budget",
+    unit: "share of the discretionary target",
     setBy: "chosen",
     why: "Up when more of the cheap tail should run; down when the tail is " +
       "displacing tests with a record.",
@@ -777,7 +804,7 @@ export const DIALS: readonly Dial[] = [
   {
     name: "FILL_EXPLORATION_SHARE",
     value: FILL_EXPLORATION_SHARE,
-    unit: "share of the run's budget",
+    unit: "share of the discretionary target",
     setBy: "chosen",
     why:
       "Up when the unselected corpus is going stale; down when lanes spend " +
@@ -907,8 +934,8 @@ export const DIALS: readonly Dial[] = [
     setBy: "chosen",
     why: "The most times the full run runs a unit again where a test in it " +
       "failed every time. Up when flaky tests on `main` fail every rerun " +
-      "and go on being counted as catches; down when a real break's reruns " +
-      "take time that tells nobody anything.",
+      "and go on being counted as new real test failures; down when a real " +
+      "break's reruns take time that tells nobody anything.",
   },
   {
     name: "RERUN_BUDGET_SECONDS",
@@ -939,16 +966,6 @@ export const DIALS: readonly Dial[] = [
       "excluded either way; it only decides what the summary mentions.",
   },
   {
-    name: "LOCAL_COVERAGE_MAX_SETS",
-    value: LOCAL_COVERAGE_MAX_SETS,
-    unit: "measured sets",
-    setBy: "chosen",
-    why:
-      "Up when broader changes should still be gated and the run can afford " +
-      "those sets' whole unit lists; down when sweeping changes are crowding " +
-      "lanes.",
-  },
-  {
     name: "EXCLUDED_FROM_COVERAGE_GATE",
     value: EXCLUDED_FROM_COVERAGE_GATE.size,
     unit: "workspace members",
@@ -969,13 +986,13 @@ export const DIALS: readonly Dial[] = [
       "than anybody reads.",
   },
   {
-    name: "CATCH_BREADTH_WINDOW_DAYS",
-    value: CATCH_BREADTH_WINDOW_DAYS,
+    name: "NEW_REAL_TEST_FAILURE_BREADTH_WINDOW_DAYS",
+    value: NEW_REAL_TEST_FAILURE_BREADTH_WINDOW_DAYS,
     unit: "days",
     setBy: "chosen",
-    why:
-      "Up when a broken runner's failures are being counted as catches; down " +
-      "when genuine breadth is being written off as environmental.",
+    why: "Up when a broken runner's failures are being counted as new real " +
+      "test failures; down when genuine breadth is being written off as " +
+      "environmental.",
   },
   {
     name: "SAME_COMMIT_REACH_DAYS",
@@ -985,10 +1002,11 @@ export const DIALS: readonly Dial[] = [
     why: "How far back the fold remembers a commit's outcomes, so that a " +
       "rerun landing in a later batch than the run it repeats is still read " +
       "as the test disagreeing with itself. Up when reruns land far enough " +
-      "behind that their disagreement is being counted as a catch; down " +
-      "when the fold's memory is the thing that will not fit. It costs the " +
-      "number of identities that have failed times the number of commits, " +
-      "so it is the dial to check first when a run runs out of memory.",
+      "behind that their disagreement is being counted as a new real test " +
+      "failure; down when the fold's memory is the thing that will not " +
+      "fit. It costs the number of identities that have failed times the " +
+      "number of commits, so it is the dial to check first when a run runs " +
+      "out of memory.",
   },
   {
     name: "FLAKE_COMMIT_REACH",
@@ -999,8 +1017,8 @@ export const DIALS: readonly Dial[] = [
       "every identity's outcomes at. Past that a commit keeps only the " +
       "identities that have already failed, so this bounds a test's first " +
       "failure: up when one lands more commits after the pass it disagrees " +
-      "with than this and is counted as a catch; down when the fold's " +
-      "memory is the thing that will not fit.",
+      "with than this and is counted as a new real test failure; down when " +
+      "the fold's memory is the thing that will not fit.",
   },
   {
     name: "COMMIT_REACH_DAYS",
@@ -1009,8 +1027,9 @@ export const DIALS: readonly Dial[] = [
     setBy: "chosen",
     why: "How late a re-run of a commit may arrive and still be recognized " +
       "as one rather than judged as a new commit. Up when re-runs landing " +
-      "later than this have their failures counted as catches; down when " +
-      "the fold's memory of commits is the thing that will not fit.",
+      "later than this have their failures counted as new real test " +
+      "failures; down when the fold's memory of commits is the thing that " +
+      "will not fit.",
   },
   {
     name: "RENAME_SIMILARITY",

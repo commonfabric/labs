@@ -830,7 +830,7 @@ related to each other: `blockOn`, a `duplicates` edge, a `move`, or a removal
 that names a child rather than an index. Indices are not addresses; a
 position shifts under concurrent writes.
 
-[CLI surface shape](../../plans/cli-surface-shape.md) states the property for
+[CLI surface shape](../../history/plans/cli-surface-shape.md) states the property for
 commands — an address printed by one command is accepted by the next. The
 argument half is the same property one level in, on arguments, and it holds
 now at both. `cf piece set-slug` resolves its source positional through its

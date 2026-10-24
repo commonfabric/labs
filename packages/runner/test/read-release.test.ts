@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 
 interface Report {
   transactions: number;
@@ -20,7 +21,13 @@ async function runHelper(scenario: string): Promise<Report> {
   // Spawned by name so the launch matches the task's `--allow-run=deno`
   // grant, which resolves the name through PATH the same way.
   const command = new Deno.Command("deno", {
-    args: ["run", "-A", "--v8-flags=--expose-gc", helper.pathname, scenario],
+    args: [
+      "run",
+      "-A",
+      "--v8-flags=--expose-gc",
+      fromFileUrl(helper),
+      scenario,
+    ],
     stdout: "piped",
     stderr: "piped",
   });

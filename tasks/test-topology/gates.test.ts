@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { parse as parseJsonc } from "@std/jsonc";
+import { dirname, fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { DOC_DEMOS } from "../check-verb-session-sync.ts";
 import { namedBenchmarkFiles } from "../check-bench-workflow.ts";
@@ -29,7 +30,7 @@ const TREE_SHARE_DIVISOR = 8;
 /** The most gates one file may reach. */
 const GATES_PER_FILE = 4;
 
-const root = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
+const root = dirname(dirname(dirname(fromFileUrl(import.meta.url))));
 
 const suites = await loadGateSuites(root);
 const byId = (id: string): Suite => suites.find((s) => s.id === id)!;
@@ -166,13 +167,13 @@ describe("the repository's gate suites", () => {
   });
 
   it("holds a gate to little of the tree, and a file to few gates", async () => {
-    // The two bounds that keep this feature a fraction of what a lane
-    // runs. A declaration wide enough to break either places its gate in
-    // every lane on the strength of what it says rather than of what it
-    // has caught, which is the decision the score exists to make. Every
-    // entry is held to naming something as well, so one whose directory
-    // the tree no longer has fails here rather than going quiet behind a
-    // sibling entry that still matches.
+    // The two bounds that keep this feature a fraction of what a lane runs. A
+    // declaration wide enough to break either places its gate in every lane on
+    // the strength of what it says rather than of its new real test failures,
+    // which is the decision the score exists to make. Every entry is held to
+    // naming something as well, so one whose directory the tree no longer has
+    // fails here rather than going quiet behind a sibling entry that still
+    // matches.
     const listed = await new Deno.Command("git", {
       args: ["-C", root, "ls-files", "-z"],
     }).output();
@@ -407,6 +408,33 @@ describe("the repository's gate suites", () => {
     // A path no group checks makes nothing mandatory, rather than making
     // every group mandatory or throwing.
     expect(typecheck.unitsForChange!(new Set(["README.md"]))).toEqual([]);
+  });
+
+  it("maps a changed path to the patterns whose contract it can change", () => {
+    const compat = byId("pattern-compat");
+    const reached = (at: string) => compat.unitsForChange!(new Set([at]));
+    // A pattern's own source, though its unit is a key and not that path.
+    expect(reached("packages/patterns/fabrichat/room.tsx")).toContain(
+      "fabrichat/room.tsx",
+    );
+    // A module the pattern imports, which is not a pattern itself.
+    expect(reached("packages/patterns/fabrichat/room-records.tsx")).toContain(
+      "fabrichat/room.tsx",
+    );
+    // One of its recorded contracts.
+    expect(
+      reached("packages/patterns/baselines/fabrichat/room.tsx/x.json"),
+    ).toEqual(["fabrichat/room.tsx"]);
+    // The accepted breaks reach every pattern, since removing an entry
+    // changes the verdict of a pattern the list no longer names.
+    expect(reached("tasks/pattern-compat-accepted-breaks.ts")).toEqual(
+      [...compat.units].sort(),
+    );
+    // A runtime module every pattern builds on is left to a lane's choice
+    // rather than making every pattern mandatory, and a path the gate
+    // never reads reaches nothing.
+    expect(reached("packages/runner/src/cell.ts")).toEqual([]);
+    expect(reached("README.md")).toEqual([]);
   });
 
   it("keeps the type check and the pattern check apart by name", () => {

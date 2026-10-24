@@ -1,9 +1,16 @@
 import { assertEquals, assertStrictEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { spy } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
+import { resolveScopeKey } from "@commonfabric/memory/v2";
+import { read } from "@commonfabric/memory/v2/engine";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import type { Runtime, RuntimeOptions } from "@commonfabric/runner";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "@commonfabric/runner/storage/cache.deno";
 import { cfcPosture, publishCfcPosture } from "@/lib/cfc-posture.ts";
 import {
   experimentalPosture,
@@ -167,10 +174,9 @@ Deno.test("createToolshedRuntime attaches the OTel bridge only when enabled", as
 
 Deno.test("createToolshedRuntime publishes the posture it resolved", async () => {
   // What `/api/meta` reports, and therefore what a client not built alongside
-  // this server adopts (docs/development/EXPERIMENTAL_OPTIONS.md). Taken from
-  // the constructed Runtime rather than re-read from the environment, so the
-  // published posture includes the defaults and preset resolution the server is
-  // actually running under — a second reading could disagree with the first.
+  // this server adopts (docs/development/EXPERIMENTAL_OPTIONS.md). The
+  // published posture includes constructor defaults and the deployment's
+  // client policies, all resolved from one environment reading.
 
   const signer = await Identity.fromPassphrase("runtime-options-posture-test");
   const storageManager = StorageManager.emulate({ as: signer });
@@ -261,6 +267,67 @@ Deno.test("createToolshedRuntime declares dedicated connections for its own stor
   } finally {
     await runtime?.dispose();
     await storageManager.close();
+    publishExperimentalPosture(null);
+    publishCfcPosture(null);
+  }
+});
+
+Deno.test("createToolshedRuntime synchronizes its session state while publishing local client storage", async () => {
+  const signer = await Identity.fromPassphrase(
+    "toolshed persistent session storage",
+  );
+  const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+  const config = {
+    MEMORY_URL: "http://memory.test:8000/",
+    API_URL: "http://api.test:9000/",
+    API_INTERNAL_URL: undefined,
+    OTEL_ENABLED: false,
+    OTEL_SERVICE_NAME: "toolshed-test",
+    ENV: "test",
+  } as const;
+  const env = (name: string) =>
+    name === "EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS"
+      ? "true"
+      : name === "EXPERIMENTAL_SERVER_EXECUTION"
+      ? "false"
+      : undefined;
+  let storage = EmulatedStorageManager.connectTo(server, {
+    as: signer,
+    id: "webhook-session",
+  });
+  let runtime: Runtime | undefined;
+  try {
+    runtime = createToolshedRuntime(config, storage, env);
+    expect(experimentalPosture()?.localSessionDocuments).toBe(true);
+    expect(runtime.experimental.localSessionDocuments).toBe(false);
+    const cell = runtime.getCell<number>(
+      signer.did(),
+      "webhook-state",
+      undefined,
+      undefined,
+      "session",
+    );
+    const id = cell.getAsNormalizedFullLink().id;
+    const scopeKey = resolveScopeKey("session", runtime.scopeKeyIdentity);
+    const tx = runtime.edit();
+    cell.withTx(tx).set(42);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await storage.synced();
+    const engine = await server.engineForSpace(signer.did());
+    expect(read(engine, { id, scopeKey })?.value).toBe(42);
+    await runtime.dispose();
+    runtime = undefined;
+    await storage.close();
+    storage = EmulatedStorageManager.connectTo(server, {
+      as: signer,
+      id: "webhook-session",
+    });
+    runtime = createToolshedRuntime(config, storage, env);
+    expect(read(engine, { id, scopeKey })?.value).toBe(42);
+  } finally {
+    await runtime?.dispose();
+    await storage.close();
+    await server.close();
     publishExperimentalPosture(null);
     publishCfcPosture(null);
   }

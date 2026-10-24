@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { cf, stripAnsi, withEnv } from "./utils.ts";
+import { argv, cf, stripAnsi, withEnv } from "./utils.ts";
 
 function errorText(stderr: string[]): string {
   return stderr.map(stripAnsi).join("\n");
@@ -12,7 +12,7 @@ describe("cf acl", () => {
     // command's `CF_API_URL` and `CF_IDENTITY` declarations. `--space` has a
     // `CF_SPACE` declaration too, and this call sets neither it nor the flag,
     // so the space is the one option left unsupplied.
-    const { code, stderr } = await cf("acl ls", {
+    const { code, stderr } = await cf(argv`acl ls`, {
       env: {
         CF_API_URL: "https://toolshed.test",
         CF_IDENTITY: "/nonexistent/identity.key",
@@ -23,7 +23,7 @@ describe("cf acl", () => {
   });
 
   it("reports a missing identity on stderr and exits non-zero", async () => {
-    const { code, stderr } = await cf("acl ls");
+    const { code, stderr } = await cf(argv`acl ls`);
     expect(code).toBe(1);
     expect(errorText(stderr)).toContain(
       'Missing required option: "--identity", or "CF_IDENTITY".',
@@ -38,7 +38,7 @@ describe("cf acl", () => {
     // missing identity is still the first thing the command reports.
     await withEnv("CF_API_URL", "https://ambient.test", async () => {
       await withEnv("CF_IDENTITY", "/ambient/identity.key", async () => {
-        const { code, stderr } = await cf("acl ls");
+        const { code, stderr } = await cf(argv`acl ls`);
         expect(code).toBe(1);
         expect(errorText(stderr)).toContain(
           'Missing required option: "--identity", or "CF_IDENTITY".',

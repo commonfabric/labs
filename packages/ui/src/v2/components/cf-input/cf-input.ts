@@ -1,6 +1,5 @@
 import { stringSchema } from "@commonfabric/runner/schemas";
 import { type CellHandle } from "@commonfabric/runtime-client";
-import { consume } from "@lit/context";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
@@ -12,9 +11,7 @@ import { type InputTimingOptions } from "../../core/input-timing-controller.ts";
 import {
   applyThemeToElement,
   type CFTheme,
-  cfThemeContext,
   type ComponentSize,
-  defaultTheme,
 } from "../theme-context.ts";
 
 /**
@@ -486,11 +483,12 @@ export class CFInput extends BaseElement {
     this.addEventListener("focus", this._forwardFocusToInput);
   }
 
-  /** The theme, consumed from the provider. */
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  // deno-lint-ignore no-explicit-any
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   private get input(): HTMLInputElement | null {
     if (!this._input) {
@@ -619,7 +617,7 @@ export class CFInput extends BaseElement {
     }
 
     if (changedProperties.has("theme")) {
-      applyThemeToElement(this, this.theme ?? defaultTheme);
+      applyThemeToElement(this, this.theme);
     }
 
     if (
@@ -656,8 +654,6 @@ export class CFInput extends BaseElement {
       this._input?.focus();
     }
 
-    // Apply theme after first render
-    applyThemeToElement(this, this.theme ?? defaultTheme);
     this._updateAccessibilityAttributes();
   }
 

@@ -1750,6 +1750,39 @@ describe("piece schema compatibility", () => {
     ).toThrow(/not stable under default insertion/);
   });
 
+  it("admits a recursive labeled schema with no default, and refuses one whose recursion holds a default", () => {
+    // A FabriChat message replies to a message, so the walk for defaults below
+    // a label meets the node it is already walking. It stops there rather than
+    // recursing without end, and still finds a default the recursion holds.
+    const message = (withReactionsDefault: boolean): JSONSchema => ({
+      $defs: {
+        message: {
+          type: "object",
+          ifc: { addIntegrity: ["fabrichat-test-message"] },
+          properties: {
+            body: { type: "string" },
+            replyTo: { $ref: "#/$defs/message" },
+            ...(withReactionsDefault
+              ? {
+                reactions: {
+                  type: "array",
+                  items: { type: "string" },
+                  default: [],
+                },
+              }
+              : {}),
+          },
+        },
+      },
+      $ref: "#/$defs/message",
+    });
+    expect(() => assertSchemaSubset(message(false), message(false))).not
+      .toThrow();
+    expect(() => assertSchemaSubset(message(true), message(true))).toThrow(
+      /not stable under default insertion/,
+    );
+  });
+
   it("rejects cell and scope changes when a record gains a default", () => {
     for (
       const [before, after, message] of [
@@ -2805,6 +2838,7 @@ describe("piece schema compatibility", () => {
     const a: JSONSchema = {
       type: "object",
       properties: { a: { type: "string" } },
+      required: ["a"],
     };
     const b: JSONSchema = {
       type: "object",
@@ -5195,6 +5229,119 @@ describe("piece schema compatibility", () => {
         pattern(incompatibleAnyOf, oldPattern.resultSchema),
       )
     ).toThrow(/argument/);
+  });
+
+  describe("field evolution on a union branch", () => {
+    const profile = (
+      extra: Record<string, JSONSchema> = {},
+    ): JSONSchemaObj => ({
+      type: "object",
+      properties: { name: { type: "string" }, ...extra },
+    });
+    const withPicture = (base: JSONSchemaObj = profile()): JSONSchemaObj => ({
+      ...base,
+      properties: { ...base.properties, picture: { type: "FabricBytes" } },
+    });
+    const update = (previous: JSONSchema, candidate: JSONSchema) => () =>
+      assertPatternSchemasBackwardCompatible(
+        pattern(
+          { type: "object", properties: { player: previous } },
+          oldPattern.resultSchema,
+        ),
+        pattern(
+          { type: "object", properties: { player: candidate } },
+          oldPattern.resultSchema,
+        ),
+      );
+    // Each wraps an object in a union node whose other keywords are
+    // descriptive annotations or keywords judged at the node itself.
+    const unions: ((branch: JSONSchema) => JSONSchema)[] = [
+      (branch) => ({ anyOf: [branch, { type: "null" }] }),
+      (branch) => ({ anyOf: [branch, { type: "null" }], default: null }),
+      (branch) => ({ anyOf: [{ type: "undefined" }, branch] }),
+      (branch) => ({ anyOf: [branch, { type: "null" }], asCell: ["cell"] }),
+      (branch) => ({
+        anyOf: [branch, { type: "null" }],
+        description: "The player, once one has joined.",
+        title: "Player",
+      }),
+    ];
+
+    it("does not throw for a new optional field on a branch, as on a bare object", () => {
+      expect(update(profile(), withPicture())).not.toThrow();
+      for (const union of unions) {
+        expect(update(union(profile()), union(withPicture()))).not.toThrow();
+      }
+      expect(
+        update(unions[0]!(profile()), {
+          ...withPicture(),
+          type: ["object", "null"],
+        }),
+      ).not.toThrow();
+      expect(update(profile(), unions[0]!(withPicture()))).not.toThrow();
+    });
+
+    it("does not throw for a union of open objects becoming one of them, as for the bare objects", () => {
+      const other = profile({ score: { type: "number" } });
+      expect(update(other, profile())).not.toThrow();
+      expect(update({ anyOf: [profile(), other] }, profile())).not.toThrow();
+    });
+
+    it("does not throw for a new optional field on a referenced branch", () => {
+      const argument = (player: JSONSchemaObj): JSONSchema => ({
+        type: "object",
+        properties: {
+          player: { anyOf: [{ $ref: "#/$defs/Player" }, { type: "null" }] },
+        },
+        $defs: { Player: player },
+      });
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(argument(profile()), oldPattern.resultSchema),
+          pattern(argument(withPicture()), oldPattern.resultSchema),
+        )
+      ).not.toThrow();
+    });
+
+    it("throws on a branch for each change it throws for on a bare object", () => {
+      const refusals: [JSONSchemaObj, JSONSchemaObj][] = [
+        [profile(), { ...withPicture(), required: ["picture"] }],
+        [
+          { ...profile(), additionalProperties: { type: "string" } },
+          {
+            ...withPicture(),
+            additionalProperties: { type: "string" },
+          },
+        ],
+        [withPicture(), profile({ picture: { type: "string" } })],
+      ];
+      for (const [previous, candidate] of refusals) {
+        expect(update(previous, candidate)).toThrow(/argument\.player/);
+        for (const union of unions) {
+          expect(update(union(previous), union(candidate))).toThrow(
+            /argument\.player/,
+          );
+        }
+      }
+    });
+
+    it("throws for a new field on a branch when the union node constrains a value", () => {
+      const unions: ((branch: JSONSchema) => JSONSchema)[] = [
+        (branch) => ({
+          properties: { picture: { type: "string" } },
+          anyOf: [branch, { type: "null" }],
+        }),
+        (branch) => ({
+          $comment: "emptyProperties",
+          anyOf: [branch, { type: "null" }],
+        }),
+      ];
+      for (const union of unions) {
+        expect(update(union(profile()), union(withPicture()))).toThrow(
+          /argument\.player/,
+        );
+      }
+    });
   });
 
   it("preserves required result guarantees and allows new required results", () => {

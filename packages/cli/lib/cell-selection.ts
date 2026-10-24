@@ -8,6 +8,15 @@
 import type { Cell } from "@commonfabric/api";
 import { containsExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 import { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
+import {
+  declaredFieldNames,
+  declaredFieldsAt,
+  isSchemaObject,
+  schemaIsArrayShaped,
+  schemaIsObjectShaped,
+} from "@commonfabric/piece/declared-fields";
+import { nearestName } from "@commonfabric/piece/refusal";
+import { LINK_MARKER_KEY } from "@commonfabric/piece/verb-input";
 import { ANNOTATION_KEYS } from "@commonfabric/piece/schema-compatibility";
 import {
   ContextualFlowControl,
@@ -43,14 +52,6 @@ import {
   isObjectOrArray,
 } from "@commonfabric/utils/types";
 import { runtimeErrorLog } from "./callable.ts";
-import {
-  declaredFieldNames,
-  declaredFieldsAt,
-  isSchemaObject,
-  schemaIsArrayShaped,
-  schemaIsObjectShaped,
-} from "./declared-fields.ts";
-import { nearestName } from "./refusal.ts";
 import { timeCliPhase } from "./trace-timing.ts";
 
 type PredicateComparisonOperator = "==" | "!=" | "<" | "<=" | ">" | ">=";
@@ -83,9 +84,6 @@ export interface ParsedSelectionFilter {
   predicate: SelectionPredicate;
   paths: Array<Array<string | number>>;
 }
-
-/** The key a caller writes beside `properties` to ask for an address. */
-export const LINK_MARKER_KEY = "$link";
 
 /**
  * The character a concise field path ends a segment with to ask for the
@@ -3244,6 +3242,16 @@ function transformReadsFor(runtime: Runtime): TransformReads {
   return reads;
 }
 
+/** `error`, reported as a failure to apply a get transform. */
+function transformError(error: unknown): CellSelectionError {
+  return new CellSelectionError(
+    `Could not apply get transform: ${
+      error instanceof Error ? error.message : String(error)
+    }`,
+    { cause: error },
+  );
+}
+
 /** Optional hooks into {@link deriveSelectedValue}'s internals. */
 export interface DeriveSelectedValueDependencies {
   /** Called with the cell the returned value was read from. */
@@ -3590,7 +3598,18 @@ export async function deriveSelectedValue(
   // The repeat runs the pattern this cell was set up with; the first read of a
   // selection is the one that installs it.
   const installedPattern = reads.patterns.get(readKey);
-  if (installedPattern === undefined) reads.patterns.set(readKey, mainPattern);
+  if (installedPattern === undefined) {
+    reads.patterns.set(readKey, mainPattern);
+  } else {
+    // The repeat sets up again over the piece the first read stored, and a
+    // release pass may have dropped that piece's documents since. Setup reads
+    // them in `tx`, so they are loaded first.
+    try {
+      await runtime.runner.syncStoredPieceCells(resultCell, installedPattern);
+    } catch (error) {
+      throw transformError(error);
+    }
+  }
   const errors = runtimeErrorLog(runtime);
   const errorCountBefore = errors.length;
   const result = await runtime.setup(
@@ -3634,11 +3653,7 @@ export async function deriveSelectedValue(
           throw new Error("projection did not start");
         }
       } catch (error) {
-        throw new CellSelectionError(
-          `Could not apply get transform: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+        throw transformError(error);
       }
     });
     // pull() is the readiness boundary for this output: it drives transitive

@@ -227,10 +227,12 @@ function createMockConnection(
 }
 
 /**
- * Create a mock RuntimeClient with a connection and a live lifetime signal.
+ * Create a mock RuntimeClient with a connection, a live lifetime signal, and
+ * a `getPiece` that finds nothing.
  *
- * CellHandle's constructor only accesses `worker[$conn]()` — it doesn't call
- * any other RuntimeClient methods — so this minimal mock is sufficient.
+ * CellHandle's constructor only accesses `worker[$conn]()`; `getPiece` is
+ * what `cf-render` opens a displayed piece with. A test that asserts the open
+ * replaces it on `cell.runtime()`.
  */
 function createMockRuntimeClient(
   conn: InitializedRuntimeConnection,
@@ -238,6 +240,7 @@ function createMockRuntimeClient(
   return {
     [$conn]: () => conn,
     signal: new AbortController().signal,
+    getPiece: () => Promise.resolve(null),
   } as unknown as RuntimeClient;
 }
 

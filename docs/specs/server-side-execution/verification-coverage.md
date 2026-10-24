@@ -3766,7 +3766,7 @@ discharge OW28. The flip's changes and validation record follow:
   serverExecution !== true`) on events.md §4/N26's subsumption,
   which subsumes only the EXACTLY-ONCE role — the receipt's
   RESULT-CARRIAGE role (plainResultReceipts, verb contract WS-C/D —
-  `cf call`'s `.result`/`.receipt`) had no replacement sentence and
+  `cf piece call`'s `.result`/`.receipt`) had no replacement sentence and
   no serving-side writer. The ruling resolves the fork to a
   SERVING-SIDE receipt/result write, on the owner's stated model:
   "all handlers write result cells (even if the value is undefined),
@@ -3920,6 +3920,55 @@ created:
   direct and through the real and nested transaction wrappers, with
   authored and serving-runtime controls that still persist, and a pair
   covering the durable-read mark either side of the wait.
+
+Delta 2026-10-15 — a late echo is dropped before its commit is prepared:
+
+- speculation §4 step 2's sentence that a late echo's writes are
+  dropped before the run's commit is prepared ELABORATES the late-echo
+  rule; it adds no rule to §1's map. A run the rule finds jobless
+  writes nowhere, so the CFC boundary pass has nothing to guard, and
+  such a run can have read a space between its ancestor's retired echo
+  and the served write to that space: a profile's `setInbox` run in the
+  cascade of an inbox's creation linked the inbox's alias document,
+  whose metadata lives on the result document it names, and the pass
+  refused the link in the owner's runtime alone.
+- Instrument: `packages/runner/test/extended-storage-transaction.test.ts`
+  ("a seal destination that discards the transaction") — a write the
+  pass refuses, to a reserved CFC grant document, is handed to a
+  destination that discards it without the refusal;
+  `packages/runner/test/speculation-intent-listener.test.ts`
+  ("whether a run is discarded, asked before it seals") — a late
+  grandchild of a terminal intent is discarded, one of an outstanding
+  intent is not, and every speculative run is once the overlay closes.
+  End to end, `packages/patterns/integration/private-inbox-multi-runtime.test.ts`
+  ("replaces the refused inbox on a click on the refusal notice's
+  button …") holds the click-marked replacement to no refusal in the
+  owner's runtime or the serving loop.
+
+Delta 2026-10-13 — an echo sealed into a space other than its intent's:
+
+- speculation §4 step 2's sentence that the space an entry sealed into
+  is no part of the retirement's scope ELABORATES the step's own rule,
+  "retire overlay entries whose `origin` is `intent(e)`", and the
+  jobless-cascade clarification under it; it adds no rule to §1's map.
+  An entry is filed under the space its run wrote and the mark arrives
+  in the space the intent was fired in, so the two differ whenever a
+  handler sends to a stream in another space, as a sender's offer to a
+  private inbox does. The retirement walks every space's entries, an
+  intent's own echo in another space included, which can therefore go
+  before the served write to that space lands: the descendant's
+  one-wave flicker. The flicker count reads only an echo in the mark's
+  own space, since it compares seqs and a seq orders commits within one
+  space.
+- Instrument: `packages/runner/test/speculation-intent-listener.test.ts`
+  — the cases under "an echo sealed into a space other than its
+  intent's": a cascade child and a grandchild behind a write-less child
+  retire on the ancestor's mark, an intent's own echo retires in every
+  space it sealed into, another intent's cascade stands, and no echo in
+  another space counts as unarrived. End to end,
+  `packages/patterns/integration/private-inbox-multi-runtime.test.ts`
+  ("lets a sender read the offers back and find its own") holds the rows
+  a sender reads to be the documents the inbox's owner reads.
 
 Delta 2026-08-16 — fan-out stage A (OW17 leg 1: the instance-keyed
 serving replica + wire; the client arrival gate):
@@ -7267,17 +7316,36 @@ supply; OW29/OW32/OW34 closed):
     waits for retry readiness, and instantiates the still-current
     pattern once into the next wave. A stop/stopAll/dispose aborts that
     readiness and any named-document pull through the outer registration's
-    cancellation signal; a runtime cycle, pointer change, or newer node
-    group wins through exact guards. Under server execution, an immediate
-    stale-read refusal follows the same catch-up and one-shot reinstantiation
-    path: it is the commit-time form of losing the materialization race, not a
-    terminal graph failure. A second recoverable failure tears the exact
-    registration down rather than spinning. A whole-wave abort or abandon is
-    not retried in place. Non-stale refusals and promise rejections remain
-    terminal in every posture, and client/OFF retains terminal behavior for
-    stale reads: a graph whose setup writes never landed is a zombie unless
-    the serving side's materialization supplies the repair path. A refusal
-    that names only policy manifests is the exception in every posture: the
+    cancellation signal; a runtime cycle, a newer registration, or a newer
+    node group wins through exact guards. A pointer that moved during the
+    wait has a follow in flight, and the retry waits for it to settle
+    first: a retry staged sooner would re-stage a setup repair the start
+    owes over a pointer naming another pattern, which the repair refuses.
+    A follow that runs the incoming pattern wins as a newer node group. One
+    that keeps the running pattern installs no graph for it, so the retry
+    instantiates it. Every way a recovery ends is logged after its
+    `piece-start-commit-recovering`: `piece-start-commit-recovered` when
+    the retry's setup lands, `piece-start-commit-superseded` when something
+    else took the piece over, `piece-start-commit-abandoned`,
+    `piece-start-commit-failed`, or a further
+    `piece-start-commit-recovering` for another round. A recovery still
+    waiting for its catch-up has logged nothing further. A second drop tears
+    the exact registration down rather than spinning. In every posture, an
+    immediate stale read follows the same catch-up and reinstantiation path, whether
+    the server refuses it or the replica's own consistency check does because
+    another writer's change arrived between the read and the commit: it is
+    the commit-time form of losing a race to a concurrent write — under server
+    execution, the serving side's materialization — not a terminal graph
+    failure. The catch-up brings the conflicting documents into the
+    runtime's own replica, which is the view the retry reads. Each write
+    that lands while a retry is in flight costs a round, up to
+    `PIECE_RUN_START_MAX_RETRIES` rounds, a budget the rounds over absent
+    documents below share; once the rounds are spent the start reports the
+    loss and tears the exact registration down rather than spinning. A
+    whole-wave abort or abandon is not retried in place.
+    Non-stale refusals and promise rejections remain terminal in every
+    posture. A refusal that names only policy manifests takes a path of its
+    own in every posture: the
     instantiation installed a manifest another participant installed first,
     and a manifest never changes once present, so a catch-up that loads it
     repairs the commit with no serving side, and a catch-up that cannot load
@@ -7285,7 +7353,29 @@ supply; OW29/OW32/OW34 closed):
     piece's own documents is the stale read it would be without the
     manifest. The start loads the manifests its pattern names before it
     instantiates, so this retry answers only a manifest installed after
-    those loads. Explicit wave
+    those loads. A refusal whose every conflicting read claimed its
+    document absent — a confirmed read at seq 0, the basis a replica
+    records for a document it holds no revision of — takes another path of
+    its own in every posture. The start read documents the store holds
+    that its loads had not brought in, which is a document its pre-sync
+    never named or one it loaded before anything was written there, so a
+    catch-up that loads them repairs the commit with no serving side, and
+    a catch-up that cannot load one fails the start with the load's
+    reason. A retry can follow a link in a document the catch-up loaded
+    to one its loads never brought in, so the instantiation takes a round
+    per such layer, up to `PIECE_RUN_START_MAX_RETRIES` rounds, and each
+    round has to name a document no earlier round loaded; a refusal that
+    claims absent only documents an earlier round loaded is terminal. The
+    start's pre-sync is meant to name everything a start reads; these
+    rounds are what keep a document it misses from costing more than a
+    round trip per layer. A refusal that names any read at a later seq is
+    a stale read over a revision another writer moved past, and takes the
+    stale-read rounds above. With the flag off, a named piece's run
+    start, which runs in a transaction of its own, runs again for either
+    exception within its `PIECE_RUN_START_MAX_RETRIES` budget, and fails
+    with the load's reason when the catch-up cannot load a document it
+    named; with the flag on, the deferred start's catch-up-and-start takes
+    every stale read first. Explicit wave
     abandon is classified separately and warned without incrementing the
     serving runtime's structure-load-failure observer. A recoverable failure
     is warned on the same terms while its one retry is outstanding, and is
@@ -7302,7 +7392,19 @@ supply; OW29/OW32/OW34 closed):
     `cfc-policy-manifest-shared-install.test.ts`, by a second participant
     starting a piece whose per-user part carries the policy, together with a
     refusal over the piece's own documents beside the manifest staying
-    terminal. And OW46's
+    terminal. The absence exception is pinned in
+    `piece-start-unloaded-read.test.ts`, by a runtime whose loads never
+    bring in the document a nested instance's setup reads through a slot
+    its stored argument carries, with a catch-up that cannot load that
+    document failing the start with the load's reason; the flag-OFF
+    terminal companion refuses a read at seq 1. The rounds are pinned in
+    `executor-wave.test.ts`: one per layer of documents claimed absent, a
+    refusal repeating a document an earlier round loaded torn down, and
+    the rounds bounded. The named piece's run start is pinned in
+    `cfc-policy-manifest-shared-install.test.ts`, by a refusal claiming
+    absence that runs the start again, a catch-up that cannot load the
+    document failing the start with the load's reason, and a read at a
+    later seq that stays terminal. And OW46's
     `structure-load-stuck` counter is BLIND here: it fires 6× per run
     in BOTH arms and in the reds names only the HOST's space, because
     it counts deferred structure loads of DEMANDED roots and this

@@ -15,7 +15,7 @@ import { type DID, isDID } from "@commonfabric/identity/did";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { extractHashtags } from "@commonfabric/utils/hashtags";
 import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import { h } from "../builder/h.ts";
 // The sidecar instantiation observes its wave settlement (a serving-wave
@@ -38,7 +38,7 @@ import {
   type NormalizedFullLink,
   toMemorySpaceAddress,
 } from "../link-utils.ts";
-import type { RawBuiltinResult } from "../module.ts";
+import type { RawBuiltinResult, RawNodeCause } from "../module.ts";
 import { systemPatternSource } from "../pattern-source-scheme.ts";
 import {
   homeHasDefaultProfileSlot,
@@ -62,6 +62,7 @@ import { isCfcRejectedCommitError } from "../scheduler/cfc-rejection-report.ts";
 import { schemaRegistryEpoch } from "../schema-registry.ts";
 import {
   enrollRuntimeOwnedStore,
+  ownedStoreLinks,
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
 import { scopedCell } from "./scope-policy.ts";
@@ -237,6 +238,7 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
     case "#profile":
     case "#profileName":
     case "#profileAvatar":
+    case "#profilePicture":
     case "#profileBio":
     case "#profileSpace":
       return "home-target";
@@ -311,8 +313,8 @@ type WishContext = {
   /** Cached #now cell to avoid non-idempotent re-runs from Date.now() */
   nowCell?: Cell<unknown>;
 
-  /** The wish node's cause, keying the durable one-shot #now capture cell. */
-  nowCause?: Cell<any>[];
+  /** The wish node's cause, which keys the durable one-shot #now capture cell. */
+  nowCause?: unknown;
 
   usedHomeSpace?: boolean;
 };
@@ -434,10 +436,11 @@ function findHomeRootCell(ctx: WishContext): Cell<any> | undefined {
  * and otherwise the space cell's empty `defaultPattern` slot itself. A wish
  * creates no root. A read through the empty slot finds nothing, and a write
  * through it is refused unless the root exists by then
- * (`SpaceRootMissingError`); a client runtime brings the root up ahead of a
- * handler whose state holds such a cell (`bringUpHomeRootForHandler`). A
- * headless wish hands out nothing over an empty slot, and throws
- * `NoHomeRootError`, so it resolves to nothing.
+ * (`SpaceRootMissingError`); on a client runtime, when a handler's write there
+ * is refused and the refusal escapes the handler, the root is brought up and
+ * the handler runs again (`bringUpHomeRootForRefusedWrite`). A headless wish
+ * hands out nothing over an empty slot, and throws `NoHomeRootError`, so it
+ * resolves to nothing.
  */
 function getHomeRootCell(ctx: WishContext): Cell<any> {
   const found = findHomeRootCell(ctx);
@@ -1089,6 +1092,14 @@ function resolveHomeSpaceTarget(
       }];
     }
 
+    case "#profilePicture": {
+      // The default profile's picture: the bytes of a raster image.
+      return [{
+        cell: getDefaultProfileCell(ctx),
+        pathPrefix: ["picture"],
+      }];
+    }
+
     case "#profileBio": {
       // The owner-authored free-text bio of the default profile (CT-1648).
       // Tracks edits made via the profile's setBio handler.
@@ -1445,6 +1456,47 @@ function handleIntervalNow(
 }
 
 /**
+ * The cell a one-shot #now's capture lives in, keyed by the wish node's piece
+ * and output spot, and the cell it lived in when the node's full cause keyed
+ * it, inputs document included. A capture made under that key is read once,
+ * while the positional cell is still empty, and copied: the documented value
+ * is the piece's first-ever load time, and a change to the wish's inputs
+ * document, a schema change among them, is not a new load. A cause carrying
+ * no output spot keys both cells the same way, so there is nothing to carry
+ * over.
+ */
+function nowOneShotCells(
+  ctx: WishContext,
+): { cell: Cell<unknown>; legacy?: Cell<unknown> } {
+  const cell = ctx.runtime.getCell(
+    ctx.parentCell.space,
+    wishStoreCause("nowOneShot", ctx.nowCause),
+    undefined,
+    ctx.tx,
+  );
+  const legacy = isNodeCauseWithOutputSpot(ctx.nowCause)
+    ? ctx.runtime.getCell(
+      ctx.parentCell.space,
+      { wish: { nowOneShot: ctx.nowCause } },
+      undefined,
+      ctx.tx,
+    )
+    : undefined;
+  wishNowDiagnostics.lastOneShot = {
+    cell: cell.getAsNormalizedFullLink(),
+    legacy: legacy?.getAsNormalizedFullLink(),
+  };
+  return { cell, legacy };
+}
+
+// Test seam: the cells of the last one-shot #now resolved in this process,
+// so a test can write the cell a capture is carried over from, which is
+// keyed on a node cause nothing outside the runtime can rebuild.
+export const wishNowDiagnostics: {
+  lastOneShot?: { cell: NormalizedFullLink; legacy?: NormalizedFullLink };
+} = {};
+
+/**
  * Resolve well-known targets that map to current space paths.
  */
 function resolveSpaceTarget(
@@ -1457,26 +1509,38 @@ function resolveSpaceTarget(
     if (parsed.path.length > 0) return null;
 
     // One-shot #now captures the load time ONCE and keeps it, durably. The value
-    // lives in a per-instance content-addressed cell (keyed by the wish node's
-    // cause), written only when the cell is still empty — so re-instantiating the
-    // piece (a stop/start, or a reload in another runtime) reads the first-ever
-    // captured time instead of re-reading the clock and jumping forward. sample()
-    // reads without subscribing the resolving action, so the write does not
-    // re-trigger it. The per-instance closure cache (ctx.nowCell) just avoids
-    // re-fetching the cell on every sync re-run within one instantiation.
+    // lives in a content-addressed cell keyed by the wish node's piece and
+    // output spot, written only when the cell is still empty — so
+    // re-instantiating the piece (a stop/start, a reload in another runtime,
+    // or a run from a later compilation of its pattern) reads the first-ever
+    // captured time instead of re-reading the clock and jumping forward. A
+    // capture written under the earlier key, the node's full cause, is carried
+    // over rather than taken from the clock again, once its document has
+    // loaded. sample() reads without subscribing the resolving action, so the
+    // write does not re-trigger it.
+    // The per-instance closure cache (ctx.nowCell) just avoids re-fetching the
+    // cell on every sync re-run within one instantiation.
     if (!ctx.nowCell) {
-      const cell = ctx.runtime.getCell(
-        ctx.parentCell.space,
-        { wish: { nowOneShot: ctx.nowCause } },
-        undefined,
-        ctx.tx,
-      );
+      const { cell, legacy } = nowOneShotCells(ctx);
       recordRuntimeOwnedStore(ctx.tx, ctx.parentCell, cell);
       enrollRuntimeOwnedStore(ctx.tx, ctx.parentCell, cell);
       const existing = cell.withTx(ctx.tx).sample();
       if (existing == null) {
+        // The capture may sit in the earlier key's document, which this
+        // replica need not have loaded: a cold replica reads it as absent
+        // while the store holds the capture. Hold the wish until the document
+        // has loaded, or its absence is confirmed, as the shared clock cell is
+        // held for in handleIntervalNow(); the read it stages re-runs the wish
+        // when the answer arrives. A confirmed absence is not read again,
+        // since a read of it would start a load of its own.
+        const carried = legacy !== undefined &&
+            ctx.readiness.requireDocument(legacy, ctx.tx)
+          ? legacy.withTx(ctx.tx).sample()
+          : undefined;
         cell.withTx(ctx.tx).set(
-          coarsenTimestamp(Date.now(), ONE_SHOT_RESOLUTION_MS),
+          typeof carried === "number"
+            ? carried
+            : coarsenTimestamp(Date.now(), ONE_SHOT_RESOLUTION_MS),
         );
       }
       ctx.nowCell = cell;
@@ -2080,6 +2144,52 @@ function wishOutputScope(
   return inputScope;
 }
 
+/** The stores a wish mints, each named by the key its cause carries. */
+type WishStoreKind =
+  | "state"
+  | "suggestionPattern"
+  | "profileCreatePattern"
+  | "profileCreatePatternReady"
+  | "profilePickerPattern"
+  | "nowOneShot";
+
+/**
+ * The cause a store the wish mints is keyed on: the node's owning piece and
+ * its output spot, under `kind` and beside `fields`, the way
+ * `ownedResultCause()` keys a branching builtin's store, with the node's
+ * inputs document left out. That document is content-addressed over the
+ * node's serialized inputs, the schema generated for the wish's type
+ * parameter among them, so two compilations of one pattern can bind one node
+ * to two inputs documents, and two sessions holding one each then run that
+ * node against one output slot. The piece and the spot are what every
+ * compilation shares. Every run re-derives the whole state, the sidecar
+ * surfaces keep what they produce in Home, and a one-shot #now carries its
+ * capture over from the cell the inputs document once keyed
+ * (`nowOneShotCells()`), so no store needs an earlier compilation's write. A
+ * cause carrying no output spot, as a hand-built one in a test, is used as
+ * it is.
+ */
+function wishStoreCause(
+  kind: WishStoreKind,
+  cause: unknown,
+  fields: Record<string, unknown> = {},
+): unknown {
+  const positional = isNodeCauseWithOutputSpot(cause)
+    ? { parents: cause.parents, outputSpot: cause.outputSpot }
+    : cause;
+  return { wish: { [kind]: positional, ...fields } };
+}
+
+/** Whether `cause` is a node cause whose output binding reached a redirect. */
+function isNodeCauseWithOutputSpot(
+  cause: unknown,
+): cause is RawNodeCause & {
+  outputSpot: NonNullable<RawNodeCause["outputSpot"]>;
+} {
+  return isObjectNotArray(cause) && cause.parents !== undefined &&
+    cause.outputSpot !== undefined;
+}
+
 /**
  * Whether a settled wish-state commit failure deserves the error surface
  * (verification-coverage OW50, seat S-J). Excluded, because re-running
@@ -2322,7 +2432,7 @@ export function wish(
   ): void {
     const baseCell = runtime.getCell(
       parentCell.space,
-      { wish: { state: cause } },
+      wishStoreCause("state", cause),
       wishStateSchemaForResult(schema),
       tx,
     );
@@ -2561,19 +2671,13 @@ export function wish(
     if (!slot.resultCell) {
       slot.resultCell = runtime.getCell(
         parentCell.space,
-        {
-          wish: {
-            suggestionPattern: cause,
-            situation: input.situation,
-            // The F2 fix's suggestion half (pre-existing gap: this cause
-            // carried NO user key): on a SERVING runtime the cell keys
-            // by the demanding identity, so two demanders never share a
-            // suggestion cell. Clients keep the pre-existing cause
-            // byte-identical (cardinality 1 — re-keying would orphan
-            // every persisted client suggestion cell for no gain).
-            ...(runtime.servingPosture ? { user: sidecarUser } : {}),
-          },
-        },
+        wishStoreCause("suggestionPattern", cause, {
+          situation: input.situation,
+          // On a serving runtime the cell keys by the demanding identity, so
+          // two demanders never share a suggestion cell. A client has one
+          // demander, the runtime's own user, and carries no user key.
+          ...(runtime.servingPosture ? { user: sidecarUser } : {}),
+        }),
         undefined,
         tx,
       );
@@ -2832,12 +2936,7 @@ export function wish(
     if (!slot.resultCell) {
       slot.resultCell = runtime.getCell(
         parentCell.space,
-        {
-          wish: {
-            profileCreatePattern: cause,
-            user: sidecarUser,
-          },
-        },
+        wishStoreCause("profileCreatePattern", cause, { user: sidecarUser }),
         undefined,
         tx,
       );
@@ -2845,12 +2944,9 @@ export function wish(
     if (!slot.readyCell) {
       slot.readyCell = runtime.getCell<boolean>(
         parentCell.space,
-        {
-          wish: {
-            profileCreatePatternReady: cause,
-            user: sidecarUser,
-          },
-        },
+        wishStoreCause("profileCreatePatternReady", cause, {
+          user: sidecarUser,
+        }),
         undefined,
         tx,
       );
@@ -3027,14 +3123,9 @@ export function wish(
     if (!slot.resultCell) {
       slot.resultCell = runtime.getCell(
         parentCell.space,
-        {
-          wish: {
-            profilePickerPattern: cause,
-            // Phase 5: keyed by the home-space user (the demanding
-            // identity on serving) — see launchProfileCreatePattern.
-            user: sidecarUser,
-          },
-        },
+        // Keyed by the home-space user, the demanding identity on a serving
+        // runtime; see launchProfileCreatePattern.
+        wishStoreCause("profilePickerPattern", cause, { user: sidecarUser }),
         undefined,
         tx,
       );
@@ -3564,5 +3655,15 @@ export function wish(
       );
     }
   };
-  return { action, onActionRegistered: readiness.onActionRegistered };
+  return {
+    action,
+    onActionRegistered: readiness.onActionRegistered,
+    // The stores keyed by this node's cause alone. The others also name the
+    // demanding user, the situation a suggestion is for, or the interval a
+    // `#now` ticks at, none of which is known until the action runs.
+    storeWrites: ownedStoreLinks(runtime, parentCell, [
+      wishStoreCause("state", cause),
+      wishStoreCause("nowOneShot", cause),
+    ]),
+  };
 }

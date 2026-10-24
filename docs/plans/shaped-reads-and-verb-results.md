@@ -3,8 +3,9 @@
 The **read layer** and **calls**, two of the three concerns in
 [Reading Fabric data](fabric-read-model.md): the shared layer that turns a cell
 into structured output, and what calling a verb adds on top. Read that document
-first — this one uses its vocabulary. The third concern, the command surface, is
-[CLI surface shape](cli-surface-shape.md).
+first — this one uses its vocabulary. The third concern, the command surface,
+was settled by [CLI surface shape](../history/plans/cli-surface-shape.md), an
+executed plan now archived.
 
 ## The shared read layer
 
@@ -73,7 +74,7 @@ There are two syntaxes, each on its own flag
 
 The concise form is sugar for the flat case; the full form is a JSON Schema
 object and is what expresses nested structure. [CLI surface
-shape](cli-surface-shape.md) is where the split between them is reasoned out.
+shape](../history/plans/cli-surface-shape.md) is where the split between them is reasoned out.
 The measured facts at the end write `--schema` for both, because that is the
 flag the measurements were taken against.
 
@@ -140,7 +141,7 @@ position neither declares nor admits, a field named below a scalar, one below
 a verb, which dispatches rather than holding a value. The refusal names the
 position, the vocabulary that position declares, and — where the vocabulary has
 a name close enough — the one the path is a typo of, the wording every other
-misspelled name gets (`packages/cli/lib/refusal.ts`). Everything the
+misspelled name gets (`packages/piece/src/refusal.ts`). Everything the
 schema leaves open passes: an open `additionalProperties`, a `patternProperties`
 map that names a pattern, a disjunction, an untyped position, a position that
 only may hold an array rather than proving it, a tuple-shaped array, a

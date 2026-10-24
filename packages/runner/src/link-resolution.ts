@@ -998,6 +998,31 @@ export function resolveLinkTracingDereferences(
         ) {
           kickDocPull(runtime, link, true);
         }
+      } else if (
+        (followedHop || inputViaLinkHop) && deadEndDocMissing &&
+        link.scope !== "space" && runtime.servingPosture &&
+        tx.tx.sourceAction !== undefined &&
+        runtime.scheduler.hasOtherWriterOf(link, tx.tx.sourceAction)
+      ) {
+        // A serving runtime reads one such row differently: a missing
+        // instance of a document that another derivation registered here
+        // writes is one the serving loop owes and has not produced yet, not
+        // one its principal never wrote. The read still reads `undefined`,
+        // as above, and stays subscribed, so the run comes again once the
+        // instance is produced; what the transaction records is that this
+        // run's value was derived from an instance not yet there, which
+        // withdraws the run's commit (`finalizeReactiveActionCommit` in
+        // scheduler/run.ts).
+        //
+        // Only a walk that crossed a hop is read this way. A walk that crossed
+        // none dead-ends at the document the run addressed itself, as a
+        // builtin reads its own store before it mints it (`llmDialog` reads
+        // its `internal` store directly, per user and per session, while
+        // another registered action declares it). That run may be the one
+        // that produces the instance, and withdrawing its commit would then
+        // starve the instance it was about to write.
+        tx.tx.unproducedScopedInstance ??=
+          `${link.space}/${link.scope}/${link.id}`;
       }
       break;
     }

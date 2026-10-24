@@ -22,7 +22,9 @@ declare global {
   var $EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION: string | undefined;
   var $EXPERIMENTAL_CONTENT_ADDRESSED_SCHEMAS: string | undefined;
   var $EXPERIMENTAL_READER_SCHEMA_PRECEDENCE: string | undefined;
+  var $EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS: string | undefined;
   var $EXPERIMENTAL_SHARED_MEMORY_CONNECTION: string | undefined;
+  var $EXPERIMENTAL_LOCAL_FOLD: string | undefined;
 }
 
 const ENVIRONMENT_DEFINE = typeof $ENVIRONMENT === "string"
@@ -57,6 +59,11 @@ const EXPERIMENTAL_CONTENT_ADDRESSED_SCHEMAS_DEFINE =
 const EXPERIMENTAL_READER_SCHEMA_PRECEDENCE_DEFINE =
   typeof $EXPERIMENTAL_READER_SCHEMA_PRECEDENCE === "string"
     ? $EXPERIMENTAL_READER_SCHEMA_PRECEDENCE
+    : undefined;
+
+const EXPERIMENTAL_LOCAL_FOLD_DEFINE =
+  typeof $EXPERIMENTAL_LOCAL_FOLD === "string"
+    ? $EXPERIMENTAL_LOCAL_FOLD
     : undefined;
 
 export const ENVIRONMENT: "development" | "production" =
@@ -120,6 +127,11 @@ export const EXPERIMENTAL = {
   // value the deployment publishes unless this define pins it
   // ({@link experimentalForDeployment}). The define is the rollback and CI
   // lever, as for the other flags; it is unset in a release build.
+  localSessionDocuments: flagValue(
+    typeof $EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS === "string"
+      ? $EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS
+      : undefined,
+  ),
   sharedMemoryConnection: flagValue(
     typeof $EXPERIMENTAL_SHARED_MEMORY_CONNECTION === "string"
       ? $EXPERIMENTAL_SHARED_MEMORY_CONNECTION
@@ -150,6 +162,10 @@ export const EXPERIMENTAL = {
   readerSchemaPrecedence: flagValue(
     EXPERIMENTAL_READER_SCHEMA_PRECEDENCE_DEFINE,
   ),
+  // The local fold of a refused derived write. Off by default in the runner;
+  // `EXPERIMENTAL_LOCAL_FOLD=true` bakes a shell whose worker keeps such a
+  // write as a fold instead of reverting it.
+  localFold: flagValue(EXPERIMENTAL_LOCAL_FOLD_DEFINE),
 };
 
 /**

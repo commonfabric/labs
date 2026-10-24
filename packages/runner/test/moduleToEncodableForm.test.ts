@@ -7,6 +7,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -81,14 +82,16 @@ describe("moduleToEncodableForm", () => {
 
   it("keeps the fallback body when the registering runtime can't resolve the $implRef (standalone-engine registration)", async () => {
     const compileEngine = new Engine(runtime);
-    const repoRoot = new URL("../../..", import.meta.url).pathname.replace(
+    const repoRoot = fromFileUrl(new URL("../../..", import.meta.url)).replace(
       /\/$/,
       "",
     );
-    const sourcePath = new URL(
-      "../../patterns/factory-outputs/parking-coordinator/main.test.tsx",
-      import.meta.url,
-    ).pathname;
+    const sourcePath = fromFileUrl(
+      new URL(
+        "../../patterns/factory-outputs/parking-coordinator/main.test.tsx",
+        import.meta.url,
+      ),
+    );
     const program = await resolveLocalProgram(
       (resolver) => compileEngine.resolve(resolver),
       { main: sourcePath, root: repoRoot },

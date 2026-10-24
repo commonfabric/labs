@@ -60,10 +60,19 @@ interface ReadAnswer<T> {
   authoritative: boolean;
 }
 
+/**
+ * The operations on one cell, in the order they reach the worker, and the
+ * value the latest of them left. Handles that read the cell under different
+ * schemas share one queue, so their writes stay in order, but not that value:
+ * it is a reading under the schema of `view`, and a handle reading under
+ * another takes it as no value.
+ */
 interface CellOperationQueue {
   tail: Promise<void> | undefined;
   hasValue: boolean;
   value: unknown;
+  // `viewKey()` of the handle whose operation left `value`.
+  view: string | undefined;
   // Changes when any equivalent handle receives an authoritative update.
   authoritativeGeneration: number;
 }
@@ -106,6 +115,18 @@ type CellAnswer<T> =
   | { readonly value: T | undefined }
   | { readonly refused: CellReadRefusal };
 
+/** What a subscriber is told about the delivery its value callback is for. */
+export type CellDelivery = {
+  /**
+   * Whether the `cfcLabel` handed to the callback is the label the worker
+   * read with the value: it is for a delivery the worker made with its label,
+   * and is not for a value-only delivery or a local write, which carry the
+   * label the handle last received, nor once the handle has left the cell's
+   * subscription and joined it again, until the worker delivers a label.
+   */
+  readonly cfcLabelCurrent: boolean;
+};
+
 /** How a subscriber to a handle hears what the handle holds of its cell. */
 export type CellSubscribeOptions = {
   /** Whether to hear the cell's display label with each value. */
@@ -132,7 +153,8 @@ export type CellSendOptions = {
    * the served run recorded. The send then rejects, with the reason, when
    * that run's commit is refused, as it is for a write whose UI contract the
    * event does not satisfy, and when the run throws or the event is dropped
-   * or refused admission.
+   * or refused admission. A run that finishes without an error resolves it,
+   * whether or not it wrote anything.
    */
   awaitHandling?: boolean;
 };
@@ -188,6 +210,14 @@ export class CellHandle<T = unknown> {
   #value: T | undefined;
   #cfcLabel: CfcLabelView | undefined;
 
+  /**
+   * Whether `#cfcLabel` is the label the worker read with `#value`: set by a
+   * delivery that carried a label, and cleared by a value that arrived
+   * without one, by a local write, by a refusal, and when the last
+   * subscriber leaves, since the handle then stops hearing of the label.
+   */
+  #cfcLabelCurrent = false;
+
   /** The refusal of this handle's last read, while it stands. */
   #refusal: CellReadRefusal | undefined;
 
@@ -206,7 +236,11 @@ export class CellHandle<T = unknown> {
   #callbacks = new Map<
     number,
     {
-      onValue: (value: Readonly<T>, cfcLabel: CfcLabelView | undefined) => void;
+      onValue: (
+        value: Readonly<T>,
+        cfcLabel: CfcLabelView | undefined,
+        delivery: CellDelivery,
+      ) => void;
       /** Runs the cleanup the subscriber's last value callback returned. */
       clear: () => void;
       onRefused: (refusal: CellReadRefusal) => void;
@@ -214,6 +248,8 @@ export class CellHandle<T = unknown> {
   >();
   #nextCallbackId = 0;
   #schemaWarned = false;
+  // `#viewKey()`, memoized.
+  #view: string | undefined;
   #updateGeneration = 0;
 
   /**
@@ -252,7 +288,7 @@ export class CellHandle<T = unknown> {
    * globalThis.commonfabric.logger["cell-handle"].disabled = false
    */
   #requireSchema(method: string): void {
-    if (!this.#ref.schema && !this.#schemaWarned) {
+    if (!this.#ref.schema && !this.#ref.keyedFrom && !this.#schemaWarned) {
       this.#schemaWarned = true;
       // Use callback for lazy evaluation - stack trace only generated if logging is enabled
       logger.warn(`no-schema-${method}`, () => {
@@ -367,8 +403,7 @@ export class CellHandle<T = unknown> {
         updateGeneration === this.#updateGeneration &&
         authoritativeGeneration === queue.authoritativeGeneration
       ) {
-        queue.value = snapshot;
-        queue.hasValue = true;
+        this.#holdInQueue(queue, snapshot);
       }
     });
   }
@@ -460,8 +495,7 @@ export class CellHandle<T = unknown> {
         updateGeneration === this.#updateGeneration &&
         authoritativeGeneration === queue.authoritativeGeneration
       ) {
-        queue.value = snapshot;
-        queue.hasValue = true;
+        this.#holdInQueue(queue, snapshot);
       }
     });
   }
@@ -481,7 +515,8 @@ export class CellHandle<T = unknown> {
   ): { value: unknown } | undefined {
     const refused = this.#writeRefusal();
     if (refused !== undefined) throw refused;
-    if (queue.hasValue) return { value: queue.value };
+    const queued = this.#queuedValue(queue);
+    if (queued !== undefined) return queued;
     if (!this.#unread && writeGeneration === this.#writeGeneration) {
       return { value: this.#value };
     }
@@ -537,8 +572,7 @@ export class CellHandle<T = unknown> {
         updateGeneration === this.#updateGeneration &&
         authoritativeGeneration === queue.authoritativeGeneration
       ) {
-        queue.value = snapshot;
-        queue.hasValue = true;
+        this.#holdInQueue(queue, snapshot);
       }
     });
   }
@@ -628,6 +662,7 @@ export class CellHandle<T = unknown> {
         tail: undefined,
         hasValue: false,
         value: undefined,
+        view: undefined,
         authoritativeGeneration: 0,
       };
       queues.set(key, queue);
@@ -740,10 +775,14 @@ export class CellHandle<T = unknown> {
     this.#value = value;
     this.#refusal = undefined;
     this.#unread = false;
+    // A local update carries the label the handle last received, which the
+    // worker did not read with this value.
+    this.#cfcLabelCurrent = false;
     for (const { onValue } of this.#callbacks.values()) {
       try {
-        // A local update does not change the label; carry the current one.
-        onValue(value as Readonly<T>, this.#cfcLabel);
+        onValue(value as Readonly<T>, this.#cfcLabel, {
+          cfcLabelCurrent: false,
+        });
       } catch (error) {
         console.error("[CellHandle] Callback error:", error);
       }
@@ -757,6 +796,7 @@ export class CellHandle<T = unknown> {
   #refuse(refusal: CellReadRefusal): void {
     this.#value = undefined;
     this.#cfcLabel = undefined;
+    this.#cfcLabelCurrent = false;
     this.#refusal = refusal;
     this.#unread = false;
     for (const { clear, onRefused } of this.#callbacks.values()) {
@@ -808,7 +848,9 @@ export class CellHandle<T = unknown> {
    * rejects with the reason when the runtime refuses the event, when that
    * run's commit is refused, as it is for a write whose UI contract the event
    * does not satisfy, and when the run throws or the event is dropped or
-   * refused admission. The surface and action are read once, here.
+   * refused admission. A run that finishes without an error resolves it,
+   * whether or not it wrote anything; a handler that turns an event down
+   * throws, which fails its run and rejects the send. The surface and action are read once, here.
    *
    * This mints trusted events. The host calls it only from the control's
    * real user-input path, with exactly the values the control displayed and
@@ -863,6 +905,11 @@ export class CellHandle<T = unknown> {
    * refusal: the child names a read of its own, which the worker decides on
    * its own, and may admit where it refuses the whole, so the child is
    * unread until that read answers, as it is when this handle is.
+   *
+   * The child is read under the schema the worker narrows this handle's
+   * schema to at the key, as the runtime's own `Cell.key()` is, and under
+   * none when neither this handle nor an ancestor it was keyed from has one.
+   * Its `ref().schema` stays unset: the narrowing happens in the worker.
    */
   key<K extends keyof T>(valueKey: K): CellHandle<T[K]> {
     const childRef = this.#extendPath(String(valueKey));
@@ -958,14 +1005,14 @@ export class CellHandle<T = unknown> {
       const refusedSince = this.#writeRefusal();
       if (refusedSince !== undefined) return Promise.reject(refusedSince);
       const authoritativeGeneration = queue.authoritativeGeneration;
-      const current = (queue.hasValue ? queue.value : fallback) as unknown[];
+      const queued = this.#queuedValue(queue);
+      const current = (queued ? queued.value : fallback) as unknown[];
       if (!Array.isArray(current)) {
         throw new Error("push() can only be used on array cells");
       }
       const value = [...current, ...snapshots];
       const updateGeneration = this.#updateGeneration;
-      queue.value = value;
-      queue.hasValue = true;
+      this.#holdInQueue(queue, value);
       if (writeGeneration === this.#writeGeneration) {
         this.#publishWrite(value as unknown as T);
       }
@@ -977,8 +1024,7 @@ export class CellHandle<T = unknown> {
           // Keep the restored base explicit in the shared queue. A later
           // append may have captured this append's optimistic publication as
           // its private fallback before the refusal arrived.
-          queue.hasValue = true;
-          queue.value = current;
+          this.#holdInQueue(queue, current);
           if (writeGeneration === this.#writeGeneration) {
             this.#publishWrite(current as unknown as T);
           }
@@ -1007,6 +1053,14 @@ export class CellHandle<T = unknown> {
   /** The cell's current display CFC label, for label-aware subscribers. */
   get cfcLabel(): CfcLabelView | undefined {
     return this.#cfcLabel;
+  }
+
+  /**
+   * Whether {@link cfcLabel} is the label the worker read with the value the
+   * handle holds, as {@link CellDelivery} tells a subscriber.
+   */
+  get cfcLabelCurrent(): boolean {
+    return this.#cfcLabelCurrent;
   }
 
   /** Whether this handle subscribed asking for reactive CFC-label delivery. */
@@ -1045,6 +1099,7 @@ export class CellHandle<T = unknown> {
     callback: (
       value: T | undefined,
       cfcLabel?: CfcLabelView | undefined,
+      delivery?: CellDelivery,
     ) => Cancel | undefined | void,
     options: CellSubscribeOptions,
   ): Cancel {
@@ -1084,10 +1139,11 @@ export class CellHandle<T = unknown> {
     const wrappedCallback = (
       value: T | undefined,
       cfcLabel: CfcLabelView | undefined,
+      delivery: CellDelivery,
     ) => {
       clear();
       try {
-        cleanup = callback(value, cfcLabel);
+        cleanup = callback(value, cfcLabel, delivery);
       } catch (error) {
         console.error("[CellHandle] Callback error:", error);
       }
@@ -1121,7 +1177,9 @@ export class CellHandle<T = unknown> {
     // Call immediately with what the handle holds, as Cell does: the value,
     // even when it is undefined, or the refusal standing in its place.
     if (this.#refusal === undefined) {
-      wrappedCallback(this.#value, this.#cfcLabel);
+      wrappedCallback(this.#value, this.#cfcLabel, {
+        cfcLabelCurrent: this.#cfcLabelCurrent,
+      });
     } else {
       this.#callbacks.get(callbackId)?.onRefused(this.#refusal);
     }
@@ -1130,6 +1188,10 @@ export class CellHandle<T = unknown> {
       clear();
       this.#callbacks.delete(callbackId);
       if (this.#callbacks.size === 0) {
+        // Off the cell's subscription, the handle hears of no label change,
+        // so the one it holds is current only until the worker delivers
+        // another.
+        this.#cfcLabelCurrent = false;
         this.#conn.unsubscribe(this);
       }
     };
@@ -1295,8 +1357,40 @@ export class CellHandle<T = unknown> {
    * or none for a refusal, which holds nothing of the cell.
    */
   #recordInQueue(queue: CellOperationQueue, read: CellAnswer<T>): void {
-    queue.value = "refused" in read ? undefined : read.value;
-    queue.hasValue = !("refused" in read);
+    if ("refused" in read) {
+      queue.value = undefined;
+      queue.hasValue = false;
+    } else {
+      this.#holdInQueue(queue, read.value);
+    }
+  }
+
+  /**
+   * Records `value` as what this handle's operation left in `queue`, as read
+   * under this handle's schema.
+   */
+  #holdInQueue(queue: CellOperationQueue, value: unknown): void {
+    queue.value = value;
+    queue.hasValue = true;
+    queue.view = this.#viewKey();
+  }
+
+  /**
+   * The value the operations before this one left in `queue`, where they
+   * left one read under this handle's schema; `undefined` otherwise.
+   */
+  #queuedValue(queue: CellOperationQueue): { value: unknown } | undefined {
+    return queue.hasValue && queue.view === this.#viewKey()
+      ? { value: queue.value }
+      : undefined;
+  }
+
+  /** What decides the shape a read through this handle returns. */
+  #viewKey(): string {
+    return this.#view ??= JSON.stringify({
+      schema: this.#ref.schema,
+      keyedFrom: this.#ref.keyedFrom,
+    });
   }
 
   /**
@@ -1416,7 +1510,7 @@ export class CellHandle<T = unknown> {
    * this handle's, or nothing yet. Its first read of its own replaces it.
    */
   asSchema<U = unknown>(schema: JSONSchema): CellHandle<U> {
-    const { schema: _schema, ...rest } = this.#ref;
+    const { schema: _schema, keyedFrom: _keyedFrom, ...rest } = this.#ref;
     const newCell = new CellHandle(this.#rt, {
       ...rest,
       schema,
@@ -1428,12 +1522,17 @@ export class CellHandle<T = unknown> {
   }
 
   #extendPath(key: string): CellRef {
+    // The child's schema is the worker's to narrow, so the child carries the
+    // nearest ancestor schema instead of one of its own.
+    const keyedFrom = this.#ref.schema !== undefined
+      ? { depth: this.#ref.path.length, schema: this.#ref.schema }
+      : this.#ref.keyedFrom;
     return {
       id: this.#ref.id,
       space: this.#ref.space,
       scope: this.#ref.scope,
       path: [...this.#ref.path, key],
-      // Child schema is unknown, so we don't include it
+      ...(keyedFrom !== undefined && { keyedFrom }),
       ...(this.#ref.cfcLabelView !== undefined && {
         cfcLabelView: rebaseCfcLabelView(this.#ref.cfcLabelView, [key]),
       }),
@@ -1501,7 +1600,7 @@ export class CellHandle<T = unknown> {
    */
   [$onCellUpdate](
     value: unknown,
-    labelUpdate?: { cfcLabel: CfcLabelView | undefined },
+    labelUpdate?: { cfcLabel: CfcLabelView | undefined; current: boolean },
   ): void {
     this.#updateGeneration++;
     // A value admitted after a refusal, or the first delivered to a handle
@@ -1520,8 +1619,7 @@ export class CellHandle<T = unknown> {
     );
     if (queue) {
       queue.authoritativeGeneration++;
-      queue.value = applied;
-      queue.hasValue = true;
+      this.#holdInQueue(queue, applied);
     }
     const valueChanged = !valuesOrCellsEqual(applied, this.#value);
     // A label-only change (value identical) still fires label-aware subscribers.
@@ -1529,14 +1627,27 @@ export class CellHandle<T = unknown> {
     // value-only notification never spuriously churns the label.
     const labelChanged = labelUpdate !== undefined && this.#wantsCfcLabel &&
       !cfcLabelViewsEqual(labelUpdate.cfcLabel, this.#cfcLabel);
+    // The label the handle holds follows every update that carries one,
+    // whether or not a subscriber hears of it: a handle whose subscribers
+    // never asked for labels still seeds a later handle on the cell with the
+    // label it holds, and says how current it is.
+    if (labelUpdate !== undefined) {
+      this.#cfcLabel = labelUpdate.cfcLabel;
+      this.#cfcLabelCurrent = labelUpdate.current;
+    } else if (valueChanged) {
+      // The value moved on without its label, which the worker read with an
+      // earlier one.
+      this.#cfcLabelCurrent = false;
+    }
     if (!valueChanged && !labelChanged && !isNews) {
       return;
     }
 
     if (valueChanged) this.#value = applied;
-    if (labelUpdate !== undefined) this.#cfcLabel = labelUpdate.cfcLabel;
     for (const { onValue } of this.#callbacks.values()) {
-      onValue(this.#value as Readonly<T>, this.#cfcLabel);
+      onValue(this.#value as Readonly<T>, this.#cfcLabel, {
+        cfcLabelCurrent: this.#cfcLabelCurrent,
+      });
     }
   }
 

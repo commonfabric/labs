@@ -6,8 +6,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { test as testCommand } from "../commands/test-command.ts";
-import { cf, checkStderr, stripAnsi, withEnv } from "./utils.ts";
-import { COMMAND_SPELLING_END_DATE } from "../lib/deprecated-spelling.ts";
+import { argv, cf, checkStderr, stripAnsi, withEnv } from "./utils.ts";
 
 class ExitError extends Error {
   constructor(readonly code: number) {
@@ -74,14 +73,13 @@ describe("main command", () => {
     const commands = [main];
     const mismatchedUsage: string[] = [];
     // Commands that state their own usage because what they accept is not
-    // expressible as a Cliffy positional: both mounts of `call`, for the
-    // callable section, and the invitation commands, which also take the ID
+    // expressible as a Cliffy positional: `call`, for the callable section,
+    // and the invitation commands, which also take the ID
     // as the word after `--`. Written out rather than derived: this set had
     // held one name twice, so the exemption it was meant to carry had
     // silently lapsed.
     const customUsageCommands = new Set([
       "cf piece call",
-      "cf call",
       "cf space invite redeem",
       "cf space invite revoke",
       "cf space invite receipts",
@@ -119,7 +117,7 @@ describe("main command", () => {
     // the handling committed. The two sit adjacent in `--help`, so a caveat
     // on one and silence on the other reads as a real difference between
     // them.
-    const { code, stdout, stderr } = await cf("piece call --help");
+    const { code, stdout, stderr } = await cf(argv`piece call --help`);
     checkStderr(stderr);
     const help = stripAnsi(stdout.join("\n")).replaceAll(/\s+/g, " ");
     expect(help).toContain(
@@ -136,7 +134,7 @@ describe("main command", () => {
     const { pieceDataCommand } = await import(
       "../commands/piece.ts?piece-call-usage-test"
     );
-    const call = pieceDataCommand("call", { spelling: "piece call" });
+    const call = pieceDataCommand("call");
     const expectedUsage =
       "--identity <identity> --url <url> --api-url <api-url> --space <space> " +
       "--cell <cell> [address] <callable> [input]";
@@ -145,7 +143,7 @@ describe("main command", () => {
       "<callable:string> [tail...:string]",
     );
     expect(call.getUsage()).toBe(expectedUsage);
-    const { code, stdout, stderr } = await cf("piece call --help");
+    const { code, stdout, stderr } = await cf(argv`piece call --help`);
     checkStderr(stderr);
     const help = stripAnsi(stdout.join("\n"));
     const renderedUsage = help.split("\n").find((line) =>
@@ -239,6 +237,7 @@ describe("main command", () => {
     );
     await expect(
       main.parse([
+        "piece",
         "call",
         "--identity",
         "./identity.key",
@@ -257,9 +256,8 @@ describe("main command", () => {
   });
 
   it("mounts each data command under the noun it acts on", async () => {
-    // Both halves matter and only one is observable as a presence: the
-    // superseded spellings still resolve, so a test that only looked for the
-    // blessed ones would pass with the surface unchanged.
+    // Both halves matter: a test that only looked for the spellings under
+    // each noun would pass with the old ones still mounted beside them.
     const { main } = await import(
       "../commands/main.ts?piece-data-absence"
     );
@@ -287,79 +285,38 @@ describe("main command", () => {
     // The lifecycle commands that merely start with the same word stay put.
     expect(named(piece, false)).toContain("setsrc");
     expect(named(piece, false)).toContain("getsrc");
-    // The label commands act on a cell and moved with `get` and `set`.
-    expect(named(piece, false)).not.toContain("get-label");
-    expect(named(piece, false)).not.toContain("set-label");
+    // The label commands act on a cell, so `cf piece` mounts neither, hidden
+    // or shown.
+    expect(named(piece, true)).not.toContain("get-label");
+    expect(named(piece, true)).not.toContain("set-label");
 
-    // The superseded top-level spellings resolve and are offered to nobody.
-    for (const superseded of ["get", "set", "call"]) {
-      expect(named(main, true)).toContain(superseded);
-      expect(named(main, false)).not.toContain(superseded);
+    // Nor does the root mount a data command of its own.
+    for (const name of ["get", "set", "call"]) {
+      expect(named(main, true)).not.toContain(name);
     }
   });
 
-  it("carries the migration notice on a superseded spelling's help page", async () => {
-    // The page is where a caller learning a command looks, and a superseded
-    // mount's page teaches its own spelling in every example. `--help` exits
-    // before any action runs, so the notice cannot ride the action alone.
-    //
-    // Both halves are asserted together: the notice on the superseded page,
-    // and silence on the blessed one. A notice fired from the shared builder
-    // rather than from the mount would put it on both, and a test that only
-    // read the superseded page would call that a pass.
+  it("reports each spelling a moved command had as an unknown command", async () => {
+    // A moved command answers only under the noun it acts on. Each line asks
+    // for nothing but the old spelling's help page, so a refusal can come
+    // only from that spelling being unmounted.
+
     for (
-      const [superseded, blessed] of [
-        ["get", "cell get"],
-        ["set", "cell set"],
-        ["call", "piece call"],
-        ["piece get-label", "cell get-label"],
-        ["piece set-label", "cell set-label"],
-        ["piece recreate-root", "space recreate-root"],
+      const [spelling, word] of [
+        ["get", "get"],
+        ["set", "set"],
+        ["call", "call"],
+        ["piece get-label", "get-label"],
+        ["piece set-label", "set-label"],
+        ["piece recreate-root", "recreate-root"],
       ] as const
     ) {
-      const old = await cf(`${superseded} --help`);
-      expect(old.code, superseded).toBe(0);
-      // One line, on stderr, naming both spellings and the date. Asserted on
-      // stderr because the page itself is stdout: a notice written there
-      // would corrupt the machine-readable output these commands reserve it
-      // for.
-      expect(old.stderr.join("\n"), superseded).toContain(
-        `'cf ${superseded}' is deprecated; spell it 'cf ${blessed}'.`,
-      );
-      expect(old.stderr.join("\n"), superseded).toContain(
-        COMMAND_SPELLING_END_DATE,
-      );
-      expect(old.stdout.join("\n"), superseded).not.toContain("is deprecated");
-
-      const current = await cf(`${blessed} --help`);
-      expect(current.code, blessed).toBe(0);
-      checkStderr(current.stderr);
-      expect(current.stderr.join("\n"), blessed).not.toContain(
-        "is deprecated",
+      const { code, stderr } = await cf(argv`${spelling.split(" ")} --help`);
+      expect(code, spelling).not.toBe(0);
+      expect(stripAnsi(stderr.join("\n")), spelling).toContain(
+        `Unknown command "${word}"`,
       );
     }
-  });
-
-  it("says nothing on a line refused before the command is reached", async () => {
-    // The boundary of the claim the README makes, pinned because it is the
-    // one a reader can disprove. `--bogus` is refused in argument parsing, so
-    // neither the action nor a help page runs on a read that reserves stdout:
-    // its own error handler keeps the page off the stream it reserves.
-    //
-    // `set` reserves nothing, so the same refusal prints a page and the notice
-    // rides it. Both are asserted, because a test that read only the silent
-    // half would pass with the notice removed altogether.
-    const reserved = await cf("get --bogus");
-    expect(reserved.code).toBe(2);
-    expect(reserved.stderr.join("\n")).toContain('Unknown option "--bogus"');
-    expect(reserved.stderr.join("\n")).not.toContain("is deprecated");
-    expect(reserved.stdout).toEqual([]);
-
-    const unreserved = await cf("set --bogus");
-    expect(unreserved.code).toBe(2);
-    expect(unreserved.stderr.join("\n")).toContain(
-      "'cf set' is deprecated; spell it 'cf cell set'.",
-    );
   });
 
   it("registers visible commands and reports configured environment defaults", async () => {
@@ -464,11 +421,11 @@ describe("main command", () => {
           };
           for (const entry of named) {
             if (!entry.includes(" ")) continue;
-            const absent = await cf(entry, { env: reachesSpace });
+            const absent = await cf(entry.split(" "), { env: reachesSpace });
             expect(stripAnsi(absent.stderr.join("\n")), entry).toContain(
               'Missing required option: "--space"',
             );
-            const ambient = await cf(entry, {
+            const ambient = await cf(entry.split(" "), {
               env: { ...reachesSpace, CF_SPACE: "ambient" },
             });
             expect(stripAnsi(ambient.stderr.join("\n")), entry).not.toContain(
@@ -485,10 +442,10 @@ describe("main command", () => {
     // one. A stale key here is silent: the command runs, the list selector
     // wins, and a repair --apply mutates a target the line does not name.
     for (const flag of ["--cell", "--piece"]) {
-      for (const command of ["piece survey", "piece repair"]) {
-        const where = `${command} ${flag}`;
+      for (const command of [argv`piece survey`, argv`piece repair`]) {
+        const where = `${command.join(" ")} ${flag}`;
         const { code, stderr } = await cf(
-          `${command} ${flag} holder --list member`,
+          argv`${command} ${flag} holder --list member`,
         );
         // The whole command line is echoed to stderr, so a looser assertion
         // here passes whether or not the conflict fires. Name the refusal.
@@ -501,7 +458,7 @@ describe("main command", () => {
   });
 
   it("shows exec command help before trying to resolve a mounted file", async () => {
-    const { code, stdout } = await cf("exec --help");
+    const { code, stdout } = await cf(argv`exec --help`);
     const help = stripAnsi(stdout.join("\n"));
 
     expect(code).toBe(0);
@@ -512,7 +469,7 @@ describe("main command", () => {
   });
 
   it("shows help for the direct FUSE daemon entry point", async () => {
-    const { code, stdout } = await cf("fuse-daemon --help");
+    const { code, stdout } = await cf(argv`fuse-daemon --help`);
 
     expect(code).toBe(0);
     expect(stripAnsi(stdout.join("\n"))).toContain(
@@ -524,7 +481,7 @@ describe("main command", () => {
     // The subcommand forwards its raw argv to the supervisor's parser, so the
     // compiled binary and a direct `deno run` of the supervisor produce the
     // same flags and the same help.
-    const { code, stdout } = await cf("fuse-supervisor --help");
+    const { code, stdout } = await cf(argv`fuse-supervisor --help`);
 
     expect(code).toBe(0);
     expect(stdout.join("\n")).toContain(
@@ -534,7 +491,9 @@ describe("main command", () => {
   });
 
   it("rejects an unknown flag on the direct supervisor entry point", async () => {
-    const { code, stdout, stderr } = await cf("fuse-supervisor /mnt --json");
+    const { code, stdout, stderr } = await cf(
+      argv`fuse-supervisor /mnt --json`,
+    );
 
     expect(code).not.toBe(0);
     expect(stdout).toEqual([]);
@@ -544,7 +503,7 @@ describe("main command", () => {
   });
 
   it("keeps rejection help off stdout when --json is unsupported", async () => {
-    const { code, stdout, stderr } = await cf("acl --json");
+    const { code, stdout, stderr } = await cf(argv`acl --json`);
 
     expect(code).not.toBe(0);
     expect(stdout).toEqual([]);

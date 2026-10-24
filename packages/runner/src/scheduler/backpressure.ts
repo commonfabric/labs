@@ -184,3 +184,77 @@ export class EventHandlerNotRunError extends Error {
     this.elapsedMs = options.elapsedMs;
   }
 }
+
+/**
+ * Terminal failure raised when a client event is dropped before dispatch
+ * because no handler could be found for its stream: the piece owning the
+ * stream did not start, started without a pattern graph, or started and
+ * registered nothing for the stream. Surfaced through the scheduler error
+ * channel, so a send made from inside a handler, which has no commit callback
+ * to settle, is still an error somebody sees.
+ */
+export class EventDroppedError extends Error {
+  readonly streamId: string;
+  readonly reason: string;
+  readonly attempts: number;
+
+  /**
+   * Why the last start attempt did not start the piece, when it did not:
+   * the start verdict's own reason (`no-pattern-meta`, `pattern-unloadable`,
+   * `chain-cycle`), or `start-failed` for a start that threw.
+   */
+  readonly pieceStartReason?: string;
+
+  constructor(
+    options: {
+      streamId: string;
+      reason: string;
+      attempts: number;
+      pieceStartReason?: string;
+    },
+  ) {
+    super(
+      `${options.reason} (piece-start attempts: ${options.attempts})`,
+    );
+    this.name = "EventDroppedError";
+    this.streamId = options.streamId;
+    this.reason = options.reason;
+    this.attempts = options.attempts;
+    if (options.pieceStartReason !== undefined) {
+      this.pieceStartReason = options.pieceStartReason;
+    }
+  }
+}
+
+/**
+ * Terminal failure raised when a client event handler's commit is refused in a
+ * way re-running cannot change, and the write is dropped: a non-stale-basis
+ * rejection (an authorization denial, a malformed store operation, a transport
+ * failure), or a permanent precondition failure. Surfaced through the
+ * scheduler error channel, so a send made from inside a handler, which has no
+ * commit callback to settle, is still an error somebody sees.
+ */
+export class EventCommitRefusedError extends Error {
+  readonly rejection: "non-retryable" | "permanent";
+  override readonly cause: unknown;
+
+  constructor(
+    options: {
+      handlerId?: string;
+      rejection: "non-retryable" | "permanent";
+      cause: unknown;
+    },
+  ) {
+    const handlerPart = options.handlerId ? ` for ${options.handlerId}` : "";
+    const causeMessage = (options.cause as { message?: unknown } | undefined)
+      ?.message;
+    super(
+      `Event handler commit${handlerPart} was refused (${options.rejection}) ` +
+        "and its write dropped" +
+        (typeof causeMessage === "string" ? `: ${causeMessage}` : ""),
+    );
+    this.name = "EventCommitRefusedError";
+    this.rejection = options.rejection;
+    this.cause = options.cause;
+  }
+}

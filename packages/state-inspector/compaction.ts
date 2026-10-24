@@ -25,8 +25,16 @@ import { COMPACTION_SESSION_PREFIX } from "@commonfabric/memory/v2/engine";
 
 import { openSpace, type SpaceDb } from "./db.ts";
 import { decodeStored } from "./decode.ts";
-import { contentFingerprint } from "./fingerprint.ts";
-import { reconstructOutcome, reconstructRevision } from "./reconstruct.ts";
+import {
+  contentFingerprint,
+  fingerprintReader,
+  type FingerprintReport,
+} from "./fingerprint.ts";
+import {
+  type ReconstructOutcome,
+  reconstructOutcome,
+  reconstructRevision,
+} from "./reconstruct.ts";
 
 export type CompactionCheck = {
   name: string;
@@ -614,22 +622,76 @@ export function verifyCompaction(
       ACL_ID_PATTERN,
     );
     let compared = 0;
-    const mismatches: string[] = [];
-    for (let index = 0; index < instances.length; index += stride) {
+    const mismatches: { index: number; address: string }[] = [];
+    const visited = new Uint8Array(instances.length);
+    const leftReader = sampled ? undefined : fingerprintReader(main);
+
+    /** Checks one head, optionally using a fingerprint's primary read. */
+    const compareHead = (index: number, knownRight?: ReconstructOutcome) => {
       const { id, scope_key } = instances[index];
+      visited[index] = 1;
       compared++;
-      const left = reconstructOutcome(main, { id, scope: scope_key });
-      const right = reconstructOutcome(backup, { id, scope: scope_key });
+      const at = { id, scope: scope_key };
+      const left = leftReader === undefined
+        ? reconstructOutcome(main, at)
+        : leftReader.read(at);
+      const right = knownRight ?? reconstructOutcome(backup, at);
       // Two unreadable payloads are not the same document: an identical
       // status proves nothing when the status is that nothing could be read.
       const same = left.status === right.status &&
         left.status !== "undecodable" &&
         (left.status !== "present" || right.status !== "present" ||
           sameValue(left.document, right.document));
-      if (!same && mismatches.length < 5) {
-        mismatches.push(`${id} (${scope_key})`);
+      if (!same) {
+        mismatches.push({ index, address: `${id} (${scope_key})` });
+        mismatches.sort((a, b) => a.index - b.index);
+        if (mismatches.length > 5) mismatches.pop();
+      }
+    };
+
+    let rightPrint: FingerprintReport | undefined;
+    let rightPrintError: { error: unknown } | undefined;
+    let comparisonError: { index: number; error: unknown } | undefined;
+    if (!sampled) {
+      const headIndices = new Map<string, Map<string, number>>();
+      for (const [index, row] of instances.entries()) {
+        let ids = headIndices.get(row.scope_key);
+        if (ids === undefined) headIndices.set(row.scope_key, ids = new Map());
+        ids.set(row.id, index);
+      }
+      try {
+        rightPrint = contentFingerprint(backup, {
+          onEntity: (at, outcome) => {
+            const index = headIndices.get(at.scope)?.get(at.id);
+            if (index === undefined) return;
+            try {
+              compareHead(index, outcome);
+            } catch (error) {
+              if (
+                comparisonError === undefined || index < comparisonError.index
+              ) {
+                comparisonError = { index, error };
+              }
+            }
+          },
+        });
+      } catch (error) {
+        rightPrintError = { error };
       }
     }
+    // A fingerprint may refuse a cap or fail before reaching a head. A head
+    // may also have no revision. Every such address still gets its comparison.
+    for (let index = 0; index < instances.length; index += stride) {
+      if (visited[index] !== 0) continue;
+      try {
+        compareHead(index);
+      } catch (error) {
+        if (comparisonError === undefined || index < comparisonError.index) {
+          comparisonError = { index, error };
+        }
+      }
+    }
+    if (comparisonError !== undefined) throw comparisonError.error;
     check(
       "every document reads back identical",
       mismatches.length === 0,
@@ -637,7 +699,9 @@ export function verifyCompaction(
         (stride > 1 ? ` (every ${stride}th)` : "") +
         (mismatches.length === 0
           ? ""
-          : `; differ or unreadable: ${mismatches.join(", ")}`),
+          : `; differ or unreadable: ${
+            mismatches.map((entry) => entry.address).join(", ")
+          }`),
     );
 
     // The ACL document. With a live one in the backup: a `set` at the newest
@@ -862,12 +926,15 @@ export function verifyCompaction(
         (tableDiffs.length === 0 ? "" : `; ${tableDiffs.join("; ")}`),
     );
 
-    // 4. The fingerprint, which excludes generated cells: necessary, cheap
-    //    relative to the replay above, skipped on a sampled pass.
+    // 4. Complete the fingerprints whose primary reads also served the head
+    // comparison. Fingerprint failures are reported in result/backup order.
     if (!sampled) {
       try {
-        const leftPrint = contentFingerprint(main);
-        const rightPrint = contentFingerprint(backup);
+        const leftPrint = leftReader!.finish();
+        if (rightPrintError !== undefined) throw rightPrintError.error;
+        if (rightPrint === undefined) {
+          throw new Error("The backup fingerprint has no result.");
+        }
         check(
           "fingerprint",
           leftPrint.hash === rightPrint.hash,

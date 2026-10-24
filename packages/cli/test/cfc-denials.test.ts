@@ -13,7 +13,7 @@ import {
   printCfcDenials,
   warningsCountCfcDenial,
 } from "../lib/cfc-denials.ts";
-import { cf } from "./utils.ts";
+import { argv, cf } from "./utils.ts";
 
 const SPACE = "did:key:z6Mkdenials";
 
@@ -161,7 +161,7 @@ describe("cfc-denials", () => {
       "      - writeAuthorizedBy requires a trusted verified binding identity at /text";
 
     it("prints a denied commit with its reason", async () => {
-      const { code, stdout } = await cf(`test "${fixture}" --cfc-denials`);
+      const { code, stdout } = await cf(argv`test ${fixture} --cfc-denials`);
       expect(code).toBe(0);
       expect(stdout).toContain(
         `    CFC denied (write-policy-gate): ${SUMMARY}`,
@@ -170,7 +170,7 @@ describe("cfc-denials", () => {
     });
 
     it("prints no denial without the flag", async () => {
-      const { code, stdout } = await cf(`test "${fixture}"`);
+      const { code, stdout } = await cf(argv`test ${fixture}`);
       expect(code).toBe(0);
       expect(stdout.join("\n")).not.toContain("CFC denied (");
     });
@@ -185,7 +185,7 @@ describe("cfc-denials", () => {
 
       it("prints the setup denial's reason with the flag", async () => {
         const { code, stdout } = await cf(
-          `test "${setupFixture}" --cfc-denials`,
+          argv`test ${setupFixture} --cfc-denials`,
         );
         expect(code).toBe(1);
         expect(stdout).toContain(
@@ -195,7 +195,7 @@ describe("cfc-denials", () => {
       });
 
       it("prints a hint naming the flag without it", async () => {
-        const { code, stdout } = await cf(`test "${setupFixture}"`);
+        const { code, stdout } = await cf(argv`test ${setupFixture}`);
         expect(code).toBe(1);
         expect(stdout).toContain(hint);
         expect(stdout.join("\n")).not.toContain("CFC denied (");
@@ -207,7 +207,7 @@ describe("cfc-denials", () => {
         import.meta.dirname!,
         "fixtures/cfc-denials/repeated",
       );
-      const { code, stdout } = await cf(`test "${repeated}"`);
+      const { code, stdout } = await cf(argv`test ${repeated}`);
       expect(code).toBe(1);
       expect(
         stdout.filter((line) =>
@@ -224,7 +224,7 @@ describe("cfc-denials", () => {
 
       it("prints the denial behind the participant's name with the flag", async () => {
         const { code, stdout } = await cf(
-          `test "${multiUserFixture}" --cfc-denials`,
+          argv`test ${multiUserFixture} --cfc-denials`,
         );
         expect(code).toBe(1);
         expect(stdout).toContain(
@@ -236,7 +236,7 @@ describe("cfc-denials", () => {
       });
 
       it("prints a hint naming the flag without it", async () => {
-        const { code, stdout } = await cf(`test "${multiUserFixture}"`);
+        const { code, stdout } = await cf(argv`test ${multiUserFixture}`);
         expect(code).toBe(1);
         expect(stdout).toContain(
           "    Run again with `--cfc-denials` to see what CFC denied, and why.",

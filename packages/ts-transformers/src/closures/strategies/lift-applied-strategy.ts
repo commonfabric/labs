@@ -3,6 +3,7 @@ import {
   namesOnlyPolicyBindings,
   readBindingAnnotation,
   readDeclaringSymbol,
+  spellSameValue,
 } from "@commonfabric/schema-generator/value-annotation";
 import type {
   CapabilityParamSummary,
@@ -22,6 +23,7 @@ import {
   unwrapOpaqueLikeType,
 } from "../../ast/mod.ts";
 import { analyzeFunctionCapabilities } from "../../policy/capability-analysis.ts";
+import { unwrapExpression } from "../../utils/expression.ts";
 import { registerLiftAppliedCallType } from "../../ast/type-inference.ts";
 import { applyShrinkAndWrap } from "../../transformers/type-shrinking.ts";
 import { getCellKind } from "../../transformers/cell-type.ts";
@@ -576,6 +578,26 @@ export function transformLiftAppliedCall(
         );
       if (spelledBy && namesOnlyPolicyBindings(spelledBy, checker)) {
         state.recordSchemaHint(resultTypeNode, { spelledBy });
+      } else if (
+        returned && ts.isArrayLiteralExpression(unwrapExpression(returned))
+      ) {
+        // A callback returning an array literal of bindings' values declared
+        // with one annotation is read at that annotation in the print's
+        // element, by the same rule.
+        const elementNode = printedArrayElementNode(resultTypeNode);
+        const elementType = checker.getIndexTypeOfType(
+          resultType,
+          ts.IndexKind.Number,
+        );
+        const annotation = elementNode && elementType &&
+          returnedElementAnnotation(
+            unwrapExpression(returned) as ts.ArrayLiteralExpression,
+            elementType,
+            checker,
+          );
+        if (annotation && namesOnlyPolicyBindings(annotation, checker)) {
+          state.recordSchemaHint(elementNode, { spelledBy: annotation });
+        }
       }
     }
   }
@@ -696,4 +718,43 @@ function returnedValue(
   return only && rest.length === 0 && ts.isReturnStatement(only)
     ? only.expression
     : undefined;
+}
+
+/**
+ * The node a print of an array type spells its element with, the element of
+ * `T[]`, which is how the printer writes an array.
+ */
+export function printedArrayElementNode(
+  printed: ts.TypeNode,
+): ts.TypeNode | undefined {
+  return ts.isArrayTypeNode(printed) ? printed.elementType : undefined;
+}
+
+/**
+ * The annotation every element of `literal` is read at, where each element
+ * reads a binding declared with an annotation spelling one value
+ * (`spellSameValue()`) that denotes `elementType`; `undefined` for a spread,
+ * a hole, an element that reads no binding, or elements declared apart.
+ */
+function returnedElementAnnotation(
+  literal: ts.ArrayLiteralExpression,
+  elementType: ts.Type,
+  checker: ts.TypeChecker,
+): ts.TypeNode | undefined {
+  let annotation: ts.TypeNode | undefined;
+  for (const element of literal.elements) {
+    if (ts.isSpreadElement(element) || ts.isOmittedExpression(element)) {
+      return undefined;
+    }
+    const read = readBindingAnnotation(
+      readDeclaringSymbol(element, checker),
+      elementType,
+      checker,
+    );
+    if (!read || (annotation && !spellSameValue(read, annotation, checker))) {
+      return undefined;
+    }
+    annotation ??= read;
+  }
+  return annotation;
 }

@@ -85,6 +85,26 @@ describe("recursive binding identity", () => {
     expect(diagnostics).toEqual([]);
   });
 
+  it("keeps a writer named by the declared element of a nongeneric tuple alias", async () => {
+    const { schema, diagnostics } = await generate(`
+      type Pair = [WriteAuthorizedBy<string, typeof f>];
+      type Named = Pair;
+      interface Holder { pair: Pair; named: Named }
+    `);
+
+    for (const field of ["pair", "named"]) {
+      expect(asObjectSchema(schema.properties![field]!).items).toEqual({
+        type: "string",
+        ifc: {
+          writeAuthorizedBy: {
+            __ctWriterIdentityOf: { file: "test.ts", path: ["f"] },
+          },
+        },
+      });
+    }
+    expect(diagnostics).toEqual([]);
+  });
+
   it("keeps inherited, forwarded, and defaulted writers distinct through plain generics", async () => {
     const { schema, diagnostics } = await generate(`
       interface Base<A, B> {

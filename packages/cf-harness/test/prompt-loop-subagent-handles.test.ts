@@ -28,9 +28,14 @@ import {
   PATTERN_AUTHORING_GUIDANCE,
   PATTERN_COMPOSITION_GUIDANCE,
 } from "../src/pattern-authoring.ts";
+import {
+  PATTERN_SOURCE_GUIDANCE,
+  RUN_PATTERN_GUIDANCE,
+} from "../src/tool-guidance.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
 import {
   createHarnessHandleTable,
+  markHandleDescribed,
   mintAddressHandle,
   mintReferentHandle,
   resolveReferentToken,
@@ -506,6 +511,25 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(child?.referents?.map((entry) => entry.token)).toEqual([
       first.token,
     ]);
+  });
+
+  it("hands a child a delegated handle undescribed, whatever the parent described", async () => {
+    // read_value admits a handle once the run reading it has looked at its
+    // shape, so a child looks for itself before it reads.
+    const runId = "run-subagent-described-handles";
+    const minted = await mintAddressHandle(
+      createHarnessHandleTable(runId),
+      "of:fid1:described-handle-test",
+    );
+    const parent = markHandleDescribed(minted.table, minted.token);
+
+    const child = seedSubagentHandleTable(parent, `${runId}.subagent.1`, {
+      goal: `Read ${minted.token}.`,
+      profile: "pattern-author",
+    });
+
+    expect(child?.entries.map((entry) => entry.token)).toEqual([minted.token]);
+    expect(child?.entries[0].described).toBeUndefined();
   });
 
   it("adopts referents discovered by a child and preserves seeded identities", async () => {
@@ -1389,6 +1413,8 @@ describe("prompt-loop cross-agent address handles", () => {
     );
     expect(childSystemPrompt).toContain(REVISION_VERIFICATION_GUIDANCE);
     expect(childSystemPrompt).toContain(PATTERN_AUTHORING_GUIDANCE);
+    // The query and import rules the run_pattern descriptor no longer states.
+    expect(childSystemPrompt).toContain(PATTERN_SOURCE_GUIDANCE);
     expect(childSystemPrompt).not.toContain(PATTERN_COMPOSITION_GUIDANCE);
     // The deliverable is a reference to something that ran, and source is
     // refused rather than merely discouraged: an encoding is still source.
@@ -1408,6 +1434,37 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(childSystemPrompt).not.toContain(
       "Never return a computed(), lift, or other derived wrapper",
     );
+  });
+
+  it("tells a `default` child holding run_pattern how to write and read a pattern", async () => {
+    const requestBodies: unknown[] = [];
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "run-subagent-default-run-pattern-prompt",
+        model: "gpt-5.4",
+        fabricSessionFactory: () =>
+          Promise.reject(new Error("unexpected fabric session")),
+      }),
+      allowedSubagentProfiles: ["default"],
+      fetchFn: scriptedFetch([
+        delegateCallTurn("call-delegate-default", { goal: "Count the rows." }),
+        finalTurn("Child done."),
+        finalTurn("Parent done."),
+      ], requestBodies),
+    });
+
+    await loop.runPrompt({
+      prompt: "Delegate the count.",
+      promptSlotBinding: directPromptSlotBinding,
+    });
+
+    expect(chatViewOfRequest(requestBodies[1]).tools).toContain("run_pattern");
+    const childSystemPrompt =
+      chatViewOfRequest(requestBodies[1]).messages[0]!.content ?? "";
+    expect(childSystemPrompt).toContain("Subagent profile: default");
+    expect(childSystemPrompt).toContain(RUN_PATTERN_GUIDANCE);
   });
 
   for (const enabled of [true, false]) {

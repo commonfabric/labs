@@ -6,21 +6,14 @@ import {
   action,
   type AddIntegrity,
   assert,
+  type Cell,
   pattern,
   TESTS,
   UI,
   Writable,
 } from "commonfabric";
 import { clickButton, hasText } from "../test/vnode-helpers.ts";
-import {
-  type ActivityCounters,
-  type MessageRecord,
-  type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
-  type SentActivity,
-  type UsedTime,
-} from "./room-records.tsx";
+import { type MessageRecord, type MessagesValue } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
 import {
   CHAT_SEND_ACTION,
@@ -44,7 +37,7 @@ const sendGesture = {
 const typed = (text: string) => ({ type: "click", target: { value: text } });
 
 // Each stored message, as `body@shownIn`.
-const summary = (messages: Writable<MessagesValue>): string =>
+const summary = (messages: Cell<MessagesValue>): string =>
   (messages.get() as MessageRecord[]).map((message) =>
     `${message?.body}@${message?.replyTo?.shownIn ?? "-"}`
   ).join(" | ");
@@ -56,11 +49,6 @@ export default pattern(() => {
     myProfile: aliceProfile,
     about: { kind: "group" as const },
     messages,
-    reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
-    requests: Writable.of<RequestMemo[]>([]),
-    usedTimes: Writable.of<UsedTime[]>([]),
-    activity: Writable.of<SentActivity[]>([]),
-    counters: Writable.of<ActivityCounters[]>([]),
   } as RoomArg);
 
   return {

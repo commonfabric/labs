@@ -189,6 +189,37 @@ deno task cf space reset  <dir>
 deno task cf space fingerprint <space> [--per-entity] [--include-generated]
 ```
 
+Fingerprinting reads every branch-visible entity in every scope, including
+tombstones, and refuses a scope exceeding its enumeration cap. Each document
+feeds classification, manifest extraction, and value hashing in one pass. A
+scan-local cache retains at most 256 related documents per scope for owner and
+schema lookups; the scan retains hashes and diagnostic evidence rather than
+whole-scope document bodies. Generated exclusions are applied after all scopes'
+manifests have been read. Fingerprint reports carry scheme-1 hashes, ordered
+addresses, ambiguity notices, and unhashable-value diagnostics; included decode
+failures throw. Full compaction verification compares the roll-up hashes and
+reports a computation failure if either fingerprint throws. Fingerprinting
+expects an offline, unchanging store.
+
+Full compaction verification reuses each side's primary reconstruction for both
+the whole-document comparison and its fingerprint. The comparison includes
+generated cells and session scopes; each fingerprint independently enumerates
+revision addresses, including those without a head row, and resolves owners and
+schemas against its own store. It retains compact fingerprint evidence while
+releasing primary document bodies. Exact-row boundary checks use their own
+reconstruction and snapshot rules. Mismatch examples follow head-address order,
+and fingerprint diagnostics follow each store's listing order.
+
+Replay uses indexed `(seq, op_index)` bounds to read the selected suffix. The
+latest set base is decoded before snapshot selection, so a corrupt base remains
+an error even when a newer snapshot supplies the value.
+
+`fingerprintReader()` exposes this reuse to package callers: `read()` returns a
+reconstructed outcome and captures fingerprint evidence; `finish()` completes
+the independent enumeration, applies globally collected exclusions, and returns
+the report. `FingerprintOptions.onEntity` observes primary reconstructions,
+including generated and unreadable records, after evidence is captured.
+
 The `cf inspect value-at`, `diff`, and `converge` commands accept `--path-json`
 when a path must preserve its segments exactly. The standalone `value-at` and
 `converge` commands accept the same option. The value is a JSON array of

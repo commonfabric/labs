@@ -464,11 +464,10 @@ describe("schema-merge-unions", () => {
     expect(merged.anyOf).toEqual([{ type: "boolean" }]);
   });
 
-  it("leaves a union to the candidate when merging a branch would respell its reference, and reports the dropped claim", () => {
-    // Stored stamps and the candidate's `minLength` merge into an inline
-    // `Adder` that neither definition spells, so the branch would pair with
-    // no later writer's. The candidate's union stands, and the stored stamp
-    // it drops is what the commit refuses.
+  it("keeps the stored stamp and the candidate's constraint in a branch whose referenced definitions differ", () => {
+    // The stored stamp and the candidate's `minLength` meet in a definition
+    // the merge names for the pair, which neither side spells, so the branch
+    // keeps its reference, pairs with a later writer's, and holds both.
     const candidate = panels("successor") as JSONSchemaObj;
     const strengthened = {
       ...candidate,
@@ -478,15 +477,31 @@ describe("schema-merge-unions", () => {
     };
     const stored = panels("stored");
     const merged = mergeCfcSchemaEnvelopes(stored, strengthened);
-    expect(droppedStoredClaim(stored, merged)).toContain(
-      "drops the stored writeAuthorizedBy at /panels/*/addedBy",
-    );
+    expect(droppedStoredClaim(stored, merged)).toBeUndefined();
+    const branch = (
+      ((merged as JSONSchemaObj).properties!.panels as JSONSchemaObj)
+        .items as JSONSchemaObj
+    ).anyOf![0] as JSONSchemaObj;
+    const addedBy = (branch.properties as Record<string, JSONSchemaObj>)
+      .addedBy;
+    expect(typeof addedBy.$ref).toBe("string");
+    const resolved = resolveCfcSchemaRefs(addedBy, merged) as JSONSchemaObj;
+    expect(resolved.minLength).toBe(1);
+    expect(resolved.ifc?.writeAuthorizedBy).toEqual(writer("stored"));
+    expect(mergeCfcSchemaEnvelopes(merged, strengthened)).toEqual(merged);
+    expect(
+      droppedStoredClaim(
+        stored,
+        mergeCfcSchemaEnvelopes(merged, panels("third")),
+      ),
+    )
+      .toBeUndefined();
   });
 
-  it("keeps a stored union pairable with a later writer after a merge that would inline a referenced branch", () => {
+  it("keeps a stored union pairable with a later writer, and its stamp, after a merge of referenced branches that differ", () => {
     // A branch merged from a stored claim and a candidate field equals
-    // neither referenced body. Stored inline, it would pair with no later
-    // writer's `$ref` branch, and every later write there would be refused.
+    // neither referenced body. It refers to the definition the merge names
+    // for the two, so a later writer's `$ref` branch still pairs with it.
     const holder = (moduleIdentity: string, withBio: boolean): JSONSchema => ({
       type: "object",
       properties: {
@@ -509,15 +524,21 @@ describe("schema-merge-unions", () => {
     });
     const stored = holder("release-1", false);
     const merged = mergeCfcSchemaEnvelopes(stored, holder("release-2", true));
-    expect(droppedStoredClaim(stored, merged)).toContain(
-      "drops the stored writeAuthorizedBy at /profile/avatar",
-    );
+    expect(droppedStoredClaim(stored, merged)).toBeUndefined();
     const branch = (
       (merged as JSONSchemaObj).properties!.profile as JSONSchemaObj
     ).anyOf![1] as JSONSchemaObj;
     expect(typeof branch.$ref).toBe("string");
-    expect(() => mergeCfcSchemaEnvelopes(merged, holder("release-1", false)))
-      .not.toThrow();
+    const profile = resolveCfcSchemaRefs(branch, merged) as JSONSchemaObj;
+    const fields = profile.properties as Record<string, JSONSchemaObj>;
+    expect(fields.avatar.ifc?.writeAuthorizedBy).toEqual(
+      writer("release-1", "setAvatar"),
+    );
+    expect(fields.bio).toEqual({ type: "string" });
+    expect(mergeCfcSchemaEnvelopes(merged, holder("release-1", false)))
+      .toEqual(merged);
+    expect(mergeCfcSchemaEnvelopes(merged, holder("release-2", true)))
+      .toEqual(merged);
   });
 
   for (
@@ -557,7 +578,7 @@ describe("schema-merge-unions", () => {
     ).toThrow(/union branches/);
   });
 
-  it("keeps a candidate's changed FabricPrimitive default in a referenced branch, and reports the dropped claim", () => {
+  it("keeps a candidate's changed FabricPrimitive default in a referenced branch, and the stored stamp", () => {
     // Two distinct `FabricEpochDay` values have no enumerable state, so a
     // comparison blind to them would hand back the stored reference and its
     // stored default.
@@ -577,9 +598,8 @@ describe("schema-merge-unions", () => {
     expect(fabricAwareEqual(resolved.default, new FabricEpochDay(2n))).toBe(
       true,
     );
-    expect(droppedStoredClaim(stored, merged)).toContain(
-      "drops the stored writeAuthorizedBy",
-    );
+    expect(resolved.ifc?.writeAuthorizedBy).toEqual(writer("stored"));
+    expect(droppedStoredClaim(stored, merged)).toBeUndefined();
   });
 
   it("keeps body claims when an IFC sibling overlays a reference", () => {

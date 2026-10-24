@@ -197,6 +197,86 @@ describe("graph-query", () => {
         ]);
       });
 
+      describe("over an inline object held in an array", () => {
+        // The object holds a link that names no document, so the link
+        // resolves inside the document that stores it. The schema reaches
+        // `shared` by that link alone, so the walk records the glaze document
+        // only by following it.
+
+        const glazeSchema = {
+          type: "object",
+          properties: { flavor: { type: "string" } },
+          additionalProperties: false,
+        } as const;
+        const selector = {
+          path: ["value"],
+          schema: {
+            type: "object",
+            properties: {
+              donuts: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: { glaze: glazeSchema },
+                  additionalProperties: false,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
+        } as const satisfies SchemaPathSelector;
+        const documents = () =>
+          new Map<string, FabricValue>([
+            [
+              keyFor("of:root"),
+              {
+                donuts: [{
+                  glaze: { "/": { [LINK_V1_TAG]: { path: ["shared"] } } },
+                }],
+                shared: linkTo("of:glaze"),
+              },
+            ],
+            [keyFor("of:glaze"), { flavor: "maple" }],
+          ]);
+
+        it("records a document reached by a path-only link inside the object", () => {
+          const { manager, schemaTracker, walk } = walkOver(documents());
+
+          walk.visit(documentFor(manager, "of:root"), selector);
+
+          expect(trackedKeys(schemaTracker)).toEqual([
+            keyFor("of:glaze"),
+            keyFor("of:root"),
+          ]);
+        });
+
+        it("names the stored document as the referrer of a missing document linked from inside the object", () => {
+          // A miss is retired when its referrer is walked again without the
+          // link, so the referrer has to be a document a walk can visit.
+          const manager = new StubObjectManager(
+            new Map<string, FabricValue>([
+              [keyFor("of:root"), { donuts: [{ glaze: linkTo("of:absent") }] }],
+            ]),
+          );
+          const misses: { missKey: string; referrerKey?: string }[] = [];
+          const walk = new GraphQueryWalk({
+            manager,
+            space: SPACE,
+            schemaTracker: new MapSetStringToPathSelectors(true),
+            identity: TEST_SCOPE_IDENTITY,
+            onMissedDoc: (missKey, _selector, referrerKey) => {
+              misses.push({ missKey, referrerKey });
+            },
+          });
+
+          walk.visit(documentFor(manager, "of:root"), selector);
+
+          expect(misses).toEqual([
+            { missKey: keyFor("of:absent"), referrerKey: keyFor("of:root") },
+          ]);
+        });
+      });
+
       it("leaves a document the schema excludes out of the tracker", () => {
         const documents = new Map<string, FabricValue>([
           [

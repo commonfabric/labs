@@ -33,6 +33,16 @@ export interface SchedulerGateState {
   echoBackoffUntil?: number;
 }
 
+/**
+ * Whether `gate` holds convergence-backoff state: a deadline, a streak or
+ * hold passes charged. The remote-echo backoff is a separate gate and is not
+ * part of it.
+ */
+export function holdsBackoffState(gate: SchedulerGateState): boolean {
+  return gate.backoffUntil !== undefined || gate.backoffStreak > 0 ||
+    gate.convergenceHoldPasses > 0;
+}
+
 export interface SchedulerNode {
   readonly action: Action;
   /** Whether this registration has an accepted result to retain while gated. */
@@ -104,6 +114,19 @@ export class NodeRegistry {
   #invalidNodes = new Set<Action>();
 
   /**
+   * Active nodes whose gate holds convergence-backoff state
+   * (`holdsBackoffState()`). The pass-end clearing and the idle-episode reset
+   * walk this set instead of every registered node, since on a large graph a
+   * handful of nodes hold backoff while thousands never do. Every writer of
+   * that state calls `noteBackoff()` after writing it, and
+   * `SchedulerGates.clearBackoff()` calls `forgetBackoff()` after clearing
+   * it; like `#invalidNodes`, membership also tracks active membership, so a
+   * removed node drops out and a reactivated one re-enters iff its preserved
+   * gate still holds the state.
+   */
+  #backedOffNodes = new Set<SchedulerNode>();
+
+  /**
    * Source of monotonic registration ordinals (see `SchedulerNode.ordinal`).
    */
   #nextOrdinal = 0;
@@ -123,6 +146,16 @@ export class NodeRegistry {
    * the serving posture and on every client. Refcounts (per demanded
    * entity) live in the facade. */
   readonly demandedWriters = new Set<Action>();
+
+  /** How many nodes are registered and active, of either kind. */
+  get activeCount(): number {
+    return this.#all.size;
+  }
+
+  /** How many active nodes are `invalid` or `never-ran`. */
+  get invalidCount(): number {
+    return this.#invalidNodes.size;
+  }
 
   isDemandedWriter(action: Action): boolean {
     return this.demandedWriters.has(action);
@@ -190,6 +223,7 @@ export class NodeRegistry {
     this.#activeEffects.delete(action);
     this.#activeComputations.delete(action);
     this.#invalidNodes.delete(action);
+    this.#backedOffNodes.delete(record);
     // Drop the child from its parent's index. The index holds actions
     // strongly, so a child left in it is retained by the parent — along with
     // the frame of the child's last run, that run's storage transaction, and
@@ -239,6 +273,21 @@ export class NodeRegistry {
    */
   getInvalidNodes(): ReadonlySet<Action> {
     return this.#invalidNodes;
+  }
+
+  /** Active nodes whose gate holds convergence-backoff state. */
+  getBackedOffNodes(): ReadonlySet<SchedulerNode> {
+    return this.#backedOffNodes;
+  }
+
+  /** Indexes `record` after a write of convergence-backoff state to its gate. */
+  noteBackoff(record: SchedulerNode): void {
+    if (this.#all.has(record)) this.#backedOffNodes.add(record);
+  }
+
+  /** Drops `record` from the index after its backoff state is cleared. */
+  forgetBackoff(record: SchedulerNode): void {
+    this.#backedOffNodes.delete(record);
   }
 
   #syncInvalidIndex(record: SchedulerNode): void {
@@ -376,5 +425,6 @@ export class NodeRegistry {
     // A freshly registered node is born `never-ran`; a reactivated record
     // re-enters the index iff its (preserved) status still qualifies.
     this.#syncInvalidIndex(record);
+    if (holdsBackoffState(record.gate)) this.#backedOffNodes.add(record);
   }
 }

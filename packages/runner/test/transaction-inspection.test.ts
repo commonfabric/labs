@@ -627,6 +627,52 @@ describe("transaction inspection", () => {
     }
   });
 
+  it("lists spaces targeted only by preconditions or SQLite writes", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    try {
+      const preconditionOnly = storageManager.edit();
+      preconditionOnly.addCommitPrecondition?.(space, {
+        kind: "origin-committed",
+        originLocalSeq: 1,
+      });
+      expect(getTransactionWrittenSpaces(preconditionOnly)).toEqual([space]);
+
+      const sqliteOnly = storageManager.edit();
+      sqliteOnly.recordSqliteWrite?.(space, {
+        op: "sqlite",
+        db: { id: "of:inspection", tables: {} },
+        sql: "CREATE TABLE notes (body TEXT)",
+        params: [],
+      });
+      expect(getTransactionWrittenSpaces(sqliteOnly)).toEqual([space]);
+    } finally {
+      await storageManager.close();
+    }
+  });
+
+  it("lists exact targets in explicit multi-space commit order", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const otherSpace = (await Identity.fromPassphrase(
+      "transaction-inspection-other-space",
+    )).did();
+    try {
+      const tx = storageManager.edit();
+      tx.enableMultiSpaceWrites?.([otherSpace, space]);
+      tx.addCommitPrecondition?.(space, {
+        kind: "origin-committed",
+        originLocalSeq: 1,
+      });
+      tx.addCommitPrecondition?.(otherSpace, {
+        kind: "origin-committed",
+        originLocalSeq: 2,
+      });
+
+      expect(getTransactionWrittenSpaces(tx)).toEqual([otherSpace, space]);
+    } finally {
+      await storageManager.close();
+    }
+  });
+
   it("names the direct reactivity log's spaces as written when the transaction keeps no write-attempt log or replayable journal", () => {
     const journal = {
       activity: () => {

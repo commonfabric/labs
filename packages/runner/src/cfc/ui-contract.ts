@@ -1,7 +1,3 @@
-import {
-  isFabricDataUri,
-  valueFromDataUri,
-} from "@commonfabric/data-model/codec-data-uri";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type {
@@ -20,6 +16,7 @@ import {
   resolveCfcSchemaRefRoot,
 } from "./schema-refs.ts";
 import type { CfcAddress } from "./types.ts";
+import { inlineCellValue, isInlineCellId } from "../immutable-cell.ts";
 
 type UiContractTrustRequirements = {
   trustedPattern?: string;
@@ -813,8 +810,8 @@ const eventEnvelopePayloads = (
   }
   try {
     const eventLink = parseLink(event);
-    if (eventLink?.id && isFabricDataUri(eventLink.id)) {
-      const decoded = valueFromDataUri(eventLink.id);
+    if (eventLink?.id && isInlineCellId(eventLink.id)) {
+      const decoded = inlineCellValue(eventLink.id);
       addPayload(decoded, eventLink.space);
     }
   } catch {

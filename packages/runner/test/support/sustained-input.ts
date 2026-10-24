@@ -61,6 +61,10 @@ export interface CycleEnd {
 
   /** The committed value of the cascade's `total`. */
   readonly total: unknown;
+
+  /** Exhausted cycles that have advanced the watermark so far, this one
+   * included. */
+  readonly exhaustedAdvances: number;
 }
 
 /** One input the stream committed. */
@@ -113,12 +117,24 @@ export interface SustainedInputFixture {
  * has the memory server's direct-write path write the inputs instead of the
  * client, which then neither syncs nor demands the argument document, so no
  * input re-arms a terminal root whose deferred retry would hold W back.
+ * `lateBarriers` puts the flush deadline on a clock the fixture drives, and
+ * moves that clock past the deadline each time a frame barrier lands while a
+ * stream runs. Every settle the stream feeds then ends exhausted at its
+ * first barrier, with that barrier complete, on a machine of any speed. The
+ * deadline's timer still counts real time, so such a fixture takes a
+ * `flushDeadlineMs` no case runs long enough to reach.
  */
 export const openSustainedInputFixture = async (
-  { flushDeadlineMs, stageSpins = DEFAULT_STAGE_SPINS, directInputs = false }: {
+  {
+    flushDeadlineMs,
+    stageSpins = DEFAULT_STAGE_SPINS,
+    directInputs = false,
+    lateBarriers = false,
+  }: {
     flushDeadlineMs: number;
     stageSpins?: number;
     directInputs?: boolean;
+    lateBarriers?: boolean;
   },
 ): Promise<SustainedInputFixture> => {
   const space = sustainedInputSpace;
@@ -127,6 +143,7 @@ export const openSustainedInputFixture = async (
   const cycles = new ArrivalLog<CycleEnd>();
   const activations = new ArrivalLog<string>();
   let onBarrier: (() => Promise<void>) | undefined;
+  let flushDeadlineClock = 0;
   let servingRuntime: Runtime | undefined;
   let totalId: string | undefined;
 
@@ -146,6 +163,9 @@ export const openSustainedInputFixture = async (
       manager.inputSynced = async () => {
         await onBarrier?.();
         await inputSynced();
+        if (lateBarriers && onBarrier !== undefined) {
+          flushDeadlineClock += flushDeadlineMs;
+        }
       };
       const runtime = new Runtime({
         apiUrl: new URL(import.meta.url),
@@ -184,7 +204,11 @@ export const openSustainedInputFixture = async (
         },
       };
     },
-    policy: { flushDeadlineMs, idleParkMs: 600_000 },
+    policy: {
+      flushDeadlineMs,
+      idleParkMs: 600_000,
+      ...(lateBarriers ? { flushDeadlineNow: () => flushDeadlineClock } : {}),
+    },
     onActivationSettled: (_space, outcome) => activations.record(outcome),
     onWaveCycle: () => {
       // A cycle can end after teardown has closed the store.
@@ -192,6 +216,7 @@ export const openSustainedInputFixture = async (
       cycles.record({
         watermark: readWatermarkSeq(engine),
         total: committedTotal(),
+        exhaustedAdvances: host.stats().exhaustedAdvances,
       });
     },
   });
@@ -267,6 +292,7 @@ export const openSustainedInputFixture = async (
         inputs,
         stop: async () => {
           streaming = false;
+          onBarrier = undefined;
           await writing;
         },
       };

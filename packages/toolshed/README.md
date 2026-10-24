@@ -11,6 +11,14 @@ For a detailed list of endpoints, their documentation, and an interactive API
 playground, take a look at the Toolshed API reference playground:
 <https://toolshed.commontools.dev/reference>
 
+### Calendar meeting rooms
+
+The authenticated `/api/meeting-rooms/ensure` boundary retains one canonical
+social Loom address per portable occurrence within a host. Address lookup grants
+no access.
+[Meeting-room allocation](../../docs/features/meeting-room-allocation.md)
+describes concurrency, recovery, legacy-room adoption and deployment scope.
+
 ### Philosophy and Structure
 
 Toolshed is built as a single monolithic [Deno2](https://deno.com/blog/v2.0)

@@ -15,6 +15,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./approximate-json-size": "./src/approximate-json-size.ts",
     "./arrays": "./src/arrays.ts",
     "./async-local-store": "./src/async-local-store.ts",
     "./base64url": "./src/base64url.ts",

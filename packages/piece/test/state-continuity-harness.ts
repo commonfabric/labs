@@ -29,6 +29,7 @@
  */
 
 import { fromFileUrl } from "@std/path/from-file-url";
+import { toFileUrl } from "@std/path/to-file-url";
 
 // The comparison's two leaf cases. A materialized root is not plain data: at an
 // `asCell`/`asStream` position it holds a live cell, and a durable doc may hold
@@ -130,7 +131,7 @@ class FileBackedStorageManager extends StorageManager {
 
 function serverOver(storeDir: string): MemoryV2Server.Server {
   return newSharedServer({
-    store: new URL(`file://${storeDir}/`),
+    store: toFileUrl(`${storeDir}/`),
   });
 }
 
@@ -309,7 +310,7 @@ export async function openFileBackedRuntime(
   fromSnapshot?: string,
 ): Promise<VintageRuntime> {
   const space = signer.did();
-  const storeUrl = new URL(`file://${storeDir}/`);
+  const storeUrl = toFileUrl(`${storeDir}/`);
 
   if (fromSnapshot !== undefined) {
     // Place the snapshot where the engine resolves this space's store. The
@@ -422,7 +423,7 @@ async function seedSpaceStore(
   snapshotPath: string,
 ): Promise<void> {
   const target = fromFileUrl(
-    resolveSpaceStoreUrl(new URL(`file://${storeDir}/`), space as never),
+    resolveSpaceStoreUrl(toFileUrl(`${storeDir}/`), space as never),
   );
   await Deno.mkdir(target.slice(0, target.lastIndexOf("/")), {
     recursive: true,

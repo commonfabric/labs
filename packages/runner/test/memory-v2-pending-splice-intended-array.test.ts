@@ -111,8 +111,9 @@ describe("memory-v2-pending-splice-intended-array", () => {
 
   it("shows the list as it is while the other session's identical tail lands first, and the store accepts the splice as an identity", async () => {
     // The splice reaches the stored list from the view that produced it, so
-    // the server accepts it as an identity and writes nothing; the layer is
-    // dropped without a promotion.
+    // the server accepts it as an identity and writes nothing; the layer
+    // promotes to the list its transaction computed, which is the stored
+    // list, rather than landing its element a second time.
     const doc = "intended-identical";
     const a = connect();
     const b = connect();

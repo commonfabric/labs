@@ -227,10 +227,12 @@ describe("home golden replay (durable home state survives an in-place roll-forwa
           .getDefaultPattern(false))!,
       ),
     ).toBe("updated");
-    // Let the watcher observe the meta change and re-instantiate, then pull so
-    // the new instance actually executes.
+    // The watcher observes the pointer move in a scheduler pass, and reads
+    // from storage before it re-instantiates, which `idle()` does not wait
+    // for. Then pull, so that the new instance actually executes.
     await runtime.idle();
     const rolled = (await controller.getDefaultPattern(false))!;
+    await runtime.runner.patternPointerFollowed(rolled);
     await rolled.pull();
     await runtime.idle();
 
@@ -274,8 +276,10 @@ describe("home golden replay (durable home state survives an in-place roll-forwa
     await runtime.idle();
     expect(await roomsNow()).toBeUndefined();
 
+    // The home is already running, so the open resolves once it has been
+    // re-instantiated on the newer source, and the read's pull then runs the
+    // new instance.
     await controller.ensureDefaultPattern();
-    await runtime.idle();
     expect(await roomsNow()).toEqual([]);
   });
 });

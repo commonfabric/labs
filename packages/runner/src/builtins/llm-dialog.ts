@@ -12,7 +12,7 @@ import {
   entityRefToString,
   isEntityRef,
 } from "@commonfabric/data-model/cell-rep";
-import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
+
 import {
   internSchema,
   isNontrivialSchema,
@@ -130,8 +130,13 @@ import {
   LLMToolSchema,
 } from "./llm-schemas.ts";
 import { resolveStoredPatternAsync } from "./op-pattern-ref.ts";
-import { ownedCell, recordRuntimeOwnedStore } from "./runtime-owned-store.ts";
+import {
+  ownedCell,
+  ownedStoreLinks,
+  recordRuntimeOwnedStore,
+} from "./runtime-owned-store.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
+import { hasInlineCellScheme } from "../immutable-cell.ts";
 
 // Message schema that mints the `LlmDerived` provenance stamp (Epic D1).
 // Recorded as the schema write-policy input for each model-produced message's
@@ -664,10 +669,10 @@ function serializeForLLMObservation(
     value = getCellOrThrow(value);
   }
 
-  // Turn cells into a link, unless they are data: URIs and traverse instead
+  // Traverse inline cell contents; render stored cells as links.
   if (isCell(value)) {
     const link = value.resolveAsCell().getAsNormalizedFullLink();
-    if (hasDataUriScheme(link.id)) {
+    if (hasInlineCellScheme(link.id)) {
       return serializeForLLMObservation({
         value: value.get(),
         schema,
@@ -761,7 +766,7 @@ function serializeForLLMObservation(
       if (isObjectOrArray(child.value) && isCellResultForDereferencing(v)) {
         const link = getCellOrThrow(v).resolveAsCell()
           .getAsNormalizedFullLink();
-        if (!hasDataUriScheme(link.id)) {
+        if (!hasInlineCellScheme(link.id)) {
           child = {
             ...child,
             value: {
@@ -3432,6 +3437,13 @@ export function llmDialog(
   _awaitSync?: unknown,
   publicationBinding?: NormalizedFullLink,
 ): RawBuiltinResult {
+  // The stores this node keeps, each keyed by its cause alone, so the
+  // action declares them when it is set up.
+  const stores = {
+    result: { llmDialog: { result: cause } },
+    internal: { llmDialog: { internal: cause } },
+    pinnedCells: { llmDialog: { pinnedCells: cause } },
+  };
   const inputs = inputsCell.asSchema(LLMParamsSchema);
 
   // Helper function to create and register handlers
@@ -3555,7 +3567,7 @@ export function llmDialog(
         runtime,
         tx,
         parentCell,
-        { llmDialog: { result: cause } },
+        stores.result,
         resultSchema,
         outputScope,
       );
@@ -3568,7 +3580,7 @@ export function llmDialog(
         runtime,
         tx,
         parentCell,
-        { llmDialog: { internal: cause } },
+        stores.internal,
         internalSchema,
         outputScope,
       );
@@ -3590,7 +3602,7 @@ export function llmDialog(
         runtime,
         tx,
         parentCell,
-        { llmDialog: { pinnedCells: cause } },
+        stores.pinnedCells,
         pinnedCellsSchema,
         outputScope,
       );
@@ -4036,7 +4048,10 @@ export function llmDialog(
     ],
   });
 
-  return { action };
+  return {
+    action,
+    storeWrites: ownedStoreLinks(runtime, parentCell, Object.values(stores)),
+  };
 }
 
 async function startRequest(
@@ -4355,12 +4370,11 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
       tools: toolCatalog.llmTools,
     };
 
-  // TODO(bf): sendRequest must be given a callback, even if it does nothing
   const mappedLlmHost = runtime.mappedHostFor(space);
   const doWork = () =>
     client.sendRequest(
       llmParams,
-      () => {},
+      undefined,
       abortSignal,
       mappedLlmHost
         ? { endpoint: new URL("/api/ai/llm", mappedLlmHost) }

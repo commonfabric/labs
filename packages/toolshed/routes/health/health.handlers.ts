@@ -1,10 +1,16 @@
 import { z } from "zod";
 import { resolveGitSha } from "@/lib/build-info.ts";
 import type { AppRouteHandler } from "@/lib/types.ts";
-import type { DashRoute, IndexRoute, StatsRoute } from "./health.routes.ts";
+import type {
+  DashRoute,
+  DocumentInterestsRoute,
+  IndexRoute,
+  StatsRoute,
+} from "./health.routes.ts";
 import {
   getCommitRates,
   getDocumentCachesDiagnostics,
+  getDocumentInterests,
   getPushPriorityStats,
   getSessionReports,
   getSlowQueries,
@@ -82,6 +88,21 @@ export const stats: AppRouteHandler<StatsRoute> = (c) => {
       servingLoop: { ...servingLoop, ...(push === undefined ? {} : { push }) },
     }),
   }, HttpStatusCodes.OK);
+};
+
+/** Reads existing session indexes without loading documents or changing watches. */
+export const documentInterests: AppRouteHandler<DocumentInterestsRoute> = (
+  c,
+) => {
+  c.header("Cache-Control", "no-store");
+  const report = getDocumentInterests(c.req.valid("query"));
+  if (report === undefined) {
+    return c.json(
+      { error: "No memory server is registered in this process" },
+      HttpStatusCodes.SERVICE_UNAVAILABLE,
+    );
+  }
+  return c.json(report, HttpStatusCodes.OK);
 };
 
 export const dash: AppRouteHandler<DashRoute> = (c) => {

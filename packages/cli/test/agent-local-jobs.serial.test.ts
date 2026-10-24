@@ -269,7 +269,7 @@ describe("cf agent runner local jobs", () => {
       ]);
       expect(readiness).toEqual([{ state: "up", reason: null }]);
       expect(events).toContain(
-        `report:agent runner: following ${DID} on http://localhost:8100, offering describe_handle, web_fetch`,
+        `report:agent runner: following ${DID} on http://localhost:8100, offering web_fetch, describe_handle, read_value`,
       );
     });
 

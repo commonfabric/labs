@@ -1,18 +1,20 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema, JSONSchemaObj } from "../../src/builder/types.ts";
 import { recordNewProtectedDefaults } from "../../src/cfc/default-initialization.ts";
+import type { CfcCellLinkRefPayload } from "../../src/cfc/link-label-view.ts";
 import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
 import {
   recordCapturedArgumentFields,
   recordReferencedArgumentFields,
 } from "../../src/cfc/reference-initialization.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
-import { areLinksSame } from "../../src/link-utils.ts";
+import { areLinksSame } from "../../src/link-equality.ts";
 import { runtimeWritePolicyAuthorization } from "../../src/cfc/types.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
@@ -20,6 +22,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "../../src/storage/v2-emulate.ts";
+import { labelsReached } from "../support/reached-labels.ts";
 
 const signer = await Identity.fromPassphrase("reference-initialization-owner");
 const stager = await Identity.fromPassphrase(
@@ -876,8 +879,10 @@ describe("reference-initialization", () => {
     });
 
     it("keeps the confidentiality its link carries on the slot when it is staged again", async () => {
-      // The slot declares a writer and no confidentiality; the list it names
-      // is secret, and only the link's own label says so at the slot.
+      // The slot declares a writer and no confidentiality. The list it names
+      // is secret, which a read through the slot reaches where the list
+      // stores it; the slot itself stores only the link's own label, which
+      // is the root of the view the captured handle carries.
       const secretList: JSONSchemaObj = {
         type: "array",
         items: { type: "string" },
@@ -902,15 +907,30 @@ describe("reference-initialization", () => {
       for (const _ of ["staged", "staged again"]) {
         expect(
           await commitStaging(
-            (tx) => ({ items: captured(tx, "secret-board") }),
+            (tx) => ({
+              items: linkRefFrom<CfcCellLinkRefPayload>({
+                ...linkRefPayload(captured(tx, "secret-board")),
+                cfcLabelView: {
+                  version: 1,
+                  entries: [{
+                    path: [],
+                    label: { confidentiality: ["secret"] },
+                  }],
+                },
+              }),
+            }),
             { schema },
           ),
         ).toBeUndefined();
+        const argument = runtime.getCell(space, "argument");
+        expect(confidentialityAt(argument, ["params", "items"])).toContain(
+          "secret",
+        );
         expect(
-          confidentialityAt(runtime.getCell(space, "argument"), [
+          labelsReached(runtime, argument.getAsNormalizedFullLink(), [
             "params",
             "items",
-          ]),
+          ]).confidentiality,
         ).toContain("secret");
       }
     });
@@ -1114,7 +1134,20 @@ describe("reference-initialization", () => {
         .map((atom) => (atom as { subject: unknown }).subject);
     }
 
-    it("stores the entry's own authorship on a staged reference, and none for the principal that stages it", async () => {
+    /**
+     * The subjects of every `authored-by` claim a read of `path` reaches:
+     * those stored along the path and those of the entry it resolves to.
+     */
+    function authorsReached(
+      link: NormalizedFullLink,
+      path: readonly string[],
+    ): unknown[] {
+      return labelsReached(runtime, link, path).integrity
+        .filter((atom) => isObjectOrArray(atom) && atom.kind === "authored-by")
+        .map((atom) => (atom as { subject: unknown }).subject);
+    }
+
+    it("stores no authorship on a staged reference, and reaches the entry's own through it", async () => {
       await initializeOwnersMessage();
       const { error, argument } = await stageAsStager(
         argumentSchema,
@@ -1124,7 +1157,8 @@ describe("reference-initialization", () => {
       );
 
       expect(error).toBeUndefined();
-      expect(authorsAt(argument, ["element"])).toEqual([signer.did()]);
+      expect(authorsAt(argument, ["element"])).toEqual([]);
+      expect(authorsReached(argument, ["element"])).toEqual([signer.did()]);
     });
 
     /**
@@ -1171,12 +1205,13 @@ describe("reference-initialization", () => {
       };
     }
 
-    it("stores the owner's authorship, and none for the staging principal, on a reference staged from another staged reference", async () => {
+    it("reaches the owner's authorship, and stores none for the staging principal, on a reference staged from another staged reference", async () => {
       await initializeOwnersMessage();
       const { error, second } = await stageChainAsStager(argumentSchema);
 
       expect(error).toBeUndefined();
-      expect(authorsAt(second, ["element"])).toEqual([signer.did()]);
+      expect(authorsAt(second, ["element"])).toEqual([]);
+      expect(authorsReached(second, ["element"])).toEqual([signer.did()]);
     });
 
     it("preserves the owner's authorship when the downstream reference is staged first", async () => {
@@ -1184,7 +1219,8 @@ describe("reference-initialization", () => {
       const { error, second } = await stageChainAsStager(argumentSchema, true);
 
       expect(error).toBeUndefined();
-      expect(authorsAt(second, ["element"])).toEqual([signer.did()]);
+      expect(authorsAt(second, ["element"])).toEqual([]);
+      expect(authorsReached(second, ["element"])).toEqual([signer.did()]);
     });
 
     for (
@@ -1234,7 +1270,8 @@ describe("reference-initialization", () => {
       runtime.prepareTxForCommit(stage);
 
       expect((await stage.commit().settled).error).toBeUndefined();
-      expect(authorsAt(link, ["second"])).toEqual([signer.did()]);
+      expect(authorsAt(link, ["second"])).toEqual([]);
+      expect(authorsReached(link, ["second"])).toEqual([signer.did()]);
     });
 
     it("preserves authorship through three references staged from the downstream end", async () => {
@@ -1261,13 +1298,16 @@ describe("reference-initialization", () => {
 
       expect((await stage.commit().settled).error).toBeUndefined();
       expect(authorsAt(third.getAsNormalizedFullLink(), ["element"]))
+        .toEqual([]);
+      expect(authorsReached(third.getAsNormalizedFullLink(), ["element"]))
         .toEqual([signer.did()]);
     });
 
     for (const linkFirst of [false, true]) {
-      it(`stores a staged reference's labels below a link to its argument when the ${linkFirst ? "link" : "reference"} is staged first`, async () => {
-        // The link covers the whole argument, so the reference's labels land at
-        // `element` beneath it and the argument slot gains none of them.
+      it(`stores nothing below a link to its argument, and reaches the staged reference's labels through it, when the ${linkFirst ? "link" : "reference"} is staged first`, async () => {
+        // The link covers the whole argument. The holder stores its own
+        // declaration at the slot and nothing beneath it; the owner's labels
+        // are reached by reading `element` through the link.
 
         await initializeOwnersMessage({
           type: "object",
@@ -1312,20 +1352,22 @@ describe("reference-initialization", () => {
 
         expect((await stage.commit().settled).error).toBeUndefined();
         const link = holder.getAsNormalizedFullLink();
-        expect(authorsAt(link, ["argument", "element"])).toEqual([
-          signer.did(),
-        ]);
         expect(
           (readStoredCfcMetadata(runtime.edit(), link)?.labelMap.entries ?? [])
-            .filter((entry) => entry.path.join("/") === "argument/element")
-            .flatMap((entry) => entry.label.confidentiality ?? []),
-        ).toContain("owner-secret");
+            .map((entry) => entry.path),
+        ).toEqual([["argument"]]);
         expect(authorsAt(link, ["argument"])).toEqual([]);
+        expect(authorsReached(link, ["argument", "element"])).toEqual([
+          signer.did(),
+        ]);
+        const reached = labelsReached(runtime, link, ["argument", "element"]);
+        expect(reached.confidentiality).toContain("owner-secret");
+        expect(reached.confidentiality).toContain("holder");
       });
     }
 
     for (const endorsed of [true, false]) {
-      it(`${endorsed ? "credits a nested integrity floor and carries nested confidentiality" : "refuses a nested floor credited only by an ancestor"} through a pending reference`, async () => {
+      it(`${endorsed ? "credits a nested integrity floor and reaches nested confidentiality" : "refuses a nested floor credited only by an ancestor"} through a pending reference`, async () => {
         await initializeOwnersMessage({
           type: "object",
           properties: {
@@ -1394,17 +1436,21 @@ describe("reference-initialization", () => {
           return;
         }
         expect(error).toBeUndefined();
+        // The floor was credited by the nested value where it is; the
+        // argument stores nothing beneath its slot, and a read of the nested
+        // value reaches its labels.
         const entries = readStoredCfcMetadata(
           runtime.edit(),
           second.getAsNormalizedFullLink(),
         )!.labelMap.entries;
-        const labels = entries.filter((entry) =>
-          entry.path.join("/") === "element/body"
-        ).map((entry) => entry.label);
-        expect(labels.flatMap((label) => label.confidentiality ?? []))
-          .toContain("nested-secret");
-        expect(labels.flatMap((label) => label.integrity ?? []))
-          .toContain("nested-body");
+        expect(entries.filter((entry) => entry.path.length > 1)).toEqual([]);
+        const reached = labelsReached(
+          runtime,
+          second.getAsNormalizedFullLink(),
+          ["element", "body"],
+        );
+        expect(reached.confidentiality).toContain("nested-secret");
+        expect(reached.integrity).toContain("nested-body");
       });
     }
 
@@ -1427,15 +1473,17 @@ describe("reference-initialization", () => {
         runtime.getCell(space, "argument").key("element")
           .key("index").get(),
       ).toBe(7);
+      // The object stores its own label at its root alone; a read through
+      // the back-reference reaches it.
       const entries = readStoredCfcMetadata(
         runtime.edit(),
         argument.getAsNormalizedFullLink(),
       )!.labelMap.entries;
+      expect(entries.map((entry) => entry.path)).toEqual([[]]);
       expect(
-        entries.filter((entry) => entry.path.join("/") === "element")
-          .flatMap((entry) => entry.label.integrity ?? []),
-      )
-        .toContain("root-proof");
+        labelsReached(runtime, argument.getAsNormalizedFullLink(), ["element"])
+          .integrity,
+      ).toContain("root-proof");
     });
 
     for (const secondFirst of [false, true]) {
@@ -1487,7 +1535,7 @@ describe("reference-initialization", () => {
 
     for (const holderFirst of [false, true]) {
       for (const endorsed of [false, true]) {
-        it(`${endorsed ? "credits the owner's floor and confidentiality" : "refuses the stager's floor"} through repeated object back-references when the ${holderFirst ? "holder" : "object"} is staged first`, async () => {
+        it(`${endorsed ? "credits the owner's floor and reaches the owner's confidentiality" : "refuses the stager's floor"} through repeated object back-references when the ${holderFirst ? "holder" : "object"} is staged first`, async () => {
           await initializeOwnersMessage({
             ...inboxSchema,
             properties: {
@@ -1570,23 +1618,40 @@ describe("reference-initialization", () => {
             return;
           }
           expect(error).toBeUndefined();
+          // The holder stores the slot's own restriction and nothing of the
+          // owner's; the holder's reference reaches the object, whose
+          // `message` reaches the owner's entry where its labels are.
           const link = holder.getAsNormalizedFullLink();
-          expect(authorsAt(link, ["argument", "message"])).toEqual([
-            signer.did(),
-          ]);
           expect(authorsAt(link, ["argument"])).toEqual([]);
+          expect(authorsAt(link, ["argument", "message"])).toEqual([]);
+          const entries = readStoredCfcMetadata(runtime.edit(), link)!.labelMap
+            .entries;
+          expect(entries.map((entry) => entry.path)).toEqual([
+            ["argument"],
+            ["argument"],
+          ]);
+          expect(entries.flatMap((entry) => entry.label.confidentiality ?? []))
+            .not.toContain("owner-secret");
+          const reached = labelsReached(
+            runtime,
+            argument.getAsNormalizedFullLink(),
+            ["message"],
+          );
+          expect(reached.confidentiality).toContain("owner-secret");
           expect(
-            readStoredCfcMetadata(runtime.edit(), link)!.labelMap.entries
-              .filter((entry) => entry.path.join("/") === "argument/message")
-              .flatMap((entry) => entry.label.confidentiality ?? []),
+            authorsReached(argument.getAsNormalizedFullLink(), ["message"]),
           )
-            .toContain("owner-secret");
+            .toEqual([signer.did()]);
         });
       }
     }
 
     for (const growing of [false, true]) {
-      it(`refuses a staged reference to ${growing ? "its own descendant" : "itself"} inside a linked object`, async () => {
+      it(`commits a staged reference to ${growing ? "its own descendant" : "itself"} inside a linked object without borrowing authorship`, async () => {
+        // A reference persists its own label, so staging one that points
+        // back into its own document needs no walk of the document's labels.
+        // Nothing is stored at the slot, and the holder stores nothing beneath
+        // its own.
         const tx = runtime.edit();
         const argument = runtime.getCell(space, "argument", argumentSchema, tx);
         const holder = runtime.getCell(space, "holder", {
@@ -1615,9 +1680,15 @@ describe("reference-initialization", () => {
         ]);
         runtime.prepareTxForCommit(tx);
 
-        expect((await tx.commit().settled).error?.message).toContain(
-          "cyclic staged reference in link label derivation",
-        );
+        expect((await tx.commit().settled).error).toBeUndefined();
+        expect(authorsAt(argument.getAsNormalizedFullLink(), ["element"]))
+          .toEqual([]);
+        expect(
+          readStoredCfcMetadata(
+            runtime.edit(),
+            holder.getAsNormalizedFullLink(),
+          )!.labelMap.entries.map((entry) => entry.path),
+        ).toEqual([["argument"]]);
       });
     }
 
@@ -1642,7 +1713,7 @@ describe("reference-initialization", () => {
       expect((await tx.commit().settled).error).toBeUndefined();
     });
 
-    it("refuses a pointer loop whose path grows across linked objects", async () => {
+    it("commits a pointer loop whose path grows across linked objects without borrowing authorship", async () => {
       const tx = runtime.edit();
       const first = runtime.getCell(space, "first", argumentSchema, tx);
       const second = runtime.getCell(space, "second", argumentSchema, tx);
@@ -1655,12 +1726,17 @@ describe("reference-initialization", () => {
       }
       runtime.prepareTxForCommit(tx);
 
-      expect((await tx.commit().settled).error?.message).toContain(
-        "cyclic staged reference in link label derivation",
-      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      for (const cell of [first, second]) {
+        expect(authorsAt(cell.getAsNormalizedFullLink(), ["element"]))
+          .toEqual([]);
+      }
     });
 
-    it("refuses a cycle of staged references without borrowing schema authorship", async () => {
+    it("commits a cycle of staged references without borrowing schema authorship, and refuses a floor through it", async () => {
+      // Neither slot stores the authorship its schema would mint for the
+      // staging principal. A floor that needs the chain's evidence walks it,
+      // finds no value, and refuses.
       actingPrincipal = stager.did();
       const stage = runtime.edit();
       const first = runtime.getCell(space, "first", argumentSchema, stage);
@@ -1676,8 +1752,36 @@ describe("reference-initialization", () => {
       }
       runtime.prepareTxForCommit(stage);
 
-      expect((await stage.commit().settled).error?.message).toContain(
-        "cyclic staged reference in link label derivation",
+      expect((await stage.commit().settled).error).toBeUndefined();
+      for (const argument of [first, second]) {
+        expect(authorsAt(argument.getAsNormalizedFullLink(), ["element"]))
+          .toEqual([]);
+      }
+
+      const floored = runtime.edit();
+      const sink = runtime.getCell(space, "sink", {
+        type: "object",
+        properties: {
+          element: {
+            ...entrySchema,
+            ifc: {
+              ...entrySchema.ifc,
+              requiredIntegrity: [{
+                kind: "authored-by",
+                subject: stager.did(),
+              }],
+            },
+          },
+        },
+      }, floored);
+      sink.set({ element: first.withTx(floored).key("element") });
+      recordReferencedArgumentFields(floored, sink.getAsNormalizedFullLink(), [
+        "element",
+      ]);
+      runtime.prepareTxForCommit(floored);
+
+      expect((await floored.commit().settled).error?.message).toContain(
+        "write floor failed at /element",
       );
     });
 

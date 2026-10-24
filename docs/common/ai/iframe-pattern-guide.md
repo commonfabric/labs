@@ -3,8 +3,9 @@
 Use this guide to build a Common Fabric pattern whose application lives inside
 one sandboxed `cf-iframe`. The wrapper is deliberately mechanical: it exposes
 three named Cell resources (`input`, `state`, and `output`), optionally exposes
-SQLite databases, embeds the guest and its dependencies into one HTML string,
-and returns the state and output through the normal pattern result.
+SQLite databases, presence rooms, and streams the guest sends events to, embeds
+the guest and its dependencies into one HTML string, and returns the state and
+output through the normal pattern result.
 
 No other pattern guide is required for this shape.
 
@@ -14,7 +15,7 @@ Keep these files together:
 
 ```text
 packages/patterns/quick-notes/
-├── contract.ts  # input, durable state, output, scopes, optional databases
+├── contract.ts  # input, durable state, output, scopes, optional resources
 ├── guest.ts     # the iframe application; guest.tsx is also accepted
 ├── guest.html   # optional custom document shell
 └── main.tsx     # generated wrapper; do not hand-edit
@@ -100,6 +101,9 @@ available scopes are:
 
 Choose scope independently for state and output. Do not put transient DOM state
 such as hover or an open tooltip in a Fabric Cell; keep that inside the guest.
+State that other people should see while it happens and nobody needs afterwards,
+such as a pointer position or a drag in flight, belongs in a presence room
+rather than a Cell; see [Optional presence](#optional-presence).
 
 The generated wrapper owns `space`-scoped state and output inside the piece. It
 declares `user`- and `session`-scoped state or output as optional scoped pattern
@@ -304,6 +308,39 @@ TSX compilation, hook readiness, fine-grained direct Cell subscriptions,
 stable resolved items, SQLite query hooks, cleanup, and browser verification.
 Do not combine the two guest bootstraps.
 
+## Style with the ambient theme
+
+The guest wears the theme of the page around its iframe. The nearest `cf-theme`
+above the `cf-iframe` provides it: before the guest's own styles, the guest
+receives that theme's `--cf-theme-*` custom properties declared on `:root`,
+followed by a base stylesheet written against them:
+[`guest-base-sheet.ts`](../../../packages/ui/src/v2/components/cf-theme/guest-base-sheet.ts).
+The guest's root also carries the resolved scheme as `data-color-scheme`
+(`light` or `dark`). The sheet styles `html`, `body`, headings, links, buttons,
+form fields, code, and rules, and provides these classes:
+
+| Class | What it draws |
+| --- | --- |
+| `cf-surface` | the raised ground of a panel |
+| `cf-card` | a bordered, padded, rounded surface |
+| `cf-inset` | a recessed ground, for wells and code |
+| `cf-pill` | a small, fully rounded label |
+| `cf-muted` | secondary text |
+| `cf-primary`, `cf-accent`, `cf-brand` | a solid fill with its ink |
+| `cf-success`, `cf-warning`, `cf-danger` | a status fill with its ink |
+| `cf-stack`, `cf-row` | a vertical or horizontal flex layout with the theme's gap |
+
+The values follow the page: a theme change, or a switch between light and dark,
+restyles a running guest without reloading it. So write guest HTML with those
+elements, the `cf-*` classes, and `var(--cf-theme-…)` for anything else, such as
+`color: var(--cf-theme-color-text-muted)` or
+`font-family: var(--cf-theme-font-mono)`, and spell no color or font of your
+own. A literal color or font in the guest stays the same on every page, and
+reads wrong on the first one whose theme differs. The base sheet sits in a
+cascade layer, so any rule of the guest's own overrides it whatever its
+specificity; reserve that for a look the pattern deliberately owns, such as a
+game's art.
+
 ## Optional SQLite
 
 Declare database tables in `IFRAME_PATTERN`. The wrapper creates the database,
@@ -363,6 +400,315 @@ generated TypeScript bindings. They may use reserved words. When the exact name
 `__proto__` is required in `contract.ts`, write it as a computed property
 (`["__proto__"]`) so JavaScript creates an own property.
 
+## Optional presence
+
+A presence room carries what the people on a piece are doing right now. Nothing
+in it is stored: each member holds one record, a display name and a few named
+facets, and the record is gone when the member leaves. Use it for pointers,
+selections, a drag in flight, or a player's position. Use a Cell for anything
+that must be agreed on or must survive.
+
+Declare each room in `IFRAME_PATTERN`, naming the resource whose field it
+follows:
+
+```typescript
+export const IFRAME_PATTERN = {
+  name: "CursorCanvas",
+  displayName: "Cursor canvas",
+  stateScope: "space",
+  outputScope: "user",
+  frameHeight: "100vh",
+  databases: {},
+  presence: { cursors: "state" },
+} as const;
+```
+
+The value is `state` or `output`. Everyone who shares that resource shares the
+room, so a room following `space`-scoped state gathers every user and session
+on the piece, and a room following `user`-scoped output gathers only one user's
+sessions. The name grants the room and none of the resource's data.
+
+Join from the guest by listening, and publish your own record:
+
+```typescript
+// Shown at module scope.
+import { connectFabric } from "@commonfabric/iframe-sandbox/guest";
+
+const fabric = connectFabric();
+const cursors = fabric.presence("cursors");
+const board = document.querySelector<HTMLDivElement>("#root")!;
+
+const draw = () => {
+  for (const participant of cursors.participants) {
+    const pointer = participant.facets.pointer;
+    if (typeof pointer?.x !== "number" || typeof pointer.y !== "number") {
+      continue;
+    }
+    console.log(participant.name, pointer.x, pointer.y);
+  }
+};
+
+const leave = cursors.join((event) => {
+  if (event.kind === "failure") {
+    console.warn(event.error.code);
+    return;
+  }
+  draw();
+});
+
+// A publication that cannot land rejects; the room reports why to the
+// listener, so the rejection itself needs no handling.
+const publish = (publication: Promise<void>) => publication.catch(() => {});
+
+publish(cursors.setName("Ada"));
+board.addEventListener("pointermove", (event) => {
+  publish(cursors.setFacet("pointer", { x: event.offsetX, y: event.offsetY }));
+});
+board.addEventListener("pointerleave", () => {
+  publish(cursors.clearFacet("pointer"));
+});
+
+globalThis.addEventListener("pagehide", leave, { once: true });
+```
+
+The rules that shape a guest:
+
+- The room publishes nothing for a member with no name, so call `setName()`
+  before expecting peers to see you. The guest picks the name; a `user`-scoped
+  output field is a reasonable place to keep one.
+- `participants` holds every other member, never the guest itself. A
+  `participantId` names a membership, not a person: it changes on reconnect,
+  and two windows of one user are two participants.
+- A room holds latest state, not a stream. Each `setFacet()` replaces the
+  facet, and the host sends one publication per animation frame, so peers see
+  where a pointer is and not every place it was. A page that is not being
+  drawn, such as a background tab, publishes nothing until it is shown.
+- A facet is whatever another guest wrote. Check the type of every field
+  before using it, as the example does, and ignore a facet that does not fit.
+- A record holds at most eight facets and 8 KiB, and a facet's name starts
+  with a lowercase letter, continues with lowercase letters, digits, and
+  hyphens, and is at most 32 characters long. A publication outside those
+  bounds ends the room with a `presence-refused` failure.
+- A `failure` ends the room, and a new membership starts empty.
+  `presence-unsupported` means the host has no relay, and joining again will
+  not help. `presence-refused` means the relay refused the join or a
+  publication, and its message says which bound: correct what was published
+  before joining again, or the same publication ends the new room too, and a
+  full room may admit the guest later. After `presence-disconnected`, call
+  `join()` again when the user next acts and publish the name and facets as
+  they were.
+- Presence does not wait for the hydration barrier. Join at startup, and set
+  the name once the Cell that holds it has been pulled.
+
+A shape dragged across a shared board shows the division of labor. While the
+pointer is down, publish the shape's position as a facet and draw peers' facets
+over the stored positions. On release, write the position to the Cell, and
+clear the facet only after that write and a `pull()` have settled, so peers do
+not see the shape return to where it was in between.
+`packages/patterns/iframe-cursor-canvas/` is a complete example.
+
+## Optional streams
+
+A stream lets the guest send an event to one of the pattern's verbs, a handler
+that runs in the pattern rather than in the iframe. Use one when the change
+belongs to the pattern: data the pattern owns and checks, an operation other
+callers reach through the same verb, or work that only the pattern can start.
+
+When the pattern exposes an action as a verb, have the guest perform that
+action by sending the verb an event wherever it can, rather than making the
+same change through its own cell writes. One handler then decides what the
+action does, whether a person clicks in the frame or `cf piece call`, another
+pattern, or an agent sends it, and a change to the action's checks or effects
+reaches every caller at once. This is a preference, not a requirement: a direct
+write stays correct for an action the pattern exposes no verb for, and for one
+whose verb does not fit the interaction.
+
+Work that only the pattern can start is how a guest calls `agent()`,
+`generateText()`, `generateObject()`, and the other LLM built-ins in a
+user-triggered way. Each
+built-in is a reactive node in the pattern body, which the guest cannot call,
+and it makes a new request whenever its inputs change. A verb makes the user's
+action the trigger: the guest sends the event when the user clicks, the
+handler writes the task or prompt the built-in reads, and the result reaches
+the guest through `input`. Writing the prompt from the guest's own `state`
+would also start a request, but on every change to it, such as each keystroke
+in a prompt field.
+
+Declare each stream by name in `IFRAME_PATTERN`, and the event it carries in an
+exported `IframeStreamEvents` interface:
+
+```typescript
+// Shown at module scope.
+export interface AddItemEvent {
+  id: string;
+  text: string;
+}
+
+export interface IframeStreamEvents {
+  addItem: AddItemEvent;
+}
+
+export const IFRAME_PATTERN = {
+  name: "VerbListFrame",
+  displayName: "Verb list",
+  stateScope: "space",
+  outputScope: "space",
+  frameHeight: "100vh",
+  databases: {},
+  streams: ["addItem"],
+} as const;
+```
+
+A stream's name is a TypeScript identifier, distinct from `input`, `state`,
+`output`, every database, and every presence room. The wrapper takes each
+stream as a required pattern input of type
+`Stream<IframeStreamEvents["addItem"], unknown>`, so it accepts a verb whatever
+result the verb declares, and grants it to the guest under the same name.
+
+Since the verb is an input of the wrapper, a pattern of your own declares it
+and passes it in. Generate the wrapper to `frame.tsx` instead of `main.tsx`,
+and write `main.tsx` by hand:
+
+```tsx
+// Shown at module scope.
+import {
+  action,
+  type Default,
+  NAME,
+  pattern,
+  type Stream,
+  UI,
+  type VNode,
+  type Writable,
+} from "commonfabric";
+import {
+  type AddItemEvent,
+  type IframeOutputData,
+  type IframeStateData,
+  type ListItem,
+} from "./contract.ts";
+import Frame from "./frame.tsx";
+
+interface VerbListInput {
+  items?: Writable<ListItem[] | Default<[]>>;
+}
+
+interface VerbListOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  items: ListItem[];
+  state: IframeStateData;
+  output: IframeOutputData;
+  addItem: Stream<AddItemEvent>;
+}
+
+export default pattern<VerbListInput, VerbListOutput>(({ items }) => {
+  const addItem = action(({ id, text }: AddItemEvent) => {
+    const trimmed = text.trim();
+    if (trimmed === "") throw new Error("An item needs text.");
+    if (items.get().some((item) => item.id === id)) return;
+    items.push({ id, text: trimmed });
+  });
+  const { state, output, [UI]: view } = Frame({ input: { items }, addItem });
+  return { [NAME]: "Verb list", [UI]: view, items, state, output, addItem };
+});
+```
+
+The items belong to this pattern: the guest reads them as `input` and changes
+them only through the verb, and a caller with no browser, such as
+`cf piece call`, sends the same verb. Return the frame's `state` and `output`
+as a generated wrapper would, and destructure them from the frame's result
+rather than reading `frame.state`, which would put a derived copy in the
+piece's result instead of the frame's cell.
+
+The guest sends through `fabric.stream(name)`, from the handler of the user's
+action, so an event goes out only when someone acts and never on a load or
+reload of the frame:
+
+```typescript
+// Shown at module scope.
+import { connectFabric } from "@commonfabric/iframe-sandbox/guest";
+import { type AddItemEvent } from "./contract.ts";
+
+const fabric = connectFabric();
+const addItem = fabric.stream<AddItemEvent>("addItem");
+const add = document.querySelector<HTMLButtonElement>("#add")!;
+const field = document.querySelector<HTMLInputElement>("#new-item")!;
+
+add.addEventListener("click", () => {
+  const text = field.value.trim();
+  void addItem.send({ id: crypto.randomUUID(), text }).then(() => {
+    if (field.value.trim() === text) field.value = "";
+  }).catch((cause) => console.warn(cause));
+});
+```
+
+`send()` goes out once every cell operation the guest made before it has
+settled, so the handler reads what they wrote. It resolves once the handler's
+run has committed, with no value: a verb's
+declared result does not reach the guest, so read the effect through `input`
+or `state`. It rejects with the reason when the runtime refuses the event or
+the run, including an error the handler throws, so show that message where the
+user acted. The guest's sink can deliver the change before `send()` resolves,
+so keep the draft that produced the event until the send settles. The event is
+not a trusted gesture: the guest's code sent it, not a control the host draws,
+so a write gated on a reviewed action refuses it.
+
+For an LLM call, the verb writes what the built-in reads, and the frame's input
+carries the built-in's state back. An empty task or prompt makes no request, so
+nothing runs before the first event. `agent()` identifies a request by its task
+text and the addresses of its inputs, not by the values they hold, and answers
+a request it has seen from its record, so the verb counts each ask into the
+task: asking the same question again is then a new request.
+
+```tsx
+// Shown at module scope.
+import {
+  action,
+  agent,
+  computed,
+  NAME,
+  pattern,
+  UI,
+  Writable,
+} from "commonfabric";
+import Frame from "./frame.tsx";
+
+export default pattern(() => {
+  const request = new Writable<{ question: string; asked: number }>({
+    question: "",
+    asked: 0,
+  });
+  const ask = action(({ text }: { text: string }) => {
+    request.set({ question: text.trim(), asked: request.get().asked + 1 });
+  });
+  const task = computed(() => {
+    const { question, asked } = request.get();
+    return question === "" ? "" : `Question ${asked}: ${question}`;
+  });
+  const answer = agent<{ answer: string }>({
+    task,
+    inputs: {},
+    resultSchema: {
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+    },
+  });
+  const { [UI]: view } = Frame({
+    input: { pending: answer.pending, answer: answer.result },
+    ask,
+  });
+  return { [NAME]: "Ask", [UI]: view, ask };
+});
+```
+
+A built-in that already returns a stream needs no verb of its own:
+`llmDialog()` returns `addMessage`, which the frame can take directly, with the
+stream's event type `BuiltInLLMMessage` in `IframeStreamEvents`.
+
+`packages/patterns/iframe-verb-list/` is a complete example.
+
 ## Generate the wrapper
 
 Run the checked-in helper from the repository root:
@@ -400,25 +746,70 @@ deno task cf check packages/patterns/quick-notes/main.tsx --no-run
 If the pattern is intentionally outside the repository, pass its directory as
 `--root`; otherwise the CLI uses the repository as its source boundary.
 
-Launch a repository pattern against local servers from the repository root:
+Launch a repository pattern against local servers from the repository root.
+Start the servers first:
 
 ```bash
 ./scripts/start-local-dev.sh
+```
+
+The script serves on ports 8000 and 5173 and fails when either is taken, which
+is the usual case when another checkout has servers running. Start it with
+`--port-offset=<n>` then. Continue only once it reports that both servers
+started, and use the `Toolshed:` address it prints,
+`http://localhost:<8000 + n>`, as `CF_API_URL` below: a `cf` command pointed at
+port 8000 would deploy to the other checkout's server.
+[`LOCAL_DEV_SERVERS.md`](../../development/LOCAL_DEV_SERVERS.md) covers the
+scripts.
+
+Then mint a key, create a space, and create the piece in it:
+
+```bash
 mkdir -p .cf
 test -e .cf/iframe-pattern.key || \
   deno task cf id new > .cf/iframe-pattern.key
-CF_API_URL=http://localhost:8000 \
-CF_IDENTITY=.cf/iframe-pattern.key \
+# The Toolshed address that start-local-dev.sh printed.
+export CF_API_URL=http://localhost:8000
+export CF_IDENTITY=.cf/iframe-pattern.key
+export CF_SPACE="$(deno task cf space create --label "Iframe quick notes")"
 deno task cf piece new packages/patterns/quick-notes/main.tsx \
-  --root . --space iframe-quick-notes --slug quick-notes
+  --root . --slug quick-notes
 ```
 
 Never overwrite an existing key file: doing so selects a different PerUser
-identity. Open `http://localhost:8000/iframe-quick-notes/quick-notes`. If the
-shell shows its first-use login, register a new key and complete the passphrase
-confirmation. Exercise the meaningful action and check the browser console;
-compilation alone does not prove that the guest loaded or that a bridge write
-completed.
+identity. `cf piece new` does not create the space it names, so
+`cf space create` runs first. It prints the new space's DID, which `CF_SPACE`
+and `--space` accept. Run both commands once: each `cf space create` makes
+another space, and a second `cf piece new` leaves the slug with the first
+piece. `cf piece new` prints the page address under `Open in browser`, which is
+`$CF_API_URL/$CF_SPACE/quick-notes`. It also prints the `cf piece setsrc`
+command that updates the piece after a source change.
+
+Open the page address. A browser that has not signed in is shown the shell's
+login. Sign it in with the key the CLI used: choose **Register**, which a
+browser that has signed in before labels **Register New Key**, then
+**Import CLI Key**, and select `.cf/iframe-pattern.key`. The browser then acts
+as the identity that created the space, the only one the space admits, and `cf`
+commands read the PerUser values the page wrote.
+[`shared-identity.md`](../../features/shared-identity.md) covers that workflow.
+
+**Use Passphrase** on the same screen, followed by generating and confirming a
+passphrase, registers a new identity instead, and the space refuses it: the
+shell reports `Slug "quick-notes" not found.`, and the console carries
+`AuthorizationError: Principal did:key:… lacks READ on space did:key:…`.
+Take that route only when the tool driving the browser cannot choose a file, or
+for the second identity the multi-user checks below need. The principal the
+error names is the browser's DID, which
+`globalThis.app.state().identity.did()` also returns in the page's console.
+Grant it access with the CLI key, in a shell that has the three exports above,
+then reload the page:
+
+```bash
+deno task cf acl set <browser DID> WRITE
+```
+
+Exercise the meaningful action and check the browser console; compilation alone
+does not prove that the guest loaded or that a bridge write completed.
 
 Then run the pattern and exercise its meaningful interaction. Check that input
 renders, state survives at its declared scope, output changes only when the
@@ -426,7 +817,8 @@ guest intends, and any SQLite data has the declared isolation. A generated
 wrapper that compiles but never loads the guest is not complete.
 
 For multi-user behavior, cover two sessions of one identity, a second identity,
-and a reload. PerSpace data must agree everywhere; PerUser data must agree only
+and a reload. The second identity opens the piece only after the `cf acl set`
+grant above. PerSpace data must agree everywhere; PerUser data must agree only
 between the first identity's sessions; PerSession data must remain distinct.
 Exercise first use while scoped defaults and SQLite handles materialize, not
 only a warmed-up piece. When the pattern or bridge must support both execution

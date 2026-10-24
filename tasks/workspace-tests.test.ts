@@ -187,6 +187,52 @@ Deno.test("runTests drains every package with a concurrency limit of one", async
   }
 });
 
+// Run `runTests` over a one-member workspace whose member writes down the
+// spool it was handed, with recording pointed at a spool of the test's own,
+// and return what the member saw and what the run left in that spool.
+async function recordingSeenBy(
+  options: { recordResults?: boolean },
+): Promise<{ spool: string; seen: string; left: string[] }> {
+  const dir = await Deno.makeTempDir({ prefix: "ws-records-" });
+  try {
+    await makeWorkspace(dir, ["a"]);
+    await Deno.writeTextFile(
+      `${dir}/packages/a/deno.jsonc`,
+      JSON.stringify({
+        tasks: { test: 'echo "[$CF_TEST_RECORDS_DIR]" > seen.txt' },
+      }),
+    );
+    const spool = path.join(dir, "spool");
+    await Deno.mkdir(spool);
+    await withEnv({ CF_TEST_RECORDS_DIR: spool }, async () => {
+      assertEquals(await runTests(dir, options), true);
+    });
+    return {
+      spool,
+      seen: (await Deno.readTextFile(`${dir}/packages/a/seen.txt`)).trim(),
+      left: [...Deno.readDirSync(spool)].map((entry) => entry.name),
+    };
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+}
+
+Deno.test("runTests records nothing and hands members recording off for a caller that did not ask", async () => {
+  // The members of a workspace a test builds are that test's fixtures, so
+  // neither the run nor any member writes into the spool the test inherited.
+  const { seen, left } = await recordingSeenBy({});
+  assertEquals(seen, "[]");
+  assertEquals(left, []);
+});
+
+Deno.test("runTests records into the spool and hands it to members for a caller that asked", async () => {
+  const { spool, seen, left } = await recordingSeenBy({ recordResults: true });
+  assertEquals(seen, `[${spool}]`);
+  // The member writes no JUnit, so the one fragment is empty: what this
+  // pins is that the run opened its fragment in the spool it was handed.
+  assertEquals(left.length, 1);
+});
+
 // A workspace of `a`, `b` and `c` whose first package fails.
 async function makeFailingWorkspace(dir: string): Promise<void> {
   await makeWorkspace(dir, ["a", "b", "c"]);
@@ -422,13 +468,13 @@ Deno.test("memberTestTask accepts a directory path as well as a URL", async () =
     // must find the manifest rather than quietly reporting none.
     assertEquals(await memberTestTask("./packages/probe", dir), "deno test");
     assertEquals(
-      await memberTestTask("./packages/probe", new URL(`file://${dir}/`)),
+      await memberTestTask("./packages/probe", path.toFileUrl(`${dir}/`)),
       "deno test",
     );
     // Without the trailing slash a member resolves beside the directory
     // rather than inside it, which reads as a member with no manifest.
     assertEquals(
-      await memberTestTask("./packages/probe", new URL(`file://${dir}`)),
+      await memberTestTask("./packages/probe", path.toFileUrl(dir)),
       "deno test",
     );
   } finally {

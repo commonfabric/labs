@@ -1,6 +1,6 @@
 import { renderInProcess } from "@commonfabric/html/in-process";
 import { MockDoc } from "@commonfabric/html/mock-doc";
-import { type Cell, UI } from "@commonfabric/runner";
+import { type Cell, type Runtime, UI } from "@commonfabric/runner";
 import { uiSchema } from "@commonfabric/runner/schemas";
 import { getLogger } from "@commonfabric/utils/logger";
 
@@ -27,12 +27,12 @@ export interface RenderOptions {
  * and the return value is the function that unmounts.
  *
  * @param vdomCell - The cell holding the tree to render
- * @param idle - Resolves when the runtime has finished computing
+ * @param settle - Resolves when the tree is ready to be read
  * @param onUpdate - Receives the HTML after each settled change
  */
 export function renderVDomToHtml(
   vdomCell: Cell<unknown>,
-  idle: () => Promise<void>,
+  settle: () => Promise<void>,
   onUpdate?: (html: string) => void,
 ): Promise<string> | (() => void) {
   const mock = new MockDoc(
@@ -67,7 +67,7 @@ export function renderVDomToHtml(
     // Render once and unmount.
     return (async () => {
       try {
-        await idle();
+        await settle();
         return flushAndRead();
       } finally {
         render.cancel();
@@ -76,8 +76,8 @@ export function renderVDomToHtml(
   }
 
   // Several batches can make up one update, and further batches can land while
-  // a read is still waiting for the runtime. Reading once per quiet runtime
-  // reports each settled tree exactly once. `reading` is cleared in the same
+  // a read is still waiting for the runtime. Reading once per settle reports
+  // each settled tree exactly once. `reading` is cleared in the same
   // synchronous stretch as the read, so no batch lands unreported between the
   // two, and on the failure path as well, so one failed settle costs one report
   // rather than every report after it.
@@ -87,7 +87,7 @@ export function renderVDomToHtml(
   report = () => {
     if (reading || cancelled) return;
     reading = true;
-    idle().then(() => {
+    settle().then(() => {
       let html: string;
       try {
         html = flushAndRead();
@@ -113,8 +113,75 @@ export function renderVDomToHtml(
 }
 
 /**
+ * Helper for `renderPiece()`, which waits until all of these hold at once:
+ * `runtime` has nothing left to compute, storage has nothing outstanding, and
+ * no commit the runtime issued is pending.
+ *
+ * What ends a commit's pending state depends on where the commit went. One
+ * sent directly to the store is pending until the store confirms or refuses
+ * it. One sealed instead, into a serving runtime's wave or into a client's
+ * speculation overlay under server execution, is pending only until the seal
+ * accepts it, and what becomes of it afterwards is not waited for.
+ *
+ * Builtin I/O in flight, such as a fetch or a language-model call, is not
+ * waited for either.
+ */
+async function idleWithNothingPending(runtime: Runtime): Promise<void> {
+  const { scheduler, storageManager } = runtime;
+  // A settled commit can re-run its readers and a settled load can re-arm a
+  // computation, so neither wait is final until both hold at once.
+  do {
+    await scheduler.idleWithPendingCommits();
+    await storageManager.synced();
+  } while (!scheduler.isIdleWithPendingCommits());
+}
+
+/**
+ * Helper for `renderPiece()`, which waits until `runtime` has nothing left to
+ * compute and no storage work outstanding that a computation is waiting for.
+ *
+ * A commit may still be pending when it resolves, and so may builtin I/O such
+ * as a fetch or a language-model call, so a tree read after it can still
+ * change.
+ */
+async function idleWithNothingLoading(runtime: Runtime): Promise<void> {
+  const storage = runtime.storageManager;
+  if (
+    storage.pendingCrossSpacePromiseCount === undefined ||
+    storage.crossSpaceSettled === undefined
+  ) {
+    // The wait below asks storage how much work is registered with its settle
+    // barrier, and waits for that work alone. A storage manager that offers
+    // neither gets the wider wait, which takes the barrier in.
+    await idleWithNothingPending(runtime);
+    return;
+  }
+  await runtime.idle();
+  // The scheduler's idle does not cover work registered with the storage
+  // manager's settle barrier (`trackUntilSettled()`), and that work re-arms a
+  // computation once it settles: a resumed list waits there for its result
+  // container, and builds no row until it has it. The re-armed computation can
+  // register more, so we repeat until an idle leaves nothing registered.
+  while (storage.pendingCrossSpacePromiseCount() > 0) {
+    await storage.crossSpaceSettled();
+    await runtime.idle();
+  }
+}
+
+/**
  * Resolves a piece reference and renders the piece's UI to HTML.
- * Supports both static and reactive rendering with --watch mode.
+ *
+ * Without `options.watch`, returns the HTML of the tree the runtime settles to
+ * once the piece has loaded and computed and no commit that produced is
+ * pending, so a caller may exit on the result without abandoning a commit in
+ * flight. With `options.watch`, the render stays mounted, `options.onUpdate`
+ * receives the HTML each time the runtime goes idle with nothing loading, and
+ * the return value is the function that unmounts.
+ *
+ * Neither mode waits for builtin I/O in flight, such as a fetch or a
+ * language-model call.
+ *
+ * @throws Error if the piece has no UI.
  */
 export async function renderPiece(
   config: PieceConfig,
@@ -138,9 +205,17 @@ export async function renderPiece(
     throw new Error(`Piece ${config.piece} has no UI`);
   }
 
-  return renderVDomToHtml(
-    cell.key(UI),
-    () => pieces.runtime.idle(),
-    options.watch ? (html) => options.onUpdate?.(html) : undefined,
-  );
+  const { runtime } = pieces;
+  if (options.watch) {
+    return renderVDomToHtml(
+      cell.key(UI),
+      () => idleWithNothingLoading(runtime),
+      (html) => options.onUpdate?.(html),
+    );
+  }
+  // The one-shot wait takes in the runtime's pending commits, because the
+  // result is what a caller exits on, and a commit in flight when its
+  // connection closes may never be applied. A watch stays connected, and
+  // reports whatever a later commit result changes.
+  return renderVDomToHtml(cell.key(UI), () => idleWithNothingPending(runtime));
 }

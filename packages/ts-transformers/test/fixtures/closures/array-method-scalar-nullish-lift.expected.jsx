@@ -244,12 +244,12 @@ const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
     anyOf: [{
             type: "array",
             items: {
-                type: "string"
+                type: "number"
             }
         }, {
             type: "array",
             items: {
-                type: "number"
+                type: "string"
             }
         }]
 } as const satisfies __cfHelpers.JSONSchema);

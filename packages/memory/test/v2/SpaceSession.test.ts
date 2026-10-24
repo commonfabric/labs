@@ -10,6 +10,7 @@ import {
   encodeMemoryBoundary,
   type ServerMessage,
   type WatchAddRequest,
+  type WatchRemoveRequest,
   type WatchSetRequest,
   type WatchSpec,
 } from "../../v2.ts";
@@ -26,24 +27,30 @@ import {
   testSessionOpenServerOptions,
 } from "../v2-auth-test-helpers.ts";
 
-/** Builds a loopback with explicit watch-response holds and a cleanup failure. */
+/**
+ * Builds a loopback with explicit watch-response holds and a failure of the
+ * next removal, whether it replaces the watch set or names watch ids.
+ */
 function controlledWatchLoopback(server: Server) {
   const inner = loopback(server);
-  const requests: Array<WatchSetRequest | WatchAddRequest> = [];
+  const requests: Array<
+    WatchSetRequest | WatchAddRequest | WatchRemoveRequest
+  > = [];
   const holds = new Map<string, ReturnType<typeof defer<() => void>>>();
   let nextAddHold: ReturnType<typeof defer<() => void>> | undefined;
-  let failNextSet = false;
+  let failNextRemoval = false;
   let receiver = (_payload: string) => {};
   const transport: Transport = {
     send(payload) {
       const message = decodeMemoryBoundary(payload) as ClientMessage;
       if (
         message.type === "session.watch.set" ||
-        message.type === "session.watch.add"
+        message.type === "session.watch.add" ||
+        message.type === "session.watch.remove"
       ) {
         requests.push(message);
-        if (message.type === "session.watch.set" && failNextSet) {
-          failNextSet = false;
+        if (message.type !== "session.watch.add" && failNextRemoval) {
+          failNextRemoval = false;
           receiver(encodeMemoryBoundary({
             type: "response",
             requestId: message.requestId,
@@ -79,8 +86,8 @@ function controlledWatchLoopback(server: Server) {
   return {
     transport,
     requests,
-    failNextSet() {
-      failNextSet = true;
+    failNextRemoval() {
+      failNextRemoval = true;
     },
     holdNextAddResponse() {
       nextAddHold = defer<() => void>();
@@ -152,98 +159,118 @@ describe("SpaceSession", () => {
     });
 
     describe("watchRemoveSync()", () => {
-      for (const concurrent of [false, true]) {
-        describe(`with concurrent refresh ${concurrent ? "enabled" : "disabled"}`, () => {
-          for (const retry of [false, true]) {
-            it(`keeps earlier and later acquisitions subscribed during ${retry ? "a cleanup retry" : "cleanup"}`, async () => {
-              watcher.setConcurrentWatchRefresh(concurrent);
-              const temporary = "of:temporary";
-              const retained = ["of:kept", "of:earlier", "of:later"];
-              await watcher.watchSetSync([
-                rootSpec(temporary),
-                rootSpec(retained[0]),
-              ]);
-              if (retry) {
-                control.failNextSet();
-                await expect(watcher.watchRemoveSync([temporary]))
-                  .rejects.toThrow("injected cleanup failure");
-              }
+      for (
+        const [byId, concurrent] of [
+          [true, false],
+          [true, true],
+          [false, false],
+          [false, true],
+        ]
+      ) {
+        describe(
+          `${
+            byId ? "by id" : "by replacing the set"
+          }, with concurrent refresh ${concurrent ? "enabled" : "disabled"}`,
+          () => {
+            for (const retry of [false, true]) {
+              it(`keeps earlier and later acquisitions subscribed during ${retry ? "a cleanup retry" : "cleanup"}`, async () => {
+                if (!byId) watcherClient.serverFlags!.watchRemoveV1 = false;
+                watcher.setConcurrentWatchRefresh(concurrent);
+                const temporary = "of:temporary";
+                const retained = ["of:kept", "of:earlier", "of:later"];
+                await watcher.watchSetSync([
+                  rootSpec(temporary),
+                  rootSpec(retained[0]),
+                ]);
+                if (retry) {
+                  control.failNextRemoval();
+                  await expect(watcher.watchRemoveSync([temporary]))
+                    .rejects.toThrow("injected cleanup failure");
+                }
 
-              const held = control.holdNextAddResponse();
-              const earlier = watcher.watchAddSync([rootSpec(retained[1])]);
-              const release = await held;
-              // The server has installed the earlier watch, but the client
-              // has not applied its response when we queue removal.
-              const removal = watcher.watchRemoveSync([temporary]);
-              const later = watcher.watchAddSync([rootSpec(retained[2])]);
-              release();
-              const [, , { view }] = await Promise.all([
-                earlier,
-                removal,
-                later,
-              ]);
+                const held = control.holdNextAddResponse();
+                const earlier = watcher.watchAddSync([rootSpec(retained[1])]);
+                const release = await held;
+                // The server has installed the earlier watch, but the client
+                // has not applied its response when we queue removal.
+                const removal = watcher.watchRemoveSync([temporary]);
+                const later = watcher.watchAddSync([rootSpec(retained[2])]);
+                release();
+                const [, , { view }] = await Promise.all([
+                  earlier,
+                  removal,
+                  later,
+                ]);
 
-              const updates = view.subscribe();
-              await writer.transact({
-                localSeq: 1,
-                reads: { confirmed: [], pending: [] },
-                operations: [...retained, temporary].map((id) => ({
-                  op: "set" as const,
-                  id,
-                  value: { value: { n: 1 } },
-                })),
-              });
-              await server.flushSessions([space]);
-              // Name the arrival (docs/development/waiting-in-tests.md): a
-              // second write to the root that stayed watched throughout marks
-              // the end of the fan-out. Frames deliver in order, so once the
-              // marker lands every frame the first flush owed has landed too,
-              // and a root the removal dropped is missing rather than late.
-              const marker = retained[0];
-              await writer.transact({
-                localSeq: 2,
-                reads: { confirmed: [], pending: [] },
-                operations: [{
-                  op: "set" as const,
-                  id: marker,
-                  value: { value: { n: 2 } },
-                }],
-              });
-              await server.flushSessions([space]);
-              const nOf = (id: string) =>
-                (view.entities.find((entity) => entity.id === id)?.document as
-                  | { value?: { n?: number } }
-                  | undefined)?.value?.n;
-              while (nOf(marker) !== 2) {
-                const next = await updates.next();
-                expect(next.done).toBe(false);
-              }
-              expect(view.entities.map(({ id }) => id).sort()).toEqual(
-                [...retained].sort(),
-              );
-              for (const entity of view.entities) {
-                expect(entity.document).toEqual({
-                  value: { n: entity.id === marker ? 2 : 1 },
+                const updates = view.subscribe();
+                await writer.transact({
+                  localSeq: 1,
+                  reads: { confirmed: [], pending: [] },
+                  operations: [...retained, temporary].map((id) => ({
+                    op: "set" as const,
+                    id,
+                    value: { value: { n: 1 } },
+                  })),
                 });
-              }
+                await server.flushSessions([space]);
+                // Name the arrival (docs/development/waiting-in-tests.md): a
+                // second write to the root that stayed watched throughout marks
+                // the end of the fan-out. Frames deliver in order, so once the
+                // marker lands every frame the first flush owed has landed too,
+                // and a root the removal dropped is missing rather than late.
+                const marker = retained[0];
+                await writer.transact({
+                  localSeq: 2,
+                  reads: { confirmed: [], pending: [] },
+                  operations: [{
+                    op: "set" as const,
+                    id: marker,
+                    value: { value: { n: 2 } },
+                  }],
+                });
+                await server.flushSessions([space]);
+                const nOf = (id: string) =>
+                  (view.entities.find((entity) => entity.id === id)?.document as
+                    | { value?: { n?: number } }
+                    | undefined)?.value?.n;
+                while (nOf(marker) !== 2) {
+                  const next = await updates.next();
+                  expect(next.done).toBe(false);
+                }
+                expect(view.entities.map(({ id }) => id).sort()).toEqual(
+                  [...retained].sort(),
+                );
+                for (const entity of view.entities) {
+                  expect(entity.document).toEqual({
+                    value: { n: entity.id === marker ? 2 : 1 },
+                  });
+                }
 
-              const lastRequests = control.requests.slice(-3);
-              expect(lastRequests.map(({ type }) => type)).toEqual([
-                "session.watch.add",
-                "session.watch.set",
-                "session.watch.add",
-              ]);
-              expect(lastRequests[1].watches.map(({ id }) => id)).toEqual(
-                retained.slice(0, 2),
-              );
-            });
-          }
-        });
+                const [first, removed, last] = control.requests.slice(-3);
+                expect(first.type).toBe("session.watch.add");
+                expect(last.type).toBe("session.watch.add");
+                if (removed.type === "session.watch.remove") {
+                  expect(byId).toBe(true);
+                  expect(removed.watchIds).toEqual([temporary]);
+                } else {
+                  expect(byId).toBe(false);
+                  expect(removed.type).toBe("session.watch.set");
+                  expect(removed.watches.map(({ id }) => id)).toEqual(
+                    retained.slice(0, 2),
+                  );
+                }
+              });
+            }
+          },
+        );
       }
     });
 
     describe("watchAddSync()", () => {
       it("issues a second acquisition while the first response is held", async () => {
+        // The removal below replaces the watch set, so that the request
+        // names every watch the session keeps.
+        watcherClient.serverFlags!.watchRemoveV1 = false;
         watcher.setConcurrentWatchRefresh(true);
         const firstHeld = control.holdNextAddResponse();
         const first = watcher.watchAddSync([rootSpec("of:first")]);
@@ -255,7 +282,13 @@ describe("SpaceSession", () => {
         releaseFirst();
         await Promise.all([first, second]);
         await watcher.watchRemoveSync([]);
-        expect(control.requests.at(-1)?.watches.map(({ id }) => id)).toEqual([
+        const removal = control.requests.at(-1);
+        expect(removal?.type).toBe("session.watch.set");
+        expect(
+          removal?.type === "session.watch.set"
+            ? removal.watches.map(({ id }) => id)
+            : undefined,
+        ).toEqual([
           "of:first",
           "of:second",
         ]);

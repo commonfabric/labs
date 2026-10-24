@@ -38,14 +38,8 @@ for (const depth of [4, 8, 10]) {
             const entries =
               readStoredCfcMetadata(tx, holder.getAsNormalizedFullLink())!
                 .labelMap.entries;
-            const leaves = entries.filter((entry) =>
-              entry.path.length === depth + 1 &&
-              entry.label.confidentiality?.includes("secret")
-            );
-            if (leaves.length !== width ** depth) {
-              throw new Error(
-                "Reference graph is missing confidential leaf labels",
-              );
+            if (entries.length !== 1 || entries[0].path.length !== 0) {
+              throw new Error("Reference graph stores labels below its root");
             }
           } finally {
             tx.abort();

@@ -1954,18 +1954,26 @@ interface FollowedLink {
  * Every path of a snapshot where the reader had a link to follow out of the
  * cell the run addressed.
  *
- * `origin: "link"` is the label a reference itself carries, so a path holding
- * one is a place the walk had a link to follow. It is the denominator of this
- * check: a run with none reached no second document, so nothing about
- * derivation across a link arises for it.
+ * A record lists those paths in `linkPaths`, which the reader fills from the
+ * links it found in the cell's value, whether or not what a link reaches
+ * carries a label. A record holding no such list is read by its
+ * `origin: "link"` entries instead: that is the label a reference itself
+ * carries, so a path holding one is a place the walk had a link to follow.
+ * Those entries undercount, since a reference with no label of its own
+ * leaves none, which is why the list is preferred wherever a record has it.
+ *
+ * This is the denominator of the check: a run with no such path reached no
+ * second document, so nothing about derivation across a link arises for it.
  */
 const followedLinks = (
   labels: HarnessCellLabels,
 ): readonly FollowedLink[] =>
   labels.cells.flatMap((cell) =>
-    cell.entries
-      .filter((entry) => entry.origin === "link")
-      .map((entry) => ({ cell, path: entry.path }))
+    (cell.linkPaths ??
+      cell.entries
+        .filter((entry) => entry.origin === "link")
+        .map((entry) => entry.path))
+      .map((path) => ({ cell, path }))
   );
 
 /** Whether `path` is `prefix` itself or sits beneath it. */

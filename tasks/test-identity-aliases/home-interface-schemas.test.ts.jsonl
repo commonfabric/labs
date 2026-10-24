@@ -1,0 +1,1 @@
+{"date":"2026-10-13","from":{"k":"integration","s":"patterns","n":"Home interface schemas > keeps every authored observation field and its requiredness in the host projections"},"to":{"k":"integration","s":"patterns","n":"Home interface schemas > keeps authored observation fields, requiredness and literal choices in the host projections"}}

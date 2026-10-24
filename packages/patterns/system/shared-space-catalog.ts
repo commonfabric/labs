@@ -1,11 +1,13 @@
 /**
  * Home's shared-space collection. Registration retains the first accepted
  * route; explicit membership choices compare the revision the user observed,
- * and so does a removal. Handler results describe the action, while the catalog
+ * and so does a removal. A retitle refreshes an entry's display title and
+ * nothing else. Handler results describe the action, while the catalog
  * carries membership.
  */
 
 import {
+  type Cell,
   eventKey,
   handler,
   isWellFormedDID,
@@ -92,6 +94,17 @@ export type SharedSpaceRemovalResult =
   | { status: "removed"; space: string }
   | { status: "conflict"; reason: "missing" | "revision" | "offer" };
 
+/** Names one entry whose display title its space's root now gives. */
+export interface SharedSpaceRetitle {
+  space: string;
+  title: string;
+}
+
+/** A retitle's outcome. */
+export type SharedSpaceRetitleResult =
+  | { status: "retitled" | "unchanged"; space: string }
+  | { status: "conflict"; reason: "missing" };
+
 /**
  * The validating reader deliberately selects every stored field. A narrower
  * schema can omit a malformed optional value before the validator sees it.
@@ -111,9 +124,16 @@ export function sharedSpaceOfferKey(from: string, id: string): string {
   return JSON.stringify([from, id]);
 }
 
-/** Reads an initialized catalog, refusing unavailable or malformed values. */
+/**
+ * Reads an initialized catalog, refusing unavailable or malformed values. It
+ * writes nothing, which its parameter declares by being a `Cell` where the
+ * catalog's writers take a `Writable`: a computation that hands a cell to a
+ * `Writable` parameter is scheduled as a writer of that cell.
+ *
+ * @throws When `catalog` holds something other than a valid catalog.
+ */
 export function readSharedSpaceCatalog(
-  catalog: Writable<SharedSpaceCatalogStorage>,
+  catalog: Cell<SharedSpaceCatalogStorage>,
 ): SharedSpaceCatalog {
   const value = catalog.get();
   if (!isSharedSpaceCatalog(value)) {
@@ -411,6 +431,37 @@ export const changeSharedSpaceMembership = handler<
   toSchema<SharedSpaceCatalogState>(),
   (change, { catalog }) => changeSharedSpaceMembershipIn(catalog, change),
 );
+
+/**
+ * Sets the display title of the entry for `retitle.space` in `catalog` to the
+ * title its space's root now gives, staging its write in the transaction of
+ * the handler that calls it. Writes nothing when the entry already has that
+ * title, and returns `conflict` without writing when the space has no entry.
+ * The entry's membership, revision and last action stay as they are: a title
+ * is a display hint, not a membership choice, so a choice made from a list
+ * shown before the retitle still names the current revision.
+ *
+ * @throws When `retitle` is not a valid retitle, or `catalog` holds something
+ *   other than a valid catalog.
+ */
+export function retitleSharedSpaceIn(
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  retitle: SharedSpaceRetitle,
+): SharedSpaceRetitleResult {
+  if (
+    !plainObject(retitle) || !isWellFormedDID(retitle.space) ||
+    !boundedString(retitle.title, 200, true)
+  ) {
+    throw new TypeError("Invalid shared-space retitle.");
+  }
+  const current = readSharedSpaceCatalog(catalog).entries[retitle.space];
+  if (!current) return { status: "conflict", reason: "missing" };
+  if (current.title === retitle.title) {
+    return { status: "unchanged", space: retitle.space };
+  }
+  catalog.key("entries", retitle.space, "title").set(retitle.title);
+  return { status: "retitled", space: retitle.space };
+}
 
 /**
  * Removes one entry from the catalog, for one purpose only: an application

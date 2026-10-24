@@ -19,14 +19,22 @@ import {
   parseLink,
 } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { entityKey } from "../src/scheduler/keys.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import type { CommitError } from "../src/storage/interface.ts";
+import type {
+  CommitError,
+  IExtendedStorageTransaction,
+} from "../src/storage/interface.ts";
+import { setCfcTrustSnapshot } from "../src/storage/extended-storage-transaction.ts";
 import { type ErrorWithContext, Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("piece named before start");
+const requester = await Identity.fromPassphrase(
+  "piece named before start requester",
+);
 const space = signer.did();
 
 // A host whose list maps each item onto a card carrying a handler. The
@@ -105,7 +113,7 @@ const ITEMS_SCHEMA = {
   items: { type: "object", properties: { seed: { type: "string" } } },
 } as const;
 // One card per case, each cold on the replica that runs it.
-const CARD_COUNT = 14;
+const CARD_COUNT = 15;
 
 type EventCommitMarker = {
   type: "scheduler.event.commit";
@@ -725,6 +733,36 @@ describe("piece-named-before-start", () => {
     expect((await settled).outcome).toBe("installed");
     await quiesce(b);
     expect(b.runner.cancels.has(key)).toBe(false);
+  });
+
+  it("hands the named run's start the trust snapshot of the transaction that asked for the run", async () => {
+    const { cardB, itemB, key } = locateCard(14);
+    // B stamps its runs the way a serving loop does, so the start runs under
+    // a run context: a start that initializes on its parent's behalf then
+    // takes its parent's trust, not the runtime's own.
+    const stamped: IExtendedStorageTransaction[] = [];
+    b.stampServerRun = (tx, info) => {
+      stamped.push(tx);
+      stampWaveRunContext(tx, { actionId: info.actionId, kind: info.kind });
+    };
+    const asked = b.trustSnapshotForPrincipal(requester.did());
+
+    const settled = waitForDeferredStart(
+      b,
+      "runner.deferred-start.settled",
+      key,
+    );
+    const runTx = b.edit();
+    setCfcTrustSnapshot(runTx, asked);
+    b.runner.run(runTx, cardPattern, { item: itemB }, cardB);
+    b.prepareTxForCommit(runTx);
+    expect((await runTx.commit().settled).error).toBeUndefined();
+    expect((await settled).outcome).toBe("installed");
+
+    const starts = stamped.filter((tx) => tx !== runTx);
+    expect(starts.length).toBe(1);
+    expect(starts[0].getCfcState().attributedInitialization).toBe(true);
+    expect(starts[0].getCfcState().trustSnapshot).toBe(asked);
   });
 
   it("runs a piece under a pattern it was upgraded to elsewhere after an earlier landing", async () => {

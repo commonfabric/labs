@@ -1,11 +1,32 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import type { TemplateResult } from "lit";
 import {
   CFAvatar,
   initialsForName,
   isAvatarImageUrl,
   isRemoteLikeSource,
 } from "./index.ts";
+
+/** The markup and bound values of a rendered template, nested ones included. */
+function flatten(
+  result: unknown,
+): { markup: string; values: unknown[] } {
+  const template = result as TemplateResult;
+  const values: unknown[] = [];
+  let markup = template.strings.join("\u0000");
+  for (const value of template.values) {
+    if (value && typeof value === "object" && "strings" in value) {
+      const inner = flatten(value);
+      markup += inner.markup;
+      for (const innerValue of inner.values) values.push(innerValue);
+    } else {
+      values.push(value);
+    }
+  }
+  return { markup, values };
+}
 
 describe("CFAvatar", () => {
   it("registers the custom element", () => {
@@ -16,6 +37,34 @@ describe("CFAvatar", () => {
     const el = new CFAvatar();
     expect(el.size).toBe("md");
     expect(el.shape).toBe("circle");
+  });
+
+  describe("render", () => {
+    const bytes = new FabricBytes(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+
+    it("shows bytes as an image, ahead of a glyph", () => {
+      const el = new CFAvatar();
+      el.bytes = bytes;
+      el.src = "🦊";
+      const { markup, values } = flatten(el.render());
+      expect(markup).toContain("<cf-image");
+      expect(values).toContain(bytes);
+      expect(values).not.toContain("🦊");
+    });
+
+    it("shows the glyph, or else initials, when the bytes are empty", () => {
+      const el = new CFAvatar();
+      el.bytes = new FabricBytes(new Uint8Array());
+      el.name = "Ada Lovelace";
+      el.src = "🦊";
+      const glyph = flatten(el.render());
+      expect(glyph.markup).not.toContain("<cf-image");
+      expect(glyph.values).toContain("🦊");
+      el.src = undefined;
+      const initials = flatten(el.render());
+      expect(initials.markup).not.toContain("<cf-image");
+      expect(initials.values).toContain("AL");
+    });
   });
 
   describe("isAvatarImageUrl", () => {

@@ -161,7 +161,7 @@ describe("generateText outbox mechanism", () => {
     expect(setupResult.ok).toBeDefined();
 
     let resultCell: any;
-    const action = rawGenerateText(
+    const { action } = rawGenerateText(
       inputsCell,
       (_resultTx, result) => {
         resultCell = result;
@@ -242,7 +242,7 @@ describe("generateText outbox mechanism", () => {
     expect(setupResult.ok).toBeDefined();
 
     let resultCell: any;
-    const action = rawLlm(
+    const { action } = rawLlm(
       inputsCell,
       (_resultTx, result) => {
         resultCell = result;
@@ -335,7 +335,7 @@ describe("generateText outbox mechanism", () => {
     expect(setupResult.ok).toBeDefined();
 
     let resultCell: any;
-    const action = rawGenerateText(
+    const { action } = rawGenerateText(
       inputsCell,
       (_resultTx, result) => {
         resultCell = result;

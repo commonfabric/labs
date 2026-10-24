@@ -10,7 +10,7 @@ import {
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
   refuseFabricInstance,
-  valueEqual,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { type ACL, aclDocId } from "@commonfabric/memory/acl";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
@@ -24,6 +24,7 @@ import {
   usesLocalReads,
   validateLocalReadBasis,
 } from "./storage/local-read-policy.ts";
+import { keepRefusedArgumentSlots } from "./refused-argument-slots.ts";
 import { STORED_ARGUMENT_SCHEMA_REFUSAL } from "./stored-argument-refusal.ts";
 import {
   storedArgumentSlotIssues,
@@ -77,7 +78,9 @@ import {
   cellRuntime,
   cellTx,
   createCell,
+  internCellLinkSchema,
   isCell,
+  recordWriteDestinationPolicyInput,
   schemaCellScope,
   syncCellForIdentity,
 } from "./cell.ts";
@@ -134,6 +137,12 @@ import {
   type RawBuiltinReturnType,
   type RawNodeCause,
 } from "./module.ts";
+import {
+  nodeBindingInputsWeight,
+  NodeBindingMemo,
+  type NodeBindingSubjectMember,
+} from "./node-binding-memo.ts";
+import { hasInlineCellScheme } from "./immutable-cell.ts";
 import { runtimeOwnedStoreOwnerKey } from "./cfc/runtime-owned-stores.ts";
 import { writeResultSchemaMeta } from "./result-schema-meta.ts";
 import {
@@ -169,19 +178,20 @@ import {
   type PreparedSourceUpdate,
 } from "./pattern-manager.ts";
 import { isCellResultForDereferencing } from "./query-result-proxy.ts";
-import type { Runtime } from "./runtime.ts";
+import type { CommitRetryPullFailure, Runtime } from "./runtime.ts";
 import {
   type Action,
   type EventHandler,
   ignoreReadForScheduling,
 } from "./scheduler.ts";
 import { deriveEventKey } from "./scheduler/event-identity.ts";
-import { entityKey } from "./scheduler/keys.ts";
+import { entityKey, entityNameKey } from "./scheduler/keys.ts";
 import { CooperativeYield } from "./scheduler/cooperative-yield.ts";
 import {
   InSpaceTargetUnresolved,
   RetryImmediately,
 } from "./scheduler/retry-immediately.ts";
+import { getContentAddressedSchemasConfig } from "./schema-doc-config.ts";
 import { isSchemaMismatchError } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
 import { combineOptionalSchema } from "./traverse.ts";
@@ -203,6 +213,7 @@ import {
   type URI,
 } from "./storage/interface.ts";
 import {
+  internalVerifierRead,
   isDurableReadTx,
   machineryRead,
   markDurableReadTx,
@@ -214,6 +225,7 @@ import {
   isStaleReadConflict,
   isStorageTransactionInconsistent,
 } from "./storage/rejection.ts";
+import { transactionFailureMessage } from "./storage/transaction-errors.ts";
 
 import "./builtins/index.ts";
 
@@ -259,7 +271,7 @@ import {
   sessionScopedArgumentKeys,
 } from "./data-updating.ts";
 import { getVerifiedProvenance } from "./harness/verified-provenance.ts";
-import { bringUpHomeRootForHandler } from "./home-root.ts";
+import { bringUpHomeRootForRefusedWrite } from "./home-root.ts";
 import { setResultCell } from "./result-utils.ts";
 import {
   describePatternOrModule,
@@ -270,7 +282,12 @@ import {
   setRunnableName,
 } from "./runner-utils.ts";
 import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
-import { narrowestScope, normalizeCellScope, scopeRank } from "./scope.ts";
+import {
+  isCellScope,
+  narrowestScope,
+  normalizeCellScope,
+  scopeRank,
+} from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
@@ -302,6 +319,35 @@ const triggerFlowLogger = getLogger("runner.trigger-flow", {
 const RESULT_SHORTCUT_LIMIT = 4096;
 
 /**
+ * How many node bindings of each kind one runner holds. A resume pre-sync
+ * plans every node of a piece's tree before any of them is instantiated,
+ * and a binding is held from the first plan of its node for every later
+ * plan of it, across a load and past it; the bound is sized for a tree of
+ * several hundred nested instances. Past it the least recently used
+ * binding is dropped, and computed again by whichever plan asks for it
+ * next.
+ */
+const NODE_BINDING_LIMIT = 65_536;
+
+/**
+ * The most weight the held node bindings of one kind have between them, in
+ * characters: those of each binding's key, and of its inputs document or,
+ * for a pattern node, {@link BOUND_CHILD_NODE_WEIGHT} for each node of its
+ * bound child. An inputs document carries a link, its schema as a
+ * reference, for every input it holds.
+ */
+const NODE_BINDING_WEIGHT_LIMIT = 256 * 1024 * 1024;
+
+/**
+ * What one node of a pattern node's bound child counts toward
+ * {@link NODE_BINDING_WEIGHT_LIMIT}. Binding a child copies each of its
+ * nodes along the paths that hold an alias and shares the rest, schemas
+ * among it, with the pattern it was bound from, so the copy is not measured
+ * but taken to be a few thousand characters a node.
+ */
+const BOUND_CHILD_NODE_WEIGHT = 4096;
+
+/**
  * Presence probes `Runner.#patternToNameBeforeRun` may spend before it stops
  * looking and holds the run for a name-sync. Each probe is one read of the
  * local replica, so the budget bounds the walk's cost and not its verdict: a
@@ -320,10 +366,29 @@ const RESULT_SHORTCUT_LIMIT = 4096;
 const NAMING_PROBE_BUDGET = 256;
 
 /**
+ * The read metadata of `Runner.#documentPresent`, the presence probe that
+ * decides whether a run of a piece, or a swap of one to another pattern, waits
+ * for a name-sync (`Runner.#patternToNameBeforeRun`,
+ * `Runner.#swapReadsAbsent`). It reads through a read-only transaction of its
+ * own, and what it finds decides only when the run happens, never what it
+ * computes. So it is a runtime-internal read, which neither schedules nor
+ * taints, and which a runtime read ceiling does not measure: a document whose
+ * value the ceiling withholds is on the replica all the same, and the run's
+ * own reads of it are the reads the ceiling governs.
+ */
+const PRESENCE_PROBE_READ = {
+  ...ignoreReadForScheduling,
+  ...internalVerifierRead,
+};
+
+/**
  * How many times a named piece's run starts again after its start transaction
  * is refused retryably, matching the bound `Runtime.editWithRetry()` puts on
- * any other retrying writer. Each attempt waits for the refusal's catch-up
- * first, so the bound caps a basis that keeps moving rather than a spin.
+ * any other retrying writer, and how many times a piece's instantiation runs
+ * again after its commit loses its basis to concurrent writes or claims absent
+ * successive layers of documents. Each attempt waits for the refusal's
+ * catch-up first, so the bound caps a basis that keeps moving, or a chain of
+ * links each reaching a document not yet loaded, rather than a spin.
  */
 const PIECE_RUN_START_MAX_RETRIES = 5;
 
@@ -367,6 +432,75 @@ const refusalNamesPolicyManifest = (error: CommitError): boolean =>
 const refusalNamesOnlyPolicyManifests = (error: CommitError): boolean => {
   const ids = refusedDocumentIds(error);
   return ids.length > 0 && ids.every(isPolicyManifestId);
+};
+
+/**
+ * Whether a commit refusal is a stale confirmed read whose every conflicting
+ * read claimed its document absent: each read is at seq `0`, the basis a
+ * replica records for a document it holds no revision of. The transaction
+ * read documents its replica had not loaded, or had loaded before anything
+ * was written there, and once the catch-up has loaded them a fresh run reads
+ * them as present. A refusal that names any read at a later seq is a stale
+ * read over a revision another writer moved past, and one whose conflicts
+ * carry no seq is not known to be either.
+ */
+const refusalClaimsOnlyAbsence = (error: CommitError): boolean => {
+  if (
+    error.name !== "ConflictError" ||
+    !error.message.startsWith("stale confirmed read")
+  ) {
+    return false;
+  }
+  const conflicts = error.conflicts ?? [];
+  return conflicts.length > 0 && conflicts.every(({ seq }) => seq === 0);
+};
+
+/**
+ * The documents a commit refusal names, each keyed by its space, scope and
+ * id, so that a later refusal claiming absent only documents an earlier
+ * catch-up loaded can be told from one that reached documents not yet
+ * loaded.
+ */
+const conflictKeys = (error: CommitError): string[] =>
+  error.name === "ConflictError"
+    ? (error.conflicts ?? []).map(({ space, of, scope }) =>
+      entityNameKey({ space, id: of, scope })
+    )
+    : [];
+
+/**
+ * The failure a piece start reports when the catch-up of a refusal it would
+ * otherwise retry could not load documents the retry reads. `refused` says
+ * which start was refused and how, and the cause is the reason each load
+ * gave.
+ */
+const catchUpLoadFailure = (
+  refused: string,
+  unloaded: readonly CommitRetryPullFailure[],
+): Error =>
+  new Error(
+    `${refused}, and its catch-up could not load ` +
+      unloaded.map(({ id }) => id).join(", "),
+    {
+      cause: unloaded.length === 1
+        ? unloaded[0].error
+        : new AggregateError(unloaded.map(({ error }) => error)),
+    },
+  );
+
+/**
+ * What a piece's instantiation may still recover once an earlier attempt's
+ * refused commit was recovered, while rounds remain: another stale read, or
+ * another refusal claiming documents absent ({@link refusalClaimsOnlyAbsence})
+ * when it names a document no earlier round's catch-up loaded. Any other
+ * refusal is terminal.
+ */
+type InstantiationRetry = {
+  /** Rounds the retry may still take, over stale reads and absences alike. */
+  readonly roundsLeft: number;
+
+  /** The documents earlier rounds loaded, as {@link conflictKeys} names. */
+  readonly loaded: ReadonlySet<string>;
 };
 
 /**
@@ -436,6 +570,11 @@ type StartAttempt = {
   // instead of running a second resolution pipeline. Assigned by start() once
   // the pipeline promise exists.
   settled?: Promise<boolean>;
+  // The settlements of the commits the graphs this attempt installed made of
+  // their setup writes, for `startWithCommit()`. Recorded on the attempt
+  // rather than by document, so a caller that joins the attempt late, or one
+  // whose start followed a link to the piece, finds them all the same.
+  instantiationCommits?: PieceInstantiationSettlement[];
   // The pattern keys this attempt has read inherited authority for. The walk
   // runs again from the top after the read, and must not read again for a
   // grant the durable metadata does not carry.
@@ -443,27 +582,48 @@ type StartAttempt = {
 };
 
 /**
+ * What `schemaWithEventSlotAsStream()` returned for each deep-frozen handler
+ * argument schema, by that schema.
+ */
+const eventSlotAsStreamSchemas = new WeakMap<object, JSONSchema>();
+
+/**
  * `schema` with a handler's `$event` slot declared as a stream: what a
  * handler node's bound inputs are synced under at start, where the slot
  * holds the stream link rather than an event. Declared so, the slot's
  * document is not loaded under the event schema the link carries; the
  * stream is named whole beside the plan (`#cellsNodePlanReads`).
+ *
+ * The result is the interned schema, and one handler schema gets the same
+ * one on every call: each plan of a handler node attaches it to its inputs
+ * cell, which interns what it is given, and a schema built per plan would be
+ * hashed whole per plan. A schema declaring an `$event` slot is interned as a
+ * cell interns one (`internCellLinkSchema()`), which deep-freezes it in place
+ * unless it holds a value read out of a cell.
  */
-function schemaWithEventSlotAsStream(
+export function schemaWithEventSlotAsStream(
   schema: JSONSchema | undefined,
 ): JSONSchema | undefined {
   if (!isObjectOrArray(schema) || !isObjectOrArray(schema.properties)) {
     return schema;
   }
   if (!Object.hasOwn(schema.properties, "$event")) return schema;
+  // A result is kept only for a deep-frozen schema, which cannot change
+  // under it.
+  internCellLinkSchema(schema);
+  const keep = isDeepFrozen(schema);
+  const remembered = keep ? eventSlotAsStreamSchemas.get(schema) : undefined;
+  if (remembered !== undefined) return remembered;
   const required = Array.isArray(schema.required)
     ? schema.required.filter((key) => key !== "$event")
     : undefined;
-  return {
+  const declared = internCellLinkSchema({
     ...schema,
     properties: { ...schema.properties, $event: { asCell: ["stream"] } },
     ...(required !== undefined && { required }),
-  };
+  });
+  if (keep) eventSlotAsStreamSchemas.set(schema, declared);
+  return declared;
 }
 
 // The debug-name builders reuse the action's already-computed
@@ -531,8 +691,7 @@ function patternDefaultScope(pattern: Pattern): CellScope | undefined {
  * or a link, whose kind belongs to whatever it resolves to rather than to the
  * receipt.
  *
- * A `data:` link is the exception among links: it carries its value inside
- * its own identifier, and the write inlines it, so the receipt holds that
+ * An immutable `snapshot:` or Fabric `data:` link is expanded on write, so the receipt holds that
  * value rather than a link to it. The description comes from the same
  * inlining, so it describes what is stored.
  *
@@ -805,6 +964,30 @@ const recordRawBuiltinResultSchemaPolicyInput = (
 };
 
 /**
+ * Whether `argumentLink` names a stand-in: the immutable document a pre-sync
+ * builds from the inputs of an instance that has no stored argument.
+ */
+function isStandInArgument(
+  argumentLink: NormalizedFullLink | undefined,
+): boolean {
+  return argumentLink !== undefined && hasInlineCellScheme(argumentLink.id);
+}
+
+/**
+ * What decides a node's binding beside the node, its pattern and the two
+ * links: the type of module the node resolved to, the registry name it
+ * resolved from, and whether a bound link carries its schema as a reference.
+ */
+function bindingVariant(
+  moduleType: Module["type"],
+  moduleRefName: string | undefined,
+): string {
+  return `${moduleType}:${moduleRefName ?? ""}:${
+    getContentAddressedSchemasConfig() ? "reference" : "inline"
+  }`;
+}
+
+/**
  * The kind-free ids of a pattern's derived internal cells on `resultCell` — the
  * ids a manifest-blind binding conversion mints for a `partialCause` alias
  * (pattern-binding's descriptor-miss fallback), which is how the identity bind
@@ -948,6 +1131,42 @@ function isPositionalPartialCause(partialCause: unknown): boolean {
 }
 
 /**
+ * The children a parent's `instanceChildren` meta records, by instance name:
+ * for each, the child that named instance runs in place of the one at its own
+ * spot. The meta is a list of `{ name, child }` entries rather than a record
+ * keyed by name, since an instance may take any name a `const` can, among
+ * them names a stored record may not use as a key, such as `constructor` and
+ * `__proto__`. An entry that is malformed, or that repeats a name an earlier
+ * entry gave, is skipped.
+ */
+function readInstanceChildren(
+  parent: Cell<any>,
+): Map<string, NormalizedFullLink> {
+  const raw = convertibleJsFromFabricValue(
+    parent.getMetaRaw("instanceChildren", { meta: ignoreReadForScheduling }),
+  );
+  const children = new Map<string, NormalizedFullLink>();
+  if (!Array.isArray(raw)) return children;
+  for (const entry of raw) {
+    if (!isObjectNotArray(entry) || typeof entry.name !== "string") continue;
+    const child = entry.child;
+    if (
+      children.has(entry.name) || !isObjectNotArray(child) ||
+      typeof child.space !== "string" || typeof child.id !== "string"
+    ) {
+      continue;
+    }
+    children.set(entry.name, {
+      space: child.space as MemorySpace,
+      id: child.id as URI,
+      path: [],
+      scope: isCellScope(child.scope) ? child.scope : "space",
+    });
+  }
+  return children;
+}
+
+/**
  * The manifest of derived internal cells `cell` holds, as setup recorded it.
  */
 function storedManifestOf(cell: Cell<any>): InternalCellDescriptor[] {
@@ -1029,6 +1248,56 @@ function samePatternRef(
   b: { identity: string; symbol: string },
 ): boolean {
   return a.identity === b.identity && a.symbol === b.symbol;
+}
+
+/**
+ * Whether `link`, a cell an instance in a piece's tree owns, is owed a
+ * default: it declares one at a scope narrower than that of its owning
+ * instance's result cell, `ownerScope`, which a start's preparation seeds
+ * when the cell holds no value.
+ */
+function ownedCellOwesSeed(
+  link: NormalizedFullLink,
+  ownerScope: CellScope,
+): boolean {
+  return isObjectOrArray(link.schema) &&
+    link.schema.default !== undefined &&
+    scopeRank(link.scope) > scopeRank(ownerScope);
+}
+
+/**
+ * Whether the gate before the start of a piece a resume pre-sync has named
+ * takes the record of `link`, a cell an instance in the piece's tree owns,
+ * for the cell; the owning instance's result cell is at `ownerScope`. It does
+ * for a derived cell (`computed:`), which holds a value only once its
+ * computation has produced one: after the pre-sync has asked the store for
+ * it, a record holding no value is what the store holds. It does not for a
+ * cell owed a default (`ownedCellOwesSeed`).
+ */
+function ownedCellRecordSuffices(
+  link: NormalizedFullLink,
+  ownerScope: CellScope,
+): boolean {
+  return entityKindOfIdString(link.id) === "computed" &&
+    !ownedCellOwesSeed(link, ownerScope);
+}
+
+/**
+ * Whether the pattern pointer or the setup-completion marker on `resultCell`
+ * names a pattern other than `entryRef`, which is what makes a setup of
+ * `entryRef` there re-stage the stored argument. Each falls back to
+ * `sessionRef`, the session-side pointer a keyless piece has in place of
+ * both, as setup's own reading does. None of the three reads as `false`.
+ */
+function storedUnderAnotherPattern(
+  resultCell: Cell<unknown>,
+  entryRef: { identity: string; symbol: string },
+  sessionRef: { identity: string; symbol: string } | undefined,
+): boolean {
+  const pointer = getPatternIdentityRef(resultCell) ?? sessionRef;
+  const marker = getPatternSetupIdentityRef(resultCell) ?? sessionRef;
+  return (pointer !== undefined && !samePatternRef(pointer, entryRef)) ||
+    (marker !== undefined && !samePatternRef(marker, entryRef));
 }
 
 /**
@@ -1263,20 +1532,25 @@ const pieceOwnedStores = (
 ];
 
 /**
- * Hands a deferred start the trust snapshot of the transaction it was deferred
- * from, when it initializes on that transaction's behalf. The start runs in a
- * transaction of its own, and on a serving runtime the stamp that gives it a
- * run context leaves it the runtime's ambient snapshot, which names the
- * service. A run the serving loop attached a principal's snapshot to, such as
- * the owner the space-root ensure resolves, would otherwise hand the start's
- * initializations to the service rather than to that principal. Called after
- * the start is stamped and before its first read. A start no serving loop
- * stamped takes its trust from the runtime it runs in, as its parent did.
+ * Stamps `start`, the transaction a deferred piece start runs in, with the run
+ * context `info` gives it (`Runtime.stampServerRun()`), and hands it the trust
+ * snapshot of `from`, the transaction it was deferred from, when it
+ * initializes on that transaction's behalf. The start runs in a transaction of
+ * its own, and on a serving runtime the stamp leaves it the runtime's ambient
+ * snapshot, which names the service. A run the serving loop attached a
+ * principal's snapshot to, such as the owner the space-root ensure resolves,
+ * would otherwise hand the start's initializations to the service rather than
+ * to that principal. Every deferred start is stamped here, before its first
+ * read, so none is stamped without that trust. A start no serving loop stamps
+ * takes its trust from the runtime it runs in, as its parent did.
  */
-const carryDeferredStartTrust = (
+const stampDeferredStart = (
+  runtime: Runtime,
   from: IExtendedStorageTransaction,
   start: IExtendedStorageTransaction,
+  info: Parameters<Runtime["stampServerRun"]>[1],
 ): void => {
+  runtime.stampServerRun(start, info);
   const trustSnapshot = from.getCfcState().trustSnapshot;
   if (
     start.getCfcState().attributedInitialization &&
@@ -1574,6 +1848,16 @@ export interface PieceSourceRevision {
 
   operation: PieceSourceRevisionOperation;
   selectedRevisionId?: string;
+
+  /**
+   * When the deployment that served this revision's source released it, in
+   * milliseconds since the epoch (`pattern-release-time.ts`). Carried by a
+   * revision adopted from a `system:` origin whose host states one, and by a
+   * later revision that leaves that same source in place, which carries the
+   * latest time known for it ({@link knownPieceReleasedAt}). It is what keeps
+   * the piece from being moved to an earlier release.
+   */
+  releasedAt?: number;
 }
 
 export interface PieceSourceSnapshot {
@@ -1628,6 +1912,17 @@ export interface PieceReconciliation {
 
   /** What the attempt reported, in its own words. */
   detail?: string;
+
+  /**
+   * The source the piece runs, with the latest release time at which its
+   * `system:` origin has offered that source since the piece adopted it, in
+   * milliseconds since the epoch (`pattern-release-time.ts`). A later deploy
+   * of unchanged source moves it forward without adopting anything, which is
+   * what keeps the piece from being moved to a release between the one it
+   * adopted and the one that confirmed it. It never moves backward, and an
+   * accepted transition clears it with the rest of the record.
+   */
+  confirmed?: { identity: string; releasedAt: number };
 }
 
 export type PieceSourceTransitionBaseline =
@@ -1645,6 +1940,17 @@ export interface PieceSourceTransition {
 
   expected: PieceSourceSnapshot;
   selectedRevisionId?: string;
+
+  /** The release time the revision records (`PieceSourceRevision`). */
+  releasedAt?: number;
+
+  /**
+   * Refuse the transition with {@link PIECE_RELEASE_OVERTAKEN} unless
+   * `releasedAt` is later than the latest release time known, when it
+   * commits, for the source the piece runs. Set by a step whose review relied
+   * on the candidate being the later release.
+   */
+  requireLaterRelease?: boolean;
 }
 
 /**
@@ -1718,6 +2024,44 @@ type BoundNodeIO = {
    * argument from, and what the pre-sync syncs under the node's read schema.
    */
   inputsCell: Cell<any>;
+};
+
+/**
+ * What binding a javascript, passthrough or raw node produces before
+ * anything is read through a transaction. `Runner.#nodeIOBindings` holds the
+ * one the first plan of a node, result cell and argument link computes, and
+ * every later plan takes its members from that one, so no holder changes
+ * them.
+ */
+type NodeIOBinding = {
+  inputs: FabricExecValue;
+  outputs: FabricExecValue;
+
+  /** The bound inputs as an immutable document, bound to no transaction. */
+  inputsCell: Cell<any>;
+};
+
+/**
+ * What binding a pattern node produces before anything is read through a
+ * transaction, held by `Runner.#patternNodeBindings` the way a
+ * {@link NodeIOBinding} is held.
+ */
+type PatternNodeBindingCore = {
+  child: Pattern;
+  inputs: FabricExecValue;
+  outputs: FabricExecValue;
+
+  /**
+   * The outputs bound without the pattern's manifest. Their first write
+   * redirect names the spot the child's identity derives from.
+   */
+  identityOutputs: FabricExecValue;
+
+  /** The ids among `identityOutputs` that name a cause and hold no data. */
+  causeOnlyIds: ReadonlySet<string> | undefined;
+
+  /** The instance name of a named instance, which no other node shares. */
+  instanceName: string | undefined;
 };
 
 /**
@@ -1937,13 +2281,13 @@ const relaxedHandlerSchemaCache = new WeakMap<object, JSONSchema>();
  *   an absent event.
  *
  * Validation is the same composition the CLI's pre-dispatch gate applies
- * (`verbInputSchemaError`, packages/cli/lib/callable.ts): `required` lists are
- * relaxed for defaulted properties first (the runtime fills a present object's
- * missing defaulted properties before checking `required`, so judging the
- * unrelaxed schema would refuse payloads the verb accepts), then
- * `validateSchemaValue` judges the payload. Cell links inside the payload are
- * accepted opaquely: a link's target cannot be read here, and its schema check
- * belongs to the handler's own reactive reads — the same deferral the
+ * (`verbInputSchemaError`, packages/piece/src/verb-input.ts): `required`
+ * lists are relaxed for defaulted properties first (the runtime fills a
+ * present object's missing defaulted properties before checking `required`,
+ * so judging the unrelaxed schema would refuse payloads the verb accepts),
+ * then `validateSchemaValue` judges the payload. Cell links inside the payload
+ * are accepted opaquely: a link's target cannot be read here, and its schema
+ * check belongs to the handler's own reactive reads — the same deferral the
  * pattern-argument validator applies to unresolvable links. A link VALUE passes
  * unjudged; an undeclared KEY still rejects.
  *
@@ -2157,6 +2501,22 @@ function dedupeNormalizedLinks(
 }
 
 /**
+ * Each of `links` at every scope: a write to a document whose instance scope
+ * is decided only when it is written, declared so that a write surface keyed
+ * by scope covers whichever instance it turns out to be.
+ */
+function atEveryScope(
+  links: readonly NormalizedFullLink[],
+): NormalizedFullLink[] {
+  return links.flatMap((link) =>
+    (["space", "user", "session"] as const).map((scope) => ({
+      ...link,
+      scope,
+    }))
+  );
+}
+
+/**
  * A started piece's registration: the cancel that retires it, carrying
  * whether the pattern graph it was installed with is still there. The
  * registration outlives that graph — a refused instantiation commit retires
@@ -2165,6 +2525,27 @@ function dedupeNormalizedLinks(
  * rather than the registration's presence.
  */
 type PieceRegistration = Cancel & { graphIsInstalled: () => boolean };
+
+/**
+ * A piece-start commit that failed, as `Runner.#reportPieceStartCommitFailure()`
+ * reports it. The started graph's setup writes did not land.
+ */
+type PieceStartCommitFailure = {
+  /** The commit's action identity, which names the piece. */
+  actionId: string;
+
+  /** Storage's verdict on the commit, or what else cut it short. */
+  error: unknown;
+};
+
+/**
+ * Settlement of a self-minted piece instantiation commit, following the
+ * retries a recoverable refusal takes: the failure it reported, or `undefined`
+ * when its setup writes landed or nothing was lost.
+ */
+type PieceInstantiationSettlement = Promise<
+  PieceStartCommitFailure | undefined
+>;
 
 /** A resident view graph whose unavailable bindings can resume independently. */
 export type ViewPieceRegistration = PieceRegistration & {
@@ -2184,6 +2565,18 @@ type ScopedPieceRegistration = PieceRegistration & {
 type PieceVariantRegistration = {
   registrations: Map<string, PieceRegistration>;
   selection: ImplementationSelection;
+};
+
+/** The in-flight follows of one registration of a piece's pattern watcher. */
+type WatcherFollows = {
+  /** Follows that have not settled. */
+  pending: Set<Promise<unknown>>;
+
+  /** Resolves when the registration is cancelled. */
+  cancelled: Promise<void>;
+
+  /** Whether the registration has been cancelled. */
+  isCancelled: boolean;
 };
 
 export class Runner {
@@ -2220,6 +2613,17 @@ export class Runner {
   #pendingWatcherPatternLoads = new Set<Promise<unknown>>();
 
   /**
+   * The entries of `#pendingWatcherPatternLoads`, by the doc key of the piece
+   * whose watcher started each, under the watcher registration that did. A
+   * caller that moved a running piece's pattern pointer waits on that piece's
+   * entries alone (see `patternPointerFollowed()`), so that another piece's
+   * slow load does not hold it. A piece with nothing in flight has no entry.
+   * A cancelled registration's entry stays until its loads settle, which
+   * takes as long as their storage reads do, and is not waited on.
+   */
+  #watcherFollowsByPiece = new Map<string, WatcherFollows>();
+
+  /**
    * In-flight catch-up recoveries of commit-gated starts whose transaction lost
    * its basis to the serving side's own first-hydration materialization (see
    * `#catchUpAndStartOnStaleRead()`). _Never_ awaited by `dispose()`, for
@@ -2234,10 +2638,11 @@ export class Runner {
    * In-flight settlements of self-minted piece instantiations, which commit
    * asynchronously. Their local graph is speculative until the commit and any
    * serving-wave settlement succeed, so a stale-read refusal or contribution
-   * drop tears down that exact node group and re-instantiates it once against
-   * the repaired view. This set is a deterministic test seam: disposal relies
-   * on the registration and lifecycle guards rather than waiting for a
-   * readiness gate or a wave that a closing serving loop may abandon.
+   * drop tears down that exact node group and re-instantiates it against the
+   * repaired view, for a bounded number of rounds. This set is a deterministic
+   * test seam: disposal relies on the registration and lifecycle guards rather
+   * than waiting for a readiness gate or a wave that a closing serving loop may
+   * abandon.
    */
   #pendingPieceInstantiationSettlements = new Set<Promise<unknown>>();
 
@@ -2291,6 +2696,13 @@ export class Runner {
   #independentlyStartedResults = new Set<
     `${MemorySpace}/${ScopeKey}/${URI}`
   >();
+
+  /**
+   * The patterns a handler's result is set up from. A child one of them
+   * instantiates was made by an event, not by its parent's program, so no
+   * release of the parent re-instantiates it, whichever space it is in.
+   */
+  #handlerResultPatterns = new WeakSet<Pattern>();
 
   /**
    * Registrations a run installed in a transaction refused for a stale basis,
@@ -2424,9 +2836,11 @@ export class Runner {
    * its stored argument and names what they read, so a name-sync of that
    * instance under the same pattern would make the same requests and
    * deliver nothing more; the gate before such an instance's own start
-   * probes its owned cells, which a seed may still be owed, and skips the
-   * argument walk. Bounded like `#locallyPreparedResults`: a missing entry
-   * costs a walk, never a wrong verdict.
+   * probes its owned cells, which a seed may still be owed, taking a
+   * derived cell's record for the cell where no seed is
+   * (`ownedCellRecordSuffices`), and skips the argument walk. Bounded like
+   * `#locallyPreparedResults`: a missing entry costs a walk, or a hold on a
+   * derived cell that holds no value, never a wrong verdict.
    */
   readonly #presyncNamedInstances = new BoundedKeyMap<string, string>(
     RESULT_SHORTCUT_LIMIT,
@@ -2442,6 +2856,35 @@ export class Runner {
   #presyncPlanRecorder:
     | ((piece: string, node: Node, site: "node" | "owned") => void)
     | undefined;
+
+  /**
+   * The bindings of the javascript, passthrough and raw nodes this runner
+   * has planned, weighed by their inputs documents.
+   */
+  readonly #nodeIOBindings = new NodeBindingMemo<NodeIOBinding>({
+    capacity: NODE_BINDING_LIMIT,
+    maxWeight: NODE_BINDING_WEIGHT_LIMIT,
+    weigh: (binding) =>
+      nodeBindingInputsWeight(binding.inputsCell.getAsNormalizedFullLink().id),
+  });
+
+  /**
+   * The bindings of the pattern nodes this runner has planned, weighed by
+   * the node count of their bound children.
+   */
+  readonly #patternNodeBindings = new NodeBindingMemo<PatternNodeBindingCore>({
+    capacity: NODE_BINDING_LIMIT,
+    maxWeight: NODE_BINDING_WEIGHT_LIMIT,
+    weigh: (binding) => binding.child.nodes.length * BOUND_CHILD_NODE_WEIGHT,
+  });
+
+  /**
+   * Observer of every node binding this runner computes, by the piece bound
+   * and the node, for a test counting bindings against the tree's
+   * `(instance, node)` pairs. A binding the runner already holds is not
+   * computed, and so not reported. Unset outside tests.
+   */
+  #nodeBindingRecorder: ((piece: string, node: Node) => void) | undefined;
 
   /**
    * Observer of every child document the displaced-child guard reads, by
@@ -2548,8 +2991,9 @@ export class Runner {
    * syncer and deferred-start committer a test may supply, the setup,
    * storage-subscription, commit-gated run, ownership, key, sync, walk, and
    * retry steps, the implementation invoker, the node planner, which a
-   * test drives directly, the wave kick, and the pre-sync plan recorder and
-   * resume yield a test installs.
+   * test drives directly, the wave kick, the count of node bindings held
+   * and the step that drops them, and the pre-sync plan recorder, node
+   * binding recorder and resume yield a test installs.
    */
   get accessForTestingOnly(): {
     scopedProgramCounts(): Array<{ piece: string; variants: number }>;
@@ -2626,6 +3070,9 @@ export class Runner {
     presyncPlanRecorder:
       | ((piece: string, node: Node, site: "node" | "owned") => void)
       | undefined;
+    nodeBindingRecorder: ((piece: string, node: Node) => void) | undefined;
+    forgetNodeBindings(): void;
+    readonly heldNodeBindings: number;
     displacedChildReadRecorder: ((child: string) => void) | undefined;
     resumeYield: CooperativeYield;
     kickResumeWave(
@@ -2741,6 +3188,20 @@ export class Runner {
       },
       set presyncPlanRecorder(value) {
         outerThis.#presyncPlanRecorder = value;
+      },
+      get nodeBindingRecorder() {
+        return outerThis.#nodeBindingRecorder;
+      },
+      set nodeBindingRecorder(value) {
+        outerThis.#nodeBindingRecorder = value;
+      },
+      forgetNodeBindings: () => {
+        this.#nodeIOBindings.clear();
+        this.#patternNodeBindings.clear();
+      },
+      get heldNodeBindings() {
+        return outerThis.#nodeIOBindings.size +
+          outerThis.#patternNodeBindings.size;
       },
       get displacedChildReadRecorder() {
         return outerThis.#displacedChildReadRecorder;
@@ -3238,7 +3699,14 @@ export class Runner {
     const storable = flattenBuilderArtifacts(argument, {
       isLeaf: isCellResultForDereferencing,
     });
-    argumentCell.set(storable);
+    // The write's schema policy input describes the write, so it is recorded
+    // where the write lands: the argument document. Setup writes that
+    // document's bindings (`replacesBindings`, below) and nothing it binds.
+    recordWriteDestinationPolicyInput(
+      tx,
+      argumentLink,
+      argumentLink.schema ?? argumentCell.schema,
+    );
     // The policy recorder sees the RAW argument, as its sibling in
     // `#updateResultProjection` does. Handing it the flattened one would walk
     // a serialized pattern graph the raw walk stops at -- a function halts
@@ -3262,13 +3730,34 @@ export class Runner {
       projection,
       [],
     );
-    diffAndUpdate(
+    // The argument document is the piece's own, and this writes it whole: a
+    // binding it already holds stays where the argument names the same cell,
+    // and is replaced where the argument binds the slot another way. A write
+    // through the old binding would land in the cell it names, which is the
+    // caller's.
+    const changed = diffAndUpdate(
       this.#runtime,
       tx,
       argumentLink,
       storable,
       argumentLink,
+      { replacesBindings: true },
     );
+    // The document now holds the value supplied here, so flow labels may
+    // stamp it as a whole write, as they may a `Cell.set()`; and a mergeable
+    // op on a list in it resolves against this value rather than the store.
+    if (changed) {
+      tx.recordCfcAssertedValueRoot(
+        {
+          space: argumentLink.space,
+          id: argumentLink.id,
+          scope: argumentLink.scope,
+          path: [...argumentLink.path],
+        },
+        runtimeWritePolicyAuthorization,
+      );
+    }
+    tx.poisonMergeableOp?.(argumentLink);
     initializeScopedArgumentSlots(
       this.#runtime,
       tx,
@@ -3515,10 +4004,11 @@ export class Runner {
     //
     // The conversion MUST precede the no-op gate. A raw result is not
     // necessarily a `FabricValue` — one carrying `toJSON`, say, only becomes one
-    // here — and `valueEqual` hashes its operands, so comparing a raw result
-    // throws `` `hashOf()`: unsupported object type `` instead of deciding
-    // anything. Converting first also makes the gate compare what a write
-    // would actually store, since the stored side is already a `FabricValue`.
+    // here — and the comparison reads its operands as `FabricValue`s, so
+    // comparing a raw result throws on what it cannot read instead of
+    // deciding anything. Converting first also makes the gate compare what a
+    // write would actually store, since the stored side is already a
+    // `FabricValue`.
     // A result can carry a builder artifact -- a pattern tool, say -- and an
     // artifact is not a `FabricValue`, so it is replaced before the
     // conversion. That keeps the gate below comparing what a write would
@@ -3529,7 +4019,7 @@ export class Runner {
     return {
       result,
       fabricResult,
-      changed: !valueEqual(fabricResult, previousResult),
+      changed: !valueEqualByWalk(fabricResult, previousResult),
     };
   }
 
@@ -3663,8 +4153,10 @@ export class Runner {
    * holds, and validates what it staged. A stored slot the new argument
    * schema refuses is left out, so that its default fills it where it has
    * one. Where what is staged still fails the schema as a whole, every stored
-   * slot the caller does not name is left out. Each slot left out is logged
-   * as a warning naming the pattern, the piece, the slot and the mismatch.
+   * slot the caller does not name is left out. The value each slot left out
+   * held is copied into the piece's refused-slot store, and each is logged as
+   * a warning naming the pattern, the piece, the slot, the mismatch and the
+   * store.
    * A slot named in `droppedArgumentFields` is left out from the start and
    * not logged: the caller leaves it out on purpose. Returns the argument
    * staged.
@@ -3761,6 +4253,23 @@ export class Runner {
     const identity = entryRef === undefined
       ? "keyless"
       : `${entryRef.identity}#${entryRef.symbol}`;
+    // The staged argument fills each dropped slot with its default, so the
+    // value the slot held is copied out first, in this same transaction: the
+    // copy commits exactly when the write over it does. The refused-slot
+    // store is minted from the piece's result cell and named as a store the
+    // runtime owns for it, so the fit check declares the confidentiality the
+    // copy carries rather than refusing a labeled value a fresh document does
+    // not declare.
+    const kept = keepRefusedArgumentSlots(
+      this.#runtime,
+      tx,
+      resultCell.getAsNormalizedFullLink(),
+      argumentLink,
+      stored,
+      dropped,
+      identity,
+    );
+    if (kept !== undefined) recordRuntimeOwnedStore(tx, resultCell, kept);
     if (issue !== undefined) {
       this.#validateArgument(
         tx,
@@ -3775,7 +4284,10 @@ export class Runner {
         `${backtickQuote(resultCell.getAsNormalizedFullLink().id)} ` +
         `dropped its stored ${backtickQuote(slot)}, which the pattern's ` +
         `argument schema refuses: ${reason}. The slot takes its default, if ` +
-        "it has one.",
+        "it has one" +
+        (kept === undefined
+          ? "."
+          : `, and the value it held is kept in ${backtickQuote(kept.id)}.`),
       ]);
     }
     return staged;
@@ -3947,6 +4459,16 @@ export class Runner {
               nextArgument,
             );
           }
+          // No caller names a slot, so every slot the document holds is
+          // staged again with the bytes it holds, as a setup replay stages
+          // the slots its caller leaves out. A default the merge adds where
+          // the document holds nothing is no replay, and gets no record.
+          recordReplayedArgumentSlots(
+            tx,
+            argumentLink,
+            undefined,
+            previousArgument,
+          );
 
           // Stage the exact Fabric-layer representation before validating
           // it. The untyped materialization inside resolves ordinary sigil
@@ -4461,12 +4983,58 @@ export class Runner {
    * before instantiation.
    */
   start<T = any>(resultCell: Cell<T>): Promise<boolean> {
+    return this.#joinOrBeginStart(resultCell).settled;
+  }
+
+  /**
+   * Like `start()`, except the returned promise also waits for the commit of
+   * the setup writes of the graph the start installs, through the retries a
+   * recoverable refusal takes, and rejects when that commit failed. `start()`
+   * resolves before the commit settles, and reports its failure only to the
+   * log and to `Runtime.pieceStartCommitFailureObserver`.
+   *
+   * The commit waited for is the one the start this call runs or joins makes,
+   * whichever document a link from `resultCell` leads it to. A failed commit
+   * retires the graph it set up, so a rejection says the piece is not running
+   * here. A piece that was already running installs nothing, and this waits
+   * for nothing then: a graph its pattern watcher swaps in later commits its
+   * setup the way `start()`'s does. On a runtime that seals into a serving
+   * wave, the commit settles with the wave, so an action feeding that wave
+   * cannot wait for it here.
+   *
+   * @throws Error naming the failed piece-start commit, with storage's
+   * verdict, or whatever else cut the commit short, as its `cause`.
+   */
+  async startWithCommit<T = any>(resultCell: Cell<T>): Promise<boolean> {
+    const { attempt, settled } = this.#joinOrBeginStart(resultCell);
+    const started = await settled;
+    const commits = attempt.instantiationCommits ?? [];
+    for (const failure of await Promise.all(commits)) {
+      if (failure === undefined) continue;
+      throw new Error(
+        `piece-start commit ${failure.actionId} failed, so the started ` +
+          "graph's setup writes did not land: " +
+          transactionFailureMessage(failure.error),
+        { cause: failure.error },
+      );
+    }
+    return started;
+  }
+
+  /**
+   * Helper for `start()` and `startWithCommit()`, which returns the current
+   * in-flight start attempt for `resultCell`'s document, or begins one, along
+   * with its outcome.
+   */
+  #joinOrBeginStart<T>(
+    resultCell: Cell<T>,
+  ): { attempt: StartAttempt; settled: Promise<boolean> } {
     const startKey = this.#getDocKey(resultCell);
     const inFlight = this.#inFlightStartsByDoc.get(startKey);
     if (
       inFlight?.settled !== undefined && this.#isStartAttemptCurrent(inFlight)
     ) {
-      return inFlight.settled;
+      return { attempt: inFlight, settled: inFlight.settled };
     }
     const attempt: StartAttempt = {
       lifecycleEpoch: this.#lifecycleEpoch,
@@ -4501,10 +5069,10 @@ export class Runner {
         });
       attempt.settled = settled;
       this.#inFlightStartsByDoc.set(startKey, attempt);
-      return settled;
+      return { attempt, settled };
     } catch (error) {
       this.#finishStartAttempt(attempt);
-      return Promise.reject(error);
+      return { attempt, settled: Promise.reject(error) };
     }
   }
 
@@ -4879,6 +5447,8 @@ export class Runner {
    * @param resultCell - The result cell to start
    * @param options.tx - Transaction to use for initial setup (optional)
    * @param options.givenPattern - Pattern to use instead of looking up by ID
+   * @param options.onInitialCommit - Receives the settlement of the commit the
+   * initial instantiation makes of its own transaction, when it makes one
    * @returns The exact cancel registration installed for this start
    */
   #startCore<T = any>(
@@ -4894,6 +5464,7 @@ export class Runner {
       awaitSyncBeforeInitialRun?: boolean;
       // See RunnerRunOptions.parentPieceRootId.
       parentPieceRootId?: string;
+      onInitialCommit?: (settlement: PieceInstantiationSettlement) => void;
     } = {},
   ): Cancel {
     const {
@@ -4996,19 +5567,26 @@ export class Runner {
     // The cold-start setup repair `instantiateInitialPattern` found owed for
     // the pattern this start began with. It stages into the instantiation's
     // own transaction, so the setup and the graph that reads it land or fail
-    // together, under the one retry and the wave settlement that transaction
+    // together, under the retries and the wave settlement that transaction
     // already has.
     let setupRepair: {
       pattern: Pattern;
       stage: (tx: IExtendedStorageTransaction) => void;
     } | undefined;
+    // The work the pattern watcher has in flight following a move of the
+    // piece's pointer, from seeing the move until it runs the incoming pattern
+    // or keeps the running one. A recovering instantiation waits it out: only
+    // once it settles is it known whether the move installed a graph.
+    const pointerFollows = new Set<Promise<unknown>>();
 
-    // Helper to instantiate nodes for a pattern
+    // Helper to instantiate nodes for a pattern. Returns the settlement of the
+    // transaction it commits itself, and nothing when it stages into `useTx`
+    // or instantiates nothing.
     const instantiatePattern = (
       pattern: Pattern,
       useTx?: IExtendedStorageTransaction,
-      recoverOnce = true,
-    ) => {
+      retry?: InstantiationRetry,
+    ): PieceInstantiationSettlement | undefined => {
       if (!active || startLifecycleEpoch !== this.#lifecycleEpoch) return;
       // Create new cancel group for nodes
       const [nodeCancel, addNodeCancel] = useCancelGroup();
@@ -5077,6 +5655,7 @@ export class Runner {
       schedulerRehydration.implementationSelection = options.variantRegistration
         ?.selection;
       initialSchedulerRehydrationAvailable = false;
+      let commitSettlement: PieceInstantiationSettlement | undefined;
       try {
         if (
           this.#runtime.servingPosture &&
@@ -5174,10 +5753,10 @@ export class Runner {
         if (shouldCommit) {
           this.#runtime.prepareTxForCommit(actualTx);
           // Fire-and-forget by design (start() resolves before the
-          // commit settles), but NEVER swallowed: a refused or failed
-          // instantiation commit means the piece is running against
-          // writes that never landed, so the failure surfaces loudly
-          // and, on a serving runtime, counted.
+          // commit settles, and only `startWithCommit()` waits for it), but
+          // NEVER swallowed: a refused or failed instantiation commit means
+          // the piece is running against writes that never landed, so the
+          // failure surfaces loudly and, on a serving runtime, counted.
           const instantiateActionId = startActionId;
           const patternKeyAtInstantiation = currentPatternKey;
           const teardownRegistrationIfCurrent = () => {
@@ -5190,19 +5769,30 @@ export class Runner {
             active && startLifecycleEpoch === this.#lifecycleEpoch &&
             registrations.get(key) === cancel && cancelNodes === nodeCancel &&
             currentPatternKey === patternKeyAtInstantiation;
-          // `refusal` is how the commit was lost: its basis to the serving
-          // side, a policy manifest install to another participant, or
-          // neither, which is terminal. One retry is enough for a lost
-          // install: a manifest never changes once present, so once the
-          // catch-up has loaded it the install reads it as present and writes
-          // nothing, and the same refusal cannot recur. A named piece's run
-          // start takes up to `PIECE_RUN_START_MAX_RETRIES` instead, because
-          // its refusal may also name the piece's own documents, whose basis
-          // other writers can keep moving.
-          const recoverInstantiationOnce = async (
+          // `refusal` is how the commit was lost: its basis to a concurrent
+          // write, its whole contribution to the serving wave, a policy
+          // manifest install to another participant, an absence claim over
+          // the documents `absent` names that the store holds, or none of
+          // these, which is terminal. A dropped contribution takes one retry
+          // against the view the drop rolled back to. One retry is enough
+          // for a lost install: a manifest never changes once present, so
+          // once the catch-up has loaded it the install reads it as present
+          // and writes nothing, and the same refusal cannot recur. A lost
+          // basis can take a round per concurrent write that lands while the
+          // retry is in flight, since each round reads only what its own
+          // catch-up brought in. An absence claim can take a round per layer
+          // of documents: the retry reads each named document at the
+          // revision the catch-up loaded, and may follow a link in one to a
+          // document not yet loaded, so each such round has to name a
+          // document no earlier round loaded. The rounds of both kinds come
+          // from one budget, `PIECE_RUN_START_MAX_RETRIES`, the bound
+          // `Runtime.editWithRetry()` and a named piece's run start also put
+          // on a basis that keeps moving.
+          const recoverInstantiation = async (
             error: unknown,
-            refusal: "basis" | "manifest" | "terminal",
-          ) => {
+            refusal: "absence" | "basis" | "dropped" | "manifest" | "terminal",
+            absent: readonly string[] = [],
+          ): PieceInstantiationSettlement => {
             if (!exactNodesAreCurrent()) {
               // A stop, a runtime cycle, or a newer instantiation retired
               // these nodes while the commit was in flight. Whoever holds
@@ -5214,13 +5804,24 @@ export class Runner {
               ]);
               return;
             }
-            if (!recoverOnce || refusal === "terminal") {
-              // Either the one retry lost the same way, or this failure was
-              // never the recoverable class. The graph's setup does not
-              // become durable and the load has genuinely failed.
-              this.#reportPieceStartCommitFailure(instantiateActionId, error);
+            const recoverable = refusal !== "terminal" &&
+              (retry === undefined ||
+                (refusal === "basis" && retry.roundsLeft > 0) ||
+                (refusal === "absence" && retry.roundsLeft > 0 &&
+                  absent.some((key) => !retry.loaded.has(key))));
+            if (!recoverable) {
+              // Either this failure was never the recoverable class, or an
+              // earlier recovery leaves it none: the one retry of a manifest
+              // or of a dropped contribution lost the same way, or a round
+              // over documents claimed absent reached none not yet loaded, or
+              // the rounds are spent. The graph's setup does not become
+              // durable and the load has genuinely failed.
+              const failure = this.#reportPieceStartCommitFailure(
+                instantiateActionId,
+                error,
+              );
               teardownRegistrationIfCurrent();
-              return;
+              return failure;
             }
 
             // Recoverable, and about to be recovered: the setup writes have
@@ -5233,7 +5834,13 @@ export class Runner {
                 ? "was refused over a policy manifest another participant " +
                   "installed; loading the manifest, and instantiating once " +
                   "more if it loads"
-                : "lost its basis to the serving side; re-instantiating once " +
+                : refusal === "absence"
+                ? "claimed documents absent that the store holds; loading " +
+                  "them, and instantiating once more if they load"
+                : refusal === "dropped"
+                ? "had its contribution dropped from the serving wave; " +
+                  "re-instantiating once from the rolled-back view"
+                : "lost its basis to a concurrent write; re-instantiating " +
                   "from the caught-up view"),
               error,
             ]);
@@ -5251,77 +5858,144 @@ export class Runner {
               retryReadinessTeardown.signal,
             );
 
-            // A stop aborts the readiness/pull work above; a runtime cycle,
-            // pointer change, or newer instantiation during the wait owns the
-            // key now. Otherwise retry exactly once; a second recoverable
-            // failure tears the registration down instead of spinning.
-            if (
-              retryReadinessTeardown.signal.aborted || !active ||
-              startLifecycleEpoch !== this.#lifecycleEpoch ||
-              registrations.get(key) !== cancel ||
-              currentPatternKey !== patternKeyAtInstantiation ||
-              cancelNodes !== undefined
-            ) {
+            // A pointer that moved during the wait has a follow in flight,
+            // which either runs the incoming pattern or keeps the running
+            // one. The retry waits for it: a retry staged first would
+            // re-stage the running pattern's setup repair over a pointer
+            // that names another pattern, which the repair refuses, and its
+            // failure would tear down the piece the follow is about to run.
+            if (pointerFollows.size > 0) {
+              const tornDown = new Promise<void>((resolve) =>
+                retryReadinessTeardown.signal.addEventListener(
+                  "abort",
+                  () => resolve(),
+                  { once: true },
+                )
+              );
+              while (
+                pointerFollows.size > 0 &&
+                !retryReadinessTeardown.signal.aborted
+              ) {
+                await Promise.race([
+                  Promise.allSettled([...pointerFollows]),
+                  tornDown,
+                ]);
+              }
+            }
+
+            // A stop aborts the waits above; a runtime cycle, a newer
+            // registration, or a newer instantiation, the incoming pattern's
+            // among them, owns the key now. A follow that kept the running
+            // pattern installed no graph for it, so the retry below is what
+            // gives that pattern a graph to keep. Otherwise retry, handing
+            // the retry what it may still recover, so that a failure it may
+            // not tears the registration down instead of spinning.
+            const supersededBy = retryReadinessTeardown.signal.aborted ||
+                !active
+              ? "a stop"
+              : startLifecycleEpoch !== this.#lifecycleEpoch
+              ? "a runtime cycle"
+              : registrations.get(key) !== cancel
+              ? "a newer registration"
+              : cancelNodes !== undefined
+              ? "a newer instantiation"
+              : undefined;
+            if (supersededBy !== undefined) {
+              logger.warn("piece-start-commit-superseded", () => [
+                `piece-start commit ${instantiateActionId} was not retried: ` +
+                `${supersededBy} took the piece over during its catch-up`,
+              ]);
               return;
             }
-            // A retry reads the manifest the catch-up loaded. One that could
-            // not be loaded would read as absent and be installed again, so
+            // A retry reads the documents the catch-up loaded. One that could
+            // not be loaded would read as absent again, a manifest to be
+            // installed again or a document to be claimed absent again, so
             // the start fails here, with the reason the load gave.
-            if (refusal === "manifest" && unloaded.length > 0) {
-              this.#reportPieceStartCommitFailure(
+            if (
+              (refusal === "manifest" || refusal === "absence") &&
+              unloaded.length > 0
+            ) {
+              const failure = this.#reportPieceStartCommitFailure(
                 instantiateActionId,
-                new Error(
-                  `piece-start commit ${instantiateActionId} lost a policy ` +
-                    "manifest install, and its catch-up could not load " +
-                    unloaded.map(({ id }) => id).join(", "),
-                  {
-                    cause: unloaded.length === 1
-                      ? unloaded[0].error
-                      : new AggregateError(
-                        unloaded.map(({ error }) => error),
-                      ),
-                  },
+                catchUpLoadFailure(
+                  `piece-start commit ${instantiateActionId} ` +
+                    (refusal === "manifest"
+                      ? "lost a policy manifest install"
+                      : "claimed documents absent that the store holds"),
+                  unloaded,
                 ),
               );
               teardownRegistrationIfCurrent();
-              return;
+              return failure;
             }
             try {
-              instantiatePattern(pattern, undefined, false);
+              return await instantiatePattern(
+                pattern,
+                undefined,
+                refusal === "manifest" || refusal === "dropped"
+                  ? { roundsLeft: 0, loaded: new Set() }
+                  : {
+                    roundsLeft: (retry?.roundsLeft ??
+                      PIECE_RUN_START_MAX_RETRIES) - 1,
+                    loaded: new Set([...(retry?.loaded ?? []), ...absent]),
+                  },
+              );
             } catch (retryError) {
-              this.#reportPieceStartCommitFailure(
+              const failure = this.#reportPieceStartCommitFailure(
                 instantiateActionId,
                 retryError,
               );
               teardownRegistrationIfCurrent();
+              return failure;
             }
           };
+          // The settlement of a commit whose setup writes landed. A retry
+          // says so at the level `piece-start-commit-recovering` is logged
+          // at, so that each recovery's log says how it ended.
+          const reportRecovered = (): undefined => {
+            if (retry === undefined) return;
+            logger.warn("piece-start-commit-recovered", () => [
+              `piece-start commit ${instantiateActionId} landed on its retry`,
+            ]);
+          };
           const commitWork = actualTx.commit().settled.then(
-            async ({ error }) => {
+            async ({ error }): PieceInstantiationSettlement => {
               if (error !== undefined) {
                 // A lost manifest install recovers in every posture, for the
                 // reason `refusalNamesOnlyPolicyManifests` gives.
                 if (refusalNamesOnlyPolicyManifests(error)) {
-                  await recoverInstantiationOnce(error, "manifest");
-                  return;
+                  return await recoverInstantiation(error, "manifest");
                 }
-                // A stale read recovers only where a serving side supplies the
-                // view the retry reads.
+                // So does a claim of absence over documents the store holds,
+                // for the reason `refusalClaimsOnlyAbsence` gives.
+                if (refusalClaimsOnlyAbsence(error)) {
+                  return await recoverInstantiation(
+                    error,
+                    "absence",
+                    conflictKeys(error),
+                  );
+                }
+                // So does any other stale read, refused by the server or by
+                // this replica's own consistency check: the retry reads the
+                // replica once the refusal's catch-up has brought the
+                // conflicting documents into it, whichever side wrote them.
                 if (
-                  this.#runtime.experimental.serverExecution === true &&
-                  isStaleReadConflict(error)
+                  isStaleReadConflict(error) ||
+                  isStorageTransactionInconsistent(error)
                 ) {
-                  await recoverInstantiationOnce(error, "basis");
-                  return;
+                  return await recoverInstantiation(error, "basis");
                 }
-                this.#reportPieceStartCommitFailure(instantiateActionId, error);
+                const failure = this.#reportPieceStartCommitFailure(
+                  instantiateActionId,
+                  error,
+                );
                 if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
-                return;
+                return failure;
               }
               const settlement = waveSettlementOf(actualTx);
-              if (settlement === undefined) return;
+              if (settlement === undefined) return reportRecovered();
               const settled = await settlement;
-              if (settled.error === undefined) return;
+              if (settled.error === undefined) return reportRecovered();
 
               const waveWithdrawalCause = settled.error.waveWithdrawalCause;
               if (waveWithdrawalCause === "wave-abandoned") {
@@ -5342,29 +6016,52 @@ export class Runner {
               // contribution stands, so there is no rolled-back view to
               // re-instantiate against, and it takes the same terminal arm a
               // second failure takes.
-              await recoverInstantiationOnce(
+              return await recoverInstantiation(
                 settled.error,
                 waveWithdrawalCause === "contribution-dropped"
-                  ? "basis"
+                  ? "dropped"
                   : "terminal",
               );
             },
           ).catch((error) => {
-            this.#reportPieceStartCommitFailure(instantiateActionId, error);
+            const failure = this.#reportPieceStartCommitFailure(
+              instantiateActionId,
+              error,
+            );
             if (exactNodesAreCurrent()) teardownRegistrationIfCurrent();
+            return failure;
           });
           this.#pendingPieceInstantiationSettlements.add(commitWork);
           commitWork.finally(() =>
             this.#pendingPieceInstantiationSettlements.delete(commitWork)
           );
+          commitSettlement = commitWork;
         }
       }
+      return commitSettlement;
     };
 
     // Helper to set up the pattern watcher. Sinks on the `patternIdentity` meta
     // (the only pattern pointer); a keyless pattern writes none, so its watcher
     // is inert by design (keyless patterns change only via a fresh run()).
     const setupPatternWatcher = () => {
+      const { promise: cancelled, resolve: markCancelled } = Promise
+        .withResolvers<void>();
+      const follows: WatcherFollows = {
+        pending: new Set(),
+        cancelled,
+        isCancelled: false,
+      };
+      addCancel(() => {
+        follows.isCancelled = true;
+        markCancelled();
+      });
+      /** Records `work` among the follows a recovering instantiation waits out. */
+      const followingPointer = (work: Promise<unknown>): void => {
+        pointerFollows.add(work);
+        const settle = () => pointerFollows.delete(work);
+        work.then(settle, settle);
+      };
       // A hot-swap targets a DIFFERENT program over this piece's existing doc:
       // the incoming pattern's internal cells and its argument-schema
       // defaults have never been materialized here. A fresh start() does
@@ -5430,46 +6127,16 @@ export class Runner {
           }
           this.#evictResultPatternMemos(`${pieceLink.space}/${pieceLink.id}`);
         };
-        if (!this.#runtime.sealDestinationInstalled) {
-          // The OFF arm (and ON-arm client speculation): setup commits to
-          // the store and the swap proceeds synchronously.
-          try {
-            this.#applySetupState(
-              setupTx,
-              pattern,
-              newRef,
-              {
-                sameStoredSetup: false,
-                restageStoredArgument: true,
-                storedSetupMatches: false,
-              },
-              undefined,
-              resultCell,
-            );
-            this.#runtime.prepareTxForCommit(setupTx);
-            setupTx.commit();
-          } catch (error) {
-            logger.error(
-              "pattern-swap-setup-error",
-              `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} failed`,
-              error,
-            );
-            keepRunningPattern();
-            return;
-          }
-          finishSwap();
-          return;
-        }
-        // ON-arm serving: the setup seals into the wave, and the wave
-        // can still WITHDRAW it at the commit step (a conflict drop, a
-        // lease-lost abort) after `commit().settled` resolved — so the running
-        // graph is replaced only once the setup is DURABLY accepted
-        // (waveSettlementOf). On withdrawal the OLD graph stays: v2
-        // running against withdrawn setup would read internal cells that
-        // setup never materialized, while old-graph-plus-new-pointer is a
-        // coherent not-yet-swapped state a later pointer write (or
-        // reactivation) repairs.
-        void (async () => {
+        // The running graph is replaced only once the setup it reads is
+        // accepted. A commit can be refused, and a serving wave can still
+        // WITHDRAW one at the commit step (a conflict drop, a lease-lost
+        // abort) after `commit().settled` resolved (waveSettlementOf). Either
+        // way the OLD graph stays: v2 running against setup that never landed
+        // would read internal cells nothing materialized, while
+        // old-graph-plus-new-pointer is a coherent not-yet-swapped state a
+        // later pointer write (or reactivation) repairs. Events for the piece
+        // wait for the outcome (`pendingPatternChangeFor`).
+        const setupWork = (async () => {
           try {
             this.#applySetupState(
               setupTx,
@@ -5488,7 +6155,7 @@ export class Runner {
             if (committed.error !== undefined) {
               logger.error(
                 "pattern-swap-setup-error",
-                `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} was refused at the seal`,
+                `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} was refused at commit`,
                 committed.error,
               );
               keepRunningPattern();
@@ -5524,7 +6191,26 @@ export class Runner {
           if (!active || startLifecycleEpoch !== this.#lifecycleEpoch) return;
           if (currentPatternKey !== patternIdentityKey(newRef)) return;
           finishSwap();
-        })();
+        })().catch((error) => {
+          logger.error(
+            "pattern-swap-setup-error",
+            `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} failed`,
+            error,
+          );
+        });
+        // A serving runtime's setup waits for its wave, which settles after
+        // the cycle that sealed into it ends, so a caller in that cycle could
+        // not wait for it (`patternPointerFollowed()`), and an event held on it
+        // would hold the wave (`pendingPatternChangeFor()`).
+        followingPointer(setupWork);
+        if (this.#runtime.sealDestinationInstalled) {
+          this.#pendingWatcherPatternLoads.add(setupWork);
+          setupWork.finally(() =>
+            this.#pendingWatcherPatternLoads.delete(setupWork)
+          );
+        } else {
+          this.#trackWatcherPatternLoad(pieceKey, follows, setupWork);
+        }
       };
       // The session-swap half of the watcher (see `#sessionPatternSwaps`):
       // exactly the sinkMeta arm's semantics, driven directly with a live
@@ -5606,8 +6292,8 @@ export class Runner {
                 err,
               );
             });
-          this.#pendingWatcherPatternLoads.add(named);
-          named.finally(() => this.#pendingWatcherPatternLoads.delete(named));
+          followingPointer(named);
+          this.#trackWatcherPatternLoad(pieceKey, follows, named);
           return;
         }
         // Async load for a pattern change after initial start. Errors are
@@ -5692,13 +6378,51 @@ export class Runner {
                   "pointer as written",
                 ]);
               }
+              // A piece whose history records an update from `running` to
+              // the pointer is stopped here instead of rolled back. The
+              // check runs twice: before the rollback opens a transaction,
+              // and again through that transaction, so an update recorded
+              // between the two is honored too.
+              const standDown = (
+                running: { identity: string; symbol: string },
+              ) => {
+                logger.warn("pattern-pointer-ahead-of-runtime", () => [
+                  `durable patternIdentity ${newRef.identity}#${newRef.symbol}`,
+                  "is a recorded update from the running pattern",
+                  `${running.identity}#${running.symbol}, and this runtime`,
+                  "cannot load it; stopping the piece here rather than",
+                  "rolling the update back",
+                ]);
+                this.stop(resultCell);
+              };
+              if (
+                this.#runtime.cfcEnforcementMode !== "disabled" &&
+                revertTarget !== undefined &&
+                patternIdentityKey(revertTarget) !== newKey &&
+                pieceSourceMovedPast(resultCell, revertTarget, newRef)
+              ) {
+                // The piece's own history records a move from the pattern
+                // running here to the one this runtime cannot load: a newer
+                // runtime adopted a release this one cannot compile. The
+                // pointer is ahead of this runtime, not dead. Writing the
+                // running identity back would undo the adoption, and every
+                // start of the newer runtime would adopt again. Stopping the
+                // piece here writes nothing, leaves the adoption standing for
+                // every runtime that can load it, and keeps this runtime from
+                // writing the piece's documents under a version they have
+                // moved past.
+                standDown(revertTarget);
+                return;
+              }
               if (
                 this.#runtime.cfcEnforcementMode !== "disabled" &&
                 revertTarget !== undefined &&
                 patternIdentityKey(revertTarget) !== newKey
               ) {
                 const revertRef = revertTarget;
+                let recordedUpdateAtCommit = false;
                 const rollForward = this.#runtime.editWithRetry((tx) => {
+                  recordedUpdateAtCommit = false;
                   // Async pointer repair from the meta watcher's load
                   // promise — no scheduler run stamps it; bookkeeping
                   // per serving-loop.md §3d.
@@ -5715,12 +6439,31 @@ export class Runner {
                   if (!cur || patternIdentityKey(cur) !== newKey) {
                     return false;
                   }
+                  if (
+                    pieceSourceMovedPast(
+                      resultCell.withTx(tx),
+                      revertRef,
+                      newRef,
+                    )
+                  ) {
+                    recordedUpdateAtCommit = true;
+                    return false;
+                  }
                   resultCell.withTx(tx).setMetaRaw("patternIdentity", {
                     identity: revertRef.identity,
                     symbol: revertRef.symbol,
                   }, rawMetaWriteAuthorization);
                   return true;
                 }).then((result) => {
+                  if (recordedUpdateAtCommit) {
+                    if (
+                      active && startLifecycleEpoch === this.#lifecycleEpoch &&
+                      currentPatternKey === newKey
+                    ) {
+                      standDown(revertRef);
+                    }
+                    return;
+                  }
                   // Only reclaim the observed key while it is STILL the
                   // failed one — a valid repoint that raced this rollback
                   // has already advanced the watcher state, and clobbering
@@ -5795,10 +6538,8 @@ export class Runner {
               err,
             );
           });
-        this.#pendingWatcherPatternLoads.add(watcherLoad);
-        watcherLoad.finally(() =>
-          this.#pendingWatcherPatternLoads.delete(watcherLoad)
-        );
+        followingPointer(watcherLoad);
+        this.#trackWatcherPatternLoad(pieceKey, follows, watcherLoad);
       };
       addCancel(
         resultCell.sinkMeta("patternIdentity", (newValue) => {
@@ -5828,10 +6569,8 @@ export class Runner {
             }
             followPointer(newRef, newKey);
           });
-          this.#pendingWatcherPatternLoads.add(followed);
-          followed.finally(() =>
-            this.#pendingWatcherPatternLoads.delete(followed)
-          );
+          followingPointer(followed);
+          this.#trackWatcherPatternLoad(pieceKey, follows, followed);
         }),
       );
     };
@@ -5946,7 +6685,8 @@ export class Runner {
           },
         };
       }
-      instantiatePattern(pattern, useTx);
+      const settlement = instantiatePattern(pattern, useTx);
+      if (settlement !== undefined) options.onInitialCommit?.(settlement);
     };
 
     const resultCellForRead = tx ? resultCell.withTx(tx) : resultCell;
@@ -6128,7 +6868,7 @@ export class Runner {
         try {
           this.#instantiateNode(
             tx,
-            { ...node, module },
+            node,
             resultCell.withTx(tx),
             addAttemptCancel,
             pattern,
@@ -6217,7 +6957,12 @@ export class Runner {
       const rootSyncStart = performance.now();
       return rootCell.sync().then(() => {
         if (!this.#isStartAttemptCurrent(attempt)) return false;
-        logger.time(rootSyncStart, "start", "rootCellSync");
+        logger.timeDetailed(
+          () => rootCell.getAsNormalizedFullLink().id,
+          rootSyncStart,
+          "start",
+          "rootCellSync",
+        );
         if (rootCell.getRaw() === undefined) {
           return Promise.reject(new Error("No data at cell"));
         } else {
@@ -6373,7 +7118,12 @@ export class Runner {
           if (!this.#isStartAttemptCurrent(attempt)) return false;
           // Resume-boot decomposition: source-doc fetch + module load/eval for
           // a pattern this runtime has never instantiated.
-          logger.time(loadStart, "start", "loadPatternByIdentity");
+          logger.timeDetailed(
+            () => `${identityRef.identity}#${identityRef.symbol}`,
+            loadStart,
+            "start",
+            "loadPatternByIdentity",
+          );
           if (loaded) {
             return this.#doStart(rootCell, seenCells, attempt);
           } else {
@@ -6387,6 +7137,12 @@ export class Runner {
     }
 
     const resolvedPattern = this.#resolveToPattern(pattern);
+    // Holds the list rather than the attempt, which the registration's
+    // closures would otherwise keep for as long as the piece runs.
+    const instantiationCommits = attempt.instantiationCommits ??= [];
+    const recordInitialCommit = (settlement: PieceInstantiationSettlement) => {
+      instantiationCommits.push(settlement);
+    };
 
     // Fast path for pieces prepared in the current runtime via setup()/run() or
     // explicitly restarted after stop(). Those writes are already present
@@ -6408,6 +7164,7 @@ export class Runner {
         attempt.installedRegistration = this.#startCore(rootCell, {
           ...attempt.options,
           givenPattern: resolvedPattern,
+          onInitialCommit: recordInitialCommit,
         });
       } catch (err) {
         return Promise.reject(err);
@@ -6463,6 +7220,7 @@ export class Runner {
         attempt.installedRegistration = this.#startCore(rootCell, {
           ...attempt.options,
           givenPattern: resolvedPattern,
+          onInitialCommit: recordInitialCommit,
           schedulerRehydration: this.#schedulerRehydrationOptions(
             rootCell,
             // Resumed from a synced state (it just awaited
@@ -6477,7 +7235,12 @@ export class Runner {
       } finally {
         // Synchronous instantiation cost of the resumed piece (pattern
         // setup, node wiring), distinct from the syncs around it.
-        logger.time(startCoreStart, "start", "startCoreResume");
+        logger.timeDetailed(
+          () => rootCell.getAsNormalizedFullLink().id,
+          startCoreStart,
+          "start",
+          "startCoreResume",
+        );
       }
 
       return true;
@@ -6656,7 +7419,7 @@ export class Runner {
       // rule governs internal writes at the wave seal destination, which this
       // client-side start tx never reaches. The serving side and the OFF arm
       // keep bookkeeping.
-      this.#runtime.stampServerRun(startTx, {
+      stampDeferredStart(this.#runtime, tx, startTx, {
         actionId: `piece-start/${resultLink.id}`,
         ...(speculativeConsequence !== undefined
           ? {
@@ -6665,7 +7428,6 @@ export class Runner {
           }
           : { kind: "bookkeeping" as const }),
       });
-      carryDeferredStartTrust(tx, startTx);
       // A deferred start minted from an EVENT-HANDLER run carries that run's
       // event context across to the start tx, so a navigateTo instantiated
       // under it can address the firing session (builtins.md §4;
@@ -6758,20 +7520,13 @@ export class Runner {
 
   /**
    * Load one family document under the identity captured before awaiting.
-   * A cell declared a stream is loaded whole: its document holds no value
-   * a read uses, so a selector carrying the event schema would ask the
-   * store to walk a shape that is never there, and the gate's probe of the
-   * document reads its record, which the whole document brings.
+   * A cell declared a stream is loaded whole, as the storage manager loads
+   * every such cell (`StorageManager.syncCell`).
    */
   #syncFamilyCell<T>(
     cell: Cell<T>,
     identity: ScopeKeyIdentity | undefined,
   ): Promise<Cell<T>> {
-    if (ContextualFlowControl.declaresStream(cell.schema)) {
-      return syncCellForIdentity(cell.asSchema(undefined), identity) as Promise<
-        Cell<T>
-      >;
-    }
     return syncCellForIdentity(cell, identity);
   }
 
@@ -6853,26 +7608,28 @@ export class Runner {
 
   /**
    * Whether the document `link` names is on this replica, probed through
-   * `readTx`. A document is here when it holds a value. A stream's document
-   * never holds one, so for a link that declares a stream the record is
-   * probed instead: setup writes the `result` back-link onto it. Any other
+   * `readTx`. A document is here when it holds a value, or with `record`,
+   * when its record is: the `result` back-link setup writes onto it, with or
+   * without a value. A stream's document never holds a value, so for a link
+   * that declares a stream the record is probed either way. Any other
    * document that has its metadata and no value — a computed cell nothing
-   * has computed yet — reads absent.
+   * has computed yet — reads absent unless `record` is set.
    */
   #documentPresent(
     readTx: IExtendedStorageTransaction,
     link: NormalizedFullLink,
+    record = false,
   ): boolean {
     return readTx.readOrThrow(
       {
         space: link.space,
         id: link.id,
-        path: ContextualFlowControl.declaresStream(link.schema)
+        path: record || ContextualFlowControl.declaresStream(link.schema)
           ? []
           : ["value"],
         ...(link.scope !== undefined && { scope: link.scope }),
       },
-      { meta: ignoreReadForScheduling },
+      { meta: PRESENCE_PROBE_READ },
     ) !== undefined;
   }
 
@@ -6927,7 +7684,19 @@ export class Runner {
    * names, when a pre-sync of this runner planned it under this pattern
    * (`#presyncNamedInstances`), the argument's links are not walked: that
    * pre-sync named what the nodes read through them, and a name-sync here
-   * would ask for the same documents again.
+   * would ask for the same documents again. A derived cell such a family
+   * owns is likewise here once its record is, unless a seed is owed to it
+   * (`ownedCellRecordSuffices`): the pre-sync's waves have landed, so a
+   * record holding no value is what the store holds, and a name-sync would
+   * deliver it again. Any other owned cell of such a family that is absent
+   * holds the run only while the replica has not examined the document
+   * (`IStorageProvider.unexaminedAbsences`): the pre-sync asked the store
+   * for every cell the family owns, so an absence it was told of is what
+   * the store holds, and the session's own instance of a session-scoped
+   * cell, which no store holds before the session writes it, the replica
+   * counts as examined without asking. A cell owed a default
+   * (`ownedCellOwesSeed`) holds the run whatever the replica examined: the
+   * hold's preparation is what seeds it.
    */
   #familyAbsent(
     pattern: Pattern,
@@ -6953,13 +7722,13 @@ export class Runner {
     const cell = resultCell.withTx(readTx);
     let probes = this.#namingProbeBudget;
     let budgetSpent = false;
-    const present = (link: NormalizedFullLink): boolean => {
+    const present = (link: NormalizedFullLink, record = false): boolean => {
       if (probes === 0) {
         budgetSpent = true;
         return false;
       }
       probes--;
-      return this.#documentPresent(readTx, link);
+      return this.#documentPresent(readTx, link, record);
     };
     // The hold, with what decided it: a document of `stage` read absent, or
     // the budget ran out on a probe of that stage — the case worth a log,
@@ -6980,7 +7749,9 @@ export class Runner {
       return true;
     };
     if (!present(argumentLink)) return hold("the argument document");
-    if (this.#presyncNamedInstances.get(familyKey) !== entryKey) {
+    const presyncNamed =
+      this.#presyncNamedInstances.get(familyKey) === entryKey;
+    if (!presyncNamed) {
       if (
         this.#argumentLinksAbsent(
           argument,
@@ -6996,21 +7767,77 @@ export class Runner {
     // The owned cells the run reads: the pattern's derived internal cells
     // and, through each nested sub-pattern's result spot, those of the
     // sub-pieces the run instantiates — the same walk the resume pre-sync
-    // syncs by name.
-    const owned: Cell<any>[] = [];
+    // syncs by name. Each is weighed against the instance that owns it,
+    // whose result's scope decides whether a seed is owed to it.
+    const instances: ResumePatternInstance[] = [];
     this.#collectResumeOwnedCells(
       pattern,
       cell,
-      owned,
+      [],
       new Set(),
       readTx,
+      instances,
     );
-    for (const ownedCell of owned) {
-      if (!present(ownedCell.getAsNormalizedFullLink())) {
-        return hold("an owned cell");
+    // The owned cells of a named family read absent are weighed together
+    // once every probe has run: what decides the hold is whether any of
+    // them is an absence the replica has yet to examine, which the probes'
+    // own reads through `readTx` are what the replica answers from.
+    const absent: NormalizedFullLink[] = [];
+    for (const { pattern: owner, resultCell: ownerCell } of instances) {
+      const ownerScope = ownerCell.getAsNormalizedFullLink().scope;
+      for (const descriptor of owner.derivedInternalCells ?? []) {
+        const link = getDerivedInternalCell(ownerCell, descriptor)
+          .getAsNormalizedFullLink();
+        const record = presyncNamed &&
+          ownedCellRecordSuffices(link, ownerScope);
+        if (present(link, record)) continue;
+        if (
+          !presyncNamed || budgetSpent ||
+          ownedCellOwesSeed(link, ownerScope)
+        ) {
+          return hold("an owned cell");
+        }
+        absent.push(link);
       }
     }
-    return false;
+    return absent.length > 0 && this.#absenceUnexamined(readTx, absent)
+      ? hold("an owned cell")
+      : false;
+  }
+
+  /**
+   * Whether any of `links`, documents the probes of a named family's gate
+   * read as absent through `readTx`, is one this replica never examined: no
+   * record of it, under the instance `readTx`'s identity resolves. A
+   * document the pre-sync asked the store for and was told nothing of has
+   * its record, and the session's own instance of a session-scoped document
+   * is counted examined without one, since no store holds it before the
+   * session writes it. A provider that cannot say, or an instance the
+   * identity cannot resolve, leaves the absence unexamined, as holding the
+   * run costs a name-sync and a wrong verdict costs a conflicting commit.
+   */
+  #absenceUnexamined(
+    readTx: IExtendedStorageTransaction,
+    links: readonly NormalizedFullLink[],
+  ): boolean {
+    const identity = readTx.tx.scopeKeyIdentity;
+    if (
+      identity !== undefined &&
+      links.some((link) => !canResolveScopeKey(link.scope, identity))
+    ) {
+      return true;
+    }
+    const unexamined = new Set<string>();
+    for (const space of new Set(links.map((link) => link.space))) {
+      const provider = this.#runtime.storageManager.open(space);
+      if (provider.unexaminedAbsences === undefined) return true;
+      for (const absence of provider.unexaminedAbsences(readTx.tx)) {
+        unexamined.add(`${absence.space}\0${absence.id}\0${absence.scope}`);
+      }
+    }
+    return links.some((link) =>
+      unexamined.has(`${link.space}\0${link.id}\0${link.scope}`)
+    );
   }
 
   /**
@@ -7264,11 +8091,12 @@ export class Runner {
         if (identity !== undefined) startTx.tx.scopeKeyIdentity = identity;
         // A speculative child's continuation keeps its origin across the
         // data load. Authored and served starts use piece bookkeeping.
-        this.#runtime.stampServerRun(
+        stampDeferredStart(
+          this.#runtime,
+          tx,
           startTx,
           speculationContext ?? { actionId, kind: "bookkeeping" },
         );
-        carryDeferredStartTrust(tx, startTx);
         if (navigateContext !== undefined) {
           setNavigateEventContext(startTx, navigateContext);
         }
@@ -7340,14 +8168,14 @@ export class Runner {
             ownership,
             started.installedCancel,
           )
-          : "terminal";
+          : { failure: error };
         if (retry === "retry") {
           retriesLeft--;
           continue;
         }
         if (retry === "settled") return;
         ownership.cancel();
-        this.#reportPieceStartCommitFailure(actionId, error);
+        this.#reportPieceStartCommitFailure(actionId, retry.failure);
         return;
       }
     })();
@@ -7358,10 +8186,13 @@ export class Runner {
   /**
    * Prepares a named piece's run for another attempt after its start
    * transaction was refused over a policy manifest another participant
-   * installed first. Resolves `"retry"` when the caller should run it again,
-   * `"terminal"` when the caller's failure arm should run as it does for any
-   * other refusal, and `"settled"` when the start was stopped or the runtime
-   * torn down during the wait, so there is nothing left to report.
+   * installed first, or over documents it claimed absent that the store
+   * holds. Resolves `"retry"` when the caller should run it again,
+   * `"settled"` when the start was stopped or the runtime torn down during
+   * the wait, so there is nothing left to report, and otherwise the failure
+   * the caller's failure arm reports, as it does for any other refusal: the
+   * refusal itself, or the reason the catch-up could not load a document the
+   * run reads, since a run that reads it as absent again is refused again.
    *
    * The run is this participant's own setup of a piece set up elsewhere, and
    * when its argument carries a PolicyOf label that setup installs the policy
@@ -7371,7 +8202,10 @@ export class Runner {
    * lands the setup, so this is the retry `Runtime.editWithRetry()` gives any
    * other retrying writer: wait for the refusal's catch-up, then prepare the
    * run from the start, where the install reads the manifest as present.
-   * Every other refusal stays terminal, a stale read over the piece's own
+   * A start that read documents its replica had not loaded is refused the
+   * same way ({@link refusalClaimsOnlyAbsence}), and after the catch-up has
+   * loaded them the run from the start reads them as present. Every other
+   * refusal stays terminal, a stale read over a revision of the piece's own
    * documents included: whether a re-commit converges against a serving
    * side's derived writes is a different question, which
    * `#catchUpAndStartOnStaleRead()` answers by committing nothing.
@@ -7389,30 +8223,37 @@ export class Runner {
     scheduledLifecycleEpoch: number,
     ownership: DeferredCancelOwnership,
     installedRegistration: Cancel | undefined,
-  ): Promise<"retry" | "terminal" | "settled"> {
+  ): Promise<"retry" | "settled" | { readonly failure: unknown }> {
     // A stop, a release, or `stopAll()` since the install removed it from
     // the registry, so the registration check also covers a canceled token
     // and a newer lifecycle epoch.
     const key = this.#getDocKey(resultCell);
+    const manifest = refusalNamesPolicyManifest(error);
     if (
-      !refusalNamesPolicyManifest(error) ||
+      (!manifest && !refusalClaimsOnlyAbsence(error)) ||
       installedRegistration === undefined ||
       this.#cancels.get(key) !== installedRegistration
     ) {
-      return "terminal";
+      return { failure: error };
     }
     this.stop(resultCell);
     ownership.markInstalled(undefined);
     this.#registerPendingDeferredStart(key, ownership);
     logger.info(
       "piece-start-commit-retrying",
-      "piece-run start lost a policy manifest install to another " +
-        "participant; running it again once storage has caught up",
+      "piece-run start " +
+        (manifest
+          ? "lost a policy manifest install to another participant"
+          : "claimed documents absent that the store holds") +
+        "; running it again once storage has caught up",
       resultCell.getAsNormalizedFullLink().id,
       error,
     );
     const teardown = this.#runtime.writeTeardownSignal;
-    await this.#runtime.awaitCommitRetryReadiness(error, teardown);
+    const unloaded = await this.#runtime.awaitCommitRetryReadiness(
+      error,
+      teardown,
+    );
     if (
       ownership.isCancelled() || teardown.aborted ||
       scheduledLifecycleEpoch !== this.#lifecycleEpoch
@@ -7420,7 +8261,18 @@ export class Runner {
       ownership.cancel();
       return "settled";
     }
-    if (this.#cancels.has(key)) return "terminal";
+    if (this.#cancels.has(key)) return { failure: error };
+    if (unloaded.length > 0) {
+      return {
+        failure: catchUpLoadFailure(
+          `piece-run start of ${resultCell.getAsNormalizedFullLink().id} ` +
+            (manifest
+              ? "lost a policy manifest install"
+              : "claimed documents absent that the store holds"),
+          unloaded,
+        ),
+      };
+    }
     return "retry";
   }
 
@@ -7463,8 +8315,10 @@ export class Runner {
    * CLIENT raced, and the cross-tab mutex semantics own that story — the OFF
    * arm of a commit-gated start stays terminal. A named piece's run refused
    * over a policy manifest another participant installed first is not that
-   * story either: `#retryPieceRunStart()` runs it again in a fresh
-   * transaction, under either arm, when this recovery declines.
+   * story either, and neither is one whose every conflicting read claimed a
+   * document absent that the store holds: `#retryPieceRunStart()` runs those
+   * again in a fresh transaction, under either arm, when this recovery
+   * declines.
    *
    * WHAT stays terminal. Only the engine's stale-read family recovers —
    * `stale confirmed read` and its `stale pending read` sibling
@@ -7749,7 +8603,7 @@ export class Runner {
       // navigate-deferred start is a speculative handler CONSEQUENCE and
       // diverts to the overlay instead of racing the serving side's receipt
       // create).
-      this.#runtime.stampServerRun(startTx, {
+      stampDeferredStart(this.#runtime, tx, startTx, {
         actionId: `piece-start/${resultLink.id}`,
         ...(speculativeConsequence !== undefined
           ? {
@@ -7758,7 +8612,6 @@ export class Runner {
           }
           : { kind: "bookkeeping" as const }),
       });
-      carryDeferredStartTrust(tx, startTx);
       // Carry the instantiating event-handler run's event context to the start
       // tx (builtins.md §4) — capture point 1, as in startAfterSuccessfulCommit
       // above.
@@ -8158,8 +9011,10 @@ export class Runner {
    *   naming no pattern is not a receipt.
    *
    * @throws PatternSetupPostCommitError when the transaction commits and the
-   * work that refreshes the running piece then fails. Its `.commit` is the
-   * accepted transaction's receipt and its `.cause` the later failure.
+   * work that refreshes the running piece then fails, the commit of the setup
+   * writes of a graph the call starts included (see `startWithCommit()`). Its
+   * `.commit` is the accepted transaction's receipt and its `.cause` the
+   * later failure.
    */
   async runSyncedWithCommit(
     resultCell: Cell<any>,
@@ -8456,7 +9311,10 @@ export class Runner {
           // a stale caller can never instantiate its old candidate while
           // recording a newer identity as current.
           await resultCell.sync();
-          await this.start(resultCell);
+          // A receipt's caller is told whether the piece it started is
+          // running, which takes the start's own commit landing too.
+          if (requireCommit) await this.startWithCommit(resultCell);
+          else await this.start(resultCell);
         }
       }
 
@@ -8541,12 +9399,13 @@ export class Runner {
    * Reports a piece-start setup/instantiation commit failure. Such a commit
    * is fire-and-forget by design but NEVER silent — loud in every arm, and
    * handed to the serving runtime's installed observer (the SpaceServer
-   * counts it into serving-loop.md §7's structureLoadFailures).
+   * counts it into serving-loop.md §7's structureLoadFailures). Returns the
+   * failure it reported, which an instantiation's settlement resolves to.
    */
   #reportPieceStartCommitFailure(
     actionId: string,
     error: unknown,
-  ): void {
+  ): PieceStartCommitFailure {
     logger.error("piece-start-commit-failed", () => [
       `piece-start commit ${actionId} failed; the started graph's setup ` +
       "writes did not land (stage P2-F, F1)",
@@ -8560,6 +9419,7 @@ export class Runner {
         observerError,
       ]);
     }
+    return { actionId, error };
   }
 
   /**
@@ -8741,7 +9601,10 @@ export class Runner {
         undefined,
         cellTx(candidate),
       );
-      return valueEqual(candidateArgument.getRawUntyped(), argumentValue);
+      return valueEqualByWalk(
+        candidateArgument.getRawUntyped(),
+        argumentValue,
+      );
     };
   }
 
@@ -8750,8 +9613,12 @@ export class Runner {
    * links to directly, and the result document of the piece that owns each,
    * reached through the `result` backlink the linked document carries once
    * it is local. Setup's proof that a supplied link stays compatible reads
-   * both, and the gate that decides whether a run over a stored piece must
-   * name its family first probes them. `argumentCell` is local already.
+   * both, a setup re-staging the argument under another pattern's schema
+   * reads each linked document to judge the slot holding the link, and the
+   * gate that decides whether a run over a stored piece must name its family
+   * first probes them. `argumentCell` is local already. The argument and each
+   * linked document are read, and named, as `identity`, so a scoped argument
+   * is read in the instance that identity's setup reads.
    */
   async #syncStoredArgumentLinkTargets(
     argumentCell: Cell<unknown>,
@@ -8775,7 +9642,7 @@ export class Runner {
       seen.add(value);
       for (const key in value) collect(value[key]);
     };
-    collect(argumentCell.getRawUntyped());
+    collect(argumentCell.withTx(this.#familyReadTx(identity)).getRawUntyped());
     const syncNamed = (cells: readonly Cell<unknown>[]): Promise<void> =>
       Promise.all(
         cells.map((cell) =>
@@ -8789,8 +9656,9 @@ export class Runner {
       ).then(() => {});
     await syncNamed(targets);
     const owners: Cell<unknown>[] = [];
+    const ownerTx = this.#familyReadTx(identity);
     for (const target of targets) {
-      const owner = getMetaLink(target, "result");
+      const owner = getMetaLink(target.withTx(ownerTx), "result");
       if (owner !== undefined) {
         owners.push(
           this.#runtime.getCellFromLink({ ...owner, schema: undefined }),
@@ -8959,7 +9827,10 @@ export class Runner {
             !Array.isArray(manifest) ||
             !manifest.some((entry) =>
               isObjectOrArray(entry) && "link" in entry &&
-              valueEqual(fabricFromConvertibleJsValue(entry.link), expectedLink)
+              valueEqualByWalk(
+                fabricFromConvertibleJsValue(entry.link),
+                expectedLink,
+              )
             )
           ) {
             defaultsPrepared = false;
@@ -9036,7 +9907,12 @@ export class Runner {
         // the runner timing stats (they record even when the logger is
         // disabled) so load summaries can attribute slow storage-resume
         // boots.
-        logger.time(syncStart, "start", "syncCellsForRunningPattern");
+        logger.timeDetailed(
+          () => resultCell.getAsNormalizedFullLink().id,
+          syncStart,
+          "start",
+          "syncCellsForRunningPattern",
+        );
       }
     };
     const syncer = this.#dependencySyncer;
@@ -9065,7 +9941,7 @@ export class Runner {
 
     // The nodes bind against the piece's argument document once setup has
     // written it. Before that, on a fresh run, they bind against an
-    // immutable stand-in holding the caller's argument: a data-URI document,
+    // immutable stand-in holding the caller's argument: a native snapshot document,
     // local by construction, whose links are the caller's, so a plan bound
     // against it names the same stored documents the run will read through
     // them. Planning resolves each node's output redirect chain, which reads
@@ -9180,7 +10056,12 @@ export class Runner {
     await this.#kickResumeWave(cells, (c) => {
       const cellSyncStart = performance.now();
       const synced = this.#syncFamilyCell(c, identity).finally(() =>
-        logger.time(cellSyncStart, "start", "resumeCellSync")
+        logger.timeDetailed(
+          () => c.getAsNormalizedFullLink().id,
+          cellSyncStart,
+          "start",
+          "resumeCellSync",
+        )
       );
       // A start that writes nothing carrying the policy needs no manifest,
       // and one that does reads it as absent and fails its commit loudly, so
@@ -9262,14 +10143,7 @@ export class Runner {
     for (const node of pattern.nodes) {
       let plan: NodePlan | undefined;
       try {
-        plan = this.#nodePlan(
-          tx,
-          node,
-          resultCell,
-          pattern,
-          undefined,
-          argumentLink,
-        );
+        plan = this.#nodePlan(tx, node, resultCell, pattern, argumentLink);
       } catch (error) {
         logger.warn("resume-pre-sync", () => [
           "skipping a node whose bindings did not unwrap",
@@ -9286,8 +10160,9 @@ export class Runner {
         "node",
       );
       // Each node's plan, synced under the schema its run reads through. The
-      // inputs document is a data URI, so syncing it under a schema hands the
-      // server one selector per binding link, and the server's query walk
+      // inputs document may be stored or an immutable stand-in. Syncing it
+      // under the schema hands the server one selector per binding link,
+      // and the server's query walk
       // follows links from there the way a read does: as deep as the
       // declaration goes, through `asCell` positions, stopping at an opaque
       // one. What arrives is what the node's first run reads.
@@ -9457,6 +10332,13 @@ export class Runner {
    * builtin's own cells, written by an earlier session whose setup of the
    * instance was lost — is local before the parent's start reads it rather
    * than entering that start's commit at sequence zero.
+   *
+   * An instance stored under a pattern other than the one it is planned under
+   * is set up again by its parent's start, and that setup judges every slot
+   * its stored argument holds against the new argument schema — slots no
+   * plan reads among them, such as one a previous version took and this one
+   * does not — through the links those slots hold. Each such instance's
+   * argument links are named the way the root's are, for the same reason.
    */
   async #syncResumeInstanceNodes(
     instances: readonly ResumePatternInstance[],
@@ -9479,6 +10361,9 @@ export class Runner {
       // not plan, or a round with a sync that failed, is not recorded: its
       // own start then walks its argument as before.
       const planned: [familyKey: string, entryKey: string][] = [];
+      // The argument documents of the instances this round finds stored under
+      // another pattern.
+      const restaged: Cell<unknown>[] = [];
       let syncFailed = false;
       const planTx = this.#runtime.edit();
       if (identity !== undefined) planTx.tx.scopeKeyIdentity = identity;
@@ -9514,17 +10399,26 @@ export class Runner {
             );
           }
           if (argumentMetaLink !== undefined) {
-            cells.push(
-              this.#runtime.getCellFromLink({
-                ...argumentMetaLink,
-                schema: undefined,
-              }),
-            );
+            const argumentCell = this.#runtime.getCellFromLink({
+              ...argumentMetaLink,
+              schema: undefined,
+            });
+            cells.push(argumentCell);
+            const entryRef = this.#entryRefForPattern(pattern);
             if (nodes.skipped === 0) {
               planned.push([
                 this.#getFamilyKey(resultCell, identity),
-                patternIdentityKey(this.#entryRefForPattern(pattern)),
+                patternIdentityKey(entryRef),
               ]);
+            }
+            if (
+              storedUnderAnotherPattern(
+                resultCell,
+                entryRef,
+                this.#sessionPatternPointer(resultCell),
+              )
+            ) {
+              restaged.push(argumentCell);
             }
           }
         }
@@ -9546,6 +10440,21 @@ export class Runner {
       );
       logger.time(waveStart, "start", "resumeInstanceNodeSyncWave");
       await this.#syncCrossSpaceReads(plans, identity);
+      // The argument documents arrived with the wave above, so what they link
+      // to can be named now.
+      if (restaged.length > 0) {
+        const argumentLinksStart = performance.now();
+        await Promise.all(
+          restaged.map((argumentCell) =>
+            this.#syncStoredArgumentLinkTargets(argumentCell, identity)
+          ),
+        );
+        logger.time(
+          argumentLinksStart,
+          "start",
+          "resumeInstanceArgumentLinksSync",
+        );
+      }
       if (!syncFailed) {
         for (const [familyKey, entryKey] of planned) {
           this.#presyncNamedInstances.set(familyKey, entryKey);
@@ -9693,8 +10602,7 @@ export class Runner {
               const { inputsCell } = this.#buildRawNodeInputs(
                 planTx,
                 resolved,
-                node.inputs,
-                node.outputs,
+                node,
                 resultCell,
                 pattern,
                 op,
@@ -9845,8 +10753,7 @@ export class Runner {
               const { inputsCell, outputBinding } = this.#buildRawNodeInputs(
                 planTx,
                 resolved,
-                node.inputs,
-                node.outputs,
+                node,
                 resultCell,
                 pattern,
                 op,
@@ -10005,14 +10912,7 @@ export class Runner {
       // setup mints rather than the unresolved head.
       let plan: NodePlan | undefined;
       try {
-        plan = this.#nodePlan(
-          tx,
-          node,
-          resultCell,
-          pattern,
-          undefined,
-          argumentLink,
-        );
+        plan = this.#nodePlan(tx, node, resultCell, pattern, argumentLink);
       } catch (error) {
         // A node whose outputs cannot be bound (e.g. they alias the argument
         // doc while the argument link is unavailable) or resolved contributes
@@ -10088,6 +10988,47 @@ export class Runner {
   }
 
   /**
+   * The change of pattern that a piece among `pieces`, or a piece that
+   * instantiated one of them, is making on this runtime, or `undefined` when
+   * none is: the follow its pattern watcher has in flight from seeing the
+   * pointer move until the piece runs the incoming pattern, or keeps the one
+   * it runs because that pattern's setup did not land. Until it settles, the
+   * handlers registered for those pieces may be about to be replaced, so the
+   * scheduler holds an event for them on it. A serving runtime reports none:
+   * its swap waits for the wave its setup seals into, and a wave commits only
+   * once the scheduler is idle.
+   *
+   * @param pieces - The result cells of the pieces a handler belongs to.
+   */
+  pendingPatternChangeFor(
+    pieces: readonly NormalizedFullLink[],
+  ): Promise<void> | undefined {
+    if (
+      this.#watcherFollowsByPiece.size === 0 ||
+      this.#runtime.sealDestinationInstalled
+    ) {
+      return undefined;
+    }
+    const keys = new Set<string>();
+    for (const piece of pieces) {
+      const scopeKey = resolveScopeKey(
+        piece.scope,
+        this.#runtime.scopeKeyIdentity,
+      );
+      for (const id of this.#demandRootChains.get(piece.id) ?? [piece.id]) {
+        const key = `${piece.space}/${scopeKey}/${id}`;
+        // A cancelled registration's follows run on to no effect.
+        if (this.#watcherFollowsByPiece.get(key)?.isCancelled === false) {
+          keys.add(key);
+        }
+      }
+    }
+    if (keys.size === 0) return undefined;
+    return Promise.all([...keys].map((key) => this.#watcherFollowsSettled(key)))
+      .then(() => {});
+  }
+
+  /**
    * Whether a graph is registered for `resultCell`'s document: the piece is
    * running, and a start would return on its fast path without touching the
    * stored doc. A subpath cell stands for its root document.
@@ -10126,6 +11067,7 @@ export class Runner {
       }
     }
     this.#stopResult(resultCell);
+    void this.#runtime.releaseUnreadDocuments();
   }
 
   #stopResult<T>(resultCell: Cell<T>): void {
@@ -10242,6 +11184,31 @@ export class Runner {
   }
 
   /**
+   * Helper for the pattern watcher, which records `load` as in flight until
+   * it settles, for the watcher registration `follows` of the piece
+   * `pieceKey` names.
+   */
+  #trackWatcherPatternLoad(
+    pieceKey: string,
+    follows: WatcherFollows,
+    load: Promise<unknown>,
+  ): void {
+    this.#pendingWatcherPatternLoads.add(load);
+    follows.pending.add(load);
+    this.#watcherFollowsByPiece.set(pieceKey, follows);
+    load.finally(() => {
+      this.#pendingWatcherPatternLoads.delete(load);
+      follows.pending.delete(load);
+      if (
+        follows.pending.size === 0 &&
+        this.#watcherFollowsByPiece.get(pieceKey) === follows
+      ) {
+        this.#watcherFollowsByPiece.delete(pieceKey);
+      }
+    });
+  }
+
+  /**
    * Settle in-flight pointer roll-forward COMMITS — bounded local work,
    * awaited by dispose() before the storage sessions they write through
    * close. Deliberately excludes watcher pattern LOADS: a load can be
@@ -10251,6 +11218,61 @@ export class Runner {
   async settlePointerCommits(): Promise<void> {
     while (this.#pendingPointerCommits.size > 0) {
       await Promise.allSettled([...this.#pendingPointerCommits]);
+    }
+  }
+
+  /**
+   * Resolves once the pattern watcher of the running piece `resultCell` names
+   * has finished following every move of the piece's pattern pointer it has
+   * observed. The piece then runs the pattern its pointer names, unless a
+   * follow failed, which is logged and leaves the piece on the pattern it was
+   * running. Resolves at once when nothing is in flight, as for a piece that
+   * is not running, and resolves when the piece is stopped with a follow in
+   * flight, whose remaining work has no effect. A piece started again by then
+   * has a watcher of its own, whose follows this goes on to wait for. A
+   * subpath cell stands for its root document.
+   *
+   * The watcher observes a move in a scheduler pass, so a caller that has
+   * just committed one awaits `Runtime.idle()` before calling this. Following
+   * a move reads from storage, which `idle()` does not wait for: the writer
+   * authority the incoming pattern inherits, and the documents the incoming
+   * pattern reads that this replica lacks. A pattern this runtime does not
+   * hold is also loaded, so this waits as long as that load takes.
+   *
+   * Not covered: the commit that rolls back a pointer naming a pattern that
+   * cannot be loaded, and, on a runtime that seals its writes into a serving
+   * wave, the re-instantiation. That one follows the wave's settlement, and a
+   * wave settles after the cycle that sealed into it has ended, so a caller
+   * running within that cycle could not wait for it.
+   */
+  patternPointerFollowed<T>(resultCell: Cell<T>): Promise<void> {
+    const link = resultCell.getAsNormalizedFullLink();
+    const rootCell = link.path.length > 0
+      ? this.#runtime.getCellFromLink({ ...link, path: [] })
+      : resultCell;
+    return this.#watcherFollowsSettled(this.#getDocKey(rootCell));
+  }
+
+  /**
+   * Helper for `patternPointerFollowed()` and `pendingPatternChangeFor()`,
+   * which resolves once the piece whose doc key is `key` has no follow in
+   * flight, or once the watcher registration that started them is cancelled.
+   */
+  async #watcherFollowsSettled(key: string): Promise<void> {
+    // A settled follow's continuation can start another, so the entry is read
+    // again after each wait. A cancelled registration's follows run on to no
+    // effect, so the wait ends with the cancellation, unless the piece has
+    // been started again and its new registration has a follow in flight,
+    // which the entry then names.
+    let follows: WatcherFollows | undefined;
+    while ((follows = this.#watcherFollowsByPiece.get(key)) !== undefined) {
+      const cancelled = await Promise.race([
+        Promise.allSettled([...follows.pending]).then(() => false),
+        follows.cancelled.then(() => true),
+      ]);
+      if (cancelled && this.#watcherFollowsByPiece.get(key) === follows) {
+        return;
+      }
     }
   }
 
@@ -10332,6 +11354,8 @@ export class Runner {
     // Clear the result pattern cache as well, since the actions have been
     // canceled
     this.#resultPatternCache.clear();
+    this.#nodeIOBindings.clear();
+    this.#patternNodeBindings.clear();
     this.#locallyPreparedResults.clear();
     this.#presyncNamedInstances.clear();
     this.#locallyStoppedResults.clear();
@@ -10412,136 +11436,229 @@ export class Runner {
    * containers' child paths, and those reads must not consume `*`-path
    * membership templates (machineryRead; template-population §6, the SC-8
    * machinery-read boundary).
+   *
+   * A plan has two parts. The bindings read nothing through a transaction,
+   * and the runner holds the ones the first plan of a node computes for
+   * every later plan of it — a pre-sync's, a name-sync's, the node's
+   * instantiation's (`#nodeIOBinding()`, `#bindPatternNode()`). What the
+   * bound outputs redirect to is read through `tx` on every call, so each
+   * caller's transaction records the reads its plan rests on, and a plan
+   * follows a redirect written since the last one.
    */
   #nodePlan(
     tx: IExtendedStorageTransaction,
     node: Node,
     resultCell: Cell<any>,
     pattern: Pattern,
-    moduleRefName?: string,
     argumentLink?: NormalizedFullLink,
   ): NodePlan | undefined {
-    const module = node.module;
-    if (isModule(module)) {
-      switch (module.type) {
-        case "ref": {
-          const refName = module.implementation as string;
-          // `.asScope(scope)` records its scope on the *ref* module (the node's
-          // module), but resolving the ref swaps in the registry's module — so
-          // hand the declared default scope to the registry, or it is silently
-          // dropped and the node falls back to "space". The registry owns
-          // applying it, because the copy it takes to do so must also carry
-          // the module's `debugName` (its policy identity) across.
-          const resolved = this.#runtime.moduleRegistry.getModule(
-            refName,
-            module.defaultScope,
-          );
-          return this.#nodePlan(
-            tx,
-            { ...node, module: resolved },
+    const nodeModule = node.module;
+    if (!isModule(nodeModule)) {
+      if (isWriteRedirectLink(nodeModule) || isAliasBinding(nodeModule)) {
+        // TODO(seefeld): Implement, a dynamic node
+        return undefined;
+      }
+      throw new Error(debugStr`Unknown module: $quote${nodeModule}`);
+    }
+    // `.asScope(scope)` records its scope on the *ref* module (the node's
+    // module), but resolving the ref swaps in the registry's module — so
+    // hand the declared default scope to the registry, or it is silently
+    // dropped and the node falls back to "space". The registry owns
+    // applying it, because the copy it takes to do so must also carry
+    // the module's `debugName` (its policy identity) across.
+    let module = nodeModule;
+    let moduleRefName: string | undefined;
+    while (module.type === "ref") {
+      moduleRefName = module.implementation as string;
+      module = this.#runtime.moduleRegistry.getModule(
+        moduleRefName,
+        module.defaultScope,
+      );
+    }
+    const resolved = module;
+    switch (resolved.type) {
+      case "javascript":
+      case "passthrough":
+        return tx.runWithAmbientReadMeta(machineryRead, () => {
+          const binding = this.#nodeIOBinding(
+            node,
             resultCell,
             pattern,
-            refName,
-            argumentLink,
-          );
-        }
-        case "javascript":
-        case "passthrough":
-          return tx.runWithAmbientReadMeta(machineryRead, () => ({
-            kind: module.type as "javascript" | "passthrough",
-            module,
-            ...this.#bindNodeIO(
-              tx,
-              node.inputs,
-              node.outputs,
-              resultCell,
-              pattern,
-              argumentLink,
-            ),
-          }));
-        case "raw":
-          return tx.runWithAmbientReadMeta(machineryRead, () => ({
-            kind: "raw",
-            module,
+            resolved.type,
             moduleRefName,
-            ...this.#buildRawNodeInputs(
-              tx,
-              module,
-              node.inputs,
-              node.outputs,
-              resultCell,
-              pattern,
-              moduleRefName,
-              argumentLink,
-            ),
-          }));
-        case "pattern":
-          return tx.runWithAmbientReadMeta(machineryRead, () => ({
-            kind: "pattern",
-            module,
-            ...this.#bindPatternNode(
-              tx,
-              module,
-              node.inputs,
-              node.outputs,
-              resultCell,
-              pattern,
-              argumentLink,
-            ),
-          }));
-        default:
-          throw new Error(`Unknown module type: ${module.type}`);
-      }
-    } else if (isWriteRedirectLink(module) || isAliasBinding(module)) {
-      // TODO(seefeld): Implement, a dynamic node
-      return undefined;
-    } else {
-      throw new Error(debugStr`Unknown module: $quote${module}`);
+            argumentLink ?? getMetaLink(resultCell, "argument")!,
+          );
+          return {
+            kind: resolved.type as "javascript" | "passthrough",
+            module: resolved,
+            inputs: binding.inputs,
+            outputs: binding.outputs,
+            writes: findAllWriteRedirectCells(binding.outputs, resultCell, {
+              followRedirectChains: !usesLocalReads(cellTx(resultCell)),
+            }),
+            inputsCell: binding.inputsCell.withTx(tx),
+          };
+        });
+      case "raw":
+        return tx.runWithAmbientReadMeta(machineryRead, () => ({
+          kind: "raw",
+          module: resolved,
+          moduleRefName,
+          ...this.#buildRawNodeInputs(
+            tx,
+            resolved,
+            node,
+            resultCell,
+            pattern,
+            moduleRefName,
+            argumentLink,
+          ),
+        }));
+      case "pattern":
+        return tx.runWithAmbientReadMeta(machineryRead, () => ({
+          kind: "pattern",
+          module: resolved,
+          ...this.#bindPatternNode(
+            tx,
+            resolved,
+            node,
+            resultCell,
+            pattern,
+            argumentLink,
+          ),
+        }));
+      default:
+        throw new Error(`Unknown module type: ${resolved.type}`);
     }
   }
 
-  #bindNodeIO(
-    tx: IExtendedStorageTransaction,
-    inputBindings: FabricExecValue,
-    outputBindings: FabricExecValue,
+  /**
+   * Binds the inputs and outputs of `node`, a javascript, passthrough or
+   * raw node of `pattern`, on `resultCell` against `argumentCellLink`, or
+   * returns the binding held for them. `moduleType` is the type of the
+   * module the node resolved to and `moduleRefName` the registry name it
+   * resolved from, when it resolved from one.
+   *
+   * The binding reads nothing through a transaction: it is a function of
+   * the node, the pattern's manifest and argument schema, and the two
+   * links. What a plan reads through its transaction, the redirect chains
+   * its outputs write through, is resolved by each plan in its own.
+   *
+   * A binding against a stand-in argument, an immutable document a pre-sync
+   * builds for an instance with no stored argument, is never held: the
+   * instance's instantiation binds against the argument document its setup
+   * writes, so no later plan has that argument link.
+   */
+  #nodeIOBinding(
+    node: Node,
     resultCell: Cell<any>,
     pattern: Pattern,
-    argumentCellLink: NormalizedFullLink = getMetaLink(
-      resultCell,
-      "argument",
-    )!,
-  ): BoundNodeIO {
-    const inputs = unwrapOneLevelAndBindToDoc(
-      inputBindings,
-      argumentCellLink,
-      resultCell,
-      {
+    moduleType: Module["type"],
+    moduleRefName: string | undefined,
+    argumentCellLink: NormalizedFullLink | undefined,
+  ): NodeIOBinding {
+    const bind = (): NodeIOBinding => {
+      this.#nodeBindingRecorder?.(
+        resultCell.getAsNormalizedFullLink().id,
+        node,
+      );
+      const options = {
         derivedInternalCells: pattern.derivedInternalCells,
         argumentCapSchema: pattern.argumentSchema,
-      },
-    );
-    const outputs = unwrapOneLevelAndBindToDoc(
-      outputBindings,
-      argumentCellLink,
-      resultCell,
-      {
-        derivedInternalCells: pattern.derivedInternalCells,
-        argumentCapSchema: pattern.argumentSchema,
-      },
-    );
-    return {
-      inputs,
-      outputs,
-      writes: findAllWriteRedirectCells(outputs, resultCell, {
-        followRedirectChains: !usesLocalReads(cellTx(resultCell)),
-      }),
-      inputsCell: this.#runtime.getImmutableCell(
+      };
+      const inputs = unwrapOneLevelAndBindToDoc(
+        node.inputs,
+        argumentCellLink,
+        resultCell,
+        options,
+      );
+      const outputs = unwrapOneLevelAndBindToDoc(
+        node.outputs,
+        argumentCellLink,
+        resultCell,
+        options,
+      );
+
+      // For the list builtins, replace a pattern-valued input (the `op`) with
+      // a compact `{ $patternRef }` sentinel when its content-addressed entry
+      // ref is known. This is the post-eval moment where the in-memory op
+      // object (linked to its original via `noteDerivedCopy`, preserved
+      // through binding) carries its `{ identity, symbol }`; the sentinel
+      // then survives the immutable-cell JSON round-trip, so the builtin
+      // resolves the live canonical pattern by identity instead of
+      // deserializing the embedded graph. A KEYLESS op is never substituted
+      // (its session identity must not land durably); the returned mint is
+      // registered below, once the inputs doc's address is known, as this
+      // session's resolution hint for the builtin.
+      const keylessOpRef = moduleType === "raw"
+        ? this.#substituteOpPatternRefs(moduleRefName, inputs)
+        : undefined;
+
+      // The input bindings are about to cross into the data model, and a
+      // pattern author can bind a builder artifact (a handler, a pattern) as
+      // an ordinary input value at any depth. Each is replaced with its
+      // serialized form on the way, so what crosses is representable -- by
+      // the walk INSIDE `getImmutableCell`, not by a call here. That it
+      // happens there and not alongside the `op` substitution above is what
+      // keeps it clear of `findAllWriteRedirectCells`, which walks the same
+      // bindings for a different purpose and must see them as bound.
+      const inputsCell = this.#runtime.getImmutableCell(
         resultCell.space,
         inputs,
         undefined,
-        tx,
-      ),
+      );
+      if (keylessOpRef !== undefined) {
+        // The keyless op's in-session resolution hint (see
+        // `#substituteOpPatternRefs`): the builtin reads the embedded graph
+        // from this immutable doc and resolves the pristine minted artifact
+        // through this registration instead (the embedded round-trip's defer
+        // corruption never engages in-session, and nothing keyless is
+        // durable).
+        this.#runtime.patternManager.registerKeylessOpResolution(
+          opInputsDocKey(inputsCell),
+          keylessOpRef,
+        );
+      }
+      return { inputs, outputs, inputsCell };
     };
+    if (isStandInArgument(argumentCellLink)) return bind();
+    return this.#nodeIOBindings.bindingFor({
+      ...this.#bindingSubjectMembers(node, pattern),
+      resultLink: resultCell.getAsNormalizedFullLink(),
+      argumentLink: argumentCellLink,
+      variant: bindingVariant(moduleType, moduleRefName),
+    }, bind);
+  }
+
+  /**
+   * How a binding's subject names `node` and `pattern`
+   * (`NodeBindingSubjectMember`): the pattern by its content identity when
+   * it has one, and the node by its position among the pattern's nodes,
+   * since every pattern object of one identity — the one embedded in a
+   * parent's graph, the one loaded by identity for the instance's own start
+   * — holds the same nodes at the same positions; both by object identity
+   * otherwise.
+   */
+  #bindingSubjectMembers(
+    node: Node,
+    pattern: Pattern,
+  ): { node: NodeBindingSubjectMember; pattern: NodeBindingSubjectMember } {
+    const identity = this.#patternSubjectMember(pattern);
+    const position = typeof identity === "string"
+      ? pattern.nodes.indexOf(node)
+      : -1;
+    return position === -1
+      ? { node, pattern }
+      : { node: position, pattern: identity };
+  }
+
+  /**
+   * How a binding's subject names `pattern`: by its content identity when
+   * it has one, and by the object otherwise.
+   */
+  #patternSubjectMember(pattern: Pattern): NodeBindingSubjectMember {
+    const ref = this.#runtime.patternManager.getArtifactEntryRef(pattern);
+    return ref === undefined ? pattern : patternIdentityKey(ref);
   }
 
   #collectStaticRedirectWriteTargets(
@@ -11270,7 +12387,7 @@ export class Runner {
     );
   }
 
-  #handleJavaScriptHandlerResult(
+  async #handleJavaScriptHandlerResult(
     tx: IExtendedStorageTransaction,
     resultSchema: JSONSchema | undefined,
     result: any,
@@ -11279,7 +12396,7 @@ export class Runner {
     patternResultCell: Cell<any>,
     addCancel: AddCancel,
     cause: Record<string, any>,
-  ): any {
+  ): Promise<any> {
     const receiptCell = this.#handlingReceiptCell(patternResultCell, cause, tx);
     const receiptsEnabled =
       this.#runtime.experimental.commitPreconditions === true &&
@@ -11371,8 +12488,8 @@ export class Runner {
         // the client-written one — `{}` as the existence witness, the handler's
         // plain return under `plainResultReceipts` — and the cell identity is
         // the same cause-derived address, so the verb contract's readback
-        // (`cf call`'s `.result`) reads a serving-written receipt the same
-        // way it reads a client-written one.
+        // (`cf piece call`'s `.result`) reads a serving-written receipt the
+        // same way it reads a client-written one.
         //
         // Write-once is CAS, not a wire precondition: no markCreateOnly (a
         // create-only mark must not ride a wave commit whose event the
@@ -11443,6 +12560,21 @@ export class Runner {
       undefined,
       resultSchema,
     );
+    this.#handlerResultPatterns.add(resultPattern);
+    if (
+      subPatternNodes(resultPattern).some(({ module }) =>
+        isPattern(module.implementation) &&
+        this.#childSystemOrigin(
+            tx,
+            patternResultCell,
+            module.implementation,
+          ) !== undefined
+      )
+    ) {
+      // A tracked child retains a verified source revision during its setup.
+      // Its compiled module can be loaded without the parser that verifies it.
+      await prepareSourceClosureVerification();
+    }
     // navigateTo result patterns must start after the handler's transaction
     // commits so the navigation target is durable. Every other handler result
     // pattern runs into the canonical result/receipt cell in the handler's
@@ -11637,6 +12769,35 @@ export class Runner {
       `Resolving in-space target spaces: ${
         pending.map(([name]) => name).join(", ")
       }`,
+    );
+  }
+
+  /**
+   * Brings up the user's Home root for a handler whose write beneath the
+   * Home's empty slot was refused with `error`, then throws
+   * {@link RetryImmediately} so the scheduler runs the handler again, and its
+   * write lands under the root. As with an `inSpace()` name, an unserved event
+   * sent with `retries: false` is not run again, so its write drops once the
+   * root exists. A creation that fails is reported as `error` itself, with the
+   * failure as its cause and the handler's `frame` attached, as a handler's
+   * other failures carry theirs. `undefined` when this runtime brings up no
+   * root for `error` (see `bringUpHomeRootForRefusedWrite()`).
+   */
+  #bringUpHomeRootAndRetry(
+    error: unknown,
+    frame: Frame,
+  ): Promise<never> | undefined {
+    const creation = bringUpHomeRootForRefusedWrite(this.#runtime, error);
+    if (creation === undefined) return undefined;
+    return creation.then(
+      () => {
+        throw new RetryImmediately("Bringing up the user's Home root");
+      },
+      (failure: unknown) => {
+        (error as Error & { frame?: Frame }).cause = failure;
+        (error as Error & { frame?: Frame }).frame = frame;
+        throw error;
+      },
     );
   }
 
@@ -12069,7 +13230,12 @@ export class Runner {
         };
 
         const postRunResult = result instanceof Promise
-          ? result.then(postRun)
+          ? result.then(
+            postRun,
+            (error) =>
+              this.#bringUpHomeRootAndRetry(error, frame) ??
+                Promise.reject(error),
+          )
           : postRun(result);
         if (postRunResult instanceof Promise) {
           popFrameAfterReturn = false;
@@ -12090,6 +13256,13 @@ export class Runner {
             tx,
             this.#handlingReceiptCell(resultCell, cause, tx),
           ).finally(() => popFrame(frame));
+        }
+        // A write beneath the user's Home before Home has a root is refused;
+        // the root is brought up, and the handler runs again.
+        const retrying = this.#bringUpHomeRootAndRetry(error, frame);
+        if (retrying !== undefined) {
+          popFrameAfterReturn = false;
+          return retrying.finally(() => popFrame(frame));
         }
         (error as Error & { frame?: Frame }).frame = frame;
         throw error;
@@ -12163,12 +13336,7 @@ export class Runner {
           // apart from the body's own reads, and a read that dead-ends on a
           // link into another space kicks that document's load here rather
           // than in the body.
-          const materialized = inputsCell.asSchema(module.argumentSchema)
-            .withTx(tx).get();
-          // A handler holding a cell beneath the user's Home before Home has
-          // a root runs only once the root exists, so a write it makes there
-          // lands under the root.
-          await bringUpHomeRootForHandler(this.#runtime, materialized, tx);
+          inputsCell.asSchema(module.argumentSchema).withTx(tx).get();
         }
         : undefined;
 
@@ -12302,7 +13470,6 @@ export class Runner {
         false,
         policyFacingIdentity,
       );
-      (action as Action & { lastFrame?: Frame }).lastFrame = frame;
       if (policyFacingIdentity) {
         setCfcImplementationIdentity(tx, policyFacingIdentity);
       }
@@ -12857,8 +14024,7 @@ export class Runner {
   #buildRawNodeInputs(
     tx: IExtendedStorageTransaction,
     module: Module,
-    inputBindings: FabricExecValue,
-    outputBindings: FabricExecValue,
+    node: Node,
     resultCell: Cell<any>,
     pattern: Pattern,
     moduleRefName: string | undefined,
@@ -12867,39 +14033,17 @@ export class Runner {
       "argument",
     )!,
   ): RawNodeInputs {
-    const mappedInputBindings = unwrapOneLevelAndBindToDoc(
-      inputBindings,
-      argumentCellLink,
+    const {
+      inputs: mappedInputBindings,
+      outputs: mappedOutputBindings,
+      inputsCell,
+    } = this.#nodeIOBinding(
+      node,
       resultCell,
-      {
-        derivedInternalCells: pattern.derivedInternalCells,
-        argumentCapSchema: pattern.argumentSchema,
-      },
-    );
-    const mappedOutputBindings = unwrapOneLevelAndBindToDoc(
-      outputBindings,
-      argumentCellLink,
-      resultCell,
-      {
-        derivedInternalCells: pattern.derivedInternalCells,
-        argumentCapSchema: pattern.argumentSchema,
-      },
-    );
-
-    // For the list builtins, replace a pattern-valued input (the `op`) with a
-    // compact `{ $patternRef }` sentinel when its content-addressed entry ref
-    // is known. This is the post-eval moment where the in-memory op object
-    // (linked to its original via `noteDerivedCopy`, preserved through binding)
-    // carries its `{ identity, symbol }`; the sentinel then survives the
-    // immutable-cell JSON round-trip, so the builtin resolves the live
-    // canonical pattern by identity instead of deserializing the embedded
-    // graph. A KEYLESS op is never substituted (its session identity must not
-    // land durably); the returned mint is registered below, once the inputs
-    // doc's address is known, as this session's resolution hint for the
-    // builtin.
-    const keylessOpRef = this.#substituteOpPatternRefs(
+      pattern,
+      "raw",
       moduleRefName,
-      mappedInputBindings,
+      argumentCellLink,
     );
 
     // outputCells tracks the static write surface for dependency ordering and
@@ -12908,32 +14052,6 @@ export class Runner {
       mappedOutputBindings,
       resultCell,
     );
-
-    // The input bindings are about to cross into the data model, and a
-    // pattern author can bind a builder artifact (a handler, a pattern) as an
-    // ordinary input value at any depth. Each is replaced with its serialized
-    // form on the way, so what crosses is representable -- by the walk INSIDE
-    // `getImmutableCell`, not by a call here. That it happens there and not
-    // alongside the `op` substitution above is what keeps it clear of
-    // `findAllWriteRedirectCells`, which walks the same bindings for a
-    // different purpose and must see them as bound.
-    const inputsCell = this.#runtime.getImmutableCell(
-      resultCell.space,
-      mappedInputBindings,
-      undefined,
-      tx,
-    );
-    if (keylessOpRef !== undefined) {
-      // The keyless op's in-session resolution hint (see
-      // `#substituteOpPatternRefs`): the builtin reads the embedded graph from
-      // this immutable doc and resolves the pristine minted artifact through
-      // this registration instead (the embedded round-trip's defer corruption
-      // never engages in-session, and nothing keyless is durable).
-      this.#runtime.patternManager.registerKeylessOpResolution(
-        opInputsDocKey(inputsCell),
-        keylessOpRef,
-      );
-    }
 
     // The output spot this node writes through is reserved for this node, so
     // its fully-resolved coordinates are a stable, position-derived,
@@ -12965,7 +14083,7 @@ export class Runner {
       outputs: mappedOutputBindings,
       writes: outputCells,
       argumentCellLink,
-      inputsCell,
+      inputsCell: inputsCell.withTx(tx),
       resolvedOutputSpot,
       outputBinding,
     };
@@ -13131,6 +14249,9 @@ export class Runner {
     const builtinOnActionRegistered = isRawBuiltinResult(builtinResult)
       ? builtinResult.onActionRegistered
       : undefined;
+    const builtinStoreWrites = isRawBuiltinResult(builtinResult)
+      ? builtinResult.storeWrites ?? []
+      : [];
 
     // Name the raw action for debugging - use implementation name or fallback to "raw"
     const impl = module.implementation as ((...args: unknown[]) => Action) & {
@@ -13194,9 +14315,15 @@ export class Runner {
       ...outputCells,
       ...staticRedirectWriteTargets,
     ]);
+    // isEffect can come from module options or from the builtin result
+    const isEffect = module.isEffect ?? builtinIsEffect;
     Object.assign(action, builtinAction, {
       reads: inputCells,
-      writes: schedulingWrites,
+      // An effect takes no write surface, so its stores are not declared.
+      writes: isEffect ? schedulingWrites : dedupeNormalizedLinks([
+        ...schedulingWrites,
+        ...atEveryScope(builtinStoreWrites),
+      ]),
       ...(module.materializerWriteEnvelopes
         ? { materializerWriteEnvelopes: module.materializerWriteEnvelopes }
         : {}),
@@ -13204,8 +14331,6 @@ export class Runner {
       pattern,
     });
 
-    // isEffect can come from module options or from the builtin result
-    const isEffect = module.isEffect ?? builtinIsEffect;
     const debounce = module.debounce ?? builtinDebounce;
     const noDebounce = module.noDebounce ?? builtinNoDebounce;
     const throttle = module.throttle ?? builtinThrottle;
@@ -13277,8 +14402,7 @@ export class Runner {
   #bindPatternNode(
     tx: IExtendedStorageTransaction,
     module: Module,
-    inputBindings: FabricExecValue,
-    outputBindings: FabricExecValue,
+    node: Node,
     resultCell: Cell<any>,
     pattern: Pattern,
     argumentLink?: NormalizedFullLink,
@@ -13293,57 +14417,131 @@ export class Runner {
     // fresh run's pre-sync binds against.
     const argumentCellLink = argumentLink ??
       getMetaLink(resultCell, "argument");
-    if (!isPattern(module.implementation)) throw new Error(`Invalid pattern`);
-    // The child's nodes are bound as the child's own start sees them: this
-    // bind crosses one `defer` boundary of every alias inside the
-    // implementation before the child instantiates it.
-    const child = unwrapOneLevelAndBindToDoc(
-      module.implementation,
-      argumentCellLink,
-      resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
-    );
-    // A node's inputs nearly always alias the argument document, so without
-    // the link they stay unbound: a walk that runs before setup writes the
-    // link wants the child's identity, which the outputs alone anchor, and
-    // instantiation never runs without it.
-    const inputs = argumentCellLink === undefined
-      ? inputBindings
-      : unwrapOneLevelAndBindToDoc(
-        inputBindings,
+    const implementation = module.implementation;
+    if (!isPattern(implementation)) throw new Error(`Invalid pattern`);
+    const bind = (): PatternNodeBindingCore => {
+      this.#nodeBindingRecorder?.(
+        resultCell.getAsNormalizedFullLink().id,
+        node,
+      );
+      // The child's nodes are bound as the child's own start sees them: this
+      // bind crosses one `defer` boundary of every alias inside the
+      // implementation before the child instantiates it.
+      const child = unwrapOneLevelAndBindToDoc(
+        implementation,
+        argumentCellLink,
+        resultCell,
+        { derivedInternalCells: pattern.derivedInternalCells },
+      );
+      // A node's inputs nearly always alias the argument document, so without
+      // the link they stay unbound: a walk that runs before setup writes the
+      // link wants the child's identity, which the outputs alone anchor, and
+      // instantiation never runs without it.
+      const inputs = argumentCellLink === undefined
+        ? node.inputs
+        : unwrapOneLevelAndBindToDoc(
+          node.inputs,
+          argumentCellLink,
+          resultCell,
+          {
+            targetSchema: child.argumentSchema,
+            derivedInternalCells: pattern.derivedInternalCells,
+            // The links serialized into the sub-piece's argument doc must
+            // keep the containing pattern's declared slot scopes; the
+            // authored schema is the only place those declarations still
+            // exist (the meta link carries a sanitized schema). See
+            // foldDeclaredScopeIntoLinkSchema.
+            sourceSchemas: { argument: pattern.argumentSchema },
+          },
+        );
+      // VALUE BIND (kind: the descriptor's). Binding WITH the manifest
+      // resolves a partialCause output to the descriptor's derived internal
+      // cell, so `getDerivedInternalCellLink` mints its id under the
+      // descriptor's kind: `computed:fid1:<hash>` for a descriptor classified
+      // `kind: "computed"`, and the same `of:fid1:<hash>` the identity bind
+      // below mints for a kindless one (the classifier declines the node, or
+      // `experimental.computedCellIds` is off). This is the binding the child
+      // link is SENT to (`sendValueToBinding` in `#instantiatePatternNode`),
+      // so this is where the child's value actually lives — at a DIFFERENT
+      // entity from the identity bind's only when the descriptor carries a
+      // kind. See the identity bind for the pairing.
+      const outputs = unwrapOneLevelAndBindToDoc(
+        node.outputs,
         argumentCellLink,
         resultCell,
         {
-          targetSchema: child.argumentSchema,
           derivedInternalCells: pattern.derivedInternalCells,
-          // The links serialized into the sub-piece's argument doc must keep
-          // the containing pattern's declared slot scopes; the authored
-          // schema is the only place those declarations still exist (the
-          // meta link carries a sanitized schema). See
-          // foldDeclaredScopeIntoLinkSchema.
-          sourceSchemas: { argument: pattern.argumentSchema },
+          argumentCapSchema: pattern.argumentSchema,
         },
       );
-    // VALUE BIND (kind: the descriptor's). Binding WITH the manifest resolves a
-    // partialCause output to the descriptor's derived internal cell, so
-    // `getDerivedInternalCellLink` mints its id under the descriptor's kind:
-    // `computed:fid1:<hash>` for a descriptor classified `kind: "computed"`,
-    // and the same `of:fid1:<hash>` the identity bind below mints for a kindless
-    // one (the classifier declines the node, or `experimental.computedCellIds`
-    // is off). This is the binding the child link is SENT to
-    // (`sendValueToBinding` in `#instantiatePatternNode`), so this is where
-    // the child's value actually lives — at a DIFFERENT entity from the
-    // identity bind's only when the descriptor carries a kind. See the
-    // identity bind for the pairing.
-    const outputs = unwrapOneLevelAndBindToDoc(
-      outputBindings,
-      argumentCellLink,
-      resultCell,
-      {
-        derivedInternalCells: pattern.derivedInternalCells,
-        argumentCapSchema: pattern.argumentSchema,
-      },
-    );
+      // Bind the output bindings first (as `#buildRawNodeInputs` does), so
+      // the `argument`/`internal`/`result` pseudo-cell aliases resolve to
+      // their DISTINCT concrete cells. Resolving the raw bindings would let
+      // pseudo cells at the same path (e.g. `internal.x` vs `result.x`)
+      // collapse onto the base result cell and collide on one shared child
+      // cell. `bindPatterns: false` — output bindings never carry
+      // sub-patterns to instantiate, so skip that work; we only need the
+      // pseudo-cell aliases resolved to their concrete links.
+      //
+      // IDENTITY BIND (kind: always `of:`). This omits
+      // `derivedInternalCells` where the value bind above passes it, and the
+      // manifest descriptor is what carries the entity kind. Same cause, same
+      // hash preimage — but no descriptor means no kind, so this mint always
+      // lands on the unkinded `of:fid1:<hash>`
+      // (docs/specs/computed-cell-identity.md: the preimage is kind-free, the
+      // URI scheme IS the kind). Whether that is a SECOND entity depends on
+      // the descriptor the value bind saw:
+      //   - descriptor with `kind: "computed"` — the value bind minted
+      //     `computed:fid1:<hash>`, so the two binds address two distinct
+      //     entities that differ only by scheme, and the child link lives on
+      //     the `computed:` one;
+      //   - kindless descriptor (the classifier declined the node, or
+      //     `experimental.computedCellIds` is off) — both binds land on this
+      //     same `of:` entity, and the child link is written here.
+      // The split is fine because both use the link purely as the
+      // `resultFor` CAUSE — a stable coordinate, never read for a value. But
+      // anything that wants to READ the child link must use the id the VALUE
+      // bind minted: where the descriptor was computed, reading the `of:` one
+      // returns undefined for a healthy piece.
+      const identityOutputs = unwrapOneLevelAndBindToDoc(
+        node.outputs,
+        argumentCellLink,
+        resultCell,
+      );
+      return {
+        child,
+        inputs,
+        outputs,
+        identityOutputs,
+        // The manifest-blind bind above renders a partialCause alias as its
+        // derived cell's kind-free id, which is cause-only — resolving it
+        // would read an entity the kinded data never lives at (and kick a
+        // doc pull nothing can satisfy), so the scan is told to take those
+        // coordinates as they stand.
+        causeOnlyIds: causeOnlySpotIds(
+          resultCell,
+          pattern.derivedInternalCells,
+        ),
+        instanceName: instanceNameOfNodeOutputs(node.outputs),
+      };
+    };
+    // The child bound here is the pattern object the child's own nodes are
+    // held under, so a plan that finds this binding hands its instantiation
+    // the child the first plan bound, and the child's nodes find theirs.
+    const binding = isStandInArgument(argumentCellLink)
+      ? bind()
+      : this.#patternNodeBindings.bindingFor({
+        ...this.#bindingSubjectMembers(node, pattern),
+        // A node whose module is a registry reference keeps its identity
+        // when the registry puts another pattern under the name. The
+        // pattern it holds is named by content identity when it has one,
+        // like the pattern holding the node.
+        implementation: this.#patternSubjectMember(implementation),
+        resultLink: resultCell.getAsNormalizedFullLink(),
+        argumentLink: argumentCellLink,
+        variant: bindingVariant("pattern", undefined),
+      }, bind);
+    const { child, inputs, outputs, instanceName } = binding;
     const io = {
       child,
       inputs,
@@ -13372,66 +14570,32 @@ export class Runner {
     // we only borrow the resolved output link's coordinates as the cause. A
     // pattern node always writes through a write redirect, so the absence of
     // one leaves `childResultCell` undefined, which the instantiation refuses.
-    //
-    // Bind the output bindings first (as `#buildRawNodeInputs` does), so the
-    // `argument`/`internal`/`result` pseudo-cell aliases resolve to their
-    // DISTINCT concrete cells. Resolving the raw bindings would let pseudo
-    // cells at the same path (e.g. `internal.x` vs `result.x`) collapse onto
-    // the base result cell and collide on one shared child cell.
-    // `bindPatterns: false` — output bindings never carry sub-patterns to
-    // instantiate, so skip that work; we only need the pseudo-cell aliases
-    // resolved to their concrete links.
-    //
-    // IDENTITY BIND (kind: always `of:`). This omits
-    // `derivedInternalCells` where the value bind above passes it, and the
-    // manifest descriptor is what carries the entity kind. Same cause, same
-    // hash preimage — but no descriptor means no kind, so this mint always
-    // lands on the unkinded `of:fid1:<hash>`
-    // (docs/specs/computed-cell-identity.md: the preimage is kind-free, the
-    // URI scheme IS the kind). Whether that is a SECOND entity depends on the
-    // descriptor the value bind saw:
-    //   - descriptor with `kind: "computed"` — the value bind minted
-    //     `computed:fid1:<hash>`, so the two binds address two distinct
-    //     entities that differ only by scheme, and the child link lives on
-    //     the `computed:` one;
-    //   - kindless descriptor (the classifier declined the node, or
-    //     `experimental.computedCellIds` is off) — both binds land on this
-    //     same `of:` entity, and the child link is written here.
-    // The split is fine because both use the link purely as the `resultFor`
-    // CAUSE — a stable coordinate, never read for a value. But anything that
-    // wants to READ the child link must use the id the VALUE bind minted:
-    // where the descriptor was computed, reading the `of:` one returns
-    // undefined for a healthy piece.
-    const mappedOutputBindings = unwrapOneLevelAndBindToDoc(
-      outputBindings,
-      argumentCellLink,
-      resultCell,
-    );
-    // The manifest-blind bind above renders a partialCause alias as its
-    // derived cell's kind-free id, which is cause-only — resolving it
-    // would read an entity the kinded data never lives at (and kick a
-    // doc pull nothing can satisfy), so the scan is told to take those
-    // coordinates as they stand.
     const outputRedirect = firstResolvedOutputRedirect(
       this.#runtime,
       tx,
-      mappedOutputBindings,
+      binding.identityOutputs,
       resultCell,
-      causeOnlySpotIds(resultCell, pattern.derivedInternalCells),
+      binding.causeOnlyIds,
     );
     if (outputRedirect === undefined) {
       return { ...io, childResultCell: undefined, sendToBindings: true };
     }
-    const instanceName = instanceNameOfNodeOutputs(outputBindings);
+    // A named instance the parent's `instanceChildren` records a child for
+    // runs that child, wherever its own spot would mint one.
+    const recordedChild = instanceName === undefined
+      ? undefined
+      : readInstanceChildren(resultCell.withTx(tx)).get(instanceName);
     return {
       ...io,
-      childResultCell: this.#mintChildResultCell(
-        tx,
-        module,
-        child,
-        outputRedirect,
-        resultCell,
-      ),
+      childResultCell: recordedChild !== undefined
+        ? this.#runtime.getCellFromLink(recordedChild, child.resultSchema, tx)
+        : this.#mintChildResultCell(
+          tx,
+          module,
+          child,
+          outputRedirect,
+          resultCell,
+        ),
       sendToBindings: true,
       ...(instanceName !== undefined && { instanceName }),
     };
@@ -13502,7 +14666,9 @@ export class Runner {
    * named sub-pattern node of `pattern` would set its child up over a child
    * the parent `resultCell` keeps elsewhere (`#refuseDisplacedChild()`), for
    * each such node whose child this parent owns: not a child that is its
-   * space's root, nor one managed in a space of its own.
+   * space's root, nor one managed in a space of its own. A named instance's
+   * child is the one the parent's `instanceChildren` records for it, where it
+   * records one.
    *
    * Only a parent its updater has pointed at `pattern` is judged: its stored
    * `patternIdentity` already names `pattern`, while its setup marker names
@@ -13533,25 +14699,29 @@ export class Runner {
     const manifest = storedManifestOf(parent);
     const recorded = recordedPositionalSpots(manifest);
     const recordedInstances = recordedInstanceNames(manifest);
+    const recordedChildren = readInstanceChildren(parent);
     for (const { module, partialCause } of subPatternNodes(pattern)) {
-      // Only a spot the stored manifest records can hold a child already, and
-      // only a positional or named one can hold another's: a spot a result
-      // key, a node input or `.for()` names does not shift with its siblings,
-      // and no instance stamps the child there.
+      // Only a spot the stored manifest records, or a child the parent's
+      // `instanceChildren` records for a named instance, can hold a child
+      // already, and only a positional or named one can hold another's: a
+      // spot a result key, a node input or `.for()` names does not shift with
+      // its siblings, and no instance stamps the child there.
       const instanceName = instanceNameOfPartialCause(partialCause);
       const judged = isPositionalPartialCause(partialCause)
         ? recorded.has(positionalNumber(partialCause))
-        : instanceName !== undefined && recordedInstances.has(instanceName);
+        : instanceName !== undefined &&
+          (recordedInstances.has(instanceName) ||
+            recordedChildren.has(instanceName));
       if (!judged) continue;
       // A space's root sits where its space's genesis reserved it, whatever
       // the node's cause, so no shift between this parent's spots moves it.
       if (module.targetSpaceRoot) continue;
-      const child = this.#childAtPartialCause(
-        tx,
-        resultCell,
-        module,
-        partialCause,
-      );
+      const link = instanceName === undefined
+        ? undefined
+        : recordedChildren.get(instanceName);
+      const child = link !== undefined
+        ? this.#runtime.getCellFromLink(link, undefined, tx)
+        : this.#childAtPartialCause(tx, resultCell, module, partialCause);
       if (resumesIndependently(child, resultCell)) continue;
       this.#refuseDisplacedChild(
         tx,
@@ -13569,14 +14739,15 @@ export class Runner {
    * Throws rather than let the child of `childPattern`, at the positional or
    * named spot `partialCause` names, set up over `storedChild` when that cell
    * holds a different child the parent `resultCell` keeps elsewhere: a child
-   * stamped with another instance's name, or, where `partialCause` is
-   * positional, a sign that the parent's positional children have moved
-   * spots, which is `storedChild` running another pattern identity while
-   * either a child of `childPattern`'s identity runs at another positional
-   * spot, or another positional spot of `pattern` sets up the identity
-   * `storedChild` runs. A child is looked for only at the positional spots in
-   * `recorded`, the ones the parent's stored manifest records, and no spot
-   * whose node sets up a space's root is counted. A child whose identity
+   * stamped with another instance's name, a child the parent's
+   * `instanceChildren` records for another named instance, or, where
+   * `partialCause` is positional, a sign that the parent's positional children
+   * have moved spots, which is `storedChild` running another pattern identity
+   * while either a child of `childPattern`'s identity runs at another
+   * positional spot, or another positional spot of `pattern` sets up the
+   * identity `storedChild` runs. A child is looked for only at the positional
+   * spots in `recorded`, the ones the parent's stored manifest records, and no
+   * spot whose node sets up a space's root is counted. A child whose identity
    * differs with no such sign is the same child under a newer version of its
    * own source.
    */
@@ -13601,28 +14772,36 @@ export class Runner {
     );
     const describe = (ref: { identity: string; symbol: string }) =>
       `${ref.identity}#${ref.symbol}`;
-    // The stamp alone decides this refusal, so it holds for a child whose
-    // pattern identity was never stored; the identities only name the two
-    // sides in the message.
+    const holder = instanceName !== undefined
+      ? `instance "${instanceName}"`
+      : "a positional spot";
+    const settingUp = incoming !== undefined
+      ? describe(incoming)
+      : "a pattern with no identity";
+    const over = stored !== undefined
+      ? `the child of ${describe(stored)}`
+      : "a child with no stored pattern identity";
+    // The stamp and the parent's `instanceChildren` record alone decide these
+    // refusals, so they hold for a child whose pattern identity was never
+    // stored, and whatever the two identities; the identities only name the
+    // two sides in the message.
     const stamped = getInstanceNameStamp(storedChild);
     if (stamped !== undefined && stamped !== instanceName) {
-      const holder = instanceName !== undefined
-        ? `instance "${instanceName}"`
-        : "a positional spot";
-      const settingUp = incoming !== undefined
-        ? describe(incoming)
-        : "a pattern with no identity";
-      const over = stored !== undefined
-        ? `the child of ${describe(stored)}`
-        : "a child with no stored pattern identity";
       throw new Error(
         `refusing to set up ${settingUp} for ${holder} over ${over} that ` +
           `instance "${stamped}" set up`,
       );
     }
+    const storedKey = documentKey(storedChild.getAsNormalizedFullLink());
+    for (const [name, link] of readInstanceChildren(resultCell.withTx(tx))) {
+      if (name === instanceName || documentKey(link) !== storedKey) continue;
+      throw new Error(
+        `refusing to set up ${settingUp} for ${holder} over ${over} that ` +
+          `instance "${name}" carries`,
+      );
+    }
     if (stored === undefined || incoming === undefined) return;
     if (!positional || samePatternRef(stored, incoming)) return;
-    const storedKey = documentKey(storedChild.getAsNormalizedFullLink());
     for (const { module, partialCause } of subPatternNodes(pattern)) {
       // A space's root child sits at its space's genesis address rather than
       // at a spot of this parent, so it shows nothing about how the parent's
@@ -13744,12 +14923,14 @@ export class Runner {
           rawMetaWriteAuthorization,
         );
       }
-      // Only a child in a space of its own claims one: an in-space nested
-      // node is part of its parent's graph and is re-instantiated from the
-      // parent's program on each release of the parent, so an origin of its
-      // own would be followed twice; a cross-space child outlives the
-      // program that made it and is what a release has to reach.
-      const sourceOrigin = crossSpace && !resumeExisting
+      // A nested node of the parent's own graph claims none: the parent's
+      // program re-instantiates it on each release of the parent, so an
+      // origin of its own would be followed twice. A child in a space of its
+      // own, or one a handler made, outlives the program that made it, and is
+      // what a release has to reach.
+      const outlivesParent = crossSpace ||
+        this.#handlerResultPatterns.has(pattern);
+      const sourceOrigin = outlivesParent && !resumeExisting
         ? this.#childSystemOrigin(instanceTx, parentResultCell, patternImpl)
         : undefined;
       const options = {
@@ -13989,7 +15170,10 @@ export function getPieceSourceRevisions(
           typeof value.origin !== "string") ||
       value.selectedRevisionId !== undefined &&
         (typeof value.selectedRevisionId !== "string" ||
-          value.selectedRevisionId.length === 0)
+          value.selectedRevisionId.length === 0) ||
+      value.releasedAt !== undefined &&
+        (typeof value.releasedAt !== "number" ||
+          !Number.isFinite(value.releasedAt) || value.releasedAt < 0)
     ) {
       throw new Error("piece source history is invalid");
     }
@@ -14007,10 +15191,66 @@ export function getPieceSourceRevisions(
     if (typeof value.selectedRevisionId === "string") {
       revision.selectedRevisionId = value.selectedRevisionId;
     }
+    if (typeof value.releasedAt === "number") {
+      revision.releasedAt = value.releasedAt;
+    }
     revisionIds.add(revision.revisionId);
     revisions.push(revision);
   }
   return revisions;
+}
+
+/**
+ * Whether the piece's recorded source history moved it from `from` to `to`:
+ * its latest revision names `to`, and either an earlier revision names `from`
+ * or a recorded transition displaced `from`. A transition whose predecessor's
+ * source is not retained records no baseline revision for it; it names that
+ * predecessor in the `displacedPattern` meta, stamped with the transition's
+ * own timestamp, which its revisions carry too. A later transition leaves that
+ * record in place, so a record whose timestamp matches a revision still in the
+ * history shows `from` was displaced before the latest revision was recorded.
+ * A history this runtime cannot read returns `false`.
+ *
+ * A runtime that cannot load `to` asks this to tell a source it is behind
+ * from one that is dead: when the piece moved from `from` to `to`, some
+ * runtime loaded `to`, so it is ahead of this one rather than unloadable
+ * everywhere. The history cannot tell the two apart for a source that every
+ * runtime has since lost, which it reads as ahead too.
+ */
+export function pieceSourceMovedPast(
+  resultCell: Cell<unknown>,
+  from: { identity: string; symbol: string },
+  to: { identity: string; symbol: string },
+): boolean {
+  let history: PieceSourceRevision[];
+  try {
+    history = getPieceSourceRevisions(resultCell);
+  } catch {
+    return false;
+  }
+  const latest = history.at(-1);
+  if (
+    latest === undefined ||
+    patternIdentityKey(latest.pattern) !== patternIdentityKey(to)
+  ) {
+    return false;
+  }
+  const fromKey = patternIdentityKey(from);
+  if (
+    history.slice(0, -1).some((revision) =>
+      patternIdentityKey(revision.pattern) === fromKey
+    )
+  ) {
+    return true;
+  }
+  const displaced = resultCell.getMetaRaw("displacedPattern", {
+    meta: ignoreReadForScheduling,
+  });
+  const displacedRef = asPatternIdentityRef(displaced);
+  return displacedRef !== undefined &&
+    patternIdentityKey(displacedRef) === fromKey &&
+    isObjectOrArray(displaced) &&
+    history.some((revision) => revision.timestamp === displaced.displacedAt);
 }
 
 /**
@@ -14027,7 +15267,7 @@ export function getPieceReconciliation(
     meta: ignoreReadForScheduling,
   });
   if (!isObjectOrArray(raw)) return undefined;
-  const { outcome, at, origin, offered, reason, detail } = raw;
+  const { outcome, at, origin, offered, reason, detail, confirmed } = raw;
   if (
     !isPieceReconciliationOutcome(outcome) ||
     typeof at !== "number" || !Number.isFinite(at) || at < 0 ||
@@ -14043,6 +15283,18 @@ export function getPieceReconciliation(
     ...(offeredRef === undefined ? {} : { offered: offeredRef }),
     ...(isPieceReconciliationReason(reason) ? { reason } : {}),
     ...(typeof detail === "string" && detail.length > 0 ? { detail } : {}),
+    ...(isObjectNotArray(confirmed) &&
+        typeof confirmed.identity === "string" &&
+        confirmed.identity.length > 0 &&
+        typeof confirmed.releasedAt === "number" &&
+        Number.isFinite(confirmed.releasedAt) && confirmed.releasedAt >= 0
+      ? {
+        confirmed: {
+          identity: confirmed.identity,
+          releasedAt: confirmed.releasedAt,
+        },
+      }
+      : {}),
   };
 }
 
@@ -14062,6 +15314,29 @@ export function setPieceReconciliation(
   );
 }
 
+/**
+ * `recorded`, keeping the confirmation `stored` carries where that confirms
+ * the source the piece runs (`running`) at a later release time than
+ * `recorded` does, or where `recorded` confirms nothing. Another runtime can
+ * confirm the running source at a later release while an attempt is under
+ * way, and an attempt that failed, or found nothing to adopt, has learned
+ * nothing that moves that time back. An accepted transition clears the record
+ * it supersedes, so nothing is carried past one.
+ */
+export function keepLaterConfirmation(
+  stored: PieceReconciliation | undefined,
+  recorded: PieceReconciliation,
+  running: string | undefined,
+): PieceReconciliation {
+  const kept = stored?.confirmed;
+  if (kept === undefined || kept.identity !== running) return recorded;
+  const own = recorded.confirmed;
+  return own === undefined ||
+      (own.identity === kept.identity && own.releasedAt < kept.releasedAt)
+    ? { ...recorded, confirmed: kept }
+    : recorded;
+}
+
 /** Whether two recorded outcomes say the same thing, ignoring when. */
 export function samePieceReconciliation(
   left: PieceReconciliation | undefined,
@@ -14070,6 +15345,8 @@ export function samePieceReconciliation(
   if (left === undefined || right === undefined) return left === right;
   return left.outcome === right.outcome && left.origin === right.origin &&
     left.reason === right.reason && left.detail === right.detail &&
+    left.confirmed?.identity === right.confirmed?.identity &&
+    left.confirmed?.releasedAt === right.confirmed?.releasedAt &&
     (left.offered === undefined || right.offered === undefined
       ? left.offered === right.offered
       : patternIdentityKey(left.offered) === patternIdentityKey(right.offered));
@@ -14186,7 +15463,8 @@ function initializePieceSourceHistory(
   }], rawMetaWriteAuthorization);
 }
 
-function samePieceSourceSnapshot(
+/** Whether two snapshots name the same source state of a piece. */
+export function samePieceSourceSnapshot(
   left: PieceSourceSnapshot,
   right: PieceSourceSnapshot,
 ): boolean {
@@ -14219,6 +15497,47 @@ function normalizePieceSourceOrigin(
  */
 export const PIECE_SOURCE_MOVED =
   "piece source changed while the source transition was being prepared";
+
+/**
+ * The reason a transition marked `requireLaterRelease` is refused: by the time
+ * it commits, the source the piece runs is known to have been released at or
+ * after the candidate, so the candidate is no longer the later release its
+ * review took it for.
+ *
+ * Exported so that the caller that set the requirement can tell this refusal
+ * from any other and review the candidate again.
+ */
+export const PIECE_RELEASE_OVERTAKEN =
+  "the piece's source was confirmed at a later release while the update was " +
+  "being prepared";
+
+/**
+ * The latest release time known for the source `resultCell` runs, `running`:
+ * the latest one recorded by the revisions naming it since the piece last
+ * moved to it from another source, or a later one the piece's reconciliation
+ * record confirms for it. `undefined` when none says.
+ */
+export function knownPieceReleasedAt(
+  resultCell: Cell<unknown>,
+  running: { identity: string; symbol: string },
+): number | undefined {
+  const history = getPieceSourceRevisions(resultCell);
+  let latest: number | undefined;
+  for (let index = history.length - 1; index >= 0; index--) {
+    const revision = history[index];
+    if (patternIdentityKey(revision.pattern) !== patternIdentityKey(running)) {
+      break;
+    }
+    if (revision.releasedAt !== undefined) {
+      latest = Math.max(latest ?? revision.releasedAt, revision.releasedAt);
+    }
+  }
+  const confirmed = getPieceReconciliation(resultCell)?.confirmed;
+  if (confirmed?.identity === running.identity) {
+    latest = Math.max(latest ?? confirmed.releasedAt, confirmed.releasedAt);
+  }
+  return latest;
+}
 
 /**
  * The session-side pattern the prepare/apply moved-guards below check a KEYLESS
@@ -14311,6 +15630,16 @@ export function applyPieceSourceTransition(
   ) {
     throw new Error(PIECE_SOURCE_MOVED);
   }
+  // Read before anything below writes: the reconciliation record this
+  // transition clears may be the only place the latest time is kept.
+  const knownReleasedAt = knownPieceReleasedAt(candidate, current.pattern);
+  if (
+    transition.requireLaterRelease &&
+    (transition.releasedAt === undefined || knownReleasedAt === undefined ||
+      knownReleasedAt >= transition.releasedAt)
+  ) {
+    throw new Error(PIECE_RELEASE_OVERTAKEN);
+  }
   const history = getPieceSourceRevisions(candidate);
   if (
     history.some((revision) => revision.revisionId === transition.revisionId)
@@ -14360,6 +15689,14 @@ export function applyPieceSourceTransition(
     }, rawMetaWriteAuthorization);
   }
 
+  // A transition that leaves the source in place keeps the latest release
+  // time known for it, so a confirmation the cleared reconciliation record
+  // held still orders the piece's later updates.
+  const keepsSource =
+    patternIdentityKey(current.pattern) === patternIdentityKey(nextPattern);
+  const releasedAt = !keepsSource || knownReleasedAt === undefined
+    ? transition.releasedAt
+    : Math.max(transition.releasedAt ?? knownReleasedAt, knownReleasedAt);
   const recordedCurrent = history.at(-1);
   const currentOrigin = normalizePieceSourceOrigin(
     runtime,
@@ -14406,6 +15743,7 @@ export function applyPieceSourceTransition(
     ...(transition.selectedRevisionId === undefined
       ? {}
       : { selectedRevisionId: transition.selectedRevisionId }),
+    ...(releasedAt === undefined ? {} : { releasedAt }),
   });
   candidate.setMetaRaw(
     "patternSource",

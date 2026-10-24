@@ -74,6 +74,7 @@
     // this separate task, so the permission to rewrite a pattern comes with
     // asking for it.
     "fix-pattern-tiers": "deno run --allow-read --allow-write ./tasks/check-pattern-tiers.ts --write",
+    "refresh-fabrichat-rehearsal": "deno run --allow-read --allow-write=packages/patterns/integration/fixtures/fabrichat-update-rehearsal --allow-run=git ./tasks/refresh-fabrichat-rehearsal.ts",
     "check-skill-facts": "deno run --allow-read --allow-run=git ./tasks/check-skill-facts.ts",
     "check-address-examples": "deno run --allow-read --allow-run=git ./tasks/check-address-examples.ts",
     "check-cfc-correspondence": "deno run --allow-read --allow-run=git ./tasks/check-cfc-correspondence.ts",

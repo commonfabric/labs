@@ -87,7 +87,7 @@ const __cfLift_7 = __cfHelpers.lift<{
                 type: "object",
                 properties: {
                     size: {
-                        "enum": ["s", "md"]
+                        "enum": ["md", "s"]
                     }
                 },
                 required: ["size"]

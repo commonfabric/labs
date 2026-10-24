@@ -63,6 +63,7 @@ function samplesOf(lines: number[]): CoverageDebtSample[] {
     day: dayAt(lines.length - 1 - index),
     uncoveredLines,
     runId: 1000 + index,
+    attempt: 1,
   }));
 }
 
@@ -99,9 +100,9 @@ describe("coverage-debt", () => {
       // The two-day gap moved 40 lines, which is 20 a day, matching the step
       // beside it rather than reading as twice the move.
       const samples: CoverageDebtSample[] = [
-        { day: dayAt(4), uncoveredLines: 100, runId: 1 },
-        { day: dayAt(2), uncoveredLines: 140, runId: 2 },
-        { day: dayAt(1), uncoveredLines: 160, runId: 3 },
+        { day: dayAt(4), uncoveredLines: 100, runId: 1, attempt: 1 },
+        { day: dayAt(2), uncoveredLines: 140, runId: 2, attempt: 1 },
+        { day: dayAt(1), uncoveredLines: 160, runId: 3, attempt: 1 },
       ];
       expect(medianDailyChange(samples)).toBe(20);
     });
@@ -117,9 +118,9 @@ describe("coverage-debt", () => {
       // two measurements of one moment, and dividing would be a division by
       // zero rather than a small number.
       const sameDay: CoverageDebtSample[] = [
-        { day: dayAt(2), uncoveredLines: 100, runId: 1 },
-        { day: dayAt(2), uncoveredLines: 900, runId: 2 },
-        { day: dayAt(1), uncoveredLines: 930, runId: 3 },
+        { day: dayAt(2), uncoveredLines: 100, runId: 1, attempt: 1 },
+        { day: dayAt(2), uncoveredLines: 900, runId: 2, attempt: 1 },
+        { day: dayAt(1), uncoveredLines: 930, runId: 3, attempt: 1 },
       ];
       expect(medianDailyChange(sameDay)).toBe(30);
     });

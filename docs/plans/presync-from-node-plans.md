@@ -1,12 +1,13 @@
 # Pre-syncing from node plans
 
 A piece's runs read through the schemas the transformer narrowed to what each
-lift and handler body touches. The pre-sync that pulls documents before those
-runs follows wider schemas, walks the pattern graph a second time with code of
-its own, and then holds every first run on a space-wide timer rather than on
-the loads it asked for. This plan makes one derivation per node serve both
-instantiation and the pre-sync, on resumes and fresh starts alike, and gates
-each node's first run on the loads that derivation named.
+lift and handler body touches. This plan makes the pre-sync that pulls
+documents before those runs follow the same schemas: one derivation per node
+serves both instantiation and the pre-sync, on resumes and fresh starts
+alike, and each node's first run is gated on the loads that derivation named.
+The derivation and the pre-sync built on it are in the runner. Gating first
+runs is the largest stage still open: a resumed action's first run is held on
+a space-wide timer, not on the loads its plan named.
 
 The audit this plan follows from is
 [`../history/packages/runner/presync-audit-2026-09-09.md`](../history/packages/runner/presync-audit-2026-09-09.md).
@@ -41,62 +42,150 @@ only if something named it or a selector reached it.
 
 ## Where the runner stands
 
-Five places bind a node's inputs and outputs to documents. `#bindNodeIO`
-serves JavaScript nodes, `#buildRawNodeInputs` serves raw nodes and was
-already factored out so the resume pre-sync could derive a list
-coordinator's inputs without instantiating it, the passthrough node and the
-pattern node each bind inline, and the resume pre-sync's node walk binds
-every node once more with a copy of the same calls. The walk syncs each
-write-redirect link under the link's own schema, which is a slice of the
-pattern's authored argument schema, and pushes the argument document as a
-link-target root under the whole authored schema. Neither is the module
-schema, so the pre-sync pulls what the authored type reaches rather than what
-the bodies read.
+Stages 1 and 3 are complete, stage 2 lacks only its measurement, and stage 5
+has its first step. This section describes the runner the open stages start
+from. Every method it names is in `packages/runner/src/runner.ts` unless a
+path says otherwise.
 
-A fresh start gets less. `runSynced` walks the caller's argument raw and skips
-the node walk, because the `argument` meta link it keys on does not exist
-until setup writes it. `run()` pre-syncs nothing for a fresh piece.
+`#nodePlan` derives the plan of every node, whatever its kind. Instantiation
+calls it from `#instantiateNode`. The pre-sync calls it from
+`#cellsPatternNodes`, for the nodes it syncs, and from
+`#collectResumeOwnedCells`, which takes each pattern node's child result cell
+from the plan. The list-children pass is the one caller that binds a node
+without it: `#syncListSlotResolutions` and `#syncResumeListChildren` derive a
+list coordinator's inputs through `#buildRawNodeInputs`, the binder a raw
+node's plan uses. The bindings the first plan of a node computes against a
+stored argument are held for every later plan of it (`NodeBindingMemo`,
+`packages/runner/src/node-binding-memo.ts`); a binding against a stand-in is
+computed and not held. "One plan per node" below says which part of a plan
+that covers.
 
-Pattern nodes get their child's derived internal cells named through the
-owned-cell walk and nothing else: the child result document is never named,
-the child's nodes are never walked, and the child's inputs are bound under the
-child's whole authored argument schema.
+The pre-sync (`#syncCellsForRunningPattern`) names the result document and
+then syncs what each node's plan names (`#cellsNodePlanReads`): a JavaScript
+or raw node's inputs document under its module schema, with a handler's
+`$event` slot declared as a stream and every hop of that stream named whole;
+a passthrough node's inputs document under no schema; a pattern node's child
+result cell under the child's result schema, and nothing of its inputs. Each
+plan's write targets are synced under the schema their output binding
+carries. Beside the plans it names the argument document whole under no
+schema, the derived internal cells of the pattern and of every nested
+instance, the result under the pattern's result schema, the result's `[UI]`
+where the pattern returns one and that schema does not declare it, and the
+policy manifests the pattern names. Once those have landed it names what the
+plans' reads reach in other spaces (`#syncCrossSpaceReads`), the list
+coordinators' children and the cells those children own
+(`#syncResumeListChildren`), and what the nested instances' nodes read
+(`#syncResumeInstanceNodes`). Last, it names root-only the documents the
+stored argument links to directly and the result document owning each
+(`#syncStoredArgumentLinkTargets`).
 
-Every action resumed from storage then holds its first run until the space's
-`synced()` resolves or two seconds pass. The constant's own comment records
-that this is an anti-churn optimization rather than a gate: a run whose input
-had not landed reads absent, computes a different value, writes it, and
-conflicts when the durable value arrives. The precise wait exists for events
-only: an event parks on the specific in-flight loads its closure reads, and
-since #7189 a client dispatch whose argument read cold re-runs parked on the
-loads its own reads registered. Computations have no such park.
+`#syncResumeInstanceNodes` works level by level. Each round plans every
+nested instance whose `argument` meta link has become readable and syncs
+what those plans name, the child result cells among them, which is what lets
+the next round plan the level below. An instance whose result document holds
+no argument link is planned against the inputs its parent's node binds it
+to. An instance with a stored setup is recorded in `#presyncNamedInstances`,
+under the pattern it was planned with, once a round has planned all of its
+nodes and none of that round's syncs has failed. An instance whose pattern
+pointer or setup marker names a pattern other than the one it is planned
+with is set up again by its parent's start, and that setup judges every slot
+its stored argument holds against the new argument schema, slots no plan
+reads among them. Once the round's syncs have landed, such an instance's
+stored argument has its direct link targets, and the result document owning
+each, named the way the root's are (`#syncStoredArgumentLinkTargets`).
+
+`runSynced` runs the same pre-sync before setup. On a fresh start the result
+document has no `argument` meta link yet, so the plans bind against an
+immutable cell holding the caller's argument. A fresh start whose caller
+passes no argument has nothing to bind against: the pre-sync plans none of
+its nodes and logs that it skipped them. `run()` is synchronous and runs no
+pre-sync for a fresh piece. Over a piece set up elsewhere, `run()` asks the
+gate described below and, when the gate finds a document absent, defers setup
+and start until the same pre-sync has landed (`#runAfterNamedFamilyLands`).
+
+A start that resumes a piece from storage awaits the pre-sync and then
+instantiates the piece with `awaitSyncBeforeInitialRun` set (`#doStart`).
+The scheduler holds the first run of every action registered that way until
+the space's `synced()` resolves or `INITIAL_RUN_SYNC_HOLD_TIMEOUT_MS`, two
+seconds, has passed (`#holdInitialRunUntilSynced`,
+`packages/runner/src/scheduler/facade.ts`). The hold is space-wide and timed:
+it takes no account of the loads the action's plan named, and the timer
+releases it whether or not they have landed. A pattern node passes the option
+on to its child's start, and a list builtin passes it to the element runs of
+its first non-empty reconcile after a resume (`resumeBatchAwaitSync`). Events
+wait on specific loads where computations do not. The event at the head of
+the queue parks on the loads in flight for documents its handler reads. A
+client dispatch whose handler did not run, on a runtime without server
+execution, is run again unless its caller sent it with `retries: false`, in
+which case it is dropped. The run that follows is parked on the loads the
+first run's reads registered when any are in flight, and otherwise waits a
+backoff step (`packages/runner/src/scheduler/events.ts`).
+
+Two gates decide whether a run or a swap over a stored piece must name the
+piece's family first, and both probe the replica for documents.
+`#familyAbsent`, asked before a run, probes the argument document, then the
+documents the caller's argument and the stored argument link to, computed
+cells and streams excepted, following each redirect chain up to four hops
+(`#argumentLinksAbsent`), then the derived internal cells of the pattern and
+of its nested instances. Its probes share a budget of 256
+(`NAMING_PROBE_BUDGET`), and a spent budget counts as an absence. For an
+instance recorded in `#presyncNamedInstances` under the same pattern it
+skips the walk of the argument's links and still probes the derived internal
+cells. `#swapReadsAbsent`, asked before a running piece swaps to the pattern
+its pointer moved to, probes the argument document and the derived internal
+cells the stored `internal` manifest lists. It walks no links and has no
+budget.
 
 ## Design
 
 ### One plan per node
 
-`#nodePlan(tx, node, resultCell, pattern, moduleRefName?, argumentLink?)`
-returns:
+`#nodePlan(tx, node, resultCell, pattern, argumentLink?)` returns:
 
 - `inputsCell`, the immutable cell built from the bound input bindings, which
   the node reads its argument from;
 - `module`, whose argument schema is the read schema the pre-sync syncs
   `inputsCell` under for a JavaScript node, with a handler's `$event` slot
-  excluded (`schemaWithoutEventSlot`), and for a raw node, where it is the
-  builtin's; a passthrough node's `inputsCell` is synced schema-less, since
-  its run copies the inputs whole, and a pattern node's is not synced at all,
-  since the child's own plans read it;
+  declared as a stream (`schemaWithEventSlotAsStream`), and for a raw node,
+  where it is the builtin's; a passthrough node's `inputsCell` is synced
+  schema-less, since its run copies the inputs whole, and a pattern node's is
+  not synced at all, since the child's own plans read it;
 - `outputs`, the bound output bindings, and `writes`, their write-redirect
   links, each carrying the output binding's schema;
 - for a pattern node, `childResultCell` under the child's result schema and
   the bound child pattern, derived as `#instantiatePatternNode` derives them.
 
-Instantiation consumes the plan: `#bindNodeIO`, `#buildRawNodeInputs`, the
-passthrough node, and `#instantiatePatternNode` each take their bound values
-from it instead of binding on their own. The pre-sync consumes the same plan.
+Instantiation consumes the plan: the JavaScript, raw, passthrough and pattern
+node instantiations each take their bound values from it instead of binding
+on their own. The pre-sync consumes the same plan.
 Whatever a node reads at run time, it reads through `inputsCell` under
 `readSchema`, so a pre-sync that walks exactly that pair pulls exactly the
 run's read set and nothing the authored schema reaches beyond it.
+
+A plan has two parts, and the runner computes them differently. Binding the
+node's inputs and outputs to the piece's argument and result documents, and
+building `inputsCell` from the bound inputs, reads nothing through a
+transaction: the result is a function of the node, its pattern's manifest and
+argument schema, the result cell's link and the argument link, for a given
+kind of module. The runner holds that part by those four and by the kind of
+module the node resolved to, with the pattern a pattern node's module holds,
+from the first plan made of a node for every later plan of it — a pre-sync's,
+a name-sync's, the instantiation's — across a load (`NodeBindingMemo`,
+`packages/runner/src/node-binding-memo.ts`), so every plan of a node shares
+one binding and one inputs document, and a pattern node's bound child is the
+same pattern object in every plan, under which the child's own nodes are
+found again. A pattern is named by its content identity when it has one and
+a node by its position among its nodes, since the pattern embedded in a
+parent's graph and the one loaded by identity for the instance's own start
+are two objects of one identity holding the same nodes. A binding against a
+stand-in argument is not held: the instance it belongs to is instantiated
+against the argument document its setup writes.
+
+Resolving what the bound outputs redirect to (`writes`, a raw node's resolved
+output spot, a pattern node's `childResultCell`) reads link slots through the
+caller's transaction, and every plan does that for itself: the reads belong
+in the log of the transaction the plan is made in, an action's among them,
+and a redirect written since the last plan has to be followed.
 
 ### The pre-sync syncs each plan under its schema
 
@@ -120,8 +209,12 @@ plan syncs. `LINK_HOPS`, `ArgumentLinkRoot`, `narrowChildSchema`, and
 `isReferenceOnlySchema` go with them. One walk stays, one hop wide: the
 stored argument's direct link targets and the result document owning each
 are named root-only (`#syncStoredArgumentLinkTargets`), because setup's
-supplied-link proof reads them and that read is no node's. It runs last in
-the pre-sync, after every plan sync and coordinator sync has been issued, so
+supplied-link proof reads them and that read is no node's. A nested instance
+that its parent's start sets up again under another pattern has the same
+walk over its own stored argument, because that setup reads each stored slot
+through the link it holds, and that read is no node's either. The root's walk
+runs last in the pre-sync, after every plan sync and coordinator sync has
+been issued, so
 a document a plan reads is asked for under that plan's schema before the
 root-only naming asks for it. Among plans the requests go out together, in
 pattern order, and no order among them is claimed; what the ordering
@@ -237,12 +330,12 @@ produce, and it no longer depends on a two-second race.
 ### The named-family gate asks the plans
 
 `#familyAbsent` and `#swapReadsAbsent` decide whether a run or a swap over a
-stored piece must name its family first. They probe presence with a raw
-four-hop scan of the argument under a 256-probe budget. With plans available
-the question has an exact answer: whether each node's selector is already
-covered, which the storage manager's sync-request index knows without a round
-trip. The gate keeps its structure and its hold, and asks that instead of
-scanning.
+stored piece must name its family first, by probing the replica for
+documents as [Where the runner stands](#where-the-runner-stands) describes.
+With plans available the question has an exact answer: whether each node's
+selector is already covered, which the storage manager's sync-request index
+knows without a round trip. The gate keeps its structure and its hold, and
+asks that instead of scanning.
 
 ## Stages
 
@@ -418,7 +511,10 @@ Exit: no resumed action's first run is released by a timer.
       instance's own start, asked under the same pattern, skips the
       argument walk: the pre-sync's plans are the plans a name-sync would
       build, so a name-sync could request nothing the pre-sync did not. The
-      owned cells are still probed, since an absent one is owed a seed. The
+      owned cells are still probed, since an absent one is owed a seed; a
+      derived cell owed none is probed by its record, since its value is
+      its computation's to produce and a name-sync would deliver the same
+      record. The
       instance wave also names the policy manifests each nested pattern
       declares, as the root wave names the root's.
 - [x] Test: a tree whose rows receive, through the root's argument, a link

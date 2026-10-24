@@ -1,11 +1,20 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { deepFreeze } from "@commonfabric/data-model";
+import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 import { decomposeSchema } from "../src/schema-decompose.ts";
-import { ensureExternalSchemaClosure } from "../src/schema-ifc.ts";
+import {
+  ensureExternalSchemaClosure,
+  schemaHasIfc,
+} from "../src/schema-ifc.ts";
+import {
+  acquireSchemaRegistryLease,
+  registerSchemaDocument,
+} from "../src/schema-registry.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const space = "did:key:zSchemaIfcClosureUnit" as MemorySpace;
@@ -96,6 +105,82 @@ describe("schema-ifc", () => {
       } as unknown as IExtendedStorageTransaction;
 
       expect(ensureExternalSchemaClosure(tx, space, ref)).toBe(true);
+    });
+  });
+
+  describe("schemaHasIfc()", () => {
+    // A link's stored schema as each document holding the link carries it:
+    // a deep-frozen object of the document's own, here a reference to a
+    // registered schema document beside a keyword of the link's own.
+    const storedLinkSchemas = (tag: string, labeled: boolean) => {
+      const decomposed = decomposeSchema(
+        {
+          type: "object",
+          properties: {
+            [tag]: {
+              type: "string",
+              ...(labeled && { ifc: { confidentiality: ["secret"] } }),
+            },
+            plain: { type: "object", properties: { name: { type: "string" } } },
+          },
+        } as unknown as JSONSchemaObj,
+      );
+      for (const [hash, document] of decomposed.documents) {
+        registerSchemaDocument(hash, document);
+      }
+      return () =>
+        deepFreeze({
+          $ref: decomposed.rootRef,
+          description: `stored link schema ${tag}`,
+        }) as JSONSchema;
+    };
+
+    it("returns `true` for each of several equal schemas whose reference reaches a label, hashing only each schema's own root", () => {
+      const release = acquireSchemaRegistryLease();
+      try {
+        const stored = storedLinkSchemas("has-ifc-labeled", true);
+        expect(schemaHasIfc(stored())).toBe(true);
+        const hashedBefore = getContainersHashedForTestingOnly();
+        for (let document = 0; document < 10; document++) {
+          expect(schemaHasIfc(stored())).toBe(true);
+        }
+        // Resolving the reference for each schema builds, and hashes, the
+        // referenced document merged with the schema's own keywords.
+        expect(getContainersHashedForTestingOnly() - hashedBefore).toBe(10);
+      } finally {
+        release();
+      }
+    });
+
+    it("returns `false` for each of several equal schemas whose reference reaches no label", () => {
+      const release = acquireSchemaRegistryLease();
+      try {
+        const stored = storedLinkSchemas("has-ifc-unlabeled", false);
+        for (let document = 0; document < 3; document++) {
+          expect(schemaHasIfc(stored())).toBe(false);
+        }
+      } finally {
+        release();
+      }
+    });
+
+    it("returns `false` for a schema equal to one it judged labeled, once the registry holding the label's document has cleared", () => {
+      const release = acquireSchemaRegistryLease();
+      const stored = storedLinkSchemas("has-ifc-cleared", true);
+      expect(schemaHasIfc(stored())).toBe(true);
+      release();
+      expect(schemaHasIfc(stored())).toBe(false);
+    });
+
+    it("returns the verdict of a schema that is not deep-frozen without freezing it", () => {
+      const labeled = {
+        type: "object",
+        properties: {
+          secret: { type: "string", ifc: { confidentiality: ["secret"] } },
+        },
+      } as JSONSchema;
+      expect(schemaHasIfc(labeled)).toBe(true);
+      expect(Object.isFrozen(labeled)).toBe(false);
     });
   });
 });

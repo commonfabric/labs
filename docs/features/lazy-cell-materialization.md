@@ -216,14 +216,14 @@ wrong. These rules hold that agreement:
   Under a union the item's type settles, the item is a view over the selected
   branch, and the dead-end below it refuses where the reader touches it, as
   under any view; the item never reads as the substitute.
-- **An inline array element is identified by its value.** `toCell` on such an
-  element, including a nested array, must not name the array's index; written
-  elsewhere that link would follow whatever lands at the index next. Eager
-  traversal rebases it onto a
-  [`data:` identifier](data-uri-identifiers.md), and the view does the same. The
-  read stays on the slot, and recursively: the identity is derived from the
-  whole
-  element value.
+- **An inline array value is identified by its contents.** Converting an
+  element value to a link, including a nested array, uses a
+  [`snapshot:` identifier](immutable-cell-identifiers.md) so the link keeps
+  that value when the source array changes. The scheduling read remains on the
+  slot and covers the whole element recursively. A schema requesting `asCell`
+  instead returns a cell at the array slot, which follows subsequent writes
+  there. Memory-server graph queries also keep elements in place through
+  `inlineArrayItemsInPlace`.
 - **A property the schema turns down is settled off the schema, not by reading
   it.** Declaring it `false` turns it down, and so does leaving it unnamed by a
   schema that refuses the properties it does not name. Either way it is absent
@@ -424,7 +424,7 @@ is the unmarked ones that stand.
 
 ## Related documents
 
-- [`data-uri-identifiers.md`](data-uri-identifiers.md) — the identifiers an
+- [`immutable-cell-identifiers.md`](immutable-cell-identifiers.md) — the identifiers an
   inline array element is rebased onto.
 - [`../specs/space-model/7-schemas.md`](../specs/space-model/7-schemas.md) —
   what a schema means on a read.

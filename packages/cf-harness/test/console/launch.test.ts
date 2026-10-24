@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 
 import { DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE } from "../../src/config.ts";
 
@@ -692,13 +692,14 @@ describe("launch", () => {
         .toThrow(/^(?!.*pieces\.json).*$/s);
     });
 
-    it("throws for a space named by DID, which composes no piece URL", () => {
-      expect(() =>
-        resolveConsoleLaunchPlan(NO_INSTANCE, {
-          ...NAMED_FABRIC,
-          space: "did:key:z6Mk",
-        })
-      ).toThrow("rather than a DID");
+    it("returns a plan naming the space DID a caller gives", () => {
+      const space = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+      const plan = resolveConsoleLaunchPlan(NO_INSTANCE, {
+        ...NAMED_FABRIC,
+        space,
+      });
+
+      expect(plan.environment.CF_HARNESS_FABRIC_SPACE).toBe(space);
     });
   });
 
@@ -1594,7 +1595,7 @@ describe("launch", () => {
       // what an operator who forgot one sees.
       const launcher = new URL("../../console/launch.ts", import.meta.url);
       const run = await new Deno.Command(Deno.execPath(), {
-        args: ["run", "-A", launcher.pathname],
+        args: ["run", "-A", fromFileUrl(launcher)],
         env: {
           ...NAMES_RUNSC,
           CF_IDENTITY: "",

@@ -3,12 +3,14 @@ import { isDID } from "@commonfabric/identity/did";
 import { type Cell } from "../cell.ts";
 import { type FabricUrlTarget, parseFabricUrl } from "../fabric-url.ts";
 import { getMetaLink } from "../link-utils.ts";
+import { type RawBuiltinResult } from "../module.ts";
 import { type Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import type { URI } from "../sigil-types.ts";
 import { slugIdForSpace } from "../slugs.ts";
 import {
   enrollRuntimeOwnedStore,
+  ownedStoreLinks,
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
 import type {
@@ -48,17 +50,23 @@ export function cellFromUrl(
   cause: Cell<any>[],
   parentCell: Cell<any>,
   runtime: Runtime,
-): Action {
-  return (tx: IExtendedStorageTransaction) => {
+): RawBuiltinResult {
+  // The stores this node keeps, each keyed by its cause alone, so the
+  // action declares them when it is set up.
+  const stores = {
+    pending: { cellFromUrl: { pending: cause } },
+    cell: { cellFromUrl: { cell: cause } },
+  };
+  const action: Action = (tx: IExtendedStorageTransaction) => {
     const pending = runtime.getCell<boolean>(
       parentCell.space,
-      { cellFromUrl: { pending: cause } },
+      stores.pending,
       undefined,
       tx,
     );
     const cell = runtime.getCell<unknown>(
       parentCell.space,
-      { cellFromUrl: { cell: cause } },
+      stores.cell,
       undefined,
       tx,
     );
@@ -163,6 +171,10 @@ export function cellFromUrl(
 
     const pendingWithTx = pending.withTx(tx);
     if (pendingWithTx.get() !== false) pendingWithTx.set(false);
+  };
+  return {
+    action,
+    storeWrites: ownedStoreLinks(runtime, parentCell, Object.values(stores)),
   };
 }
 

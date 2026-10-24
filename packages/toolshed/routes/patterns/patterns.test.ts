@@ -195,12 +195,33 @@ describe("Patterns API", () => {
       expect(await revalidated.text()).toBe("");
     });
 
+    it("sends the release time it is given beside an identity", async () => {
+      const response = await createPatternsRoute({
+        releasedAt: Date.UTC(2026, 9, 16, 14, 3, 0),
+      }).serveFile("system/default-app.tsx", { identity: true });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("CF-Released-At")).toBe(
+        "2026-10-16T14:03:00.000Z",
+      );
+    });
+
+    it("sends no release time when it is given none", async () => {
+      const response = await app.request(
+        "/api/patterns/system/default-app.tsx?identity",
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.has("CF-Released-At")).toBe(false);
+    });
+
     it("allows cross-origin identity fetches", () => {
       const headers = new Headers(
         patternResponseHeaders("text/plain; charset=utf-8", '"test"'),
       );
       expect(headers.get("Access-Control-Allow-Origin")).toBe("*");
       expect(headers.get("Access-Control-Expose-Headers")).toContain("ETag");
+      expect(headers.get("Access-Control-Expose-Headers")).toContain(
+        "CF-Released-At",
+      );
     });
 
     it("matches the shared resolveEntryIdentity over the real closure (HTTP-boundary drift guard)", async () => {

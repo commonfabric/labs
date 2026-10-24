@@ -229,6 +229,21 @@ export interface HarnessCellLabelRecord {
   truncationReason?: HarnessCellLabelTruncationReason;
 
   /**
+   * Every path of this cell at which the reader found a link naming a
+   * document, in the order it found them: the links it followed, and the ones
+   * it left unread, which `unreadPaths` names as well. A link reached through
+   * another sits under the path that reached it.
+   *
+   * A reference leaves an entry of its own only where it carries a label, so
+   * this list, and not `entries`, is what says where a cell's links are. An
+   * empty list is a positive finding: the cell was read and holds no link. It
+   * is absent where the cell went unread, and from a record whose reader
+   * listed none. Under a `truncationReason` it holds the links found before
+   * the reader stopped.
+   */
+  linkPaths?: readonly (readonly string[])[];
+
+  /**
    * The labels, one entry per labelled path. An empty list is a positive
    * finding — the space was read and holds no label for this cell — except
    * where `unreadReason` is set, which says nothing was asked, at the paths

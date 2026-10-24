@@ -40,6 +40,7 @@ export const CFC_DENIAL_CODES = [
   "write-policy-gate",
   "write-prepare-crashed",
   "write-unprepared",
+  "write-prepare-invalidated",
   "write-prepared-digest-mismatch",
   "render-confidentiality-ceiling",
   "render-remote-load",

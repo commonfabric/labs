@@ -110,7 +110,8 @@ export function patternSourceUrl(source: string, base: string | URL): URL {
  * The source ref and creation cause for a space's root, by space type.
  * The CAUSE is identity-bearing: it derives the piece cell's entity id,
  * so every creator (client controller, server ensure) MUST mint the same
- * cause for the OCC creation race to converge on one root by address —
+ * cause for the optimistic concurrency control (OCC) creation race to
+ * converge on one root by address —
  * these are the controller's historical literals, shared so they cannot
  * drift.
  */

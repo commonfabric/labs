@@ -9,11 +9,30 @@ import { listElementLink } from "./list-element-link.ts";
 import { inferListOpArgumentUsage } from "./list-op-argument-usage.ts";
 import { listResultSchema } from "./list-result-schema.ts";
 import { resolveOpPattern } from "./op-pattern-ref.ts";
-import { ownedCell } from "./runtime-owned-store.ts";
+import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 import { narrowestCellScope, outputSpotFromBinding } from "./scope-policy.ts";
 
 /** The three list coordinators, by the builtin ref name each registers. */
 export type ListOp = "map" | "filter" | "flatMap";
+
+/**
+ * The result container an `op` node's plan mints, named when the node is set
+ * up so that its action declares it. A node with no output spot has none: its
+ * plan refuses to run.
+ */
+export function listContainerStoreWrites(
+  runtime: Runtime,
+  op: ListOp,
+  parentCell: Cell<any>,
+  outputBinding: NormalizedFullLink | undefined,
+): NormalizedFullLink[] {
+  const outputSpot = outputSpotFromBinding(outputBinding);
+  return outputSpot
+    ? ownedStoreLinks(runtime, parentCell, [
+      listContainerCause(op, parentCell, outputSpot),
+    ])
+    : [];
+}
 
 /**
  * Everything a list coordinator derives before it touches an element: the
@@ -124,7 +143,7 @@ export function listCoordinatorPlan(
     runtime,
     tx,
     parentCell,
-    { [op]: parentCell.entityId, outputSpot },
+    listContainerCause(op, parentCell, outputSpot),
     resultSchema,
     scope,
   );
@@ -196,4 +215,13 @@ export function listElementResultCell(
     tx,
     container.getAsNormalizedFullLink().scope,
   );
+}
+
+/** The cause a list coordinator's result container is minted under. */
+function listContainerCause(
+  op: ListOp,
+  parentCell: Cell<any>,
+  outputSpot: NonNullable<ReturnType<typeof outputSpotFromBinding>>,
+): unknown {
+  return { [op]: parentCell.entityId, outputSpot };
 }

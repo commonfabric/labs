@@ -1,7 +1,12 @@
-import type { JSONSchemaObj, SchemaPathSelector } from "@commonfabric/api";
+import type {
+  JSONSchema,
+  JSONSchemaObj,
+  SchemaPathSelector,
+} from "@commonfabric/api";
 import {
   hashSchema,
   internPathSelector,
+  internSchema,
   REJECTING_SELECTOR,
 } from "@commonfabric/data-model-schema";
 import {
@@ -9,6 +14,7 @@ import {
   containsExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
 import { hashStringOf } from "@commonfabric/data-model";
+import { LRUCache } from "@commonfabric/utils/cache";
 import type { MIME } from "@commonfabric/memory/interface";
 import type {
   CellScope,
@@ -18,6 +24,7 @@ import type {
 
 import { pruneCfcSchemaDefinitions } from "../cfc/schema-refs.ts";
 import {
+  type DecomposedSchema,
   decomposeSchema,
   recomposeSchema,
   SchemaNotDecomposableError,
@@ -25,6 +32,7 @@ import {
 import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
 import {
   lookupSchemaDocument,
+  onSchemaRegistryClear,
   registerSchemaDocument,
 } from "../schema-registry.ts";
 import type { PullError, Result, Unit, URI } from "./interface.ts";
@@ -76,6 +84,56 @@ export class SelectorClosureUnavailableError extends Error {
 }
 
 /**
+ * The two forms a decomposition's schema goes to the wire in, each interned
+ * and built on first use: the reference to its root, and its closure
+ * recomposed inline.
+ */
+type ExternalizedForms = { reference?: JSONSchema; inline?: JSONSchema };
+
+/**
+ * The externalized forms of each decomposition, by the decomposition. A
+ * decomposition `decomposeSchema()` keeps is handed out again for the same
+ * schema, so every sync of one schema reads its forms here; one it does not
+ * keep is a new object per call, and builds its form again. The forms are
+ * dropped when the schema registry clears, as every retainer of externalized
+ * forms drops them: a reference dies with the registry epoch that minted it.
+ */
+let externalizedForms = new WeakMap<DecomposedSchema, ExternalizedForms>();
+onSchemaRegistryClear(() => {
+  externalizedForms = new WeakMap();
+});
+
+/** Helper for the two form readers, which returns `decomposed`'s entry. */
+const externalizedFormsOf = (
+  decomposed: DecomposedSchema,
+): ExternalizedForms => {
+  let forms = externalizedForms.get(decomposed);
+  if (forms === undefined) {
+    forms = {};
+    externalizedForms.set(decomposed, forms);
+  }
+  return forms;
+};
+
+/** The interned reference to `decomposed`'s root. */
+const referenceFormOf = (decomposed: DecomposedSchema): JSONSchema =>
+  externalizedFormsOf(decomposed).reference ??= internSchema({
+    $ref: decomposed.rootRef,
+  });
+
+/**
+ * The interned inline form of `decomposed`: its closure recomposed into one
+ * self-contained schema.
+ */
+const inlineFormOf = (decomposed: DecomposedSchema): JSONSchema =>
+  externalizedFormsOf(decomposed).inline ??= internSchema(
+    recomposeSchema(
+      decomposed.rootRef,
+      (hash) => decomposed.documents.get(hash) ?? lookupSchemaDocument(hash),
+    ),
+  );
+
+/**
  * Normalizes a selector's schema for the wire
  * (`docs/specs/content-addressed-schemas.md`, Phase 2; the
  * `contentAddressedSchemas` flag, shared with the link writer — the two
@@ -121,9 +179,10 @@ export const externalizeSyncSelector = (
   const carriesRefs = containsExternalSchemaRef(schema);
   if (!carriesRefs && !getContentAddressedSchemasConfig()) return selector;
   try {
-    const { rootRef, documents } = decomposeSchema(schema as JSONSchemaObj, {
+    const decomposed = decomposeSchema(schema as JSONSchemaObj, {
       resolveDocument: lookupSchemaDocument,
     });
+    const { documents } = decomposed;
     for (const [hash, document] of documents) {
       registerSchemaDocument(hash, document);
     }
@@ -133,16 +192,13 @@ export const externalizeSyncSelector = (
     if (persisted && getContentAddressedSchemasConfig()) {
       return internPathSelector({
         path: selector.path,
-        schema: { $ref: rootRef },
+        schema: referenceFormOf(decomposed),
       });
     }
     if (!carriesRefs) return selector;
     return internPathSelector({
       path: selector.path,
-      schema: recomposeSchema(
-        rootRef,
-        (hash) => documents.get(hash) ?? lookupSchemaDocument(hash),
-      ),
+      schema: inlineFormOf(decomposed),
     });
   } catch (error) {
     if (error instanceof SchemaNotDecomposableError) {
@@ -211,29 +267,86 @@ export const compactWatchEntries = (
   return compacted;
 };
 
-const selectorIdentity = (selector: SchemaPathSelector): string =>
-  hashStringOf({
-    path: selector.path,
-    schemaHash: selector.schema === undefined
-      ? ""
-      : hashSchema(selector.schema),
-  });
+/**
+ * How many watch ids `watchIds` keeps, and how many selector identities
+ * `selectorIdentities` keeps. A load refreshes its watch set many times over
+ * with entries equal by value, so each is sized for the entries of the loads
+ * under way rather than for every entry a session ever watched.
+ */
+const WATCH_ID_LIMIT = 8_192;
+const SELECTOR_IDENTITY_LIMIT = 4_096;
 
+/**
+ * The identities `selectorIdentity()` has hashed most recently, by the
+ * schema hash and path they were hashed from. The key is `JSON.stringify()`
+ * of those two, which tells strings apart exactly, so two selectors share an
+ * entry only where they hash alike.
+ */
+const selectorIdentities = new LRUCache<string, string>({
+  capacity: SELECTOR_IDENTITY_LIMIT,
+});
+
+/**
+ * The ids `watchIdForEntry()` has hashed most recently, by the parts it
+ * hashes them from. As with `selectorIdentities`, the key is
+ * `JSON.stringify()` of those parts, every one a string or absent.
+ */
+const watchIds = new LRUCache<string, string>({ capacity: WATCH_ID_LIMIT });
+
+/**
+ * The identity of `selector`: the hash of its path and of its schema's hash.
+ * A schema is hashed once per interned instance, so the cost here is the
+ * hash of the pair, paid once per distinct pair.
+ */
+const selectorIdentity = (selector: SchemaPathSelector): string => {
+  const schemaHash = selector.schema === undefined
+    ? ""
+    : hashSchema(selector.schema);
+  const key = JSON.stringify([schemaHash, selector.path]);
+  let identity = selectorIdentities.get(key);
+  if (identity === undefined) {
+    identity = hashStringOf({ path: selector.path, schemaHash });
+    selectorIdentities.put(key, identity);
+  }
+  return identity;
+};
+
+/**
+ * The id of the watch `address` and `selector` name on `branch`: a hash of
+ * the two and the branch, paid once per distinct entry.
+ */
 export const watchIdForEntry = (
   address: ScopedWatchAddress,
   selector: SchemaPathSelector,
   branch = "",
-): string =>
-  `replica:${
-    hashStringOf({
-      branch,
-      id: address.id,
-      scope: address.scope ?? "space",
-      type: DOCUMENT_MIME,
-      selector: selectorIdentity(selector),
-      // The explicit instance (stage A) is watch identity: two instances
-      // of one doc are two watches, never merged by id. Absent from the
-      // hashed object when unnamed, so the OFF-arm id is byte-identical.
-      ...(address.scopeKey !== undefined ? { scopeKey: address.scopeKey } : {}),
-    })
-  }`;
+): string => {
+  const scope = address.scope ?? "space";
+  const selectorId = selectorIdentity(selector);
+  const key = JSON.stringify([
+    branch,
+    address.id,
+    scope,
+    selectorId,
+    address.scopeKey,
+  ]);
+  let id = watchIds.get(key);
+  if (id === undefined) {
+    id = `replica:${
+      hashStringOf({
+        branch,
+        id: address.id,
+        scope,
+        type: DOCUMENT_MIME,
+        selector: selectorId,
+        // The explicit instance (stage A) is watch identity: two instances
+        // of one doc are two watches, never merged by id. Absent from the
+        // hashed object when unnamed, so the OFF-arm id is byte-identical.
+        ...(address.scopeKey !== undefined
+          ? { scopeKey: address.scopeKey }
+          : {}),
+      })
+    }`;
+    watchIds.put(key, id);
+  }
+  return id;
+};

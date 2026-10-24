@@ -10,6 +10,7 @@
 
 import {
   Default,
+  type FabricBytes,
   NAME,
   type PerSession,
   type PerSpace,
@@ -62,7 +63,11 @@ import { createEmptyGrid } from "../shared/index.tsx";
 export interface PlayerData {
   name: string;
 
-  /** Avatar URL or glyph, snapshotted from the joiner's shared profile. */
+  /** Picture bytes, snapshotted from the joiner's shared profile. */
+  picture?: FabricBytes;
+
+  /** Avatar text, snapshotted instead when the joiner's profile has no
+   * picture. */
   avatar?: string;
   ships: Ship[];
   color: string;
@@ -130,7 +135,7 @@ export function trimmedName(value: string | undefined): string {
 
 /**
  * Shared match state is per-space; viewer identity is scoped per user. The
- * join name/avatar come from the viewer's shared profile (resolved via
+ * join name/picture come from the viewer's shared profile (resolved via
  * `wish({ query: "#profile" })` in the lobby), so there is no join-form text.
  */
 export interface LobbyState {

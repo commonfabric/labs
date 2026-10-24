@@ -72,6 +72,135 @@ describe("cell-handle", () => {
     );
   }
 
+  describe("CellHandle key() schema", () => {
+    const runtime = {
+      [$conn]: () => ({ peersOf: () => [] }),
+    } as unknown as RuntimeClient;
+    const schema = {
+      type: "object",
+      properties: {
+        state: {
+          type: "object",
+          properties: { shapes: { type: "array" } },
+        },
+      },
+    } as const;
+    const ref: CellRef = {
+      id: "of:keyed" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: ["root"],
+      schema,
+    };
+
+    it("hands a child the schema of the handle it was keyed from, for the worker to narrow", () => {
+      const child = new CellHandle<{ state: unknown }>(runtime, ref).key(
+        "state",
+      );
+
+      expect(child.ref()).toEqual({
+        id: ref.id,
+        space: ref.space,
+        scope: ref.scope,
+        path: ["root", "state"],
+        keyedFrom: { depth: 1, schema },
+      });
+    });
+
+    it("keeps the nearest schema'd ancestor through each further key", () => {
+      const grandchild = new CellHandle<{ state: { shapes: unknown } }>(
+        runtime,
+        ref,
+      ).key("state").key("shapes");
+
+      expect(grandchild.ref().path).toEqual(["root", "state", "shapes"]);
+      expect(grandchild.ref().keyedFrom).toEqual({ depth: 1, schema });
+    });
+
+    it("hands a child of a handle with no schema anywhere above it none", () => {
+      const { schema: _schema, ...unschemed } = ref;
+
+      const child = new CellHandle<{ state: unknown }>(runtime, unschemed)
+        .key("state");
+
+      expect(child.ref()).not.toHaveProperty("keyedFrom");
+      expect(child.ref()).not.toHaveProperty("schema");
+    });
+
+    it("replaces an ancestor's schema with the one `asSchema()` gives", () => {
+      const own = { type: "array" } as const;
+
+      const child = new CellHandle<{ state: unknown }>(runtime, ref)
+        .key("state")
+        .asSchema(own);
+
+      expect(child.ref().schema).toEqual(own);
+      expect(child.ref()).not.toHaveProperty("keyedFrom");
+    });
+
+    it("computes an update from a read under its own schema, not from one another view of the cell queued ahead of it", async () => {
+      const narrow = {
+        type: "object",
+        properties: { state: { type: "object", properties: { a: {} } } },
+      } as const;
+      const wide = {
+        type: "object",
+        properties: {
+          state: { type: "object", properties: { a: {}, b: {} } },
+        },
+      } as const;
+      const written: unknown[] = [];
+      const viewed = (request: { type: RequestType; cell: CellRef }) =>
+        request.cell.keyedFrom?.schema === narrow
+          ? { value: { a: 1 } }
+          : { value: { a: 1, b: 2 } };
+      const viewRuntime = {
+        [$conn]: () => ({
+          request: (
+            request: { type: RequestType; cell: CellRef; value?: unknown },
+          ) => {
+            if (request.type === RequestType.CellSet) {
+              written.push(request.value);
+              return Promise.resolve({});
+            }
+            return Promise.resolve(viewed(request));
+          },
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      } as unknown as RuntimeClient;
+      type State = { state: Record<string, unknown> };
+      const narrowState = new CellHandle<State>(viewRuntime, {
+        ...ref,
+        schema: narrow,
+      }).key("state");
+      const wideState = new CellHandle<State>(viewRuntime, {
+        ...ref,
+        schema: wide,
+      }).key("state");
+
+      const pulling = narrowState.pull();
+      const updating = wideState.update((state) => ({ ...state, c: 3 }));
+      await Promise.all([pulling, updating]);
+
+      expect(written).toEqual([{ a: 1, b: 2, c: 3 }]);
+    });
+
+    it("keys subscriptions on the ancestor a child was keyed from", () => {
+      const first = new CellHandle<{ state: unknown }>(runtime, ref).key(
+        "state",
+      );
+      const second = new CellHandle<{ state: unknown }>(runtime, {
+        ...ref,
+        schema: { type: "object" },
+      }).key("state");
+
+      expect(cellRefToKey(first.ref())).not.toEqual(
+        cellRefToKey(second.ref()),
+      );
+    });
+  });
+
   describe("SQLite IPC", () => {
     const ref: CellRef = {
       id: "of:database" as CellRef["id"],
@@ -674,19 +803,19 @@ describe("cell-handle", () => {
       // Immediate call on subscribe with the current (empty) state.
       expect(calls).toEqual([[undefined, undefined]]);
 
-      cell[$onCellUpdate]("v1", { cfcLabel: labelA });
+      cell[$onCellUpdate]("v1", { cfcLabel: labelA, current: true });
       expect(calls.at(-1)).toEqual(["v1", labelA]);
       expect(cell.cfcLabel).toEqual(labelA);
 
       // Same VALUE, different LABEL → still fires (the reactivity that value
       // subscriptions miss).
-      cell[$onCellUpdate]("v1", { cfcLabel: labelB });
+      cell[$onCellUpdate]("v1", { cfcLabel: labelB, current: true });
       expect(calls.at(-1)).toEqual(["v1", labelB]);
       expect(cell.cfcLabel).toEqual(labelB);
 
       // Same value AND same label → deduped, no extra call.
       const before = calls.length;
-      cell[$onCellUpdate]("v1", { cfcLabel: labelB });
+      cell[$onCellUpdate]("v1", { cfcLabel: labelB, current: true });
       expect(calls.length).toBe(before);
     });
 
@@ -698,17 +827,17 @@ describe("cell-handle", () => {
       }, { onRefused: () => {} }); // no includeCfcLabel
 
       expect(cell.wantsCfcLabel).toBe(false);
-      cell[$onCellUpdate]("v1", { cfcLabel: labelA });
+      cell[$onCellUpdate]("v1", { cfcLabel: labelA, current: true });
       const afterValue = calls.length; // fired once for the value change
       // Label-only change must be invisible to a value-only subscriber.
-      cell[$onCellUpdate]("v1", { cfcLabel: labelB });
+      cell[$onCellUpdate]("v1", { cfcLabel: labelB, current: true });
       expect(calls.length).toBe(afterValue);
     });
 
     it("leaves the cached label untouched on a value-only update", () => {
       const cell = new CellHandle<string>(makeRuntime(), ref);
       cell.subscribe(() => {}, { includeCfcLabel: true, onRefused: () => {} });
-      cell[$onCellUpdate]("v1", { cfcLabel: labelA });
+      cell[$onCellUpdate]("v1", { cfcLabel: labelA, current: true });
       expect(cell.cfcLabel).toEqual(labelA);
       // No `labelUpdate` arg = value-only update; label stays.
       cell[$onCellUpdate]("v2");
@@ -867,7 +996,10 @@ describe("cell-handle", () => {
     it("drops the value and label it held, and throws from `get()`", () => {
       const cell = new CellHandle<string>(makeRuntime(), ref);
       cell.subscribe(() => {}, { includeCfcLabel: true, onRefused: () => {} });
-      cell[$onCellUpdate]("shown before the seal", { cfcLabel: label });
+      cell[$onCellUpdate]("shown before the seal", {
+        cfcLabel: label,
+        current: true,
+      });
 
       cell[$onCellRefused](refusal);
 
@@ -3685,6 +3817,152 @@ describe("cell-handle", () => {
       await Promise.all([sending, updating, setting]);
 
       expect(clicking.get()).toBe(30);
+    });
+  });
+
+  describe("CellHandle label currency", () => {
+    // Each delivery tells its subscriber whether the label it hands over is
+    // the one the worker read with the value, through `CellDelivery`.
+
+    const ref: CellRef = {
+      id: "of:label-currency-cell" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+    };
+    const label = (sender: string) => ({
+      version: 1 as const,
+      entries: [{
+        path: [],
+        label: { integrity: [{ kind: "authored-by", subject: sender }] },
+      }],
+    });
+    const runtime = () =>
+      ({
+        [$conn]: () => ({
+          request: () => Promise.resolve({ value: "read" }),
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+        }),
+      }) as unknown as RuntimeClient;
+    /** Subscribes label-aware, keeping each delivery's label and currency. */
+    const listen = (cell: CellHandle<string>) => {
+      const heard: Array<{ cfcLabel: unknown; current: boolean | undefined }> =
+        [];
+      const cancel = cell.subscribe((_value, cfcLabel, delivery) => {
+        heard.push({ cfcLabel, current: delivery?.cfcLabelCurrent });
+      }, { includeCfcLabel: true, onRefused: () => {} });
+      return { heard, cancel };
+    };
+
+    it("hands a subscriber the label an update carried as current", () => {
+      const cell = new CellHandle<string>(runtime(), ref);
+      const { heard, cancel } = listen(cell);
+
+      cell[$onCellUpdate]("by alice", {
+        cfcLabel: label("alice"),
+        current: true,
+      });
+
+      expect(heard.at(-1)).toEqual({ cfcLabel: label("alice"), current: true });
+      expect(cell.cfcLabelCurrent).toBe(true);
+      cancel();
+    });
+
+    it("hands a subscriber the retained label as not current with a value that arrived without one", () => {
+      const cell = new CellHandle<string>(runtime(), ref);
+      const { heard, cancel } = listen(cell);
+      cell[$onCellUpdate]("by alice", {
+        cfcLabel: label("alice"),
+        current: true,
+      });
+
+      cell[$onCellUpdate]("revised by bob");
+
+      expect(heard.at(-1)).toEqual({
+        cfcLabel: label("alice"),
+        current: false,
+      });
+      expect(cell.cfcLabelCurrent).toBe(false);
+      cancel();
+    });
+
+    it("hands a subscriber the retained label as not current with a value a read found", async () => {
+      const cell = new CellHandle<string>(runtime(), ref);
+      const { heard, cancel } = listen(cell);
+      cell[$onCellUpdate]("by alice", {
+        cfcLabel: label("alice"),
+        current: true,
+      });
+
+      await cell.sync();
+
+      expect(heard.at(-1)).toEqual({
+        cfcLabel: label("alice"),
+        current: false,
+      });
+      cancel();
+    });
+
+    it("hands a subscriber that joins after the last one left the retained label as not current", () => {
+      const cell = new CellHandle<string>(runtime(), ref);
+      const first = listen(cell);
+      cell[$onCellUpdate]("by alice", {
+        cfcLabel: label("alice"),
+        current: true,
+      });
+      first.cancel();
+
+      const second = listen(cell);
+
+      expect(second.heard).toEqual([{
+        cfcLabel: label("alice"),
+        current: false,
+      }]);
+      second.cancel();
+    });
+
+    it("takes the label a label-only update carries for a subscriber that never asked for labels, without telling it", () => {
+      // The subscriber hears no label-only change, as before, but the handle
+      // holds the new label as current, for the handle it may seed later.
+      const cell = new CellHandle<string>(runtime(), ref);
+      const heard: unknown[] = [];
+      const cancel = cell.subscribe((value) => {
+        heard.push(value);
+      }, { onRefused: () => {} });
+      cell[$onCellUpdate]("by alice", {
+        cfcLabel: label("alice"),
+        current: true,
+      });
+
+      cell[$onCellUpdate]("by alice", {
+        cfcLabel: label("bob"),
+        current: true,
+      });
+
+      expect(heard).toEqual([undefined, "by alice"]);
+      expect(cell.cfcLabel).toEqual(label("bob"));
+      expect(cell.cfcLabelCurrent).toBe(true);
+      cancel();
+    });
+
+    it("hands a subscriber that joins while another stays the label as current", () => {
+      const cell = new CellHandle<string>(runtime(), ref);
+      const first = listen(cell);
+      cell[$onCellUpdate]("by alice", {
+        cfcLabel: label("alice"),
+        current: true,
+      });
+
+      const second = listen(cell);
+
+      expect(second.heard).toEqual([{
+        cfcLabel: label("alice"),
+        current: true,
+      }]);
+      first.cancel();
+      second.cancel();
     });
   });
 });

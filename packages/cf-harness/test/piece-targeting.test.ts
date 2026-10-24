@@ -13,7 +13,7 @@ describe("piece-targeting", () => {
     );
     expect(prompt).toContain("make zero registry reads and ask the user");
     expect(prompt).toContain("Do not delegate discovery of an unnamed target");
-    expect(prompt).toContain("parent asks with finish_task outcome question");
+    expect(prompt).toContain("the parent asks the user");
   });
 
   it("bounds named target selection to one released unique match without restricting listing tasks", () => {

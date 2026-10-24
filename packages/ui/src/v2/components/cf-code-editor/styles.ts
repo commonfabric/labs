@@ -59,6 +59,19 @@ export const styles = css`
       #5b5f65
     );
 
+    --cf-code-editor-color-code-background: var(
+      --cf-theme-color-surface-tertiary,
+      var(--cf-code-editor-color-neutral-100, hsl(0, 0%, 95%))
+    );
+    --cf-code-editor-color-quote-rule: var(
+      --cf-theme-color-border-muted,
+      var(--cf-code-editor-color-neutral-200, hsl(0, 0%, 88%))
+    );
+    --cf-code-editor-color-quote-ink: var(
+      --cf-theme-color-text-muted,
+      var(--cf-code-editor-color-neutral-500, hsl(0, 0%, 45%))
+    );
+
     --cf-code-editor-color-primary-50: color-mix(
       in srgb,
       var(--cf-theme-color-primary, var(--cf-colors-primary-500, #4979fa)) 8%,
@@ -238,22 +251,21 @@ export const styles = css`
   :host([mode="prose"]) .cm-prose-inline-code {
     font-family: var(--cf-code-editor-font-family-mono, monospace);
     font-size: 0.9em;
-    background-color: var(--cf-code-editor-color-neutral-100, hsl(0, 0%, 95%));
+    background-color: var(--cf-code-editor-color-code-background);
     border-radius: 3px;
     padding: 0.1em 0.3em;
   }
 
   :host([mode="prose"]) .cm-prose-codeblock {
-    background-color: var(--cf-code-editor-color-neutral-100, hsl(0, 0%, 95%));
+    background-color: var(--cf-code-editor-color-code-background);
     font-family: var(--cf-code-editor-font-family-mono, monospace);
     font-size: 0.9em;
   }
 
   :host([mode="prose"]) .cm-prose-blockquote {
-    border-left: 3px solid
-      var(--cf-code-editor-color-neutral-200, hsl(0, 0%, 88%));
+    border-left: 3px solid var(--cf-code-editor-color-quote-rule);
     padding-left: 1em !important;
-    color: var(--cf-code-editor-color-neutral-500, hsl(0, 0%, 45%));
+    color: var(--cf-code-editor-color-quote-ink);
   }
 
   :host([mode="prose"]) .cm-prose-hr {

@@ -63,6 +63,7 @@ describe("host embedding contract: profile pinning is owner-gated", () => {
     );
     for (
       const lateStream of [
+        "setPicture",
         "setBio",
         "setInbox",
         "addExternalLink",
@@ -87,6 +88,11 @@ describe("host embedding contract: profile pinning is owner-gated", () => {
     // with no `piece`; its writer an optional late stream like the rest.
     expect(home).toContain(
       "inbox?: OwnerProtectedProfileWrite<ProfileInbox, typeof setInbox>;",
+    );
+    // The picture is optional for the same reason: a profile that has never
+    // had one set, of any vintage, holds no property at all.
+    expect(home).toContain(
+      "picture?: OwnerProtectedProfileWrite<FabricBytes, typeof setPicture>;",
     );
   });
 

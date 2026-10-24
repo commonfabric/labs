@@ -7,6 +7,8 @@ import {
   normalizeWord,
   parseWordList,
   placementCells,
+  placementKey,
+  placementsBetween,
   type WordSearch,
   type WordSearchOptions,
 } from "./generator.ts";
@@ -289,5 +291,44 @@ describe("generateWordSearch", () => {
     expect(() => generateWordSearch(options({ cols: 7.5 }))).toThrow(
       RangeError,
     );
+  });
+});
+
+describe("placementsBetween", () => {
+  const ws = generateWordSearch(options({ seed: 4 }));
+
+  it("finds a word by its two ends, in either order", () => {
+    for (const p of ws.placements) {
+      const cells = placementCells(p, ws.cols);
+      const [first, last] = [cells[0], cells[cells.length - 1]];
+      expect(placementsBetween(ws, first, last)).toEqual([p]);
+      expect(placementsBetween(ws, last, first)).toEqual([p]);
+    }
+  });
+
+  it("finds nothing for two cells that are not one word's ends", () => {
+    for (const p of ws.placements) {
+      const cells = placementCells(p, ws.cols);
+      expect(placementsBetween(ws, cells[0], cells[1])).toEqual([]);
+      expect(placementsBetween(ws, cells[0], cells[0])).toEqual([]);
+    }
+  });
+
+  it("finds both a word and its reversal, the one read in tap order first", () => {
+    const pair = generateWordSearch(
+      options({ words: ["star", "rats"], rows: 8, cols: 8, seed: 2 }),
+    );
+    const star = pair.placements.find((p) => p.word === "STAR")!;
+    const cells = placementCells(star, pair.cols);
+    const [s, r] = [cells[0], cells[cells.length - 1]];
+    expect(placementsBetween(pair, s, r).map((p) => p.word))
+      .toEqual(["STAR", "RATS"]);
+    expect(placementsBetween(pair, r, s).map((p) => p.word))
+      .toEqual(["RATS", "STAR"]);
+  });
+
+  it("keys a placement by where it runs as well as its word", () => {
+    const [p] = ws.placements;
+    expect(placementKey(p)).not.toBe(placementKey({ ...p, row: p.row + 1 }));
   });
 });

@@ -263,6 +263,7 @@ export {
 } from "./space-membership.ts";
 export {
   CFC_PREFIX_PROVENANCE_MAX_WRITES,
+  collectConsumedLabel,
   describeSinkReleaseRefusal,
   flowLabelWorkExists,
   gatedSinkRequestExists,
@@ -415,6 +416,7 @@ export {
   uniqueCfcAtoms,
 } from "./observation.ts";
 export {
+  canonicalizeCfcSchemaDocument,
   cfcSchemaIsFalse,
   cfcSchemaIsInternalKey,
   cfcSchemaIsTrue,

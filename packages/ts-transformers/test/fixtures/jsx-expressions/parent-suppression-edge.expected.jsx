@@ -443,7 +443,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["enabled", "disabled"]
+            "enum": ["disabled", "enabled"]
         } as const satisfies __cfHelpers.JSONSchema, state.key("config", "features", "darkMode"), "enabled", "disabled")} with{" "}
           {state.key("config", "theme", "colors", "primary")} primary color
         </p>

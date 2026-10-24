@@ -2,10 +2,14 @@ import { css, html, LitElement, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { createRef, Ref, ref } from "lit/directives/ref.js";
+
+import { isObjectNotArray } from "@commonfabric/utils/types";
+
 import { type FabricBridge, FabricBridgeHost } from "./bridge.ts";
 import { GuestSessions } from "./guest-sessions.ts";
 import * as IPC from "./ipc.ts";
 import OuterFrame from "./outer-frame.ts";
+import type { IframePresentation } from "./presentation.ts";
 
 type CommonIframeLoadState = "" | "loading" | "loaded";
 
@@ -36,6 +40,35 @@ export class CommonIframeSandboxElement extends LitElement {
     const previousValue = this.#bridge;
     this.#bridge = value;
     this.requestUpdate("bridge", previousValue);
+  }
+
+  /** Presentation applied to the guest without replacing its document. */
+  get presentation(): IframePresentation | null {
+    return this.#presentation;
+  }
+
+  @property({ attribute: false })
+  set presentation(value: IframePresentation | null) {
+    if (
+      value !== null && (
+        !isObjectNotArray(value) || typeof value.css !== "string" ||
+        !isObjectNotArray(value.attributes) ||
+        Object.entries(value.attributes).some(([name, text]) =>
+          !/^data-[a-z0-9-]+$/.test(name) || typeof text !== "string"
+        ) ||
+        !Array.isArray(value.stylesheets) ||
+        value.stylesheets.some((href) => typeof href !== "string")
+      )
+    ) {
+      throw new TypeError("Invalid iframe presentation.");
+    }
+    const previous = this.#presentation;
+    this.#presentation = value === null ? null : Object.freeze({
+      css: value.css,
+      attributes: Object.freeze({ ...value.attributes }),
+      stylesheets: Object.freeze([...value.stylesheets]),
+    });
+    this.requestUpdate("presentation", previous);
   }
 
   @property({ attribute: "load-state", reflect: true })
@@ -84,6 +117,7 @@ export class CommonIframeSandboxElement extends LitElement {
   `;
 
   #src = "";
+  #presentation: IframePresentation | null = null;
   #bridge: FabricBridge | undefined;
 
   /** The capability sessions on offer to the loaded guest. */
@@ -300,6 +334,7 @@ export class CommonIframeSandboxElement extends LitElement {
     this.#toOuterFrame({
       type: IPC.IPCHostMessageType.LoadDocument,
       data: this.src,
+      presentation: this.presentation,
     });
   }
 
@@ -331,7 +366,8 @@ export class CommonIframeSandboxElement extends LitElement {
    * then `#onOuterReady` does the first load. Reacting here rather than in the
    * setters folds a batch of changes into one load: assigning both properties
    * asks for one document, carrying both new values, rather than reloading
-   * the old document under the new bridge on the way.
+   * the old document under the new bridge on the way. Presentation updates
+   * travel separately and keep the current document and capability session.
    */
   protected override updated(changed: PropertyValues) {
     super.updated(changed);
@@ -348,6 +384,11 @@ export class CommonIframeSandboxElement extends LitElement {
     if (!this.#readyWindow) return;
     if (changed.has("src") || (changed.has("bridge") && this.src)) {
       this.#loadInnerDoc();
+    } else if (changed.has("presentation")) {
+      this.#toOuterFrame({
+        type: IPC.IPCHostMessageType.Presentation,
+        data: this.presentation,
+      });
     }
   }
 

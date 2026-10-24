@@ -4,7 +4,10 @@ import { Identity } from "@commonfabric/identity";
 
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import { STORAGE_DIAGNOSTICS_LIMIT } from "../src/storage/diagnostics.ts";
+import {
+  STORAGE_DIAGNOSTICS_LIMIT,
+  sumSpaceStorageSizes,
+} from "../src/storage/diagnostics.ts";
 
 const signer = await Identity.fromPassphrase("storage diagnostics");
 
@@ -105,6 +108,44 @@ describe("pending storage diagnostics", () => {
       release.resolve();
       await commit;
       replica.commitNative = commitNative;
+      await runtime.dispose();
+      await storage.close();
+    }
+  });
+
+  it("reports each open space's sizes in its own entry, adding up to the manager's sizes", async () => {
+    // The manager's sizes add every open space together, so they cannot say
+    // which space holds what; each space's entry carries that space's share.
+
+    const storage = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage,
+    });
+    const otherSpace = (await Identity.fromPassphrase("diagnostic sizes"))
+      .did();
+    try {
+      const own = runtime.edit();
+      runtime.getCell<number>(signer.did(), "sized-a", { type: "number" }, own)
+        .set(1);
+      runtime.getCell<number>(signer.did(), "sized-b", { type: "number" }, own)
+        .set(2);
+      await own.commit().settled;
+      const other = runtime.edit();
+      runtime.getCell<number>(otherSpace, "sized-c", { type: "number" }, other)
+        .set(3);
+      await other.commit().settled;
+      await storage.synced();
+
+      const entries = storage.getDiagnostics().spaces;
+      const sizesOf = (space: string) =>
+        entries.find((entry) => entry.space === space)?.sizes;
+      expect(sizesOf(signer.did())?.documents).toBe(2);
+      expect(sizesOf(otherSpace)?.documents).toBe(1);
+      expect(storage.getSizes()).toMatchObject(
+        sumSpaceStorageSizes(entries.map((entry) => entry.sizes)),
+      );
+    } finally {
       await runtime.dispose();
       await storage.close();
     }

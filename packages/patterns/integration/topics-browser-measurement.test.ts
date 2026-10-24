@@ -269,10 +269,11 @@ describe("topics-browser-measurement", () => {
       expect(await samplesLeftInPage()).toEqual([]);
     });
 
-    it("returns a sample recording a zero for an operation declared to run nothing", async () => {
-      // The declaration permits a zero; it does not assert one. The case below
-      // checks the other half, that an operation which does run is attributed
-      // as usual under the same declaration.
+    it("returns a sample recording no authored runs for an operation declared to run nothing", async () => {
+      // The declaration permits the operation to complete no authored run.
+      // Runtime work without an authored source remains in `remaining`. The
+      // case below checks the other half, that an operation which does run is
+      // attributed as usual under the same declaration.
 
       const sample = await measureTopicsReads(session.page, {
         label: "undemanded, declared",
@@ -285,7 +286,7 @@ describe("topics-browser-measurement", () => {
       checkSample(sample, () => {
         expect(sample.mayRunNothing).toBe(true);
         expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0, 0, 0]);
-        expect(sample.remaining.runs).toBe(0);
+        expect(sample.remaining.runs).toBe(sample.runsWithoutSource);
         expect(sample.graph.after.nodes).toBeGreaterThan(0);
       });
     });

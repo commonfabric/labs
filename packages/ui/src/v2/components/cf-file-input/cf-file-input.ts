@@ -13,12 +13,7 @@ import {
 } from "../../utils/file-cell-storage.ts";
 import { formatFileSize } from "../../utils/image-compression.ts";
 import type { ButtonSize, ButtonVariant } from "../cf-button/cf-button.ts";
-import {
-  applyThemeToElement,
-  type CFTheme,
-  cfThemeContext,
-  defaultTheme,
-} from "../theme-context.ts";
+import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 
 import "../cf-button/index.ts";
 
@@ -235,10 +230,12 @@ export class CFFileInput extends BaseElement {
   @state()
   protected accessor storedFiles: StoredFile[] = [];
 
-  /** The theme, consumed from the provider. */
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   @consume({ context: runtimeContext, subscribe: true })
   @property({ attribute: false })
@@ -499,13 +496,8 @@ export class CFFileInput extends BaseElement {
     super.updated(changedProperties);
 
     if (changedProperties.has("theme")) {
-      applyThemeToElement(this, this.theme ?? defaultTheme);
+      applyThemeToElement(this, this.theme);
     }
-  }
-
-  override firstUpdated() {
-    // Apply theme after first render
-    applyThemeToElement(this, this.theme ?? defaultTheme);
   }
 
   override render() {

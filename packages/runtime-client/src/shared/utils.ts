@@ -86,6 +86,7 @@ export function cellRefToKey(cell: CellRef): string {
     id: cell.id,
     path: cell.path,
     ...(cell.schema !== undefined && { schema: cell.schema }),
+    ...(cell.keyedFrom !== undefined && { keyedFrom: cell.keyedFrom }),
     ...(cell.cfcLabelView !== undefined && {
       cfcLabelView: cloneCfcLabelView(cell.cfcLabelView),
     }),

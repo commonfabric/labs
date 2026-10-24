@@ -2,6 +2,7 @@ import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchemaObj } from "@commonfabric/api";
+import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 
 import { decomposeSchema } from "../src/schema-decompose.ts";
@@ -16,6 +17,7 @@ import {
 } from "../src/schema-doc-config.ts";
 import {
   externalizeSyncSelector,
+  normalizeSyncSelector,
   SelectorClosureUnavailableError,
 } from "../src/storage/v2-watch.ts";
 
@@ -110,6 +112,111 @@ describe("v2-watch", () => {
       const referenced = { path: [], schema: { $ref: `cid:${hash}` } };
       const emitted = externalizeSyncSelector(referenced, () => true);
       expect(emitted.schema).toEqual(doc);
+    });
+
+    it("returns one selector, hashing nothing, for each later call over a persisted closure", () => {
+      // A sync externalizes its selector every time it is asked for, and a
+      // reference built per call is hashed per call to intern it.
+      setContentAddressedSchemasConfig(true);
+      const selector = normalizeSyncSelector({
+        path: ["value"],
+        schema: {
+          type: "object",
+          title: "persisted-again",
+          properties: { leaf: { $ref: "#/$defs/Leaf" } },
+          $defs: { Leaf: { type: "string" } },
+        },
+      });
+      const first = externalizeSyncSelector(selector, () => true);
+      expect(first.schema).toEqual({
+        $ref: decomposeSchema(selector.schema as JSONSchemaObj).rootRef,
+      });
+      const hashedBefore = getContainersHashedForTestingOnly();
+      for (let sync = 0; sync < 10; sync++) {
+        expect(externalizeSyncSelector(selector, () => true)).toBe(first);
+      }
+      expect(getContainersHashedForTestingOnly()).toBe(hashedBefore);
+    });
+
+    it("returns one selector, hashing nothing, for each later call that recomposes inline", () => {
+      // A schema carrying a reference the space lacks goes out inline, and
+      // an inline form recomposed per call is hashed whole per call.
+      setContentAddressedSchemasConfig(true);
+      const doc: JSONSchemaObj = {
+        type: "object",
+        title: "inline-me-back-again",
+        properties: { leaf: { type: "string" } },
+      };
+      const hash = internSchemaAsTaggedHashString(doc);
+      registerSchemaDocument(hash, doc);
+      const selector = normalizeSyncSelector({
+        path: ["value"],
+        schema: {
+          type: "object",
+          properties: { linked: { $ref: `cid:${hash}` } },
+        },
+      });
+      const first = externalizeSyncSelector(selector, () => false);
+      // Recomposition names a document reached by a bare reference after
+      // its hash.
+      const name = `def_${hash.slice(hash.indexOf(":") + 1).slice(0, 8)}`;
+      expect(first.schema).toEqual({
+        type: "object",
+        properties: { linked: { $ref: `#/$defs/${name}` } },
+        $defs: { [name]: doc },
+      });
+      const hashedBefore = getContainersHashedForTestingOnly();
+      for (let sync = 0; sync < 10; sync++) {
+        expect(externalizeSyncSelector(selector, () => false)).toBe(first);
+      }
+      expect(getContainersHashedForTestingOnly()).toBe(hashedBefore);
+    });
+
+    it("recomposes inline again once the closure it was persisted under is gone", () => {
+      // What a selector externalizes to is decided per call by what the
+      // space persists then, whatever an earlier call returned.
+      setContentAddressedSchemasConfig(true);
+      const doc: JSONSchemaObj = {
+        type: "string",
+        title: "persisted-then-not",
+      };
+      const hash = internSchemaAsTaggedHashString(doc);
+      registerSchemaDocument(hash, doc);
+      const selector = normalizeSyncSelector({
+        path: [],
+        schema: { $ref: `cid:${hash}` },
+      });
+      expect(externalizeSyncSelector(selector, () => true).schema).toEqual({
+        $ref: `cid:${hash}`,
+      });
+      expect(externalizeSyncSelector(selector, () => false).schema).toEqual(
+        doc,
+      );
+      expect(externalizeSyncSelector(selector, () => true).schema).toEqual({
+        $ref: `cid:${hash}`,
+      });
+    });
+
+    it("builds a persisted closure's reference again once the registry has cleared", () => {
+      // The forms kept for a decomposition are externalized forms, and every
+      // retainer of those drops them when the registry clears.
+      setContentAddressedSchemasConfig(true);
+      const release = acquireSchemaRegistryLease();
+      const selector = normalizeSyncSelector({
+        path: ["value"],
+        schema: {
+          type: "object",
+          title: "kept-until-clear",
+          properties: { leaf: { type: "string" } },
+        },
+      });
+      const first = externalizeSyncSelector(selector, () => true);
+      release();
+
+      const hashedBefore = getContainersHashedForTestingOnly();
+      expect(externalizeSyncSelector(selector, () => true)).toBe(first);
+      // One container: the reference, built and interned anew.
+      expect(getContainersHashedForTestingOnly() - hashedBefore).toBe(1);
     });
 
     it("propagates a failing persistence probe instead of reading it as a refusal", () => {

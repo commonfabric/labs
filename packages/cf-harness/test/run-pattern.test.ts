@@ -1516,6 +1516,51 @@ describe("run-pattern", () => {
       }
     });
 
+    it("names a plain-JSON input by its key when the pattern's own argument schema labels it", async () => {
+      // The label sits on the piece's argument document, under the input's
+      // key, and no cell the caller addressed carries it: the refused read
+      // names the argument document, and its first path segment is the key.
+
+      const { pieces, dispose } = await createStrictFabric();
+      try {
+        const result = await createStrictEngine(pieces).invokeBuiltinTool(
+          "run_pattern",
+          {
+            sourceText: [
+              "import { type Confidential, pattern } from 'commonfabric';",
+              "interface Input {",
+              "  amount: number;",
+              "  note: Confidential<string, readonly ['secret']>;",
+              "}",
+              "interface Output { note: string; }",
+              "export default pattern<Input, Output>(({ note }) => ({ note }));",
+              "",
+            ].join("\n"),
+            inputs: { amount: 2, note: "s3cr3t" },
+            resultSchema: {
+              type: "object",
+              properties: { note: { type: "string" } },
+              required: ["note"],
+            },
+          },
+        );
+        const output = result.output as RunPatternToolSuccessOutput;
+        expect(output.status).toBe("ok");
+        expect(output.value).toBeUndefined();
+        expect(output.valueError).toContain('input "note"');
+        expect(output.valueError).not.toContain('"amount"');
+        expect(output.policyRefusal).toEqual({
+          gates: ["sink-ceiling"],
+          sinks: ["run_pattern"],
+          offendingAtoms: ['"secret"'],
+          inputKeys: ["note"],
+          attribution: "complete",
+        });
+      } finally {
+        await dispose();
+      }
+    });
+
     it("lands a result when the run is repeated without the input its refusal named", async () => {
       // The replan an actionable refusal is for: the first run is refused
       // and names one of its own input keys as the whole remedy, and the
@@ -2469,11 +2514,12 @@ describe("run-pattern", () => {
           parseLLMFriendlyLink(output.resultRef, space),
         ).key("secret");
         expect(forwarded.get()).toBe("s3cr3t");
+        // The result holds a reference to the foreign value and no copy of
+        // its label: the label is read where the value is stored.
         expect(cfcLabelViewForCellFailClosed(forwarded)?.entries)
           .toContainEqual({
             path: [],
             label,
-            observes: "followRef",
           });
         const foreignSecret = runtime.getCellFromLink(link).key("secret");
         expect(foreignSecret.get()).toBe("s3cr3t");

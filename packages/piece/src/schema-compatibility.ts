@@ -134,6 +134,15 @@ const DESCRIPTIVE_ANNOTATION_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Whether `key` is a descriptive annotation that no reader of the schema
+ * treats as a constraint. `$comment` is not one: the runner reads a few
+ * reserved values as traversal markers, as
+ * {@link sourceAlternativeAcceptedBy} describes.
+ */
+const isInertAnnotationKey = (key: string): boolean =>
+  key !== "$comment" && DESCRIPTIVE_ANNOTATION_KEYS.has(key);
+
+/**
  * Keywords excluded from the subset proof's ordinary constraint comparison.
  * Descriptive annotations leave the contract unchanged. Defaults and reference
  * metadata have dedicated checks: defaults affect materialization, and reference
@@ -576,8 +585,12 @@ const comparableIfc = (ifc: unknown): unknown => {
  * may still gain optional/defaulted named fields as the piece-evolution policy,
  * and may drop named fields the pattern no longer reads — a demand given up
  * leaves a writer's value unread, where a dropped result field breaks a reader,
- * so only the result side preserves its named fields outright. A candidate that
- * cannot hold a dropped field's value is still refused, by the ordinary
+ * so only the result side preserves its named fields outright. An object that
+ * is one alternative of an `anyOf` is compared as a whole contract, under the
+ * same policy, when every other keyword on the union node is an inert
+ * annotation ({@link isInertAnnotationKey}) or one of the
+ * {@link NODE_LEVEL_KEYWORDS}, which are judged at the node itself. A candidate
+ * that cannot hold a dropped field's value is still refused, by the ordinary
  * named-property proof against its additionalProperties contract. A newly
  * required field is admitted on a valid default, which a `FabricPrimitive`
  * stored where that field's object belongs never receives: the value is frozen,
@@ -1129,7 +1142,7 @@ function additionalPropertiesOf(schema: SchemaObject): JSONSchema {
     (key === "type" &&
       (value === "unknown" ||
         (Array.isArray(value) && value.includes("unknown")))) ||
-    (key !== "$comment" && DESCRIPTIVE_ANNOTATION_KEYS.has(key))
+    isInertAnnotationKey(key)
   );
   return unconstrained ? true : additional;
 }
@@ -2000,7 +2013,7 @@ function sourceAlternativeAcceptedBy(
         // to drift. Narrowing this should wait for a runner-owned
         // classifier. The cost is that an ordinary descriptive comment also
         // stops this split; whole-branch and equality proofs are unaffected.
-        (key === "$comment" || !DESCRIPTIVE_ANNOTATION_KEYS.has(key))
+        !isInertAnnotationKey(key)
       )
     ) return false;
     if (
@@ -2036,6 +2049,15 @@ function sourceAlternativeAcceptedBy(
  * deliberately conservative: two source constraints might jointly imply a
  * target constraint that neither proves alone, in which case we reject the
  * update rather than risk accepting an incompatible one.
+ *
+ * A conjunct carrying only inert annotations ({@link isInertAnnotationKey})
+ * constrains nothing, so a conjunction whose other conjuncts are all of that
+ * kind accepts exactly what its one remaining conjunct accepts. When both
+ * sides reduce that way, typically a union branch beside a base holding
+ * nothing but the union's description, the two remaining conjuncts are
+ * compared as whole contracts, under the evolution policy the caller allows.
+ * Any other conjunction is proved conjunct by conjunct without that policy:
+ * a field one conjunct leaves unnamed may be contracted by another.
  */
 function schemaConjunctionSubsetIssue(
   source: readonly JSONSchema[],
@@ -2043,9 +2065,12 @@ function schemaConjunctionSubsetIssue(
   path: string,
   context: CompatibilityContext,
 ): string | undefined {
-  const proofContext = source.length > 1 || target.length > 1
-    ? { ...context, allowEvolutionPolicy: false }
-    : context;
+  const sourceContract = soleConstrainingConjunct(source);
+  const targetContract = soleConstrainingConjunct(target);
+  if (sourceContract !== undefined && targetContract !== undefined) {
+    return schemaSubsetIssue(sourceContract, targetContract, path, context);
+  }
+  const proofContext = { ...context, allowEvolutionPolicy: false };
   for (const targetConstraint of target) {
     const implied = source.some((sourceConstraint) =>
       schemaSubsetIssue(
@@ -2060,6 +2085,23 @@ function schemaConjunctionSubsetIssue(
     }
   }
   return undefined;
+}
+
+/**
+ * The one conjunct of `conjunction` that constrains values, or its only
+ * conjunct, or `undefined` when neither exists. A conjunct constrains nothing
+ * when it is `true` or every key it carries is an inert annotation.
+ */
+function soleConstrainingConjunct(
+  conjunction: readonly JSONSchema[],
+): JSONSchema | undefined {
+  if (conjunction.length === 1) return conjunction[0];
+  const constraining = conjunction.filter((conjunct) =>
+    conjunct !== true &&
+    (conjunct === false ||
+      !Object.keys(conjunct).every(isInertAnnotationKey))
+  );
+  return constraining.length === 1 ? constraining[0] : undefined;
 }
 
 function hasComplexSameInstanceConstraints(schema: SchemaObject): boolean {

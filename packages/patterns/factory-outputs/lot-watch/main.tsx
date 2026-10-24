@@ -5,6 +5,7 @@ import {
   type AddIntegrity,
   computed,
   Default,
+  type FabricBytes,
   generateObject,
   handler,
   ImageData,
@@ -530,20 +531,27 @@ export default pattern<LotWatchInput, LotWatchOutput>(
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
+    const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
     const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
     const profileName = computed(() => (profileNameWish.result ?? "").trim());
-    const profileAvatar = computed(() =>
-      (profileAvatarWish.result ?? "").trim()
-    );
+    const profilePicture = computed(() => profilePictureWish.result);
+    const profileAvatar = computed(() => profileAvatarWish.result ?? "");
     const hasProfile = computed(() =>
       (profileNameWish.result ?? "").trim() !== ""
     );
     const reporterLabel = computed(() => (reporterName.get() || "").trim());
     const hasReporter = computed(() => reporterLabel !== "");
-    // Show the profile avatar only while the reporter IS the profile (an
-    // explicit setReporterName override keeps initials-only rendering).
+    // Show the profile picture, or else its avatar text, only while the
+    // reporter IS the profile (an explicit setReporterName override keeps
+    // initials-only rendering).
+    const reporterIsProfile = computed(() =>
+      reporterLabel !== "" && reporterLabel === profileName
+    );
+    const reporterPicture = computed(() =>
+      reporterIsProfile ? profilePicture : undefined
+    );
     const reporterAvatar = computed(() =>
-      reporterLabel !== "" && reporterLabel === profileName ? profileAvatar : ""
+      reporterIsProfile ? profileAvatar : ""
     );
 
     // PerSession: tab navigation
@@ -1550,6 +1558,7 @@ export default pattern<LotWatchInput, LotWatchOutput>(
                           ? (
                             <cf-hstack gap="2" align="center">
                               <cf-avatar
+                                bytes={reporterPicture}
                                 src={reporterAvatar}
                                 name={reporterLabel}
                                 size="xs"

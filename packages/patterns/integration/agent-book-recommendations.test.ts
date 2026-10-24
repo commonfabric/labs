@@ -160,10 +160,12 @@ describe("agent book recommendations", () => {
           message = call("submit-books", "submit_result", {
             result: {
               picks: books.map((book, index) => ({
-                book: book[1],
+                title: `Pick ${index + 1}`,
+                author: `Author ${index + 1}`,
                 why: `Recommendation ${
                   index + 1
                 } follows the reader's linked history.`,
+                basedOn: book[1],
               })),
               sources,
             },
@@ -304,7 +306,7 @@ describe("agent book recommendations", () => {
         const resultCell = recordCell.key("result").resolveAsCell();
         const resolved = await resultCell.asSchema<
           {
-            picks: Array<{ book: Cell<unknown>; why: string }>;
+            picks: Array<{ basedOn: Cell<unknown>; why: string }>;
             sources: Cell<unknown>[];
           }
         >({
@@ -315,7 +317,7 @@ describe("agent book recommendations", () => {
               items: {
                 type: "object",
                 properties: {
-                  book: { asCell: ["cell"] },
+                  basedOn: { asCell: ["cell"] },
                   why: { type: "string" },
                 },
               },
@@ -325,7 +327,9 @@ describe("agent book recommendations", () => {
         }).pull();
         expect(resolved.picks).toHaveLength(5);
         expect(
-          resolved.picks.map((pick) => pick.book.getAsNormalizedFullLink().id),
+          resolved.picks.map((pick) =>
+            pick.basedOn.getAsNormalizedFullLink().id
+          ),
         ).toEqual(books.map((book) => book.getAsNormalizedFullLink().id));
         expect(resolved.sources).toHaveLength(3);
 
@@ -387,7 +391,8 @@ describe("agent book recommendations", () => {
             resultCell.key("picks").key(index).resolveAsCell(),
             `pick-${index}`,
           );
-          expect(pick.value.book.$link.id).toBe(
+          expect(pick.value.title).toBe(`Pick ${index + 1}`);
+          expect(pick.value.basedOn.$link.id).toBe(
             books[index].getAsNormalizedFullLink().id,
           );
           expect(pick.value.why).toBe(

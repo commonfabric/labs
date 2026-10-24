@@ -18,11 +18,8 @@ import { type JSONSchema } from "../src/builder/types.ts";
 import { createCell, isCell } from "../src/cell.ts";
 import { diffAndUpdate } from "../src/data-updating.ts";
 import { dataUriFromValueWithResolvedLinks } from "../src/data-uri.ts";
-import {
-  areLinksSame,
-  parseLink,
-  schemaForSpaceCrossing,
-} from "../src/link-utils.ts";
+import { parseLink, schemaForSpaceCrossing } from "../src/link-utils.ts";
+import { areLinksSame } from "../src/link-equality.ts";
 import { CellResult } from "../src/query-result-proxy.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";

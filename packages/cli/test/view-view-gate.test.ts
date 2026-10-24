@@ -12,17 +12,18 @@
  */
 
 import { assert, assertEquals } from "@std/assert";
-import { cf } from "./utils.ts";
+import { argv, cf } from "./utils.ts";
 
 Deno.test("cf view re-throws a missing-file read error (not a ViewError)", async () => {
   const missing = `${Deno.makeTempDirSync()}/does-not-exist-xyz123.ts`;
-  const { code, stderr } = await cf(`view --plain ${missing}`);
+  const { code, stderr } = await cf(argv`view --plain ${missing}`);
   // The catch block's `throw error;` propagates the NotFound; the CLI exits 1.
   assertEquals(code, 1);
   const text = stderr.join("\n");
-  // The re-thrown error is the raw read failure, not the plain ViewError text.
-  assert(text.includes("NotFound"), text);
-  assert(text.includes(missing), text);
+  // The re-thrown error is the raw read failure, not the plain ViewError text,
+  // and it names the file that was asked for.
+  const notFound = stderr.find((line) => line.startsWith("NotFound:"));
+  assert(notFound?.includes(missing), text);
 });
 
 Deno.test("cf view re-throws when the file argument is a directory", async () => {
@@ -30,7 +31,7 @@ Deno.test("cf view re-throws when the file argument is a directory", async () =>
   try {
     // Reading a directory as text fails with a non-ViewError, taking the same
     // re-throw branch as a missing file.
-    const { code, stderr } = await cf(`view --plain ${dir}`);
+    const { code, stderr } = await cf(argv`view --plain ${dir}`);
     assertEquals(code, 1);
     const text = stderr.join("\n");
     // Not the empty/no-input ViewError message — a raw read failure.
@@ -38,7 +39,7 @@ Deno.test("cf view re-throws when the file argument is a directory", async () =>
       !text.toLowerCase().includes("no input"),
       text,
     );
-    assert(text.includes(dir), text);
+    assert(text.includes("IsADirectory"), text);
   } finally {
     Deno.removeSync(dir, { recursive: true });
   }

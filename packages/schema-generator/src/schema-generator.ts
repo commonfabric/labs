@@ -47,6 +47,7 @@ import {
   typeParameterOfType,
   unwrapTypeParentheses,
 } from "./typescript/type-node.ts";
+import { unionNodeMembersInOrder } from "./typescript/source-order.ts";
 import { resolveWriterBinding } from "./typescript/writer-binding.ts";
 import {
   cutsExpansion,
@@ -1454,12 +1455,6 @@ export class SchemaGenerator {
     ) {
       context = { ...context, definesDocument: true, documentWithinView: true };
     }
-    if (
-      typeNode && !context.cellsOpaque &&
-      context.schemaHints?.get(typeNode)?.cellsOpaque
-    ) {
-      context = { ...context, cellsOpaque: true };
-    }
     // A bound type parameter reads as its argument: its node where it has one,
     // under the bindings of the place it is written, and its type where it
     // does not. A `Default` around one is read as the wrapper, whose value
@@ -2265,14 +2260,11 @@ export class SchemaGenerator {
    * of its cycle identity (`#formatType()`), or `""`: a reading that defines a
    * document inside a schema that views others
    * (`GenerationContext.documentWithinView`), since the view's reading of the
-   * same type leaves out a writer it cannot read; and a reading whose cells
-   * are opaque (`GenerationContext.cellsOpaque`). Neither variant's reading is
-   * the other's, so one met inside the other is no cycle of it.
+   * same type leaves out a writer it cannot read. Neither reading is the
+   * other's, so one met inside the other is no cycle of it.
    */
   #readingVariant(context: GenerationContext): string {
-    return `${context.documentWithinView ? ":document" : ""}${
-      context.cellsOpaque ? ":opaque" : ""
-    }`;
+    return context.documentWithinView ? ":document" : "";
   }
 
   /**
@@ -3281,7 +3273,7 @@ export class SchemaGenerator {
       for (const member of typeNode.members) {
         if (ts.isPropertySignature(member) && member.name && member.type) {
           const propName = getPropertyNameText(member.name, checker);
-          if (!propName) {
+          if (propName === undefined) {
             // A computed brand such as `[DEFAULT_MARKER]` can carry metadata
             // that only the resolved type retains. A wrapper with that type
             // must know this node's members were not fully interpreted.
@@ -3420,13 +3412,20 @@ export class SchemaGenerator {
     // (tuple-emission.test.ts pins that choice). A rest element contributes
     // its array's items; an optional one admits `undefined` as well, so a
     // tuple of `unknown` — reference-only slots — reads as that and not as a
-    // request for everything.
-    if (ts.isTupleTypeNode(typeNode)) {
+    // request for everything. A reference to a non-generic alias whose tuple
+    // names a writer reads as the tuple it declares (`#tupleBehind()`), as
+    // `#readsBySyntax()` sends it here to be.
+    const behind = this.#tupleBehind(typeNode, context);
+    const tuple = ts.isTupleTypeNode(typeNode) ||
+        (behind && this.#holdsWriterQuery(behind, context))
+      ? behind
+      : undefined;
+    if (tuple) {
       return {
         type: "array",
         items: tupleItems(
           this.#slotsOfTupleNode(
-            typeNode,
+            tuple,
             checker,
             context,
             new Set(),
@@ -3494,7 +3493,8 @@ export class SchemaGenerator {
       // The one member that is neither `null` nor `undefined` is read at the
       // union's instantiation less those; any other member has none.
       const { instantiatedAs, ...unplaced } = context;
-      const valued = typeNode.types.filter((member) => {
+      const members = unionNodeMembersInOrder(typeNode);
+      const valued = members.filter((member) => {
         const kind = unwrapTypeParentheses(member);
         return kind.kind !== ts.SyntaxKind.UndefinedKeyword &&
           !(ts.isLiteralTypeNode(kind) &&
@@ -3503,7 +3503,7 @@ export class SchemaGenerator {
       const soleInstantiated = valued.length === 1 && instantiatedAs
         ? soleNonNullishMember(instantiatedAs)
         : undefined;
-      const memberSchemas = typeNode.types.map((member) =>
+      const memberSchemas = members.map((member) =>
         this.#analyzeTypeNodeStructure(
           member,
           checker,
@@ -4101,7 +4101,11 @@ export class SchemaGenerator {
    * the whole, so read by type, a CFC alias over a union as a member would lose
    * its boundary and its labels; its written reference keeps both. Any other
    * node is read by its type, a bound parameter in it read as its argument
-   * wherever the walk reaches it.
+   * wherever the walk reaches it. A tuple whose syntax writes a policy's
+   * writer as a `typeof` query is read by its syntax under no bindings too,
+   * written out or declared by a non-generic alias a reference names
+   * (`#tupleBehind()`): the checker's element types hold no declaration to
+   * name that writer by.
    */
   #readsBySyntax(
     typeNode: ts.TypeNode | undefined,
@@ -4110,9 +4114,8 @@ export class SchemaGenerator {
     const bound = context.boundTypeParameters;
     if (!typeNode) return false;
     const written = unwrapTypeParentheses(typeNode);
-    if (
-      ts.isTupleTypeNode(written) && this.#holdsWriterQuery(written, context)
-    ) return true;
+    const tuple = this.#tupleBehind(written, context);
+    if (tuple && this.#holdsWriterQuery(tuple, context)) return true;
     if (!bound) return false;
     const structural = ts.isUnionTypeNode(written) ||
       ts.isIntersectionTypeNode(written) || ts.isTypeLiteralNode(written) ||
@@ -4144,6 +4147,22 @@ export class SchemaGenerator {
         context.typeChecker,
         context,
       );
+  }
+
+  /**
+   * The tuple `typeNode` is, written out or declared by a non-generic alias a
+   * reference names, followed as `#openTypeNode()` follows one; `undefined`
+   * where it is no tuple.
+   */
+  #tupleBehind(
+    typeNode: ts.TypeNode,
+    context: GenerationContext,
+  ): ts.TupleTypeNode | undefined {
+    const behind = ts.isTypeReferenceNode(typeNode)
+      ? this.#openTypeNode(typeNode, context.typeChecker, context, new Set())
+        .node
+      : typeNode;
+    return ts.isTupleTypeNode(behind) ? behind : undefined;
   }
 
   /**

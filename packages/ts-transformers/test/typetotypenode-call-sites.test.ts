@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { walk } from "@std/fs";
-import { relative } from "@std/path";
+import { fromFileUrl, relative } from "@std/path";
 
 // STATIC SWEEP — bypass guard for the type→TypeNode chokepoint.
 //
@@ -27,7 +27,7 @@ import { relative } from "@std/path";
 // registry-degradation risk at once (the chokepoint normalizes AND registers).
 // Entries that can emit a concrete (non-keyword) type are marked [emit+concrete].
 
-const SRC_ROOT = new URL("../src/", import.meta.url);
+const SRC_ROOT = fromFileUrl(new URL("../src/", import.meta.url));
 
 // Each allowed raw call site, keyed by "relative/path.ts:line", with WHY it is
 // allowed to bypass the chokepoint. Update deliberately.
@@ -69,7 +69,7 @@ Deno.test("raw checker.typeToTypeNode call sites match the reviewed allowlist", 
     })
   ) {
     const content = await Deno.readTextFile(entry.path);
-    const rel = relative(SRC_ROOT.pathname, entry.path);
+    const rel = relative(SRC_ROOT, entry.path);
     for (const line of content.split("\n")) {
       // Match `.typeToTypeNode(` but not our own wrapper name.
       if (/\.typeToTypeNode\(/.test(line)) {

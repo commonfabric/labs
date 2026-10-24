@@ -1,7 +1,8 @@
 import { parse as parseJsonc } from "@std/jsonc";
+import { fromFileUrl } from "@std/path";
 
 function sourceCoveragePath(name: string): string {
-  return new URL(name, import.meta.url).pathname;
+  return fromFileUrl(new URL(name, import.meta.url));
 }
 
 /**

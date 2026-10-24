@@ -5,12 +5,15 @@ import { stub } from "@std/testing/mock";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
+import type { JSONSchema } from "../../src/builder/types.ts";
 import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
+import { recordReferencedArgumentFields } from "../../src/cfc/reference-initialization.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { CooperativeYield } from "../../src/scheduler/cooperative-yield.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import { TransactionWrapper } from "../../src/storage/extended-storage-transaction.ts";
 
+import { labelsReached } from "../support/reached-labels.ts";
 import {
   seedReferenceGraphLeaf,
   stageReferenceGraph,
@@ -27,6 +30,36 @@ const rowSchema = {
     },
   },
 } as const;
+
+/**
+ * Stages a reference graph of depth `depth` whose holder, staged first,
+ * declares a floor nested where the graph reaches its leaf. A reference
+ * persists its own label without walking what it reaches; the floor needs
+ * the leaf's evidence, and is what makes preparing the holder walk the
+ * staged references.
+ */
+function stageFlooredGraph(runtime: Runtime, depth: number) {
+  const graph = stageReferenceGraph(runtime, space, depth, 2, "top-down");
+  let slot: JSONSchema = {
+    type: "object",
+    ifc: { requiredIntegrity: ["leaf-proof"] },
+  };
+  for (let level = 0; level < depth; level++) {
+    slot = { type: "object", properties: { p0: slot } };
+  }
+  const holder = graph.holder.asSchema({
+    type: "object",
+    ifc: { integrity: ["object-proof"] },
+    properties: { argument: slot },
+  });
+  holder.set({ argument: graph.nodes[0] });
+  recordReferencedArgumentFields(
+    graph.tx,
+    holder.getAsNormalizedFullLink(),
+    ["argument"],
+  );
+  return { ...graph, holder };
+}
 
 function makeRuntime() {
   const storageManager = StorageManager.emulate({ as: signer });
@@ -217,13 +250,7 @@ describe("preparation-cancellation", () => {
     const { runtime, storageManager } = makeRuntime();
     try {
       await seedReferenceGraphLeaf(runtime, space);
-      const { tx, holder } = stageReferenceGraph(
-        runtime,
-        space,
-        5,
-        2,
-        "top-down",
-      );
+      const { tx, holder } = stageFlooredGraph(runtime, 5);
       runtime.resetCfcStats();
       const preparedTargets = new Set<string>();
       const write = tx.writeOrThrow.bind(tx);
@@ -262,28 +289,29 @@ describe("preparation-cancellation", () => {
     }
   });
 
-  it("preserves every staged-reference label across yields within a target", async () => {
+  it("preserves every prepared label across yields within a floor's reference walk", async () => {
+    const depth = 5;
     const prepare = async (cooperative: boolean) => {
       const { runtime, storageManager } = makeRuntime();
       try {
         await seedReferenceGraphLeaf(runtime, space);
-        const { tx, holder, nodes } = stageReferenceGraph(
-          runtime,
-          space,
-          5,
-          2,
-          "top-down",
-        );
+        const { tx, holder, nodes } = stageFlooredGraph(runtime, depth);
         if (cooperative) {
           await tx.prepareForCommitCooperatively(new AbortController().signal);
         } else tx.prepareForCommit();
         expect((await tx.commit().settled).error).toBeUndefined();
-        return [holder, ...nodes].map((cell) =>
-          readStoredCfcMetadata(
-            runtime.readTx(),
-            cell.getAsNormalizedFullLink(),
-          )!.labelMap
-        );
+        return {
+          labelMaps: [holder, ...nodes].map((cell) =>
+            readStoredCfcMetadata(
+              runtime.readTx(),
+              cell.getAsNormalizedFullLink(),
+            )?.labelMap
+          ),
+          reached: labelsReached(runtime, holder.getAsNormalizedFullLink(), [
+            "argument",
+            ...Array.from({ length: depth }, (_, level) => `p${level % 2}`),
+          ]),
+        };
       } finally {
         await runtime.dispose({ closeStorage: false });
         await storageManager.synced();
@@ -300,14 +328,12 @@ describe("preparation-cancellation", () => {
     );
     const cooperative = await prepare(true);
     expect(cooperative).toEqual(synchronous);
-    const leaves = cooperative[0].entries.filter((entry) =>
-      entry.path.length === 6
-    );
-    expect(leaves).toHaveLength(32);
-    for (const leaf of leaves) {
-      expect(leaf.label.confidentiality).toContain("secret");
-      expect(leaf.label.integrity).toContain("leaf-proof");
-    }
+    // The holder stores its own label alone; the leaf's labels are reached
+    // through the graph rather than stored along it.
+    expect(cooperative.labelMaps[0]?.entries.map((entry) => entry.path))
+      .toEqual([[]]);
+    expect(cooperative.reached.confidentiality).toContain("secret");
+    expect(cooperative.reached.integrity).toContain("leaf-proof");
   });
 
   for (const closed of [false, true]) {
@@ -377,13 +403,7 @@ describe("preparation-cancellation", () => {
           let row;
           if (duringDerivation) {
             await seedReferenceGraphLeaf(runtime, space);
-            ({ tx, holder: row } = stageReferenceGraph(
-              runtime,
-              space,
-              5,
-              2,
-              "top-down",
-            ));
+            ({ tx, holder: row } = stageFlooredGraph(runtime, 5));
             runtime.resetCfcStats();
           } else {
             tx = runtime.edit();

@@ -14,8 +14,14 @@
  * so a caller never depends on them.
  */
 
+import type { HarnessRunDepth } from "@commonfabric/cf-harness/contracts/run-depth";
+import type {
+  HarnessTaskDomain,
+  HarnessTaskTag,
+} from "@commonfabric/cf-harness/task-classification";
 import { join } from "@std/path";
 
+import type { JSONSchema } from "@commonfabric/api";
 import {
   type CfHarnessStructuredResultValidation,
   processCfHarnessCliEnv,
@@ -23,6 +29,12 @@ import {
   type RunCfHarnessCliDependencies,
   selectCfHarnessCliSandboxRuntime,
 } from "@commonfabric/cf-harness/cli";
+import type {
+  HarnessModelLimits,
+  HarnessModelUsage,
+} from "@commonfabric/cf-harness/model/client";
+import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
+import { createHarnessImageAttachmentFromBase64 } from "@commonfabric/cf-harness/image-attachments";
 import type { HarnessBrowserHost } from "@commonfabric/cf-harness/contracts/browser-host";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
@@ -31,8 +43,8 @@ import {
   CfHarnessPromptLoop,
   type CreateHarnessPromptLoopOptions,
   type HarnessPromptLoopResult,
+  promptLoopModelTurnsFromError,
 } from "@commonfabric/cf-harness/prompt-loop";
-import type { JSONSchema } from "@commonfabric/api";
 import {
   type AgentRunErrorCode,
   INVALID_RESULT,
@@ -62,12 +74,21 @@ export interface HarnessJobFabric {
 
   /** Input cells the model holds as handles: name to rendered reference. */
   inputs: Readonly<Record<string, string>>;
+
+  /**
+   * Other spaces the session may reach, each a DID mapped to the host serving
+   * it: where a piece handed in as an input lives outside the job's space.
+   */
+  foreignSpaces?: Readonly<Record<string, string>>;
 }
 
 /** One job, as plain data. */
-export interface HarnessJobSpec {
+export interface HarnessJobSpec extends HarnessModelLimits {
   /** The task text, given to the model as the prompt. */
   task: string;
+
+  /** Inline host-owned images, snapshotted into this job workspace. */
+  imageAttachments?: readonly HarnessInlineImageAttachment[];
 
   /**
    * The prompt-slot role the task binds as. It is the job's authority: a
@@ -99,14 +120,27 @@ export interface HarnessJobSpec {
   /** The most model turns the job may take; the harness's own when absent. */
   maxModelTurns?: number;
 
+  /** How far to take the task; the harness's default when absent. */
+  depth?: HarnessRunDepth;
+
+  /**
+   * The task's kinds of work, in place of the harness's classification; an
+   * empty list states none and leaves them to the harness.
+   */
+  taskTags?: readonly HarnessTaskTag[];
+
+  /** Where the task's work happens, in place of the harness's; `[]` is none. */
+  taskDomains?: readonly HarnessTaskDomain[];
+
+  /** The provider reasoning effort; the provider's default when absent. */
+  reasoningEffort?: string;
+
   /** The host-owned file backing the read-only Loom tools. */
   loomRetrievalConfigPath?: string;
 
   /**
-   * The host-owned file naming the command broker behind `list_commands`
-   * and `run_command`. Those tools, and the harness flag this becomes, come
-   * with labs#8467; a harness without them refuses the flag and the job
-   * fails.
+   * The host-owned file naming the command broker behind `list_commands`,
+   * `run_command`, and `run_read_command`.
    */
   loomCommandsConfigPath?: string;
 
@@ -225,6 +259,13 @@ const reportOf = (result: HarnessPromptLoopResult): AgentRunReport => {
       }
       : {}),
     modelTurns: result.modelTurns,
+    ...(result.modelResponses !== undefined
+      ? {
+        modelResponses: result.modelResponses,
+        actualModels: result.actualModels,
+        modelAttributionComplete: result.modelAttributionComplete,
+      }
+      : {}),
     toolCalls: result.runState.toolOutputs.length,
     ...(result.runState.artifactRoot !== undefined
       ? { runRef: result.runState.artifactRoot }
@@ -270,6 +311,12 @@ const argvOf = (
       spec.fabric.space,
       "--max-confidentiality",
       JSON.stringify(spec.fabric.maxConfidentiality),
+      ...(Object.keys(spec.fabric.foreignSpaces ?? {}).length > 0
+        ? [
+          "--fabric-foreign-spaces",
+          JSON.stringify(spec.fabric.foreignSpaces),
+        ]
+        : []),
     ]
     : []),
   ...(spec.patternIndexUrl !== undefined
@@ -288,6 +335,16 @@ const argvOf = (
     : []),
   ...(spec.maxModelTurns !== undefined
     ? ["--max-model-turns", String(spec.maxModelTurns)]
+    : []),
+  ...(spec.depth !== undefined ? ["--depth", spec.depth] : []),
+  ...(spec.taskTags !== undefined && spec.taskTags.length > 0
+    ? ["--task-tags", spec.taskTags.join(",")]
+    : []),
+  ...(spec.taskDomains !== undefined
+    ? ["--task-domains", spec.taskDomains.join(",") || "none"]
+    : []),
+  ...(spec.reasoningEffort !== undefined
+    ? ["--reasoning-effort", spec.reasoningEffort]
     : []),
   ...Object.entries(spec.fabric?.inputs ?? {}).flatMap(([name, ref]) => [
     "--input-cell",
@@ -350,11 +407,23 @@ export const runHarnessJob = async (
     resultPath,
   );
 
+  for (const image of spec.imageAttachments ?? []) {
+    const snapshot = await createHarnessImageAttachmentFromBase64({
+      ...image,
+      snapshotDir: join(workspace, ".job-images"),
+    });
+    argv.push("--image", snapshot.hostPath);
+  }
+
   // The harness builds its loop through this seam, so wrapping it is how the
   // job takes its abort signal, tells the caller of each transcript event the
   // harness persists, and hands back the loop's full result.
   let loopResult: HarnessPromptLoopResult | undefined;
   let loopError: unknown;
+  let reportedUsage: HarnessModelUsage | undefined;
+  let readRunState:
+    | (() => HarnessPromptLoopResult["runState"] | undefined)
+    | undefined;
   let resultValidation: CfHarnessStructuredResultValidation | undefined;
   const createInnerLoop = options.harnessDeps?.createPromptLoop ??
     ((loopOptions: CreateHarnessPromptLoopOptions) =>
@@ -383,13 +452,27 @@ export const runHarnessJob = async (
       options.harnessDeps?.onStructuredResultValidation?.(validation);
     },
     createPromptLoop: (loopOptions) => {
-      const loop = createInnerLoop(loopOptions);
+      readRunState = () => loopOptions.engine?.getRunState();
+      const loop = createInnerLoop({
+        ...loopOptions,
+        stopOnStructuredResult: true,
+        ...(spec.maxInputBytes !== undefined
+          ? { maxInputBytes: spec.maxInputBytes }
+          : {}),
+        ...(spec.maxOutputTokens !== undefined
+          ? { maxOutputTokens: spec.maxOutputTokens }
+          : {}),
+      });
       return {
         runPrompt: async (promptOptions) => {
           try {
             loopResult = await loop.runPrompt({
               ...promptOptions,
               signal: options.signal,
+              onModelUsage: async (update) => {
+                reportedUsage = update.totalUsage;
+                await promptOptions.onModelUsage?.(update);
+              },
               onTranscriptEvent: async (event) => {
                 await options.onEvent?.(event);
                 await promptOptions.onTranscriptEvent?.(event);
@@ -402,18 +485,56 @@ export const runHarnessJob = async (
           }
         },
         runTranscript: loop.runTranscript.bind(loop),
+        // The harness classifies the task before it assembles the prompt; a
+        // wrapper without this seam runs every job with full orientation.
+        ...(loop.classifyTask !== undefined
+          ? {
+            classifyTask: (task: string) => loop.classifyTask!(task),
+          }
+          : {}),
       };
     },
   };
 
   const exitCode = await runCfHarnessCli(argv, deps);
-  if (options.signal.aborted) return { outcome: "cancelled" };
+  const failedTurns = promptLoopModelTurnsFromError(loopError);
+  const failedState = readRunState?.();
+  // These are partial measurements, not a completeness claim. A failed
+  // provider call may have spent tokens it never reported.
+  const failedReport: AgentRunReport | undefined =
+    failedTurns !== undefined || reportedUsage !== undefined
+      ? {
+        ...(reportedUsage !== undefined
+          ? {
+            usage: { ...reportedUsage },
+            usageCoverage: "including-descendants",
+          }
+          : {}),
+        ...(failedTurns !== undefined ? { modelTurns: failedTurns } : {}),
+        ...(failedState !== undefined
+          ? { toolCalls: failedState.toolOutputs.length }
+          : {}),
+        ...(failedState?.artifactRoot !== undefined
+          ? { runRef: failedState.artifactRoot }
+          : {}),
+      }
+      : undefined;
+  if (options.signal.aborted) {
+    const report = loopResult !== undefined
+      ? reportOf(loopResult)
+      : failedReport;
+    return {
+      outcome: "cancelled",
+      ...(report !== undefined ? { report } : {}),
+    };
+  }
   if (loopResult === undefined) {
     const limit = loopError instanceof Error &&
       loopError.message.includes("exceeded max model turns");
     return {
       outcome: "failed",
       errorCode: limit ? LIMIT_REACHED : PROVIDER_FAILURE,
+      ...(failedReport !== undefined ? { report: failedReport } : {}),
     };
   }
   const report = reportOf(loopResult);

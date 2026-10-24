@@ -7,9 +7,10 @@ coverage.
 
 Coverage is read two ways as well. The repository-wide figure, measured by the
 full run on `main`, is a trend: the dashboard shows it and nothing fails on it.
-The measured-set gate on pull requests is the only coverage check that fails
-anything, and it compares one suite's tests over one workspace member's lines
-against what the same set measured on `main`.
+The measured-set gates are the only coverage check that fails anything. Each
+compares one suite's tests over one workspace member's lines against what the
+same set measured on `main`, and each is a test a pull request runs when its
+score earns it a place.
 
 ## Two kinds of code, two coverage mechanisms
 
@@ -96,8 +97,8 @@ never names the script an absent one. A batch whose tests never ran writes no
 profile directory, so the lane converts nothing for it and writes no report for
 it. A profile directory that holds only empty
 files is converted, and its report is empty. What reads the reports decides what
-an absent or empty one means: the pull request coverage gate fails a measured
-set the change forced whose reports name no line of its member, as [Test
+an absent or empty one means: on a pull request, a coverage gate the plan chose
+fails where its set's reports name no line of its member, as [Test
 selection](test-selection.md) describes.
 
 ### Authored pattern code is measured by transformer instrumentation
@@ -772,27 +773,35 @@ saves, and `tasks/deno-setup-action.test.ts` holds it to that.
 ## The measured-set gate and accepting debt
 
 The only coverage check that fails anything is the measured-set gate, which
-`Status` runs on every pull request. [The test-selection
+`Status` judges on every run. [The test-selection
 guide](test-selection.md#the-coverage-gate) is how to operate it and read its
 output, and [the test-selection contract](../specs/test-selection.md#coverage)
 is what it promises. In brief:
 
-- A **measured set** is one suite's tests over one workspace member's lines. A
-  change that reaches a set, unless it reaches more than
-  `LOCAL_COVERAGE_MAX_SETS`, runs every one of its units with coverage on, and
-  the gate adds the lanes' reports for that set together and scores them over
-  the member's own tracked source, by the rules in [How the two are
-  scored](#how-the-two-are-scored).
+- A **measured set** is one suite's tests over one workspace member's lines, and
+  its **gate** is a test of its own, scored by what it has caught. A pull
+  request may run the gate of a set its change reaches, and runs it when the
+  score chooses it, as it would any test. Running the gate runs every one of the
+  set's units with coverage on, and the gate adds the lanes' reports for that
+  set together and scores them over the member's own tracked source, by the
+  rules in [How the two are scored](#how-the-two-are-scored). A gate the score
+  does not choose runs nothing, and its set is reported as not measured.
 - The **baseline** is what the same set measured at the newest `main` commit the
   branch contains. The full run on `main` writes each set's figure into the
   record store, the test-selection publisher carries the figures in the
   manifest, and the gate reads them from the manifest current at the commit
   under test. A set with no baseline the branch contains is reported rather than
   failed.
-- A **rise** above the baseline fails the pull request, unless its description
-  accepts it. Every line of the member that the set's tests newly cover lowers
-  the count, so where the new code cannot all be covered, tests for other
-  uncovered lines of the member bring the count back down.
+- A **rise** above the baseline fails the gate, unless the description accepts
+  it, and a failing gate fails the pull request where the change reaches its
+  set. Every line of the member that the set's tests newly cover lowers the
+  count, so where the new code cannot all be covered, tests for other uncovered
+  lines of the member bring the count back down.
+- Every run records each gate it judged, a rise no acceptance covers as a
+  failure, so that a gate's score reflects the rises it has found. The full run on `main` judges every
+  gate and fails for none of them. It compares each commit against its parent's
+  figure, read from the parent's own run once that run's `Status` has uploaded
+  it, and reads the description of the pull request it merged for acceptances.
 
 Accept a rise with a marker in the pull request's description, on a line of its
 own and flush against the left margin:
@@ -902,16 +911,18 @@ Three things read them:
 
 - The test-selection publisher collects each measured set's figure as a
   coverage baseline, against the commit the record's context names, from the
-  objects it folds. It takes them from a push to `main` that the fork flag
-  does not mark, the same rule its fold uses for a run of the default branch,
-  and keeps one per set per commit, the later run's where two measured the
-  same commit. It carries the previous manifest's baselines forward and
+  objects it folds. It takes them from a run of the head of `main` that the
+  fork flag does not mark, the same rule its fold uses for a run of the
+  default branch, and keeps one per set per commit, the later run's where
+  two measured the same commit. It carries the previous manifest's baselines forward and
   drops any older than `LOCAL_COVERAGE_BASELINE_DAYS`.
   `tasks/test-selection/baselines.ts` is where that happens.
 - The dashboard's coverage debt tile
   (`packages/dashboard/coverage-debt-history.ts`) takes the `workspace`
-  figure of one `main` run a day, the newest of the day's runs that has one
-  and was not measured on a cold compile cache, and charts the run of them.
+  figure of one `main` run attempt a day, the newest of the day's attempts
+  that has one, was not measured on a cold compile cache, and passed, and
+  charts the run of them. The record store does not say whether an attempt
+  passed, so the tile asks GitHub.
 - The report a `main` run posts on the pull request behind it
   (`tasks/post-main-report.ts`) reads the figures out of the newest coverage
   artifact of the run and of the run before it, and compares the two. A run
@@ -929,12 +940,12 @@ changed, so a trend that took a cold run's figure beside a warm one's would show
 a drop the next warm run takes back.
 
 The pattern-integration process owns one shared cache in
-`packages/patterns/integration/pieces-controller.ts`. Its controller helper and
-the capability-gate controller both inject that cache into every runtime they
-create. A custom runtime in this suite must do the same. Setting
-`CF_COMPILE_CACHE_FILE` only tells the test-support cache where to persist its
-bytes; a runtime uses those bytes only when it receives the cache through its
-`moduleByteCache` option.
+`packages/patterns/integration/pieces-controller.ts`. Its controller helper, the
+capability-gate controller, and the serving loop the multi-runtime harness hosts
+all inject that cache into every runtime they create. A custom runtime in this
+suite must do the same. Setting `CF_COMPILE_CACHE_FILE` only tells the
+test-support cache where to persist its bytes; a runtime uses those bytes only
+when it receives the cache through its `moduleByteCache` option.
 
 Each lane records the state of the compile byte cache it restores
 (`COMPILE_CACHE_FILE` in `tasks/ci-capabilities.ts`) itself. A lane whose
@@ -989,11 +1000,11 @@ gsutil cp gs://commontools-build-artifacts/workspace-artifacts/labs-<commit-sha>
 A run that collects coverage has each lane measure the suites it runs. The full
 run on `main` measures every suite, both server-execution arms of each included,
 because the baselines and the repository-wide trend both come out of it. A pull
-request measures only the members of the measured sets its coverage gate scores,
-and runs everything else with coverage off, since a profile no set is scored
-from is time spent on something nothing reads. The lane hands a measured batch a
-coverage directory of its suite's own. A suite whose runner is `deno test` over
-files writes one directory under it per workspace member, so that what one
+request measures only the members of the measured sets whose gates its plan
+chose, and runs everything else with coverage off, since a profile no gate
+judges is time spent on something nothing reads. The lane hands a measured batch
+a coverage directory of its suite's own. A suite whose runner is `deno test`
+over files writes one directory under it per workspace member, so that what one
 member's tests reached is converted on its own. `pattern-unit` and
 `pattern-reload` write one directory named for the suite.
 

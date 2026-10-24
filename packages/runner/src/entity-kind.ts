@@ -45,8 +45,8 @@
  * - **Registered, and used for what it was registered for.** `did:`,
  *   defined by the W3C Decentralized Identifiers specification, and
  *   `data:`, defined by RFC 2397.
- * - **Absent from the registry.** `of:` and `computed:` are private to
- *   this codebase.
+ * - **Absent from the registry.** `of:`, `computed:`, and runtime-local
+ *   `snapshot:` identifiers are private to this codebase.
  * - **Registered for an unrelated subject.** `cid:` prefixes a
  *   content-addressed schema document reference (`schema-decompose.ts`).
  *   RFC 2392 registers the same name for a body part of a MIME message,
@@ -79,7 +79,7 @@ export type EntityUriScheme = (typeof ENTITY_URI_SCHEMES)[number];
 
 /**
  * The `"<scheme>:"` prefix when `id` starts with an entity URI scheme,
- * else `undefined`. Non-entity URIs (`data:`, `did:`, …) and bare tagged
+ * else `undefined`. Non-entity URIs (`data:`, `snapshot:`, `did:`, …) and bare tagged
  * hashes (`fid1:<hash>`) return `undefined`.
  */
 export function entityUriSchemePrefix(
@@ -160,7 +160,7 @@ export function uriSchemeForEntityKind(
  * Parses the kind from an id string's URI scheme (the segment before the
  * FIRST colon): `computed:fid1:<hash>` → `"computed"`. Every other form —
  * `of:` URIs, bare tagged hashes (`fid1:<hash>`), non-entity URIs (e.g.
- * `data:`), colon-free strings, and UNKNOWN schemes (e.g. `future:fid1:…`)
+ * `data:`, `snapshot:`), colon-free strings, and UNKNOWN schemes (e.g. `future:fid1:…`)
  * — returns `undefined`, which callers must treat as strict/authoritative,
  * never relaxed.
  */

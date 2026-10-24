@@ -1,8 +1,24 @@
 import { debugStr } from "@commonfabric/data-model";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
 
-import { type IPCRemotePost, NotificationType } from "@/protocol/mod.ts";
+import {
+  type IpcChannelSizes,
+  type IPCRemotePost,
+  NotificationType,
+} from "@/protocol/mod.ts";
 import { describeFailure } from "@/shared/utils.ts";
+import { IpcChannelTally } from "./ipc-channel-tally.ts";
+
+/**
+ * What the owner's channel has carried. One per worker, as the global it
+ * counts is: every message to the owner crosses `self.postMessage`.
+ */
+const ownerChannel = new IpcChannelTally();
+
+/** What the worker has posted over its own global, for the sizes read. */
+export function ownerChannelSizes(): IpcChannelSizes {
+  return ownerChannel.snapshot();
+}
 
 /**
  * Posts one message from the worker to its client, reporting whether what was
@@ -28,21 +44,29 @@ import { describeFailure } from "@/shared/utils.ts";
 export function postToClient(message: IPCRemotePost): boolean {
   // `self` is read at call time rather than captured at module load, so that a
   // test driving this without a real worker can substitute its own.
-  return postThrough((encoded) => self.postMessage(encoded), message);
+  return postThrough(
+    (encoded) => self.postMessage(encoded),
+    message,
+    ownerChannel,
+  );
 }
 
 /**
  * Posts one message through `send`, which is what a client other than the
  * worker's owner is reached by: its own port rather than the worker's global.
  * Everything the doc above says of {@link postToClient} is said of this, which
- * is where it happens.
+ * is where it happens. `tally` counts what is handed to `send`, the
+ * substitute for a refused message included.
  */
 export function postThrough(
   send: (encoded: unknown) => void,
   message: IPCRemotePost,
+  tally?: IpcChannelTally,
 ): boolean {
   try {
-    send(realmFromFabricValue(message));
+    const encoded = realmFromFabricValue(message);
+    tally?.note(encoded);
+    send(encoded);
     return true;
   } catch (error) {
     // Defense in depth, and the mirror of the two decodes. Both steps above
@@ -57,7 +81,11 @@ export function postThrough(
     // where a throw is an uncaught error rather than something that becomes
     // an error reply. Losing one message loudly beats taking the worker's
     // dispatch with it.
-    send(realmFromFabricValue(undeliverableMessageFrom(message, error)));
+    const substitute = realmFromFabricValue(
+      undeliverableMessageFrom(message, error),
+    );
+    tally?.note(substitute);
+    send(substitute);
     return false;
   }
 }

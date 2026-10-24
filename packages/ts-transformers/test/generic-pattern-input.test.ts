@@ -181,11 +181,11 @@ describe("generic pattern input", () => {
     expect(generic.input).toEqual({ ...boxOfNumber, default: { value: 0 } });
     expect(generic.capture).toEqual({
       anyOf: [
+        boxOfNumber,
         {
           ...boxOfNumber,
           properties: { value: { type: "number", enum: [0] } },
         },
-        boxOfNumber,
       ],
       default: { value: 0 },
     });

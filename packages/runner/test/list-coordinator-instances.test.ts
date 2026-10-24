@@ -19,12 +19,15 @@ import type { Action } from "../src/scheduler.ts";
 import { useCancelGroup } from "../src/cancel.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { getMetaCell } from "../src/link-utils.ts";
+import { experimentalOptionsFromEnv } from "../src/experimental-posture.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "../src/storage/v2-emulate.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
+
+const { localSessionDocuments } = experimentalOptionsFromEnv(Deno.env.get);
 
 /** One serving coordinator must stage each principal's physical child instance. */
 describe("list-coordinator-instances", () => {
@@ -99,7 +102,10 @@ describe("list-coordinator-instances", () => {
     ]] as const
   ) {
     for (const scope of ["user", "session"] as const) {
-      it(`sets up the same named ${scope}-scoped ${name} child for both serving identities`, async () => {
+      const test = scope === "session" && localSessionDocuments === true
+        ? it.ignore
+        : it;
+      test(`sets up the same named ${scope}-scoped ${name} child for both serving identities`, async () => {
         const signer = await Identity.fromPassphrase(
           "list-coordinator-instances",
         );
@@ -160,7 +166,7 @@ describe("list-coordinator-instances", () => {
             const actorRuntime = new Runtime({
               apiUrl: new URL(import.meta.url),
               storageManager: actorStorage,
-              experimental: { serverExecution: false },
+              experimental: { serverExecution: false, localSessionDocuments },
             });
             try {
               identities[position] = actorRuntime

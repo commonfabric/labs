@@ -35,6 +35,7 @@ import {
   type JSONSchema,
   KeepAsCell,
   parseLink,
+  profileNameWrittenAt,
   type SinkConsumedLabel,
   sinkProjected,
   type Stream,
@@ -71,6 +72,7 @@ import {
   isBindingProp,
   isEventHandler,
   isEventProp,
+  styleObjectToCssString,
 } from "../render-utils.ts";
 import { CONTAINER_NODE_ID, type VDomOp } from "../vdom-ops.ts";
 import {
@@ -317,6 +319,16 @@ const logger = getLogger("worker-reconciler", {
   enabled: false,
   level: "debug",
 });
+
+/**
+ * Whether `value`, as a view stores it, is or holds a link: a position a read
+ * of the value follows to another document, whose labels that read consumes.
+ */
+function holdsLink(value: unknown, base: Cell<unknown>): boolean {
+  if (parseLink(value, base) !== undefined) return true;
+  return isObjectOrArray(value) &&
+    Object.values(value).some((held) => holdsLink(held, base));
+}
 
 /**
  * Positions holding a longest strictly increasing run of `previousPositions`,
@@ -1814,10 +1826,39 @@ export class WorkerReconciler {
   /**
    * The principals the label of `cell`'s value says it represents, as
    * `authorPrincipalCandidates()` reads them from the document that holds the
-   * value; none when that label cannot be read.
+   * value, given whether the value's `name` holds a name its owner wrote;
+   * none when that label cannot be read.
    */
   #representedPrincipalsForCell(cell: Cell<unknown>): string[] {
-    return authorPrincipalCandidates(cfcLabelViewForResolvedTarget(cell));
+    const nameWritten = this.#nameWrittenForCell(cell);
+    // A name whose read failed settles neither reading of the label, so the
+    // author represents no one here, and the boundary holds the text back.
+    return nameWritten === undefined ? [] : authorPrincipalCandidates(
+      cfcLabelViewForResolvedTarget(cell),
+      nameWritten,
+    );
+  }
+
+  /**
+   * Helper for `#representedPrincipalsForCell()`, which returns whether the
+   * `name` field of `cell`'s value, followed through its links, holds a name
+   * its owner wrote, read as `profileNameWrittenAt()` reads it, as a verifier
+   * read; `undefined` when that read fails.
+   */
+  #nameWrittenForCell(cell: Cell<unknown>): boolean | undefined {
+    const runtime = cellRuntime(cell);
+    const tx = runtime.edit();
+    try {
+      return profileNameWrittenAt(
+        runtime,
+        tx,
+        cell.withTx(tx).resolveAsCell().getAsNormalizedFullLink(),
+      );
+    } catch {
+      return undefined;
+    } finally {
+      tx.abort();
+    }
   }
 
   #staticCellProp(
@@ -3101,23 +3142,24 @@ export class WorkerReconciler {
    * The keys among `keys` whose value the node's render policy has to decide
    * on by what a read of that key consumes: each whose stored value is a
    * link, and every one when the policy does not admit the props object's
-   * own label, as when the props are linked from a document of their own. A
-   * props object that cannot be read counts every key.
+   * own label, as when the props are linked from a document of their own.
+   * `stored` is the props object as the document holds it, or undefined when
+   * it cannot be read, which counts every key.
    */
   #propKeysReadAlone(
     state: NodeState,
     propsCell: Cell<WorkerProps>,
+    stored: Record<string, unknown> | undefined,
     keys: readonly string[],
   ): ReadonlySet<string> {
-    const raw = this.#readCellPolicyValue(propsCell);
     if (
-      !isObjectNotArray(raw) ||
+      stored === undefined ||
       !canRenderCellUnderPolicy(propsCell, state.renderPolicy, this.#fitSources)
     ) {
       return new Set(keys);
     }
     return new Set(
-      keys.filter((key) => parseLink(raw[key], propsCell) !== undefined),
+      keys.filter((key) => parseLink(stored[key], propsCell) !== undefined),
     );
   }
 
@@ -3126,7 +3168,8 @@ export class WorkerReconciler {
    *
    * - Event props: resolved via .key().resolveAsCell() → stream/handler registration
    * - Binding props: resolved via .key().resolveAsCell() → cell reference
-   * - Style objects: resolved by the Cell<Props> schema and parent sink
+   * - Style objects: resolved by the Cell<Props> schema and parent sink,
+   *   unless a render policy gates the node and the object holds a link
    * - Other object/array props: per-prop sink via .key().asSchema(true)
    * - Primitive props: set directly from the resolved Cell<Props> value
    */
@@ -3174,8 +3217,10 @@ export class WorkerReconciler {
       const props = resolvedProps as Record<string, unknown>;
       const newKeys = new Set(Object.keys(props));
       const gated = !admitsEverything(state.renderPolicy);
+      const stored = gated ? this.#readCellPolicyValue(propsCell) : undefined;
+      const storedProps = isObjectNotArray(stored) ? stored : undefined;
       const readAlone = gated
-        ? this.#propKeysReadAlone(state, propsCell, [...newKeys])
+        ? this.#propKeysReadAlone(state, propsCell, storedProps, [...newKeys])
         : new Set<string>();
 
       // Remove props that no longer exist
@@ -3286,17 +3331,22 @@ export class WorkerReconciler {
             ),
           });
         } else if (
-          (isObjectOrArray(value) && (key !== "style" || gated)) ||
-          readAlone.has(key)
+          readAlone.has(key) ||
+          (isObjectOrArray(value) &&
+            (key !== "style" ||
+              (gated &&
+                (storedProps === undefined ||
+                  holdsLink(storedProps[key], propsCell)))))
         ) {
           // Generic object/array values are deliberately capped in
           // rendererVDOMSchema, so they need a per-prop sink for deep
-          // resolution. Style is excluded while no render policy gates the
-          // node: its explicit schema already traverses the object through
-          // the parent props sink. Under a policy, a style object and a value
-          // read through a link take a per-prop sink too, so the policy
-          // decides on the labels that read consumed; a literal is part of
-          // this view, which the policy already admitted.
+          // resolution. A style object's explicit schema already traverses
+          // it through the parent props sink, so a style is read on its own
+          // only when a render policy gates the node and the object holds a
+          // link: the policy then decides on the labels the read through
+          // that link consumes, as it does for a value read through a link.
+          // A literal, a style holding no link included, is part of this
+          // view, which the policy already admitted.
           const existingState = state.propSubscriptions.get(key);
           if (existingState?.cell) continue; // Already has active per-prop sink
 
@@ -4224,15 +4274,15 @@ export class WorkerReconciler {
   // deno-lint-ignore no-explicit-any
   #transformPropValue(key: string, value: unknown): any {
     // TODO(danfuzz): the `typeof` gate admits a `FabricSpecialObject`, so a
-    // fabric-valued `style` prop is routed into the `Object.entries` walk of
-    // `styleObjectToCssString` — yielding an empty CSS string, silently —
+    // fabric-valued `style` prop is routed into the walk over own keys in
+    // `styleObjectToCssString()` — yielding an empty CSS string, silently —
     // before it can reach `convertCellsToLinks` below, the one conversion
     // here that knows the fabric types.
     if (
       key === "style" && value && typeof value === "object" &&
       !Array.isArray(value)
     ) {
-      return this.#styleObjectToCssString(value as Record<string, unknown>);
+      return styleObjectToCssString(value as Record<string, unknown>);
     }
     // Use convertCellsToLinks to handle Cells, circular refs, and non-JSON values.
     // Pass doNotConvertCellResults to prevent already-resolved values (from .sink())
@@ -4246,58 +4296,6 @@ export class WorkerReconciler {
       includeSchema: true,
       keepAsCell: KeepAsCell.OnlyStream,
     });
-  }
-
-  /**
-   * Convert a style object to a CSS string.
-   */
-  #styleObjectToCssString(styleObject: Record<string, unknown>): string {
-    const unitlessProperties = new Set([
-      "animation-iteration-count",
-      "column-count",
-      "fill-opacity",
-      "flex",
-      "flex-grow",
-      "flex-shrink",
-      "font-weight",
-      "line-height",
-      "opacity",
-      "order",
-      "orphans",
-      "stroke-opacity",
-      "widows",
-      "z-index",
-      "zoom",
-    ]);
-
-    return Object.entries(styleObject)
-      .map(([key, value]) => {
-        if (value == null) return "";
-
-        let cssKey = key;
-        if (!key.startsWith("--")) {
-          if (/^(webkit|moz|ms|o)[A-Z]/.test(key)) {
-            cssKey = "-" + key;
-          }
-          cssKey = cssKey.replace(/([A-Z])/g, "-$1").toLowerCase();
-        }
-
-        let cssValue = value;
-        if (
-          typeof value === "number" &&
-          !cssKey.startsWith("--") &&
-          !unitlessProperties.has(cssKey) &&
-          value !== 0
-        ) {
-          cssValue = `${value}px`;
-        } else {
-          cssValue = String(value);
-        }
-
-        return `${cssKey}: ${cssValue}`;
-      })
-      .filter((s) => s !== "")
-      .join("; ");
   }
 
   /**

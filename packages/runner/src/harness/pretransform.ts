@@ -49,8 +49,10 @@ export function transformInjectHelperModule(
       }
       return {
         name: source.name,
-        contents: normalizeMixedModuleImports(
-          transformCfDirective(source.contents, source.name),
+        contents: transformCfDirective(
+          source.contents,
+          source.name,
+          normalizeMixedModuleImports,
         ),
       };
     }),
@@ -90,15 +92,20 @@ function prefix(filename: string, id: string): string {
   return `/${id}${filename}`;
 }
 
-function normalizeMixedModuleImports(source: string): string {
+/**
+ * Rewrites each import that takes a module's default export beside or inside
+ * a named-import list as a default import, followed by a named import of the
+ * remaining names if any, keeping the statement's line count. It reads the
+ * parse the helper injection made of `source`, so one parse serves both. The
+ * helper import and the shim the injection adds around `source` hold no such
+ * import, so rewriting `source` alone gives what rewriting the injected text
+ * would.
+ */
+function normalizeMixedModuleImports(
+  source: string,
+  sourceFile: ts.SourceFile,
+): string {
   const { ts: tsc } = compilerStack();
-  const sourceFile = tsc.createSourceFile(
-    "source.tsx",
-    source,
-    tsc.ScriptTarget.ES2023,
-    true,
-    tsc.ScriptKind.TSX,
-  );
   const printer = tsc.createPrinter({ newLine: tsc.NewLineKind.LineFeed });
   const replacements: { start: number; end: number; text: string }[] = [];
 

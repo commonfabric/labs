@@ -200,7 +200,7 @@ arrives.
   `instance ?? normalizeCellScope(scope)` — so what has to grow a scope
   parameter is that one signature, not the storage model. #6534's seam must
   be scope-aware end to end before the raw path can serve an overlay.
-- Guard-plus-`idle()` settling, per `renderVDomToHtml`'s form.
+- Guard-plus-`idle()` settling, with the guard `renderVDomToHtml` uses.
 - The connection's state is visible in the frame (`● live`, cold banner,
   or a reconnecting marker), read from the relay B1 builds —
   the storage layer publishes no connection state today

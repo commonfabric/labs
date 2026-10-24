@@ -1,17 +1,11 @@
 import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
-import { consume } from "@lit/context";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
 
 import { BaseElement } from "../../core/base-element.ts";
-import {
-  applyThemeToElement,
-  type CFTheme,
-  cfThemeContext,
-  defaultTheme,
-} from "../theme-context.ts";
+import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 import {
   type MarkdownCallbacks,
   markdownTemplate,
@@ -425,9 +419,12 @@ export class CFMarkdown extends BaseElement {
   @property({ type: Boolean, reflect: true })
   accessor compact = false;
 
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   private _unsubscribe: (() => void) | null = null;
 
@@ -482,20 +479,11 @@ export class CFMarkdown extends BaseElement {
     }
   }
 
-  override firstUpdated(
-    changedProperties: Map<string | number | symbol, unknown>,
-  ) {
-    super.firstUpdated(changedProperties);
-    if (this.theme) {
-      this._updateThemeProperties();
-    }
-  }
-
   override updated(changedProperties: Map<string | number | symbol, unknown>) {
     super.updated(changedProperties);
 
-    if (changedProperties.has("theme") && this.theme) {
-      this._updateThemeProperties();
+    if (changedProperties.has("theme")) {
+      applyThemeToElement(this, this.theme);
     }
   }
 
@@ -511,11 +499,6 @@ export class CFMarkdown extends BaseElement {
       this._unsubscribe();
       this._unsubscribe = null;
     }
-  }
-
-  private _updateThemeProperties() {
-    if (!this.theme) return;
-    applyThemeToElement(this, this.theme);
   }
 
   override render() {

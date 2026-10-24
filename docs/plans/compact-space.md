@@ -1,7 +1,12 @@
 # `compact-space` — shrinking one space's history after a write storm
 
-**Status:** stages 1–3 landed (the bounded base search, the basis guard,
-the dry run); stage 4, the write path, in review; stages 5–8 open. Design
+**Status:** stages 1–5 landed (the bounded base search, the basis guard,
+the dry run, the write path with its verification, the documentation and
+inspector); stage 6, the rehearsal, ran on 2026-10-12 and passed its
+verification, and its last acceptance check, the served edit, closed on
+2026-10-13 with the server-side instrument; stage 7 is complete on Estuary
+([production record](../history/topics-board-compaction-2026-10-18.md));
+stage 8 remains open. Design
 written 2026-10-08 against
 the shared Topics space after
 [the October write storm](../history/development/performance/2026-10-07-topics-space-write-storm.md):
@@ -585,9 +590,12 @@ the backup (the current size), the result (the compacted size), and WAL
 headroom for the run; `df -h /data` before starting, and the staging copy
 document's note that `/tmp` has no room applies here too.
 
-### Verification, in order
+### Verification obligations
 
-Each check fails differently and the order goes from cheap to expensive:
+The checks below define the verification obligations. Head comparison and
+fingerprinting share primary reconstructions within each file; each fingerprint
+independently enumerates revision addresses and resolves related documents in
+its own file.
 
 1. `PRAGMA integrity_check` and `PRAGMA foreign_key_check` on the result.
 2. **Heads unchanged, one excepted.** `SELECT branch, id, scope_key, seq,
@@ -601,17 +609,16 @@ Each check fails differently and the order goes from cheap to expensive:
    boundary is byte-identical to the backup's, op and `commit_seq` included.
    Every head must still join to a revision row.
 3. **Every document reads back identical, one excepted.** Reconstruct every
-   selected instance at its head on both files with the state inspector's
+   non-ACL instance with a default-branch head on both files with the inspector's
    replay (`packages/state-inspector/reconstruct.ts`), which is a second
    implementation of the engine's rule, and compare canonical encodings. All
-   of them, not a sample: it is offline and runs in minutes, and "every head
-   identical" is the claim the operator wants to make. For the ACL document
+   of them, not a sample: "every head identical" is the claim the operator wants
+   to make. For the ACL document
    the comparison is: `value` byte-identical, and the only root member that
    differs is `compaction`, holding what the dry run said it would.
    `--verify-sample <n>` exists for a quick pass during rehearsal.
 4. `cf space fingerprint` on both files must agree. The fingerprint excludes
-   generated cells, so it is necessary rather than sufficient, and it is
-   cheap.
+   generated cells, so it is necessary rather than sufficient.
 5. **The compaction commit is recorded**: one `system` row at the seq the dry
    run named; the rows pointing at it are exactly every boundary this run
    re-attributed — materialized or already a `set` or `delete` — plus the
@@ -625,9 +632,20 @@ Each check fails differently and the order goes from cheap to expensive:
    local toolshed on it with the workspace's port offset, open the Topics
    board cold, and read the board and a handful of topics through `cf`. The
    acceptance checks are the ones `space-clone-rehearsal.md` lists plus two
-   for this tool: `/api/health/stats` for the space shows `patchReplays` not
-   climbing on a cold board load, and `transact` round trips on a topic edit
-   are below the storm's 180 ms.
+   for this tool, each judged against the same workload on the uncompacted
+   file: the cold and warm read times and the `patchReplays` delta behind
+   the cold board load in `/api/health/stats` do not exceed the baseline's,
+   and fall where the selection reaches (a `computed:`-only selection leaves
+   the authored documents' history, so the global counter still climbs by
+   their replays); and a topic edit through the served API, with the same
+   client-side instrument on both files and judged by the server's
+   `transact` frame for it in `/api/health/stats` with
+   `CF_SLOW_QUERY_THRESHOLD_MS=0` (the storm record's 180 ms was that frame,
+   for commits from browser sessions holding the board's watch; a client's
+   round trip adds its own watch add and process time and is not that
+   number), is no slower on the compacted file — measured also with a
+   browser's board session holding its watch, so the board session's refresh
+   per edit is read beside the frame.
 8. On the host after install, the two checks `staging-space-copy.md` ends
    with: the space is listed, and a read through the API returns the content.
 
@@ -750,8 +768,8 @@ the run's report as its `original`, for `cf inspect`.
 
 The procedure never deletes the original: it is moved aside with its `-wal`
 and `-shm` companions, and the result is installed under its name. Rolling
-back is moving the result out and the original back, then starting the
-instance. The commands are written down before the instance is stopped, as
+back is moving the result out and the original back, then starting every
+instance again. The commands are written down before the instance is stopped, as
 the staging copy document requires. The backup is a second copy of the same
 pre-compaction state should the original be damaged in the move.
 
@@ -830,6 +848,17 @@ retention, since the history being removed is theirs
 df -h /data
 ls -la /data/memory/engine-v3/engine-v3/ | grep '<did>'
 curl -s localhost:8020/api/health/stats | grep -c '<did>'
+#    And the release every instance runs: its gitSha must descend from the
+#    basis guard's merge (stage 2, 174fc11ad2), or the engine that reopens
+#    the result takes a compacted basis for an absence. The rehearsal on a
+#    checkout proves nothing about this; deploy first where it fails
+#    (the runbook's preflight has the ancestry test). An instance that does
+#    not answer prints NONE; the count must read 21 of one sha.
+for p in $(seq 8001 8021); do
+  sha=$(curl -s --max-time 5 "localhost:$p/api/meta" | grep -o '"gitSha":"[0-9a-f]\{40\}"' | cut -d'"' -f4)
+  echo "$p ${sha:-NONE}"
+done | tee /tmp/releases.txt
+awk '{print $2}' /tmp/releases.txt | sort | uniq -c   # exactly one line, "21 <sha>"; a NONE or a second sha = stop here
 
 # 1. Dry run against a LIVE snapshot, with the instance still serving, and
 #    compare with the clone rehearsal's report. This snapshot is for the
@@ -839,9 +868,10 @@ sqlite3 -readonly '/data/memory/engine-v3/engine-v3/<did>.sqlite' \
 cf space compact '/data/replaced/<did>.dry-run-<date>.sqlite' \
   --documents computed: --dry-run
 
-# 2. Stop the owning instance. The other twenty keep serving their spaces.
-#    (sudo: the operator runs this.) Nothing writes the space from here on.
-sudo systemctl stop toolshed-binary@8020
+# 2. Stop every instance. (sudo: the operator runs this.) Nothing writes any
+#    space from here on. Every instance can open every file, so stopping the
+#    one the hash names would not establish that the others have let go.
+for p in $(seq 8001 8021); do sudo systemctl stop toolshed-binary@$p; done
 
 # 3. The authoritative backup, AFTER the stop: read-only, into a directory
 #    with room, checksummed. This is the rollback, the archive, and the source.
@@ -868,17 +898,17 @@ ls -la '<did>.sqlite'*
 sudo mv '<did>.sqlite'* /data/replaced/
 sudo install -o deploy -g deploy -m 644 '/data/replaced/<did>.compacted.sqlite' '<did>.sqlite'
 
-# 7. Start, confirm, read back (§3, step 7). (sudo.)
-sudo systemctl start toolshed-binary@8020
-systemctl is-active toolshed-binary@8020
+# 7. Start them all, confirm, read back (§3, step 7). (sudo.)
+for p in $(seq 8001 8021); do sudo systemctl start toolshed-binary@$p; done
+for p in $(seq 8001 8021); do systemctl is-active toolshed-binary@$p; done
 ```
 
-Only the owning instance is stopped: every instance can open every file, but
-the hash sends the space's clients to one of them, and the storm record shows
-that one at 95% CPU while its neighbors idled. Stopping all twenty-one, as the
-staging recipe does for a store it treats as shared, is the conservative
-choice if the hash cannot be confirmed. The window in which the space is down
-is steps 2 through 7, and the backup that becomes the replacement is taken
+Every instance is stopped, as the staging recipe stops them for a store it
+treats as shared: the hash sends the space's websocket clients to one
+instance, and the storm record shows that one at 95% CPU while its neighbors
+idled, but every instance can open every file, and a stop of one does not
+establish that the others have released it. The window in which the spaces are
+down is steps 2 through 7, and the backup that becomes the replacement is taken
 inside it: a snapshot from before the stop would silently drop every commit
 accepted between the two, and verifying against it would not show the gap.
 
@@ -964,7 +994,12 @@ operator took.
   history but keeps every instance, because a resumed session may still read
   one. Collecting instances of sessions that will never resume is a different
   tool with a different question (when is a session dead?), and is not
-  designed here.
+  designed here. After the rehearsal's `computed:` compaction it is the
+  largest thing left in the file: 887,520 of 1.68 million revision rows,
+  2.95 of 4.55 GB of document data and 872,700 of 1.20 million heads belong
+  to 54,929 session scopes, and the selection removed 13% of those rows
+  against 72% of the space-scoped ones (census of the rehearsal clones,
+  2026-10-13).
 - **Label history as audit trail.** A compacted document keeps its current
   labels and loses the record of which label each earlier revision carried.
   Whether that record has value under the CFC model is for the CFC review that
@@ -994,8 +1029,9 @@ operator took.
 
 ## Stages
 
-Each stage is a pull request. Stages 1 through 3 have landed, and stage 4
-onward is open. Two engine changes came first, and both have landed: the
+Each stage is a pull request. Stages 1 through 5 have landed, stage 6 has
+run and closed its acceptance checks, and stage 7 is complete on Estuary.
+Stage 8 remains open. Two engine changes came first, and both have landed: the
 base search, because it preserves history, helps the uncompacted store from
 the deploy that carries it, and is the measurement the compaction decision
 was made against; and the basis guard, because no store may be compacted
@@ -1028,7 +1064,7 @@ until the engine can tell compacted history from absence.
    `(seq, op_index)` that considers only snapshots below that seq, tested on
    a multi-operation commit with and without a snapshot at it. Run on the
    2026-10-09 snapshot; its numbers are in the cost section above.
-4. **The write path** — in review. The compaction commit with its per-run
+4. **The write path** — done ([labs#8722](https://github.com/commonfabric/labs/pull/8722)). The compaction commit with its per-run
    identity and its ACL-document marker, materialize, truncate, hollow
    (commit 1, the `op_*`-referenced commits and every compaction commit
    exempt), `VACUUM INTO`, `--verify --against`. Tests: every head reads back identical
@@ -1047,16 +1083,40 @@ until the engine can tell compacted history from absence.
    a store with a second branch is refused; a run interrupted after the first
    instance resumes to the same result as an uninterrupted one, with two
    compaction commits.
-5. **Documentation and the spec amendment.** The `cf space compact` section
-   of `packages/cli/README.md` (the command-docs gate requires it), the
-   §7 paragraph in `02-storage.md`, the state inspector learning the
-   `compaction` member and the compaction commit, and a runbook section in
-   `staging-space-copy.md` or a sibling document carrying the Estuary recipe
-   of §4 once it has been run.
-6. **Rehearsal on a clone of the current Topics file**, with the same
-   timings as stage 1 taken after compaction.
-7. **The production run**, by the operator, from the rehearsed flag set, with
-   the owner's agreement. Stage 1's measurement left disk as the reason:
+5. **Documentation and the spec amendment** — done ([labs#8786](https://github.com/commonfabric/labs/pull/8786),
+   merged 2026-10-13). The `cf space
+   compact` section of `packages/cli/README.md` (the command-docs gate
+   requires it; landed with stage 4), the §7.1 paragraph in `02-storage.md`,
+   the state inspector learning the `compaction` member (the ACL document's
+   classification carries it) and the compaction commit and the hollowed
+   payloads (`cf inspect commits` names them), and a runbook document
+   carrying the Estuary recipe of §4 as the rehearsal ran it.
+6. **Rehearsal on a clone of the current Topics file** — done 2026-10-12,
+   on the clone of the 2026-10-09 snapshot, with the same timings as stage 1
+   taken after compaction; the numbers are in
+   [`space-compaction.md`](../development/space-compaction.md). Reset 35
+   min; dry run 56 s; compaction 298 s to an 8.45 GB result from 22.71 GB;
+   verification 50.5 min, 24 checks passed, every head identical; served,
+   the board's cold load 15.5 s against 20.2 s and the patch replays behind
+   it 14,273 against 44,928, with the traversal still the bound; writes 1–5
+   ms at the engine, as after stage 1; a topic edit through the served API
+   via `cf cell set`, judged by the server's `transact` frame with the
+   threshold at zero: 2–6 ms on both files with lock wait 0, and with a
+   browser's board session holding its watch 1–2 ms compacted against 2–6
+   ms uncompacted, the board session's refresh per edit 1–2 ms against 2–3
+   ms — no slower, so the served-edit acceptance check of §3 step 7 is
+   closed (the earlier seconds were the client session's broad watch add,
+   932 watches delivering 5,613 documents; the single-topic watch of 314
+   documents took 214–224 ms in those sessions and 31–105 ms in the
+   follow-up's, where a board read had warmed them). The same session showed what a browser's
+   board page costs the server, which the `cf` instrument understates five
+   times over; that is recorded in the runbook and taken up outside this
+   plan.
+7. **The production run** — complete on Estuary with the owner's agreement,
+   `--documents computed: --keep-payloads 7d`, and full verification before
+   installation; see the
+   [production record](../history/topics-board-compaction-2026-10-18.md).
+   Stage 1's measurement left disk as the reason:
    22.7 GB, of which 13.6 GB is commit payloads that I6 reaches outside the
    window, and 1.2 GB revision rows that truncation removes.
 8. **Faithful replay of hollowed commits and explicit refusal of reads

@@ -17,6 +17,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
@@ -55,6 +56,21 @@ describe("to-encodable-form", () => {
   });
 
   describe("withAliasBindings", () => {
+    it("keeps the holes of a sparse array, at the array's length", () => {
+      // The data model tells a hole from a stored `undefined`, so a bound
+      // array has exactly the holes its input has.
+      const sparse: unknown[] = [];
+      sparse[0] = 1;
+      sparse[2] = { nested: [3] };
+      const result = withAliasBindings({ list: sparse }) as {
+        list: unknown[];
+      };
+      expect(result.list.length).toBe(3);
+      expect(1 in result.list).toBe(false);
+      expect(result.list[0]).toBe(1);
+      expect(result.list[2]).toEqual({ nested: [3] });
+    });
+
     it("should serialize shared object references correctly", () => {
       // Regression test: shared style objects used across siblings in .map()
       // should all serialize with full data, not {} for the 3rd+ occurrence.
@@ -355,6 +371,78 @@ describe("to-encodable-form", () => {
 
       expect(() => withAliasBindings(graph)).toThrow("Not representable");
       expect(reads).toBe(0);
+    });
+
+    it("returns a graph holding deep-frozen copies of a pattern's schemas, leaving the pattern's as they were", () => {
+      const graph = {
+        argumentSchema: {
+          type: "object",
+          properties: { title: { type: "string" } },
+          required: ["title"],
+        },
+        resultSchema: { type: "object", properties: {} },
+        result: {},
+        nodes: [],
+      };
+
+      const out = withAliasBindings(graph) as typeof graph;
+      expect(out.argumentSchema).toEqual(graph.argumentSchema);
+      expect(out.resultSchema).toEqual(graph.resultSchema);
+      expect(isDeepFrozen(out.argumentSchema)).toBe(true);
+      expect(isDeepFrozen(out.resultSchema)).toBe(true);
+      expect(Object.isFrozen(out)).toBe(false);
+      expect(Object.isFrozen(out.result)).toBe(false);
+
+      expect(out.argumentSchema).not.toBe(graph.argumentSchema);
+      expect(Object.isFrozen(graph.argumentSchema)).toBe(false);
+      expect(Object.isFrozen(graph.argumentSchema.properties)).toBe(false);
+      expect(Object.isFrozen(graph.argumentSchema.required)).toBe(false);
+      expect(Object.isFrozen(graph.resultSchema)).toBe(false);
+    });
+
+    it("returns a graph holding a deep-frozen manifest of derived internal cells, leaving the pattern's as it was", () => {
+      // The runtime keeps the id a partial cause names by the cause's
+      // identity only where the cause is deep-frozen, and the walk has just
+      // rebuilt the manifest's records.
+      const graph = {
+        argumentSchema: {},
+        resultSchema: {},
+        derivedInternalCells: [
+          { partialCause: { $generated: 0 } },
+          { partialCause: { stream: ["a", 1] }, schema: { type: "object" } },
+        ],
+        nodes: [],
+      };
+
+      const out = withAliasBindings(graph) as typeof graph;
+      expect(out.derivedInternalCells).toEqual(graph.derivedInternalCells);
+      expect(isDeepFrozen(out.derivedInternalCells)).toBe(true);
+      expect(out.derivedInternalCells).not.toBe(graph.derivedInternalCells);
+      expect(Object.isFrozen(graph.derivedInternalCells)).toBe(false);
+      expect(Object.isFrozen(graph.derivedInternalCells[0]!.partialCause))
+        .toBe(false);
+    });
+
+    it("returns a graph holding boolean schemas as they are", () => {
+      const graph = { argumentSchema: false, resultSchema: true, nodes: [] };
+      const out = withAliasBindings(graph) as typeof graph;
+      expect(out.argumentSchema).toBe(false);
+      expect(out.resultSchema).toBe(true);
+    });
+
+    it("returns a copy of a deep-frozen value at each place it is reached", () => {
+      // `createRef()` hashes an object it reaches twice in one cause as
+      // `null`, so a bound tree sharing one object between two places would
+      // derive other ids than a tree holding a copy at each.
+      const shared = deepFreeze({ type: "object", properties: {} });
+      const out = withAliasBindings({ a: shared, b: shared }) as {
+        a: object;
+        b: object;
+      };
+      expect(out.a).toEqual(shared);
+      expect(out.b).toEqual(shared);
+      expect(out.a).not.toBe(shared);
+      expect(out.b).not.toBe(out.a);
     });
 
     it("leaves ordinary containers alone", () => {

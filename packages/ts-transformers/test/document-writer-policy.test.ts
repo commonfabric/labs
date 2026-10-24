@@ -986,6 +986,50 @@ export default pattern<{ value: Owned<string, typeof setName> }>((input) => {
       expect(result.diagnostics.filter(isUnreadWriter)).toEqual([]);
     });
 
+    for (
+      const [what, list, defines] of [
+        [
+          "does not define its document where fresh data an inferred result returns holds a stream linking to a type with a writer policy",
+          "ITEMS.map((n) => ({ target: stream, n }))",
+          false,
+        ],
+        [
+          "does not define its document where fresh data an inferred result returns holds a cell linking to a type with a writer policy",
+          "ITEMS.map((n) => ({ target: cell, n }))",
+          false,
+        ],
+        [
+          "defines its document where fresh data an inferred result returns holds a writer policy itself",
+          'ITEMS.map((n) => ({ entry: { value: "" } as Entry, n }))',
+          true,
+        ],
+      ] as const
+    ) {
+      it(what, async () => {
+        // A plain call's result is read from its type. A stream or a cell in
+        // it is a link: the policy inside the type it links to is that
+        // document's, so the result holds no policy of its own there and is
+        // not rebuilt as defining its document. Plain data holding the policy
+        // is.
+        const result = await transform(
+          `import type { Stream } from "commonfabric";
+interface Entry { value: ${POLICY} }
+const ITEMS = [1, 2];
+export default pattern<{ stream: Stream<Entry>; cell: Writable<Entry> }>(({ stream, cell }) => ({
+  list: ${list},
+}));`,
+        );
+        const definitions = Object.keys(
+          (patternSchemas(result.root).output as { $defs?: object }).$defs ??
+            {},
+        );
+
+        expect(result.diagnostics.filter(isUnreadWriter)).toEqual([]);
+        expect(definitions.some((name) => name.endsWith(":document")))
+          .toBe(defines);
+      });
+    }
+
     it("reports nothing for an inferred result that returns a protected value through a generic alias", async () => {
       const result = await transform(`type Box<T> = { value: T };
 export default pattern<{ value: ${POLICY} }>(({ value }) => ({ box: { value } as Box<${POLICY}> }));`);

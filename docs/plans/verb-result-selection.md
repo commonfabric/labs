@@ -1,10 +1,11 @@
 # Verb calls: working notes
 
 **Sketches and investigation notes, not a plan.** The design lives in
-[Reading Fabric data](fabric-read-model.md) and the two documents it points at:
-[Shaped reads and verb results](shaped-reads-and-verb-results.md) for the read
-layer and what a call adds to it, and [CLI surface shape](cli-surface-shape.md)
-for the command surface.
+[Reading Fabric data](fabric-read-model.md) and
+[Shaped reads and verb results](shaped-reads-and-verb-results.md), for the read
+layer and what a call adds to it; the command surface was settled by
+[CLI surface shape](../history/plans/cli-surface-shape.md), an executed plan now
+archived.
 
 What is kept here is call-specific detail those documents do not carry: what
 produces a receipt and what its existence proves, how a receipt's address is
@@ -181,7 +182,7 @@ read would bypass the CFC checks attached to the stored result.
 
 A detached caller knows the receipt address before the receipt exists, so the
 reader **subscribes and wakes when it appears**; it must not poll
-(AGENTS.md, "Avoid timeouts, retry loops, and sleeps";
+(AGENTS.md, "Avoid timeouts, retry loops, sleeps, and polling";
 [waiting-in-tests.md](../development/waiting-in-tests.md)). `--wait <seconds>`
 bounds a caller's own patience, as on `cf piece call`.
 

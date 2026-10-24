@@ -23,7 +23,7 @@ const addPanel = handler({
     properties: {
         panel: {
             $ref: "#/$defs/Panel",
-            asCell: ["readonly"]
+            asCell: ["cell"]
         },
         name: {
             type: "string"

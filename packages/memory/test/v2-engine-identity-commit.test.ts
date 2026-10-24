@@ -1234,10 +1234,40 @@ describe("applyCommit() with an identity commit", () => {
     ).toThrow(ProtocolError);
   });
 
+  it("accepts and replays validation-only commits over confirmed and pending reads", () => {
+    const installed = applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(1, { operations: [setOp("of:doc", { n: 1 })] }),
+    });
+    for (const pending of [false, true]) {
+      const validation = {
+        sessionId: "s:a",
+        commit: commit(pending ? 3 : 2, {
+          reads: pending
+            ? {
+              confirmed: [],
+              pending: [{ id: "of:doc", path: [], localSeq: 1 }],
+            }
+            : {
+              confirmed: [{ id: "of:doc", path: [], seq: installed.seq }],
+              pending: [],
+            },
+        }),
+      };
+      const accepted = applyCommit(engine, validation);
+      expect(accepted.seq).toBeGreaterThan(installed.seq);
+      expect(accepted.revisions).toEqual([]);
+      expect(applyCommit(engine, validation)).toEqual({
+        ...accepted,
+        replayed: true,
+      });
+      expect(headSeqOf(engine, "of:doc")).toBe(installed.seq);
+    }
+  });
+
   it("refuses a commit with no operations over a stale confirmed read", () => {
-    // Only the wave path admits an empty operation list, for a wave whose
-    // outbound appends ride the transaction; a stale read on one is still
-    // a stale read, with nothing for the identity proof to prove.
+    // Validation-only commits have no writes for the identity proof to
+    // elide, so a stale read must still reject.
     const installSeq = installThenRewrite();
 
     expect(() =>
@@ -1249,7 +1279,6 @@ describe("applyCommit() with an identity commit", () => {
             pending: [],
           },
         }),
-        allowEmptyOperations: true,
       })
     ).toThrow(ConflictError);
   });

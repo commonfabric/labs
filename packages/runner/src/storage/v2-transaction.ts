@@ -4,10 +4,10 @@ import {
   deepFreeze,
   isDeepFrozen,
   isFabricPlainContainer,
+  missingContainerIsArray,
   valueEqual,
   valueEqualByWalk,
 } from "@commonfabric/data-model";
-import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
 import {
   canResolveScopeKey,
   type CommitPrecondition,
@@ -132,6 +132,7 @@ import {
 import { toTransactionDocumentValue } from "./v2-document.ts";
 import { hasValueAtPath, readValueAtPath } from "./v2-path.ts";
 import { recordWriteStackTrace } from "./write-stack-trace.ts";
+import { hasInlineCellScheme } from "../immutable-cell.ts";
 
 type RootAttestation = IAttestation;
 
@@ -407,36 +408,82 @@ export type PatchDraftCandidate = {
   tailSpliceStartIndex?: number;
 };
 
-const findDeepestArrayPath = (
+/**
+ * Returns the path of the array a write at `path` is diffed as a change to,
+ * given the document the commit started from and the one it leaves. Returns
+ * `null` where the write is diffed at `path` itself.
+ *
+ * Where every prefix of `path` is in both documents, that array is the deepest
+ * one above `path`. Where a prefix is in one document alone, everything
+ * beneath it arrived or left with it, and the array is the shallowest one at
+ * or below that prefix's parent: the array the prefix is an element of, which
+ * gained or lost the element, or else the first array inside what arrived. An
+ * array any deeper would be named through an element the stored document does
+ * not hold, or would be an element itself, added by its index. Where no array
+ * sits that far down, it is the deepest one above the prefix.
+ *
+ * With no array above `path` the write is diffed at `path` itself: a segment
+ * written as an index, or as `length`, is then a key of the plain object that
+ * holds it. In one case the path of a plain object is returned in an array's
+ * place. The server creates a container the starting document lacks as it
+ * applies an `add` beneath it, and shapes it by the segment that follows: an
+ * array where `missingContainerIsArray()` says so. The commit holds a plain
+ * object there, so where such a segment follows a container the starting
+ * document lacks, that container's path is returned and it is sent whole.
+ */
+const findArrayPatchPath = (
   before: FabricValue | undefined,
   after: FabricValue | undefined,
   path: readonly string[],
 ): readonly string[] | null => {
-  let deepestArrayPath: readonly string[] | null = null;
+  const options = { allowArrayLength: true };
+  let arrayDepth = -1;
+  // Length of the shortest prefix of `path` that is in one document alone,
+  // once one has been found.
+  let divergedDepth: number | undefined;
 
-  for (let index = 0; index < path.length; index += 1) {
-    const prefix = path.slice(0, index);
-    const beforeValue = readValueAtPath(before, prefix, {
-      allowArrayLength: true,
-    });
-    const afterValue = readValueAtPath(after, prefix, {
-      allowArrayLength: true,
-    });
-    if (Array.isArray(beforeValue) || Array.isArray(afterValue)) {
-      deepestArrayPath = prefix;
+  for (let depth = 0; depth < path.length; depth += 1) {
+    const prefix = path.slice(0, depth);
+    const isArray = Array.isArray(readValueAtPath(before, prefix, options)) ||
+      Array.isArray(readValueAtPath(after, prefix, options));
+    if (isArray) {
+      arrayDepth = depth;
+      if (divergedDepth !== undefined) {
+        break;
+      }
+    }
+    if (divergedDepth === undefined) {
+      const child = path.slice(0, depth + 1);
+      if (
+        hasValueAtPath(before, child, options) !==
+          hasValueAtPath(after, child, options)
+      ) {
+        divergedDepth = depth + 1;
+        if (isArray) {
+          break;
+        }
+      }
     }
   }
 
-  if (deepestArrayPath) {
-    return deepestArrayPath;
+  if (arrayDepth !== -1) {
+    return path.slice(0, arrayDepth);
   }
 
-  const firstArrayLikeSegment = path.findIndex((segment) =>
-    segment === "length" || isArrayIndexPropertyName(segment)
-  );
-  return firstArrayLikeSegment === -1
-    ? null
-    : path.slice(0, firstArrayLikeSegment);
+  // No prefix is missing from the starting document, so the server has no
+  // container to create.
+  if (
+    divergedDepth === undefined ||
+    hasValueAtPath(before, path.slice(0, divergedDepth), options)
+  ) {
+    return null;
+  }
+  for (let index = divergedDepth; index < path.length; index += 1) {
+    if (missingContainerIsArray(path[index]!)) {
+      return path.slice(0, index);
+    }
+  }
+  return null;
 };
 
 /**
@@ -604,37 +651,57 @@ const buildArrayPatchCandidates = (
 // elements, so a leaf-only matcher handles it conservatively via the array path.
 const ARRAY_INDEX_SEGMENT = /^(0|[1-9]\d*)$/;
 
-const terminalSegmentIsArrayIndex = (pointer: string): boolean => {
+/**
+ * Indicates whether `pointer` names an array element by its index: its last
+ * segment is written as an index, and the path above that segment holds an
+ * array in `before` or in `after`. Beneath a plain object the same segment is
+ * a key of that object.
+ */
+const pointerNamesArrayElement = (
+  pointer: string,
+  before: FabricValue | undefined,
+  after: FabricValue | undefined,
+): boolean => {
   const segments = parsePointer(pointer);
   const last = segments[segments.length - 1];
-  return last !== undefined && ARRAY_INDEX_SEGMENT.test(last);
+  if (last === undefined || !ARRAY_INDEX_SEGMENT.test(last)) {
+    return false;
+  }
+  const parent = segments.slice(0, -1);
+  return Array.isArray(readValueAtPath(before, parent)) ||
+    Array.isArray(readValueAtPath(after, parent));
 };
 
-// Generator invariant guard (see docs/specs/memory-v2/08-conflict-granularity.md
-// §"Array writes and the leaf-only matcher"). The commit-conflict matcher and
-// the scheduler reader-dirty index are both LEAF-ONLY, which is sound only if
-// array element insert/remove/reorder reaches the engine as a `splice` on the
-// array path or a whole-array `replace` — never as a STRUCTURAL op (add / remove
-// / move, per the wire-op registry) at an array INDEX. Such an op SHIFTS sibling
-// elements, but its leaf path captures only the touched index, so a leaf-only
-// matcher would neither conflict (commit) nor re-trigger (reader-dirty) a reader
-// of a shifted sibling — a silent stale read. `buildArrayPatchCandidates` only
-// ever emits per-index `replace`, array-path `splice`, or whole-array `replace`,
-// so this assertion can never fire for real input; it converts a future
-// regression in the array diff path into a loud failure instead of silent data
-// loss. (A numeric *object* key is flagged too — the generator never emits a
-// structural op on one either.)
-//
-// The op set and pointer fields checked come from the registry
-// (`patchOpIsStructural` / `patchOpPointerFields`), so a new structural op is
-// covered here automatically rather than escaping a hardcoded list.
-//
-// Exported for direct unit testing: the throw and `move` paths are unreachable
-// through the generator (which is the invariant), so they can only be exercised
-// by calling this with hand-built patches.
+/**
+ * Throws where `patches` holds an indexed-array structural op: an `add`, a
+ * `remove` or a `move` that names an element of an array by its index.
+ * `before` and `after` are the document the patches were diffed from and the
+ * one they were diffed to, and they decide what an index is: a pointer's last
+ * segment names an element only where the path above it holds an array in one
+ * of the two. A structural op at a key of a plain object passes, however the
+ * key is written.
+ *
+ * The commit-conflict matcher and the scheduler's reader-dirty index match a
+ * recursive read against a patch's leaf paths alone. A structural op at an
+ * array index shifts the elements after it, and its leaf path names only the
+ * index it was given, so neither matcher would see that a reader of a shifted
+ * element is stale. A change to an array therefore travels as a `replace` at
+ * an index, a `splice` on the array's path, or a `replace` of the whole array,
+ * and this is the check that the diff produced nothing else. A key added to or
+ * removed from a plain object shifts no sibling, so the leaf path of that op
+ * is the whole of what it changed. See "Array writes and the leaf-only
+ * matcher" in `docs/specs/memory-v2/08-conflict-granularity.md`.
+ *
+ * Exported for direct unit testing.
+ */
 export const assertNoIndexedArrayStructuralOps = (
   patches: readonly PatchOp[],
+  before: FabricValue | undefined,
+  after: FabricValue | undefined,
 ): void => {
+  // The structural ops and their pointer fields are read off the wire-op
+  // registry (`patchOpIsStructural()`, `patchOpPointerFields()`), so an op
+  // added there is checked here with no list of its own to extend.
   for (const patch of patches) {
     if (!patchOpIsStructural(patch)) {
       continue;
@@ -642,7 +709,11 @@ export const assertNoIndexedArrayStructuralOps = (
     const pointers = patchOpPointerFields(patch).map((field) =>
       (patch as unknown as Record<string, string>)[field]
     );
-    if (!pointers.some(terminalSegmentIsArrayIndex)) {
+    if (
+      !pointers.some((pointer) =>
+        pointerNamesArrayElement(pointer, before, after)
+      )
+    ) {
       continue;
     }
     throw new Error(
@@ -1224,6 +1295,10 @@ export class V2StorageTransaction implements IStorageTransaction {
     return this.#writeAttemptLog;
   }
 
+  getWriteTargetSpaces(): readonly MemorySpace[] {
+    return this.#orderedCommitSpaces();
+  }
+
   getReactivityLog() {
     this.#reactivityLogCache ??= this.#buildReactivityLog();
     return this.#reactivityLogCache;
@@ -1700,7 +1775,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const branch = this.#branch(address.space);
     const { doc } = this.#document(branch, address);
-    if (readStatsActive && !hasDataUriScheme(address.id)) {
+    if (readStatsActive && !hasInlineCellScheme(address.id)) {
       recordDocumentRead(this, doc);
     }
     // The one place a read chooses which root it is reading. A materialized
@@ -1723,7 +1798,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     const skipCommitPrecondition = isUiInputBlindWriteTx(this);
     const { space: _, ...memoryAddress } = address;
 
-    if (!hasDataUriScheme(address.id)) {
+    if (!hasInlineCellScheme(address.id)) {
       const readActivity = {
         space: address.space,
         scope: normalizeCellScope(address.scope),
@@ -1735,17 +1810,22 @@ export class V2StorageTransaction implements IStorageTransaction {
         ...(options?.nonRecursive === true ? { nonRecursive: true } : {}),
         journalIndex: this.#activityClock++,
       };
-      this.#recordReadActivity(readActivity);
-      this.#invalidateReactivityLog();
+      // A sealed record is frozen with metadata that has the scheduler
+      // ignore the read and marks no attempted write, so the log never lists
+      // it and stands across it. Any other record's metadata can be replaced
+      // or changed after the read, whatever it says now, and with it what
+      // the log says of the read, so such a read retires the log.
+      const sealed = this.#recordReadActivity(readActivity);
+      if (!sealed) this.#invalidateReactivityLog();
     }
     if (options?.trackReadWithoutLoad === true) {
-      if (!hasDataUriScheme(address.id) && !skipCommitPrecondition) {
+      if (!hasInlineCellScheme(address.id) && !skipCommitPrecondition) {
         doc.validated = true;
       }
       return { ok: { address, value: undefined } };
     }
 
-    if (usesLocalReads(this) && !hasDataUriScheme(address.id)) {
+    if (usesLocalReads(this) && !hasInlineCellScheme(address.id)) {
       // `patchDetails` is keyed by each write's pointer.
       const patchDetails = doc.patchDetails;
       const written = this.#readEpoch === undefined &&
@@ -1769,7 +1849,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     if (isMutableTransactionReadAllowed(readMeta)) {
       if (
-        !hasDataUriScheme(address.id) &&
+        !hasInlineCellScheme(address.id) &&
         !doc.validated &&
         !skipCommitPrecondition
       ) {
@@ -1810,7 +1890,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (
       !skipCommitPrecondition &&
       isInternalVerifierRead(readMeta) &&
-      !hasDataUriScheme(address.id) &&
+      !hasInlineCellScheme(address.id) &&
       // Content-addressed documents are EXEMPT from durable serving:
       // their content is identical on every layer (the replica refuses
       // a cid: doc whose content does not hash to its id), so the
@@ -1881,7 +1961,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const result = readAttestation(current, memoryAddress);
     if (
-      !hasDataUriScheme(address.id) &&
+      !hasInlineCellScheme(address.id) &&
       !doc.validated &&
       !skipCommitPrecondition
     ) {
@@ -1997,7 +2077,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const branch = this.#branch(address.space);
     const { doc } = this.#document(branch, address);
-    if (hasDataUriScheme(address.id)) return { ok: {} };
+    if (hasInlineCellScheme(address.id)) return { ok: {} };
     if (readStatsActive) recordDocumentRead(this, doc);
 
     const readMeta = options?.meta ?? EMPTY_META;
@@ -2167,7 +2247,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     value?: FabricValue,
     options?: IWriteOptions,
   ): Result<IAttestation, WriteError> {
-    if (hasDataUriScheme(address.id)) {
+    if (hasInlineCellScheme(address.id)) {
       return { error: ReadOnlyAddressError(address).from(space) };
     }
     const isDelete = options?.delete === true;
@@ -2208,7 +2288,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (
       isDelete
         ? !planned.present
-        : (planned.present && valueEqual(planned.previousValue, value) &&
+        : (planned.present && valueEqualByWalk(planned.previousValue, value) &&
           !this.#authoritativeWrites &&
           !this.#mustDeliverSchemaDoc(space, address.id))
     ) {
@@ -2300,9 +2380,9 @@ export class V2StorageTransaction implements IStorageTransaction {
   ): Result<Unit, WriteError> {
     if (
       writes.length <= 1 ||
-      writes.some(({ address }) => hasDataUriScheme(address.id))
+      writes.some(({ address }) => hasInlineCellScheme(address.id))
     ) {
-      // Singleton-batch / data:URI fallback: route each write through the
+      // Singleton-batch / inline-cell fallback: route each write through the
       // unified single-write entry, which itself handles
       // create-missing-intermediates.
       for (const { address, value, delete: isDelete } of writes) {
@@ -2355,7 +2435,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       // both); delete no-ops still skip.
       if (
         isDelete ? !planned.present : (planned.present &&
-          valueEqual(planned.previousValue, value) &&
+          valueEqualByWalk(planned.previousValue, value) &&
           !this.#authoritativeWrites &&
           !this.#mustDeliverSchemaDoc(space, address.id))
       ) {
@@ -3187,14 +3267,20 @@ export class V2StorageTransaction implements IStorageTransaction {
     };
   }
 
-  /** Records every read and retains mutable classifications for later checks. */
-  #recordReadActivity(read: IReadActivity): void {
-    if (read.meta === stableInternalVerifierRead) {
+  /**
+   * Records every read and retains mutable classifications for later checks.
+   * Returns whether the record is sealed: one carrying the sealed verifier
+   * metadata is frozen with it, so its classification is permanent.
+   */
+  #recordReadActivity(read: IReadActivity): boolean {
+    const sealed = read.meta === stableInternalVerifierRead;
+    if (sealed) {
       Object.freeze(read);
     } else {
       this.#potentiallyExternalReadActivities.push(read);
     }
     this.#readActivities.push(read);
+    return sealed;
   }
 
   #prepareWriteSpace(
@@ -3278,7 +3364,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     address: Pick<IMemoryAddress, "id" | "type" | "scope">,
   ): RootAttestation {
     const type = address.type ?? DOCUMENT_MIME;
-    if (hasDataUriScheme(address.id)) {
+    if (hasInlineCellScheme(address.id)) {
       const loaded = loadInline({ id: address.id, type });
       if (loaded.error) {
         throw loaded.error;
@@ -3642,7 +3728,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         continue;
       }
 
-      const arrayPatchPath = findDeepestArrayPath(
+      const arrayPatchPath = findArrayPatchPath(
         base,
         doc.current.value,
         detail.address.path,
@@ -3713,7 +3799,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (patches.length === 0) {
       return null;
     }
-    assertNoIndexedArrayStructuralOps(patches);
+    assertNoIndexedArrayStructuralOps(patches, base, doc.current.value);
 
     return { op: "patch", id, type, scope, patches, value: doc.current.value };
   }

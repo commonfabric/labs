@@ -292,7 +292,11 @@ parts:
    These are simply *additional output documents*: they enter the writer map
    and the reader-edge graph exactly like the primary output, so demand
    flowing from readers of a side-written document reaches the writer the
-   normal way. A node with static side-writes needs no standing demand.
+   normal way. A node with static side-writes needs no standing demand. The
+   stores a raw builtin keeps join this tier when their identity follows from
+   the node alone: the builtin names them at setup
+   (`RawBuiltinResult.storeWrites`), and each is declared at every scope,
+   since a store's instance scope is decided only when the store is created.
 3. **Materializer envelopes** — declared write envelopes for computations
    whose side-write targets are dynamic or broad (the function navigates a
    large structure behind a passed-in cell and may modify a small part
@@ -497,9 +501,14 @@ Nothing else happens at invalidation time. No transitive marking, no effect
 scheduling, no history append. A dormant node accumulates `invalid` + causes
 and sits there at zero cost (D5).
 
-Reverts need no special handling: a revert's changes transition values back,
-the comparison fires, affected readers re-invalidate, and the optimistic
-chain re-settles.
+Reverts take the channel like any other notification: a revert's changes
+transition values back, the comparison fires, affected readers re-invalidate,
+and the optimistic chain re-settles. One revert is self-suppressed for one
+reader under P5: the revert of a write the space refused for lack of a grant
+(an `AuthorizationError` carrying the server's permanent evidence) does not
+invalidate the writer whose transaction it reverts, since that writer read the
+restored value before it wrote and would recompute the refused write. Every
+other reader of the reverted document re-invalidates as usual.
 
 ### 6.2 First-run dependencies — no prefetch
 
@@ -630,10 +639,17 @@ runnable(N) = N.status ∈ {invalid, never-ran} ∧ live(N) ∧ eligible(N)
    with a bounded retry policy for transient failure classes.
 7. Under persistence, attach the observation to the transaction (§9.3).
 
-Retry counters belong to the action across registrations. A successful commit
-or a permanent or terminal refusal clears them even if its registration has
-retired; terminal refusals still reach the error channel. Waking consumers on
-success requires the committing run's registration to remain active.
+Retry counters belong to the action across registrations. A successful commit,
+a permanent or terminal refusal, or a refusal for lack of a grant (an
+`AuthorizationError` carrying the server's permanent evidence) of a write the
+replica reverted clears them even if its registration has retired; terminal
+refusals still reach the error channel. Such a grant refusal takes no attempt
+beyond the one refused, and the revert of the refused write is self-suppressed
+for its writer as P5 suppresses the writer's own commit, so the writer runs
+again when another input changes rather than against the same refusal. A grant
+refusal of a write the replica kept as a local fold takes the bounded retry,
+whose run reads the kept value. Waking consumers on success requires the
+committing run's registration to remain active.
 
 The run path refreshes live subscriptions incrementally, including during
 retry recovery, without tearing them down and recreating them. The change
@@ -651,6 +667,33 @@ Topological sort over the work set with:
    parent first avoids running doomed children). Identical to v1's rule,
    which is sound.
 3. Deterministic fallback on remaining ties (registration order).
+
+**Where a cycle is broken.** When nodes remain to place and none is ready,
+the unplaced nodes hold at least one cycle, and the sort places one node
+ahead of an input it reads. That node is always a member of a cycle that no
+unplaced node outside it feeds: a strongly connected component of the graph
+over the unplaced nodes that has more than one node and no edge arriving
+from an unplaced node outside it. A node is never a cycle alone, since a
+node's read of its own output is not an edge.
+
+So a break reorders edges inside a cycle and no others, which is what rule 1
+requires of it:
+
+- A node that only reads from a cycle is not a candidate. It becomes ready
+  once the nodes it reads are placed, and is placed after them. Placed ahead
+  of them, it would run on inputs the same pass then replaces, or be passed
+  over as clean and wait for another pass.
+- A cycle that another cycle feeds is broken after the one feeding it has
+  been placed.
+- The components are those of the nodes unplaced at the time of the break.
+  A node that an earlier break left outside every cycle, reading from what
+  remains of the one it was a member of, is not a candidate at a later
+  break.
+
+Among the candidates the order of preference is rule 2, then the fewest
+unplaced inputs, then rule 3. The choice is a function of the graph and of
+registration order alone, so it does not depend on the order in which nodes
+entered the work set.
 
 ### 7.5 Events
 
@@ -753,6 +796,17 @@ Implemented behavior:
   their handler's piece must load asynchronously. The event and any
   handler-result pieces are recorded under the sending transaction's
   speculation lineage.
+- A queued event runs the handler registered for its stream when it
+  dispatches, which is not the one it was queued with once its piece has
+  replaced its graph. Off a serving runtime, while the piece, or a piece that
+  instantiated it, is changing pattern, from its watcher seeing the pointer
+  move until the piece runs the incoming pattern or keeps the one it ran, the
+  head event for it waits in its position (`Runner.pendingPatternChangeFor`),
+  and then runs the handler of the pattern the piece settled on, or is dropped
+  when that pattern registered none for the stream. An event that reaches the
+  head after its piece replaced its graph, holding a handler of the replaced
+  graph that nothing re-registered, is dropped the same way; a stopped piece's
+  handler still runs.
 - The per-(stream, handler) backlog cap (`MAX_EVENT_BACKLOG_PER_STREAM`) is a
   collapse policy, not a hard ceiling. At the cap, a minted-id send collapses
   last-wins into the last pending same-origin entry, so a same-origin flood
@@ -909,9 +963,8 @@ when that kind is a record. Every property is left admissible, which is what
 keeps a link position honest, since the spelling that would name one is
 `asCell` and `["cell"]` asserts a writable handle on a document nothing can be
 written through. A value with no container kind of its own — a scalar, or a
-link, whose kind is its target's — goes undeclared. A `data:` link is the one
-link that is described: it carries its value inside its own identifier and the
-write inlines it, so the receipt holds that value rather than a link to it, and
+link, whose kind is its target's — goes undeclared. An immutable `snapshot:` or Fabric `data:` link is described: the
+write expands it to its value, so the receipt holds that value rather than a link to it, and
 the description is taken after the same inlining. None of this constrains a
 later write: the create-only mark means the value the schema describes is the
 only value that document ever holds. A verb's *declared* result type is a

@@ -1,7 +1,8 @@
-import { css, html } from "lit";
+import { css, html, unsafeCSS } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
 import { oneOf } from "../../core/property-guards.ts";
 import type { ColorIntent, ComponentSize } from "../theme-context.ts";
+import { pillGeometryCSS } from "../../styles/variables.ts";
 
 /**
  * CFBadge - Status indicator or label with multiple visual variants
@@ -32,6 +33,7 @@ export class CFBadge extends BaseElement {
     BaseElement.baseStyles,
     css`
       :host {
+        ${unsafeCSS(pillGeometryCSS)};
         --cf-badge-border-radius: var(
           --cf-pill-border-radius,
           var(--cf-border-radius-full, 9999px)

@@ -19,12 +19,6 @@ import type {
 /** The facet name an editor's focus and selection travel under. */
 export const CARET_FACET = "caret";
 
-/** Failure categories safe to expose without room or participant data. */
-export type PresenceFailureCategory =
-  | "configuration"
-  | "connection"
-  | "protocol";
-
 /** An editor's focus and selection, in confirmed memory coordinates. */
 export interface CaretFacet {
   /** Whether the remote editor owns focus. */
@@ -177,21 +171,4 @@ export function participantFromRecord(
     selection: caret.selection,
     basis: caret.basis,
   };
-}
-
-/**
- * The category an editor reports for a presence failure: a relay refusal is
- * `protocol`, a server or runtime without presence is `configuration`, and
- * anything else is the connection's.
- */
-export function presenceFailureCategory(
-  error: unknown,
-): PresenceFailureCategory {
-  if (!(error instanceof Error)) return "connection";
-  if (error.name === "PresenceError") return "protocol";
-  if (error.name === "ProtocolError") return "configuration";
-  if (error.message.includes("does not support presence")) {
-    return "configuration";
-  }
-  return "connection";
 }

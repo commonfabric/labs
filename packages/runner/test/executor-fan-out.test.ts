@@ -83,6 +83,29 @@ const FAN_OUT_PATTERN = [
   "});",
 ].join("\n");
 
+/** A per-user wish into the viewer's Home, and a reader of its result: the
+ * reader's instance for a user follows the wish's per-user state store. */
+const WISH_TAG = "fan_out_wish_profile";
+const WISH_PATTERN = [
+  "import { computed, pattern, wish } from 'commonfabric';",
+  "export default pattern<{ n?: number }, { reader: string }>(() => {",
+  `  const found = wish<{ name: string }>({ query: '#${WISH_TAG}', scope: ['~'] });`,
+  "  return { reader: computed(() => 'reader:' + String(found.result?.name)) };",
+  "});",
+].join("\n");
+
+/** Whether any revision ever written under `scopeKey` held `needle`. */
+const everHeld = (
+  engine: Engine.Engine,
+  scopeKey: string,
+  needle: string,
+): boolean =>
+  (engine.database.prepare(
+    `SELECT data FROM revision WHERE scope_key = :scope_key`,
+  ).all({ scope_key: scopeKey }) as Array<{ data: unknown }>).some((row) =>
+    JSON.stringify(row.data ?? null).includes(needle)
+  );
+
 /** A per-user subtree reachable ONLY through a per-user VALUE (design
  * §B4/§G B-f): `view` links to the `guarded` computed only for a user
  * whose per-user flag is set — the result exposes `view`, never
@@ -804,6 +827,51 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     expect(labelRuns[0].instanceKey).toBe("space");
     // And the label's basis rows key `space` only.
     expect(basisKeys(engine).has(setup.serviceUserKey)).toBe(false);
+    setup.cancel();
+  });
+
+  it("(m) a user who arrives after a per-user wish ran for another user never has a reader of the wish's state commit a value derived from its absence", async () => {
+    // The reader's run for the arriving user reads the wish's state store
+    // through the wish's output; that user's instance of the store does not
+    // exist until the wish runs for them. The wish declares the store at
+    // setup, so the serving loop holds the reader's commit back until then.
+
+    const seedHome = async (signer: Identity) => {
+      const runtime = openClient(signer);
+      const home = signer.did() as MemorySpace;
+      const tx = runtime.edit();
+      const favorite = runtime.getCell(home, "favorite", undefined, tx);
+      favorite.set({ name: `fav-${signer === aliceSigner ? "alice" : "bob"}` });
+      runtime.getCell(home, home, undefined, tx).set({
+        defaultPattern: { favorites: [{ cell: favorite, tags: [WISH_TAG] }] },
+      });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await runtime.storageManager.synced();
+    };
+    await seedHome(aliceSigner);
+    await seedHome(bobSigner);
+    const setup = await standUp({
+      names: { arg: "fo-m-arg", result: "fo-m-result" },
+      pattern: WISH_PATTERN,
+      clients: [aliceSigner],
+    });
+    const { engine } = setup;
+    const aliceKey = setup.userKey(aliceSigner);
+    const bobKey = setup.userKey(bobSigner);
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, aliceKey, '"reader:fav-alice"'),
+    );
+    await settleACycle(engine);
+    await servingRuntime!.idle();
+
+    await setup.watchRoot(bobSigner);
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, bobKey, '"reader:fav-bob"'),
+    );
+    expect(everHeld(engine, bobKey, "reader:undefined")).toBe(false);
+    expect(everHeld(engine, aliceKey, "reader:undefined")).toBe(false);
     setup.cancel();
   });
 

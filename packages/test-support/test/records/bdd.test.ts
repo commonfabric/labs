@@ -135,6 +135,8 @@ describe("what the wrappers do once a capture is installed", () => {
         return skips.includes(name);
       },
       flush: () => {},
+      begin: () => {},
+      interrupt: () => {},
     };
     return Object.assign(() => capture, { asked, names });
   }

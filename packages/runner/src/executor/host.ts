@@ -40,6 +40,7 @@ import {
   type ParkedRuntimeHandle,
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
+import { runInServingContext } from "./serving-context.ts";
 import {
   awaitDisposeTimeboxed,
   LIFECYCLE_VERB_SPACE_PARKED,
@@ -249,9 +250,15 @@ export class ExecutorHost {
     // count lives beside the flag), so neither owner's teardown can
     // un-claim `derived` while the other still serves.
     this.#releaseServerExecution = acquireServerExecutionEnabler();
+    // The memory server calls these from whichever session's request it is
+    // handling, so the two that start work enter the serving context: what
+    // the host starts from here is the serving loop's work. A demand change
+    // only wakes a loop already running in it.
     options.server.setServerExecutionObserver({
-      commitAdmitted: (notice) => this.#onCommitAdmitted(notice),
-      sessionOpened: (space) => this.#onSessionOpened(space),
+      commitAdmitted: (notice) =>
+        runInServingContext(true, () => this.#onCommitAdmitted(notice)),
+      sessionOpened: (space) =>
+        runInServingContext(true, () => this.#onSessionOpened(space)),
       // Fan-out stage B: a watch-set change on an ACTIVE space wakes its
       // demand pass (the arrival re-arm's trigger); an inactive space
       // waits for the session-open / admission activation triggers.
@@ -346,7 +353,18 @@ export class ExecutorHost {
    * Throws {@link SpaceNotServedError} when this process cannot serve the
    * space — the host is closed, or another process holds the space's lease.
    */
-  async runLifecycleVerb<T>(
+  runLifecycleVerb<T>(
+    space: MemorySpace,
+    verb: LifecycleVerb<T>,
+  ): Promise<T> {
+    return runInServingContext(
+      true,
+      () => this.#runLifecycleVerbInner(space, verb),
+    );
+  }
+
+  /** Helper for `runLifecycleVerb()`, which does all its work. */
+  async #runLifecycleVerbInner<T>(
     space: MemorySpace,
     verb: LifecycleVerb<T>,
   ): Promise<T> {
@@ -898,7 +916,12 @@ export class ExecutorHost {
    * park has finished; a park that failed is rethrown then, several as an
    * `AggregateError`.
    */
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    return runInServingContext(true, () => this.#closeInner());
+  }
+
+  /** Helper for `close()`, which does all its work. */
+  async #closeInner(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
     this.#options.server.setServerExecutionObserver(undefined);

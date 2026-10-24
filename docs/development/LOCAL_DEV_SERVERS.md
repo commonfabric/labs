@@ -215,9 +215,28 @@ can import a CLI PKCS8/PEM key via `Import CLI Key`. See
 **First-time browser login:**
 
 When accessing a space for the first time, you'll need to register:
-1. Click "➕ Register"
-2. Click "🔑 Generate Passphrase"
-3. Click "🔒 I've Saved It - Continue"
+1. Click "➕ Register". A browser that has signed in before labels this button
+   "➕ Register New Key".
+2. On the "Register with" screen, click "📝 Use Passphrase"
+3. Click "🔑 Generate Passphrase"
+4. Click "🔒 I've Saved It - Continue"
+
+The identity this registers is a new principal, not the one the CLI holds. A
+space the CLI identity created admits only its creator, so for a piece in it
+the shell reports `Slug "<slug>" not found.`, and the console carries
+`AuthorizationError: Principal did:key:... lacks READ on space did:key:...`.
+Either click "📁 Import CLI Key" at step 2 and select the CLI's key file, which
+signs the browser in as the CLI identity
+([`shared-identity.md`](../features/shared-identity.md)), or, with
+`CF_IDENTITY` naming the key that created the space, grant the browser's
+identity access and reload the page:
+```bash
+CF_SPACE="<space DID>" deno task cf acl set "<browser DID>" WRITE
+```
+The browser's DID is the principal the error names;
+`globalThis.app.state().identity?.did()` in the page's console returns it too.
+[Reading and changing a space's ACL](../tutorial/10-identity-and-security.md#reading-and-changing-a-spaces-acl)
+covers the other ACL commands.
 
 For Playwright testing, use:
 ```javascript

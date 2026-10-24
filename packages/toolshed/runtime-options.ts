@@ -57,9 +57,13 @@ export function createToolshedRuntime(
   storageManager: RuntimeOptions["storageManager"],
   envGet: EnvReader = Deno.env.get,
 ): Runtime {
-  const runtime = new Runtime(
-    toolshedRuntimeOptions(config, storageManager, envGet),
-  );
+  const options = toolshedRuntimeOptions(config, storageManager, envGet);
+  // Webhook runs persist their session state even when browser clients keep
+  // theirs local. The deployment's client policy is published separately.
+  const runtime = new Runtime({
+    ...options,
+    experimental: { ...options.experimental, localSessionDocuments: false },
+  });
   // The Runtime just declared the deployment's `sharedMemoryConnection` on
   // this storage manager. This process's own sessions do not follow it.
   // Under routed Mode A, MEMORY_URL names a route that picks the toolshed by
@@ -77,11 +81,12 @@ export function createToolshedRuntime(
   // override goes once MEMORY_URL names the router (infra#244), which serves
   // either topology.
   storageManager.setSharedMemoryConnection?.(false);
-  // What `/api/meta` reports, taken from the Runtime that resolved it rather
-  // than re-read from the environment, so a client adopting this deployment's
-  // posture gets the flags the Runtime resolved; the connection choice above
-  // is this process's own and is not part of the posture.
-  publishExperimentalPosture(runtime.experimental);
+  // `/api/meta` publishes resolved defaults and the deployment's client
+  // policy even though the webhook runtime synchronizes its own sessions.
+  publishExperimentalPosture({
+    ...runtime.experimental,
+    localSessionDocuments: options.experimental?.localSessionDocuments ?? false,
+  });
   publishCfcPosture(runtime);
   // Fire-and-forget; the attach itself is exported and unit-tested.
   void attachRuntimeOtelBridge(runtime, config);

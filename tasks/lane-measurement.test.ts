@@ -8,6 +8,8 @@ import {
   batchMeasurementName,
   excusedMeasurement,
   excusedMeasurementName,
+  hooksMeasurement,
+  hooksMeasurementName,
   LANE_MEASUREMENT_PREFIX,
   laneMeasurement,
   laneMeasurementName,
@@ -198,6 +200,58 @@ describe("lane-measurement", () => {
       const name = excusedMeasurementName(flaky);
       expect(batchMeasurement(name)).toBeUndefined();
       expect(setupMeasurement(name)).toBeUndefined();
+    });
+  });
+  describe("hooksMeasurement()", () => {
+    it("returns the suite, coverage marker, and unit a composed name names", () => {
+      for (const measured of [false, true]) {
+        const name = hooksMeasurementName(
+          "pattern-integration",
+          measured,
+          "packages/patterns/integration/counter.test.ts",
+        );
+        expect(hooksMeasurement(name)).toEqual({
+          suite: "pattern-integration",
+          measured,
+          unit: "packages/patterns/integration/counter.test.ts",
+        });
+      }
+    });
+
+    it("keeps a unit whose name holds the separator whole", () => {
+      const name = hooksMeasurementName("workspace-unit", true, "a in b");
+      expect(hooksMeasurement(name)).toEqual({
+        suite: "workspace-unit",
+        measured: true,
+        unit: "a in b",
+      });
+    });
+
+    it("returns `undefined` for a hooks measurement naming no suite or no unit", () => {
+      expect(hooksMeasurement(`${LANE_MEASUREMENT_PREFIX}hooks  in x`))
+        .toBeUndefined();
+      expect(hooksMeasurement(`${LANE_MEASUREMENT_PREFIX}hooks suite in `))
+        .toBeUndefined();
+      expect(hooksMeasurement(`${LANE_MEASUREMENT_PREFIX}hooks suite`))
+        .toBeUndefined();
+    });
+
+    it("returns `undefined` for every other measurement a lane writes", () => {
+      expect(hooksMeasurement(batchMeasurementName("suite", false)))
+        .toBeUndefined();
+      expect(hooksMeasurement(`${LANE_MEASUREMENT_PREFIX}setup deno`))
+        .toBeUndefined();
+      expect(hooksMeasurement(laneMeasurementName("spent"))).toBeUndefined();
+    });
+
+    it("is none of a batch's, a lane's, or a setup's measurements", () => {
+      // Those are read by name, so one read as a unit's hooks would be
+      // fitted as a batch, a lane, or a capability.
+      const name = hooksMeasurementName("suite", true, "unit");
+      expect(batchMeasurement(name)).toBeUndefined();
+      expect(laneMeasurement(name)).toBeUndefined();
+      expect(setupMeasurement(name)).toBeUndefined();
+      expect(excusedMeasurement(name)).toBeUndefined();
     });
   });
 });

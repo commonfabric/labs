@@ -99,10 +99,10 @@ const __cfLift_1 = __cfHelpers.lift<{
     anyOf: [{
             type: "undefined"
         }, {
-            $ref: "#/$defs/Profile"
-        }, {
             $ref: "#/$defs/Profile",
             asCell: ["cell"]
+        }, {
+            $ref: "#/$defs/Profile"
         }],
     $defs: {
         Profile: {

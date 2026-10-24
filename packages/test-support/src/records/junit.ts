@@ -13,7 +13,11 @@
  * while the tests were registering.
  */
 
-import { type TestIdentity, type TestRecord } from "./schema.ts";
+import {
+  isRepositoryPath,
+  type TestIdentity,
+  type TestRecord,
+} from "./schema.ts";
 import {
   enclosingNames,
   fileForName,
@@ -323,11 +327,9 @@ const SOURCE_SUFFIX = /\.(ts|tsx|js|jsx|mts|mjs)$/;
  */
 export function isRelativeSourcePath(classname: string): boolean {
   if (classname.includes("://") || classname.startsWith("ext:")) return false;
-  if (classname.startsWith("/")) return false;
-  if (classname.includes("\\")) return false;
+  if (!isRepositoryPath(classname)) return false;
   const segments = classname.split("/");
   for (let i = 0; i < segments.length; i++) {
-    if (segments[i] === "..") return false;
     if (segments[i] === "." && i > 0) return false;
     if (segments[i] === "") return false;
   }
@@ -399,6 +401,28 @@ export function ingestJUnit(
   xml: string,
   options: IngestJUnitOptions,
 ): TestRecord[] {
+  return readJUnit(xml, options).records;
+}
+
+/**
+ * A JUnit document's records, as `ingestJUnit()` makes them, and what its
+ * hooks took.
+ *
+ * Hooks are the setup and teardown a `describe` declares around its tests,
+ * such as a `beforeAll` that deploys a pattern and opens a page. They run
+ * inside the container case Deno reports for the describe, and inside none
+ * of its leaves. `hooks` holds one record for each outermost container
+ * that has a file and a name no other case has: the container's identity,
+ * and the seconds it took that no record holds. That is what the hooks of
+ * its describes took, nested ones included, or for a `Deno.test` whose
+ * leaves are steps, what its own body took around them, less what a
+ * container recorded among the records already holds. They are not tests,
+ * so nothing places them among the records.
+ */
+export function readJUnit(
+  xml: string,
+  options: IngestJUnitOptions,
+): { records: TestRecord[]; hooks: TestRecord[] } {
   const cases = parseJUnit(xml);
   // Deno names a case's class after the module that registered the test,
   // so a container carries the file of every leaf beneath it and the
@@ -433,15 +457,58 @@ export function ingestJUnit(
       ? undefined
       : (name) => known(identity(name), fileForName(name, files)),
   );
-  return leaves.map((leaf) => {
+  const recordOf = (testcase: JUnitCase, seconds: number): TestRecord => {
     const record: TestRecord = {
       line: "record",
-      test: identity(leaf.name),
-      outcome: leaf.cancelled && options.interrupted ? "skip" : leaf.outcome,
-      durationMs: Math.round((leaf.timeSeconds ?? 0) * 1000),
+      test: identity(testcase.name),
+      outcome: testcase.cancelled && options.interrupted
+        ? "skip"
+        : testcase.outcome,
+      durationMs: Math.round(seconds * 1000),
     };
-    const file = fileForName(leaf.name, files);
+    const file = fileForName(testcase.name, files);
     if (file !== undefined) record.file = file;
     return record;
-  });
+  };
+  return {
+    records: leaves.map((leaf) => recordOf(leaf, leaf.timeSeconds ?? 0)),
+    hooks: unrecordedTime(cases, leaves).flatMap(({ container, seconds }) => {
+      const record = recordOf(container, seconds);
+      return record.file === undefined ? [] : [record];
+    }),
+  };
+}
+
+/**
+ * Helper for `readJUnit()`, which gives each outermost container whose
+ * name no other case has the seconds it took that none of the `recorded`
+ * cases inside it, or itself where it is one of them, holds.
+ */
+function unrecordedTime(
+  cases: readonly JUnitCase[],
+  recorded: readonly JUnitCase[],
+): { container: JUnitCase; seconds: number }[] {
+  const counts = new Map<string, number>();
+  for (const { name } of cases) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const outermost = (name: string) =>
+    enclosingNames(name).find((enclosing) => counts.has(enclosing));
+  const held = new Map<string, number>();
+  for (const testcase of recorded) {
+    const outer = outermost(testcase.name) ?? testcase.name;
+    held.set(outer, (held.get(outer) ?? 0) + (testcase.timeSeconds ?? 0));
+  }
+  const containers = new Set(
+    cases.flatMap((testcase) => outermost(testcase.name) ?? []),
+  );
+  return cases.flatMap((testcase) =>
+    containers.has(testcase.name) && counts.get(testcase.name) === 1
+      ? [{
+        container: testcase,
+        seconds: Math.max(
+          0,
+          (testcase.timeSeconds ?? 0) - (held.get(testcase.name) ?? 0),
+        ),
+      }]
+      : []
+  );
 }

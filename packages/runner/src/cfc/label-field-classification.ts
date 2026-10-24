@@ -102,7 +102,9 @@ export const LABEL_FIELD_CLASSIFICATION:
     entry({ type: CFC_ATOM_TYPE.Context }, ["hash"], "public"),
     entry({ type: CFC_ATOM_TYPE.Context }, ["subject"], "commitment"),
     // "LinkReference.source/target → commitment — display/provenance only;
-    // nothing dereferences the persisted copy."
+    // nothing dereferences the persisted copy." The atom is retired (spec
+    // §15.4) and nothing mints it; a label stored before the retirement
+    // still names a space and a document through it.
     entry({ type: CFC_ATOM_TYPE.LinkReference }, ["source"], "commitment"),
     entry({ type: CFC_ATOM_TYPE.LinkReference }, ["target"], "commitment"),
     // "TransformedBy.identity.sourceFile/bindingPath → commitment —

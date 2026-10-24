@@ -45,7 +45,7 @@ interleaved in one transcript that doubles as a record.
 
 The moving half of context has no home. `CF_API_URL`, `CF_IDENTITY`, and
 `CF_SPACE` absorb the constant half, and
-[`cli-surface-shape.md`](../cli-surface-shape.md) step 8's rationale — "a
+[`cli-surface-shape.md`](../../history/plans/cli-surface-shape.md) step 8's rationale — "a
 parameter that is required everywhere and identical across a working
 session is one a caller should state once" — caps out exactly there,
 because piece, path, and scope are not identical across a session: they
@@ -478,7 +478,7 @@ several) stay reachable later.
 ## Relationship to the CLI surface arc
 
 Shuttle rides the addressing decisions of
-[`cli-surface-shape.md`](../cli-surface-shape.md) rather than making its own:
+[`cli-surface-shape.md`](../../history/plans/cli-surface-shape.md) rather than making its own:
 
 - Step 8's `CF_SPACE` is on main: the constant half of the context is
   ambient for one-shot `cf` too, which is what isolates the moving half —

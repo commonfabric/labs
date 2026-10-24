@@ -40,14 +40,17 @@ const __cfHandler_1 = __cfHelpers.handler({
     type: "object",
     properties: {
         title: {
-            type: "string"
+            type: "string",
+            description: "Read by the body."
         },
         done: {
-            type: "boolean"
+            type: "boolean",
+            description: "Declared and never read."
         },
         peer: {
             $ref: "#/$defs/PeerNode",
-            asCell: ["opaque"]
+            asCell: ["opaque"],
+            description: "A declared, never-read reference."
         }
     },
     required: ["title", "done", "peer"],

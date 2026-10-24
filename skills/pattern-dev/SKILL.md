@@ -164,6 +164,60 @@ session; that specific cause is fixed, but a UI that fires writes faster than
 the graph converges is still paying queueing it does not have to. Where a
 control can be held during settle, hold it.
 
+Hiding a list's rows does not make them cheap. `list.map(...)` instantiates what
+its callback builds once per element whether or not anything shows it: a row
+hidden by a `display` prop still has its nodes planned on every load, its
+documents written on the first run, and those documents delivered on every
+reload. A second `.map` over the same list — a thread panel, a detail pane, a
+tab most sessions never open — is therefore a second full set of instances, and
+hiding it removes none of that cost. Nothing at authoring time says so, because
+the two calls read as two views of one list. Map a list that holds only what the
+view shows. Where what it shows is chosen per session or per user, make that
+list a computed of that scope, such as `computed((): PerSession<Item[]> => …)`:
+`map` stores its result, and the instances it starts, at the scope of the list
+it maps, so each session holds its own rows and no viewer's choice replaces
+another's. A `display` prop stays the tool for a part of one row that differs by
+viewer. The worked case is `threadMessages` in
+`packages/patterns/fabrichat/room.tsx`: mapping the open thread's messages in
+place of every message took a load of a thirty-message room from sixty row
+instances to thirty, and its first run from committing two row trees to one.
+
+A mapped child that derives its own facts from the list it is an element of
+reads the whole list once per element. A row usually holds the list cell
+already, because its handlers need it, and nothing at authoring time says that a
+`computed()` reading it in the row differs from one reading it in the parent. It
+does: each row's computation scans every element, so the work of a load grows
+with the square of the list, and a change to one element re-runs the scan in
+every row. Derive what is true of the list as a whole once, in the pattern that
+maps it, as a record keyed by element, and give each child that record as a
+cell: `ReadonlyCell<Record<string, T>>`, read as `facts.key(ownKey).get()`. A
+computation that keys the cell that way reads one entry when it runs and re-runs
+when that entry changes; the same record taken as a plain value is read whole by
+every child. The key exists only at run time, so the transformer cannot declare
+which entry that is: `--show-transformed` shows the record's whole schema on
+that `lift`, as a cell, and no `completeSchedulerScopeSummary`. What narrows is
+the read the run makes, and the read-cost report of
+`cf test <file> --verbose --stats-threshold 0` counts it per step.
+`packages/patterns/fabrichat/room.tsx` derives `places` this way and
+`packages/patterns/fabrichat/message-row.tsx` reads its own.
+
+How much of a value a `computed()` reads depends on what the value passes
+through, and a function imported from another module is where the transformer
+stops following it. A value handed to an imported helper is read whole:
+`summarize(items)` reads every field of every item, where
+`summarize(items.map(({ id, parent }) => ({ id, parent })))` reads two. A cell
+handed to one is charged what the helper's parameter type declares, and
+`Writable<T>` declares a write, through an alias such as
+`type ItemsCell = Writable<Item[]>` as much as written out. The computation is
+then scheduled as a writer of that cell: every reader of the cell is ordered
+after it, and several such computations over one list order against each other
+in a cycle. A helper that only reads takes `Cell<T>` or `ReadonlyCell<T>`.
+`deno task cf check <pattern>.tsx --show-transformed` shows both: the size of
+the schema each `lift` was given, and a `materializerWriteInputPaths` entry on
+one the scheduler treats as a writer. "Imported capability contracts" in
+`docs/specs/ts-transformer/ts_transformers_current_behavior_spec.md` is the
+rule.
+
 Runtime notes:
 
 - Use the `cf` skill, or read `skills/cf/SKILL.md`, when you need CLI command

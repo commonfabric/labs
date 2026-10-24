@@ -407,7 +407,7 @@ describe("convertible-js", () => {
         ): boolean {
           return Object.isFrozen(this);
         }
-        protected [DEEP_CLONE_CORE](_frozen: boolean): CustomFabInst {
+        [DEEP_CLONE_CORE](_frozen: boolean): CustomFabInst {
           return new CustomFabInst();
         }
         protected [SHALLOW_UNFROZEN_CLONE](): CustomFabInst {
@@ -1501,6 +1501,23 @@ describe("convertible-js", () => {
     });
 
     describe("throws for circular references", () => {
+      it("rejects a frozen cycle reaching a mutable leaf without caching its members as frozen", () => {
+        const leaf = { x: 1 };
+        const a: Record<string, unknown> = {};
+        const b = { a };
+        a.b = b;
+        a.leaf = leaf;
+        Object.freeze(a);
+        Object.freeze(b);
+        expect(() => fabricFromConvertibleJsValue(a)).toThrow(
+          "Conversion refuses a circular reference",
+        );
+        expect(() => fabricFromConvertibleJsValue(b)).toThrow(
+          "Conversion refuses a circular reference",
+        );
+        expect(Object.isFrozen(leaf)).toBe(false);
+      });
+
       it("throws when object references itself", () => {
         const obj: any = { a: 1 };
         obj.self = obj;
@@ -2150,6 +2167,70 @@ describe("convertible-js", () => {
         ]]) as unknown[][];
         expect(Object.isFrozen(result)).toBe(true);
         expect(Object.isFrozen(result[0])).toBe(true);
+      });
+
+      it("checks frozen prefixes once per conversion and rechecks after input changes", () => {
+        for (
+          const makeLeaf of [() => ({ n: 1 }), () => Object.freeze(new Date(0))]
+        ) {
+          const counts: number[] = [];
+          for (const depth of [40, 80]) {
+            let visits = 0;
+            let input: unknown = makeLeaf();
+            for (let i = 0; i < depth; i++) {
+              input = new Proxy(Object.freeze({ child: input }), {
+                ownKeys(target) {
+                  visits++;
+                  return Reflect.ownKeys(target);
+                },
+              });
+            }
+            fabricFromConvertibleJsValue(input);
+            expect(visits).toBeLessThan(depth * 12);
+            counts.push(visits);
+          }
+          expect(counts[1]).toBeLessThan(counts[0]! * 2.1);
+        }
+        const child = { n: 1 };
+        const input = Object.freeze({ child });
+        expect(fabricFromConvertibleJsValue(input)).not.toBe(input);
+        Object.freeze(child);
+        expect(fabricFromConvertibleJsValue(input)).toBe(input);
+      });
+
+      it("shares frozen cyclic subtrees and rejects cycles requiring conversion", () => {
+        const cycle: Record<string, FabricValue> = {};
+        cycle.self = cycle;
+        expect(() => fabricFromConvertibleJsValue({ a: cycle })).toThrow(
+          /circular/,
+        );
+        deepFreeze(cycle);
+        const converted = fabricFromConvertibleJsValue({ a: cycle }) as {
+          a: FabricValue;
+        };
+        expect(converted.a).toBe(cycle);
+        expect(Object.isFrozen(converted)).toBe(true);
+        expect(() => fabricFromConvertibleJsValue({ a: cycle }, false)).toThrow(
+          /circular/,
+        );
+      });
+
+      it("shares frozen children beneath a mutable input without freezing the input", () => {
+        const child = deepFreeze({ items: [1, 2, 3] });
+        const input = { child, other: { n: 1 } };
+        const result = fabricFromConvertibleJsValue(input) as typeof input;
+        expect(result).not.toBe(input);
+        expect(result.child).toBe(child);
+        expect(result.other).not.toBe(input.other);
+        expect(Object.isFrozen(input.other)).toBe(false);
+        input.other.n = 2;
+        expect(result.other.n).toBe(1);
+        const mutable = fabricFromConvertibleJsValue(
+          input,
+          false,
+        ) as typeof input;
+        expect(mutable.child).not.toBe(child);
+        expect(Object.isFrozen(mutable.child)).toBe(false);
       });
 
       it("does not freeze objects when `freeze=false`", () => {

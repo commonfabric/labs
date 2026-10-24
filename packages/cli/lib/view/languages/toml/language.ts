@@ -26,6 +26,7 @@ export const tomlLanguage: Language = {
     filenamePatterns: [],
     aliases: [],
     interpreters: [],
+    signatures: [],
     sharedExtensions: [],
   },
 

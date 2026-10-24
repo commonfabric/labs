@@ -70,8 +70,8 @@ import {
 import Room, { type RoomOutput } from "./room.tsx";
 
 /**
- * The kind of every offer here, and the kind each room's space declares by
- * default.
+ * The `kind` an offer carries when its event names none, and the kind each
+ * room's space declares by default.
  */
 const OFFER_KIND = "fabrichat-room";
 
@@ -108,10 +108,13 @@ export interface CreateAndOfferRequest {
   root?: boolean;
 
   /**
-   * The kind the room's space declares: absent, the offer's kind, and `null`,
+   * The kind the room's space declares: absent, `fabrichat-room`, and `null`,
    * none.
    */
   spaceKind?: string | null;
+
+  /** The `kind` the offer carries; absent, `fabrichat-room`. */
+  kind?: string;
 }
 
 /** A space a sender's handler offers again, under another key. */
@@ -124,6 +127,9 @@ export interface OfferAgainRequest {
 
   /** What the sender calls the space. */
   title: string;
+
+  /** The `kind` the offer carries; absent, `fabrichat-room`. */
+  kind?: string;
 }
 
 /** A room a sender's handler created, queued to be offered. */
@@ -136,6 +142,9 @@ export interface OfferRoomEvent {
 
   /** What the sender calls the room. */
   title: string;
+
+  /** The `kind` the offer carries; absent, `fabrichat-room`. */
+  kind?: string;
 }
 
 /** A room's result, as the link an event carries. */
@@ -159,13 +168,18 @@ function inboxOf(link: unknown): unknown {
 }
 
 /**
- * The envelope a sender sends for an offer of `space`, from the principal
- * sending the event, naming the host this runtime is served by.
+ * The envelope a sender sends for an offer of `space`, of `kind`, from the
+ * principal sending the event, naming the host this runtime is served by.
  */
-function envelopeOf(id: string, space: string, title: string): OfferEvent {
+function envelopeOf(
+  id: string,
+  space: string,
+  title: string,
+  kind: string = OFFER_KIND,
+): OfferEvent {
   const host = new URL(getPatternEnvironment().apiUrl).origin;
   return {
-    kind: OFFER_KIND,
+    kind,
     id,
     space,
     host,
@@ -205,9 +219,10 @@ const createProfile = handler<
 });
 
 /**
- * Creates a room in a space of its own, as the space's root and declaring the
- * offer's kind unless the event says otherwise, which the event's actor owns
- * and which grants the recipient `OWNER`, and queues offering it to the owner.
+ * Creates a room in a space of its own, as the space's root and declaring
+ * `fabrichat-room` unless the event says otherwise, which the event's actor
+ * owns and which grants the recipient `OWNER`, and queues offering it to the
+ * owner, under the event's `kind`.
  */
 const createAndOffer = handler<
   CreateAndOfferRequest,
@@ -227,7 +242,12 @@ const createAndOffer = handler<
       ...(spaceKind === null ? {} : { spaceKind }),
     })({ title: event.title }),
   );
-  offerRoom.send({ room, id: event.id, title: event.title });
+  offerRoom.send({
+    room,
+    id: event.id,
+    title: event.title,
+    ...(event.kind === undefined ? {} : { kind: event.kind }),
+  });
 });
 
 /**
@@ -246,18 +266,24 @@ const offerRoom = handler<
   const space = spaceOf(event?.room);
   if (!isWellFormedDID(space)) return;
   offered.push({ id: event.id, space });
-  sendToPointedInbox(profiles, envelopeOf(event.id, space, event.title));
+  sendToPointedInbox(
+    profiles,
+    envelopeOf(event.id, space, event.title, event.kind),
+  );
 });
 
 /**
- * Offers a space again, under another key, through the inbox the owner's
- * first profile points at.
+ * Offers a space again, under another key and the event's `kind`, through the
+ * inbox the owner's first profile points at.
  */
 const offerAgain = handler<
   OfferAgainRequest,
   { profiles: Writable<ProfileHomeOutput[]> }
 >((event, { profiles }) => {
-  sendToPointedInbox(profiles, envelopeOf(event.id, event.space, event.title));
+  sendToPointedInbox(
+    profiles,
+    envelopeOf(event.id, event.space, event.title, event.kind),
+  );
 });
 
 /** What the stand-in stores, the FabriChat manager's records among it. */

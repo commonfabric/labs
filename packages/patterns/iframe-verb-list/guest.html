@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Verb list</title>
+    <style>
+    html,
+    body,
+    #root {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    .app {
+      max-width: 36rem;
+      margin: 0 auto;
+      padding: var(--cf-theme-spacing-loose);
+    }
+
+    .app h1,
+    .app p {
+      margin: 0;
+    }
+
+    .add input {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    #error {
+      color: var(--cf-theme-color-error);
+    }
+
+    #error:empty {
+      display: none;
+    }
+
+    #items {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    #items label {
+      display: flex;
+      align-items: center;
+      gap: var(--cf-theme-spacing-tight);
+      padding-block: var(--cf-theme-spacing-tight);
+    }
+
+    #items li[data-checked] span {
+      color: var(--cf-theme-color-text-muted);
+      text-decoration: line-through;
+    }
+
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- PATTERN_IFRAME_SCRIPT -->
+  </body>
+</html>

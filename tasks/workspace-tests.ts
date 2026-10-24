@@ -498,9 +498,17 @@ export function testConcurrency(
  * every member runs whatever fails, so the coverage profile holds a record
  * for every member: the coverage-debt metric reads a member with no record as
  * source no test loaded.
+ *
+ * With `recordResults`, the run records into the spool the environment
+ * names. The `deno task test` entry point sets it; a test driving this
+ * function over a workspace of its own leaves it unset, because that
+ * workspace's members are the test's fixtures rather than tests of this
+ * repository. Without it, every member is handed recording off, so none
+ * records into a spool it inherited either.
  */
 export async function runTests(
   workspaceCwd: string = Deno.cwd(),
+  { recordResults = false }: { recordResults?: boolean } = {},
 ): Promise<boolean> {
   const suiteStartedAt = Date.now();
   const members = await readWorkspaceMembers(
@@ -528,7 +536,9 @@ export async function runTests(
   // plumbing: it forwards the flag and moves the results; the reported
   // names come from the leaves. A temporary directory that cannot be
   // created turns recording off with a warning; it never fails the suite.
-  const spoolDir = recordingSpool(recordsDir(), workspaceCwd);
+  const spoolDir = recordResults
+    ? recordingSpool(recordsDir(), workspaceCwd)
+    : undefined;
   let junitRoot: string | undefined;
   if (spoolDir !== undefined) {
     try {
@@ -540,7 +550,7 @@ export async function runTests(
   const fragment = spoolDir !== undefined && junitRoot !== undefined
     ? FragmentWriter.open(spoolDir)
     : undefined;
-  const workspaceUrl = new URL(`file://${path.resolve(workspaceCwd)}/`);
+  const workspaceUrl = path.toFileUrl(`${path.resolve(workspaceCwd)}/`);
   const capable = junitRoot !== undefined
     ? await junitCapableMembers(members, workspaceUrl)
     : new Set<string>();
@@ -578,9 +588,7 @@ export async function runTests(
         packagePath,
         coverageRoot,
         {
-          ...(spoolDir === undefined
-            ? {}
-            : { [RECORDS_DIR_VARIABLE]: spoolDir }),
+          [RECORDS_DIR_VARIABLE]: spoolDir ?? "",
           ...(skipList === undefined ? {} : { [SKIP_LIST_VARIABLE]: skipList }),
         },
         junitPath,
@@ -654,5 +662,5 @@ export async function main(): Promise<boolean> {
   // A failure here returns rather than exits: the entry point's recording
   // teardown runs in a finally that an exit would skip.
   if (!await initializeDb()) return false;
-  return await runTests();
+  return await runTests(Deno.cwd(), { recordResults: true });
 }

@@ -29,6 +29,7 @@ import { type Cell, type Runtime, sendEvent } from "@commonfabric/runner";
 import {
   AGENT_RUN_STATES,
   agentQueueIndexCell,
+  withAgentInputAccessTools,
 } from "@commonfabric/runner/agent-run";
 import { getAcl } from "../lib/acl.ts";
 import { openAgentStorageHost } from "../lib/agent-connections.ts";
@@ -52,8 +53,8 @@ import { absPath } from "../lib/utils.ts";
 /** The Loom retrieval tools a runner offers when it has a Loom configuration. */
 const LOOM_TOOLS = [...LOOM_RETRIEVAL_TOOL_IDS];
 
-/** The harness tools every runner offers. */
-const BASE_TOOLS = ["describe_handle", "web_fetch"];
+/** The harness tools every runner offers, beyond the ones every run reads its inputs through. */
+const BASE_TOOLS = ["web_fetch"];
 
 /** How long a claim's lease reaches past the run's last durable write. */
 const DEFAULT_LEASE_SECONDS = 300;
@@ -76,7 +77,11 @@ export interface AgentRunnerCommandOptions {
   localOnly?: boolean;
 }
 
-/** The tool names a runner offers: `--tools`, or what its configuration backs. */
+/**
+ * The tool names a runner offers: `--tools`, or what its configuration backs.
+ * The tools every run reads its inputs through are offered either way, since
+ * every run has them.
+ */
 export function resolveRunnerTools(
   options: Pick<AgentRunnerCommandOptions, "tools" | "loomRetrievalConfig">,
 ): string[] {
@@ -94,11 +99,13 @@ export function resolveRunnerTools(
         { exitCode: 1 },
       );
     }
-    return tools;
+    return withAgentInputAccessTools(tools);
   }
-  return options.loomRetrievalConfig !== undefined
-    ? [...LOOM_TOOLS, ...BASE_TOOLS]
-    : [...BASE_TOOLS];
+  return withAgentInputAccessTools(
+    options.loomRetrievalConfig !== undefined
+      ? [...LOOM_TOOLS, ...BASE_TOOLS]
+      : BASE_TOOLS,
+  );
 }
 
 /** What the flags and environment resolve to. */

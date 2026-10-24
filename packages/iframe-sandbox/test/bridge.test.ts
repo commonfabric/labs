@@ -629,6 +629,127 @@ describe("Fabric iframe bridge", () => {
     }
   });
 
+  it("tells a guest of a failure of a sink that is not a cell's as an error, never as a value", async () => {
+    const bridge = createFabricBridge({
+      clock: {
+        kind: "service",
+        sink: (_listener, failed) => {
+          failed({ code: "clock-stopped", message: "The clock stopped." });
+          return () => {};
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const heard: Array<FabricValue | undefined> = [];
+      const failed = Promise.withResolvers<unknown>();
+      const stop = client.sinkResource(
+        "clock",
+        (value) => heard.push(value),
+        (error) => failed.resolve(error),
+      );
+      await expect(failed.promise).resolves.toMatchObject({
+        code: "clock-stopped",
+        message: "The clock stopped.",
+        resource: "clock",
+      });
+      expect(heard).toEqual([]);
+      stop();
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("handles a request of a `presence` resource while an earlier write is still settling, and a later read behind that write", async () => {
+    const writing = Promise.withResolvers<void>();
+    const order: string[] = [];
+    const bridge = createFabricBridge({
+      count: cellResource(() => 1, {
+        set: async () => {
+          await writing.promise;
+          order.push("set");
+        },
+      }),
+      cursors: {
+        kind: "presence",
+        methods: {
+          setName: () => {
+            order.push("setName");
+            return undefined;
+          },
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const set = client.cell<number>("count").set(2);
+      const pull = client.request("pull", { resource: "count", path: [] })
+        .then(() => order.push("pull"));
+      await client.call("cursors", "setName", "Ada");
+      expect(order).toEqual(["setName"]);
+
+      writing.resolve();
+      await Promise.all([set, pull]);
+      expect(order).toEqual(["setName", "set", "pull"]);
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
+  it("handles the requests of one `presence` resource in the order they arrive, behind an earlier one still settling", async () => {
+    const first = Promise.withResolvers<void>();
+    const order: string[] = [];
+    const bridge = createFabricBridge({
+      cursors: {
+        kind: "presence",
+        methods: {
+          setName: async (name) => {
+            if (name === "first") await first.promise;
+            order.push(String(name));
+            return undefined;
+          },
+        },
+      },
+      other: {
+        kind: "presence",
+        methods: {
+          setName: () => {
+            order.push("other");
+            return undefined;
+          },
+        },
+      },
+    });
+    const channel = new MessageChannel();
+    const host = new FabricBridgeHost(bridge, channel.port1);
+    const client = connectFabric();
+    handOff(channel.port2);
+
+    try {
+      const one = client.call("cursors", "setName", "first");
+      const two = client.call("cursors", "setName", "second");
+      await client.call("other", "setName", "x");
+      expect(order).toEqual(["other"]);
+
+      first.resolve();
+      await Promise.all([one, two]);
+      expect(order).toEqual(["other", "first", "second"]);
+    } finally {
+      client.disconnect();
+      host.disconnect();
+    }
+  });
+
   it("tells a sink a snapshot listener adds on a refusal of it alone, handing it no value", async () => {
     const bridge = createFabricBridge({
       secret: {

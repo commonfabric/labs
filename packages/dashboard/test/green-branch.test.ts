@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { GreenBranch } from "../green-branch.ts";
+import { FakeRelay, pushPayload } from "./webhook-relay.ts";
 
 const REPO = "example/repo";
 const NOW = Date.UTC(2026, 9, 6, 12, 0);
@@ -151,6 +152,100 @@ describe("GreenBranch", () => {
           current: false,
         });
         expect(branch.mark(sha("0"))).toBeUndefined();
+      });
+    });
+
+    describe("refresh() given the relay", () => {
+      it("reads nothing while the relay vouches that the branch has not been pushed to since the last read", async () => {
+        const relay = new FakeRelay();
+        await relay.open();
+        pages = [[update(1, sha("1"), 1)]];
+        const branch = new GreenBranch(REPO, "main-green", relay.webhooks);
+        await branch.refresh(0);
+        requests = [];
+        await relay.deliver("push", pushPayload(REPO, "refs/heads/main"));
+        await relay.deliver(
+          "push",
+          pushPayload("example/other", "refs/heads/main-green"),
+        );
+
+        await branch.refresh(0);
+
+        expect(requests).toEqual([]);
+      });
+
+      it("reads the updates again once a push to the branch is delivered", async () => {
+        const relay = new FakeRelay();
+        await relay.open();
+        pages = [[update(1, sha("1"), 2)]];
+        const branch = new GreenBranch(REPO, "main-green", relay.webhooks);
+        await branch.refresh(0);
+        pages = [[update(2, sha("2"), 1), update(1, sha("1"), 2)]];
+        await relay.deliver("push", pushPayload(REPO, "refs/heads/main-green"));
+
+        await branch.refresh(0);
+
+        expect(branch.mark(sha("2"))?.current).toBe(true);
+      });
+
+      it("reads the updates again on each refresh until they show the commit a delivered push moved the branch to", async () => {
+        const relay = new FakeRelay();
+        await relay.open();
+        pages = [[update(1, sha("1"), 2)]];
+        const branch = new GreenBranch(REPO, "main-green", relay.webhooks);
+        await branch.refresh(0);
+        await relay.deliver(
+          "push",
+          pushPayload(REPO, "refs/heads/main-green", sha("2")),
+        );
+        await branch.refresh(0);
+        requests = [];
+
+        await branch.refresh(0);
+        expect(requests).toHaveLength(1);
+
+        pages = [[update(2, sha("2"), 1), update(1, sha("1"), 2)]];
+        await branch.refresh(0);
+        expect(branch.mark(sha("2"))?.current).toBe(true);
+        requests = [];
+        await branch.refresh(0);
+        expect(requests).toEqual([]);
+      });
+
+      it("reads the updates again until they show the branch back at a commit it was at before, once a push moves it there", async () => {
+        const relay = new FakeRelay();
+        await relay.open();
+        pages = [[update(2, sha("2"), 2), update(1, sha("1"), 3)]];
+        const branch = new GreenBranch(REPO, "main-green", relay.webhooks);
+        await branch.refresh(0);
+        await relay.deliver(
+          "push",
+          pushPayload(REPO, "refs/heads/main-green", sha("1")),
+        );
+        await branch.refresh(0);
+        pages = [[
+          update(3, sha("1"), 1),
+          update(2, sha("2"), 2),
+          update(1, sha("1"), 3),
+        ]];
+
+        await branch.refresh(0);
+
+        expect(branch.mark(sha("1"))?.current).toBe(true);
+      });
+
+      it("reads the updates again after a read that failed", async () => {
+        const relay = new FakeRelay();
+        await relay.open();
+        pages = [[update(1, sha("1"), 2)]];
+        failsAt = 0;
+        const branch = new GreenBranch(REPO, "main-green", relay.webhooks);
+        await branch.refresh(0);
+        failsAt = undefined;
+
+        await branch.refresh(0);
+
+        expect(branch.mark(sha("1"))?.current).toBe(true);
       });
     });
 

@@ -414,11 +414,13 @@ describe("runtimePresets conformance", () => {
         EXPERIMENTAL_MODERN_CELL_REP: "true",
         EXPERIMENTAL_SERVER_EXECUTION: "true",
         EXPERIMENTAL_AGENT_BUILTIN: "false",
+        EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS: "true",
       };
       expect(experimentalOptionsFromEnv((name) => env[name])).toEqual({
         modernCellRep: true,
         serverExecution: true,
         agentBuiltin: false,
+        localSessionDocuments: true,
       });
       expect(experimentalOptionsFromEnv(() => undefined)).toEqual({});
     });

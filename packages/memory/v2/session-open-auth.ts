@@ -58,6 +58,8 @@ const sameSessionDescriptor = (
     sessionId?: string;
     seenSeq?: number;
     sessionToken?: string;
+    resumeKey?: string;
+    resumeAttempt?: number;
     actingAs?: string;
     genesisRoot?: FabricValue;
     spaceKind?: string;
@@ -69,6 +71,12 @@ const sameSessionDescriptor = (
     right.seenSeq &&
   (typeof left.sessionToken === "string" ? left.sessionToken : undefined) ===
     right.sessionToken &&
+  // The key that lets a resume present the token before the latest one, so
+  // it cannot be injected in transit either.
+  (typeof left.resumeKey === "string" ? left.resumeKey : undefined) ===
+    right.resumeKey &&
+  (typeof left.resumeAttempt === "number" ? left.resumeAttempt : undefined) ===
+    right.resumeAttempt &&
   // The delegated READ binding (OW31) is part of the signed descriptor:
   // a message-level marker that disagrees with the signed one is a
   // mismatch, so the binding cannot be injected or stripped in transit.
@@ -85,6 +93,8 @@ export type SessionOpenMessage = {
     sessionId?: string;
     seenSeq?: number;
     sessionToken?: string;
+    resumeKey?: string;
+    resumeAttempt?: number;
     genesisRoot?: FabricValue;
     spaceKind?: string;
   };

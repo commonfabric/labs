@@ -15,14 +15,7 @@ import {
   Writable,
 } from "commonfabric";
 import type { ParticipantRoster } from "../loom/participants.tsx";
-import {
-  type ActivityCounters,
-  type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
-  type SentActivity,
-  type UsedTime,
-} from "./room-records.tsx";
+import { type MessagesValue } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
 import type { ChatProfile } from "./schemas.tsx";
 
@@ -38,11 +31,6 @@ type TestProfile = AddIntegrity<
 /** A room's records, with none of them holding anything yet. */
 const freshRecords = () => ({
   messages: Writable.of<MessagesValue>([] as MessagesValue),
-  reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
-  requests: Writable.of<RequestMemo[]>([]),
-  usedTimes: Writable.of<UsedTime[]>([]),
-  activity: Writable.of<SentActivity[]>([]),
-  counters: Writable.of<ActivityCounters[]>([]),
   roster: Writable.of<ParticipantRoster>({}),
 });
 

@@ -31,7 +31,7 @@ Deno.test("compileAndRun initializes outputs and handles invalid programs", asyn
     const cancels: Array<() => void> = [];
     let outputs: any;
     let sendResultCount = 0;
-    const action = compileAndRun(
+    const { action } = compileAndRun(
       inputs,
       (_tx, result) => {
         sendResultCount++;
@@ -95,7 +95,7 @@ Deno.test("compileAndRun runs a program that reads an attached data file", async
     const parent = runtime.getCell(space, "data-file-parent", undefined, tx);
     const cancels: Array<() => void> = [];
     let outputs: any;
-    const action = compileAndRun(
+    const { action } = compileAndRun(
       inputs,
       (_tx, result) => {
         outputs = result;

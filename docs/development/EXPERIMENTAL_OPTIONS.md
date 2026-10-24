@@ -21,7 +21,7 @@ in the same change.
 flags](#appendix-a-removed-and-never-shipped-flags) rather than deleting the
 > record, so the history stays discoverable.
 
-**Last reviewed:** 2026-09-29. Each flag's section carries the date its status
+**Last reviewed:** 2026-10-15. Each flag's section carries the date its status
 was last checked against the code.
 
 ## Summary table
@@ -38,7 +38,10 @@ was last checked against the code.
 | [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental` | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
 | [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental` | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
+| [`localSessionDocuments`](#localsessiondocuments) | `EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS` env / shell build define, or `RuntimeOptions.experimental`; clients adopt the deployment value | off | Bernhard Seefeld (#8919) | validate local session semantics and performance, then graduate for client execution | implemented, opt-in; requires validation-only commit support |
 | [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
+| [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
+| [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | carry deployed children over to their names, exclude a runtime whose naming mode differs from its space's, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default; must not turn on before carry-over and that exclusion exist |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
 | [`cfcEnforcementMode`](#cfcenforcementmode)                                 | `RuntimeOptions.cfcEnforcementMode` (`CF_CFC_MODE` in the cf-harness / fuse)                                                                    | `enforce-strict`                                                                     | Bernhard Seefeld (#3263)                              | the ladder stays; the default is at its top rung                                                                                                                                                                                  | implemented, on by default at the strictest rung                                |
@@ -352,15 +355,13 @@ flags it adopts from the deployment it runs against.
   states, no shippable intermediates (spec README §3.4); deliberately named
   unlike v1's `SERVER_PRIMARY_EXECUTION` so the archived v1 documents never
   alias it. Both states, defined:
-  - **OFF (explicit `false` selects it regardless of the constant): the
-    pre-v2 behavior, byte-for-byte.** Every client
-    runtime runs and commits derivations exactly as it does today, and every
-    client commit is `authored`-class — `derived` is never claimed off the
-    flag. The commit `class` metadata is still *written* in this arm (it is
-    written in every arm from stage A onward — protocol.md §1), but nothing
-    is enforced from it, and `stream-data` behaves as today. Any OFF-arm
-    behavioral diff from a v2 stage is a phase-gate failure by itself
-    (testing.md §2).
+  - **OFF (explicit `false` selects it regardless of the constant): client
+    execution.** Each client runtime runs derivations and handlers. Documents
+    of all scopes synchronize by default. The opt-in
+    [`localSessionDocuments`](#localsessiondocuments) flag keeps session
+    documents local while preserving mixed-transaction rollback. Every
+    client commit is `authored`-class. Commit class metadata is written, but
+    server-execution admission is disabled. `stream-data` runs on the client.
   - **ON (explicit `true` selects it regardless of the constant): the v2
     posture.** With stages A–F landed
     this means: the per-class admission rows of protocol.md §2 are enforced
@@ -656,7 +657,7 @@ flags it adopts from the deployment it runs against.
   — what a view checks, where it diverges from an eager read, and where a
   schema-less read takes over.
 - **Design, measurements and staging.**
-  [`../plans/lazy-cell-materialization.md`](../plans/lazy-cell-materialization.md).
+  [`../history/plans/lazy-cell-materialization.md`](../history/plans/lazy-cell-materialization.md).
 
 **Validation and rollback limits.** Off is not qualified as an equivalent
 rollback. Eager reads can hand `undefined` to a body whose schema promises a
@@ -798,6 +799,54 @@ holds the measurements and the conditions for revisiting.
 - **Path to removal.** Remove the env mapping, the runtime option and its
   authority entry, and the refusal branch after the default-on posture soaks.
 
+### `localSessionDocuments`
+
+- **Toggle:** `EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS=true`, or
+  `RuntimeOptions.experimental.localSessionDocuments: true`. Server-authoritative
+  for deployed clients; the shell adopts the deployment value unless its build
+  define explicitly overrides it.
+- **Default:** off. An omitted option or explicit `false` synchronizes session
+  documents. `serverExecution: true` always synchronizes them, regardless of
+  this flag.
+- **Added by:** Bernhard Seefeld (#8919).
+- **Purpose:** in client-execution mode, keep the replica's own session instance
+  local. Its reads create no remote watches, and outgoing commits omit its
+  operations and read dependencies. Explicitly named foreign session instances
+  use server reads and admission; they are not treated as locally absent.
+  Transactions whose reads, writes, and preconditions are entirely local settle
+  without opening a connection. A commit whose writes are all local but that
+  read a shared document travels as a validation-only commit, because its
+  session writes are only as good as those reads: a rejected verdict rolls
+  them back, and it is what runs a handler again against fresh state, since
+  no later frame does. Mixed commits roll back session writes on rejection.
+  Runtimes sharing a storage manager must agree on the effective
+  session-storage policy.
+- **Toolshed:** publishes the deployment's flag for clients but keeps its own
+  webhook runtime's session documents synchronized, so their values remain in
+  the server store across runtime recreation.
+- **Rollout:** deploy memory-server support for validation-only commits before
+  enabling the flag. Older servers reject session writes that require
+  shared-read validation. Leave the flag off until that support is deployed.
+- **Removal path:** validate rollback, route replacement, scoped reactivity,
+  and the performance benefit with the flag enabled; then graduate local
+  session storage for client execution and remove the flag. Server execution
+  retains session synchronization.
+- **Tests:** `packages/runner/test/storage/local-session-documents.test.ts`
+  covers omitted, false, and true values in both execution modes. Cross-runtime
+  session fixtures run with the flag off and are explicitly skipped when it is
+  on; their user-scope counterparts run in both settings.
+- **Status (2026-10-16):** implemented, off by default. On the FabriChat
+  room cold load it removes the session writes from a load's commits and
+  spares the three commits a load makes that read nothing shared, while 167
+  of the 168 it empties still carry shared reads and travel for validation;
+  the load's other counts and its wall time stay where they were
+  (`docs/history/development/performance/2026-10-16-fabrichat-room-cold-load-local-session-documents.md`).
+  Settling those commits on the client without the round trip cuts the
+  server's commits to one a load and leaves the client's counts and wall time
+  unchanged, so the round trip is not on the load's critical path; the
+  validation stays for rollback. The remaining cost of the flag is the server
+  recording a commit for each validation-only round trip.
+
 ### `sharedMemoryConnection`
 
 - **Toggle via.** `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` environment variable
@@ -873,6 +922,108 @@ holds the measurements and the conditions for revisiting.
   entry, the toolshed's override in `createToolshedRuntime`,
   `RemoteSessionFactory`'s connection-per-space path, and the `?space=`
   address parameter.
+
+### `localFold`
+
+- **Toggle via.** `EXPERIMENTAL_LOCAL_FOLD` environment variable (through the
+  canonical env registry) or `RuntimeOptions.experimental.localFold`;
+  browser-side, the build define of the same name
+  ([`packages/shell/felt.config.ts`](../../packages/shell/felt.config.ts) /
+  [`packages/shell/src/lib/env.ts`](../../packages/shell/src/lib/env.ts)),
+  baked at build time. Server-authoritative in `EXPERIMENTAL_FLAG_AUTHORITY`:
+  a deployed CLI adopts the posture the server publishes, with an explicit
+  `EXPERIMENTAL_*` still winning. The flag is consumed from the Runtime
+  instance, at the one place the scheduler marks a reactive run's transaction
+  as carrying derived writes
+  ([`packages/runner/src/scheduler/run.ts`](../../packages/runner/src/scheduler/run.ts));
+  there is no ambient control point.
+- **Added by.** Robin McCollum, 2026-10-14.
+- **Purpose.** Gates the _local fold_ of
+  [`docs/specs/memory-v2/03-commit-model.md`](../specs/memory-v2/03-commit-model.md)
+  §3.8.3. A principal may read a space it cannot write, and a reactive
+  computation it runs there still writes its outputs. With the flag off, a
+  write of that kind that the space refuses for lack of a grant is reverted
+  like any other rejection, the scheduler takes no retry on it, and the
+  revert does not run the computation again; it runs again when an input it
+  did not write changes, and is refused again. With the flag on, the replica
+  keeps the write as a fold over the document's confirmed value, and the
+  re-run the refusal causes reads what it computed and settles.
+- **Current default and planned end state.** Off by default. Set
+  `EXPERIMENTAL_LOCAL_FOLD=true` or pass
+  `RuntimeOptions.experimental.localFold: true` to keep refused derived
+  writes as folds. The end state is one arm: either the fold graduates to
+  unconditional behavior or the revert does, and the flag goes with the arm
+  that loses.
+- **Status on 2026-10-14.** Both arms are covered by
+  `packages/runner/test/refused-derived-write.test.ts`, and the plumbing by
+  `packages/runner/test/experimental-options.test.ts`.
+- **Status on 2026-10-20.** A refused derived write the replica reverts takes
+  no scheduler retry, so a READ principal running a pattern locally settles
+  after one refusal per computation. Its derived state is not stored, the
+  panel list's result container among it, so such a principal sees a loom's
+  root without its panels; `packages/toolshed/test/loom-cold-reader.test.ts`
+  pins that beside the cases that render them: a WRITE viewer under local and
+  server execution, a READ viewer under server execution, and a READ viewer
+  under local execution with the flag on.
+- **Path to removal.** Remove the env mapping, the runtime option and its
+  authority and shell-source entries, the shell define, and the gate in the
+  scheduler. If the fold loses, the fold machinery in
+  `packages/runner/src/storage/v2.ts`, the `derivedWrites` transaction flag,
+  and §3.8.3 go with it.
+
+### `instanceNames`
+
+- **Toggle via.** `RuntimeOptions.experimental.instanceNames` only. It is
+  mapped to `null` in the canonical env registry, and the shell has no build
+  define for it, so no environment can turn it on: one process naming
+  instances binds a parent's children to other documents than the rest of its
+  space does. The flip makes it env-reachable along with the boundary below.
+  Server-authoritative in `EXPERIMENTAL_FLAG_AUTHORITY`, so a deployed CLI
+  adopts the posture its server publishes, and `"deployment"` in
+  `SHELL_FLAG_SOURCES`, so the shell runs the naming mode of the deployment it
+  is served by. The flag is consumed from the Runtime instance through
+  `namesInstances()` in
+  [`packages/runner/src/builder/instance-name.ts`](../../packages/runner/src/builder/instance-name.ts),
+  its one read: the engine passes it to every transformer pipeline it builds
+  (`TransformationOptions.instanceNames`), and the compiled-code cache keys a
+  naming compile under a variant of its own, so the two modes never share
+  compiled bytes. There is no ambient control point.
+- **Added by.** Dan Bornstein, 2026-10-23.
+- **Purpose.** Gates naming a sub-pattern instance bound to a `const`
+  ([`docs/specs/computed-cell-identity.md`](../specs/computed-cell-identity.md),
+  "Sub-pattern instance identity"). With the flag on, the reactive-variable
+  transformer stage wraps `const child = Child(...)` in
+  `nameInstance(..., "child")`, and the builder takes that name as the
+  instance's identity wherever no result key, node input or authored `.for()`
+  names the instance already, in place of its position among its parent's
+  anonymous roots. An unrelated sibling inserted ahead of such a child then no
+  longer moves it onto another child's state. With the flag off, the
+  transformer names no instance, so an instance nothing else names keeps its
+  positional identity.
+- **Current default and planned end state.** Off by default. The end state is
+  on, with the flag and the positional compile of `const`-bound instances
+  deleted.
+- **What has to come before turning it on.** Two things, both missing today.
+  First, carrying each deployed parent's positional children over to their
+  names: without it, turning the flag on moves every deployed `const`-bound
+  child from its positional identity to a named one, where it starts fresh,
+  and its state is left where nothing reaches it. Second, keeping a runtime
+  whose naming mode differs from the one a space's data was written under, an
+  older runtime or a current one with the flag off, away from that space, by
+  one mechanism that covers runtimes already connected (long-lived browser
+  tabs and backends among them) as well as new admissions, in place before
+  naming writes any data. A manifest entry an older guard reads is not enough
+  on its own: an older runtime's plain reopen of a parent is never judged by
+  its guard.
+- **Status on 2026-10-23.** The transformer's off arm is held to `main`'s
+  output by the golden fixtures and `pipeline-regressions.test.ts`, and both
+  arms by `transform.test.ts`. That compiled code is never shared between the
+  two modes is pinned by `packages/runner/test/instance-naming-modes.test.ts`,
+  and the plumbing by `packages/runner/test/experimental-options.test.ts` and
+  `packages/runner/test/deployment-meta.test.ts`.
+- **Path to removal.** Once on everywhere, delete the runtime option, its env,
+  authority and shell-source entries, `namesInstances()`,
+  `TransformationOptions.instanceNames`, and the cache variant.
 
 ## Category 2: Contextual Flow Control enforcement rollout dials
 
@@ -1517,6 +1668,14 @@ the per-epic implementation notes).
 >   Older servers omit it, which parses as `false`, and a client then keeps its
 >   reports to itself rather than sending a message the server would refuse.
 >   It is permanent.
+> - **`watchRemoveV1`** is a build-inherent capability, hardwired to `true`.
+>   It advertises `session.watch.remove`, which removes watches by id and
+>   answers with only what changed (the memory protocol chapter's section
+>   4.3.9). Only the server advertises it; a client reads it from `hello.ok`
+>   and never offers it. Older servers omit it, which parses as `false`, and a
+>   client then removes a watch by replacing the session's watch set, and
+>   keeps the watches of documents nothing reads rather than releasing them.
+>   It is permanent.
 > - **`admissionNotice`** is a build-inherent capability, hardwired to `true`
 >   on both peers. It advertises the `session/admissible` push of the memory
 >   protocol chapter's section 4.2.2: a server tells a connection it refused a
@@ -1569,15 +1728,19 @@ the per-epic implementation notes).
   a high-RTT link this dominates cold-load wall-clock. With the flag on,
   refreshes overlap up to a bounded window (`CONCURRENT_WATCH_REFRESH_WINDOW`,
   currently 8) in `storage/v2.ts`, and the memory client issues the whole
-  watch-mutation family (`watch.set` + `watch.add`) in an ordered issue phase so
-  wire order is preserved and application stays ordered. Watch removals derive
-  a full replacement set from session state, so they wait for preceding
-  responses to be applied before constructing that set. Later acquisitions
-  remain behind the removal in wire order. Each removal therefore drains the
-  in-flight window: acquisitions issued after it wait until every earlier
-  response has applied and the removal has been sent. Operation-watch
-  cancellations pay that drain. Independent acquisitions still overlap, and
-  same-tick microtask coalescing is unchanged.
+  watch-mutation family (`watch.set`, `watch.add` and `watch.remove`) in an
+  ordered issue phase so wire order is preserved and application stays
+  ordered. Watch removals wait for preceding responses to be applied before
+  they are sent. A removal by id (`session.watch.remove`, to a server
+  advertising `watchRemoveV1`) waits so that the watch intent it updates
+  holds every earlier acquisition; a removal by replacement (`watch.set`, to
+  an older server) also derives the full remaining set from that state. Later
+  acquisitions remain behind the removal in wire order. Each removal therefore
+  drains the in-flight window: acquisitions issued after it wait until every
+  earlier response has applied and the removal has been sent. Operation-watch
+  cancellations and document release passes pay that drain. Independent
+  acquisitions still overlap, and same-tick microtask coalescing is
+  unchanged.
 - **Current default and planned end state.** Off by default. It is a spike
   pending live measurement on a real (estuary-latency) load; the window size is
   a tuning value. End state is either graduation to always-on with a settled
@@ -1866,7 +2029,8 @@ The environment-backed flags (`EXPERIMENTAL_MODERN_CELL_REP`,
 `EXPERIMENTAL_COMPUTED_CELL_IDS`,
 `EXPERIMENTAL_LAZY_MATERIALIZATION`,
 `EXPERIMENTAL_READER_SCHEMA_PRECEDENCE`,
-`EXPERIMENTAL_SERVER_EXECUTION`) reach the runtime through the
+`EXPERIMENTAL_SERVER_EXECUTION`, `EXPERIMENTAL_LOCAL_FOLD`) reach the runtime
+through the
 deployed processes. The runtime-only flags (`commitPreconditions`, the CFC
 dials) reach it only through the `RuntimeOptions` passed to `new Runtime(...)`.
 

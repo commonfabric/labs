@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
-import { join } from "@std/path";
+import { join, toFileUrl } from "@std/path";
 
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -69,7 +69,7 @@ describe("profileSpaceRoot()", () => {
 
   const serve = () => {
     server = new MemoryV2Server.Server({
-      store: new URL(`file://${storeDir}/`),
+      store: toFileUrl(`${storeDir}/`),
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: { audience: "did:key:z6Mk-profile-repair-root" },
       acl: { mode: "enforce" },
@@ -331,18 +331,14 @@ describe("profileSpaceRoot()", () => {
       expect(out[planted.space].differ).toEqual([]);
     });
 
-    it("writes the space cell of a space it repairs, and one empty content-addressed document", async () => {
+    it("writes only the space cell of a space it repairs", async () => {
       const out = await written(false);
       for (const listed of [unrooted, planted]) {
         const { spaceCell, differ } = out[listed.space];
         const ids = differ.map((entity) => (entity as { id: string }).id);
-        expect(ids).toContain(spaceCell);
-        const others = differ.filter((entity) =>
-          (entity as { id: string }).id !== spaceCell
-        );
-        expect(others).toHaveLength(1);
-        expect((others[0] as { id: string }).id.startsWith("cid:")).toBe(true);
-        expect((others[0] as { value: unknown }).value).toEqual({});
+        // The link carries no label of its own here, so the space cell gains
+        // none and no schema document is written beside it.
+        expect(ids).toEqual([spaceCell]);
       }
     });
   });

@@ -78,6 +78,10 @@ import {
   type EventError,
   servedRuntimeErrors,
 } from "./served-errors.ts";
+import {
+  type RuntimeErrorExpectation,
+  runtimeErrorExpectation,
+} from "./runtime-error-expectation.ts";
 import { servedConsequences, settleServed } from "./served-settle.ts";
 import { buildActionEvent } from "./trusted-action-event.ts";
 
@@ -119,6 +123,14 @@ export interface StepMeta {
 export interface ParticipantInitResult {
   steps: StepMeta[];
   allowRuntimeErrors: boolean;
+
+  /**
+   * The runtime errors this participant requires, as
+   * `runtimeErrorExpectation()` reads them, or `undefined` for none. As in a
+   * single-user test, an expectation tolerates the errors it counts.
+   */
+  expectRuntimeErrors: RuntimeErrorExpectation | undefined;
+
   expectNonIdempotent: boolean;
   allowConsoleErrors: boolean;
   allowConsoleWarnings: boolean;
@@ -598,6 +610,9 @@ const handlers: Record<
       allowRuntimeErrors:
         await (resultCell.key("allowRuntimeErrors") as Cell<unknown>)
           .pull() === true,
+      expectRuntimeErrors: runtimeErrorExpectation(
+        await (resultCell.key("expectRuntimeErrors") as Cell<unknown>).pull(),
+      ),
       expectNonIdempotent:
         await (resultCell.key("expectNonIdempotent") as Cell<unknown>)
           .pull() === true,

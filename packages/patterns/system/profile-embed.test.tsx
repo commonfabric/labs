@@ -1,4 +1,4 @@
-import { action, assert, pattern, TESTS } from "commonfabric";
+import { action, assert, FabricBytes, pattern, TESTS } from "commonfabric";
 import ProfileEmbed from "./profile-embed.tsx";
 import ProfileHome from "./profile-home.tsx";
 
@@ -16,10 +16,16 @@ import ProfileHome from "./profile-home.tsx";
  *   (2) the amend-in-place CONTRACT the pattern depends on, exercised against a
  *       REAL `ProfileHome` instance the way the pattern's save handlers do:
  *       dispatch into the profile's exported owner-protected `setName` /
- *       `setAvatar` / `setBio` streams, with empty sends suppressed for
- *       name/avatar and allowed for bio (CT-1828). The rendered badge/bio
+ *       `setPicture` / `setBio` streams, with empty sends suppressed for
+ *       name/picture and allowed for bio (CT-1828). The rendered badge/bio
  *       presentation and edit affordance are verified in the browser.
  */
+// Stands in for a picked picture; the profile stores the bytes as sent.
+const PICKED_PICTURE = [0x89, 0x50, 0x4e, 0x47];
+
+const isPickedPicture = (picture: FabricBytes | undefined) =>
+  picture?.slice().join() === PICKED_PICTURE.join();
+
 export default pattern(() => {
   // (1) Fallback branch: with no profile resolvable in lane-2, the embed reports
   // no profile and is not in edit mode; the `[UI]` renders the wish fallback.
@@ -43,16 +49,18 @@ export default pattern(() => {
     if (draft.trim()) profile.setName.send({ name: draft });
   });
 
-  const action_amend_avatar = action(() => {
-    const draft = "GH";
-    if (draft.trim()) profile.setAvatar.send({ avatar: draft });
+  // The embed's picture picker forwards the picked bytes into setPicture,
+  // suppressing an empty pick.
+  const action_amend_picture = action(() => {
+    const picked = new FabricBytes(new Uint8Array(PICKED_PICTURE));
+    if (picked.length) profile.setPicture.send({ picture: picked });
   });
-  const action_amend_avatar_empty = action(() => {
-    const draft = "";
-    if (draft.trim()) profile.setAvatar.send({ avatar: draft });
+  const action_amend_picture_empty = action(() => {
+    const picked = new FabricBytes(new Uint8Array());
+    if (picked.length) profile.setPicture.send({ picture: picked });
   });
 
-  // Bio is deliberately clearable (unlike name/avatar); the embed sends the
+  // Bio is deliberately clearable (unlike name/picture); the embed sends the
   // trimmed draft unconditionally.
   const action_amend_bio = action(() => {
     profile.setBio.send({ bio: "Countess of computing." });
@@ -70,8 +78,10 @@ export default pattern(() => {
   const assert_name_survives_empty = assert(() =>
     profile.initialNameApplied === "Grace Hopper"
   );
-  const assert_avatar_amended = assert(() => profile.avatar === "GH");
-  const assert_avatar_survives_empty = assert(() => profile.avatar === "GH");
+  const assert_picture_amended = assert(() => isPickedPicture(profile.picture));
+  const assert_picture_survives_empty = assert(() =>
+    isPickedPicture(profile.picture)
+  );
   const assert_bio_amended = assert(() =>
     profile.bio === "Countess of computing."
   );
@@ -89,10 +99,10 @@ export default pattern(() => {
       // Empty/whitespace name amend is suppressed (CT-1828 + embed guard).
       { action: action_amend_name_empty },
       { assertion: assert_name_survives_empty },
-      { action: action_amend_avatar },
-      { assertion: assert_avatar_amended },
-      { action: action_amend_avatar_empty },
-      { assertion: assert_avatar_survives_empty },
+      { action: action_amend_picture },
+      { assertion: assert_picture_amended },
+      { action: action_amend_picture_empty },
+      { assertion: assert_picture_survives_empty },
       { action: action_amend_bio },
       { assertion: assert_bio_amended },
       { action: action_amend_bio_clear },

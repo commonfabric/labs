@@ -45,8 +45,9 @@ just a JSON subset.
 
 ## 3.2 Transaction Structure
 
-A transaction groups one or more operations into an atomic unit. All operations
-succeed or all fail.
+A transaction groups operations and their validation requirements into an atomic
+unit. All operations succeed or all fail; a validation-only transaction carries
+no operations.
 
 ```typescript
 // Shown at module scope.
@@ -57,8 +58,17 @@ interface Transaction {
 }
 ```
 
-A transaction MUST contain at least one operation. Validation of all reads
-happens before any writes are applied.
+A transaction MUST contain operations, reads, or preconditions, unless it is a
+server wave carrying outbound appends. A validation-only transaction
+checks its reads and records a commit verdict without creating document revisions.
+With `localSessionDocuments` enabled, a client-executed commit whose writes
+are all documents of the client's own session instance uses this form when it
+read a shared document or carries a shared precondition: the verdict decides
+whether its session writes stand, and a rejected one rolls them back. Writes
+to an explicitly named foreign session instance are admitted by the server
+like any other shared write. Validation of all reads happens
+before any writes are applied. Enabling local session storage requires
+servers that admit validation-only commits.
 
 ## 3.3 Client State: Confirmed and Pending
 
@@ -745,7 +755,10 @@ connection successfully resumes a session with the current token, ownership
 transfers to that connection, the old owner is revoked for that session, and
 the server rotates the token. A client presenting a stale token receives
 `SessionRevokedError` and must not assume it can continue replaying retained
-commits on that session.
+commits on that session. The one exception is the client whose resume's
+response was lost: its next resume presents the token the lost one presented,
+under the same `resumeKey` and a greater `resumeAttempt`, and the server
+accepts it (04-protocol.md section 4.1.2).
 
 On reconnect:
 
@@ -799,10 +812,10 @@ The client provider fires three notification types:
 A principal may read a space it cannot write, and a reactive computation it
 runs there still writes its outputs. Those writes are derived: running the
 computation again reproduces them. When the server refuses such a commit with
-an `AuthorizationError` it has not marked retriable, the client keeps each
-written document's new value instead of reverting it, as a _local fold_: the
-confirmed value at the same `seq`, with the refused write applied, held by
-that replica alone.
+an `AuthorizationError` it has not marked retriable, a client running under
+the `localFold` flag keeps each written document's new value instead of
+reverting it, as a _local fold_: the confirmed value at the same `seq`, with
+the refused write applied, held by that replica alone.
 
 - A document is folded only where the refused write sits directly on the
   confirmed version it was made over. Where a newer confirmed version arrived
@@ -822,6 +835,13 @@ that replica alone.
 
 Event handlers are not folded. Their writes are acts rather than derivations,
 and a refusal of one is reverted and reported.
+
+The fold is gated by the `localFold` experimental flag
+([registry](../../development/EXPERIMENTAL_OPTIONS.md#localfold)), off by
+default. Without it, a refused derived write is reverted as any other
+rejection is. The computation is not retried, and the revert of its own
+write does not run it again; it runs again when an input it did not write
+changes, and is refused again while the grant is missing.
 
 ## 3.9 Commit Ordering
 

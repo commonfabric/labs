@@ -20,6 +20,7 @@ import {
   releaseRemovedElements,
 } from "./list-element-keys.ts";
 import {
+  listContainerStoreWrites,
   listCoordinatorPlan,
   listElementResultCell,
 } from "./list-coordinator-plan.ts";
@@ -95,18 +96,22 @@ export function filter(
   outputBinding?: NormalizedFullLink,
   awaitSync?: boolean,
 ): RawBuiltinReturnType {
-  return listInstanceCoordinator((identity) =>
-    createFilterInstance(
-      inputsCell,
-      sendResult,
-      addCancel,
-      _cause,
-      parentCell,
-      runtime,
-      outputBinding,
-      awaitSync,
-      identity,
-    ), addCancel);
+  return listInstanceCoordinator(
+    (identity) =>
+      createFilterInstance(
+        inputsCell,
+        sendResult,
+        addCancel,
+        _cause,
+        parentCell,
+        runtime,
+        outputBinding,
+        awaitSync,
+        identity,
+      ),
+    addCancel,
+    listContainerStoreWrites(runtime, "filter", parentCell, outputBinding),
+  );
 }
 
 /** Creates bookkeeping and deferred work for one resolution identity. */

@@ -17,6 +17,9 @@ export interface BuildConfigInitializer {
   toolshedFlags: string[];
   binaries?: readonly BinaryName[];
   cliOnly?: boolean;
+
+  /** Whether builds use only dependencies already in Deno's cache. */
+  cachedOnly?: boolean;
 }
 
 export const BINARY_NAMES = ["toolshed", "cf"] as const;
@@ -47,8 +50,9 @@ export const BINARY_SOURCES = [
 /**
  * The environment variables a build needs from the machine it runs on: where
  * to find programs, the home and temporary directories, where Deno keeps its
- * cache, and how it reaches the network to fetch dependencies, whose contents
- * the lockfile pins. None of them reaches a binary, which
+ * cache, how it reaches the network to fetch dependencies, and whether an
+ * earlier dependency installation makes compilation cache-only. None of them
+ * reaches a binary, which
  * `build-binaries.test.ts` holds the shell bundle's configuration to. A CI
  * lane building a binary it caches passes these through from its own
  * environment, and nothing else, so every other variable the build reads is
@@ -67,6 +71,7 @@ export const BUILD_HOST_VARIABLES = [
   "DENO_TLS_CA_STORE",
   "DENO_AUTH_TOKENS",
   "NPM_CONFIG_REGISTRY",
+  "CF_DENO_DEPENDENCIES_INSTALLED",
 ] as const;
 
 export function requestedBinaries(args: readonly string[]): BinaryName[] {
@@ -92,6 +97,10 @@ export class BuildConfig {
   readonly toolshedFlags: string[];
   readonly binaries: readonly BinaryName[];
   readonly cliOnly: boolean;
+
+  /** Whether builds use only dependencies already in Deno's cache. */
+  readonly cachedOnly: boolean;
+
   #manifestOriginal: string;
   #compileCacheVersionOriginal: string;
 
@@ -108,6 +117,7 @@ export class BuildConfig {
       ? ["cf"]
       : requestedBinaries(options.binaries ?? []);
     this.cliOnly = this.binaries.length === 1 && this.binaries[0] === "cf";
+    this.cachedOnly = options.cachedOnly ?? false;
     this.#manifestOriginal = Deno.readTextFileSync(
       this.workspaceManifestPath(),
     );
@@ -529,7 +539,8 @@ export function unusedGrammarDirectories(): string[] {
   });
 }
 
-function lockedCompileArgs(config: BuildConfig): string[] {
+/** Returns the dependency-resolution arguments shared by every binary build. */
+export function lockedCompileArgs(config: BuildConfig): string[] {
   // Keep compiled binaries on the same resolved dependency graph as normal
   // install/test flows, even when compile runs from a package cwd.
   return [
@@ -537,6 +548,7 @@ function lockedCompileArgs(config: BuildConfig): string[] {
     "--lock",
     config.workspaceLockPath(),
     "--frozen=true",
+    ...(config.cachedOnly ? ["--cached-only"] : []),
     // Embed only the npm packages the binary's module graph reaches, rather
     // than every npm package in the lockfile. A package that a binary loads
     // only through a specifier the compile cannot read statically must be
@@ -698,6 +710,7 @@ export async function runBuildBinaries(
       "--allow-run",
     ],
     binaries: requestedBinaries(args),
+    cachedOnly: Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED") === "1",
   });
 
   await (options.runBuild ?? runBuildWithSignalCleanup)(config);

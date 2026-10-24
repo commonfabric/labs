@@ -40,6 +40,14 @@ cd packages/runner
 deno task test --filter "test name"
 ```
 
+`deno test --filter` compares the pattern with the names of top-level tests
+only. In a file written with `describe()` and `it()`, the top-level test is the
+`describe()`, and each `it()` inside it runs as a step of that test. So the
+pattern has to match the `describe()` name, and the whole block runs. A pattern
+that matches only an `it()` description matches nothing. The run then reports
+`0 passed | 0 failed`, with every test filtered out, and exits successfully, so
+check the passed count.
+
 The flag is passed to the `deno test` that the package's own task invokes, so
 the preload, the permissions, and the file globs that package's tests need are
 all still applied. The same holds for the packages that run their tests through
@@ -230,7 +238,8 @@ commit's own run. When another workflow calls the CI workflow, it skips
 `Status`, which holds the coverage and topology checks. It also skips the build,
 attestation and deploy jobs. The records relay follows the workflow, and its
 records carry the seed they ran under, so [test selection](test-selection.md)
-keeps them apart from the commit's own runs.
+keeps them apart from the commit's own runs. Test selection reads them as runs
+on the default branch, since they ran its own head.
 
 The order a run takes depends on the set of test files as well as the seed:
 `deno test --shuffle` and the runners this repository owns permute the whole
@@ -309,6 +318,21 @@ repository owns along with the ones whose order is the test.
 `tasks/test-topology.test.ts` fails on a `deno test` that a manifest, a
 workflow, or a shell script writes without `--no-check`; a lane passes the flag
 to every `deno test` it builds whatever the task says.
+
+### Browser windows
+
+`ShellIntegration` launches browsers headlessly when `HEADLESS` is unset or
+empty. `HEADLESS=1` and `HEADLESS=true` also select headless mode. To watch a
+shell integration test in a visible browser, explicitly set `HEADLESS=0` or
+`HEADLESS=false`:
+
+```bash
+HEADLESS=0 deno task integration shell
+```
+
+`Browser.launch()` defaults to headless mode independently of the environment;
+its `headless` option selects a different mode. `deno-web-test` also defaults
+to headless mode, with its override in `deno-web-test.config.ts`.
 
 ### Browser tests in agent sandboxes
 
@@ -604,10 +628,18 @@ reaches it as an `errored` outcome of the event, which the runner records as
 a runtime error marked `[served]`, under the same policy as any other —
 `allowRuntimeErrors` tolerates it, and `expectRuntimeErrors` counts it. It is
 left out when the same event's speculative run recorded an error with the
-same text, so a throw both runs hit is counted once. Logger warnings and errors are counted per process, so a single-user
-run, whose serving loop shares its process, counts the serving loop's as
-well. A served handler runs under the serving runtime's CFC posture rather
-than the test's.
+same text, so a throw both runs hit is counted once. Logger warnings and
+errors are counted per process, and a single-user run's serving loop shares
+the test's process, so the runner tells the loop's apart by the serving
+context described below. A logger error the loop logs fails the file as a
+console error marked `[served]`, under `allowConsoleErrors`. A logger warning
+it logs is listed under the file as a serving-loop warning and fails nothing,
+since the loop warns about work it goes on to recover from, a dropped wave
+contribution among them. A performance diagnostic, a warning
+`packages/cli/lib/perf-diagnostic-logs.ts` names, is left out of that list as
+it is left out of the test's own warnings. A multi-user run's serving loop runs in the
+orchestrator, where no counts are taken. A served handler runs under the
+serving runtime's CFC posture rather than the test's.
 
 `@commonfabric/runner/executor/serving-memory-server.deno` supplies the pair:
 a memory server over a fresh non-persistent store, with an `ExecutorHost`
@@ -636,6 +668,16 @@ and `ensureSpaceRoots`, which defaults to `false` here, the switch the serving
 loop keeps for tests. `prepareStorageManager` hands the test each serving
 runtime's storage manager before the runtime is built, which is where a stub on
 one of its providers goes.
+
+The serving loop's work runs in the serving context, which the runner carries
+per async context and `inServingContext()` reports, so a test whose clients
+share the loop's realm can tell their output apart. The host enters it
+wherever the memory server or the test starts work on it: an admitted commit,
+a session opening, a lifecycle verb, and its close. The serving runtimes'
+sessions take each server frame in it, and an emulated client session takes
+each one outside it. The memory server's own work runs in the context of the
+session whose request it is handling, and a callback one side hands the other
+runs in the context of whichever side calls it.
 
 ```ts
 // Shown at module scope.

@@ -5,7 +5,9 @@
  * DID reaches it too. An operator runs this over a whole store, as an
  * identity of its own with no special privilege: a profile space grants every
  * principal `WRITE`, so the link is an ordinary commit. A person runs it over
- * the profiles their own Home lists, as the identity that owns them.
+ * the profiles their own Home lists, as the identity that owns them, and the
+ * owner's runtime worker runs it that way as part of its housekeeping over
+ * Home, once per worker.
  *
  * What it replaces is a root that only a space-root ensure created: at the
  * address the ensure derives, running the default app by the evidence of its
@@ -27,6 +29,7 @@ import {
   getPatternIdentityRef,
   getPatternSource,
   type JSONSchema,
+  type MemorySpace,
   type NormalizedFullLink,
   resolveSpaceRootPattern,
   spaceRootPatternConfig,
@@ -156,6 +159,10 @@ async function readPlan(
   }
 
   const acl = await new ACLManager(runtime, space).getStored();
+  // Whether the profile's owner wrote a name decides which of its label's
+  // entries name its owner, so the document the name resolves to is loaded
+  // before the label is read.
+  await profile.key("name").resolveAsCell().sync();
   const owners = isACL(acl) && hasConcreteOwner(acl)
     ? Object.entries(acl).flatMap(([principal, capability]) =>
       principal !== "*" && capability === "OWNER" ? [principal] : []
@@ -165,6 +172,7 @@ async function readPlan(
   let represented: DID[] | undefined;
   try {
     represented = attestedPrincipalsAt(
+      runtime,
       tx,
       profileLink,
       "represents-principal",
@@ -254,12 +262,14 @@ export async function inspectProfileSpaceRoot(
  *
  * @throws Error when the profile or its space's root changed since the
  *   inspection that produced `expectedInspection`, including a root another
- *   writer links while the repair commits.
+ *   writer links while the repair commits, and when `signal` aborts before
+ *   the link's commit starts, having committed nothing.
  */
 export async function repairProfileSpaceRoot(
   controller: PiecesController,
   id: string,
   expectedInspection: string,
+  signal?: AbortSignal,
 ): Promise<ProfileSpaceRootInspection> {
   const plan = await readPlan(controller, id);
   if (plan.report.inspection !== expectedInspection) {
@@ -285,6 +295,7 @@ export async function repairProfileSpaceRoot(
         },
       }
       : {}),
+    ...(signal === undefined ? {} : { signal }),
   });
   await controller.runtime.storageManager.synced();
   return await inspectProfileSpaceRoot(controller, id);
@@ -310,14 +321,79 @@ export async function listedProfiles(
 ): Promise<{ space: string; id: string }[]> {
   const space = controller.getSpace();
   const root = await resolveSpaceRootPattern(controller.runtime, space);
-  const list = root?.key("profiles").asSchema(PROFILE_LIST_SCHEMA);
-  await list?.sync();
-  const entries = list?.get();
-  if (!Array.isArray(entries)) {
+  const listed = root === undefined ? undefined : await profilesListedBy(root);
+  if (listed === undefined) {
     throw new Error(`The root of ${space} is not a Home with a profiles list`);
   }
+  return listed;
+}
+
+/**
+ * Helper for `listedProfiles()` and `repairProfileRootsOf()`, which returns
+ * the address of every profile `home` lists in another space, as
+ * `listedProfiles()` describes, or `undefined` when `home` has no `profiles`
+ * list.
+ */
+async function profilesListedBy(
+  home: Cell<unknown>,
+): Promise<{ space: string; id: string }[] | undefined> {
+  const list = home.key("profiles").asSchema(PROFILE_LIST_SCHEMA);
+  await list.sync();
+  const entries = list.get();
+  if (!Array.isArray(entries)) return undefined;
   return entries.flatMap((entry) => {
     const link = (entry as Cell<unknown>).getAsNormalizedFullLink();
-    return link.space === space ? [] : [{ space: link.space, id: link.id }];
+    return link.space === home.space
+      ? []
+      : [{ space: link.space, id: link.id }];
   });
+}
+
+/**
+ * Makes each profile `home` lists, that `identity` owns, its space's root
+ * where the space has no root or one only a space-root ensure created, as
+ * `repairProfileSpaceRoot()` does, under the receipt of an inspection made
+ * just before. `home` is a Home result, read as `listedProfiles()` reads one,
+ * and one with no `profiles` list has nothing to repair. `controllerFor`
+ * returns a controller over a profile's space, through the runtime that reads
+ * and writes it. A profile already its space's root, one whose root is
+ * occupied, and one that is not a profile `identity` owns are left as they
+ * are, so running this again writes nothing.
+ *
+ * The profiles are taken one at a time, and each is tried whatever became of
+ * the ones before it. Once `signal` aborts, or the runtime begins disposal, it
+ * starts no further repair commit.
+ *
+ * @throws AggregateError, once every profile has been tried, holding why each
+ *   profile whose inspection or repair failed did so; and whatever reading
+ *   `home`'s list throws, before any profile is tried.
+ */
+export async function repairProfileRootsOf(
+  home: Cell<unknown>,
+  identity: DID,
+  controllerFor: (space: MemorySpace) => PiecesController,
+  signal?: AbortSignal,
+): Promise<void> {
+  const failures: unknown[] = [];
+  for (const { space, id } of await profilesListedBy(home) ?? []) {
+    try {
+      const controller = controllerFor(space as MemorySpace);
+      const stopped = () =>
+        signal?.aborted === true ||
+        controller.runtime.writeTeardownSignal.aborted;
+      if (stopped()) return;
+      const found = await inspectProfileSpaceRoot(controller, id);
+      if (found.action === "none" || found.owner !== identity) continue;
+      if (stopped()) return;
+      await repairProfileSpaceRoot(controller, id, found.inspection, signal);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      `Making ${failures.length} of Home's profiles their space's root failed`,
+    );
+  }
 }

@@ -33,7 +33,9 @@
     "./provenance": "./src/provenance.ts",
     "./result-writer": "./src/result-writer.ts",
     "./fabric-session": "./src/fabric-session.ts",
+    "./foreign-spaces": "./src/foreign-spaces.ts",
     "./handle-table": "./src/handle-table.ts",
+    "./input-cells": "./src/input-cells.ts",
     "./gateway/openai-client": "./src/gateway/openai-client.ts",
     "./model/client": "./src/model/client.ts",
     "./model/usage": "./src/model/usage.ts",
@@ -45,6 +47,8 @@
     "./auth/provider-settings": "./src/auth/provider-settings.ts",
     "./control-errors": "./src/control-errors.ts",
     "./contracts/prompt-slot": "./src/contracts/prompt-slot.ts",
+    "./contracts/run-depth": "./src/contracts/run-depth.ts",
+    "./task-classification": "./src/task-classification.ts",
     "./contracts/cfc-invocation-context": "./src/contracts/cfc-invocation-context.ts",
     "./contracts/native-model-tool": "./src/contracts/native-model-tool.ts",
     "./contracts/browser-host": "./src/contracts/browser-host.ts",
@@ -52,6 +56,7 @@
     "./contracts/client-action": "./src/contracts/client-action.ts",
     "./contracts/client-command": "./src/contracts/client-command.ts",
     "./contracts/image": "./src/contracts/image.ts",
+    "./image-attachments": "./src/image-attachments.ts",
     "./contracts/run-manifest": "./src/contracts/run-manifest.ts",
     "./contracts/observation": "./src/contracts/observation.ts",
     "./contracts/policy": "./src/contracts/policy.ts",
@@ -70,6 +75,7 @@
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
+    "@node/http": "node:http",
     "entities": "npm:entities@^8.0.0",
     "marked": "npm:marked@^18.0.6"
   }

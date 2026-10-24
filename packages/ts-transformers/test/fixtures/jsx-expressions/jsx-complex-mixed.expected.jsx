@@ -469,7 +469,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Yes", "No"]
+            "enum": ["No", "Yes"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_7({ state: {
                 items: state.key("items")
             } }), "Yes", "No")}</p>
@@ -480,7 +480,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Yes", "No"]
+            "enum": ["No", "Yes"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_8({ state: {
                 items: state.key("items")
             } }), "Yes", "No")}</p>
@@ -493,7 +493,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Yes", "No"]
+            "enum": ["No", "Yes"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_9({ state: {
                 items: state.key("items")
             } }), "Yes", "No")}

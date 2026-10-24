@@ -13,7 +13,7 @@ answer, the section says "not established" and what would establish it.
 
 The statement is written against the specification at the commit the spec
 snapshot at `packages/runner/src/cfc/kernel/spec-snapshot.json` records,
-`9e751d58`. It describes the runtime's shipped defaults: the dial values
+`0c12ccf3`. It describes the runtime's shipped defaults: the dial values
 `RUNTIME_CFC_DIAL_DEFAULTS` in `cfc/posture-report.ts` applies to every
 `Runtime`, and `presetCfcOptions` in `runtime-presets.ts` pins for every host
 preset. A host that sets a dial lower is described by
@@ -67,7 +67,11 @@ minted metadata and `cid:` documents. `storedCfcMetadataAppliesToPath` in
 reason: `schema.ts` on a read through an `ifc`-bearing schema
 (`schema-ifc-read`); `cell.ts` on a write through one (`schema-ifc-write`) and
 on a SQLite row label (`sqlite-row-label`); `data-updating.ts` on a link write
-(`link-write`); `schema-ifc.ts` on a link crossing an `ifc`-bearing hop
+whose link schema declares policy, whose handle carries a restriction, or
+whose slot carries stored or arriving policy (`link-write`; a bare pointer is
+recorded as a policy input without forcing relevance, and the flow-label probe
+marks the transaction when the attempt read labeled data); `schema-ifc.ts` on
+a link crossing an `ifc`-bearing hop
 (`schema-ifc-hop`); `cfc/external-ingest.ts` on external ingest; and, inside
 `extended-storage-transaction.ts`, the unprivileged writes to label metadata
 and its siblings, label-metadata and external-content observations, runtime
@@ -184,6 +188,47 @@ class-less confidentiality of every entry resolving at the slot, wildcard
 templates included, and the render path reads them through
 `cfcLabelViewForResolvedTarget` in `packages/html/src/worker/reconciler.ts`.
 
+**What a link write persists.** `linkSlotLabel` in `cfc/prepare.ts` persists
+at the receiving slot the reference's own label as §8.2.3 and §8.12.8 state
+it: the link schema's declarations, the restriction the written handle
+carries at its root, and, where flow labels persist, the creating attempt's
+flow join, stamped at the slot as a pointer-class `structure` entry beside
+the link entry, or carried to the slot by the `*` template of a container the
+transaction stamps as a whole. No evidence atom is minted for the reference:
+§15.4 retires `LinkReference`. The atom stays non-authorable, and one in a
+label stored before the retirement stays what it was, provenance that
+endorses nothing. A writer's stamp at a slot describes the reference the
+committed document holds there in an envelope that says so, with
+`stampPlacement: "committed"`: the runtime re-derives an attempt's labels
+against the committed placement (§8.10.2.2,
+`SpaceReplica.#commitReadActivities`), and writes the member when the
+envelope's stamps at reference slots were all placed that way. A stamp at a
+reference slot of an envelope that does not say it is not an input witness
+(§18.7, `slotStampPlacementUnknown`). The member is beside the ones the
+envelope's version defines, so a reader that predates it reads the envelope
+all the same. Nothing of the source's labels is copied to the slot,
+and the write takes no dependency on the source's envelope. A write floor on
+the slot, including a floor declared under a wildcard on every element of a
+list, resolves the source's current evidence through `linkedSourceEvidence`,
+as §8.2.6 requires, and persists none of it. A stamp the writer's schema mints
+at the slot's path credits no reference written there, since the store keeps
+no stamp at a position holding a reference; a stamp at a container the write
+persists covers the references beneath it. In that evidence the source's
+stored integrity stands as stored, and only the link schema's integrity and
+a schema the transaction writes the source under are gated against
+runtime-minted atoms. A refusal the floor reaches from documents the
+transaction holds is terminal, and the refused run then depends on what the
+floor read there, the source's envelope among it, so a writer runs again when
+that evidence changes. A handle's carried view is the reference restrictions
+of the slots its resolution left (`cfcAcquisitionViewForDereferenceTraces`
+in `cfc/label-view-state.ts`, `referenceRestrictionsOf` for the schema
+traversal's crossings), confidentiality alone, and nothing of the document
+it names, whose labels are read from that document when the handle is
+followed; the resolution reads those labels all the same, so that a
+subscription depends on them. The reading attempt's own join reaches a
+written reference through the slot stamp of the writing transaction rather
+than through the handle.
+
 **This runtime does not claim the precise reference profile.** No labs
 document claims it, and the following is not established:
 
@@ -225,6 +270,11 @@ statement.
   empty: an under-claim of integrity, the fail-safe direction, stated in
   [`cfc-transformed-by-input-witnesses.md`](cfc-transformed-by-input-witnesses.md)
   under "What fails closed".
+- A schema declaration carrying `TransformedBy` is admitted as declared,
+  where §15.4 requires the runtime to refuse or strip the atom at admission.
+  The input-witness reader takes no witness from it (§8.10.2.2); whether any
+  other integrity consumer reads it as a claim is not established, and if
+  one does, the declaration over-claims integrity, an under-taint.
 - The atom carries an input-witness summary in place of the pseudocode's
   `inputs` array, the conservative summary §8.9.3 permits; `SC-43` in
   [`cfc-spec-changes.md`](cfc-spec-changes.md) is the open ruling.
@@ -392,6 +442,18 @@ enforce`. [`cfc-template-population.md`](cfc-template-population.md),
 [`cfc-observation-classes.md`](cfc-observation-classes.md) and
 [`cfc-label-metadata-confidentiality.md`](cfc-label-metadata-confidentiality.md)
 are the designs.
+
+An owner release (§8.12.7 route 2c) is the one operation that lowers a
+still-existing path's existence entry. `releaseCellConfidentiality` in
+`cfc/confidentiality-release.ts` is the host operation, the transaction's
+`releaseCfcConfidentiality` in `storage/extended-storage-transaction.ts` the
+privileged write, and `planConfidentialityRelease` in
+`cfc/confidentiality-release-plan.ts` the decision. It implements the route as
+stated, its recommended refusal of a request the path would still show an
+unkept clause after included; the request is an authenticated host command
+and the record a create-only receipt
+([`cfc-persisted-declassification.md`](cfc-persisted-declassification.md)
+§3.3).
 
 **Residuals, with direction.**
 

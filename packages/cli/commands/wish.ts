@@ -160,11 +160,12 @@ re-implemented here. Use it for the cases that "cannot wish": offline profile
 caches demoting to witness/echo, agents, and scripts.
 
 PROFILE TARGETS (resolve against the IDENTITY's home space; '--space' optional):
-  #profile        The viewer's active profile object (default → MRU → first)
-  #profileName    Its live display name
-  #profileAvatar  Its avatar
-  #profileBio     Its owner-authored bio
-  #profileSpace   Its own space cell
+  #profile         The viewer's active profile object (default → MRU → first)
+  #profileName     Its live display name
+  #profileAvatar   Its avatar text
+  #profilePicture  Its picture, as image bytes
+  #profileBio      Its owner-authored bio
+  #profileSpace    Its own space cell
 
 OTHER TARGETS (space-relative; pass '--space'):
   #favorites  #journal  #learned  #mentionable  /  #pieceRegistry  …

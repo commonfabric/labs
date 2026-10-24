@@ -64,6 +64,7 @@ const SENT = {
     agentBuiltin: false,
     webViewScopedReplication: true,
     contentAddressedSchemas: false,
+    localSessionDocuments: true,
   },
   cfcEnforcementMode: "enforce-strict",
   cfcFlowLabels: "persist",
@@ -149,17 +150,19 @@ const REACH = {
     expected: space,
   },
   experimental: {
-    // Read back as a pair, so the case turns on the record arriving with its
+    // Read back the fields, so the case turns on the record arriving with its
     // contents rather than on one key of it.
     reads: (o) => ({
       agentBuiltin: o.runtime.experimental.agentBuiltin,
       webViewScopedReplication: o.runtime.experimental.webViewScopedReplication,
       contentAddressedSchemas: o.runtime.experimental.contentAddressedSchemas,
+      localSessionDocuments: o.runtime.experimental.localSessionDocuments,
     }),
     expected: {
       agentBuiltin: false,
       webViewScopedReplication: true,
       contentAddressedSchemas: false,
+      localSessionDocuments: true,
     },
   },
   cfcEnforcementMode: {

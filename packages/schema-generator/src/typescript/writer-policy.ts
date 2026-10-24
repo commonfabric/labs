@@ -12,6 +12,7 @@ import {
   cfcCarrierProperty,
   memberValueType,
 } from "./cfc-carrier.ts";
+import { isCellType } from "./cell-brand.ts";
 
 /**
  * The writer policy `metadata`, a CFC carrier's metadata type, holds, by the
@@ -138,8 +139,11 @@ export const holdsWriterPolicy = (
  * elements. Each type is read once, which is what ends the reading of a
  * recursive type that returns to a type it has read; any other reading ends
  * at `MAX_READING_DEPTH` object types deep or `MAX_TYPES_READ` types read. A
- * function's signature, a cell's methods among them, holds no value, and is
- * not read.
+ * function's signature holds no value, and is not read. Nor is a cell, a
+ * stream or another reactive reference: it holds a link to a document of its
+ * own, and a policy inside the type it links to is that document's. A policy
+ * on the link itself, a carrier around the reference, is read as any
+ * intersection member's is.
  */
 export const readWriterPolicy = (
   type: ts.Type,
@@ -169,6 +173,7 @@ const readWithin = (
   }
   if ((type.flags & ts.TypeFlags.Object) === 0) return undefined;
   if (type.getCallSignatures().length > 0) return undefined;
+  if (isCellType(type, checker)) return undefined;
   if (depth >= MAX_READING_DEPTH) return "unread";
   const within = (inner: ts.Type) =>
     readWithin(inner, checker, seen, depth + 1);

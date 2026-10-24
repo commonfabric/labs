@@ -44,8 +44,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     setup.loom.viewerState.set({ selectedPanel: panel })
   );
   const stage = action(() => clickButton(setup.loom[UI], "Stage all"));
-  // Labeled, as a real profile is: the runtime links only a document whose
-  // label it holds into the write-protected roster.
+  // Labeled, as a real profile is.
   const profile = Writable.of<TestProfile>({
     name: "Alice",
   });
@@ -110,8 +109,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const select = action(() =>
     setup.loom.viewerState.set({ selectedPanel: panel })
   );
-  // Labeled, as a real profile is: the runtime links only a document whose
-  // label it holds into the write-protected roster.
+  // Labeled, as a real profile is.
   const profile = Writable.of<TestProfile>({
     name: "Bob",
   });

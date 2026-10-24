@@ -163,6 +163,19 @@ minting a second one — unless a run is already minting for you, which it
 takes up, because the key that run delivers is the one replacing what is
 installed.
 
+The key file and the delivery identity live in `~/.config/commonfabric/`
+(or `$XDG_CONFIG_HOME/commonfabric/` when that variable is set). A
+workstation that holds them in the
+`~/.config/common-fabric/` directory is moved by whichever key tool
+command runs next there. The files go to the new directory, the profile
+line this tool wrote, and every harness entry naming the old path, are
+rewritten to name it,
+and the old directory is removed once it is empty. A shell started
+before the move still names the old path, and the uploader follows that
+path to the key's new place. A file that already exists in the new
+directory is kept, and its counterpart in the old directory is reported
+and left in place until `uninstall` removes both.
+
 Starting the workflow takes write access, so for someone without commit
 access a team member starts it for them. The person signs in with `gh auth login`
 (setup needs a GitHub login before it does anything else), runs `deno
@@ -189,7 +202,7 @@ deno task test-records-key collect
 The key travels sealed. The delivery identity is an X25519 key pair whose
 public half is the `cfr1...` recipient string the tool prints and the
 workflow takes as its input; the private half stays in
-`~/.config/common-fabric/test-records-identity.json` and never leaves the
+`~/.config/commonfabric/test-records-identity.json` and never leaves the
 workstation. The workflow seals the minted key to that recipient —
 ephemeral-sender X25519, HKDF-SHA256, AES-256-GCM, with both public keys
 bound into the derivation — and publishes the box as a workflow artifact
@@ -372,8 +385,10 @@ everything stored was authored under the write-access group's trust —
 `ci.fork` marks a team member's fork run — so the only distinction left
 for a decision consumer is code provenance, not author trust:
 pull-request runs execute unmerged code, and failure-rate or duration
-baselines come from `ci.event` `"push"` runs, whose code the tree itself
-carries. Both fields are stamped from the trusted event payload. A fork
+baselines come from runs of the head of `main` — `ci.event` `"push"`,
+`"schedule"` or `"workflow_dispatch"` — whose code the tree itself
+carries. `isMainRun` in `@commonfabric/test-support/records` is that
+rule. Both fields are stamped from the trusted event payload. A fork
 run and a same-repository run of a pull request are therefore read
 alike, and what `ci.fork` keeps a run out of is a baseline rather than
 the data. It is set for a payload that did not name both repositories as
@@ -437,6 +452,14 @@ it. `recordingArguments()` from `@commonfabric/test-support/records`
 builds the preload argument and those permissions together, given the
 invocation's own flags, the spool, the repository root, and the skip
 list where there is one.
+
+The preload also listens for the `error` and `unhandledrejection` events,
+without handling them. Either event before a file's hooks and tests begin can
+mean the file's module stopped part way through loading, after registering only
+some of its tests, so the preload marks that file's names as interrupted. A lane
+then does not read them as everything the file holds. The preload registers a
+`Deno.test.beforeAll` hook of its own, which Deno runs once the module has
+settled, to know when that is.
 
 It grants the reads as one `--allow-read` list and the write as one
 `--allow-write` list, and leaves out a list for a permission the flags
@@ -528,7 +551,9 @@ driving the same function does not, since the files it hands over are that
 test's fixtures. `recordsSpooledBy` from
 `@commonfabric/test-support/records` pins both halves of that: it points
 recording at a fresh spool, runs the function, and hands back every record
-the function left there.
+the function left there. It throws instead when the function left a record
+line the record parser refuses, since every reader of the store drops that
+line.
 
 A harness a test drives as a child process takes it the other way round,
 since the child reads its own environment: the test hands the child an
@@ -536,6 +561,18 @@ empty `CF_TEST_RECORDS_DIR`, which is recording off. `tasks/integration.ts`
 does that for the `cf` children whose files it times itself, and
 `packages/deno-web-test/test/utils.ts` for the fixture projects it runs the
 browser harness over.
+
+Two narrower checks back the rule up. The pattern runner and the browser
+harness record nothing for a test file that no repository holds, which is
+what a fixture in a temporary directory is, whatever spool the run
+inherited. And the record parser every reader shares drops a record whose
+`file`, or whose pattern test name, is absolute or climbs above the
+repository root. The parser cannot tell every fixture's record from a real
+one: a run whose working directory is the fixture's own directory names its
+files without climbing at all. Neither check reaches a fixture kept inside
+the repository, such as those under `packages/cli/test/fixtures`. For those,
+the caller's decision not to record is the only thing that keeps them out of
+the store.
 
 The child inherits every variable the test's own process carries, so a
 test that starts one names each recording variable it cares about,

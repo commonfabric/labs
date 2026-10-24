@@ -31,6 +31,7 @@ import {
   type WordSearch as Puzzle,
 } from "./generator.ts";
 import { wordSearchPdf } from "./pdf.ts";
+import { byWord, cellStyle, gridStyle, WORD_LIST_STYLE } from "./view.ts";
 
 export interface WordSearchInput {
   /** Heading on screen and in the PDF. */
@@ -108,12 +109,7 @@ export const WordSearch = pattern<WordSearchInput, WordSearchOutput>(
       seed.set(Math.floor(Math.random() * 0x100000000));
     });
 
-    const gridStyle = computed(() =>
-      `display: grid; grid-template-columns: repeat(${puzzle.cols}, 1fr); ` +
-      `gap: 2px; width: min(100%, ${puzzle.cols * 2.25}rem); ` +
-      `font-family: var(--cf-theme-mono-font-family, monospace); ` +
-      `font-weight: 600; user-select: none;`
-    );
+    const grid = computed(() => gridStyle(puzzle.cols));
 
     // One entry per grid cell, row by row, with whether it is part of an
     // answer when answers are showing.
@@ -125,19 +121,12 @@ export const WordSearch = pattern<WordSearchInput, WordSearchOutput>(
       );
       return puzzle.grid.join("").split("").map((letter, i) => ({
         letter,
-        style: `aspect-ratio: 1; display: flex; align-items: center; ` +
-          `justify-content: center; border-radius: 999px; ` +
-          (answers.has(i)
-            ? "background: var(--cf-theme-color-primary); " +
-              "color: var(--cf-theme-color-primary-foreground);"
-            : "color: var(--cf-theme-color-text);"),
+        style: cellStyle({ marked: answers.has(i), waiting: false }),
       }));
     });
 
     const listed = computed(() =>
-      [...puzzle.placements]
-        .sort((a, b) => (a.word < b.word ? -1 : a.word > b.word ? 1 : 0))
-        .map((p) => p.label)
+      byWord(puzzle.placements).map((p) => p.label)
     );
     const hasSkipped = computed(() => puzzle.skipped.length > 0);
     const skippedNote = computed(() =>
@@ -177,14 +166,14 @@ export const WordSearch = pattern<WordSearchInput, WordSearchOutput>(
             </cf-hstack>
           </cf-hstack>
 
-          <div style={gridStyle}>
+          <div style={grid}>
             {cells.map((cell) => <span style={cell.style}>{cell.letter}</span>)}
           </div>
 
           {isEmpty
             ? <cf-text tone="muted">Add some words to hide.</cf-text>
             : (
-              <div style="display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; font-weight: 600; letter-spacing: 0.05em;">
+              <div style={WORD_LIST_STYLE}>
                 {listed.map((label) => <span>{label}</span>)}
               </div>
             )}

@@ -23,6 +23,7 @@ import type {
 } from "../contracts/skill.ts";
 import type { HarnessBrowserAccessLease } from "../contracts/browser-access.ts";
 import type { HarnessBrowserHost } from "../contracts/browser-host.ts";
+import type { HarnessSubagentProfile } from "../contracts/subagent.ts";
 import type { HarnessClientActionRequester } from "../client-actions/coordinator.ts";
 import type { HarnessAssignedPiece } from "../contracts/assigned-piece.ts";
 import type { HarnessDocsCorpus } from "../docs-corpus/corpus.ts";
@@ -63,6 +64,14 @@ import type {
 export interface HarnessToolContext {
   runId: string;
   cfcEnforcementMode: CfcEnforcementMode;
+
+  /**
+   * Whether the policy gate would admit a side effect on this call, decided
+   * as it decides a side-effect tool's. A tool classed as a read that can
+   * cause one only on some inputs asks this before causing it; a call made
+   * outside the prompt loop leaves it absent, which admits none.
+   */
+  sideEffectsAuthorized?: boolean;
   skillRegistry?: HarnessSkillRegistry;
   skillActivations?: HarnessSkillActivations;
   allowSkillScripts?: boolean;
@@ -386,6 +395,9 @@ export interface HarnessToolRun {
 
   /** Whether a browser host carries out the run's browser actions. */
   browserHost?: boolean;
+
+  /** The subagent profiles the run may delegate to. */
+  subagentProfiles?: readonly HarnessSubagentProfile[];
 }
 
 export interface HarnessToolDefinition<Input = unknown, Output = unknown> {

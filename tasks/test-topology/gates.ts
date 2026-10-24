@@ -12,7 +12,11 @@
  * it.
  */
 
-import { collectPathsByScope, scopesReached } from "../typecheck.ts";
+import {
+  collectPathsByScope,
+  localImporters,
+  scopesReached,
+} from "../typecheck.ts";
 import * as path from "@std/path";
 import { ACCEPTED_CONTRACT_BREAKS } from "../pattern-compat-accepted-breaks.ts";
 import {
@@ -635,11 +639,13 @@ async function cfcheckSuite(root: string): Promise<Suite> {
  * break names it, and the lane given it reports it as retired or orphaned.
  * Its task takes `--only` to restrict which patterns it reads, so a lane
  * runs the ones it was given, and a run given every pattern passes no
- * `--only` at all.
+ * `--only` at all. A unit is a pattern key rather than a path, so
+ * `unitsForChange` says which patterns a change reaches.
  */
 async function patternCompatSuite(root: string): Promise<Suite> {
+  const files = await patternFiles(root);
   const paths = await collectCompatibilityPaths(
-    await patternFiles(root),
+    files,
     path.join(root, BASELINES_DIR),
     ACCEPTED_CONTRACT_BREAKS.map((accepted) => accepted.pattern),
   );
@@ -656,6 +662,7 @@ async function patternCompatSuite(root: string): Promise<Suite> {
     // Each pattern's verdict is one identity, and `--only` selects whole
     // patterns.
     whole: units,
+    unitsForChange: patternsReached(root, files, new Set(units)),
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
       if (record.test.n === name) return { level: "suite" };
@@ -689,6 +696,63 @@ async function patternCompatSuite(root: string): Promise<Suite> {
         cwd: context.root,
       }]);
     },
+  };
+}
+
+/** The list of contract breaks the compatibility gate forgives. */
+const ACCEPTED_BREAKS_FILE = "tasks/pattern-compat-accepted-breaks.ts";
+
+/**
+ * Helper for `patternCompatSuite()`, which names the patterns among `units` a
+ * change reaches: one whose source changed, one importing a changed module of
+ * a pattern tree directly or through other such modules, and one whose
+ * recorded contracts changed. A change to the list of accepted breaks reaches
+ * every pattern: removing an entry changes the verdict of a pattern the list
+ * no longer names, and what the list named before is not visible here. `files`
+ * are the pattern sources the tree holds, which the import graph is read from
+ * on the first change that needs it.
+ *
+ * Imports are followed only within the pattern trees. A contract is also
+ * built from what lies outside them, the schema generator and the API's
+ * types, but a change there reaches every pattern, which is the case
+ * `Suite.unitsForChange` leaves to a lane on what each unit is worth.
+ */
+function patternsReached(
+  root: string,
+  files: readonly string[],
+  units: ReadonlySet<string>,
+): (changed: ReadonlySet<string>) => string[] {
+  const inTrees = (file: string) =>
+    PATTERN_TREES.some((tree) => file.startsWith(`${tree.directory}/`));
+  let importers: Map<string, string[]> | undefined;
+  return (changed) => {
+    const reached = new Set<string>();
+    const pending: string[] = [];
+    for (const at of changed) {
+      if (at === ACCEPTED_BREAKS_FILE) {
+        return [...units].sort();
+      } else if (at.startsWith(`${BASELINES_DIR}/`)) {
+        // A baseline is `<key>/<label>.json` under the baselines directory.
+        const rest = at.slice(BASELINES_DIR.length + 1);
+        const key = rest.slice(0, rest.lastIndexOf("/"));
+        if (units.has(key)) reached.add(key);
+      } else if (inTrees(at)) {
+        pending.push(at);
+      }
+    }
+    if (pending.length > 0) importers ??= localImporters(root, files);
+    const seen = new Set<string>();
+    while (pending.length > 0) {
+      const at = pending.pop()!;
+      if (seen.has(at)) continue;
+      seen.add(at);
+      const key = patternKey(at);
+      if (units.has(key)) reached.add(key);
+      for (const importer of importers!.get(at) ?? []) {
+        if (inTrees(importer)) pending.push(importer);
+      }
+    }
+    return [...reached].sort();
   };
 }
 

@@ -1,17 +1,19 @@
 /**
  * Writing in a FabriChat room joins it, which makes it one of the writer's
- * chats. Alice, whose manager lists the group room, sends a message and reacts
- * to it, and asks her manager nothing. Bob reached the room by its link, so his
+ * chats. Each viewer's catalog is confidential, so room writes ask the
+ * manager to join through a separate event. Alice's listed room stays saved
+ * without a new manager request. Bob reached the room by its link, so his
  * manager doesn't list it: his first message tells his manager he joined the
- * room, which lists it and adds him to its roster, and a later one asks
- * nothing more. Once he forgets the room, a reaction lists it again, and so,
- * once he forgets it again, does a message.
+ * room, which lists it and adds him to its roster, and a later join leaves
+ * its request history unchanged. Once he forgets the room, a reaction lists
+ * it again, and so, once he forgets it again, does a message.
  */
 import {
   type AddIntegrity,
   assert,
   type Cell,
   computed,
+  type Confidential,
   equals,
   handler,
   multiUserTest,
@@ -31,15 +33,10 @@ import {
 import { FabriChatManagerCore, type ManagerStreamEvent } from "./manager.tsx";
 import { FabriChatMessageRow } from "./message-row.tsx";
 import {
-  type ActivityCounters,
   type ComposerState,
   type JoinRoomRequest,
   type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
   type RoomStreamEvent,
-  type SentActivity,
-  type UsedTime,
 } from "./room-records.tsx";
 import {
   type ChatRoomOutput,
@@ -63,6 +60,12 @@ type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
 type RowArg = Parameters<typeof FabriChatMessageRow>[0];
 type ManagerArg = Parameters<typeof FabriChatManagerCore>[0];
 
+/** The viewer's catalog, whose confidentiality room writes must preserve. */
+type PrivateCatalog = Confidential<
+  SharedSpaceCatalogStorage,
+  readonly ["fabrichat-private-catalog"]
+>;
+
 // A stand-in for a person's `#profile`, labeled, as a Fabric profile is,
 // because a room's participants link only a document that carries a label.
 type TestProfile = AddIntegrity<
@@ -78,11 +81,6 @@ const typed = (text: string) => ({ type: "click", target: { value: text } });
 /** A room's records, which every viewer's room over them shares. */
 interface Setup {
   messages: Writable<MessagesValue>;
-  reactionLists: Writable<ReactionList[]>;
-  requests: Writable<RequestMemo[]>;
-  usedTimes: Writable<UsedTime[]>;
-  activity: Writable<SentActivity[]>;
-  counters: Writable<ActivityCounters[]>;
 
   /** Those who joined the room. */
   roster: Writable<ParticipantRoster>;
@@ -90,11 +88,6 @@ interface Setup {
 
 export const setup = pattern(() => ({
   messages: Writable.of<MessagesValue>([] as MessagesValue),
-  reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
-  requests: Writable.of<RequestMemo[]>([]),
-  usedTimes: Writable.of<UsedTime[]>([]),
-  activity: Writable.of<SentActivity[]>([]),
-  counters: Writable.of<ActivityCounters[]>([]),
   roster: Writable.of<ParticipantRoster>({}),
 }));
 
@@ -203,7 +196,7 @@ interface ViewerOutput {
  */
 const Viewer = pattern<ViewerInput, ViewerOutput>((input) => {
   const { setup, profile } = input;
-  const catalog = Writable.of<SharedSpaceCatalogStorage>({
+  const catalog = Writable.of<PrivateCatalog>({
     entries: {},
     offers: {},
   });
@@ -222,11 +215,6 @@ const Viewer = pattern<ViewerInput, ViewerOutput>((input) => {
     myProfile: profile,
     about: { kind: "group" as const, title: "Team" },
     messages: setup.messages,
-    reactionLists: setup.reactionLists,
-    requests: setup.requests,
-    usedTimes: setup.usedTimes,
-    activity: setup.activity,
-    counters: setup.counters,
     roster: setup.roster,
     self,
     manager: {
@@ -234,7 +222,6 @@ const Viewer = pattern<ViewerInput, ViewerOutput>((input) => {
       requests: manager.requests,
       people: manager.people,
       joinRoom: counted,
-      sharedSpaceCatalog: manager.sharedSpaceCatalog,
     } as RoomManager,
   } as RoomArg);
   const first = FabriChatMessageRow({
@@ -243,15 +230,13 @@ const Viewer = pattern<ViewerInput, ViewerOutput>((input) => {
     inThread: false,
     kind: "group" as const,
     composer: Writable.of<ComposerState>({}),
+    // Stand-ins for what the room derives; a row's streams read none of it.
+    places: {},
+    cannotWrite: false,
+    isOwner: false,
     messages: setup.messages,
-    reactionLists: setup.reactionLists,
-    requests: setup.requests,
-    usedTimes: setup.usedTimes,
-    activity: setup.activity,
-    counters: setup.counters,
     canJoin: true,
-    joinRoom: counted,
-    catalog: manager.sharedSpaceCatalog,
+    manager: { joinRoom: counted },
     self,
   } as RowArg);
 
@@ -296,13 +281,13 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
         event: { emoji: "🎉" },
         trustedUi: reactGesture,
       },
-      // The message and the reaction landed, and asked her manager nothing.
+      // Both writes landed; their joins left the listed room unchanged.
       {
         assertion: assert(() =>
           setup.messages.get().length === 1 &&
           (setup.messages.key(0).get()?.reactions?.get() ?? []).length === 1 &&
           viewer.requestCount === 0 &&
-          viewer.joinCount === 0 &&
+          viewer.joinCount === 2 &&
           viewer.entryState === "saved"
         ),
       },
@@ -338,7 +323,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           )
         ),
       },
-      // Once it is listed, writing asks nothing more of his manager.
+      // A later join leaves the listed room and its request history unchanged.
       {
         action: viewer.sendMessage,
         event: typed("Still here"),
@@ -348,7 +333,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         assertion: assert(() =>
           setup.messages.get().length === 3 &&
           viewer.requestCount === 1 &&
-          viewer.joinCount === 1
+          viewer.joinCount === 2
         ),
       },
       // A reaction lists a room he forgot again.

@@ -430,8 +430,10 @@ const withoutUndefinedLabelMembers = (label: IFCLabel): IFCLabel => {
  * canonical, `undefined` label members dropped, and `version` fixed at 1 —
  * the stored spelling is not part of what two envelopes are compared on,
  * so a version-1 and a version-2 envelope holding the same labels are
- * equal here. The document-rooted entries take the same form, and an empty
- * set of them is the same as none.
+ * equal here. `stampPlacement` is left out on the same ground: it says how
+ * the envelope was written, and two envelopes holding the same labels are
+ * equal whichever says it. The document-rooted entries take the same form,
+ * and an empty set of them is the same as none.
  */
 export const canonicalizeCfcMetadata = (
   metadata: CfcMetadata,

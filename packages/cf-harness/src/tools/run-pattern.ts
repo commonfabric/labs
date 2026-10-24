@@ -294,7 +294,7 @@ export const isRunPatternToolSuccessOutput = (
 /** The module every Common Fabric pattern imports the runtime from. */
 export const RUNTIME_MODULE_SPECIFIER = "commonfabric";
 
-/** The import line a pattern opens with, as the tool description states it. */
+/** The import line a pattern opens with, as the authoring guidance states it. */
 export const RUNTIME_MODULE_IMPORT_LINE =
   `import { Default, NAME, pattern, UI } from "${RUNTIME_MODULE_SPECIFIER}";`;
 
@@ -350,7 +350,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
   toolId: "run_pattern",
   title: "Run Pattern",
   description:
-    `Compile and run a Common Fabric pattern in the configured space, returning a reference to its live result cell. Give it either your own sourceText or the patternId of a pattern search_patterns found. Import runtime APIs from "${RUNTIME_MODULE_SPECIFIER}" and published components from "cf:pattern:<patternId>". A runtime import has the form ${RUNTIME_MODULE_IMPORT_LINE}; no package named after the product resolves. The run's confidentiality ceiling bounds cell reads. Shared db.query results retain complete labeled row sets and withhold the array, including its row count, when the ceiling does not admit every row. Declare query results per session (PerSession<> on the result type, or the query's { scope: "session" } option) to filter rows under the runtime's ceiling at the query boundary. Bound every query's rows with a LIMIT — a few hundred is a sensible ceiling for a view — because every result row is materialized as its own document in the space, so an unbounded query over a large store writes a document per row it returns, and a re-run writes again only the rows that changed, except that a labeled result keys its rows on position and so also rewrites the rows a change displaced, and re-keys every row when the query's projection or the handle's tables change; an aggregate returning one row per group — count(*), sum(), a GROUP BY — is bounded by its own shape and needs no LIMIT. A pattern composing another passes on what the composed one reports: expose its error branch and its row count under your own result and render them, or the run answers over figures derived from a read that failed, and the result carries an outputConcerns entry naming the output you did not read. A query over a served store may still be pending when this call answers. Pending counts and rows are placeholders, not data. Expose pending along with the error branch and counts. The host returns pending and hasError from the captured declared top-level outputs when the release fit admits them. Reread the held resultRef if it is pending; do not author a replacement page to wait for data. If a settled filtered result is empty, compare it with a count without the uncertain predicate and present both counts, naming the filter; an empty subset does not mean the source is empty. The piece stays out of the space's piece list; assign_slug names and lists it when it deserves a public address.`,
+    `Compile and run a Common Fabric pattern in the configured space, given source that imports its runtime APIs from "${RUNTIME_MODULE_SPECIFIER}" or a published patternId; returns a reference to its live result cell and, when released, the values resultSchema selects.`,
   effectClass: "side-effect",
   inputSchema: RUN_PATTERN_INPUT_SCHEMA,
   outputSchema: {

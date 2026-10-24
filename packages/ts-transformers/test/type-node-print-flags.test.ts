@@ -9,14 +9,14 @@
 
 import { expect } from "@std/expect";
 import { walk } from "@std/fs";
-import { relative } from "@std/path";
+import { fromFileUrl, relative } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { TYPE_NODE_FLAGS } from "../src/ast/mod.ts";
 import { DEFAULT_TYPE_NODE_FLAGS } from "../src/ast/type-building.ts";
 
-const SRC_ROOT = new URL("../src/", import.meta.url);
+const SRC_ROOT = fromFileUrl(new URL("../src/", import.meta.url));
 
 /** The flag sets the source shares, by the name a call passes one under. */
 const SHARED_FLAG_SETS: Record<string, ts.NodeBuilderFlags> = {
@@ -60,7 +60,7 @@ async function rawPrints(): Promise<
           node.getStart(file),
         );
         prints.push({
-          location: `${relative(SRC_ROOT.pathname, entry.path)}:${line + 1}`,
+          location: `${relative(SRC_ROOT, entry.path)}:${line + 1}`,
           allowsEmptyTuple: flags !== undefined && namesAllowing(flags),
         });
       }

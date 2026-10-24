@@ -26,8 +26,10 @@ import {
   BYTES,
   groupKey,
   JSON_PASS_THROUGH_OMNIBUSES,
+  LINKED_INPUTS,
   OBJECTS,
   OMNIBUSES,
+  PLAIN_LINKED_INPUTS,
   REALM_PASS_THROUGH_OMNIBUSES,
   SINGLES,
   SPARSE,
@@ -58,6 +60,12 @@ const JSON_PASS_THROUGH_JSON = JSON_PASS_THROUGH_OMNIBUSES.map(([n, v]) =>
   [n, jsonFromFabricValue(v)] as const
 );
 const REALM_PASS_THROUGH_JSON = REALM_PASS_THROUGH_OMNIBUSES.map(([n, v]) =>
+  [n, jsonFromFabricValue(v)] as const
+);
+const LINKED_INPUTS_JSON = LINKED_INPUTS.map(([n, v]) =>
+  [n, jsonFromFabricValue(v)] as const
+);
+const PLAIN_LINKED_INPUTS_JSON = PLAIN_LINKED_INPUTS.map(([n, v]) =>
   [n, jsonFromFabricValue(v)] as const
 );
 
@@ -279,4 +287,46 @@ for (const [leaves, json] of REALM_PASS_THROUGH_JSON) {
       fabricFromJsonValue(json);
     },
   });
+}
+
+// Inputs binding links that carry their schemas inline, by the number of
+// links. Each link is a `/`-keyed object over a plain subtree of some hundreds
+// of values, so the encode side of this series is the cost of choosing an
+// escape for a subtree that size and writing it out.
+//
+// The `plain-links` series is its control: the same trees with each link under
+// a key the format does not reserve, so that nothing in them is escaped. A
+// `links` row and the `plain-links` row of the same size differ by what the
+// escaping costs, and by nothing else.
+
+const LINK_SERIES: readonly (readonly [
+  string,
+  readonly (readonly [number, FabricValue])[],
+  readonly (readonly [number, string])[],
+])[] = [
+  ["links", LINKED_INPUTS, LINKED_INPUTS_JSON],
+  ["plain-links", PLAIN_LINKED_INPUTS, PLAIN_LINKED_INPUTS_JSON],
+];
+
+for (const [prefix, subjects, encodedForms] of LINK_SERIES) {
+  for (const [links, value] of subjects) {
+    Deno.bench({
+      name: `encode ${groupKey(prefix, links)}`,
+      group: groupKey(prefix, links),
+      baseline: true,
+      fn() {
+        jsonFromFabricValue(value);
+      },
+    });
+  }
+
+  for (const [links, json] of encodedForms) {
+    Deno.bench({
+      name: `decode ${groupKey(prefix, links)}`,
+      group: groupKey(prefix, links),
+      fn() {
+        fabricFromJsonValue(json);
+      },
+    });
+  }
 }

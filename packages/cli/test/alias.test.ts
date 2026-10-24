@@ -1,11 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cliName } from "../lib/cli-name.ts";
-import { cf, checkStderr, stripAnsi } from "./utils.ts";
+import { argv, cf, checkStderr, stripAnsi } from "./utils.ts";
 
 describe("CLI naming", () => {
   it("shows cf in top-level help", async () => {
-    const { code, stdout, stderr } = await cf("--help");
+    const { code, stdout, stderr } = await cf(argv`--help`);
     const help = stripAnsi(stdout.join("\n"));
 
     expect(code).toBe(0);
@@ -17,7 +17,7 @@ describe("CLI naming", () => {
   });
 
   it("shows cf in exec help examples", async () => {
-    const { code, stdout, stderr } = await cf("help exec");
+    const { code, stdout, stderr } = await cf(argv`help exec`);
     const help = stripAnsi(stdout.join("\n"));
 
     expect(code).toBe(0);

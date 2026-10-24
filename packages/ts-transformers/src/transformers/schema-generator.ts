@@ -25,6 +25,7 @@ import {
 import { createPropertyName } from "../utils/identifiers.ts";
 import { normalizeWriterIdentityFile } from "../utils/writer-identity-file.ts";
 import { compileCfcPolicyManifestsForSource } from "./cfc-policy-authoring.ts";
+import { narrowEventCapabilities } from "./contract-capabilities.ts";
 import { reportOpaqueReservedResultKeys } from "./reserved-result-keys.ts";
 
 export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
@@ -216,6 +217,17 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
           );
         }
         finalSchema = resolvePolicyOfMarkers(finalSchema, context, node);
+        // A verb's authored event takes, at each cell, the capability its
+        // handler earns there (`SchemaHint.contractCapabilities`).
+        const contractCapabilities = context.state.lookupSchemaHint(
+          schemaTypeArg,
+        )?.contractCapabilities;
+        if (contractCapabilities) {
+          finalSchema = narrowEventCapabilities(
+            finalSchema,
+            contractCapabilities,
+          );
+        }
         const emittedSchema = typeof finalSchema === "boolean"
           ? finalSchema
           : { ...(finalSchema as Record<string, unknown>), ...optionsObj };

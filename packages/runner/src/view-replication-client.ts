@@ -30,6 +30,7 @@ import type {
 } from "./storage/interface.ts";
 import { restrictToLocalReads } from "./storage/local-read-policy.ts";
 import { ViewInputBasisCache } from "./view-input-basis.ts";
+import { hasInlineCellScheme } from "./immutable-cell.ts";
 
 type ViewProducer = NonNullable<ViewPlan["producers"]>[number];
 
@@ -210,7 +211,7 @@ export class ViewReplicationClient {
 
   /** Rejects cached documents that are outside the admitted view input union. */
   permits(address: IMemorySpaceAddress): boolean {
-    if (address.id.startsWith("data:")) return true;
+    if (hasInlineCellScheme(address.id)) return true;
     const state = this.#spaces.get(address.space);
     return state?.inputs.has(entityNameKey(address)) ?? false;
   }
@@ -346,7 +347,7 @@ export class ViewReplicationClient {
       )
     ) return undefined;
     for (const value of [...basis.reads, ...basis.outputs]) {
-      if (value.id.startsWith("data:")) continue;
+      if (hasInlineCellScheme(value.id)) continue;
       if (
         state.replica.hasLocalDocumentCoverage?.(
           value.id as IMemorySpaceAddress["id"],

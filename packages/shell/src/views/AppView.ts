@@ -347,17 +347,18 @@ export class XAppView extends BaseView {
   /**
    * The answer the view is SHOWING and the reference it answers: the
    * resolution whose piece is on screen, or whose refusal is the error on
-   * screen, under the address that reached it. Undefined before the first run
-   * of the selection reports; the answer within it is undefined where a run
-   * reached nothing to show, a load that could not finish among them.
+   * screen, or whose load's failure is the error on screen, under the address
+   * that reached it. Undefined before the first run of the selection reports;
+   * the answer within it is undefined where a run reached no answer at all,
+   * as a resolution that faulted does.
    *
    * One fact, not several about one thing. What was resolved, whether it was
    * applied, which piece it reached, and which answer is newest are all read
    * off this — so there is no second slot for one of them to disagree with,
    * and a re-resolution asks one question: is this what the view is showing?
    * A no is the whole of the work to do, whether the reference moved, a
-   * member arrived, a refusal changed, or a load failed and left the view on
-   * something else.
+   * member arrived, a refusal changed, or a resolution faulted and left the
+   * view on something else.
    *
    * Written only by {@link XAppView.#markShown}, and only from the answer the
    * writer itself resolved — never from whatever is current when it finishes,
@@ -397,6 +398,16 @@ export class XAppView extends BaseView {
     undefined;
 
   /**
+   * The runtime and space this view last asked to have the user join the room
+   * shown, and the request itself, from that decision until the worker has
+   * answered. A piece shown in the same space under the same runtime asks
+   * nothing more.
+   */
+  #visitJoin:
+    | { rt: RuntimeInternals; space: DID; done: Promise<void> }
+    | undefined = undefined;
+
+  /**
    * The revision the slug watch bumps to make the selection run again, which
    * a test reads to tell a reload from a resolution that changed nothing.
    */
@@ -423,6 +434,27 @@ export class XAppView extends BaseView {
     return bringUp !== undefined && bringUp.rt === this.rt
       ? bringUp.done
       : undefined;
+  }
+
+  /**
+   * The join this view has asked for of the room it shows, under its current
+   * runtime, which resolves, never rejecting, once the worker has answered;
+   * `undefined` before a piece under that runtime is on screen.
+   */
+  get visitJoin(): Promise<void> | undefined {
+    const join = this.#visitJoin;
+    return join !== undefined && join.rt === this.rt ? join.done : undefined;
+  }
+
+  /**
+   * The work this view has started under its current runtime that the view
+   * is not settled without: the latest join of a visited room, which itself
+   * waits for Home's bring-up, or else the bring-up; `undefined` before a
+   * piece under that runtime is on screen. It is the same promise for as long
+   * as no other join is asked for.
+   */
+  get settling(): Promise<void> | undefined {
+    return this.visitJoin ?? this.homeBringUp;
   }
 
   #debuggerController = new DebuggerController(this);
@@ -567,11 +599,13 @@ export class XAppView extends BaseView {
           try {
             pattern = await rt.getPattern(space, pieceId, { scope });
           } catch (error) {
-            // Around the load alone. The run's outer catch also takes the
-            // refusal's own throw, and recording nothing there would undo
-            // the mark a refusal just made — leaving every poll to re-resolve
-            // an answer the view is already showing.
-            this.#markShown(reference, undefined, signal);
+            // Around the load alone, since the run's outer catch also takes
+            // the refusal's own throw. A load that fails leaves this answer's
+            // failure on screen, and that IS the view showing this answer:
+            // recorded as shown, a poll reaching the same answer is no news,
+            // and the failing piece is not fetched and started again on
+            // every tick. An answer that differs still reloads.
+            this.#markShown(reference, landed, signal);
             throw error;
           }
           // `landed` and not whatever is current: this run finished THIS
@@ -774,7 +808,8 @@ export class XAppView extends BaseView {
    * that same run's, for the same reason.
    *
    * Every outcome of a run is reported through here — the piece it loaded,
-   * the refusal it was given, and the load it could not finish. That is what
+   * the refusal it was given, the load it could not finish, and the
+   * resolution that faulted before it reached an answer. That is what
    * lets one comparison stand for all of them: an outcome that wrote nothing
    * would leave the answer before it standing as though it were still what
    * the view had settled on.
@@ -875,12 +910,13 @@ export class XAppView extends BaseView {
     // the reference beside it: a piece already on screen wants no reload
     // however the view came to be showing it. A difference covers every
     // reason the view could be behind — the reference moved, a member
-    // arrived, a refusal changed, a load failed and left the view on an error
-    // — because each of them is the same fact: what the view settled on is
-    // not this. That holds because every outcome of a run is recorded, a load
-    // that could not finish among them; an outcome that recorded nothing
-    // would leave the answer before it reading as settled, and the retry it
-    // needs would never be asked for.
+    // arrived, a refusal changed, a resolution faulted and left the view on an
+    // error — because each of them is the same fact: what the view settled on
+    // is not this. That holds because every outcome of a run is recorded; an
+    // outcome that recorded nothing would leave the answer before it reading
+    // as settled, and the reload it needs would never be asked for. A load
+    // that failed is recorded under the answer it was loading, so the same
+    // answer again is no news and the failure stands until the answer moves.
     const shown = this.#shownResolution?.answer;
     if (shown && slugResolutionKey(shown) === slugResolutionKey(landed)) return;
     this.#handleSlugCellUpdate(watch);
@@ -1004,6 +1040,19 @@ export class XAppView extends BaseView {
     ) {
       this.#homeBringUp = { rt, done: this.#bringUpHome(rt) };
     }
+
+    // Each space a runtime shows a piece of, in turn, is one whose room the
+    // user may have joined by visiting it. The worker decides whether it is a
+    // room, and the user's chat manager whether that changes anything.
+    const space = this.space;
+    if (
+      rt !== undefined && space !== undefined &&
+      this._patterns.status === TaskStatus.COMPLETE &&
+      this._patterns.value?.activePattern !== undefined &&
+      (rt !== this.#visitJoin?.rt || space !== this.#visitJoin.space)
+    ) {
+      this.#visitJoin = { rt, space, done: this.#joinVisitedRoom(rt, space) };
+    }
   }
 
   /**
@@ -1029,6 +1078,33 @@ export class XAppView extends BaseView {
       if (!rt.signal.aborted) {
         console.error("[AppView] Failed to bring up Home:", error);
       }
+    }
+  }
+
+  /**
+   * Helper for `updated()`, which asks `rt`'s worker to have the user join the
+   * room in `space`, a piece of which is on screen, once Home's bring-up has
+   * answered and the view has settled. The worker joins the user only to a
+   * FabriChat room they can write to, and does nothing for a user with no
+   * Home, so every space shown is asked about. Joining a room makes it one of
+   * the user's chats, and lists a forgotten one again: in this shell, visiting
+   * a room is joining it.
+   *
+   * A request the worker answers is done, whatever it decided, a refusal
+   * included. One that fails is forgotten, so that the next update showing
+   * the space asks again.
+   */
+  async #joinVisitedRoom(rt: RuntimeInternals, space: DID): Promise<void> {
+    try {
+      await this.#homeBringUp?.done;
+      await createViewSettled(() => rt.runtime())();
+      if (rt.signal.aborted) return;
+      await rt.runtime().joinVisitedRoom(space);
+    } catch (error) {
+      if (rt.signal.aborted) return;
+      console.error("[AppView] Failed to join the visited room:", error);
+      const join = this.#visitJoin;
+      if (join?.rt === rt && join.space === space) this.#visitJoin = undefined;
     }
   }
 

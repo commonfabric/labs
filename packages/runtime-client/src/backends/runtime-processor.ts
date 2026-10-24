@@ -76,6 +76,7 @@ import {
   isCell,
   isCellResult,
   isLoopbackHostname,
+  isPieceRoot,
   markDurableReadTx,
   type NormalizedFullLink,
   normalizeSpaceHost,
@@ -175,6 +176,8 @@ import {
 } from "./worker-client.ts";
 import {
   type ActionRunTraceResponse,
+  type BlobUrlRequest,
+  type BlobUrlResponse,
   BooleanResponse,
   type CellFieldsRequest,
   type CellFieldsResponse,
@@ -229,6 +232,8 @@ import {
   type IPCClientNotification,
   IPCClientRequest,
   isCellRef,
+  type JoinVisitedRoomRequest,
+  type JoinVisitedRoomResponse,
   type ListEventAttentionRequest,
   type LoggerCountsResponse,
   type LoggerMetadata,
@@ -312,6 +317,7 @@ import {
   type VDomMountRequest,
   type VDomMountResponse,
   type VDomUnmountRequest,
+  type WorkerIpcSizes,
   type WriteStackTraceResponse,
 } from "@/protocol/mod.ts";
 import type { RemoteResponse, VDomOp } from "@/protocol/types.ts";
@@ -974,9 +980,11 @@ export class RuntimeProcessor {
   #identity: Identity;
   #legacySpacesAdopted: Promise<void> | undefined;
   #privateInboxEnsured: Promise<void> | undefined;
+  #profileRootsRepaired: Promise<void> | undefined;
   #shareIntake: Promise<ShareIntake | undefined> | undefined;
   // Aborted as disposal begins, so an inbox ensure still in flight sends
-  // nothing after it, and the share intake stops.
+  // nothing after it, a profile root repair starts no commit after it, and
+  // the share intake stops.
   #disposal = new AbortController();
   #isDisposed = false;
   #disposingPromise: Promise<void> | undefined;
@@ -1084,6 +1092,12 @@ export class RuntimeProcessor {
     this.#runtime.retrySpaceAccess(space)
   );
 
+  /**
+   * What the worker's ports have carried, read from the client registry
+   * that owns them; `null` where no registry stands behind this processor.
+   */
+  readonly #ipcSizes: () => WorkerIpcSizes | null;
+
   private constructor(
     runtime: Runtime,
     cc: PiecesController,
@@ -1092,8 +1106,10 @@ export class RuntimeProcessor {
     telemetry: RuntimeTelemetry,
     securityContext: RuntimeSecurityContext,
     clients: () => Iterable<WorkerClient> = () => [ownerClient],
+    ipcSizes: () => WorkerIpcSizes | null = () => null,
   ) {
     this.#runtime = runtime;
+    this.#ipcSizes = ipcSizes;
     this.#cc = cc;
     this.#spaces.set(initSpace, cc);
     this.#identity = identity;
@@ -1146,6 +1162,7 @@ export class RuntimeProcessor {
     readonly awaitedHealth: boolean;
     legacySpacesAdopted: Promise<void> | undefined;
     privateInboxEnsured: Promise<void> | undefined;
+    profileRootsRepaired: Promise<void> | undefined;
     shareIntake: Promise<ShareIntake | undefined> | undefined;
     getSpaceCtx(space: DID): PiecesController;
   } {
@@ -1175,6 +1192,12 @@ export class RuntimeProcessor {
       },
       set privateInboxEnsured(value) {
         outerThis.#privateInboxEnsured = value;
+      },
+      get profileRootsRepaired() {
+        return outerThis.#profileRootsRepaired;
+      },
+      set profileRootsRepaired(value) {
+        outerThis.#profileRootsRepaired = value;
       },
       get shareIntake() {
         return outerThis.#shareIntake;
@@ -1497,7 +1520,8 @@ export class RuntimeProcessor {
    * Tears down everything one client owns, leaving the runtime and every other
    * client's work running. This is what a client's departure costs: its cell
    * and operation subscriptions stop, its presence memberships end, its VDOM
-   * trees unmount, and nothing else moves.
+   * trees unmount, and the documents nothing reads any longer are released
+   * (`Runtime.releaseUnreadDocuments()`).
    *
    * The runtime itself is never touched here, however the departing client
    * came to leave. Only {@link dispose} ends a runtime, and only the client
@@ -1560,6 +1584,9 @@ export class RuntimeProcessor {
       if (membership.client.id !== client.id) continue;
       void this.#endPresenceMembership(subscriptionId);
     }
+
+    // What only this client read is now read by nothing.
+    void this.#runtime.releaseUnreadDocuments();
   }
 
   #hostSelectedCell(ref: CellRef): Cell<unknown> {
@@ -1636,7 +1663,10 @@ export class RuntimeProcessor {
     const gate = this.#hostReadGate;
     let cell = getCell(this.#runtime, request.cell);
     if (request.meta !== undefined) {
-      const rootCell = getCell(this.#runtime, { ...request.cell, path: [] });
+      // The document root, which the keyed ancestor's schema does not
+      // describe.
+      const { keyedFrom: _keyedFrom, ...address } = request.cell;
+      const rootCell = getCell(this.#runtime, { ...address, path: [] });
       if (request.meta !== "argument" && request.meta !== "result") {
         // A metadata field that is not a link returns the raw data.
         return gate.readMetadata(rootCell, request.meta);
@@ -2323,16 +2353,19 @@ export class RuntimeProcessor {
       includeCfcLabel: request.includeCfcLabel,
     }, (value) => {
       // Log empty-schema subscriptions that produce CellResult proxies.
-      // These are the call sites that need real schemas added.
-      const hasSchema = hasExplicitSubscriptionSchema(request.cell.schema);
-      if (!hasSchema && isCellResult(value)) {
+      // These are the call sites that need real schemas added. The schema
+      // checked is the one the cell reads under, which for a ref keyed from
+      // an ancestor is the one the worker narrowed to.
+      if (!isCellResult(value)) return;
+      const schema = cell.getAsNormalizedFullLink().schema;
+      if (!hasExplicitSubscriptionSchema(schema)) {
         console.error(
           `[handleCellSubscribe] EMPTY SCHEMA SUBSCRIPTION producing ` +
             `CellResult proxy. Add a schema to this subscription site!\n` +
             `  cell: ${request.cell.id}\n` +
             `  path: ${JSON.stringify(request.cell.path)}\n` +
             `  space: ${request.cell.space}\n` +
-            `  schema: ${JSON.stringify(request.cell.schema)}`,
+            `  schema: ${JSON.stringify(schema)}`,
         );
       }
     }, (update) =>
@@ -2593,7 +2626,7 @@ export class RuntimeProcessor {
   ): CfcLabelViewResponse {
     // Label reads must use the runtime's stored cell identity. The request
     // schema is client-supplied view context, not trusted label provenance.
-    const { schema: _schema, ...cellRef } = request.cell;
+    const { schema: _schema, keyedFrom: _keyedFrom, ...cellRef } = request.cell;
     const cell = getCell(this.#runtime, cellRef);
     // This reads the label with `cfcLabelViewForResolvedCell()`, which reads
     // what the store holds now, following a link the path crosses part way
@@ -2793,6 +2826,25 @@ export class RuntimeProcessor {
   }
 
   /**
+   * Tells the user's chat manager that the user has joined the FabriChat room
+   * declared by the space `request` names, when it passes vetting, as
+   * `PiecesController.joinVisitedRoom()` says, and returns what was
+   * decided. A user with no Home gets nothing done and no decision: Home is
+   * never created for it, and an existing Home is brought up as any other
+   * bring-up does.
+   */
+  async handleJoinVisitedRoom(
+    request: JoinVisitedRoomRequest,
+  ): Promise<JoinVisitedRoomResponse> {
+    if (!(await this.#homeExists())) return {};
+    await this.#ensureHomePattern();
+    const decision = await this.#homeController().joinVisitedRoom(
+      request.space,
+    );
+    return { decision };
+  }
+
+  /**
    * Ensures the user's Home pattern is running and returns its result cell,
    * once the worker's housekeeping over Home has adopted the Home space
    * list's name-only entries, as `#startHomeHousekeeping()` says.
@@ -2809,11 +2861,13 @@ export class RuntimeProcessor {
    * Helper for bringing up the user's Home pattern, which the first time in
    * this worker adopts the Home space list's name-only entries (see
    * `PiecesController.adoptLegacySpaces`), and then starts Home's ensure of
-   * the user's private inbox (see `PiecesController.ensurePrivateInbox`) and
-   * the share intake over Home's inboxes (see
-   * `PiecesController.startShareIntake`) without waiting for either. A later
-   * bring-up shares the run already made, and repeats only a step that
-   * failed. `homeCC` is a controller over the identity's Home space.
+   * the user's private inbox (see `PiecesController.ensurePrivateInbox`), the
+   * repair that makes each of the user's profiles its space's root (see
+   * `PiecesController.repairProfileRoots`), and the share intake over Home's
+   * inboxes (see `PiecesController.startShareIntake`) without waiting for
+   * any of them. A later bring-up shares the run already made, and repeats
+   * only a step that failed. `homeCC` is a controller over the identity's
+   * Home space.
    *
    * Resolves once the adoption has settled, and never rejects.
    */
@@ -2839,6 +2893,17 @@ export class RuntimeProcessor {
         console.warn("[RuntimeProcessor] Ensuring the private inbox:", error);
       },
     );
+    // The repair reads each listed profile's space and writes the space cell
+    // of one whose profile is not its root, so Home opens without waiting for
+    // it. A failure is reported unless the processor has been disposed, and
+    // the next bring-up of Home in this worker starts it again.
+    this.#profileRootsRepaired ??= homeCC.repairProfileRoots(
+      this.#disposal.signal,
+    ).catch((error) => {
+      this.#profileRootsRepaired = undefined;
+      if (this.#isDisposed) return;
+      console.warn("[RuntimeProcessor] Repairing profile roots:", error);
+    });
     // The intake follows Home's inboxes until disposal aborts its signal. A
     // failure to start it is reported unless the processor has been disposed,
     // and the next bring-up of Home in this worker starts it again.
@@ -2901,15 +2966,16 @@ export class RuntimeProcessor {
   /**
    * Helper for `handleIdle()`, which waits for the housekeeping over Home that
    * `#startHomeHousekeeping()` has started in this worker: the adoption of the
-   * Home space list's name-only entries, the private inbox ensure, the start
-   * of the share intake, and the intake taking up every change it has been
-   * told of. Returns the intake, when one is running. Never rejects: each step
-   * is held as a promise that does not, and a failure of the intake's own wait
-   * is reported rather than passed on.
+   * Home space list's name-only entries, the private inbox ensure, the profile
+   * root repair, the start of the share intake, and the intake taking up every
+   * change it has been told of. Returns the intake, when one is running. Never
+   * rejects: each step is held as a promise that does not, and a failure of
+   * the intake's own wait is reported rather than passed on.
    */
   async #homeHousekeepingIdle(): Promise<ShareIntake | undefined> {
     await this.#legacySpacesAdopted;
     await this.#privateInboxEnsured;
+    await this.#profileRootsRepaired;
     const intake = await this.#shareIntake;
     await intake?.idle().catch((error) => {
       console.warn("[RuntimeProcessor] Waiting for the share intake:", error);
@@ -3065,8 +3131,8 @@ export class RuntimeProcessor {
    * someone else's space. Opening the root of this runtime's identity's own
    * Home also starts the worker's housekeeping over Home, as
    * `handleEnsureHomePatternRunning()` does: the adoption of legacy space
-   * entries, the private inbox ensure and the share intake, each once per
-   * worker. It returns without waiting for any of them.
+   * entries, the private inbox ensure, the profile root repair and the share
+   * intake, each once per worker. It returns without waiting for any of them.
    *
    * @throws The server's refusal when this runtime's identity may not read
    *   the space, whether or not a root is still held from before.
@@ -3145,7 +3211,8 @@ export class RuntimeProcessor {
    * the schema it is read under — so what this loads is what deciding the
    * address takes: the requested document, and behind a redirect the document
    * the redirect lands in, whose metadata says whether it is a piece and what
-   * result schema a cell inside it takes. Serving a slug document, the server
+   * result schema a cell inside it takes. A requested document carrying a
+   * pattern pointer is the piece itself, and its redirect is not followed. Serving a slug document, the server
    * resolves the redirect through the links on its path, which is the floor
    * for an address a redirect answers. Nothing here reads the target's value,
    * so whatever that value reaches stays cold until a caller subscribes to
@@ -3181,10 +3248,15 @@ export class RuntimeProcessor {
     // arrives, plus what the server resolves at the address itself when the
     // value stored there is a link.
     await requestedCell.sync();
-    const redirect = parseLink(
-      requestedCell.getRaw(),
-      requestedCell.getAsNormalizedFullLink(),
-    );
+    // A piece's root is the piece, even when its value is a redirect, as it is
+    // for a pattern that returns a sub-pattern's result whole. Only a
+    // document that is no piece names one.
+    const redirect = isPieceRoot(this.#runtime, requestedCell)
+      ? undefined
+      : parseLink(
+        requestedCell.getRaw(),
+        requestedCell.getAsNormalizedFullLink(),
+      );
     if (redirect?.overwrite === "redirect") {
       const target = this.#runtime.getCellFromLink({
         ...redirect,
@@ -3628,6 +3700,19 @@ export class RuntimeProcessor {
       timing,
       flags,
       cfc: this.#runtime.getCfcStats(),
+      compileCache: { ...this.#runtime.patternManager.getCompileCacheStats() },
+      sizes: {
+        ...this.#runtime.getSizes(),
+        worker: {
+          cellSubscriptions: this.#subscriptions.size,
+          operationSubscriptions: this.#operationSubscriptions.size,
+          operationSessions: this.#operationSessions.size,
+          presenceMemberships: this.#presenceMemberships.size,
+          vdomMounts: this.#vdomMounts.size,
+          spaces: this.#spaces.size,
+        },
+        ipc: this.#ipcSizes(),
+      },
     };
   }
 
@@ -3742,14 +3827,14 @@ export class RuntimeProcessor {
     if (!isDID(request.space)) {
       throw new Error("uploadBlob requires a space DID");
     }
-    const suffix = (request.suffix ?? "bin").replace(/^\./, "") || "bin";
+    // With no suffix, the upload names no blob in its path, and the store
+    // chooses the suffix itself.
+    const suffix = request.suffix?.replace(/^\./, "");
+    const blobPath = suffix ? `/upload.${encodeURIComponent(suffix)}` : "";
     // The blob belongs to the named space, so it uploads to — and its
     // returned URL resolves against — THAT space's host.
     const host = this.#runtime.hostForSpace(request.space);
-    const target = new URL(
-      `/${request.space}/blobs/upload.${encodeURIComponent(suffix)}`,
-      host,
-    );
+    const target = new URL(`/${request.space}/blobs${blobPath}`, host);
     // The envelope's decode already produced this; `request.body` is a
     // `FabricBytes` by the time it arrives, and a handler owns the values its
     // request carries per `BaseRequest`, so nothing else is reading it. The
@@ -3759,11 +3844,19 @@ export class RuntimeProcessor {
     if (!(bytes instanceof FabricBytes)) {
       throw new Error("uploadBlob requires bytes as its body");
     }
+    if (request.name !== undefined && typeof request.name !== "string") {
+      throw new Error(
+        "uploadBlob requires any name it is given to be a string",
+      );
+    }
     // Blob upload payloads must preserve FabricBytes even when the wider
-    // process is running with legacy memory JSON flags.
+    // process is running with legacy memory JSON flags. A blob with no name
+    // has no `name` key at all, since its id is the hash of exactly what is
+    // sent.
     const body = blobUploadCodec.encode({
       type: request.contentType,
       body: bytes,
+      ...(request.name === undefined ? {} : { name: request.name }),
     });
     const response = await fetch(target, {
       method: "POST",
@@ -3782,6 +3875,32 @@ export class RuntimeProcessor {
     return {
       id: result.id,
       url: resolveBlobUrl(result.url, host, request.space),
+    };
+  }
+
+  /**
+   * Returns the URL the host of the request's space serves the request's blob
+   * at: the URL an upload of it returns, without the file suffix, and with
+   * `?download` for a request to save it.
+   */
+  handleBlobUrl(request: BlobUrlRequest): BlobUrlResponse {
+    if (!isDID(request.space)) {
+      throw new Error("blobUrl requires a space DID");
+    }
+    if (typeof request.id !== "string" || request.id.length === 0) {
+      throw new Error("blobUrl requires a blob id");
+    }
+    const hash = request.id.startsWith("fid1:")
+      ? request.id.slice("fid1:".length)
+      : request.id;
+    const host = this.#runtime.hostForSpace(request.space);
+    const query = request.download === true ? "?download" : "";
+    return {
+      url: resolveBlobUrl(
+        `blobs/${encodeURIComponent(hash)}${query}`,
+        host,
+        request.space,
+      ),
     };
   }
 
@@ -3941,6 +4060,8 @@ export class RuntimeProcessor {
         return this.handleGetHomeSpaceCell(request);
       case RequestType.EnsureHomePatternRunning:
         return await this.handleEnsureHomePatternRunning(request);
+      case RequestType.JoinVisitedRoom:
+        return await this.handleJoinVisitedRoom(request);
       case RequestType.Idle:
         return await this.handleIdle();
       case RequestType.ListEventAttention:
@@ -4045,6 +4166,8 @@ export class RuntimeProcessor {
         return this.setBreakpoints(request);
       case RequestType.UploadBlob:
         return await this.handleUploadBlob(request);
+      case RequestType.BlobUrl:
+        return this.handleBlobUrl(request);
       case RequestType.VDomMount:
         return this.handleVDomMount(request, client);
       case RequestType.VDomUnmount:
@@ -4247,6 +4370,7 @@ export class RuntimeProcessor {
       identity: Identity,
       telemetry: RuntimeTelemetry,
       securityContext: RuntimeSecurityContext,
+      ipcSizes?: () => WorkerIpcSizes | null,
     ): RuntimeProcessor;
   } {
     return {
@@ -4257,6 +4381,7 @@ export class RuntimeProcessor {
         identity,
         telemetry,
         securityContext,
+        ipcSizes,
       ) =>
         new RuntimeProcessor(
           runtime,
@@ -4265,6 +4390,8 @@ export class RuntimeProcessor {
           identity,
           telemetry,
           securityContext,
+          undefined,
+          ipcSizes,
         ),
     };
   }
@@ -4280,11 +4407,13 @@ export class RuntimeProcessor {
    * requests at once, and a host the check could not reach is reported to
    * the clients connected when it answers. A caller that needs storage and
    * pieces to have converged waits on `synced()`. `clients` resolves the
-   * current authorized recipients of runtime-wide notifications.
+   * current authorized recipients of runtime-wide notifications, and
+   * `ipcSizes` what their channels have carried, for the sizes read.
    */
   static async initialize(
     data: InitializationData,
     clients: () => Iterable<WorkerClient> = () => [ownerClient],
+    ipcSizes: () => WorkerIpcSizes | null = () => null,
   ): Promise<RuntimeProcessor> {
     const apiUrlObj = new URL(data.apiUrl);
     // Memory alone moves to the memory URL. LLM requests, patterns and the
@@ -4413,6 +4542,7 @@ export class RuntimeProcessor {
       telemetry,
       securityContextFrom(data, identity.did()),
       clients,
+      ipcSizes,
     );
     processor.#health = health;
     processor.#awaitedHealth = data.awaitHealth === true;

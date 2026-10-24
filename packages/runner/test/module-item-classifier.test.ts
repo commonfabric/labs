@@ -170,4 +170,90 @@ describe("classifyModuleItems (format-agnostic security core)", () => {
       )
     ).toThrow(/Reserved wrapper binding/);
   });
+
+  describe("the `new` keyword at module scope", () => {
+    // A top-level construction is mutable data, so the classifier refuses it
+    // unless it is wrapped. Trivia stripping runs `new Map()` together into
+    // `newMap()`, which is why these cases put the keyword next to each kind
+    // of character that can follow it, and an identifier that merely begins
+    // with `new` next to them.
+
+    function classify(body: string) {
+      const { source, statements } = bodyStatements(body);
+      return () =>
+        classifyModuleItems(
+          source,
+          "<m>",
+          statements,
+          new Map<string, BindingInfo>(),
+          EMPTY_GUARD_OPTIONS,
+        );
+    }
+
+    it("accepts an exported function whose name begins with `new`", () => {
+      expect(
+        classify(
+          `function () { function newThing(n) { return n + 1; } exports.newThing = newThing; }`,
+        ),
+      ).not.toThrow();
+    });
+
+    it("accepts a reference to a const function whose name is `new` plus a constructor name", () => {
+      expect(
+        classify(
+          `function () { const newMap = (n) => n; exports.newMap = newMap; }`,
+        ),
+      ).not.toThrow();
+    });
+
+    it("throws for a call to a local function whose name begins with `new`", () => {
+      expect(
+        classify(
+          `function () { function newThing() { return {}; } exports.thing = newThing(); }`,
+        ),
+      ).toThrow(/Top-level call results must be wrapped/);
+    });
+
+    it("throws for an unknown identifier whose name begins with `new`", () => {
+      expect(
+        classify(`function () { exports.thing = newThing; }`),
+      ).toThrow(/Unknown top-level identifier 'newThing'/);
+    });
+
+    it("throws for `new Map()` bound at module scope", () => {
+      expect(
+        classify(`function () { const map = new Map(); exports.map = map; }`),
+      ).toThrow(/Mutable top-level data must be wrapped/);
+    });
+
+    it("throws for `new` preceded by a comment", () => {
+      expect(
+        classify(`function () { exports.map = /* c */ new Map(); }`),
+      ).toThrow(/Mutable top-level data must be wrapped/);
+    });
+
+    it("throws for `new` followed by a comment", () => {
+      expect(
+        classify(`function () { exports.map = new/* c */Map(); }`),
+      ).toThrow(/Mutable top-level data must be wrapped/);
+    });
+
+    it("throws for `new` followed by a parenthesized constructor", () => {
+      expect(
+        classify(`function () { exports.map = new(Map)(); }`),
+      ).toThrow(/Mutable top-level data must be wrapped/);
+    });
+
+    it("throws for `new` inside wrapping parentheses", () => {
+      expect(
+        classify(`function () { exports.map = (new Map); }`),
+      ).toThrow(/Mutable top-level data must be wrapped/);
+    });
+
+    it("throws for `new.target`", () => {
+      expect(
+        classify(`function () { exports.target = new.target; }`),
+      ).toThrow(/Mutable top-level data must be wrapped/);
+    });
+  });
 });

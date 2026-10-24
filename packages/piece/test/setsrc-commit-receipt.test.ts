@@ -10,6 +10,10 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import {
+  commitRefusal,
+  interceptPieceStartCommit,
+} from "../../runner/test/support/intercept-piece-start-commit.ts";
 import { watchMetaReads } from "../../runner/test/support/watch-meta-reads.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
@@ -199,6 +203,48 @@ describe("setsrc commit receipt", () => {
       pieces.syncPattern = originalSyncPattern;
       runtime.runSyncedWithCommit = originalRunSyncedWithCommit;
       unwatch();
+      console.warn = originalWarn;
+    }
+  });
+
+  it("returns a failed refresh when storage refuses the started piece's setup commit", async () => {
+    // A runtime that has not started the piece, which is the one
+    // `cf piece setsrc` runs in, starts it once the update commits, and that
+    // start commits the graph's setup writes on a transaction of its own.
+    // Storage refusing it leaves the source update durable and the piece
+    // running nowhere, so the receipt says the refresh failed, and why.
+
+    const piece = await pieces.create(markedProgram("v1"), {
+      input: {},
+      start: false,
+    });
+    const refusal = commitRefusal("injected refusal of the start commit");
+    const intercepted = interceptPieceStartCommit(runtime, { refusal });
+    const failures: string[] = [];
+    runtime.pieceStartCommitFailureObserver = ({ actionId }) => {
+      failures.push(actionId);
+    };
+    const originalWarn = console.warn;
+    console.warn = () => {};
+
+    try {
+      const receipt = await piece.setPattern(markedProgram("v2"));
+      await runtime.runner.idlePieceInstantiationSettlements();
+
+      // The refused transaction is the start's own, as the runner reports it.
+      expect(failures).toEqual([
+        `piece-instantiate/${piece.getCell().sourceURI}`,
+      ]);
+      expect(receipt.status).toBe("committed");
+      expect(getPatternIdentityRef(piece.getCell())).toEqual(receipt.ref);
+      expect(receipt.refresh).toEqual({
+        status: "failed",
+        warning: `piece-start commit ${failures[0]} failed, so the started ` +
+          `graph's setup writes did not land: ${refusal.message}`,
+      });
+    } finally {
+      intercepted.restore();
+      runtime.pieceStartCommitFailureObserver = undefined;
       console.warn = originalWarn;
     }
   });

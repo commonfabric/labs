@@ -46,7 +46,9 @@ export const MAX_EVENT_BACKLOG_PER_STREAM = 256;
  * the NEXT INPUT (the creation commit arriving) or, absent input, from a
  * real-time backstop tick — never synchronously, so the budget cannot be
  * consumed back-to-back inside one quiet moment and drop an event whose
- * creation input is milliseconds away.
+ * creation input is milliseconds away. A served deferral reached while an
+ * earlier arrival in the same space is still pending does not count toward
+ * it, since that arrival's consequence may be the creation.
  */
 export const EVENT_DEFERRAL_DROP_THRESHOLD = 8;
 

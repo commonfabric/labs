@@ -1,7 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
@@ -19,8 +18,11 @@ const space: MemorySpace = signer.did();
 
 const LABEL = "personal-space";
 
-// A labeled element: confidential as a whole, and more so at `secret`, so a
-// link to it mints an entry at the slot and one below it.
+// A labeled element: confidential as a whole, and more so at `secret`. A
+// handle to it under this schema writes a link whose schema declares the
+// label, so the link's slot carries it as the reference's own restriction;
+// the `secret` label stays on the element, where a read through the link
+// finds it.
 const labeledSchema: JSONSchema = {
   type: "object",
   properties: {
@@ -80,7 +82,7 @@ const setUp = async (flow: CfcFlowLabelsMode): Promise<Fixture> => {
   return {
     runtime,
     storageManager,
-    a: runtime.getCell(space, "a"),
+    a: runtime.getCell(space, "a", labeledSchema),
     b: runtime.getCell(space, "b"),
     c: runtime.getCell(space, "c"),
     d: runtime.getCell(space, "d"),
@@ -169,22 +171,14 @@ const idOf = (runtime: Runtime, name: string): string =>
 
 /**
  * The labels document `name` stores where the labeled element `a` is linked
- * at `path`: `a`'s label and the reference from that position to `a` at the
- * slot, and `a`'s `secret` label below it.
+ * at `path`: the link's own label at the slot, which its schema declares.
+ * Nothing below the slot: `a`'s `secret` label is `a`'s, read where `a` is.
  */
 const labelsOfAAt = (
-  runtime: Runtime,
+  _runtime: Runtime,
   path: readonly string[],
-  name = "list",
-): string[] =>
-  [
-    labelString(path, [LABEL], [{
-      type: CFC_ATOM_TYPE.LinkReference,
-      source: { space, id: idOf(runtime, "a"), path: [] },
-      target: { space, id: idOf(runtime, name), path },
-    }]),
-    labelString([...path, "secret"], ["secret-note"]),
-  ].sort();
+  _name = "list",
+): string[] => [labelString(path, [LABEL])];
 
 describe("cfc-list-link-labels", () => {
   for (const flow of ["persist", "off"] as const) {
@@ -346,9 +340,9 @@ describe("cfc-list-link-labels", () => {
         }
       });
 
-      it("still refuses an unlabeled element at a position the document declares a label for", async () => {
-        // The declared entry sits at the slot itself, where the link-origin
-        // entries a link write disregards also sit.
+      it("keeps a position's declared label when an unlabeled element replaces a labeled one there", async () => {
+        // The declared entry labels the position, whatever reference it
+        // holds; the link entry labels the reference, and leaves with it.
         const fixture = await setUp(flow);
         try {
           const { runtime, a, b } = fixture;
@@ -357,13 +351,24 @@ describe("cfc-list-link-labels", () => {
               .set({ x: a });
           });
           expect(declared.error).toBeUndefined();
+          expect(storedLabels(runtime, "declared-holder")).toEqual([
+            labelString(["x"], [LABEL]),
+            ...labelsOfAAt(runtime, ["x"], "declared-holder"),
+          ].sort());
 
-          const refused = await commit(runtime, (tx) => {
+          const replaced = await commit(runtime, (tx) => {
             runtime.getCell(space, "declared-holder", undefined, tx).key("x")
               .set(b);
           });
-          expect(refused.error?.message).toContain(
-            "missing link source metadata",
+          expect(replaced.error).toBeUndefined();
+          // Where flow labels persist, the replacing attempt read the
+          // position it overwrote, and that observation is stamped at the
+          // slot as the new reference's own restriction, beside the
+          // declaration and spelled the same.
+          expect(storedLabels(runtime, "declared-holder")).toEqual(
+            flow === "persist"
+              ? [labelString(["x"], [LABEL]), labelString(["x"], [LABEL])]
+              : [labelString(["x"], [LABEL])],
           );
         } finally {
           await tearDown(fixture);
@@ -397,7 +402,7 @@ describe("cfc-list-link-labels", () => {
         }
       });
 
-      it("still refuses an unlabeled element in a list that declares a label", async () => {
+      it("keeps a list's declared element label when an unlabeled element joins it", async () => {
         const fixture = await setUp(flow);
         try {
           const { runtime, a, b } = fixture;
@@ -406,24 +411,23 @@ describe("cfc-list-link-labels", () => {
               .error,
           ).toBeUndefined();
 
-          const refused = await setList(
-            runtime,
-            [b, a],
-            "declared",
-            declaredListSchema,
-          );
-          expect(refused.error?.message).toContain(
-            "missing link source metadata",
-          );
+          expect(
+            (await setList(runtime, [b, a], "declared", declaredListSchema))
+              .error,
+          ).toBeUndefined();
+          expect(storedLabels(runtime, "declared")).toEqual([
+            labelString(["*"], [LABEL]),
+            ...labelsOfAAt(runtime, ["1"], "declared"),
+          ].sort());
         } finally {
           await tearDown(fixture);
         }
       });
 
-      it("still refuses a link-write input naming an unlabeled source at a labeled position", async () => {
+      it("disregards a link-write input naming a source the position does not hold", async () => {
         // The input claims the position now links an unlabeled element, and
-        // nothing was written there: the position's labels stay as they are
-        // only if the claim is refused.
+        // nothing was written there: the position keeps the labels of the
+        // reference it holds.
         const fixture = await setUp(flow);
         try {
           const { runtime, a, b } = fixture;
@@ -432,7 +436,7 @@ describe("cfc-list-link-labels", () => {
           const list = runtime.getCell(space, "list")
             .getAsNormalizedFullLink();
           const source = b.getAsNormalizedFullLink();
-          const refused = await commit(runtime, (tx) => {
+          const claimed = await commit(runtime, (tx) => {
             tx.recordCfcWritePolicyInput({
               kind: "link-write",
               target: {
@@ -449,9 +453,7 @@ describe("cfc-list-link-labels", () => {
               },
             });
           });
-          expect(refused.error?.message).toContain(
-            "missing link source metadata",
-          );
+          expect(claimed.error).toBeUndefined();
           expect(storedLabels(runtime)).toEqual(labelsOfAAt(runtime, ["0"]));
         } finally {
           await tearDown(fixture);

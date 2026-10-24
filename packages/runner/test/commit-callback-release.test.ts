@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 
 describe("commit callback release", () => {
   // A settled transaction must not keep the callbacks it already dispatched.
@@ -22,7 +23,7 @@ describe("commit callback release", () => {
     // Spawned by name so the launch matches the task's `--allow-run=deno`
     // grant, which resolves the name through PATH the same way.
     const command = new Deno.Command("deno", {
-      args: ["run", "-A", "--v8-flags=--expose-gc", helper.pathname],
+      args: ["run", "-A", "--v8-flags=--expose-gc", fromFileUrl(helper)],
       stdout: "piped",
       stderr: "piped",
     });

@@ -11,7 +11,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { cf, stripAnsi } from "./utils.ts";
+import { argv, cf, stripAnsi } from "./utils.ts";
 
 function errorText(stderr: string[]): string {
   return stderr.map(stripAnsi).join("\n");
@@ -37,20 +37,20 @@ const FABRIC = {
 
 describe("an ambient space", () => {
   it("is required when neither the flag nor the variable supplies it", async () => {
-    const { code, stderr } = await cf("piece ls", { env: FABRIC });
+    const { code, stderr } = await cf(argv`piece ls`, { env: FABRIC });
     expect(code).toBe(1);
     expect(errorText(stderr)).toContain(MISSING_SPACE);
   });
 
   it("supplies the space a piece command was not given", async () => {
-    const { stderr } = await cf("piece ls", {
+    const { stderr } = await cf(argv`piece ls`, {
       env: { ...FABRIC, CF_SPACE: AMBIENT },
     });
     expect(errorText(stderr)).not.toContain(MISSING_SPACE);
   });
 
   it("supplies the space an acl command was not given", async () => {
-    const { stderr } = await cf("acl ls", {
+    const { stderr } = await cf(argv`acl ls`, {
       env: { ...FABRIC, CF_SPACE: AMBIENT },
     });
     expect(errorText(stderr)).not.toContain(MISSING_SPACE);
@@ -61,12 +61,12 @@ describe("an ambient space", () => {
     // missing one and the signal the tests above read does not exist here.
     // What it does have is the declaration, which is absent when the command
     // does not read the variable.
-    const { stdout } = await cf("wish --help");
+    const { stdout } = await cf(argv`wish --help`);
     expect(stdout.map(stripAnsi).join("\n")).toContain("CF_SPACE");
   });
 
   it("supplies the space a deps command was not given", async () => {
-    const { stderr } = await cf("deps update nonexistent.tsx", {
+    const { stderr } = await cf(argv`deps update nonexistent.tsx`, {
       env: { ...FABRIC, CF_SPACE: AMBIENT },
     });
     expect(errorText(stderr)).not.toContain(MISSING_SPACE);
@@ -75,7 +75,7 @@ describe("an ambient space", () => {
   it("is what the command targets when only the variable is set", async () => {
     // The reference names EXPLICIT, so a command targeting AMBIENT refuses and
     // names AMBIENT as the space it was pointed at.
-    const { stderr } = await cf(`get ${REF}`, {
+    const { stderr } = await cf(argv`cell get ${REF}`, {
       env: { ...FABRIC, CF_SPACE: AMBIENT },
     });
     expect(errorText(stderr)).toContain(
@@ -87,9 +87,12 @@ describe("an ambient space", () => {
     // `--url` carries its own space and refuses an explicit `--space` beside
     // it. An ambient one is not a second spelling of the target, so exporting
     // CF_SPACE for a session must not take the URL form away.
-    const { stderr } = await cf("piece ls --url http://localhost:9999/aspace", {
-      env: { ...FABRIC, CF_SPACE: AMBIENT },
-    });
+    const { stderr } = await cf(
+      argv`piece ls --url http://localhost:9999/aspace`,
+      {
+        env: { ...FABRIC, CF_SPACE: AMBIENT },
+      },
+    );
     expect(errorText(stderr)).not.toContain(
       '"--space" cannot be provided when using "--url"',
     );
@@ -97,7 +100,7 @@ describe("an ambient space", () => {
 
   it("still refuses an explicit --space beside --url", async () => {
     const { stderr } = await cf(
-      `piece ls --url http://localhost:9999/aspace --space ${EXPLICIT}`,
+      argv`piece ls --url http://localhost:9999/aspace --space ${EXPLICIT}`,
       { env: FABRIC },
     );
     expect(errorText(stderr)).toContain(
@@ -110,7 +113,7 @@ describe("an ambient space", () => {
     // Deciding provenance by comparing the value against CF_SPACE would call
     // this one ambient and let it through.
     const { stderr } = await cf(
-      `piece ls --url http://localhost:9999/aspace --space ${AMBIENT}`,
+      argv`piece ls --url http://localhost:9999/aspace --space ${AMBIENT}`,
       { env: { ...FABRIC, CF_SPACE: AMBIENT } },
     );
     expect(errorText(stderr)).toContain(
@@ -124,7 +127,7 @@ describe("an ambient space", () => {
     // the variable cannot make this fail. It is here because the variable is
     // only safe to leave set for a whole session if the flag keeps winning,
     // and nothing else states that.
-    const { stderr } = await cf(`get ${REF} --space ${EXPLICIT}`, {
+    const { stderr } = await cf(argv`cell get ${REF} --space ${EXPLICIT}`, {
       env: { ...FABRIC, CF_SPACE: AMBIENT },
     });
     expect(errorText(stderr)).not.toContain("but the command targets space");

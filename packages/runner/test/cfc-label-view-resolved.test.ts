@@ -15,10 +15,10 @@ const signer = await Identity.fromPassphrase("runner-cfc-label-view-resolved");
 /**
  * `cfcLabelViewForResolvedCellWithStatus` answers "what is the label here"
  * about a path a person selected, so it reads the doc that path RESOLVES to
- * rather than only the doc it started in. The one-hop reader it builds on
- * follows a link the path lands ON; a path that CROSSES one part way through
- * — a sqlite query result, whose rows each split into their own entity doc —
- * needs the runtime's own resolution to reach the doc holding the label.
+ * rather than only the doc it started in. A path that CROSSES a link part way
+ * through — a sqlite query result, whose rows each split into their own
+ * entity doc — needs the runtime's own resolution to reach the doc holding
+ * the label.
  */
 describe("cfcLabelViewForResolvedCellWithStatus", () => {
   const space = signer.did();
@@ -79,9 +79,6 @@ describe("cfcLabelViewForResolvedCellWithStatus", () => {
       });
 
       const leaf = query.key("result").key(0).key("secret");
-      // The one-hop reader starts in the query doc and never arrives.
-      expect(cfcLabelViewForCellWithStatus(leaf).view).toBeUndefined();
-
       const status = cfcLabelViewForResolvedCellWithStatus(leaf);
       expect(status.readFailed).toBe(false);
       expect(status.view?.entries).toEqual([
@@ -134,10 +131,11 @@ describe("cfcLabelViewForResolvedCellWithStatus", () => {
           { label: { confidentiality?: string[] } }
         >).flatMap((entry) => entry.label.confidentiality ?? []).sort();
 
-      // Whatever the one-hop reader finds is still in the resolved answer.
-      const onehop = atoms(cfcLabelViewForCellWithStatus(slot));
+      // Whatever `cfcLabelViewForCellWithStatus()` finds is still in the
+      // resolved answer.
+      const unresolved = atoms(cfcLabelViewForCellWithStatus(slot));
       const resolved = atoms(cfcLabelViewForResolvedCellWithStatus(slot));
-      for (const atom of onehop) expect(resolved).toContain(atom);
+      for (const atom of unresolved) expect(resolved).toContain(atom);
       expect(resolved).toContain("from-slot");
       expect(resolved).toContain("from-target");
 
@@ -173,9 +171,9 @@ describe("cfcLabelViewForResolvedCellWithStatus", () => {
     });
   });
 
-  it("answers a non-cell exactly as the one-hop reader does", () => {
+  it("answers a non-cell exactly as `cfcLabelViewForCellWithStatus()` does", () => {
     // A value that is not a cell has no link to resolve. The resolved reader
-    // hands back the one-hop answer untouched — no view, and not a failure.
+    // hands back that answer untouched — no view, and not a failure.
     for (const value of ["plain string", 42, { body: "object" }, undefined]) {
       const status = cfcLabelViewForResolvedCellWithStatus(value);
       expect(status).toEqual(cfcLabelViewForCellWithStatus(value));
@@ -185,8 +183,9 @@ describe("cfcLabelViewForResolvedCellWithStatus", () => {
   });
 
   it("treats a link getter that throws as no link, not a failed read", () => {
-    // The one-hop reader already swallows this and reports no label; the
-    // resolved reader must not turn the same object into a fail-closed read.
+    // `cfcLabelViewForCellWithStatus()` swallows this and reports no label;
+    // the resolved reader must not turn the same object into a fail-closed
+    // read.
     const broken = {
       getAsNormalizedFullLink(): never {
         throw new Error("no link here");

@@ -38,7 +38,8 @@ const HOME_PATH = "/api/patterns/system/home.tsx";
 /**
  * The served patterns route, in-process: a Home root owning the lists a wish
  * reaches, and a profile create surface that hands back the `profiles` it is
- * handed, with a handler `add` that appends a name to them. A test may take a
+ * handed, with a handler `add` that appends a name to them and a handler `peek`
+ * that only reads them, counting them into its own `seen`. A test may take a
  * route away.
  */
 let files: Map<string, string>;
@@ -66,8 +67,22 @@ function servedFiles(): Map<string, string> {
         ">((event, { profiles }) => {",
         "  profiles.push(event.name);",
         "});",
+        "const peek = handler<",
+        "  Record<string, never>,",
+        "  { profiles: Writable<string[]>; seen: Writable<number> }",
+        ">((_event, { profiles, seen }) => {",
+        "  seen.set((profiles.get() ?? []).length);",
+        "});",
         "export default pattern<{ profiles: Writable<string[]> }>(",
-        "  ({ profiles }) => ({ profiles, add: add({ profiles }) }),",
+        "  ({ profiles }) => {",
+        "    const seen = new Writable<number>(-1).for('seen');",
+        "    return {",
+        "      profiles,",
+        "      seen,",
+        "      add: add({ profiles }),",
+        "      peek: peek({ profiles, seen }),",
+        "    };",
+        "  },",
         ");",
         "",
       ].join("\n"),
@@ -187,7 +202,27 @@ describe("wish-home-root", () => {
       }
     });
 
-    it("brings up the Home root ahead of the create surface's handler, whose write lands under it", async () => {
+    it("creates no Home root for a handler that only reads beneath the empty slot", async () => {
+      const { found, stop } = await runWish(
+        "#profile",
+        "profile read",
+        {},
+        home,
+      );
+      try {
+        const surface = await createSurface(found);
+
+        surface.key("peek").send({});
+        await runtime.idle();
+
+        expect(surface.key("seen").get()).toBe(0);
+        expect(homeSlot()).toBeUndefined();
+      } finally {
+        stop();
+      }
+    });
+
+    it("brings up the Home root at the create surface's handler's write, which then lands under it", async () => {
       // In the Home space itself, so that the stand-in surface's handler,
       // which creates no profile space of its own, writes one space only.
       const { found, stop } = await runWish(
@@ -247,8 +282,12 @@ describe("wish-home-root", () => {
         surface.key("add").send({ name: "Ada" });
         await runtime.idle();
 
-        expect(errors.some((error) => error instanceof SpaceRootMissingError))
-          .toBe(true);
+        const refusal = errors.find((error) =>
+          error instanceof SpaceRootMissingError
+        ) as (SpaceRootMissingError & { frame?: unknown }) | undefined;
+        expect(refusal).toBeDefined();
+        expect(String(refusal!.cause)).toContain("404");
+        expect(refusal!.frame).toBeDefined();
         expect(homeSlot()).toBeUndefined();
       } finally {
         stop();

@@ -14,7 +14,8 @@ export interface Key {
   /**
    * Normalized name: an arrow/nav name ("up", "down", "left", "right",
    * "pageup", "pagedown", "home", "end"), a mouse-wheel name ("wheel-up",
-   * "wheel-down"), a function key ("f1".."f12"), an editing name ("enter",
+   * "wheel-down"), a press or release of the primary mouse button ("mouse"),
+   * a function key ("f1".."f12"), an editing name ("enter",
    * "escape", "backspace", "delete", "tab", "space"), a control combo
    * ("ctrl-c", "ctrl-d", …), or the literal character for a printable key
    * ("a", "/", "?").
@@ -31,6 +32,21 @@ export interface Key {
 
   /** The printable character, when the key produced one. */
   readonly char?: string;
+
+  /** The primary mouse button going down or coming up, for a "mouse" key. */
+  readonly mouse?: MouseButton;
+}
+
+/** A press or release of the primary mouse button. */
+export interface MouseButton {
+  /** Whether the button went down, rather than coming up. */
+  readonly down: boolean;
+
+  /** Zero-based screen column of the cell under the pointer. */
+  readonly x: number;
+
+  /** Zero-based screen row of the cell under the pointer. */
+  readonly y: number;
 }
 
 export interface DecodeResult {
@@ -62,7 +78,10 @@ export function decodeKeys(buf: Uint8Array): DecodeResult {
         // final instead of inside the CSI parameters.
         if (i + 2 < buf.length && buf[i + 2] === 0x4d) {
           if (i + 5 >= buf.length) break;
-          keys.push(mouseToKey(buf[i + 3] - 32));
+          // Each byte is its value plus 32, and the cell is one-based.
+          keys.push(
+            mouseToKey(buf[i + 3] - 32, buf[i + 4] - 33, buf[i + 5] - 33),
+          );
           i += 6;
           continue;
         }
@@ -209,9 +228,10 @@ function csiToKey(final: number, params: string): Key {
       return { name: "f3" };
     case 0x53:
       return { name: "f4" };
-    case 0x4d:
+    case 0x4d: // ESC [ < button ; column ; row M — an SGR mouse press
+    case 0x6d: // … m — an SGR mouse release
       return params.startsWith("<")
-        ? mouseToKey(parseInt(params.slice(1).split(";", 1)[0], 10))
+        ? sgrMouseToKey(params.slice(1), final === 0x6d)
         : { name: "unknown" };
     case 0x7e:
       return tildeKey(params);
@@ -265,9 +285,36 @@ function tildeKey(params: string): Key {
   }
 }
 
-/** Maps a terminal mouse button code to the wheel event it represents. */
-function mouseToKey(button: number): Key {
-  const baseButton = button & ~(4 | 8 | 16 | 32);
+/**
+ * Decodes the `button;column;row` parameters of an SGR mouse report, whose cell
+ * is one-based. A report that lacks one of the three numbers is unknown.
+ */
+function sgrMouseToKey(params: string, release: boolean): Key {
+  const fields = /^(\d+);(\d+);(\d+)$/.exec(params);
+  if (!fields) return { name: "unknown" };
+  const [button, column, row] = fields.slice(1).map(Number);
+  return mouseToKey(button, column - 1, row - 1, release);
+}
+
+/**
+ * Maps a terminal mouse report to the wheel step it represents, or to the press
+ * or release of the primary button at the zero-based cell `x`, `y`. An SGR
+ * report says whether it is a release; an X10 report gives every release as
+ * button 3, whichever button was let go. A report of the pointer moving, which
+ * sets the 32 bit, is unknown.
+ */
+function mouseToKey(
+  button: number,
+  x: number,
+  y: number,
+  release = false,
+): Key {
+  const baseButton = button & ~(4 | 8 | 16); // the shift, alt, and ctrl bits
+  if (baseButton === 0) {
+    return { name: "mouse", mouse: { down: !release, x, y } };
+  }
+  if (release) return { name: "unknown" };
+  if (baseButton === 3) return { name: "mouse", mouse: { down: false, x, y } };
   if (baseButton === 64) return { name: "wheel-up" };
   if (baseButton === 65) return { name: "wheel-down" };
   return { name: "unknown" };

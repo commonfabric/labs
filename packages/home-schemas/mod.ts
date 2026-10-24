@@ -6,6 +6,7 @@
  * - Journal: user's activity log
  * - Learned: user's learned profile data
  * - Spaces: user's managed spaces list
+ * - Social spaces: separate collection observations and command projections
  *
  * This package exists to break the circular dependency between
  * @commonfabric/runner and @commonfabric/piece. Both packages can
@@ -59,6 +60,15 @@ export {
 } from "./spaces.ts";
 
 export { type Home, homeSchema } from "./home.ts";
+
+export {
+  type HomeSharedSpaceCollectionView,
+  sharedSpaceCollectionViewSchema,
+  sharedSpaceCommandsSchema,
+  sharedSpaceEntrySchema,
+  sharedSpaceImportCommandsSchema,
+  sharedSpaceReceiptViewSchema,
+} from "./shared-spaces.ts";
 
 export const objectStubSchema = {
   type: "unknown",

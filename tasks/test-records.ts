@@ -39,6 +39,7 @@ import {
 } from "@commonfabric/test-support/shuffle";
 import {
   localSubmissionsPrefix,
+  movedKeyPath,
   parsePersonalKeyFile,
   type PersonalKeyFile,
   REPO,
@@ -139,6 +140,22 @@ export async function buildLocalContext(
   }, env);
 }
 
+/**
+ * The text of the key file at a path, read where the key tool moved it
+ * when the path is the legacy one and nothing is there any more.
+ */
+function readKeyFile(path: string): string {
+  try {
+    return Deno.readTextFileSync(path);
+  } catch (error) {
+    const moved = movedKeyPath(path);
+    if (!(error instanceof Deno.errors.NotFound) || moved === undefined) {
+      throw error;
+    }
+    return Deno.readTextFileSync(moved);
+  }
+}
+
 /** Reads and parses the personal key file the environment names. */
 export function readPersonalKey(
   env: Environment = Deno.env.get,
@@ -147,7 +164,7 @@ export function readPersonalKey(
   if (path === undefined || path.length === 0) return undefined;
   let text: string;
   try {
-    text = Deno.readTextFileSync(path);
+    text = readKeyFile(path);
   } catch (error) {
     warn(`cannot read ${RECORDS_KEY_FILE_VARIABLE} at ${path}: ${error}`);
     return undefined;

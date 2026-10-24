@@ -26,11 +26,8 @@ import {
 import type { Manifest, ManifestEntry } from "./test-selection/manifest.ts";
 import { alarms } from "./test-selection/health.ts";
 import type { Suite } from "./test-topology/suite.ts";
-import {
-  DIALS,
-  EXCLUDED_FROM_COVERAGE_GATE,
-  LANES,
-} from "./test-selection/policy.ts";
+import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
+import { DIALS, EXCLUDED_FROM_COVERAGE_GATE } from "./test-selection/policy.ts";
 
 const TEST = { k: "unit", s: "memory", n: "space > writes" };
 
@@ -70,11 +67,12 @@ const TOPOLOGY: Suite[] = [
 function planned(
   manifest: Manifest,
   suites: readonly Suite[] = TOPOLOGY,
+  of?: number,
 ): Promise<LanePlan> {
   return lanePlan(
     {
       lane: 1,
-      of: LANES,
+      ...(of === undefined ? {} : { of }),
       full: false,
       dryRun: true,
       laneCount: false,
@@ -156,7 +154,7 @@ describe("test-selection", () => {
       expect(lines.join("\n")).toContain("The manifest has no entry for it");
     });
 
-    it("prints the catches behind a score", () => {
+    it("prints the new real test failures behind a score", () => {
       const held = manifest();
       held.entries[0]!.inputs = {
         catches: 3,
@@ -165,15 +163,15 @@ describe("test-selection", () => {
         lastCatch: "2026-08-20",
       };
       const text = explainLines(held, TEST, { selected: true }).join("\n");
-      expect(text).toContain("3.0 weighted catches");
+      expect(text).toContain("3.0 weighted new real test failures");
       expect(text).toContain("2 sources");
       expect(text).toContain("2026-08-20");
       expect(text).toContain("selects it");
     });
 
-    it("says a test has never caught anything", () => {
+    it("says a test has never had a new real test failure", () => {
       expect(explainLines(manifest(), TEST).join("\n")).toContain(
-        "never caught anything",
+        "never had a new real test failure",
       );
     });
 
@@ -254,9 +252,10 @@ describe("test-selection", () => {
           sampleEntry({ k: "unit", s: "memory", n: "two" }, { cost: 1 }),
         ],
       });
-      const text = planLines(await planned(manifest), undefined).join("\n");
+      const plan = await planned(manifest);
+      const text = planLines(plan, undefined).join("\n");
       expect(text).toContain("2 identities in this tree");
-      expect(text).toContain(`${LANES} lanes`);
+      expect(text).toContain(`\n${plan.laid.lanes.length} lanes, `);
       expect(text).toContain("lane 1:");
     });
 
@@ -281,7 +280,8 @@ describe("test-selection", () => {
       const manifest = sampleManifest({
         entries: [sampleEntry({ k: "unit", s: "memory", n: "one" })],
       });
-      const text = planLines(await planned(manifest), 3).join("\n");
+      const text = planLines(await planned(manifest, TOPOLOGY, 5), 3)
+        .join("\n");
       expect(text).toContain("lane 3:");
       expect(text).not.toContain("lane 1:");
     });
@@ -332,12 +332,14 @@ describe("test-selection", () => {
         })],
       });
       expect(
-        planLines(await planned(manifest, [tree(10)]), undefined).join("\n"),
+        planLines(await planned(manifest, [tree(10)], 5), undefined)
+          .join("\n"),
       ).toMatch(
         /the mandatory set alone puts a lane (\d+(\.\d)?[hms])+ past its budget/,
       );
       expect(
-        planLines(await planned(manifest, [tree(1)]), undefined).join("\n"),
+        planLines(await planned(manifest, [tree(1)], 5), undefined)
+          .join("\n"),
       ).not
         .toContain("the mandatory set alone");
     });
@@ -377,7 +379,7 @@ describe("coverageLines()", () => {
     });
     expect(await coverageLines(manifest, [workspaceUnit], [], first)).toEqual([
       "workspace-unit/packages/memory  2 units, against 41 uncovered lines " +
-      "at abcdef0",
+      "at abcdef0; its gate has no record yet",
     ]);
     expect(
       (await coverageLines(
@@ -449,7 +451,7 @@ describe("coverageLines()", () => {
     });
     expect(lines).toEqual([
       "workspace-unit/packages/memory  2 units, against 20 uncovered lines " +
-      "at near",
+      "at near; its gate has no record yet",
     ]);
     expect(asked).toEqual([["ahead", "near", "far"]]);
     expect(
@@ -460,7 +462,8 @@ describe("coverageLines()", () => {
         () => Promise.resolve(undefined),
       ),
     ).toEqual([
-      "workspace-unit/packages/memory  2 units, against no baseline yet",
+      "workspace-unit/packages/memory  2 units, against no baseline yet; " +
+      "its gate has no record yet",
     ]);
   });
 
@@ -472,8 +475,24 @@ describe("coverageLines()", () => {
       first,
     );
     expect(lines).toEqual([
-      "workspace-unit/packages/memory  2 units, against no baseline yet",
+      "workspace-unit/packages/memory  2 units, against no baseline yet; " +
+      "its gate has no record yet",
     ]);
+  });
+
+  it("names the score of a set's gate", async () => {
+    const manifest = sampleManifest({
+      entries: [sampleEntry(
+        { k: "gate", s: "memory", n: "coverage-gate workspace-unit" },
+        {
+          suite: "coverage-gate",
+          unit: "workspace-unit/packages/memory",
+          score: 0.4,
+        },
+      )],
+    });
+    expect((await coverageLines(manifest, [workspaceUnit], [], first))[0])
+      .toContain("its gate scores 0.400");
   });
 
   it("gives the reason for a member that carries no set", async () => {
@@ -547,14 +566,14 @@ describe("laneArgument()", () => {
     expect(laneArgument(["plan", "--dry-run"])).toBeUndefined();
   });
 
-  it("takes a lane inside the range", () => {
+  it("takes any lane from one up, which the plan then holds to its count", () => {
     expect(laneArgument(["plan", "--lane", "1"])).toBe(1);
-    expect(laneArgument(["plan", "--lane", String(LANES)])).toBe(LANES);
+    expect(laneArgument(["plan", "--lane", "40"])).toBe(40);
   });
 
-  it("rejects a lane outside the range, at either end", () => {
+  it("rejects a lane below one", () => {
     expect(laneArgument(["plan", "--lane", "0"])).toBe("invalid");
-    expect(laneArgument(["plan", "--lane", String(LANES + 1)])).toBe("invalid");
+    expect(laneArgument(["plan", "--lane", "-1"])).toBe("invalid");
   });
 
   it("rejects what is not a whole number, including a missing value", () => {
@@ -1015,24 +1034,31 @@ describe("dispatch()", () => {
   );
 
   it("prints the plan, and only the lane asked for", async () => {
+    // Enough work chosen by score to take several lanes.
+    const units = Array.from(
+      { length: 12 },
+      (_, i) => `packages/memory/test/case-${i}.test.ts`,
+    );
     const manifest = sampleManifest({
-      entries: Array.from(
-        { length: 12 },
-        (_, i) =>
-          sampleEntry({ k: "unit", s: "memory", n: `case ${i}` }, {
-            unit: `packages/memory/test/case-${i}.test.ts`,
-          }),
+      entries: units.map((unit, i) =>
+        sampleEntry({ k: "unit", s: "memory", n: `case ${i}` }, {
+          unit,
+          cost: 100,
+        })
       ),
     });
-    const all = await ran(["plan", "--dry-run"], {
+    const sources = {
       manifest: () => Promise.resolve({ manifest }),
-    });
+      topology: () => Promise.resolve([suiteHolding(units)]),
+    };
+    const all = await ran(["plan", "--dry-run"], sources);
     expect(all.code).toBe(0);
-    expect(all.out.match(/^ {2}lane \d+:/gm)?.length).toBe(LANES);
+    const lanes = (await planned(manifest, [suiteHolding(units)])).laid
+      .lanes.length;
+    expect(lanes).toBeGreaterThan(1);
+    expect(all.out.match(/^ {2}lane \d+:/gm)?.length).toBe(lanes);
 
-    const one = await ran(["plan", "--dry-run", "--lane", "2"], {
-      manifest: () => Promise.resolve({ manifest }),
-    });
+    const one = await ran(["plan", "--dry-run", "--lane", "2"], sources);
     expect(one.out.match(/^ {2}lane \d+:/gm)?.length).toBe(1);
     expect(one.out).toContain("  lane 2:");
   });
@@ -1040,7 +1066,12 @@ describe("dispatch()", () => {
   it("stops on a lane number no lane has", async () => {
     const result = await ran(["plan", "--lane", "9"]);
     expect(result.code).toBe(2);
-    expect(result.stop?.message).toContain("whole number from 1 to");
+    expect(result.stop?.message).toContain(
+      "--lane names lane 9, and this plan has 1",
+    );
+    const zero = await ran(["plan", "--lane", "0"]);
+    expect(zero.code).toBe(2);
+    expect(zero.stop?.message).toContain("whole number from 1");
   });
 
   it("verifies the manifest against the tree", async () => {
@@ -1099,6 +1130,26 @@ describe("dispatch()", () => {
     });
     expect(result.code).toBe(1);
     expect(result.out).toContain("no identity for workspace-unit: unrun");
+  });
+
+  it("fails --verify on a gate nothing has recorded, which no lane runs", async () => {
+    const memory: Suite = {
+      ...suiteHolding(["packages/memory/test/memory.test.ts"]),
+      measured: [{
+        member: "packages/memory",
+        reachedBy: ["packages/memory/"],
+        units: ["packages/memory/test/memory.test.ts"],
+      }],
+    };
+    const result = await ran(["plan", "--verify"], {
+      topology: () => Promise.resolve([memory, coverageGateSuite([memory])]),
+    });
+    expect(result.code).toBe(1);
+    expect(result.out).toContain(
+      "no record of the gate coverage-gate: workspace-unit/packages/memory, " +
+        "so a change is offered it at the floor of the score",
+    );
+    expect(result.out).not.toContain("runs it as unknown");
   });
 
   describe("health", () => {

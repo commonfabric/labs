@@ -14,6 +14,7 @@ import {
   assert,
   Default,
   equals,
+  FabricBytes,
   NAME,
   pattern,
   Stream,
@@ -48,6 +49,7 @@ import Topic, {
   submitProfileComment,
   submitProfileLink,
   type TopicAuthor,
+  topicAuthorFromPerson,
   topicAuthorLabel,
   type TopicComment,
   type TopicLink,
@@ -199,7 +201,16 @@ const LegacyUnsignedTopic = pattern<
   };
 });
 
+// Stands in for Ada's profile picture; attribution copies the bytes without
+// decoding them.
+const ADA_PICTURE = [0x89, 0x50, 0x4e, 0x47];
+
+const isAdaPicture = (picture: FabricBytes | undefined) =>
+  picture?.slice().join() === ADA_PICTURE.join();
+
 export default pattern(() => {
+  const adaPicture = new FabricBytes(new Uint8Array(ADA_PICTURE));
+
   const board = Topics({});
   // The board stores only TopicPiece's shared-safe projection. Exercise the
   // session-local UI controls on a direct Topic instance so this test does not
@@ -285,7 +296,6 @@ export default pattern(() => {
     names: profileNames,
     newTitle: profileTitleDraft,
     profileName: " Ada ",
-    profileAvatar: " 🦊 ",
   });
 
   const profileSubmitComment = submitProfileComment({
@@ -293,7 +303,18 @@ export default pattern(() => {
     comments: profileComments,
     commentDraft: profileCommentDraft,
     profileName: "Ada",
-    profileAvatar: "🦊",
+    profilePicture: adaPicture,
+    profileAvatar: "🐙",
+  });
+  // A profile with avatar text and no picture: its comments carry the text.
+  const textComments = new Writable<TopicComment[] | Default<[]>>([]);
+  const textCommentDraft = new Writable("from a profile with no picture");
+  const textSubmitComment = submitProfileComment({
+    upgrade: { ...profileUpgrade, comments: textComments },
+    comments: textComments,
+    commentDraft: textCommentDraft,
+    profileName: "Grace",
+    profileAvatar: " 🦊 ",
   });
   const profileSaveBody = saveProfileBody({
     upgrade: profileUpgrade,
@@ -305,7 +326,6 @@ export default pattern(() => {
     bodyUpdatedBy: profileBodyUpdatedBy,
     bodyUpdatedAt: profileBodyUpdatedAt,
     profileName: "Ada",
-    profileAvatar: "🦊",
   });
   const profileSubmitLink = submitProfileLink({
     upgrade: profileUpgrade,
@@ -314,7 +334,6 @@ export default pattern(() => {
     linkLabelDraft: profileLinkLabelDraft,
     linkKindDraft: profileLinkKindDraft,
     profileName: "Ada",
-    profileAvatar: "🦊",
   });
 
   // --- actions ---
@@ -389,6 +408,9 @@ export default pattern(() => {
   });
   const action_submit_profile_comment = action(() => {
     profileSubmitComment.send();
+  });
+  const action_submit_text_comment = action(() => {
+    textSubmitComment.send();
   });
   const action_save_profile_body = action(() => {
     profileSaveBody.send();
@@ -521,7 +543,8 @@ export default pattern(() => {
       list[0]?.title === "Profile topic" &&
       list[0]?.createdBy?.kind === "person" &&
       list[0]?.createdBy?.name === "Ada" &&
-      list[0]?.createdBy?.avatar === "🦊" &&
+      // Only a comment's author carries the picture, being the one shown.
+      list[0]?.createdBy?.picture === undefined &&
       profileTitleDraft.get() === "";
   });
 
@@ -540,15 +563,36 @@ export default pattern(() => {
     )
   );
 
+  // A profile with no picture is drawn with its avatar text; one with a
+  // picture carries the picture alone.
+  const assert_author_falls_back_to_avatar_text = assert(() => {
+    const textOnly = topicAuthorFromPerson("Ada", undefined, " 🦊 ");
+    const both = topicAuthorFromPerson(
+      "Ada",
+      new FabricBytes(new Uint8Array(ADA_PICTURE)),
+      "🦊",
+    );
+    const neither = topicAuthorFromPerson("Ada", undefined, "  ");
+    return textOnly?.avatar === "🦊" && textOnly.picture === undefined &&
+      isAdaPicture(both?.picture) && both?.avatar === undefined &&
+      neither?.avatar === undefined && neither?.picture === undefined;
+  });
+
   const assert_profile_comment_submitted = assert(() => {
     const list = profileComments.get() ?? [];
     return list.length === 1 &&
       list[0]?.body === "via the profile composer" &&
       list[0]?.author?.kind === "person" &&
       list[0]?.author?.name === "Ada" &&
-      list[0]?.author?.avatar === "🦊" &&
+      isAdaPicture(list[0]?.author?.picture) &&
+      list[0]?.author?.avatar === undefined &&
       (list[0]?.sentAt ?? 0) > 0 &&
       profileCommentDraft.get() === "";
+  });
+  const assert_text_comment_carries_avatar = assert(() => {
+    const author = (textComments.get() ?? [])[0]?.author;
+    return author?.name === "Grace" && author.avatar === "🦊" &&
+      author.picture === undefined;
   });
 
   const assert_profile_body_saved = assert(() =>
@@ -576,7 +620,7 @@ export default pattern(() => {
       list[0]?.label === "profile link" &&
       list[0]?.addedBy?.kind === "person" &&
       list[0]?.addedBy?.name === "Ada" &&
-      list[0]?.addedBy?.avatar === "🦊" &&
+      list[0]?.addedBy?.picture === undefined &&
       (list[0]?.addedAt ?? 0) > 0 &&
       profileLinkUrlDraft.get() === "" &&
       profileLinkLabelDraft.get() === "" &&
@@ -1173,7 +1217,6 @@ export default pattern(() => {
     titleUpdatedBy: renameUpdatedBy,
     titleUpdatedAt: renameUpdatedAt,
     profileName: "Ada",
-    profileAvatar: "🦊",
   });
 
   const action_browser_rename = action(() => {
@@ -1220,6 +1263,9 @@ export default pattern(() => {
       { assertion: assert_profile_topic_named },
       { action: action_submit_profile_comment },
       { assertion: assert_profile_comment_submitted },
+      { assertion: assert_author_falls_back_to_avatar_text },
+      { action: action_submit_text_comment },
+      { assertion: assert_text_comment_carries_avatar },
       { action: action_save_profile_body },
       { assertion: assert_profile_body_saved },
       { assertion: assert_profile_references_published },

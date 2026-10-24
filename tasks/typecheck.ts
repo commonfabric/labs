@@ -374,7 +374,7 @@ interface GraphModule {
  * graph is read from the working tree alone, and a module Deno cannot parse
  * contributes no imports of its own.
  */
-function localImporters(
+export function localImporters(
   root: string,
   files: readonly string[],
 ): Map<string, string[]> {

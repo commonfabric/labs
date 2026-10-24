@@ -148,8 +148,9 @@ currency. The existing overlay and retirement rules below still apply.
   whose schema promised a value would crash on the `undefined` (the
   OW51 `splitDefinitions` TypeError, observed on BOTH the client and
   the serving runtime because the read path is shared code). Instead
-  the lazy read REFUSES (when the reader's schema PROMISES a value —
-  see the carve-outs below): it registers the dead-end doc's read (the
+  the lazy read REFUSES (when the reader's schema declares NO default,
+  whether or not its type admits `undefined` — see the carve-outs
+  below): it registers the dead-end doc's read (the
   dependency that re-triggers the run when the doc arrives) and the run
   is disposed as a non-event — **output `undefined`, no action failure,
   re-triggered when any of its reads so far change, exactly like a
@@ -196,6 +197,19 @@ currency. The existing overlay and retirement rules below still apply.
      takes main's interim-undefined-then-heal. No shipped pattern
      routes link chains through user-scoped docs (the #6179 review's
      population audit).
+     A serving runtime's commit reads one such row differently (a
+     corollary that narrows the ruling above and awaits the owner's
+     ruling): an absent user- or session-scoped instance of a document
+     that another derivation registered in the same serving runtime
+     declares as a write — its output, or a store a builtin keeps
+     (scheduler-v2 README §4.3) — is one the serving loop owes and has
+     not produced yet, so it is transit for that runtime, not knowledge.
+     The read still reads `undefined`, but the served run that read it
+     commits nothing (serving-loop.md §3d) and runs again once the
+     instance is produced. A writer that never produces a principal's
+     instance therefore holds back its served readers' commits for that
+     instance indefinitely; the client's own echo of it persists (§4's
+     arrival gate).
   2. **A lift that THROWS the error takes the same disposition.** The
      refusal propagates out of the lift body (the body did not catch
      it) and produces an undefined result through the ordinary result
@@ -281,7 +295,16 @@ On each pushed `derived` commit with `derivedThrough = W` and
    refused) has already arrived at this client — the local dispatch
    ran late (a load-parked head event, a busy worker) — is jobless on
    the same grounds and is NOT registered: its writes are dropped
-   before any layer is sealed. A
+   before any layer is sealed. They are dropped before the run's
+   commit is prepared, too: the commit asks the overlay whether it
+   would drop the run (`discards`) and skips the CFC boundary pass for
+   a run it would, since writes that reach no layer cross no boundary.
+   A late run can have read state no commit sees — a cascade child
+   running after its ancestor's echo in another space has retired, and
+   before the served write to that space lands, reads that space
+   without the documents the echo held — and the pass would refuse
+   what it read there, a refusal counted and reported for writes that
+   go nowhere. A
    non-idempotent handler's late echo is divergent by construction (it
    re-toggles the already-served state), and its floor sits at the
    served commit's seq, above every W reachable until the next authored
@@ -309,12 +332,28 @@ On each pushed `derived` commit with `derivedThrough = W` and
    speculative run, never a durable entry of its own (a root fire's
    echo carries no thread; another intent's cascade does not reach
    `e`); a retired descendant's id joins the jobless set so a LATE
-   grandchild drops at seal. Cost, stated: when the server's LT1 child
+   grandchild drops at seal. The space an entry sealed into is no part
+   of that scope. An entry lives in the space its run wrote, and an
+   event id names one event in every space, so `e`'s mark, which
+   arrives on the sidecar in the space `e` was fired in, retires `e`'s
+   own echo and its descendants in every space. A handler that sends to
+   a stream in another space leaves its cascade child's echo in that
+   space, where no mark, watermark or arrival would otherwise name it.
+   A handler that writes into another space itself leaves its own echo
+   there. The served handler's write to that space commits apart from
+   the mark, so that echo can go before the write lands, the same
+   one-wave flicker a descendant costs below, and uncounted, as a
+   descendant in another space is.
+   Cost, stated: when the server's LT1 child
    of `e` did not complete in `e`'s appending wave (events.md §4's
    purge; the drain delivers it a wave later), the descendant echo goes
    at `e`'s consequence while the child's own consequence is still a
    wave away — a visible one-wave flicker, COUNTED
-   (`cascade-echo-retired-unarrived`), not hidden; the owner-level
+   (`cascade-echo-retired-unarrived`), not hidden, for a descendant in
+   the mark's own space: the count compares the seq of a document the
+   echo wrote with the mark's, and a seq orders commits within one
+   space, so a descendant in another space is retired uncounted; the
+   owner-level
    alternative (deterministic cascade ids derived from the parent id +
    send ordinal on both sides — which would also make the frame-caused
    entity ids agree, so the arrival gate would carry the echo to the
@@ -322,7 +361,8 @@ On each pushed `derived` commit with `derivedThrough = W` and
    NOT taken here. Impl: `overlay-destination.ts` `retireIntent` (the
    cascade arm) over `OverlayEntry.parentEventId` + `#cascadeParents`;
    pinned in `speculation-intent-listener.test.ts` (W2.1-1…4 scripted,
-   each with its mutation, + the W2.1 e2e lunch-join shape, RED on the
+   each with its mutation, the cases under "an echo sealed into a space
+   other than its intent's", + the W2.1 e2e lunch-join shape, RED on the
    pre-W2.1 tip).
    **The match, and its carrier (RULED 2026-08-18 — the stage-C design
    pass, items 5/6, landed with W2):** the match is on the pushed
@@ -657,6 +697,12 @@ pins the export, the scoping, the verify-durable consistency, the
 content-addressed exemption, and the durable-read mark on both a
 direct transaction and a piece start.
 
+The echo a blind write lands over is the speculation of an event whose
+authoritative consequence commits later, and that consequence does not
+land over the write in turn: serving-loop.md §3d supersedes every
+consequence write that a later write of the event's firing session
+overwrote.
+
 ### The durable-read mark, and the piece start that needs it
 
 An authored transaction whose writes must reach the wire can read the
@@ -667,9 +713,19 @@ transaction consumed and what it names stay the same set — the
 verify-durable and name-durable pairing again, one shape wider. A
 document still short of its authoritative value re-derives reactively
 once that value lands, which is the recovery path §6's refusal
-message names. Two callers carry the mark. One is the direct SQLite
-capability's exec, an authored write with no reactive run around it.
-The other is the runner's piece start.
+message names. The direct SQLite capability's exec carries the mark,
+an authored write with no reactive run around it, and so does the
+runner's piece start.
+
+A host read that must not report this runtime's preview carries it
+too, on a read-only transaction: `readConfirmed()` and `readDurable()`
+(`confirmed-read.ts`). Such a reader learns when to read again from a
+subscription, which sees the ordinary view, and a standing layer hides
+two changes to the durable view from it: a write arriving beneath the
+layer, and the layer's retirement over an equal value. The replica's
+`whenSpeculationSettled()` resolves once the layers standing over a
+document have settled, and `readDurable()` hands it back for what it
+read, so the reader reads again then as well.
 
 A piece start mints its own transaction, instantiates the pattern's
 nodes into it, and commits it fire-and-forget as sanctioned

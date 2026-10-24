@@ -515,7 +515,10 @@ export class ValueHasher {
     const keys = utf8SortedKeysOf(value);
 
     hasher.update(TAG_OBJECT_BYTES);
-    for (const key of keys) {
+    // Indexed rather than `for...of`, which would allocate an iterator per
+    // object fed; a document's hash feeds thousands of them.
+    for (let at = 0; at < keys.length; at++) {
+      const key = keys[at]!;
       // Keys are encoded in the same format as strings, and values are hashed
       // recursively.
       hasher.update(getStringRep(key));

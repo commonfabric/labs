@@ -13,6 +13,7 @@ import type { Cancel } from "../cancel.ts";
 import {
   ensurePieceRunningVerdict,
   type EnsurePieceVerdict,
+  type OwningRootAddress,
 } from "../ensure-piece-running.ts";
 import {
   isAclDocumentWriteRefusal,
@@ -20,6 +21,7 @@ import {
   waveSettlementOf,
 } from "../executor/wave.ts";
 import {
+  addressKey,
   areNormalizedLinksSame,
   type NormalizedFullLink,
 } from "../link-utils.ts";
@@ -31,6 +33,8 @@ import type {
   IExtendedStorageTransaction,
   IPreconditionFailedError,
   IStorageManager,
+  IStorageNotification,
+  IStorageTransaction,
   MemorySpace,
 } from "../storage/interface.ts";
 import {
@@ -43,6 +47,7 @@ import {
   isReadIgnoredForScheduling,
 } from "../storage/reactivity-log.ts";
 import {
+  isCfcEnforcementRejection,
   isConflictRejection,
   isPermanentRejection,
   isStorageTransactionInconsistent,
@@ -52,6 +57,8 @@ import {
   type CommitBackpressurePolicy,
   CommitConvergenceError,
   computeBackoffDelayMs,
+  EventCommitRefusedError,
+  EventDroppedError,
   EventHandlerNotRunError,
   HANDLER_NOT_RUN_BACKOFF_LIMIT,
 } from "./backpressure.ts";
@@ -59,7 +66,10 @@ import type {
   SchedulerActionInfo,
   SchedulerEventPreflightStats,
 } from "../telemetry.ts";
-import { MAX_EVENT_BACKLOG_PER_STREAM } from "./constants.ts";
+import {
+  EVENT_DEFERRAL_DROP_THRESHOLD,
+  MAX_EVENT_BACKLOG_PER_STREAM,
+} from "./constants.ts";
 import { createEventPreflightTraceContext } from "./diagnostics.ts";
 import { mintEventId } from "./event-identity.ts";
 import { planEventInvalidDependencyScheduling } from "./execution.ts";
@@ -83,6 +93,7 @@ import {
   type EventHandler,
   type EventPreflightTraceContext,
   LT1_LATE_SEAL_REFUSED,
+  type PieceStartWake,
   type QueuedEvent,
   type ReactivityLog,
   type ServedEventFailureOutcome,
@@ -94,6 +105,68 @@ const logger = getLogger("scheduler", {
   level: "warn",
 });
 const EVENT_COMMIT_TELEMETRY_WRITE_LIMIT = 25;
+
+/**
+ * The handlers registered for event streams, at most one per stream, each
+ * held under its stream's address (`addressKey()`): the members of a link
+ * `areNormalizedLinksSame()` compares. Registering, removing and finding a
+ * handler therefore cost the same however many streams are registered.
+ * Iteration yields the registrations in the order they were made, a handler
+ * that replaces another taking a new place at the end.
+ */
+export class EventHandlerRegistry {
+  #byStream = new Map<string, readonly [NormalizedFullLink, EventHandler]>();
+
+  /** Constructs an instance holding `registrations`, registered in order. */
+  constructor(
+    registrations: Iterable<readonly [NormalizedFullLink, EventHandler]> = [],
+  ) {
+    for (const [link, handler] of registrations) this.set(link, handler);
+  }
+
+  /** Number of streams with a handler registered. */
+  get size(): number {
+    return this.#byStream.size;
+  }
+
+  /** Returns the handler registered for the stream `link` names, if any. */
+  get(link: NormalizedFullLink): EventHandler | undefined {
+    return this.#byStream.get(addressKey(link))?.[1];
+  }
+
+  /**
+   * Returns the registration for the stream `link` names, if any: the link
+   * it was made under, and its handler.
+   */
+  registration(
+    link: NormalizedFullLink,
+  ): readonly [NormalizedFullLink, EventHandler] | undefined {
+    return this.#byStream.get(addressKey(link));
+  }
+
+  /**
+   * Registers `handler` for the stream `link` names, in place of any
+   * handler registered for it.
+   */
+  set(link: NormalizedFullLink, handler: EventHandler): void {
+    const key = addressKey(link);
+    // Removed first, so that a replacement is the newest registration.
+    this.#byStream.delete(key);
+    this.#byStream.set(key, [link, handler]);
+  }
+
+  /** Removes the registration for the stream `link` names, if any. */
+  delete(link: NormalizedFullLink): void {
+    this.#byStream.delete(addressKey(link));
+  }
+
+  /** Iterates the registrations, oldest first. */
+  [Symbol.iterator](): IterableIterator<
+    readonly [NormalizedFullLink, EventHandler]
+  > {
+    return this.#byStream.values();
+  }
+}
 
 const guardedImplementations = Symbol("guarded event implementations");
 
@@ -149,7 +222,7 @@ export function selectEventImplementation(
 /** Stable queued callback whose selection follows the live stream registry. */
 function createGuardedDispatcher(
   ref: NormalizedFullLink,
-  eventHandlers: readonly [NormalizedFullLink, EventHandler][],
+  eventHandlers: EventHandlerRegistry,
 ): GuardedDispatcher {
   const dispatcher: GuardedDispatcher = Object.assign(
     (tx: IExtendedStorageTransaction, event: unknown) => {
@@ -165,7 +238,7 @@ function createGuardedDispatcher(
     {
       [guardedImplementations]: {
         implementations: new Map<string, { handler: EventHandler }>(),
-        current: () => findEventHandler(eventHandlers, ref),
+        current: () => eventHandlers.get(ref),
       },
     },
   );
@@ -321,12 +394,28 @@ export function isExplicitTransactionAbort(
     error.abortedBeforeStorage === true;
 }
 
+/**
+ * Whether an event's commit failed in commit preparation for a cause a fresh
+ * attempt may clear: a crash (`CommitPreparationError`), or a CFC refusal
+ * that is not wholly a verdict, which keeps the retryable
+ * `StorageTransactionAborted` name (`cfc/verdict-reason.ts`). A CFC verdict,
+ * `CfcCommitRefusalError`, is not one.
+ */
+function failedCommitPreparation(
+  error: { name?: string; message?: string } | undefined,
+): boolean {
+  return error?.name === "CommitPreparationError" ||
+    (error?.name === "StorageTransactionAborted" &&
+      isCfcEnforcementRejection(error));
+}
+
 export function isHeadEventParked(
   state: { readonly eventQueue: readonly QueuedEvent[] },
   now: number = performance.now(),
 ): boolean {
   const headEvent = state.eventQueue[0];
   return headEvent?.handlerLoadPending === true ||
+    headEvent?.patternChangePending === true ||
     headEvent?.retryReadinessPending === true ||
     (headEvent?.notBefore !== undefined && headEvent.notBefore > now);
 }
@@ -348,7 +437,7 @@ export interface EventDependencyPreflightResult {
 
 export interface SchedulerEventQueueState {
   readonly runtime: Runtime;
-  readonly eventHandlers: readonly [NormalizedFullLink, EventHandler][];
+  readonly eventHandlers: EventHandlerRegistry;
   readonly eventQueue: QueuedEvent[];
   readonly backgroundTasks: Set<Promise<unknown>>;
   readonly loadPieceForEvent?: (
@@ -364,6 +453,16 @@ export interface SchedulerEventQueueState {
     originTx: IExtendedStorageTransaction,
     event: QueuedEvent,
   ) => void;
+
+  /** Loading heads waiting for a piece that could not be started yet. */
+  readonly pieceStartWaits: Set<QueuedEvent>;
+
+  /** Whether piece-start waits have been ended for good, as disposal does;
+   * a wait that would begin after that ends at once instead. */
+  readonly pieceStartWaitsEnded: () => boolean;
+
+  /** Reports an error through the scheduler's error channel. */
+  readonly handleError: (error: Error, action: unknown) => void;
 }
 
 /**
@@ -452,12 +551,207 @@ export function dropQueuedEvent(
 ): void {
   const index = state.eventQueue.indexOf(event);
   if (index >= 0) state.eventQueue.splice(index, 1);
+  event.endPieceStartWait?.("settled");
+  event.endPatternChangeWait?.();
   if (event.originTx !== undefined) {
     state.releaseLineageEvent?.(event.originTx, event);
   }
   if (event.finalOutcomeNotified) return;
   event.finalOutcomeNotified = true;
   notifyEventDropped(state, event, reason, servedKind, options);
+}
+
+/**
+ * Whether this runtime is the only deliverer of a client event, as it is with
+ * server execution off. With it on, a client event without a served carriage
+ * is the echo of a run the server makes, delivers and reports on itself.
+ */
+function clientDeliversItsEvents(
+  state: Pick<SchedulerEventQueueState, "runtime">,
+): boolean {
+  return state.runtime.experimental.serverExecution !== true;
+}
+
+/**
+ * Drops a client event whose stream has no handler, as `dropQueuedEvent()`
+ * does, and, where the client is the event's only deliverer, reports the
+ * drop as an `EventDroppedError` through the scheduler error channel. A send
+ * made from inside a handler carries no commit callback, so without the
+ * report its drop would reach nobody but the log.
+ */
+function dropUndeliverableClientEvent(
+  state: SchedulerEventQueueState,
+  event: QueuedEvent,
+  reason: string,
+  attempts: number,
+  pieceStartReason?: string,
+): void {
+  if (event.finalOutcomeNotified) return;
+  dropQueuedEvent(state, event, reason);
+  if (!clientDeliversItsEvents(state)) return;
+  state.handleError(
+    new EventDroppedError({
+      streamId: event.eventLink.id,
+      reason,
+      attempts,
+      ...(pieceStartReason !== undefined ? { pieceStartReason } : {}),
+    }),
+    event.handler,
+  );
+}
+
+/**
+ * Whether a piece the start in `verdict`, made for `eventLink`, did not start
+ * may still start once another writer's commit lands: its graph is not
+ * installed, or its owning document carries no pattern pointer while being
+ * either reached through a `result` backlink, so that it is another document
+ * than the one the start began from, or empty. A document holding a value of
+ * its own and no pointer is not a piece, and no commit will make it one.
+ */
+function pieceMayStillStart(
+  state: Pick<SchedulerEventQueueState, "runtime">,
+  verdict: EnsurePieceVerdict,
+  eventLink: NormalizedFullLink,
+): boolean {
+  if (verdict.started) return true;
+  if (verdict.reason !== "no-pattern-meta") return false;
+  const root = verdict.root;
+  if (root === undefined) return false;
+  if (
+    root.id !== eventLink.id || root.space !== eventLink.space ||
+    (root.scope ?? "space") !== (eventLink.scope ?? "space")
+  ) {
+    return true;
+  }
+  // The start synced this document, so the replica holds what the store
+  // does; reading it there costs no load.
+  return state.runtime.storageManager.open(root.space).replica.getDocument(
+    root.id,
+    root.scope,
+  )?.value === undefined;
+}
+
+/** The identity of an observed document: its space, scope and ID. */
+function observedDocKey(
+  space: string,
+  scope: string | undefined,
+  id: string,
+): string {
+  return JSON.stringify([space, scope ?? "space", id]);
+}
+
+/**
+ * The wait of a loading head whose piece could not be started, which
+ * `beginPieceStartWait()` begins. `woken` resolves with what ended it: a
+ * storage notification changing an observed document, a handler registering
+ * for the head's stream, the head settling by another path, the retry window
+ * ending, or the scheduler being disposed. `observe()` adds documents to
+ * watch, and ends the wait at once if one of them has changed since it began.
+ */
+interface PieceStartWait {
+  readonly woken: Promise<PieceStartWake>;
+  observe(docs: readonly OwningRootAddress[]): void;
+  end(cause: PieceStartWake): void;
+}
+
+/**
+ * Begins the wait of a loading head whose piece could not be started,
+ * watching `docs`, until `deadline` at the latest. The wait watches storage
+ * from the moment it begins, so a start attempt made after this sees every
+ * change the wait could miss.
+ */
+function beginPieceStartWait(
+  state: Pick<
+    SchedulerEventQueueState,
+    "runtime" | "pieceStartWaits" | "pieceStartWaitsEnded"
+  >,
+  event: QueuedEvent,
+  docs: readonly OwningRootAddress[],
+  deadline: number,
+): PieceStartWait {
+  const { promise, resolve } = Promise.withResolvers<PieceStartWake>();
+  const observed = new Set<string>();
+  const changed = new Set<string>();
+  let ended = false;
+  const subscription: IStorageNotification = {
+    next: (notification) => {
+      if (ended) return { done: true };
+      if (notification.type === "reset") {
+        end("documents-changed");
+        return { done: true };
+      }
+      for (const change of notification.changes) {
+        const key = observedDocKey(
+          notification.space,
+          change.address.scope,
+          change.address.id,
+        );
+        if (observed.has(key)) {
+          end("documents-changed");
+          return { done: true };
+        }
+        changed.add(key);
+      }
+      return undefined;
+    },
+  };
+  const end = (cause: PieceStartWake): void => {
+    if (ended) return;
+    ended = true;
+    clearTimeout(windowTimer);
+    state.runtime.storageManager.unsubscribe?.(subscription);
+    state.pieceStartWaits.delete(event);
+    delete event.endPieceStartWait;
+    resolve(cause);
+  };
+  const observe = (more: readonly OwningRootAddress[]): void => {
+    for (const doc of more) {
+      const key = observedDocKey(doc.space, doc.scope, doc.id);
+      if (changed.has(key)) end("documents-changed");
+      observed.add(key);
+    }
+  };
+  const windowTimer = setTimeout(
+    () => end("window-spent"),
+    Math.max(0, deadline - performance.now()),
+  );
+  if (state.pieceStartWaitsEnded()) {
+    end("disposed");
+  } else {
+    event.endPieceStartWait = end;
+    state.pieceStartWaits.add(event);
+    state.runtime.storageManager.subscribe(subscription);
+    observe(docs);
+  }
+  return { woken: promise, observe, end };
+}
+
+/**
+ * Ends the piece-start wait of every loading head for `ref`'s stream, so that
+ * it finds the handler just registered there.
+ */
+export function wakePieceStartWaits(
+  state: Pick<SchedulerEventQueueState, "pieceStartWaits">,
+  ref: NormalizedFullLink,
+): void {
+  for (const event of [...state.pieceStartWaits]) {
+    if (areNormalizedLinksSame(event.eventLink, ref)) {
+      event.endPieceStartWait?.("handler-registered");
+    }
+  }
+}
+
+/**
+ * Ends every piece-start wait, for a scheduler being disposed. The caller
+ * also makes `pieceStartWaitsEnded()` report `true`, so that a start attempt
+ * still in flight begins no new wait.
+ */
+export function endPieceStartWaits(
+  state: Pick<SchedulerEventQueueState, "pieceStartWaits">,
+): void {
+  for (const event of [...state.pieceStartWaits]) {
+    event.endPieceStartWait?.("disposed");
+  }
 }
 
 /**
@@ -512,14 +806,6 @@ export function deferLaterSameSpaceServedEvents(
       },
     );
   }
-}
-
-function findEventHandler(
-  handlers: readonly [NormalizedFullLink, EventHandler][],
-  eventLink: NormalizedFullLink,
-): EventHandler | undefined {
-  return handlers.find(([link]) => areNormalizedLinksSame(link, eventLink))
-    ?.[1];
 }
 
 // Source of QueuedEvent.enqueueSeq stamps. Process-global monotonicity is a
@@ -637,7 +923,7 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
   // ingress caller's opaque idempotency key is bound to its stream earlier,
   // at the send surface (cell.ts), via scopeCallerEventId.
   const id = args.eventId ?? mintEventId(args.eventLink, args.originTx);
-  const handler = findEventHandler(state.eventHandlers, args.eventLink);
+  const handler = state.eventHandlers.get(args.eventLink);
 
   if (handler) {
     // W4: bound the per-(stream, handler) in-queue backlog. Below the cap,
@@ -780,67 +1066,94 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
     }
     state.queueExecution();
 
+    // With server execution off, a client event (no served carriage) whose
+    // piece cannot be started yet has no durable entry for a later pass to
+    // re-deliver, and no server delivering it either, so the head waits
+    // for something that could change the answer — a commit touching a
+    // document the start read, or a handler registering for the stream —
+    // and asks again. The wait holds the queue's head, so it is bounded:
+    // `EVENT_DEFERRAL_DROP_THRESHOLD` re-attempts, within the retry window
+    // the commit backpressure policy gives a client re-delivery. Past either,
+    // the event drops with an `EventDroppedError`. The window runs from the
+    // first attempt that found the piece unstartable.
     const startTask = (async () => {
+      let attempts = 0;
+      let deadline: number | undefined;
+      let windowSpent = false;
+      // Begun before a start attempt that rechecks the one before it.
+      let wait: PieceStartWait | undefined;
       try {
-        const verdict = await (state.loadPieceForEvent ??
-          ensurePieceRunningVerdict)(
-            state.runtime,
-            args.eventLink,
-          );
-        // The origin may have failed while the piece was loading.
-        if (
-          queuedEvent.finalOutcomeNotified ||
-          !state.eventQueue.includes(queuedEvent)
-        ) return;
+        while (true) {
+          const rechecking = wait !== undefined;
+          if (!rechecking) attempts++;
+          const verdict = await (state.loadPieceForEvent ??
+            ensurePieceRunningVerdict)(
+              state.runtime,
+              args.eventLink,
+            );
+          // The origin may have failed while the piece was loading.
+          if (
+            queuedEvent.finalOutcomeNotified ||
+            !state.eventQueue.includes(queuedEvent)
+          ) {
+            wait?.end("settled");
+            return;
+          }
 
-        const loadedHandler = findEventHandler(
-          state.eventHandlers,
-          args.eventLink,
-        );
-        if (loadedHandler) {
-          queuedEvent.handler = loadedHandler;
-          queuedEvent.action = (tx) => loadedHandler(tx, args.event);
-          delete queuedEvent.handlerLoadPending;
-        } else if (
-          verdict.started && verdict.graphIsInstalled?.() !== false
-        ) {
-          // The piece is running with its pattern graph installed and
-          // registered NOTHING for this stream — events.md §5's drop
-          // predicate ("no runnable handler"). A verdict carrying no
-          // graph probe reads as installed: only a start walk mints
-          // one, and its absence says nothing about the piece.
-          dropQueuedEvent(
-            state,
-            queuedEvent,
-            `Event dropped: no handler registered for ${args.eventLink.id} after starting its piece`,
-          );
-        } else {
-          // Either the piece could not be STARTED, or it has no
-          // pattern graph installed: a refused instantiation commit
-          // retires the graph the start walk installed, and the runner
-          // then either re-instantiates once from a caught-up view or
-          // retires the registration with it. The walk ran before any
-          // of that, so `started` reports a piece that has nothing
-          // registered for any of its streams. Neither shape is the
-          // drop predicate — the handler is missing because the commit
-          // was raced, not because there is none, and events.md §5
-          // calls for a requeue there. For a served (drained) event
-          // that is a deferral: the durable entry stays pending and a
-          // later wave re-drains it, under the serving loop's bounded
-          // deferral budget — a condition that outlasts the budget
-          // hardens into §5's drop notice rather than wedging the
-          // stream. Client-side the distinction is moot (no durable
-          // entry to re-drain) and the drop keeps its existing shape.
+          const loadedHandler = state.eventHandlers.get(args.eventLink);
+          if (loadedHandler) {
+            wait?.end("settled");
+            queuedEvent.handler = loadedHandler;
+            queuedEvent.action = (tx) => loadedHandler(tx, args.event);
+            delete queuedEvent.handlerLoadPending;
+            return;
+          }
+          if (verdict.started && verdict.graphIsInstalled?.() !== false) {
+            // The piece is running with its pattern graph installed and
+            // registered NOTHING for this stream — events.md §5's drop
+            // predicate ("no runnable handler"). A verdict carrying no
+            // graph probe reads as installed: only a start walk mints
+            // one, and its absence says nothing about the piece.
+            const reason = `Event dropped: no handler registered for ` +
+              `${args.eventLink.id} after starting its piece`;
+            if (queuedEvent.served !== undefined) {
+              dropQueuedEvent(state, queuedEvent, reason);
+            } else {
+              dropUndeliverableClientEvent(
+                state,
+                queuedEvent,
+                reason,
+                attempts,
+              );
+            }
+            return;
+          }
+          // Either the piece could not be STARTED, or it has no pattern
+          // graph installed: a refused instantiation commit retires the
+          // graph the start walk installed, and the runner then either
+          // re-instantiates once from a caught-up view or retires the
+          // registration with it. The walk ran before any of that, so
+          // `started` reports a piece that has nothing registered for any
+          // of its streams. Neither shape is the drop predicate — the
+          // handler is missing because the commit was raced, not because
+          // there is none, and events.md §5 calls for a requeue there. For
+          // a served (drained) event that is a deferral: the durable entry
+          // stays pending and a later wave re-drains it, under the serving
+          // loop's bounded deferral budget — a condition that outlasts the
+          // budget hardens into §5's drop notice rather than wedging the
+          // stream. A client event waits as described above.
+          // A verdict that did not start the piece and names no reason is
+          // one whose start threw, which the start walk logs and collapses.
+          const pieceStartReason = verdict.started
+            ? undefined
+            : verdict.reason ?? "start-failed";
           const pieceState = verdict.started
             ? "has no pattern graph installed"
-            : "could not be started";
-          dropQueuedEvent(
-            state,
-            queuedEvent,
-            `Event dropped: no handler registered for ${args.eventLink.id} and its piece ${pieceState}`,
-            queuedEvent.served !== undefined ? "deferred" : "dropped",
-          );
+            : `could not be started (${pieceStartReason})`;
+          const reason = `Event dropped: no handler registered for ` +
+            `${args.eventLink.id} and its piece ${pieceState}`;
           if (queuedEvent.served !== undefined) {
+            dropQueuedEvent(state, queuedEvent, reason, "deferred");
             // A deferral carries the drain's arrival-order barrier
             // (events.md §2; review-6459 F1's sibling arm), exactly as
             // the handler-not-run withdrawal and the facade's load-park
@@ -850,7 +1163,51 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
               queuedEvent,
               `whose piece ${pieceState}`,
             );
+            return;
           }
+          if (
+            windowSpent || attempts > EVENT_DEFERRAL_DROP_THRESHOLD ||
+            !clientDeliversItsEvents(state) ||
+            !pieceMayStillStart(state, verdict, args.eventLink)
+          ) {
+            dropUndeliverableClientEvent(
+              state,
+              queuedEvent,
+              reason,
+              attempts,
+              pieceStartReason,
+            );
+            return;
+          }
+          deadline ??= performance.now() +
+            state.runtime.commitBackpressure.retryWindowMs;
+          if (wait === undefined) {
+            // The attempt read its documents before anything watched them,
+            // so a commit landing in between would wake nothing. Watch them
+            // first, then ask once more; that recheck is not a re-attempt.
+            wait = beginPieceStartWait(
+              state,
+              queuedEvent,
+              verdict.observedDocs,
+              deadline,
+            );
+            continue;
+          }
+          wait.observe(verdict.observedDocs);
+          const wake = await wait.woken;
+          wait = undefined;
+          if (wake === "settled") return;
+          if (wake === "disposed") {
+            dropQueuedEvent(
+              state,
+              queuedEvent,
+              `${reason}, and the scheduler was disposed while it waited`,
+            );
+            return;
+          }
+          // A spent window still asks once more, so a piece that started
+          // while nothing announced it is found rather than reported.
+          if (wake === "window-spent") windowSpent = true;
         }
       } catch (error) {
         // Unlike the arms above, this one is reachable with the event
@@ -859,15 +1216,22 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
         // never crosses it. A settled head holds no barrier — its
         // disposition was someone else's (e.g. a lineage drop mid-load).
         const alreadySettled = queuedEvent.finalOutcomeNotified === true;
-        dropQueuedEvent(
-          state,
-          queuedEvent,
-          `Event dropped: starting the piece for ${args.eventLink.id} failed: ${
+        const reason = `Event dropped: starting the piece for ` +
+          `${args.eventLink.id} failed: ${
             error instanceof Error ? error.message : String(error)
-          }`,
-          queuedEvent.served !== undefined ? "deferred" : "dropped",
-        );
-        if (!alreadySettled && queuedEvent.served !== undefined) {
+          }`;
+        if (queuedEvent.served === undefined) {
+          dropUndeliverableClientEvent(
+            state,
+            queuedEvent,
+            reason,
+            attempts,
+            "start-failed",
+          );
+          return;
+        }
+        dropQueuedEvent(state, queuedEvent, reason, "deferred");
+        if (!alreadySettled) {
           // Same deferral disposition as the arm above — same barrier.
           deferLaterSameSpaceServedEvents(
             state,
@@ -887,17 +1251,31 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
     // Second pass after a piece start that still registered no handler for
     // this stream (e.g. the piece "started" but its nodes failed to
     // instantiate). Trying again won't change this, so settle the event now.
-    notifyEventDropped(
-      state,
-      args,
-      `Event dropped: no handler registered for ${args.eventLink.id} ` +
-        `after starting its piece`,
-    );
+    const reason = `Event dropped: no handler registered for ` +
+      `${args.eventLink.id} after starting its piece`;
+    notifyEventDropped(state, args, reason);
+    if (args.served === undefined && clientDeliversItsEvents(state)) {
+      state.handleError(
+        new EventDroppedError({
+          streamId: args.eventLink.id,
+          reason,
+          attempts: 1,
+        }),
+        undefined,
+      );
+    }
   }
 }
 
+/**
+ * Registers `args.handler` for the stream `args.ref` names and returns the
+ * cancel that removes it. A handler carrying an implementation selection
+ * joins the stream's guarded dispatcher, which chooses among the
+ * implementations registered under it at dispatch. Any other handler takes
+ * the stream over, in place of whatever was registered for it.
+ */
 export function addSchedulerEventHandler(state: {
-  readonly eventHandlers: [NormalizedFullLink, EventHandler][];
+  readonly eventHandlers: EventHandlerRegistry;
 }, args: {
   readonly handler: EventHandler;
   readonly ref: NormalizedFullLink;
@@ -909,18 +1287,12 @@ export function addSchedulerEventHandler(state: {
   if (args.populateDependencies) {
     args.handler.populateDependencies = args.populateDependencies;
   }
-  const existingIndex = state.eventHandlers.findIndex(([existing]) =>
-    areNormalizedLinksSame(existing, args.ref)
-  );
-  const existing = state.eventHandlers[existingIndex]?.[1];
+  const existing = state.eventHandlers.get(args.ref);
   if (args.handler.implementationSelection !== undefined) {
     const dispatcher = existing && isGuardedDispatcher(existing)
       ? existing
       : createGuardedDispatcher(args.ref, state.eventHandlers);
-    if (dispatcher !== existing) {
-      if (existingIndex !== -1) state.eventHandlers.splice(existingIndex, 1);
-      state.eventHandlers.push([args.ref, dispatcher]);
-    }
+    if (dispatcher !== existing) state.eventHandlers.set(args.ref, dispatcher);
     const key = args.handler.implementationSelection.key;
     const registration = { handler: args.handler };
     dispatcher[guardedImplementations].implementations.set(key, registration);
@@ -928,36 +1300,47 @@ export function addSchedulerEventHandler(state: {
       const { implementations } = dispatcher[guardedImplementations];
       if (implementations.get(key) !== registration) return;
       implementations.delete(key);
-      if (implementations.size === 0) {
-        const index = state.eventHandlers.findIndex(([, h]) =>
-          h === dispatcher
-        );
-        if (index !== -1) state.eventHandlers.splice(index, 1);
+      if (
+        implementations.size === 0 &&
+        state.eventHandlers.get(args.ref) === dispatcher
+      ) {
+        state.eventHandlers.delete(args.ref);
       }
     };
   }
-  if (existingIndex !== -1) {
-    if (existing && isGuardedDispatcher(existing)) {
+  if (existing !== undefined) {
+    if (isGuardedDispatcher(existing)) {
       existing[guardedImplementations].implementations.clear();
     }
-    state.eventHandlers.splice(existingIndex, 1);
     logger.warn("event-handler-replaced", () => [
       "Replacing existing event handler for link",
       { linkId: args.ref.id },
     ]);
   }
-  state.eventHandlers.push([args.ref, args.handler]);
+  state.eventHandlers.set(args.ref, args.handler);
   return () => {
-    const index = state.eventHandlers.findIndex(([r, h]) =>
-      r === args.ref && h === args.handler
-    );
-    if (index !== -1) state.eventHandlers.splice(index, 1);
+    // Only the registration this call made: one a later call made for the
+    // same stream stays, whichever handler it carries.
+    const registered = state.eventHandlers.registration(args.ref);
+    if (registered?.[0] === args.ref && registered[1] === args.handler) {
+      state.eventHandlers.delete(args.ref);
+    }
   };
 }
 
 export interface SchedulerEventExecutionState {
   readonly runtime: Runtime;
+  readonly eventHandlers: EventHandlerRegistry;
   readonly eventQueue: QueuedEvent[];
+
+  /** Holds `idle()` open until `work` settles (`Scheduler.trackBackgroundTask`). */
+  readonly trackBackgroundTask: (work: Promise<unknown>) => void;
+
+  /** The heads held for a pattern change, while each waits. */
+  readonly patternChangeWaits: Set<QueuedEvent>;
+
+  /** Whether `endPatternChangeWaits()` has run; no hold begins after it. */
+  readonly patternChangeWaitsEnded: () => boolean;
   readonly backpressure: CommitBackpressurePolicy;
   readonly collectPendingLoadParkKeys: (
     event: QueuedEvent,
@@ -1015,7 +1398,11 @@ export interface SchedulerEventExecutionState {
     originTx: IExtendedStorageTransaction,
     event: QueuedEvent,
   ) => void;
-  readonly dropEvent: (event: QueuedEvent, reason: string) => void;
+  readonly dropEvent: (
+    event: QueuedEvent,
+    reason: string,
+    options?: { quiet?: boolean },
+  ) => void;
   readonly recordLineageEvent: (
     originTx: IExtendedStorageTransaction,
     event: QueuedEvent,
@@ -1353,6 +1740,135 @@ export function preflightQueuedEventDependencies(state: {
   }
 }
 
+/**
+ * The pattern change that `handler`'s piece, or a piece that instantiated
+ * it, is making (`Runner.pendingPatternChangeFor`), or `undefined` when none
+ * is. Until that change settles, the handler may be about to be replaced by
+ * the incoming pattern's, or kept because its setup did not land.
+ */
+function patternChangeHolding(
+  runtime: Runtime,
+  handler: EventHandler,
+): Promise<void> | undefined {
+  const pieces = piecesOf(handler);
+  if (pieces.length === 0) return undefined;
+  return runtime.runner.pendingPatternChangeFor(pieces);
+}
+
+/** The result cells of the pieces whose graphs registered `handler`. */
+function piecesOf(handler: EventHandler): NormalizedFullLink[] {
+  return eventHandlerImplementations(handler).flatMap((implementation) => {
+    const piece = (implementation as Partial<TelemetryAnnotations>).viewPiece;
+    return piece === undefined ? [] : [piece];
+  });
+}
+
+/**
+ * Whether `handler` belongs to a graph its piece has replaced: it is no longer
+ * registered, and the piece it came from runs with a graph installed. A
+ * running piece's current graph has its handlers registered, so the one that
+ * registered `handler` is gone. A stopped piece's handler is not judged.
+ */
+function isReplacedGraphHandler(
+  state: Pick<SchedulerEventExecutionState, "runtime" | "eventHandlers">,
+  handler: EventHandler,
+): boolean {
+  for (const [, registered] of state.eventHandlers) {
+    if (registered === handler) return false;
+  }
+  return piecesOf(handler).some((piece) =>
+    state.runtime.runner.pieceGraphIsInstalled(
+      state.runtime.getCellFromLink(piece),
+    )
+  );
+}
+
+/**
+ * Points `queuedEvent` at the handler registered for its stream now, and
+ * reports whether there is one. An event takes its stream's handler when it is
+ * queued, and a piece that changes pattern or re-instantiates its graph
+ * before the event dispatches replaces that handler with its new graph's: the
+ * one the event holds then belongs to a graph that no longer runs, and writes
+ * through bindings nothing reads.
+ */
+function followRegisteredHandler(
+  state: Pick<SchedulerEventExecutionState, "eventHandlers">,
+  queuedEvent: QueuedEvent,
+): boolean {
+  const current = state.eventHandlers.get(queuedEvent.eventLink);
+  if (current === undefined) return false;
+  if (current !== queuedEvent.handler) {
+    queuedEvent.handler = current;
+    queuedEvent.action = (tx) => current(tx, queuedEvent.event);
+    delete queuedEvent.preflightImplementation;
+  }
+  return true;
+}
+
+/**
+ * Parks the head `queuedEvent` until `change` settles, then hands it to the
+ * handler registered for its stream by then: the incoming pattern's once the
+ * piece swapped, the running one's when the swap's setup did not land. An
+ * event sent once a pointer move commits is the incoming pattern's to handle,
+ * and running it on the outgoing graph would write through bindings the
+ * incoming one no longer reads. The head holds the queue's FIFO slot, as a
+ * head whose handler's piece is loading does, so a later event cannot
+ * overtake it; and the wait holds `idle()` open, since the queue is quiet
+ * because it is waiting.
+ */
+function holdHeadEventForPatternChange(
+  state: SchedulerEventExecutionState,
+  queuedEvent: QueuedEvent,
+  change: Promise<void>,
+): void {
+  queuedEvent.patternChangePending = true;
+  logger.debug("scheduler", () => [
+    `event ${queuedEvent.id} waits for its piece's pattern change`,
+  ]);
+  const { promise: ended, resolve: end } = Promise.withResolvers<void>();
+  queuedEvent.endPatternChangeWait = end;
+  state.patternChangeWaits.add(queuedEvent);
+  const task = Promise.race([change, ended]).then(() => {
+    state.patternChangeWaits.delete(queuedEvent);
+    delete queuedEvent.endPatternChangeWait;
+    if (
+      queuedEvent.finalOutcomeNotified ||
+      !state.eventQueue.includes(queuedEvent)
+    ) return;
+    // The wait also ends when the piece stops, or when the scheduler is
+    // disposed, and then the event keeps the handler it was queued with, as
+    // a stopped piece's event does on the ordinary path.
+    if (
+      !followRegisteredHandler(state, queuedEvent) &&
+      isReplacedGraphHandler(state, queuedEvent.handler)
+    ) {
+      // The pattern the piece settled on registered nothing for this
+      // stream: events.md §5's drop predicate ("no runnable handler").
+      state.dropEvent(
+        queuedEvent,
+        `Event dropped: no handler registered for ${queuedEvent.eventLink.id} after its piece changed pattern`,
+      );
+      return;
+    }
+    delete queuedEvent.patternChangePending;
+  }).finally(() => state.queueExecution());
+  state.trackBackgroundTask(task);
+}
+
+/**
+ * Ends every pattern-change wait, for a scheduler being disposed: such a wait
+ * can be held by a pattern load that only the watcher's cancellation, later
+ * in the disposal, would release. The caller also makes
+ * `patternChangeWaitsEnded()` report `true`, so that no head is held again.
+ */
+export function endPatternChangeWaits(
+  state: Pick<SchedulerEventExecutionState, "patternChangeWaits">,
+): void {
+  for (const event of [...state.patternChangeWaits]) {
+    event.endPatternChangeWait?.();
+  }
+}
+
 export async function processPullQueuedEventDuringExecute(
   state: SchedulerEventExecutionState,
   eventBlockingDeps: Set<Action>,
@@ -1370,6 +1886,7 @@ export async function processPullQueuedEventDuringExecute(
       state.dropEvent(
         queuedEvent,
         `Event dropped: lineage origin failed before ${queuedEvent.id} dispatched`,
+        { quiet: state.lineageRunsAgain(queuedEvent.originTx) },
       );
       logger.debug("scheduler-lineage", () => [
         "Dropping event from failed lineage origin",
@@ -1386,12 +1903,16 @@ export async function processPullQueuedEventDuringExecute(
   // completion hydrates the same object and queues a fresh execution tick.
   if (queuedEvent.handlerLoadPending) return;
 
+  // The head waits for its piece's pattern change; the change's settlement
+  // hands it its handler and queues a fresh tick.
+  if (queuedEvent.patternChangePending) return;
+
   // The head is a stale-basis retry holding its slot while the state it
   // re-runs against arrives; the readiness continuation queues a fresh tick.
   if (queuedEvent.retryReadinessPending) return;
 
-  // Head is parked on in-flight closure loads; loadsSettled re-queues after
-  // success or drops the event after an explicit load failure.
+  // Head is parked on in-flight closure loads; the park's settlement
+  // re-queues, drops, or defers the event.
   if (state.isHeadEventLoadParked(queuedEvent)) {
     return;
   }
@@ -1405,6 +1926,26 @@ export async function processPullQueuedEventDuringExecute(
   }
 
   delete queuedEvent.notBefore;
+
+  const change = state.patternChangeWaitsEnded()
+    ? undefined
+    : patternChangeHolding(state.runtime, queuedEvent.handler);
+  if (change !== undefined) {
+    holdHeadEventForPatternChange(state, queuedEvent, change);
+    return;
+  }
+  if (
+    !followRegisteredHandler(state, queuedEvent) &&
+    isReplacedGraphHandler(state, queuedEvent.handler)
+  ) {
+    // The graph the piece replaced its handler's with registered nothing for
+    // this stream: events.md §5's drop predicate ("no runnable handler").
+    state.dropEvent(
+      queuedEvent,
+      `Event dropped: no handler registered for ${queuedEvent.eventLink.id} after its piece replaced its graph`,
+    );
+    return;
+  }
 
   const { handler } = queuedEvent;
 
@@ -2051,7 +2592,7 @@ export async function dispatchQueuedEvent(state: {
       // reaches leaves the run free to dispatch.
       const refused = served === undefined
         ? undefined
-        : refusedReadIn(state.runtime.storageManager, tx);
+        : refusedReadIn(state.runtime.storageManager, tx.tx);
       if (refused !== undefined) {
         if (tx.status().status === "ready") {
           tx.abort(new Error(`served run read a refused document: ${refused}`));
@@ -2397,18 +2938,16 @@ export async function dispatchQueuedEvent(state: {
           telemetryFailure = { error };
         }
 
-        // A served event's DETERMINISTIC CFC pre-storage refusal seals an
-        // error consequence (events.md §5: the error IS the consequence — the
-        // same honesty as the throw arm in `finalize` above). Without one the
-        // durable entry stays unconsequenced and every wave re-drains it into
-        // the identical refusal. Scoped to exactly the class
-        // `reportDroppedCfcRejectedWrite` reports: every other non-retried
-        // outcome has its own explicit routing below: typed delivery failures
-        // checkpoint, proven-no-commit failures terminalize, and a handler abort
-        // seals a safe error consequence. Called before the commit callback on
-        // both paths that carry a refusal, so the drain's in-flight guard sees
-        // the staged notice ("marked") rather than releasing the still-"queued"
-        // copy.
+        // A served event's CFC verdict seals an error consequence (events.md
+        // §5: the error IS the consequence — the same honesty as the throw arm
+        // in `finalize` above). Without one the durable entry stays
+        // unconsequenced and every later drain pass runs it into the identical
+        // refusal. Scoped to exactly the class `reportDroppedCfcRejectedWrite`
+        // reports; a CFC refusal that is not a verdict defers instead
+        // (`deferCommitPreparationFailure`). Called before the commit callback
+        // on both paths that carry a refusal, so the drain's in-flight guard
+        // sees the staged notice ("marked") rather than releasing the
+        // still-"queued" copy.
         const sealCfcRefusalConsequence = (): void => {
           if (served === undefined || !isCfcRejectedCommitError(error)) return;
           reportServedEventFailure(served, {
@@ -2432,11 +2971,17 @@ export async function dispatchQueuedEvent(state: {
             message: error.message,
           });
         };
-        const deferCommitPreparationFailure = (): void => {
-          if (
-            served === undefined || error?.name !== "CommitPreparationError"
-          ) {
-            return;
+        // For a served event, a commit preparation that failed for a cause a
+        // fresh attempt may clear (`failedCommitPreparation`) is a delivery
+        // failure in the commit-preparation phase: the drain checkpoints the
+        // durable entry, holds the events behind it, retries it on input, and
+        // covers it for attention once its failed-state budget is spent
+        // (events.md §5). Sealing an error consequence instead would end an
+        // event a later attempt can still deliver. Returns whether it
+        // deferred.
+        const deferCommitPreparationFailure = (): boolean => {
+          if (served === undefined || !failedCommitPreparation(error)) {
+            return false;
           }
           reportServedEventFailure(served, {
             kind: "deferred",
@@ -2449,6 +2994,15 @@ export async function dispatchQueuedEvent(state: {
               permanentEvidence: false,
             },
           });
+          // The deferral carries the drain's arrival-order barrier
+          // (events.md §2): a later arrival the drain queued in the same pass
+          // sits behind this head and would dispatch and seal next.
+          deferLaterSameSpaceServedEvents(
+            state,
+            queuedEvent,
+            "whose commit preparation failed",
+          );
+          return true;
         };
         const routeProvenNoCommitFailure = (): void => {
           if (served === undefined || error === undefined) return;
@@ -2472,6 +3026,26 @@ export async function dispatchQueuedEvent(state: {
               permanentEvidence: true,
             },
           });
+        };
+        // With server execution off, a client event's refused commit is the
+        // only record of the write it drops, and a send made from inside a
+        // handler has no commit callback to carry it, so the refusal goes to
+        // the error channel. An explicit handler abort is the handler's own
+        // choice, and a lost receipt race means the same invocation already
+        // committed, so neither is reported.
+        const reportRefusedClientCommit = (
+          rejection: "non-retryable" | "permanent",
+        ): void => {
+          if (served !== undefined || !clientDeliversItsEvents(state)) return;
+          if (isExplicitTransactionAbort(error)) return;
+          state.handleError(
+            new EventCommitRefusedError({
+              handlerId,
+              rejection,
+              cause: error,
+            }),
+            action,
+          );
         };
         const sealExplicitHandlerAbort = (): void => {
           if (served === undefined || !isExplicitTransactionAbort(error)) {
@@ -2510,28 +3084,35 @@ export async function dispatchQueuedEvent(state: {
             runFinalCommitCallback();
             break;
           }
-          case "give-up":
-            deferCommitPreparationFailure();
+          case "give-up": {
+            const deferred = deferCommitPreparationFailure();
             routeProvenNoCommitFailure();
             sealExplicitHandlerAbort();
             sealCfcRefusalConsequence();
             sealAclDocumentRefusalConsequence();
             runFinalCommitCallback();
             reportDroppedCfcRejectedWrite(error, handlerId);
-            // No further attempt at this event is coming, so anything staged on
-            // the transaction and waiting for it to commit is waiting for
-            // nothing.
+            // This transaction never commits, and an attempt the drain makes
+            // at a deferred event runs in a fresh one, so anything staged on
+            // this one and waiting for it to commit is waiting for nothing.
             tx.abandonStagedWork(error as CommitError);
             logger.warn(
               "scheduler",
-              disposition.reason === "non-retryable"
+              deferred
+                ? "Event handler commit failed in commit preparation; the " +
+                  "served event is deferred as a delivery failure"
+                : disposition.reason === "non-retryable"
                 ? "Event handler commit failed with a non-stale-basis rejection " +
                   "that re-running cannot resolve; dropping the write without retry"
                 : "Event handler commit failed and the caller opted out of " +
                   "retry (retries: false); dropping the write",
               { error, handlerId },
             );
+            if (disposition.reason === "non-retryable") {
+              reportRefusedClientCommit("non-retryable");
+            }
             break;
+          }
           case "backoff":
             logger.debug(
               "scheduler",
@@ -2549,8 +3130,8 @@ export async function dispatchQueuedEvent(state: {
             // A deterministic commit-rule refusal: run the final callback and
             // stop. No retry (would recompute the identical refused write) and no
             // handleError — the rejection is observable via the commit telemetry
-            // marker (`terminal: "rule"`), mirroring the permanent path; surfacing
-            // a scheduler error here is reserved for non-deterministic failures.
+            // marker (`terminal: "rule"`), and a CFC refusal through the dropped-
+            // write report below.
             // A CFC boundary refusal is classified terminal rather than
             // give-up, so both of the give-up path's CFC obligations have to
             // hold here too: seal the served entry's error consequence, and
@@ -2604,6 +3185,9 @@ export async function dispatchQueuedEvent(state: {
               "Event handler commit permanently rejected; not retrying",
               { error, handlerId, permanentRejection },
             );
+            if (permanentRejection !== "receipt-exists") {
+              reportRefusedClientCommit("permanent");
+            }
             break;
           case "convergence-failed": {
             runFinalCommitCallback();
@@ -2755,10 +3339,13 @@ export async function dispatchQueuedEvent(state: {
  * records as a link-resolution probe, which resolving a link through the
  * document makes; and a read it records as ignored for scheduling, which
  * writing into the document makes.
+ *
+ * The reads are the ones `tx`, the storage transaction itself, records
+ * natively; a transaction that records none names no document.
  */
 export function refusedReadIn(
   manager: Pick<IStorageManager, "refusesReadByConstruction">,
-  tx: Pick<IExtendedStorageTransaction, "getReadActivities">,
+  tx: Pick<IStorageTransaction, "getReadActivities">,
 ): string | undefined {
   if (manager.refusesReadByConstruction === undefined) return undefined;
   for (const read of tx.getReadActivities?.() ?? []) {

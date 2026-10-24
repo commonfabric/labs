@@ -1,6 +1,5 @@
 import { stringSchema } from "@commonfabric/runner/schemas";
 import { type CellHandle } from "@commonfabric/runtime-client";
-import { consume } from "@lit/context";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
@@ -11,9 +10,7 @@ import { createFormFieldController } from "../../core/form-field-controller.ts";
 import {
   applyThemeToElement,
   type CFTheme,
-  cfThemeContext,
   type ComponentSize,
-  defaultTheme,
 } from "../theme-context.ts";
 
 export type TimingStrategy = "immediate" | "debounce" | "throttle" | "blur";
@@ -325,10 +322,12 @@ export class CFTextarea extends BaseElement {
     }
   `;
 
-  /** The theme, consumed from the provider. */
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   #internals: ElementInternals;
   private _generatedAriaLabel: string | null = null;
@@ -417,9 +416,6 @@ export class CFTextarea extends BaseElement {
       delay: this.timingDelay,
     });
 
-    // Apply theme on mount
-    applyThemeToElement(this, this.theme ?? defaultTheme);
-
     // Register with form after binding is complete
     this._formField.register(this.name);
 
@@ -486,7 +482,7 @@ export class CFTextarea extends BaseElement {
     }
 
     if (changedProperties.has("theme")) {
-      applyThemeToElement(this, this.theme ?? defaultTheme);
+      applyThemeToElement(this, this.theme);
     }
 
     if (changedProperties.has("value") && this.autoResize) {

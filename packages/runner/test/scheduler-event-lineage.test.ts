@@ -724,6 +724,25 @@ describe("scheduler event lineage", () => {
       expect(result.dropWarnings).toEqual([]);
     });
 
+    it("drops a follow-up queued after its retrying origin aborted without a warning", async () => {
+      let sendFromAbortedAttempt: ((payload: number) => void) | undefined;
+      const result = await runOrigin(
+        "lineage late rerun follow-up",
+        (attempt, sendFollowUp) => {
+          if (attempt === 1) {
+            sendFromAbortedAttempt = sendFollowUp;
+            throw new RetryImmediately();
+          }
+          sendFromAbortedAttempt!(1);
+          sendFollowUp(2);
+        },
+      );
+
+      expect(result.originAttempts).toBe(2);
+      expect(result.delivered).toEqual([2]);
+      expect(result.dropWarnings).toEqual([]);
+    });
+
     it("runs an attempt withdrawn for an unresolved in-space name once, and drops its follow-up without a warning", async () => {
       // The serving runtime's run of the event creates the space and sends
       // its own follow-ups, so a client's echo does not run again.

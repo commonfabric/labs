@@ -18,16 +18,26 @@ export function spaceCellId(space: MemorySpace): URI {
  * finds the slot taken, so a space written that way never gets its root.
  */
 export class SpaceRootMissingError extends Error {
+  readonly #rootlessSpace: MemorySpace;
+
   constructor(space: MemorySpace) {
     super(
       `${space} has no root yet, so a write beneath its \`defaultPattern\` ` +
-        `slot is refused rather than landing in the space cell. A client ` +
-        `runtime brings a user's Home root up ahead of a handler that holds ` +
-        `a cell beneath it. Any other space gets its root when an OWNER of ` +
-        `it opens it on a client runtime, or, under server execution, from ` +
-        `the space's own server once the space is active and its owner ` +
-        `resolves; a user with WRITE alone does not bring it up by opening it.`,
+        `slot is refused rather than landing in the space cell. On a client ` +
+        `runtime, when a handler's write beneath a user's own Home slot is ` +
+        `refused and the refusal escapes the handler, that Home's root is ` +
+        `brought up and the handler runs again. Any other space ` +
+        `gets its root when an OWNER of it opens it on a client runtime, or, ` +
+        `under server execution, from the space's own server once the space ` +
+        `is active and its owner resolves; a user with WRITE alone does not ` +
+        `bring it up by opening it.`,
     );
     this.name = "SpaceRootMissingError";
+    this.#rootlessSpace = space;
+  }
+
+  /** The space whose root is missing. */
+  get rootlessSpace(): MemorySpace {
+    return this.#rootlessSpace;
   }
 }

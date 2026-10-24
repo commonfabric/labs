@@ -93,84 +93,55 @@ The receiving slot's schema is the entry's own, so it can declare integrity the
 entry's writer adds, such as authorship by the current principal. Staging a
 link writes none of that content, so preparation mints none of that integrity
 for the principal staging it: not on the slot's declared label, not on the
-link's label, and not toward an integrity floor at the slot. The same holds for
-a label derived for the link's source when that source is itself a reference
-staged in the transaction. The link carries its source's label and the
-`LinkReference` a link write mints, so a reader reaching the entry through the
-link sees the entry's own authorship.
+link's label, and not toward an integrity floor at the slot. The slot persists
+the reference's own label and nothing of the entry's (CFC §8.2.5, §8.12.8):
+the entry's authorship and labels stay with the entry, where a reader reaching
+it through the link finds them composed with the slot's restriction (§8.2.4).
 
 An integrity floor at a path below a staged link is checked against the value
 the link brings there, which is the source's value at the matching path. Where
 the source holds nothing at that path, nothing lands at the floor, and the
 floor does not apply. Where the source reaches that value through references
-staged in the same transaction, the floor uses the labels derived through them,
-as described below. Where it reaches the value through a link stored before the
-transaction, the floor uses the label of the document holding the value, at the
-value's own position, and only that label. A stored link's label describes
-whatever its target held when the link was written, so it is no evidence about
-the value there now.
+staged in the same transaction, the floor uses the evidence derived through
+them, as described below. Where it reaches the value through a link stored
+before the transaction, the floor uses the label of the document holding the
+value, at the value's own position, and only that label. A stored link's slot
+describes the reference, so it is no evidence about the value there now.
 
-When deriving a pending reference source, schema labels are minted at their
-declaration paths, with wildcard segments bound to the projected source path.
-Covering declarations join their confidentiality and static integrity, including
-when the reference slot has its own nonempty confidentiality declaration. A
-declaration at or below an initialized reference mints no integrity for the
-referenced content. Principal claims, including `authored-by` and
-`represents-principal`, come from the most specific source label covering the
-projected path: a container's author does not become the author of a reference
-it holds. This applies to both pending and stored source labels, and to floors
-checked against them. Inline data without a more specific label keeps its
-container's authorship. An empty declaration without a persistent gate does not
-shadow an ancestor during this derivation.
+When deriving a pending reference source for a floor, schema labels are minted
+at their declaration paths, with wildcard segments bound to the projected
+source path. Covering declarations join their confidentiality and static
+integrity, including when the reference slot has its own nonempty
+confidentiality declaration. A declaration at or below an initialized
+reference mints no integrity for the referenced content. Principal claims,
+including `authored-by` and `represents-principal`, come from the most
+specific source label covering the projected path, and a container's claims
+never reach a path that holds a reference: a container's author does not
+become the author of a reference it holds. This applies to both pending and
+stored source labels. Inline data without a more specific label keeps its
+container's authorship. An empty declaration without a persistent gate does
+not shadow an ancestor during this derivation.
 
-A reference accepted through a carried label view also persists a root
-`LinkReference` entry when its source has no schema or stored CFC metadata.
-This entry bounds the container's principal claims even when the carried view
-labels only descendants. The descendants retain their carried labels; the
-reference's root evidence supplies no content authorship or represented
-principal.
+Each slot persists the label of its last recorded link matching the source it
+still holds: the same space, scope, document, and path. A raw write restoring
+an earlier reference therefore uses the last input for that source. A
+replacement by another reference, inline data, or absence removes the
+superseded link's entry. Every link attempt remains subject to verification,
+but only the selected input persists a slot entry. Write-side integrity floors
+use the final references.
 
-Each slot persists labels from its last recorded link matching the source it
-still holds: the same space, scope, document, and path. A raw write restoring an
-earlier reference therefore uses the last input for that source. A replacement
-by another reference, inline data, or absence removes the superseded link's
-contribution. Every link attempt remains subject to verification, but only the
-selected input supplies persisted link entries and the pending source view.
-Write-side integrity floors use the final references. Confidentiality consumed
-by the transaction still applies to inline values that replace a reference.
-
-A pending source view excludes stored link entries that the source's final
-writes replace or rederive, including descendants of a repeated reference with
-a changed carried view. Its final recorded references supply their own labels,
-whether or not the write carries reference-initialization evidence. Reading a
-source before its envelope is prepared therefore follows the same replacement
-rules as reading that envelope after preparation.
-
-When a link's source is a reference staged in the same transaction, or a value
-holding one, preparation derives that reference's labels through the recorded
-chain. A reference at or above the source path supplies the label there. One
-held below it supplies the labels at the matching paths beneath the link, and
-none at the link itself. This does not depend on staging order or on the
-references occupying different documents. Each hop retains the source's nested
-labels and applies the ordinary evidence and carried-label checks. An integrity
-floor uses those same derived labels, so the source's real authorship can meet
-it. A chain of pending references that never reaches a value refuses label
-derivation terminally. An object holding a reference back to itself or another
-object is valid. Preparation expands each held reference once per branch, then
-follows back-references only as far as a source path, floor, or carried view
-requires. This keeps the persisted view finite; reads beyond it follow the
-stored references and consume the labels at each hop. A carried view is checked
-in full at the link's first occurrence, and a repeated occurrence supplies the
-entries covering the requested paths.
-
-Within one derivation, sibling branches can reuse a complete result when the
-pending document graph has shared sources and no cycles, and the result carries
-no caller-specific projection request. The cache belongs to that derivation:
-preparation can persist source metadata between calls, so later calls derive
-against the current snapshot. Graphs with document cycles retain their
-branch-local expansion rules. Ordinary chains need no shared-result cache.
-The persisted view still contains every distinct labeled path; sharing work
-does not reduce the size of a flat label map for a branching graph.
+When a floor's link source is a reference staged in the same transaction, or a
+value holding one, the floor derives that reference's evidence through the
+recorded chain. A reference at or above the source path supplies the evidence
+there. One held below it supplies the evidence at the matching paths beneath
+the link, and none at the link itself. This does not depend on staging order
+or on the references occupying different documents. A chain of pending
+references that never reaches a value refuses the derivation terminally, and a
+floor over it fails. An object holding a reference back to itself or another
+object is valid; the derivation expands each held reference once per branch
+and follows back-references only as far as a floor requires. Nothing of this
+derivation is persisted: the slot stores the reference's own label, and a read
+beyond it follows the stored references and consumes the labels at each hop.
 
 ### Captured bindings
 
@@ -229,20 +200,50 @@ both, the slots the caller does not name are carried over from the stored
 document with the bytes they hold, and the runtime records each such slot as a
 replay. The record permits nothing but leaving those bytes as they are. A slot
 the changed code's argument schema refuses is not carried over, and receives
-no record.
+no record. Its value is copied into the piece's refused-slot store instead
+([pattern updates](./pattern-imports/pattern-updates.md)), which the runtime
+names as a store it owns for the piece.
 
-Preparation defers a protected field's writer requirement when the field lies
-at or under a recorded replay slot and no write the transaction recorded
-changes a byte at the field, at an ancestor where the difference reaches the
-field, or below it. The deferred requirement is waived only when the envelope
-the transaction would store leaves the field as it was too: the policy claims
-and the label positions they declare are the same throughout the document,
-and every label entry at the field, above it or below it is the same. The
-stored schema document and envelope version are then kept, and labels
+A piece whose own code changed, as when its origin publishes a release the
+source reconciler adopts, is set up again over its stored argument with no
+argument supplied. Every slot the document holds is carried over and recorded
+as a replay, and a default the changed schema adds where the document holds
+nothing is not. A stored slot the changed schema refuses refuses the setup as
+a whole.
+
+Preparation defers a protected field's writer requirements — its
+`writeAuthorizedBy`, and the trusted event its UI contract requires — when the
+field lies at or under a recorded replay slot and no write the transaction
+recorded changes a byte at the field, at an ancestor where the difference
+reaches the field, or below it. The deferred requirement is waived only when the
+envelope the transaction would store leaves the field as it was too: the policy
+claims and the label positions they declare are the same throughout the
+document, and every label entry at the field, above it or below it is the same.
+Claims are compared at the positions they apply to, each reference followed to
+the definition it names, so a definition no reference reaches declares nothing;
+a release whose merged envelope keeps the stored claims in force, under another
+layout of definitions, leaves them the same. In a release, the claims beneath a
+position where the stored document holds links describe the documents linked
+there, which the release may re-describe, so they are not compared. Nor are the
+claims at or beneath a new field: a concrete property the object holding it
+lacked before the transaction, so that one holding `undefined` is not new, which
+the stored envelope declares nothing at or beneath, and which lies beneath no
+protected field the setup restates. Such a field is initialized as "New fields
+during a source update" above describes, and a list there whose entries are
+protected may hold no entry. The stored schema document and envelope version are
+then kept where the comparison left out no new field's claims. Otherwise the
+envelope the transaction derives is stored. It differs from the stored one at
+the new fields, whose claims it declares, and, in a release, beneath links,
+where it re-describes the claims as the specification's link-position rule
+("Claims Beneath a Link Position", "Release") lets a release do. Labels
 elsewhere in the document persist as for any write. An authoritative
 transaction, which commits each document whole, receives no deferral. Any other
 write attempt at a protected field — pattern code setting a whole document with
-the field's own bytes among them — requires the field's ordinary writer.
+the field's own bytes among them — requires the field's ordinary writer. The
+same requirements are deferred at the root of a document holding a runtime
+output that a re-run initializer preserves, as "New cells" above describes, and
+are waived there only when the transaction leaves the complete stored envelope
+as it was.
 
 ## Attribution of an initialized value
 

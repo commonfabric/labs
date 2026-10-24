@@ -50,6 +50,7 @@ describe("file-cell-storage", () => {
     expect(request).toMatchObject({
       space: "did:key:z6Mk-file-cell-storage-test",
       contentType: "text/plain",
+      name: "hello world.txt",
       suffix: "txt",
     });
     expect(new Uint8Array((request as { body: ArrayBuffer }).body)).toEqual(
@@ -64,5 +65,23 @@ describe("file-cell-storage", () => {
       size: 5,
       data: "data:text/plain;base64,aGVsbG8=",
     });
+  });
+
+  it("uploads a file with no name with no `name` in its request", async () => {
+    let request: unknown;
+    const runtime = {
+      uploadBlob: (options: unknown) => {
+        request = options;
+        return Promise.resolve({ id: "fid1:test", url: "blobs/test.bin" });
+      },
+    } as unknown as RuntimeClient;
+
+    await uploadFile({
+      file: new File(["hello"], "", { type: "text/plain" }),
+      runtime,
+      space: "did:key:z6Mk-file-cell-storage-test" as never,
+    });
+
+    expect(Object.hasOwn(request as object, "name")).toBe(false);
   });
 });

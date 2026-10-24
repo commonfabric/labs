@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { fromFileUrl, join, toFileUrl } from "@std/path";
+import { join, toFileUrl } from "@std/path";
 
 import {
   activeCapture,
@@ -15,12 +15,12 @@ import {
   readNameMaps,
   readRegistrations,
   repositoryPathOf,
-  repositoryRootOf,
   runDirectory,
   runningFile,
   serializeSkipList,
   writableSpool,
 } from "./registration.ts";
+import { repositoryRoot } from "./paths.ts";
 
 // The fixture runner's module, as a class name would end.
 const FIXTURE_RUNNER = new URL("../fixture-runner.ts", import.meta.url).href;
@@ -376,6 +376,28 @@ describe("registration", () => {
   });
 
   describe("readRegistrations()", () => {
+    it("leaves out a file any map marked as interrupted names", async () => {
+      // An error can stop a module part way through loading, after some
+      // of its tests registered and their names were written unmarked.
+      const dir = await Deno.makeTempDir();
+      try {
+        await writeNameMap(dir, "01", { early: "packages/a/one.test.ts" });
+        await Deno.writeTextFile(
+          join(dir, `${NAME_MAP_PREFIX}02${NAME_MAP_SUFFIX}`),
+          JSON.stringify({
+            names: { early: "packages/a/one.test.ts" },
+            interrupted: true,
+          }),
+        );
+        await writeNameMap(dir, "03", { whole: "packages/b/two.test.ts" });
+        expect(await readRegistrations(dir)).toEqual(
+          new Map([["packages/b/two.test.ts", new Set(["whole"])]]),
+        );
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
     it("returns each file's names from every map a spool holds", async () => {
       // Every execution of a unit writes a map of its own, and what the
       // file registered is all of them together.
@@ -545,6 +567,50 @@ describe("registration", () => {
       }
     });
 
+    it("writes every name it noted again, marked, once interrupted", async () => {
+      // The names written before the interruption were written unmarked,
+      // and the file they came from may hold more than they say.
+      const spool = await Deno.makeTempDir();
+      try {
+        const { registrar } = recorder();
+        const built = buildCapture({ registrar, spool });
+        built.registrar("before", () => {});
+        built.capture.flush();
+        expect((await readRegistrations(spool)).size).toBe(1);
+        built.registrar("during", () => {});
+        built.capture.interrupt();
+        built.registrar("after", () => {});
+        built.capture.flush();
+        expect(await readRegistrations(spool)).toEqual(new Map());
+        // Each name still says which file it came from.
+        const files = await readNameMaps(spool);
+        for (const name of ["before", "during", "after"]) {
+          expect(files.get(name)).toMatch(/registration\.test\.ts$/);
+        }
+      } finally {
+        await Deno.remove(spool, { recursive: true });
+      }
+    });
+
+    it("notes no interruption once the module has finished loading", async () => {
+      // An error once the file's hooks and tests begin leaves what its
+      // module registered whole.
+      const spool = await Deno.makeTempDir();
+      try {
+        const { registrar } = recorder();
+        const built = buildCapture({ registrar, spool });
+        built.registrar("runs", () => {});
+        built.capture.begin();
+        built.capture.interrupt();
+        built.capture.flush();
+        expect([...(await readRegistrations(spool)).values()]).toEqual([
+          new Set(["runs"]),
+        ]);
+      } finally {
+        await Deno.remove(spool, { recursive: true });
+      }
+    });
+
     it("writes nothing when it captured nothing, or has nowhere", () => {
       const { registrar } = recorder();
       // No spool: flushing is a no-op rather than an error.
@@ -639,26 +705,6 @@ describe("what the capture does with what it cannot read", () => {
   });
 });
 
-describe("repositoryRootOf()", () => {
-  it("finds the root above a file inside the repository", () => {
-    const root = repositoryRootOf(fromFileUrl(import.meta.url));
-    expect(root).toBeDefined();
-    expect(Deno.statSync(join(root!, ".git"))).toBeDefined();
-  });
-
-  it("is nothing for a path under no repository at all", async () => {
-    // The climb reaches the filesystem root and stops there. Answering
-    // with the root itself would make every test file's path relative
-    // to "/", which names no file in any repository.
-    const outside = await Deno.makeTempDir();
-    try {
-      expect(repositoryRootOf(join(outside, "a.test.ts"))).toBeUndefined();
-    } finally {
-      await Deno.remove(outside, { recursive: true });
-    }
-  });
-});
-
 describe("runDirectory()", () => {
   it("names the working directory as the repository sees it", () => {
     const dir = runDirectory();
@@ -668,7 +714,7 @@ describe("runDirectory()", () => {
     // nor climbs out of the repository.
     expect(dir!.startsWith("/")).toBe(false);
     expect(dir!.split("/")).not.toContain("..");
-    const root = repositoryRootOf(join(Deno.cwd(), "a.ts"));
+    const root = repositoryRoot();
     expect(join(root!, dir!)).toBe(Deno.cwd());
   });
 });

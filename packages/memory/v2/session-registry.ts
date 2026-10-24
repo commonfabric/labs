@@ -9,6 +9,11 @@ import type {
   ViewQuery,
   WatchSpec,
 } from "../v2.ts";
+import {
+  type DocumentInterestQuery,
+  type DocumentInterestsReport,
+  inspectDocumentInterests,
+} from "./document-interests.ts";
 import type { TrackedGraphState } from "./query.ts";
 import type { SessionCacheEntry } from "./server-sync.ts";
 import { trackedIdsFromEntries } from "./server-sync.ts";
@@ -17,6 +22,15 @@ export type SessionState = {
   id: string;
   space: string;
   sessionToken: SessionToken;
+  /**
+   * The `resumeKey` and `resumeAttempt` the latest open carried, and the
+   * token it presented. A newer attempt under the same key may present that
+   * token instead of `sessionToken`: its client may never have received the
+   * response that carried `sessionToken` (`SessionDescriptor.resumeKey`).
+   */
+  resumeKey?: string;
+  resumeAttempt?: number;
+  presentedToken?: SessionToken;
 
   /** The read ceiling this session declared at its LAST open
    * (`SessionDescriptor.readCeiling`); fresh per open, never inherited. */
@@ -75,9 +89,9 @@ export type SessionState = {
   pendingCaughtUpLocalSeq: number;
 
   /** Set when delivery-state rollback re-inserted tombstone cache entries
-   * for a lost frame's removes: the incremental refresh path never emits
-   * removes, so the next sync must run a FULL watch evaluation to re-diff
-   * them out (CT-1927 review, round 7). Self-clearing. */
+   * for a lost frame's removes: the incremental refresh retracts only what
+   * its own re-walks retire, so the next sync must run a FULL watch
+   * evaluation to re-diff them out. Self-clearing. */
   forceFullResync: boolean;
 
   /** Set once this session was admitted an explicit `entity_scope_key`
@@ -203,7 +217,18 @@ export class SessionRegistry {
     }
     if (
       existing !== undefined &&
-      session.sessionToken !== existing.sessionToken
+      session.sessionToken !== existing.sessionToken &&
+      !(
+        existing.resumeKey !== undefined &&
+        existing.presentedToken !== undefined &&
+        existing.resumeAttempt !== undefined &&
+        session.resumeKey === existing.resumeKey &&
+        session.sessionToken === existing.presentedToken &&
+        // A superseded attempt, still in flight when a newer one restored
+        // the session, must not take it back.
+        session.resumeAttempt !== undefined &&
+        session.resumeAttempt > existing.resumeAttempt
+      )
     ) {
       throw revokedError(
         `session ${sessionId} resume token is no longer valid`,
@@ -223,6 +248,15 @@ export class SessionRegistry {
       id: sessionId,
       space,
       sessionToken,
+      ...(session.resumeKey !== undefined
+        ? { resumeKey: session.resumeKey }
+        : {}),
+      ...(session.resumeAttempt !== undefined
+        ? { resumeAttempt: session.resumeAttempt }
+        : {}),
+      ...(session.sessionToken !== undefined
+        ? { presentedToken: session.sessionToken }
+        : {}),
       seenSeq,
       lastSyncedSeq: existing?.lastSyncedSeq ?? seenSeq,
       watches: existing?.watches ?? [],
@@ -320,6 +354,11 @@ export class SessionRegistry {
       }
     }
     return sessions;
+  }
+
+  /** Attributes a document to retained sessions without pruning or mutation. */
+  documentInterests(query: DocumentInterestQuery): DocumentInterestsReport {
+    return inspectDocumentInterests(this.#sessions.values(), query);
   }
 
   /** Every live session of one principal across ALL spaces — the

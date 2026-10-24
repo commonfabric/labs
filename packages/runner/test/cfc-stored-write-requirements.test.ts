@@ -6,7 +6,9 @@ import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
 
 import type { JSONSchema } from "../src/builder/types.ts";
+import { droppedStoredClaim } from "../src/cfc/claim-preservation.ts";
 import { loadStoredCfcEnvelope } from "../src/cfc/prepare.ts";
+import { cfcSchemaEntries } from "../src/cfc/schema-label-view.ts";
 import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
@@ -1217,6 +1219,34 @@ describe("stored write requirements", () => {
       return await tx.commit().settled;
     };
 
+    /** The envelope `id` stores, read outside any write. */
+    const storedEnvelopeOf = (runtime: Runtime, id: string): JSONSchema => {
+      const tx = runtime.edit();
+      const link = runtime.getCell(space, id, undefined, tx)
+        .getAsNormalizedFullLink();
+      const stored = loadStoredCfcEnvelope(tx, link);
+      tx.abort("inspected");
+      expect(stored.status).toBe("loaded");
+      return (stored as { schema: JSONSchema }).schema;
+    };
+
+    /** The modules the writer claims of `envelope` at `path` are stamped with. */
+    const writerStampsAt = (
+      envelope: JSONSchema,
+      path: readonly string[],
+    ): string[] =>
+      cfcSchemaEntries(envelope).flatMap((entry) => {
+        const claim =
+          (entry.schema as { ifc?: { writeAuthorizedBy?: unknown } })
+            .ifc?.writeAuthorizedBy as
+              | { __ctWriterIdentityOf?: { moduleIdentity?: string } }
+              | undefined;
+        const stamp = claim?.__ctWriterIdentityOf?.moduleIdentity;
+        return entry.path.join("/") === path.join("/") && stamp !== undefined
+          ? [stamp]
+          : [];
+      });
+
     it("follows a new release's claims beneath a linked profile", async () => {
       const runtime = start();
       const value = await seedHolder(runtime, "linked-profile", (profile) => ({
@@ -1299,42 +1329,41 @@ describe("stored write requirements", () => {
         // Only the runtime's release of the piece follows a new release's
         // claims; any other writer carrying the same schema keeps them.
         const runtime = start();
-        const value = await seedHolder(runtime, `not-release-${release}`, (
+        const id = `not-release-${release}`;
+        const value = await seedHolder(runtime, id, (
           profile,
         ) => ({ profile, profiles: [], other: "o" }));
+        const before = storedEnvelopeOf(runtime, id);
         expect(
-          refusalOf(
-            await rewriteUnderNextRelease(
-              runtime,
-              `not-release-${release}`,
-              value,
-              false,
-              release,
-            ),
-          ),
-        ).toContain("drops the stored writeAuthorizedBy at /profile/avatar");
+          (await rewriteUnderNextRelease(runtime, id, value, false, release))
+            .error,
+        ).toBeUndefined();
+        expect(droppedStoredClaim(before, storedEnvelopeOf(runtime, id)))
+          .toBeUndefined();
       });
     }
 
-    it("lets the position's writer write after a rewrite that would drop its claim is refused", async () => {
-      // A refusal leaves the stored union as it was, so the position's own
-      // writer still pairs with it; only other writers are refused.
+    it("lets the position's writer write after a rewrite under the next release's schema, and refuses the next release's writer", async () => {
+      // The rewrite keeps the stored union and its stamp, so the position's
+      // own writer still pairs with it; other writers are refused.
       const runtime = start();
       const value = await seedHolder(runtime, "writable-after", () => ({
         profiles: [],
         other: "o",
       }));
+      const before = storedEnvelopeOf(runtime, "writable-after");
       expect(
-        refusalOf(
-          await rewriteUnderNextRelease(
-            runtime,
-            "writable-after",
-            value,
-            false,
-            "none",
-          ),
-        ),
-      ).toContain("drops the stored writeAuthorizedBy at /profile/avatar");
+        (await rewriteUnderNextRelease(
+          runtime,
+          "writable-after",
+          value,
+          false,
+          "none",
+        )).error,
+      ).toBeUndefined();
+      expect(
+        droppedStoredClaim(before, storedEnvelopeOf(runtime, "writable-after")),
+      ).toBeUndefined();
       const writeAvatarAs = async (moduleIdentity: string) => {
         const tx = runtime.edit();
         setCfcTrustSnapshot(tx, {
@@ -1439,11 +1468,17 @@ describe("stored write requirements", () => {
         profiles: [],
         other: "o",
       }));
+      const before = storedEnvelopeOf(runtime, "absent-unguarded");
       expect(
-        refusalOf(
-          await rewriteUnderNextRelease(runtime, "absent-unguarded", value),
+        (await rewriteUnderNextRelease(runtime, "absent-unguarded", value))
+          .error,
+      ).toBeUndefined();
+      expect(
+        droppedStoredClaim(
+          before,
+          storedEnvelopeOf(runtime, "absent-unguarded"),
         ),
-      ).toContain("drops the stored writeAuthorizedBy at /profile/avatar");
+      ).toBeUndefined();
     });
 
     it("keeps the claims beneath a list a release wrote an item of before rewriting it", async () => {
@@ -1456,6 +1491,7 @@ describe("stored write requirements", () => {
         profiles: [profile],
         other: "o",
       }));
+      const before = storedEnvelopeOf(runtime, "item-then-list");
       const tx = runtime.edit();
       setCfcTrustSnapshot(tx, { id: `trust-${space}`, actingPrincipal: space });
       markRelease(runtime, tx, "item-then-list");
@@ -1479,12 +1515,16 @@ describe("stored write requirements", () => {
         profiles: (value.profiles as unknown[]).map(link),
         other: "changed",
       } as never);
-      expect(refusalOf(await tx.commit().settled)).toContain(
-        "drops the stored writeAuthorizedBy",
-      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      expect(
+        droppedStoredClaim(before, storedEnvelopeOf(runtime, "item-then-list")),
+      ).toBeUndefined();
     });
 
     it("keeps the claims beneath a list holding one inline profile", async () => {
+      // The profile position holds a link alone, so a release's claims there
+      // follow it; the list holds an inline profile beside a linked one, so
+      // its claims are this document's and stay as stored.
       const runtime = start();
       const value = await seedHolder(
         runtime,
@@ -1498,17 +1538,22 @@ describe("stored write requirements", () => {
         true,
       );
       expect(
-        refusalOf(
-          await rewriteUnderNextRelease(
-            runtime,
-            "mixed-list",
-            value,
-            false,
-            "authorized",
-            true,
-          ),
-        ),
-      ).toContain("drops the stored writeAuthorizedBy at /profiles/*/avatar");
+        (await rewriteUnderNextRelease(
+          runtime,
+          "mixed-list",
+          value,
+          false,
+          "authorized",
+          true,
+        )).error,
+      ).toBeUndefined();
+      const after = storedEnvelopeOf(runtime, "mixed-list");
+      expect(writerStampsAt(after, ["profile", "avatar"])).toEqual([
+        "release-2",
+      ]);
+      expect(writerStampsAt(after, ["profiles", "*", "avatar"])).toEqual([
+        "release-1",
+      ]);
     });
   });
 

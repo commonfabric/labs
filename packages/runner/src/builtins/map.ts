@@ -20,6 +20,7 @@ import {
   releaseRemovedElements,
 } from "./list-element-keys.ts";
 import {
+  listContainerStoreWrites,
   listCoordinatorPlan,
   listElementResultCell,
 } from "./list-coordinator-plan.ts";
@@ -105,18 +106,22 @@ export function map(
   outputBinding?: NormalizedFullLink,
   awaitSync?: boolean,
 ): RawBuiltinReturnType {
-  return listInstanceCoordinator((identity) =>
-    createMapInstance(
-      inputsCell,
-      sendResult,
-      addCancel,
-      _cause,
-      parentCell,
-      runtime,
-      outputBinding,
-      awaitSync,
-      identity,
-    ), addCancel);
+  return listInstanceCoordinator(
+    (identity) =>
+      createMapInstance(
+        inputsCell,
+        sendResult,
+        addCancel,
+        _cause,
+        parentCell,
+        runtime,
+        outputBinding,
+        awaitSync,
+        identity,
+      ),
+    addCancel,
+    listContainerStoreWrites(runtime, "map", parentCell, outputBinding),
+  );
 }
 
 /** Creates bookkeeping and deferred work for one resolution identity. */

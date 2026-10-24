@@ -1,6 +1,7 @@
 import * as Path from "@std/path";
 
 import { z } from "zod";
+import { parseReleaseTime } from "@commonfabric/runner/pattern-release-time";
 import {
   isLoopbackHostname,
   readHttpOrigin,
@@ -63,6 +64,16 @@ function selfApiOrigin(host: string, port: number): string {
     : bare;
   return `http://${name}:${port}`;
 }
+
+/**
+ * How far `TOOLSHED_RELEASED_AT` may run ahead of this host's clock: the
+ * allowance for skew between the host that deploys and the hosts that run. A
+ * deploy states the time it happens and starts its instances after it, so a
+ * time further ahead is a clock or a typo. Every piece that adopted a release
+ * stamped with it would read every correct release after it as earlier, and
+ * stay where it is until a deploy stated a later time still.
+ */
+const RELEASED_AT_CLOCK_SKEW_MS = 5 * 60_000;
 
 // NOTE: This is where we define the environment variable types and defaults.
 // Exported so the parsing rules (e.g. OTEL_ENABLED) can be unit-tested without
@@ -410,6 +421,33 @@ export const EnvSchema = z.object({
   // Source-run build metadata fallback for /api/meta, mirroring the gitSha a
   // compiled binary reads from its baked COMPILED file.
   COMMIT_SHA: z.string().optional(),
+  // When this deployment released what it serves, as an RFC 3339 date-time
+  // (`@commonfabric/runner/pattern-release-time`), read as milliseconds since
+  // the epoch. Set at deploy time to the time of that deploy. The patterns
+  // route sends it beside every identity it advertises, which is what keeps a
+  // piece from being moved to an earlier release of a system pattern. Empty:
+  // identities go out alone, and nothing orders them.
+  TOOLSHED_RELEASED_AT: z.string().default("").transform((value, ctx) => {
+    if (value === "") return undefined;
+    const releasedAt = parseReleaseTime(value);
+    if (releasedAt === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "TOOLSHED_RELEASED_AT must be an RFC 3339 date-time with an " +
+          `offset, such as 2026-10-16T14:03:00Z: \`${value}\``,
+      });
+      return z.NEVER;
+    }
+    if (releasedAt > Date.now() + RELEASED_AT_CLOCK_SKEW_MS) {
+      ctx.addIssue({
+        code: "custom",
+        message: "TOOLSHED_RELEASED_AT is more than five minutes ahead of " +
+          `this host's clock, which no deploy that has happened is: \`${value}\``,
+      });
+      return z.NEVER;
+    }
+    return releasedAt;
+  }),
 
   //
   // Sandbox Service

@@ -1,5 +1,4 @@
 import { type CellHandle } from "@commonfabric/runtime-client";
-import { consume } from "@lit/context";
 import { css, html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
@@ -10,9 +9,7 @@ import { createFormFieldController } from "../../core/form-field-controller.ts";
 import {
   applyThemeToElement,
   type CFTheme,
-  cfThemeContext,
   type ComponentSize,
-  defaultTheme,
 } from "../theme-context.ts";
 
 /**
@@ -282,9 +279,6 @@ export class CFSelect extends BaseElement {
     // Initialize cell controller binding
     this._cellController.bind(this.value);
     this.applyValueToDom();
-    // Apply theme on first render
-    applyThemeToElement(this, this.theme ?? defaultTheme);
-
     // Register with form after binding is complete
     this._formField.register(this.name);
     this._updateAccessibilityAttributes();
@@ -317,7 +311,7 @@ export class CFSelect extends BaseElement {
       this.applyValueToDom();
     }
     if (changed.has("theme")) {
-      applyThemeToElement(this, this.theme ?? defaultTheme);
+      applyThemeToElement(this, this.theme);
     }
     if (
       changed.has("disabled") || changed.has("required") ||
@@ -327,10 +321,12 @@ export class CFSelect extends BaseElement {
     }
   }
 
-  /** The theme, consumed from the provider. */
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   //
   // Render

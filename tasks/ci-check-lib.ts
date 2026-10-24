@@ -76,6 +76,9 @@ export interface WorkflowRun {
    */
   run_started_at?: string;
 
+  /** `queued`, `in_progress` or `completed`, among others GitHub names. */
+  status?: string;
+
   conclusion: string;
   event: string;
 }

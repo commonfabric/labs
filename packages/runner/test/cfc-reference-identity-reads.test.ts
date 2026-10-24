@@ -46,6 +46,7 @@ import type { Cell } from "../src/cell.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { machineryRead } from "../src/storage/reactivity-log.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { labelsThroughLink } from "./support/reached-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-reference-identity");
 const space = signer.did();
@@ -458,11 +459,12 @@ describe("cfc-reference-identity-reads", () => {
   describe("carrying the reference onward", () => {
     // Why a wiring probe can consume nothing without losing the label. What
     // the runtime does with a reference it obtains is write that same
-    // reference into another slot, and the link write mints the source
-    // document's own label there (`derivePersistedLinkLabel`). So the
-    // protection arrives at the slot that now holds the reference, whatever
-    // the probe consumed. This is the substitute route the skip rests on, and
-    // nothing else pins it.
+    // reference into another slot. The slot stores the reference's own label
+    // and nothing of the source document's (CFC §8.2, §8.12.8): the
+    // source's label stays on the source, and a dereference from the slot
+    // that now holds the reference reaches it there, whatever the probe
+    // consumed. This is the substitute route the skip rests on, and nothing
+    // else pins it.
 
     const seedOnward = async (rt: Runtime) => {
       const seed = seeding(rt);
@@ -475,21 +477,27 @@ describe("cfc-reference-identity-reads", () => {
         [pointerEntry(["ref"], "pointer-label")],
       );
       await seed.commit();
-      return holder;
+      return { holder, target };
     };
 
     /**
      * Obtains the reference at the holder's slot the way the runtime's wiring
      * does, writes it into a fresh document, and answers with what that
-     * document stores: the pointer label at the slot the reference landed in,
-     * and the audiences the container-shape stamps over the whole document
-     * name.
+     * document stores and reaches: the pointer label at the slot the
+     * reference landed in, the audiences the container-shape stamps over the
+     * whole document name, and the audiences a dereference from that slot to
+     * `target` consumes.
      */
     const carryOnward = async (
       rt: Runtime,
       outCause: string,
+      target: NormalizedFullLink,
       obtain: (tx: IExtendedStorageTransaction) => NormalizedFullLink,
-    ): Promise<{ slot: string[] | undefined; container: string[] }> => {
+    ): Promise<{
+      slot: string[] | undefined;
+      container: string[];
+      reached: string[] | undefined;
+    }> => {
       const tx = rt.edit();
       const reference = obtain(tx);
       const out = rt.getCell(space, outCause, undefined, tx);
@@ -500,39 +508,53 @@ describe("cfc-reference-identity-reads", () => {
       return {
         slot: pointerTagsAt(id, ["slot"]),
         container: containerTags(id),
+        reached: tagsOf(
+          labelsThroughLink(rt, { space, id, path: ["slot"] }, {
+            space,
+            id: target.id,
+            path: [],
+          }).confidentiality,
+        ),
       };
     };
 
-    it("mints the source's label at the slot the reference lands in", async () => {
+    it("stores none of the source's label at the slot the reference lands in, and reaches it on dereference", async () => {
       const rt = makeRuntime();
-      const holder = await seedOnward(rt);
+      const { holder, target } = await seedOnward(rt);
       const carried = await carryOnward(
         rt,
         "rir-onward-out",
+        target,
         (tx) =>
           tx.runWithAmbientReadMeta(
             machineryRead,
             () => readMaybeLink(tx, { ...holder, path: ["ref"] })!,
           ),
       );
-      expect(carried.slot).toEqual(["on-target"]);
+      expect(carried.slot).toBeUndefined();
+      expect(carried.reached).toContain("on-target");
       expect(carried.container).toEqual([]);
     });
 
-    it("mints the same label there when the probe consumed one", async () => {
-      // The slot's label does not come from the probe. An unmarked probe at
-      // the same position consumes the holder's pointer label, and what that
-      // adds is a stamp over the container the reference landed in — the
-      // second, coarser copy. The slot carries what it carried above either
-      // way, so the skip removes the copy and not the protection.
+    it("reaches the same label on dereference when the probe consumed one", async () => {
+      // What the slot reaches does not come from the probe. An unmarked probe
+      // at the same position consumes the holder's pointer label, which then
+      // joins the writing attempt's flow join, and the container the
+      // reference landed in, written as a whole, carries that join on its
+      // stamps (CFC §8.2.3) and to every slot through its `*` template. The
+      // slot stores nothing of the source either way, and the dereference
+      // reaches the source's label either way, so the skip removes the
+      // attempt's own taint and not the protection.
       const rt = makeRuntime();
-      const holder = await seedOnward(rt);
+      const { holder, target } = await seedOnward(rt);
       const carried = await carryOnward(
         rt,
         "rir-onward-standalone-out",
+        target,
         (tx) => readMaybeLink(tx, { ...holder, path: ["ref"] })!,
       );
-      expect(carried.slot).toEqual(["on-target"]);
+      expect(carried.slot).toBeUndefined();
+      expect(carried.reached).toContain("on-target");
       expect(carried.container).toEqual(["pointer-label"]);
     });
   });

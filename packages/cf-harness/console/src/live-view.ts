@@ -37,6 +37,7 @@ import {
 import { stepCfcRecorded, withheldView } from "./steps-view.ts";
 import type { ConsoleStep } from "../steps.ts";
 import type { ConsoleTurnResultPiece } from "../turn-result.ts";
+import { pieceUrl } from "../../src/piece-url.ts";
 import type { BrowserToolAction } from "../../src/tools/browser.ts";
 import type { HarnessPolicyDecisionReasonCode } from "../../src/contracts/policy-trace.ts";
 import {
@@ -116,9 +117,6 @@ export type ConsoleLiveEntry =
      */
     revealed?: Readonly<Record<string, string>>;
     pieces: readonly ConsoleTurnResultPiece[];
-
-    /** The space the pieces are in, which composing an address needs. */
-    spaceName?: string;
   };
 
 /**
@@ -631,19 +629,17 @@ const piecesBaseFrom = (raw: string | null): string | undefined => {
 /**
  * Where one piece is opened. The host that renders pieces somewhere other than
  * the Fabric API says so with `piecesBase`, and the pane composes the address
- * from the space and the slug the run recorded; with no base named, the URL
- * the run recorded is used as it stands rather than rebuilt.
+ * under it from the piece's space and slug, as every piece address is composed
+ * (`pieceUrl`). With no base named, or no space recorded, the URL the run
+ * recorded is used as it stands.
  */
 export const consoleLivePieceHref = (
   piece: ConsoleTurnResultPiece,
-  spaceName: string | undefined,
   piecesBase: string | undefined,
 ): string =>
-  piecesBase === undefined || spaceName === undefined
-    ? piece.url
-    : `${piecesBase}/${encodeURIComponent(spaceName)}/${
-      encodeURIComponent(piece.slug)
-    }`;
+  (piecesBase === undefined || piece.space === undefined
+    ? undefined
+    : pieceUrl(piecesBase, piece.space, piece.slug)) ?? piece.url;
 
 /**
  * What the address a pane was opened at names. The session is the last segment
@@ -927,7 +923,6 @@ export const consoleLiveEntries = (
             ? {}
             : { revealed: event.result.revealed }),
           pieces: event.result.pieces,
-          spaceName: event.result.spaceName,
         });
         break;
       }
@@ -1232,6 +1227,8 @@ const REASONS: ReadonlyMap<string, Reason> = new Map(Object.entries(
     cfc_enforce_explicit_direct_command: (task) => `${task} ${WHY}`,
     cfc_enforce_explicit_requires_direct_command: (task) => `${task} ${WHY}`,
     cfc_enforce_strict_direct_command: (task) => `${task} ${WHY}`,
+    cfc_enforce_strict_host_command_read: () =>
+      "The host allows this context task to discover commands and invoke only its granted read commands.",
     cfc_enforce_strict_requires_direct_command: (task) =>
       `${task} ${WHY} ${EVEN_LOOKING}`,
     write_file_disabled: () => CHECKS_OFF,
@@ -1798,11 +1795,7 @@ export class ConsoleLive extends LitElement {
               html`
                 <a
                   class="piece-link"
-                  href="${consoleLivePieceHref(
-                    piece,
-                    entry.spaceName,
-                    this.piecesBase,
-                  )}"
+                  href="${consoleLivePieceHref(piece, this.piecesBase)}"
                   rel="noopener"
                 >
                   Open ${piece.slug}

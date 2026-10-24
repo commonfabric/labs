@@ -73,7 +73,7 @@ import {
   withRuntimeCleanupOnFailure,
 } from "../lib/piece.ts";
 import { safeStringify } from "../lib/render.ts";
-import { cf, checkStderr, stripAnsi } from "./utils.ts";
+import { argv, cf, checkStderr, stripAnsi } from "./utils.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
@@ -1426,7 +1426,7 @@ describe("cli piece parsing", () => {
     // receipt reports the way a client-side update's does.
     const program = { main: "/main.tsx", files: [] };
     const cell = { name: "the piece's cell" };
-    const seen: { requests: unknown[]; started: unknown[] } = {
+    const seen: { requests: unknown[]; started: unknown[][] } = {
       requests: [],
       started: [],
     };
@@ -1435,8 +1435,8 @@ describe("cli piece parsing", () => {
       runtime: { experimental: { serverExecution: true } },
       getSpace: () => SPACE_DID,
       getPieceCell: () => Promise.resolve(cell),
-      startPiece: (started: unknown) => {
-        seen.started.push(started);
+      startPiece: (...args: unknown[]) => {
+        seen.started.push(args);
         return refreshFails
           ? Promise.reject(new Error("the piece never settled"))
           : Promise.resolve();
@@ -1482,7 +1482,11 @@ describe("cli piece parsing", () => {
       program,
       repository: "repo",
     });
-    expect(seen.started).toEqual([cell]);
+    // The start answers for its own setup commit, which a plain start would
+    // report only to the log.
+    expect(seen.started).toEqual([
+      [cell, undefined, { awaitSetupCommit: true }],
+    ]);
 
     refreshFails = true;
     const unrefreshed = await setPiecePattern(
@@ -1528,7 +1532,7 @@ describe("cli piece parsing", () => {
   });
 
   it("shows recreate-root as a space-scoped command", async () => {
-    const { code, stdout, stderr } = await cf("space recreate-root --help");
+    const { code, stdout, stderr } = await cf(argv`space recreate-root --help`);
     checkStderr(stderr);
     const output = stripAnsi(stdout.join("\n"));
     expect(output).toContain(
@@ -1539,7 +1543,7 @@ describe("cli piece parsing", () => {
   });
 
   it("shows search as a registered-piece command with JSON output", async () => {
-    const { code, stdout, stderr } = await cf("piece search --help");
+    const { code, stdout, stderr } = await cf(argv`piece search --help`);
     checkStderr(stderr);
     const output = stripAnsi(stdout.join("\n"));
     expect(output).toContain(
@@ -1554,11 +1558,11 @@ describe("cli piece parsing", () => {
   it("describes listing and mapping as registry-backed", async () => {
     const commands = [
       {
-        args: "piece ls --help",
+        args: argv`piece ls --help`,
         description: "List pieces registered in the space.",
       },
       {
-        args: "piece map --help",
+        args: argv`piece map --help`,
         description: "Show registered pieces and the connections between them",
       },
     ];
@@ -1573,7 +1577,7 @@ describe("cli piece parsing", () => {
   });
 
   it("documents the piece registry in link help", async () => {
-    const { code, stdout, stderr } = await cf("piece link --help");
+    const { code, stdout, stderr } = await cf(argv`piece link --help`);
     checkStderr(stderr);
     const output = stripAnsi(stdout.join("\n"));
     expect(code).toBe(0);
@@ -1706,9 +1710,9 @@ describe("cli piece parsing", () => {
     });
 
     const options = () =>
-      `--identity ${identityPath} --api-url ${API_URL} --space ${SPACE}`;
+      argv`--identity ${identityPath} --api-url ${API_URL} --space ${SPACE}`;
 
-    const spaceRefusal = async (command: string) => {
+    const spaceRefusal = async (command: readonly string[]) => {
       const { code, stderr } = await cf(command);
       expect(code).toBe(1);
       return stripAnsi(stderr.join("\n"));
@@ -1717,8 +1721,8 @@ describe("cli piece parsing", () => {
     it("refuses a link whose source names another space", async () => {
       expect(
         await spaceRefusal(
-          `piece link ${options()} ` +
-            `/@${SPACE_DID}/${LLM_HANDLE}/notes ${LLM_HANDLE}/inbox`,
+          argv`piece link ${options()}
+            /@${SPACE_DID}/${LLM_HANDLE}/notes ${LLM_HANDLE}/inbox`,
         ),
       ).toContain(`Reference names space "${SPACE_DID}"`);
     });
@@ -1726,8 +1730,8 @@ describe("cli piece parsing", () => {
     it("refuses a link whose target names another space", async () => {
       expect(
         await spaceRefusal(
-          `piece link ${options()} ` +
-            `${LLM_HANDLE}/notes /@${SPACE_DID}/${LLM_HANDLE}/inbox`,
+          argv`piece link ${options()}
+            ${LLM_HANDLE}/notes /@${SPACE_DID}/${LLM_HANDLE}/inbox`,
         ),
       ).toContain(`Reference names space "${SPACE_DID}"`);
     });
@@ -1735,8 +1739,8 @@ describe("cli piece parsing", () => {
     it("refuses a sqlite link whose target names another space", async () => {
       expect(
         await spaceRefusal(
-          `piece link ${options()} ` +
-            `sqlite:/tmp/reference-data.db /@${SPACE_DID}/${LLM_HANDLE}/refDb`,
+          argv`piece link ${options()}
+            sqlite:/tmp/reference-data.db /@${SPACE_DID}/${LLM_HANDLE}/refDb`,
         ),
       ).toContain(`Reference names space "${SPACE_DID}"`);
     });
@@ -1744,8 +1748,8 @@ describe("cli piece parsing", () => {
     it("refuses a slug whose source names another space", async () => {
       expect(
         await spaceRefusal(
-          `piece set-slug ${options()} ` +
-            `project-notes /@${SPACE_DID}/${LLM_HANDLE}/notes`,
+          argv`piece set-slug ${options()}
+            project-notes /@${SPACE_DID}/${LLM_HANDLE}/notes`,
         ),
       ).toContain(`Reference names space "${SPACE_DID}"`);
     });
@@ -1755,7 +1759,7 @@ describe("cli piece parsing", () => {
       // canonical endpoint was parsed rather than refused as unrecognized.
       expect(
         await spaceRefusal(
-          `piece link ${options()} ${LLM_HANDLE}/notes /${LLM_HANDLE}`,
+          argv`piece link ${options()} ${LLM_HANDLE}/notes /${LLM_HANDLE}`,
         ),
       ).toContain("Target reference must include a path.");
     });
@@ -1780,21 +1784,9 @@ describe("cli piece parsing", () => {
     expect(setsrcFlags).toContain("--dangerously-allow-incompatible-schema");
   });
 
-  it("declares the same options on both mounts of a moved command", () => {
-    // One builder, two mount points: a caller who has not migrated yet meets
-    // the surface the new spelling has, not a copy that can drift from it.
-    // Compared on each command's own declarations, because the two nouns
-    // contribute different globals -- see the `--json` case below.
-    const own = (command: { getBaseOptions(): { flags: string[] }[] }) =>
-      command.getBaseOptions().flatMap((o) => o.flags).sort();
-    expect(own(piece.getCommand("recreate-root", true)!)).toEqual(
-      own(space.getCommand("recreate-root")!),
-    );
-  });
-
   it("refuses `--json` on a moved command rather than ignoring it", async () => {
     const { code, stdout, stderr } = await cf(
-      "space recreate-root --json -i ./k.key -s s -a http://localhost:8000",
+      argv`space recreate-root --json -i ./k.key -s s -a http://localhost:8000`,
     );
     expect(code).not.toBe(0);
     expect(stdout).toEqual([]);
@@ -1811,64 +1803,29 @@ describe("cli piece parsing", () => {
     const all = (command: { getOptions(): { flags: string[] }[] }) =>
       command.getOptions().flatMap((o) => o.flags);
     expect(all(space.getCommand("recreate-root")!)).toContain("--json");
-    expect(all(piece.getCommand("recreate-root", true)!)).not.toContain(
-      "--json",
-    );
   });
 
-  it("hides the superseded `cf piece` mounts from help", () => {
-    // Hidden is what keeps the old spelling working without teaching it: it
-    // stays reachable for a caller who already wrote it, and is offered to
-    // nobody new.
-    const names = (
-      // deno-lint-ignore no-explicit-any
-      command: any,
-      includeHidden: boolean,
-    ): string[] =>
-      command.getCommands(includeHidden).map((c: { getName(): string }) =>
-        c.getName()
-      );
-    expect(names(piece, true)).toContain("recreate-root");
-    expect(names(piece, false)).not.toContain("recreate-root");
-    expect(names(space, false)).toContain("recreate-root");
-  });
+  it("reports `set-home` on both nouns as an unknown command", async () => {
+    // Neither noun mounts `set-home`, shown or hidden. A Home is created on
+    // its user's first open and changed in place with `cf piece setsrc` on its
+    // root, which leaves a command that installs one nothing to do.
 
-  it("answers the retired `set-home` on both mounts with what replaced it", async () => {
-    // Retired rather than removed, for now: a script that still writes the
-    // command is told what to write instead, and is told the same day both
-    // times. Neither mount is offered to anyone new.
-    const names = (
-      // deno-lint-ignore no-explicit-any
-      command: any,
-      includeHidden: boolean,
-    ): string[] =>
-      command.getCommands(includeHidden).map((c: { getName(): string }) =>
-        c.getName()
-      );
     for (const noun of [piece, space]) {
-      expect(names(noun, true)).toContain("set-home");
-      expect(names(noun, false)).not.toContain("set-home");
+      expect(noun.getCommand("set-home", true)).toBeUndefined();
     }
     for (
-      const line of [
-        "space set-home -i ./k.key -a http://localhost:8000 --reset",
-        "piece set-home -i ./k.key -a http://localhost:8000 ./my-home.tsx",
+      const args of [
+        argv`space set-home`,
+        argv`piece set-home -i ./k.key -a http://localhost:8000 ./my-home.tsx`,
       ]
     ) {
-      const { code, stdout, stderr } = await cf(line);
+      const line = args.join(" ");
+      const { code, stderr } = await cf(args);
       expect(code, line).not.toBe(0);
-      // The refusal prints the help page as context, as every refusal here
-      // does, and that page is where the replacement is written out.
-      expect(stripAnsi(stdout.join("\n")), line).toContain("Retired.");
-      const said = stripAnsi(stderr.join("\n"));
-      expect(said, line).toContain("is retired");
-      expect(said, line).toContain("created on its user's first open");
-      expect(said, line).toContain("cf piece setsrc --cell <home-root>");
-      expect(said, line).toContain("stops answering after 2026-10-21");
+      expect(stripAnsi(stderr.join("\n")), line).toContain(
+        'Unknown command "set-home"',
+      );
     }
-    const { code, stdout } = await cf("space set-home --help");
-    expect(code).toBe(0);
-    expect(stripAnsi(stdout.join("\n"))).toContain("Retired.");
   });
 
   it("offers computed transforms for piece reads", () => {
@@ -1933,10 +1890,10 @@ describe("cli piece parsing", () => {
 
   it("refuses a piece get command that names both projection flags", async () => {
     const { code, stderr } = await cf(
-      "get " +
-        "--identity ./definitely-missing-piece-get-review.key " +
-        "--api-url https://cf.dev --space common-knowledge " +
-        `--piece ${PIECE} --select id --schema id`,
+      argv`cell get
+        --identity ./definitely-missing-piece-get-review.key
+        --api-url https://cf.dev --space common-knowledge
+        --piece ${PIECE} --select id --schema id`,
     );
     expect(code).not.toBe(0);
     expect(stripAnsi(stderr.join("\n"))).toContain(
@@ -1946,10 +1903,10 @@ describe("cli piece parsing", () => {
 
   it("passes a --select projection through the piece get command action", async () => {
     const { code, stderr } = await cf(
-      "get " +
-        "--identity ./definitely-missing-piece-get-review.key " +
-        "--api-url https://cf.dev --space common-knowledge " +
-        `--piece ${PIECE} --select id,title`,
+      argv`cell get
+        --identity ./definitely-missing-piece-get-review.key
+        --api-url https://cf.dev --space common-knowledge
+        --piece ${PIECE} --select id,title`,
     );
     expect(code).toBe(1);
     expect(stderr.join("\n")).toContain(
@@ -1959,10 +1916,10 @@ describe("cli piece parsing", () => {
 
   it("passes a parsed selection through the piece get command action", async () => {
     const { code, stderr } = await cf(
-      "get " +
-        "--identity ./definitely-missing-piece-get-review.key " +
-        "--api-url https://cf.dev --space common-knowledge " +
-        `--piece ${PIECE} --filter .active --schema id`,
+      argv`cell get
+        --identity ./definitely-missing-piece-get-review.key
+        --api-url https://cf.dev --space common-knowledge
+        --piece ${PIECE} --filter .active --schema id`,
     );
     expect(code).toBe(1);
     expect(stderr.join("\n")).toContain(
@@ -5598,7 +5555,7 @@ describe("cli piece parsing", () => {
   });
 
   it("shows set-slug command options", async () => {
-    const { code, stdout, stderr } = await cf("piece set-slug --help");
+    const { code, stdout, stderr } = await cf(argv`piece set-slug --help`);
     checkStderr(stderr);
     const output = stripAnsi(stdout.join("\n"));
     expect(code).toBe(0);

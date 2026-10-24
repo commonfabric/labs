@@ -224,7 +224,7 @@ describe("research", () => {
           "inspect unresolved relevant handles with describe_handle before asking",
         );
         expect(system).toContain(
-          "Private research inspects candidates and tells the parent what to run; it cannot execute them",
+          "reports what to run; it cannot execute anything",
         );
         expect(system).toContain(
           "If sending is unavailable, say so immediately",

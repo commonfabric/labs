@@ -282,7 +282,7 @@ describe("generateObject outbox mechanism", () => {
     expect(setupResult.ok).toBeDefined();
 
     let resultCell: any;
-    const action = rawGenerateObject(
+    const { action } = rawGenerateObject(
       inputsCell,
       (_resultTx, result) => {
         resultCell = result;
@@ -386,7 +386,7 @@ describe("generateObject outbox mechanism", () => {
     expect(setupResult.ok).toBeDefined();
 
     let resultCell: any;
-    const action = rawGenerateObject(
+    const { action } = rawGenerateObject(
       inputsCell,
       (_resultTx, result) => {
         resultCell = result;

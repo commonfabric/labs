@@ -32,11 +32,11 @@
  *
  * The design, and the four shapes rejected in reaching it, are recorded under
  * "Naming the target" in
- * [CLI surface shape](../../../docs/plans/cli-surface-shape.md).
+ * [CLI surface shape](../../../docs/history/plans/cli-surface-shape.md).
  */
 
 import { Command, ValidationError } from "@cliffy/command";
-import { listFlags, nearestName } from "./refusal.ts";
+import { listFlags, nearestName } from "@commonfabric/piece/refusal";
 
 /**
  * The flags that shape a result, in the order the commands declare them.

@@ -452,6 +452,7 @@ export const mergeHarnessHandleTables = (
     const schemaSide = held.schema !== undefined ? held : entry;
     const capability = held.capability ?? entry.capability;
     const acquisition = held.acquisition ?? entry.acquisition;
+    const described = held.described ?? entry.described;
     entries[index] = {
       token: held.token,
       kind: held.kind,
@@ -463,6 +464,7 @@ export const mergeHarnessHandleTables = (
         ? { schemaSource: schemaSide.schemaSource }
         : {}),
       ...(acquisition !== undefined ? { acquisition } : {}),
+      ...(described !== undefined ? { described } : {}),
     };
   }
   const referents = [...(current.referents ?? [])];
@@ -528,6 +530,26 @@ export const resolveHandleToken = (
   token: string,
 ): HarnessHandleEntry | undefined =>
   table.entries.find((entry) => entry.token === token);
+
+/**
+ * `table` with the entry `handle` names — by token or by the address it
+ * stands for — recorded as described, or `table` itself when it holds no such
+ * entry or the entry is described already.
+ */
+export const markHandleDescribed = (
+  table: HarnessHandleTable,
+  handle: string,
+): HarnessHandleTable => {
+  const entry = resolveHandleToken(table, handle) ??
+    resolveHandleRef(table, handle);
+  if (entry === undefined || entry.described === true) return table;
+  return {
+    ...table,
+    entries: table.entries.map((held) =>
+      held === entry ? { ...held, described: true } : held
+    ),
+  };
+};
 
 /**
  * The `addressKey` of the address `refText` names, or `undefined` when the
@@ -916,6 +938,11 @@ export const assertValidHarnessHandleTable = (
         `invalid handle table: entry \`${entry.token}\` has an unknown capability \`${
           String(entry.capability)
         }\``,
+      );
+    }
+    if (entry.described !== undefined && entry.described !== true) {
+      throw new Error(
+        `invalid handle table: entry \`${entry.token}\` has a described mark that is not \`true\``,
       );
     }
     if (entry.acquisition !== undefined) {

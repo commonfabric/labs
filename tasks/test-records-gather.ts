@@ -22,8 +22,8 @@ import { expandGlob } from "@std/fs";
 import { join } from "@std/path";
 import {
   type Environment,
-  ingestJUnit,
   readEnv,
+  readJUnit,
   readNameMaps,
   readSpool,
   recordsDir,
@@ -144,6 +144,14 @@ export interface Collected {
    * drift guard is what fails on them.
    */
   conflicts: TestRecord[];
+
+  /**
+   * What each outermost test its JUnit reports name took beyond the
+   * records, one record each, as `readJUnit()` makes them, with the
+   * declared variant applied. They are not tests, so they are in neither
+   * list above and nothing ships them.
+   */
+  hooks: TestRecord[];
 }
 
 /**
@@ -163,6 +171,7 @@ export async function collectRecords(
     throw new Error("a declared variant must not be empty");
   }
   const records: TestRecord[] = [];
+  const hooks: TestRecord[] = [];
   // The registration preload leaves a name-to-file map in the spool.
   // Where it installed, every class name names the wrapper it put in
   // front of `Deno.test`, so the map is the only thing that can tell a
@@ -188,7 +197,7 @@ export async function collectRecords(
         // itself, not the records of every later file the glob matched.
         try {
           const xml = await Deno.readTextFile(entry.path);
-          const ingestOptions: Parameters<typeof ingestJUnit>[1] = {
+          const ingestOptions: Parameters<typeof readJUnit>[1] = {
             kind: spec.kind,
             scope: spec.scope,
             fileByName,
@@ -196,9 +205,9 @@ export async function collectRecords(
           };
           if (spec.prefix !== undefined) ingestOptions.filePrefix = spec.prefix;
           if (options.known !== undefined) ingestOptions.known = options.known;
-          for (const record of ingestJUnit(xml, ingestOptions)) {
-            records.push(record);
-          }
+          const read = readJUnit(xml, ingestOptions);
+          for (const record of read.records) records.push(record);
+          for (const record of read.hooks) hooks.push(record);
         } catch (error) {
           console.warn(
             `test records: ingesting ${entry.path} failed: ${error}`,
@@ -229,7 +238,10 @@ export async function collectRecords(
     }
     if (options.variant !== undefined) record.test.v = options.variant;
   }
-  return { records, conflicts };
+  if (options.variant !== undefined) {
+    for (const record of hooks) record.test.v = options.variant;
+  }
+  return { records, conflicts, hooks };
 }
 
 export interface GatherOptions {

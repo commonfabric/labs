@@ -16,6 +16,7 @@ import {
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { findNumericLabelField } from "./label-metadata-table.ts";
 import { mapLinkSchemas } from "./schema-table-links.ts";
 import {
   applySqliteCommitWrite,
@@ -2166,6 +2167,30 @@ ADD COLUMN source_event TEXT;
   }
 };
 
+// An outbox row's payload is stored in the memory boundary's encoding, which
+// keeps a property holding `undefined`. A row whose payload is plain JSON
+// text is rewritten to that encoding; plain JSON holds nothing the encoding
+// cannot, so the value is unchanged. Undelivered rows are few, as delivery
+// deletes them, so the scan is short.
+const migrateExecutionOutboxPayloadEncoding = (database: Database): void => {
+  const plain = database.prepare(`
+SELECT id, payload FROM execution_outbox
+WHERE substr(payload, 1, 5) <> 'fvj1:'
+`).all() as Array<{ id: number; payload: string }>;
+  if (plain.length === 0) return;
+  const update = database.prepare(
+    `UPDATE execution_outbox SET payload = :payload WHERE id = :id`,
+  );
+  database.transaction(() => {
+    for (const row of plain) {
+      update.run({
+        id: row.id,
+        payload: encodeMemoryBoundary(JSON.parse(row.payload)),
+      });
+    }
+  }).immediate();
+};
+
 // Server-execution v2 Phase 1 stage C.2: the observation-payload tables are
 // REPLACED by the scheduler_basis index (serving-loop.md §3b). The drop list
 // is §3b's SEVEN tables, deliberately not a constant enumerating six (D6 —
@@ -2228,6 +2253,7 @@ export const open = async (
   migrateCommitDerivedThrough(database);
   migrateCommitDelegation(database);
   migrateExecutionOutboxEventCarriage(database);
+  migrateExecutionOutboxPayloadEncoding(database);
   migrateSchedulerObservationTablesToBasis(database);
   migrateIntegratedOperationIds(database);
   return {
@@ -4110,6 +4136,62 @@ ORDER BY seq, op_index
 };
 
 /**
+ * The value paths that one session's authored commits overwrote in one doc
+ * instance after `sinceSeq`, the session being `sessionId` opened by
+ * `principal`. This is the input to the wave commit step's supersession of an
+ * event consequence by a later write of the session that fired the event
+ * (serving-loop.md §3d). Only writes that replace what sits at their path
+ * count: a `set` or `delete` revision reports the root path, and a `patch`
+ * revision reports the paths of its `replace`, `add` and `remove` patches and
+ * both paths of a `move`. A patch that merges into existing content — an
+ * append, a splice, an increment — overwrites nothing and is left out.
+ */
+export const selectSessionOverwritePathsSince = (
+  engine: Engine,
+  options: {
+    branch?: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    sinceSeq: number;
+    principal: string;
+    sessionId: SessionId;
+  },
+): Array<readonly string[]> => {
+  const rows = engine.database.prepare(`
+SELECT r.op, r.data FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
+WHERE r.branch = :branch AND r.id = :id AND r.scope_key = :scope_key
+  AND r.seq > :since_seq
+  AND c.class = 'authored' AND c.session_id = :session_id
+ORDER BY r.seq, r.op_index
+`).all({
+      branch: options.branch ?? DEFAULT_BRANCH,
+      id: options.id,
+      scope_key: options.scopeKey,
+      since_seq: options.sinceSeq,
+      session_id: resolveCommitSessionKey(options.sessionId, options.principal),
+    }) as Array<{ op: string; data: string | null }>;
+  const paths: Array<readonly string[]> = [];
+  for (const row of rows) {
+    if (row.op === "patch" && row.data !== null) {
+      const patches = decodeTrustedMemoryBoundary(row.data) as PatchOp[];
+      for (const patch of patches) {
+        if (
+          patch.op === "replace" || patch.op === "add" || patch.op === "remove"
+        ) {
+          paths.push(parsePointer(patch.path));
+        } else if (patch.op === "move") {
+          paths.push(parsePointer(patch.from));
+          paths.push(parsePointer(patch.path));
+        }
+      }
+    } else if (row.op === "set" || row.op === "delete") {
+      paths.push([]);
+    }
+  }
+  return paths;
+};
+
+/**
  * Whether a commit after `sinceSeq` wrote this document instance that
  * `holder`'s own derived commits do not account for — serving-loop.md
  * §3d's INTRUSION on a document a serving tenure derives into. A client's
@@ -5547,11 +5629,15 @@ const applyCommitTransaction = (
     }
   }
   const hasPreconditions = (commit.preconditions?.length ?? 0) > 0;
+  const hasReads = commit.reads.confirmed.length > 0 ||
+    commit.reads.pending.length > 0;
   if (
-    commit.operations.length === 0 && !hasPreconditions &&
+    commit.operations.length === 0 && !hasPreconditions && !hasReads &&
     allowEmptyOperations !== true
   ) {
-    throw new Error("memory v2 commit requires at least one operation");
+    throw new Error(
+      "memory v2 commit requires operations, reads, or preconditions",
+    );
   }
 
   const branch = commit.branch ?? DEFAULT_BRANCH;
@@ -5735,6 +5821,40 @@ const applyCommitTransaction = (
       requiredLabelDocs.add(ref.slice("cid:".length));
     }
   };
+  // A number at a whole-field label or path of the CFC label map is a
+  // transport dictionary reference in a negotiated envelope and nothing
+  // anywhere else: no dictionary is stored with a document, so a stored
+  // number can never be resolved, and the sync sender cannot compress an
+  // envelope carrying one without changing its meaning. Request parsing
+  // sees the number a set or a value-bearing patch carries, but a `move`
+  // or an `increment` can produce one from application data, so the
+  // post-patch document is checked here for every form alike. A document
+  // stored before this check may already hold such a number: a write that
+  // leaves its label map exactly as stored (an unchanged set, a value edit,
+  // a metadata patch beside the map) is admitted, so the document stays
+  // writable, and `stored` is read only when a number is found.
+  const labelMapOf = (document: unknown): unknown => {
+    const cfc = (document as { cfc?: unknown } | null | undefined)?.cfc;
+    return (cfc as { labelMap?: unknown } | null | undefined)?.labelMap;
+  };
+  const requireInlineLabelMetadata = (
+    id: string,
+    document: unknown,
+    stored: () => unknown,
+  ): void => {
+    const field = findNumericLabelField(document);
+    if (field === undefined) return;
+    const labelMap = labelMapOf(document);
+    const storedMap = labelMapOf(stored());
+    if (
+      storedMap === undefined ||
+      !valueEqual(labelMap as FabricValue, storedMap as FabricValue)
+    ) {
+      throw new ProtocolError(
+        `memory v2 commit writes document ${id} with a numeric CFC label-map ${field}, which only a transport dictionary could resolve`,
+      );
+    }
+  };
   // A document's reserved `schema` metadata member is a schema position
   // in the link spelling — a self-contained inline schema, or a single
   // `{ "$ref": "cid:…" }` root — and its refs are collected exactly as a
@@ -5807,6 +5927,24 @@ const applyCommitTransaction = (
     }
   }
   const stagedMetadataDocs = new Map<string, unknown>();
+  // The document an operation applies to: what an earlier operation of this
+  // commit staged for it, or else what is stored.
+  const priorDocument = (
+    opIndex: number,
+    operation: { id: string; scope?: unknown },
+    docKey = opDocKey(opIndex, operation),
+  ): unknown => {
+    return stagedMetadataDocs.has(docKey)
+      ? stagedMetadataDocs.get(docKey)
+      : readState(engine, {
+        id: operation.id,
+        branch,
+        scope: operation.scope as Parameters<typeof readState>[1]["scope"],
+        principal: scanPrincipal,
+        sessionId: scanSession,
+        scopeKey: scopeKeyByOpIndex.get(opIndex),
+      })?.document ?? undefined;
+  };
   for (const [opIndex, operation] of commit.operations.entries()) {
     if (operation.op === "sqlite") continue;
     if (operation.op === "patch") {
@@ -5818,18 +5956,7 @@ const applyCommitTransaction = (
       if (metadataPatchDocKeys.size > 0) {
         const docKey = opDocKey(opIndex, operation);
         if (metadataPatchDocKeys.has(docKey)) {
-          const base = stagedMetadataDocs.has(docKey)
-            ? stagedMetadataDocs.get(docKey)
-            : readState(engine, {
-              id: operation.id,
-              branch,
-              scope: operation.scope as Parameters<
-                typeof readState
-              >[1]["scope"],
-              principal: scanPrincipal,
-              sessionId: scanSession,
-              scopeKey: scopeKeyByOpIndex.get(opIndex),
-            })?.document ?? undefined;
+          const base = priorDocument(opIndex, operation, docKey);
           try {
             const patched = applyPatchToDocument(
               base as Parameters<typeof applyPatchToDocument>[0] | undefined,
@@ -5837,6 +5964,7 @@ const applyCommitTransaction = (
             );
             stagedMetadataDocs.set(docKey, patched);
             if (patchTouchesMetadata(operation.patches)) {
+              requireInlineLabelMetadata(operation.id, patched, () => base);
               collectCfcEnvelopeRef((patched as { cfc?: unknown }).cfc);
               collectSchemaMetaRefs(operation.id, patched);
             }
@@ -5848,6 +5976,11 @@ const applyCommitTransaction = (
     }
     if (!operation.id.startsWith("cid:")) {
       if (operation.op === "set") {
+        requireInlineLabelMetadata(
+          operation.id,
+          operation.value,
+          () => priorDocument(opIndex, operation),
+        );
         collectLinkSchemaRefs(operation.value);
         collectCfcEnvelopeRef(
           (operation.value as { cfc?: unknown } | null)?.cfc,
@@ -5920,6 +6053,11 @@ const applyCommitTransaction = (
     // `cid:` document alike (see collectSchemaMetaRefs): the identity
     // check above covers `.value` and nothing beside it.
     if (installsVerifiedContent) {
+      requireInlineLabelMetadata(
+        operation.id,
+        operation.value,
+        () => readState(engine, { id: operation.id, branch })?.document,
+      );
       collectSchemaMetaRefs(operation.id, operation.value);
     }
     const earlierSet = cidSetsInCommit?.get(operation.id);

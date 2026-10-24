@@ -258,6 +258,19 @@ state.
 Append new members with `push()` as the complete guest above does, so
 concurrent additions compose.
 
+Status that other viewers should see while it happens and that nobody needs
+afterwards, such as a brush in progress or each viewer's hovered mark, travels
+through a presence room instead of a Cell.
+[Optional presence](./iframe-pattern-guide.md#optional-presence) in the
+iframe pattern guide is the contract.
+
+An action the pattern exposes as a verb, or work only the pattern can start,
+such as a request to `agent()` or another LLM built-in, goes through a verb the
+pattern passes in as a stream where it can; the guest sends it an event with
+`fabric.stream(name).send(event)`.
+[Optional streams](./iframe-pattern-guide.md#optional-streams) in the iframe
+pattern guide is the contract.
+
 When an interaction starts from an array position, resolve that position to a
 stable Cell before subscribing or writing. The returned handle remains attached
 to the same item even when it moves:
@@ -317,6 +330,12 @@ small assets locally, or pass data through `input`; do not depend on a CDN,
 `<!-- PATTERN_IFRAME_SCRIPT -->` exactly once. Buttons must use `type="button"`
 so an accidental form ancestor cannot trigger navigation.
 
+Style the shell and the chart with the ambient theme the iframe receives — its
+elements, `cf-*` classes, and `--cf-theme-*` variables, which SVG `fill` and
+`stroke` accept as `var(--cf-theme-color-primary)` — and spell no color or
+font; see
+[Style with the ambient theme](./iframe-pattern-guide.md#style-with-the-ambient-theme).
+
 ## Generate and validate
 
 Generate the wrapper without the React flag:
@@ -336,6 +355,11 @@ deno fmt packages/patterns/d3-shared-bars
 deno check packages/patterns/d3-shared-bars/guest.ts
 deno task cf check packages/patterns/d3-shared-bars/main.tsx --no-run
 ```
+
+Launch the pattern with the steps under
+[Verify](./iframe-pattern-guide.md#verify) in the plain DOM guide, substituting
+this pattern's path, a space label, and a slug. Those steps start local
+servers, create the space, and sign the browser in as its owner.
 
 In a real browser, verify all of the following:
 

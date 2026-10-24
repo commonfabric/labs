@@ -31,6 +31,9 @@ const signer = await Identity.fromPassphrase("runner-cfc-ri-provenance");
 // it carries no confidentiality and its integrity is entirely non-endorsement
 // provenance. A confidentiality-bearing read (the prompt-injection briefing)
 // still gates.
+// The atom is retired (spec §15.4): no link write mints it. A label stored
+// before the retirement still carries it, which is the label these cases
+// seed, and it stays non-authorable.
 const LINK_REFERENCE_ATOM = {
   type: "https://commonfabric.org/cfc/atom/LinkReference",
 };

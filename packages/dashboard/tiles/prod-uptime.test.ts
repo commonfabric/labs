@@ -558,9 +558,9 @@ Deno.test("prod uptime: a host that both errors and has no address headlines as 
 });
 
 Deno.test("prod uptime: red outranks orange and HTTP outranks latency", async () => {
-  const realNow = Date.now;
-  const readings = [0, 0, 501, 300];
-  Date.now = () => readings.shift() ?? 0;
+  const restoreElapsedMs = setProdUptimeElapsedMsForTest((name) =>
+    name === "rapids" ? 501 : 0
+  );
   const restore = stub(
     (url) => new Response(null, { status: url.includes("rapids") ? 502 : 200 }),
     (hostname) =>
@@ -572,12 +572,11 @@ Deno.test("prod uptime: red outranks orange and HTTP outranks latency", async ()
     const view = await prodUptime.collect(ctx());
     assertEquals(view.status, "bad");
     assertEquals(view.value, "HTTP 502");
-    assertStringIncludes(view.extra ?? "", "501 ms");
-    assertStringIncludes(view.extra ?? "", "HTTP 502");
+    assertTargetDetail(view, "rapids", "HTTP 502 · 501 ms");
     assertStringIncludes(view.extra ?? "", "DNS unknown");
   } finally {
-    Date.now = realNow;
     restore();
+    restoreElapsedMs();
   }
 });
 

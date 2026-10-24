@@ -324,7 +324,7 @@ describe("CFC label view helpers", () => {
     expect(cfcLabelViewForCell(cell)).toBeUndefined();
   });
 
-  it("does not synthesize runtime reads for linked cells", async () => {
+  it("reports the labels of the document a cell's root link reaches", async () => {
     const signer = await Identity.fromPassphrase("cfc label view linked read");
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
@@ -376,7 +376,13 @@ describe("CFC label view helpers", () => {
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).ok).toBeDefined();
 
-      expect(cfcLabelViewForCell(target)).toBeUndefined();
+      expect(cfcLabelViewForCell(target)).toEqual({
+        version: 1,
+        entries: [{
+          path: [],
+          label: { confidentiality: ["prompt-influence"] },
+        }],
+      });
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -709,11 +715,13 @@ describe("CFC label view helpers", () => {
         runtime.prepareTxForCommit(tx);
         expect((await tx.commit().settled).ok).toBeDefined();
 
-        // The broader slot holds a redirect, whose link entry labels that
-        // pointer, reference integrity atom included.
+        // The broader slot holds a redirect under the slot's declared label.
+        // A slot stores the reference's own label and nothing of the
+        // instance it points at (CFC §8.2, §8.12.8); the redirect declares
+        // nothing beyond the slot's declaration, so the declared entry is
+        // all the slot holds.
         const slot = labelsAt(runtime.getCell(space, "narrowed-label"));
-        expect(slot.confidentiality).toEqual(["secret", "secret"]);
-        expect(slot.integrity).not.toEqual([]);
+        expect(slot).toEqual({ confidentiality: ["secret"], integrity: [] });
         const scoped = labelsAt(
           runtime.getCell(
             space,
@@ -1938,19 +1946,9 @@ describe("CFC label view helpers", () => {
         }],
       });
 
+      // The cell's view follows the link: it joins the field's stored labels
+      // with the labels of the document the link reaches.
       expect(cfcLabelViewForCell(target)).toEqual({
-        version: 1,
-        entries: [{
-          path: [],
-          label: {
-            confidentiality: ["personal-space"],
-            integrity: ["selected-by-alice"],
-          },
-        }],
-      });
-
-      const resolvedTarget = target.resolveAsCell();
-      expect(cfcLabelViewForCell(resolvedTarget)).toEqual({
         version: 1,
         entries: [{
           path: [],
@@ -1963,6 +1961,26 @@ describe("CFC label view helpers", () => {
               "selected-by-alice",
               "authored-by-bob",
             ]),
+          },
+        }, {
+          path: ["details"],
+          label: { confidentiality: ["target-detail"] },
+        }],
+      });
+
+      // The resolved handle names the document the link reaches, and carries
+      // the field's restriction without its endorsement.
+      const resolvedTarget = target.resolveAsCell();
+      expect(cfcLabelViewForCell(resolvedTarget)).toEqual({
+        version: 1,
+        entries: [{
+          path: [],
+          label: {
+            confidentiality: expect.arrayContaining([
+              "personal-space",
+              "shared-space",
+            ]),
+            integrity: ["authored-by-bob"],
           },
         }, {
           path: ["details"],
@@ -1989,10 +2007,7 @@ describe("CFC label view helpers", () => {
               "shared-space",
               "target-detail",
             ]),
-            integrity: expect.arrayContaining([
-              "selected-by-alice",
-              "authored-by-bob",
-            ]),
+            integrity: ["authored-by-bob"],
           },
         }],
       });
@@ -2002,7 +2017,7 @@ describe("CFC label view helpers", () => {
     }
   });
 
-  it("keeps accumulated link labels on cells recovered from query results", async () => {
+  it("carries the target's labels and not the slot's endorsement on cells recovered from query results", async () => {
     const signer = await Identity.fromPassphrase(
       "cfc label view query result to cell",
     );
@@ -2078,10 +2093,7 @@ describe("CFC label view helpers", () => {
         entries: [{
           path: [],
           label: {
-            integrity: expect.arrayContaining([
-              "selected-by-alice",
-              "authored-by-bob",
-            ]),
+            integrity: ["authored-by-bob"],
           },
         }],
       });
@@ -2091,7 +2103,7 @@ describe("CFC label view helpers", () => {
     }
   });
 
-  it("keeps accumulated link labels on schema asCell materialization", async () => {
+  it("carries the target's labels and not the slot's endorsement on schema asCell materialization", async () => {
     const signer = await Identity.fromPassphrase(
       "cfc label view schema asCell",
     );
@@ -2170,10 +2182,7 @@ describe("CFC label view helpers", () => {
         entries: [{
           path: [],
           label: {
-            integrity: expect.arrayContaining([
-              "selected-by-alice",
-              "authored-by-bob",
-            ]),
+            integrity: ["authored-by-bob"],
           },
         }],
       });
@@ -2268,7 +2277,7 @@ describe("CFC label view helpers", () => {
     }
   });
 
-  it("keeps accumulated link labels on default-created asCell values", async () => {
+  it("carries the target's labels and not the slot's endorsement on default-created asCell values", async () => {
     const signer = await Identity.fromPassphrase(
       "cfc label view default asCell",
     );
@@ -2353,10 +2362,7 @@ describe("CFC label view helpers", () => {
         entries: [{
           path: [],
           label: {
-            integrity: expect.arrayContaining([
-              "selected-by-alice",
-              "authored-by-bob",
-            ]),
+            integrity: ["authored-by-bob"],
           },
         }],
       });
@@ -2460,10 +2466,7 @@ describe("CFC label view helpers", () => {
         entries: [{
           path: [],
           label: {
-            integrity: expect.arrayContaining([
-              "selected-first",
-              "authored-first",
-            ]),
+            integrity: ["authored-first"],
           },
         }],
       });
@@ -2472,10 +2475,7 @@ describe("CFC label view helpers", () => {
         entries: [{
           path: [],
           label: {
-            integrity: expect.arrayContaining([
-              "selected-second",
-              "authored-second",
-            ]),
+            integrity: ["authored-second"],
           },
         }],
       });
@@ -2565,10 +2565,7 @@ describe("CFC label view helpers", () => {
         entries: [{
           path: [],
           label: {
-            integrity: expect.arrayContaining([
-              "selected-first",
-              "authored-shared",
-            ]),
+            integrity: ["authored-shared"],
           },
         }],
       });
@@ -2577,10 +2574,7 @@ describe("CFC label view helpers", () => {
         entries: [{
           path: [],
           label: {
-            integrity: expect.arrayContaining([
-              "selected-second",
-              "authored-shared",
-            ]),
+            integrity: ["authored-shared"],
           },
         }],
       });
@@ -2722,6 +2716,176 @@ describe("CFC label view helpers", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  describe("a value reached through links", () => {
+    /**
+     * Runs `body` with three documents: `source` holds labeled content,
+     * `middle` links to the source's `details` from a slot that declares a
+     * label of its own, and `holder` links to that slot at `detail` and to the
+     * whole source at `item`.
+     */
+    const withLinkChain = async (
+      body: (holder: Cell<unknown>) => void,
+    ): Promise<void> => {
+      const signer = await Identity.fromPassphrase(
+        "cfc label view link chain",
+      );
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const tx = runtime.edit();
+        const seed = (
+          name: string,
+          value: FabricValue,
+          entries: CfcMetadata["labelMap"]["entries"],
+        ): Cell<unknown> => {
+          const cell = runtime.getCell(signer.did(), name, undefined, tx);
+          seedStoredEnvelope(tx, {
+            space: signer.did(),
+            id: parseLink(cell.getAsLink()).id!,
+            type: "application/json",
+            path: [],
+          }, {
+            value,
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: { version: 1, entries },
+            },
+          });
+          return cell;
+        };
+        writeSeedEnvelopeDoc(tx, signer.did());
+        const source = seed("cfc-label-view-chain-source", {
+          title: "shared",
+          details: "restricted",
+        }, [{
+          path: [],
+          label: {
+            confidentiality: ["shared-space"],
+            integrity: ["authored-by-bob"],
+          },
+        }, {
+          path: ["details"],
+          label: { confidentiality: ["target-detail"] },
+        }]);
+        const middle = seed("cfc-label-view-chain-middle", {
+          via: source.key("details").getAsLink(),
+        }, [{
+          path: ["via"],
+          label: {
+            confidentiality: ["middle-slot"],
+            integrity: ["middle-endorsed"],
+          },
+        }]);
+        const holder = seed("cfc-label-view-chain-holder", {
+          detail: middle.key("via").getAsLink(),
+          item: source.getAsLink(),
+        }, [{
+          path: ["detail"],
+          label: { integrity: ["selected-detail"] },
+        }]);
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).ok).toBeDefined();
+        body(holder);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    const atomsOf = (view: CfcLabelView | undefined) => ({
+      confidentiality: (view?.entries ?? []).flatMap((entry) =>
+        entry.label.confidentiality ?? []
+      ).toSorted(),
+      integrity: (view?.entries ?? []).flatMap((entry) =>
+        entry.label.integrity ?? []
+      ).toSorted(),
+    });
+
+    it("carries the labels stored with the value at the end of a chain of two links", async () => {
+      await withLinkChain((holder) => {
+        const view = cfcLabelViewForCell(holder.key("detail"));
+
+        expect(view?.entries.map((entry) => entry.path)).toEqual([[]]);
+        expect(atomsOf(view).confidentiality).toEqual(
+          expect.arrayContaining(["shared-space", "target-detail"]),
+        );
+        expect(atomsOf(view).integrity).toEqual(
+          expect.arrayContaining(["authored-by-bob", "selected-detail"]),
+        );
+      });
+    });
+
+    it("carries the confidentiality of a slot followed in another document and none of its integrity", async () => {
+      await withLinkChain((holder) => {
+        const atoms = atomsOf(cfcLabelViewForCell(holder.key("detail")));
+
+        expect(atoms.confidentiality).toContain("middle-slot");
+        expect(atoms.integrity).not.toContain("middle-endorsed");
+      });
+    });
+
+    it("carries the labels stored with the value behind a link part way along the cell's path", async () => {
+      await withLinkChain((holder) => {
+        const view = cfcLabelViewForCell(holder.key("item").key("details"));
+
+        expect(view).toEqual({
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: ["shared-space", "target-detail"],
+              integrity: ["authored-by-bob"],
+            },
+          }],
+        });
+      });
+    });
+
+    it("fails closed where the links at the cell's path resolve around a cycle", async () => {
+      const signer = await Identity.fromPassphrase(
+        "cfc label view link cycle",
+      );
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const tx = runtime.edit();
+        const loop = runtime.getCell(
+          signer.did(),
+          "cfc-label-view-link-cycle",
+          undefined,
+          tx,
+        );
+        tx.writeOrThrow({
+          space: signer.did(),
+          id: parseLink(loop.getAsLink()).id!,
+          type: "application/json",
+          path: [],
+        }, { value: { self: loop.key("self").getAsLink() } });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).ok).toBeDefined();
+
+        const status = cfcLabelViewForCellFailClosedWithStatus(
+          loop.key("self"),
+        );
+
+        expect(status.readFailed).toBe(true);
+        expect(atomsOf(status.view).confidentiality).toEqual([
+          "cfc:label-read-failed",
+        ]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
   });
 
   it("follows array-element links to stored metadata", async () => {

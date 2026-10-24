@@ -201,6 +201,43 @@ describe("ConsumedLabelIndex", () => {
         .toEqual([original]);
       expect(index.overlapping(["other", "field"])).toEqual([]);
     });
+
+    it("indexes only the entries a selection keeps, at their label-map ordinals", () => {
+      const entries = [["a"], ["b"], ["a", "c"]].map(entry);
+      const odd = {
+        key: "odd",
+        keeps: (item: LabelMapEntry) => item.label.confidentiality![0] !== "1",
+      };
+      const index = new ConsumedLabelIndex(entries, { select: odd });
+      expect(index.overlapping(["a", "c"]).map((item) => item.ordinal))
+        .toEqual([0, 2]);
+      expect(index.overlapping(["b"])).toEqual([]);
+    });
+
+    it("shares one trie between indexes over the same list and selection, and not across selections", () => {
+      const entries = [["a"], ["b"]].map(entry);
+      const all = {
+        key: "all",
+        keeps: () => true,
+      };
+      const first = new ConsumedLabelIndex(entries, { select: all });
+      const second = new ConsumedLabelIndex(entries, { select: all });
+      const unselected = new ConsumedLabelIndex(entries);
+      expect(second.overlapping([])).toBe(first.overlapping([]));
+      expect(unselected.overlapping([])).not.toBe(first.overlapping([]));
+      expect(unselected.overlapping([]).map((item) => item.entry))
+        .toEqual(entries);
+    });
+
+    it("keeps a selection keyed by the empty string apart from no selection", () => {
+      const entries = [["a"], ["b"]].map(entry);
+      const none = { key: "", keeps: () => false };
+      const selected = new ConsumedLabelIndex(entries, { select: none });
+      const unselected = new ConsumedLabelIndex(entries);
+      expect(selected.overlapping([])).toEqual([]);
+      expect(unselected.overlapping([]).map((item) => item.entry))
+        .toEqual(entries);
+    });
   });
 
   describe("instance members", () => {

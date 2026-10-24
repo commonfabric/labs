@@ -1,6 +1,12 @@
+import { getLogger } from "@commonfabric/utils/logger";
 import { css, html, type PropertyValues } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
 import "../cf-button/cf-button.ts";
+
+const logger = getLogger("cf-submit-input", {
+  enabled: false,
+  level: "debug",
+});
 
 /**
  * CFSubmitInput - A text field with a submit button whose click carries the
@@ -192,7 +198,11 @@ export class CFSubmitInput extends BaseElement {
     if (!submitted.trim()) {
       // Nothing to submit. Stop the click here so an empty submit — including a
       // held Enter key that repeats — never reaches the host to spin up a no-op
-      // create.
+      // create. The drop is otherwise silent, so it is counted and, with the
+      // logger enabled, logged.
+      logger.debug("dropped", () => [
+        `cf-submit-input dropped an empty submit (#${this.inputId})`,
+      ]);
       event.stopPropagation();
       return;
     }

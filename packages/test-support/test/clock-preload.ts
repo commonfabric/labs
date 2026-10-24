@@ -540,5 +540,11 @@ export function installFakeClock(options: FakeClockOptions): void {
     }
   }
 
+  // A hook registers a function to run around the tests rather than a
+  // test, so it is the registrar's own.
+  for (const hook of HOOKS) Reflect.set(frozenTest, hook, realTest[hook]);
   Reflect.set(Deno, "test", frozenTest);
 }
+
+/** The lifecycle hooks `Deno.test` carries beside its overloads. */
+const HOOKS = ["beforeAll", "beforeEach", "afterEach", "afterAll"] as const;

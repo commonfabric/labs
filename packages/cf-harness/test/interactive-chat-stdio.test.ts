@@ -2316,6 +2316,7 @@ Deno.test("interactive NDJSON transport echoes its client protocol on an accepte
       "client_actions",
       "typed_commands",
       "starts_run",
+      "automatic_mutations",
     ],
   );
 });

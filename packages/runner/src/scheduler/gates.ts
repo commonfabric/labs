@@ -4,10 +4,11 @@ import {
   AUTO_DEBOUNCE_MIN_RUNS,
   AUTO_DEBOUNCE_THRESHOLD_MS,
 } from "./constants.ts";
-import type {
-  NodeRegistry,
-  SchedulerGateState,
-  SchedulerNode,
+import {
+  holdsBackoffState,
+  type NodeRegistry,
+  type SchedulerGateState,
+  type SchedulerNode,
 } from "./node-record.ts";
 import type { Action } from "./types.ts";
 
@@ -56,13 +57,17 @@ export class SchedulerGates {
   holdInitialRun(action: Action, notBefore: number): void {
     const gate = this.#mutableGate(action);
     gate.backoffUntil = Math.max(gate.backoffUntil ?? 0, notBefore);
+    this.#noteBackoff(action);
     this.scheduleWake(notBefore);
   }
 
   releaseInitialRunHold(action: Action): void {
     const record = this.#state.nodes.get(action);
     if (!record?.gate?.backoffUntil) return;
-    record.gate.backoffUntil = 0;
+    delete record.gate.backoffUntil;
+    if (!holdsBackoffState(record.gate)) {
+      this.#state.nodes.forgetBackoff(record);
+    }
     this.recomputeWakeAfterClear();
   }
 
@@ -72,6 +77,7 @@ export class SchedulerGates {
     if (!record || !staged) return;
     record.gate = { ...record.gate, ...staged };
     this.#stagedGates.delete(action);
+    if (holdsBackoffState(record.gate)) this.#state.nodes.noteBackoff(record);
   }
 
   setDebounce(action: Action, ms: number): void {
@@ -432,6 +438,7 @@ export class SchedulerGates {
     delete node.gate.backoffUntil;
     node.gate.backoffStreak = 0;
     node.gate.convergenceHoldPasses = 0;
+    this.#state.nodes.forgetBackoff(node);
     return clearedDeadline;
   }
 
@@ -516,6 +523,11 @@ export class SchedulerGates {
       return;
     }
     gate.throttleReadyAt = stats.lastRunTimestamp + throttleMs;
+  }
+
+  #noteBackoff(action: Action): void {
+    const record = this.#state.nodes.get(action);
+    if (record) this.#state.nodes.noteBackoff(record);
   }
 
   #gate(action: Action): SchedulerGateState | undefined {

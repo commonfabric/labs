@@ -50,6 +50,7 @@ import {
   disclosedCfcLabels,
 } from "../cfc-label-disclosure.ts";
 import { errorMessage } from "../error-message.ts";
+import type { HarnessForeignSpaces } from "../foreign-spaces.ts";
 import { scrubBareFabricIdentifiers } from "../fabric-identifier-scrub.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
@@ -294,12 +295,15 @@ const provenanceOf = (state: PieceSourceState): PieceSourceProvenance => {
  * Every check here is one `assign_slug` already makes of the same kind of
  * token, for the same reasons: a reference this run does not hold, a space
  * the session has no authority in, and a position inside a piece rather than
- * a piece are three different mistakes and each is said by name.
+ * a piece are three different mistakes and each is said by name. A piece in
+ * another space is reached only where `admitsSpace` says the caller may act
+ * there; by default nothing outside the run's own space is.
  */
-const resolvePiece = async (
+export const resolvePiece = async (
   toolId: string,
   pieces: PiecesController,
   ref: string,
+  admitsSpace: (space: string) => boolean = () => false,
 ): Promise<
   { ok: true; cell: Cell<unknown>; id: string } | { ok: false; message: string }
 > => {
@@ -313,7 +317,7 @@ const resolvePiece = async (
       message: `${toolId} token does not name a reference this run holds`,
     };
   }
-  if (link.space !== space) {
+  if (link.space !== space && !admitsSpace(link.space)) {
     return {
       ok: false,
       message: `${toolId} can only reach a piece in this run's own space`,
@@ -337,6 +341,17 @@ const resolvePiece = async (
       }`,
     };
   }
+  // A space this session may not read serves the piece as empty; say so
+  // rather than report a piece that is not one.
+  const denied = pieces.runtime.storageManager.authorizationError?.(
+    link.space,
+  );
+  if (denied !== undefined) {
+    return {
+      ok: false,
+      message: `${toolId} cannot read the piece's space: ${denied.message}`,
+    };
+  }
   const id = pieceId(cell);
   if (getPatternIdentityRef(cell) === undefined || id === undefined) {
     return {
@@ -348,11 +363,12 @@ const resolvePiece = async (
 };
 
 /** The session's piece controller, or the refusal that says why there is none. */
-const sessionPieces = async (
+export const sessionPieces = async (
   toolId: string,
   context: HarnessToolContext,
 ): Promise<
-  { ok: true; pieces: PiecesController } | {
+  | { ok: true; pieces: PiecesController; foreignSpaces: HarnessForeignSpaces }
+  | {
     ok: false;
     message: string;
   }
@@ -365,7 +381,12 @@ const sessionPieces = async (
     };
   }
   try {
-    return { ok: true, pieces: (await context.getFabricSession()).pieces };
+    const session = await context.getFabricSession();
+    return {
+      ok: true,
+      pieces: session.pieces,
+      foreignSpaces: session.foreignSpaces ?? {},
+    };
   } catch (error) {
     return {
       ok: false,

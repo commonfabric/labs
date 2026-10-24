@@ -18,18 +18,24 @@ does its **integrity** survive, is its **confidentiality** changed
 (declassified), and is it the **whole** value or a **subset**. The load-bearing
 fact is:
 
-> **A reference (link) carries a label across a space boundary. Materialized
-> bytes do not.**
+> **A reference (link) reaches a labeled value across a space boundary.
+> Materialized bytes do not.**
 
-When a cell in space B holds a link to a value in space A, the runtime derives
-the persisted label at the link path from the *source's own space*
-(`derivePersistedLinkLabel`, `prepare.ts`): the source integrity is preserved
-and a runtime-minted `LinkReference` endorsement is added recording **both**
-spaces (spec §3.7.2, integrity = target ∪ link-endorsement); the source
-confidentiality is carried across (§3.7.1, viewing needs both spaces). The
-persisted entry is stamped `origin: "link"`. This is the only mechanism that
-crosses spaces today, and it is exercised for the first time by two real DIDs in
-the test file above.
+When a cell in space B holds a link to a value in space A, the value's labels
+stay in space A, on the value, and a read that follows the link consumes them
+there together with the link's own restriction (spec §8.2.4: dereference
+confidentiality is the reference restriction conjoined with the target's
+current labels; integrity is the target's plus the link's own endorsements,
+§3.7.2). What the runtime persists at the link path in space B is the
+reference's own label (`linkSlotLabel`, `prepare.ts`): the link schema's
+declarations and the restriction the written handle carried, in one entry
+stamped `origin: "link"`. Where flow labels persist, the creating attempt's
+flow join is stamped at the same path as an entry of its own, with
+`origin: "structure"` and `observes: "followRef"`. No evidence atom is minted
+for the reference (§15.4, the retired `LinkReference`). Nothing of the
+source's labels is copied into either (§8.2.5, §8.12.8): a public,
+independently acquired reference to confidential content is public to hold
+and compare, and confidential to read through.
 
 By contrast, once a handler reads a value into plain bytes and writes those
 bytes into another space, the runtime has no basis to attest they are the same
@@ -46,11 +52,12 @@ Two forms, both real:
   mismatch rejects the commit with `exactCopyOf failed`.
 - **Across spaces** — `exactCopyOf` compares two paths *within one value tree*,
   but a path may **hold a cross-space link**. So a field whose `exactCopyOf`
-  source is a link into another space is (a) verified as an exact copy and (b)
-  carries the source label across the boundary, because the label it copies is
-  that path's link-carried label. This is "verbatim copy retains integrity
-  across spaces": the link is the carrier, `exactCopyOf` is the verified claim
-  on top of it.
+  source is a link into another space is (a) verified as an exact copy of the
+  reference and (b) carries that path's own label, the reference's restriction
+  and endorsement. The linked value's integrity is read where the value is,
+  through either reference. This is "verbatim copy retains integrity across
+  spaces": the link is the carrier, `exactCopyOf` is the verified claim on top
+  of it.
 
 `exactCopyOf` under an array wildcard (`"*"`) is unsupported and fails closed.
 
@@ -85,14 +92,16 @@ ordinary authoring, no special machinery.
 Two different meanings, two different behaviors:
 
 - **Reference a subset of fields** — link the **specific sub-paths**, not the
-  parent object. A link to `src.key("foo").key("bar")` carries only that leaf's
-  label. **Gotcha:** linking the **whole** object does *not* project it to a
-  narrower destination schema — the full source labelMap crosses, undeclared
-  sibling fields included. A narrower schema is a read-time *view*, not a
-  projection; it does not sanitize the reference. (The undeclared fields stay
-  confined by their own confidentiality labels, so it is safe, not a leak — but
-  "only the right fields crossed" is false.) To copy a genuine subset by
-  reference, link exactly the leaves you want.
+  parent object. A link to `src.key("foo").key("bar")` reaches only that leaf,
+  and a read through it consumes that leaf's labels and nothing of its
+  siblings'. **Gotcha:** linking the **whole** object does *not* project it to a
+  narrower destination schema — every field of the source is reachable through
+  the reference, undeclared sibling fields included, each under its own label. A
+  narrower schema is a read-time *view*, not a projection; it does not sanitize
+  the reference. (The undeclared fields stay confined by their own
+  confidentiality labels, so it is safe, not a leak — but "only the right
+  fields are reachable" is false.) To copy a genuine subset by reference, link
+  exactly the leaves you want.
 - **Declassify only a subset** — two orthogonal scopings compose:
   - **Per-path labels.** A value's label is stored per path, so only the
     field(s) you read/release reach the boundary evaluator.
@@ -161,7 +170,7 @@ deployment.
 
 ## Provenance
 
-Runner seams: `derivePersistedLinkLabel` / `linkReferenceIntegrity` /
+Runner seams: `linkSlotLabel` / `linkedSourceEvidence` /
 `derivePersistedLabel` / `verifyExactCopyRequirements` /
 `unsupportedTrustSensitiveReason` / `gateRuntimeMintedIntegrity`
 (`cfc/prepare.ts`); `ExchangeRule` / `buildCfcPolicySnapshot` (`cfc/policy.ts`);

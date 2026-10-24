@@ -36,8 +36,9 @@ import { createVDomDebugHelpers, viewSettled } from "@commonfabric/html/debug";
  * and the resulting vdom and Lit updates have drained. getRt is read on each
  * call so the helper tracks runtime replacement; with no runtime the idle step
  * is skipped. `getPending`, when given, names work the shell has started that
- * the view is not settled without, such as the bring-up of the user's Home,
- * and each pass waits for it ahead of the worker's idle. It answers with the
+ * the view is not settled without, such as the bring-up of the user's Home
+ * or the join of a room the user visits, and each pass waits for it ahead of
+ * the worker's idle. It answers with the
  * same promise for as long as the same work is pending. Work it comes to name
  * after a pass read it, while the worker was idling, is waited for by a
  * settle of its own.

@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 
 import { attachOptionsFrom, RuntimeClient } from "@/runtime-client.ts";
 import { findKeyMaterial } from "@/shared/key-material.ts";
@@ -212,6 +212,7 @@ describe("RuntimeClient", () => {
         timing: {},
         flags: {},
         cfc: { cfcRelevantTx: 4, dereferenceTracesMax: 9 },
+        compileCache: { hits: 1, misses: 2, byIdentityHits: 3 },
       };
       const conn = {
         on: () => {},
@@ -221,9 +222,15 @@ describe("RuntimeClient", () => {
         new (conn: never, options: unknown): RuntimeClient;
       })(conn, undefined);
 
-      expect((await client.getLoggerCounts()).cfc).toEqual({
+      const counts = await client.getLoggerCounts();
+      expect(counts.cfc).toEqual({
         cfcRelevantTx: 4,
         dereferenceTracesMax: 9,
+      });
+      expect(counts.compileCache).toEqual({
+        hits: 1,
+        misses: 2,
+        byIdentityHits: 3,
       });
     });
   });
@@ -371,6 +378,25 @@ describe("RuntimeClient", () => {
     });
   });
 
+  /** A client whose worker answers every request with `response`. */
+  function clientAnswering(response: unknown): {
+    client: RuntimeClient;
+    requests: unknown[];
+  } {
+    const requests: unknown[] = [];
+    const conn = {
+      on: () => {},
+      request: (message: unknown) => {
+        requests.push(message);
+        return Promise.resolve(response);
+      },
+    } as unknown as never;
+    const client = new (RuntimeClient as unknown as {
+      new (conn: never, options: unknown): RuntimeClient;
+    })(conn, undefined);
+    return { client, requests };
+  }
+
   describe("ensureHomePatternRunning()", () => {
     const home: CellRef = {
       id: "of:fid1:home" as CellRef["id"],
@@ -378,25 +404,6 @@ describe("RuntimeClient", () => {
       scope: "space",
       path: [],
     };
-
-    /** A client whose worker answers every request with `response`. */
-    function clientAnswering(response: unknown): {
-      client: RuntimeClient;
-      requests: unknown[];
-    } {
-      const requests: unknown[] = [];
-      const conn = {
-        on: () => {},
-        request: (message: unknown) => {
-          requests.push(message);
-          return Promise.resolve(response);
-        },
-      } as unknown as never;
-      const client = new (RuntimeClient as unknown as {
-        new (conn: never, options: unknown): RuntimeClient;
-      })(conn, undefined);
-      return { client, requests };
-    }
 
     it("asks the worker for Home, creating it where missing, and returns its cell", async () => {
       const { client, requests } = clientAnswering({ cell: home });
@@ -429,6 +436,25 @@ describe("RuntimeClient", () => {
       await expect(client.ensureHomePatternRunning()).rejects.toThrow(
         "Home's root is missing",
       );
+    });
+  });
+
+  describe("joinVisitedRoom()", () => {
+    const space = "did:key:z6Mk-runtime-client-visited" as DID;
+
+    it("asks the worker to join the room in the space, and returns its decision", async () => {
+      const { client, requests } = clientAnswering({ decision: "sent" });
+
+      const decision = await client.joinVisitedRoom(space);
+
+      expect(requests).toEqual([{ type: RequestType.JoinVisitedRoom, space }]);
+      expect(decision).toBe("sent");
+    });
+
+    it("returns `undefined` where the worker decided nothing, as for a user with no Home", async () => {
+      const { client } = clientAnswering({});
+
+      expect(await client.joinVisitedRoom(space)).toBeUndefined();
     });
   });
 
@@ -1260,6 +1286,63 @@ describe("RuntimeClient", () => {
 
       expect(request.body).toBeInstanceOf(FabricBytes);
       expect(request.body.slice()).toEqual(new Uint8Array([1, 2, 3]));
+    });
+
+    it("returns the URL a blob URL request returns", async () => {
+      const requests: unknown[] = [];
+      const conn = {
+        on: () => {},
+        request: (message: unknown) => {
+          requests.push(message);
+          return Promise.resolve({ url: "http://host/space/blobs/abc" });
+        },
+      } as unknown as never;
+      const client = new (RuntimeClient as unknown as {
+        new (conn: never, options: unknown): RuntimeClient;
+      })(conn, undefined);
+
+      const url = await client.blobUrl({
+        space: "did:key:z6Mk-runtime-client-blob" as never,
+        id: "fid1:abc",
+      });
+
+      expect(url).toBe("http://host/space/blobs/abc");
+      expect(requests).toEqual([{
+        type: RequestType.BlobUrl,
+        space: "did:key:z6Mk-runtime-client-blob",
+        id: "fid1:abc",
+      }]);
+
+      await client.blobUrl({
+        space: "did:key:z6Mk-runtime-client-blob" as never,
+        id: "fid1:abc",
+        download: true,
+      });
+
+      expect((requests[1] as { download?: boolean }).download).toBe(true);
+    });
+
+    it("sends the name of the file the bytes came from", async () => {
+      const requests: unknown[] = [];
+      const conn = {
+        on: () => {},
+        request: (message: unknown) => {
+          requests.push(message);
+          return Promise.resolve({ id: "fid1:blob", url: "blobs/blob.png" });
+        },
+      } as unknown as never;
+      const client = new (RuntimeClient as unknown as {
+        new (conn: never, options: unknown): RuntimeClient;
+      })(conn, undefined);
+
+      await client.uploadBlob({
+        space: "did:key:z6Mk-runtime-client-blob" as never,
+        contentType: "image/png",
+        body: new Uint8Array([1, 2, 3]),
+        name: "photo.png",
+      });
+
+      expect((requests[0] as UploadBlobRequest).name).toBe("photo.png");
     });
   });
 });

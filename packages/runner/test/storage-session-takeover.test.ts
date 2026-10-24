@@ -133,10 +133,14 @@ describe("storage session takeover", () => {
       "ordinary reconnect",
     ]
   ) {
-    const terminal = cause !== "ordinary reconnect";
+    const terminal = cause === "server takeover";
     const description = terminal
       ? `returns an error for an already loaded document after ${cause}`
-      : "keeps an already loaded document subscribed through an ordinary reconnect";
+      : `keeps an already loaded document subscribed through ${
+        cause === "lost resume reply"
+          ? "a reconnect whose resume reply is lost"
+          : "an ordinary reconnect"
+      }`;
     it(description, async () => {
       const owner = await Identity.fromPassphrase("storage session takeover");
       const space = owner.did();
@@ -190,6 +194,10 @@ describe("storage session takeover", () => {
           type: "array",
           items: { type: "string" },
         });
+      const ended: { target: string; error: Error }[] = [];
+      manager.subscribeSpaceSessionError((target, error) =>
+        ended.push({ target, error })
+      );
       let replacement: Awaited<ReturnType<typeof connect>> | undefined;
       try {
         await write(["first"]);
@@ -209,16 +217,21 @@ describe("storage session takeover", () => {
           }, testSessionOpenAuthFactory);
           await transport.delivered();
         } else if (cause === "lost resume reply") {
+          // The next resume carries the session's resume key, so the server
+          // takes the token the lost resume presented.
           transport.loseNextResume();
-          await expect(session.whenRestored()).rejects.toThrow("taken-over");
+          await session.whenRestored();
           expect(transport.lostReplies).toBe(1);
-          expect(transport.staleResumeRefusals).toBe(1);
+          expect(transport.staleResumeRefusals).toBe(0);
         } else {
           transport.reconnect();
           await session.whenRestored();
         }
         expect(session.closeError?.name).toBe(
           terminal ? "SessionRevokedError" : undefined,
+        );
+        expect(ended).toEqual(
+          terminal ? [{ target: space, error: session.closeError }] : [],
         );
 
         await write(["first", "second"]);
@@ -243,6 +256,7 @@ describe("storage session takeover", () => {
           expect(await heldInbox.pull()).toEqual(["first", "second"]);
           expect(await inbox().pull()).toEqual(["first", "second"]);
         }
+        expect(ended).toHaveLength(terminal ? 1 : 0);
       } finally {
         await runtime.dispose({ closeStorage: false });
         await manager.close();
@@ -253,6 +267,46 @@ describe("storage session takeover", () => {
       }
     });
   }
+
+  it("reports no session error after a takeover in a space an authoritative local store supplies", async () => {
+    const owner = await Identity.fromPassphrase("local store takeover");
+    const space = owner.did();
+    const server = new Server({
+      ...TEST_MEMORY_SERVER_AUTH,
+      store: new URL(`memory://local-store-takeover-${crypto.randomUUID()}`),
+    });
+    const reader = await connect({ transport: loopback(server) });
+    let session: SpaceSession | undefined;
+    const factory: SessionFactory = {
+      async create(target, _signer, options) {
+        session = await reader.mount(
+          target,
+          options,
+          testSessionOpenAuthFactory,
+        );
+        return { client: reader, session };
+      },
+    };
+    const manager = TestStorageManager.create({
+      as: owner,
+      memoryHost: new URL("memory://"),
+    }, factory);
+    const ended: string[] = [];
+    manager.subscribeSpaceSessionError((target) => ended.push(target));
+    try {
+      await manager.open(space).sync("of:local-store-document");
+      if (session === undefined) throw new Error("reader did not mount");
+      manager.installStoreReadThrough(space, () => undefined);
+      session.handleRevoked("taken-over");
+      expect(session.closeError?.name).toBe("SessionRevokedError");
+      expect(manager.spaceSessionError(space)).toBeUndefined();
+      expect(ended).toEqual([]);
+    } finally {
+      await manager.close();
+      await reader.close();
+      await server.close();
+    }
+  });
 
   for (const schemaless of [false, true]) {
     for (const victim of ["home", "foreign", "unrelated"] as const) {
@@ -330,6 +384,8 @@ describe("storage session takeover", () => {
             items: { type: "string" },
           });
         };
+        const ended: string[] = [];
+        manager.subscribeSpaceSessionError((target) => ended.push(target));
         let replacement: Awaited<ReturnType<typeof connect>> | undefined;
         try {
           await writeOffers(["first"]);
@@ -379,6 +435,7 @@ describe("storage session takeover", () => {
           await transport.delivered();
           expect(manager.spaceSessionError(victimSpace)?.name)
             .toBe("SessionRevokedError");
+          expect(ended).toEqual([victimSpace]);
 
           await writeOffers(["first", "second"]);
           await server.flushSessions([home, foreign, unrelated]);

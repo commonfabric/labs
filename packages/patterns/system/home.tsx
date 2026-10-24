@@ -7,6 +7,7 @@ import {
   NAME,
   pattern,
   type PatternFactory,
+  SELF,
   Stream,
   toSchema,
   UI,
@@ -22,6 +23,14 @@ import FabriChatManager, {
 } from "../fabrichat/manager.tsx";
 import FavoritesManager from "./favorites-manager.tsx";
 import Self from "../self.tsx";
+import SharedSpaceCollection, {
+  type SharedSpaceCollectionOutput,
+} from "./shared-space-collection.tsx";
+import {
+  sharedSpaceCollectionViewOf,
+  type SharedSpaceInterface,
+  sharedSpaceReceiptViewOf,
+} from "./shared-space-interface.ts";
 import {
   changeSharedSpaceMembership,
   readSharedSpaceCatalog,
@@ -51,11 +60,15 @@ import {
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
   pointProfilesAtPrivateInbox,
+  PrivateInboxAnswering,
   type PrivateInboxHolder,
+  type PrivateInboxReceipt,
   type PrivateInboxRefusalHolder,
   type PrivateInboxReplacementHolder,
+  type PrivateInboxRequest,
   replaceRefusedPrivateInbox,
   repointProfilesFromReplacedInbox,
+  requestPrivateInbox,
   type RetainedPrivateInboxes,
   TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE,
   TRUSTED_REPLACE_REFUSED_INBOX_ACTION,
@@ -94,6 +107,8 @@ type SpaceEntry = {
 };
 
 export type HomeOutput = {
+  /** The collection browser's named instance and session-local controls. */
+  socialSpaceCollection: SharedSpaceCollectionOutput;
   [NAME]: string;
   [UI]: VNode;
   // These defaults are part of Home's published result contract. Pattern setup
@@ -157,6 +172,10 @@ export type HomeOutput = {
   // `replaceRefusedPrivateInbox` writes it, from the button on Home's refusal
   // notice. No `replacement` before the first.
   privateInboxReplacement: Writable<PrivateInboxReplacementHolder>;
+  // Independent roles for product consumers. Select `commands` for writes,
+  // `view` for collection lists, and `receipts` for offer admission evidence.
+  sharedSpaces: SharedSpaceInterface;
+  // Flat aliases address the same catalog and command streams.
   sharedSpaceCatalog: SharedSpaceCatalog;
   registerSharedSpace: Stream<
     SharedSpaceRegistration,
@@ -181,8 +200,15 @@ export type HomeOutput = {
   // profile's inbox in `privateInboxRefusal`.
   // The host sends it the first time a runtime worker brings up Home, and
   // again at that worker's next bring-up if the ensure failed, so Home adopts
-  // again only then.
+  // again only then. `requestPrivateInbox` sends it an event naming nothing,
+  // which adopts nothing.
   ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
+  // For a client, such as a loom daemon, that would otherwise create an inbox
+  // of its own: has Home ensure its inbox, as `ensurePrivateInbox` does for an
+  // event naming nothing, and links the handling's receipt to Home's answer
+  // for the profile the request names, which reads `ensured` once that profile
+  // points at Home's inbox, or a final status saying why it never will.
+  requestPrivateInbox: Stream<PrivateInboxRequest, PrivateInboxReceipt>;
   // For the owner, from the button on Home's refusal notice: replaces the
   // refused inbox with the one Home holds, or with one it creates when it holds
   // none, and points the profiles that point at the refused inbox at Home's.
@@ -337,7 +363,8 @@ const homeResultSchema = __cf_data(
 );
 
 const Home = pattern(
-  (_: Record<string, never>): HomeOutput => {
+  (input: Record<string, never> & { [SELF]: HomeOutput }): HomeOutput => {
+    const home = input[SELF];
     // OWN the data cells (.for for id stability)
     const favorites = new Writable<Favorite[]>([]).for("favorites");
     const journal = new Writable<JournalEntry[]>([]).for("journal");
@@ -391,6 +418,11 @@ const Home = pattern(
     const privateInboxReplacement = new Writable<PrivateInboxReplacementHolder>(
       {},
     ).for("privateInboxReplacement");
+    // The profiles requests for Home's inbox have named, by entity, which
+    // Home goes on answering for.
+    const privateInboxRequests = new Writable<Record<string, boolean>>({}).for(
+      "privateInboxRequests",
+    );
     // The refusal notice reads the refusal's code and time, and never its
     // `inbox`: the stored link carries the label the refused inbox's owner
     // gives its offers. The notice renders after everything else, for the
@@ -439,11 +471,6 @@ const Home = pattern(
     // Child components
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
-    // Its panel renders after every other panel. A panel inserted ahead of an
-    // existing one shifts the positions of a deployed Home's existing
-    // children, so each child's update runs on the stored state of the child
-    // that held its position before, and a stored slot the child's argument
-    // schema refuses is dropped with a `setup-stored-slot-dropped` warning.
     const chatManager = FabriChatManager({ sharedSpaceCatalog: catalog });
     const ensurePrivateInboxStream = ensurePrivateInbox({
       privateInbox,
@@ -470,6 +497,28 @@ const Home = pattern(
     // the Profile tab. Owns its own durable cell (seeded via Default<>).
     const selfComponent = Self({});
     const activeTab = new Writable("spaces").for("activeTab");
+    // Home's answers to requests for its inbox, which `requestPrivateInbox`
+    // links a request's receipt to.
+    const privateInboxAnswering = PrivateInboxAnswering({
+      privateInbox,
+      profiles: profiles as any,
+      requested: privateInboxRequests,
+    });
+    const sharedSpaces = {
+      view: computed(() => sharedSpaceCollectionViewOf(catalog.get())),
+      receipts: computed(() => sharedSpaceReceiptViewOf(catalog.get())),
+      commands: {
+        register: home.registerSharedSpace,
+        changeMembership: home.changeSharedSpaceMembership,
+      },
+      imports: { remove: home.removeSharedSpace },
+    };
+    // The builder numbers unnamed roots in input/result walk order, including
+    // the UI. Naming this spot preserves every existing positional cause.
+    const socialSpaceCollection = SharedSpaceCollection({
+      catalog,
+      view: sharedSpaces.view,
+    });
 
     return {
       [NAME]: `Home`,
@@ -487,6 +536,7 @@ const Home = pattern(
               <cf-tab value="self">Self</cf-tab>
               <cf-tab value="agent-runs">Agent runs</cf-tab>
               <cf-tab value="chats">Chats</cf-tab>
+              <cf-tab value="social-spaces">Social spaces</cf-tab>
             </cf-tab-list>
             <cf-tab-panel value="agent-runs" id="home-agent-runs">
               {agentQueue}
@@ -589,6 +639,9 @@ const Home = pattern(
             <cf-tab-panel value="chats" id="home-chats">
               {chatManager}
             </cf-tab-panel>
+            <cf-tab-panel value="social-spaces" id="home-social-spaces">
+              {socialSpaceCollection}
+            </cf-tab-panel>
           </cf-tabs>
 
           <div slot="header">
@@ -640,6 +693,7 @@ const Home = pattern(
       ) as VNode,
 
       // Exported data
+      socialSpaceCollection,
       favorites,
       journal,
       spaces,
@@ -655,6 +709,7 @@ const Home = pattern(
       privateInboxRefusal,
       privateInboxReplacement,
 
+      sharedSpaces,
       sharedSpaceCatalog: computed(() => readSharedSpaceCatalog(catalog)),
 
       // Exported handlers
@@ -670,6 +725,12 @@ const Home = pattern(
       renameSpace: renameSpaceHandler({ spaces }),
       createProfile: createProfileStream,
       ensurePrivateInbox: ensurePrivateInboxStream,
+      requestPrivateInbox: requestPrivateInbox({
+        profiles: profiles as any,
+        requested: privateInboxRequests,
+        answers: privateInboxAnswering.answers,
+        ensure: ensurePrivateInboxStream,
+      }),
       replaceRefusedPrivateInbox: replaceRefusedInboxStream,
     };
   },

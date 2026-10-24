@@ -18,7 +18,8 @@
 import { join } from "@std/path";
 
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
-import { Identity } from "@commonfabric/identity";
+import { Identity, legacySpaceDid } from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 import type { ACL } from "@commonfabric/memory/acl";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
@@ -31,7 +32,11 @@ import {
 } from "../harness-job.ts";
 import { LocalJobBrowserHost } from "./browser-host.ts";
 import type { LocalJobProfile, LocalJobProfiles } from "./profiles.ts";
-import { narrowLocalJobProfile } from "./profiles.ts";
+import {
+  type LocalJobFabric,
+  localJobForeignSpaces,
+  narrowLocalJobProfile,
+} from "./profiles.ts";
 import {
   LOCAL_JOB_TERMINAL_STATES,
   type LocalJob,
@@ -96,6 +101,28 @@ export interface LocalJobLaneOptions {
 }
 
 /**
+ * The `foreignSpaces` of a job's fabric part: the spaces of the pieces it was
+ * handed that lie outside the profile's own, compared as DIDs — a profile
+ * naming its space by name resolves it as its session does — each routed to
+ * the origin the request names for it, or nothing when every input is in the
+ * profile's space.
+ */
+const foreignSpacesOf = async (
+  fabric: LocalJobFabric,
+  request: LocalJob["request"],
+): Promise<{ foreignSpaces?: Record<string, string> }> => {
+  const own = isDID(fabric.space)
+    ? fabric.space
+    : await legacySpaceDid(fabric.space);
+  const foreignSpaces = localJobForeignSpaces(
+    request.inputs,
+    request.foreignSpaces,
+    own,
+  );
+  return Object.keys(foreignSpaces).length > 0 ? { foreignSpaces } : {};
+};
+
+/**
  * The spec a job runs as: its request's task, framing and schema, under its
  * profile narrowed to what the request asked for. The task binds as the
  * profile's role, never as anything the request says. Screen context and
@@ -103,7 +130,11 @@ export interface LocalJobLaneOptions {
  * profile narrowed to a browser host adds the tool and the subagent profile
  * the browser runs under, for this job alone. A profile's fabric session is
  * read-capped at the ceiling the host grants its identity in its space, as
- * the Fabric lane resolves it, with nothing narrower requested.
+ * the Fabric lane resolves it, with nothing narrower requested. The request's
+ * `inputs` become the run's input cells, each held by the model as a handle,
+ * and the space of each one living outside the profile's is admitted for the
+ * run on the host the request's `foreignSpaces` names for it; `narrowLocalJobProfile` has already refused them
+ * under a profile with no fabric session.
  *
  * SHORTCUT: context reaches the model inside the system prompt, marked as
  * data rather than instructions, because a batch job has one prompt slot and
@@ -134,6 +165,9 @@ export const localJobSpecOf = async (
   ];
   return {
     task: request.task,
+    ...(request.imageAttachments !== undefined
+      ? { imageAttachments: request.imageAttachments }
+      : {}),
     commandJobId: job.id,
     taskRole: profile.taskRole,
     resultSchema: request.resultSchema as HarnessJobSpec["resultSchema"],
@@ -148,6 +182,18 @@ export const localJobSpecOf = async (
       ...(browser ? [LOCAL_JOB_BROWSER_SUBAGENT_PROFILE] : []),
     ],
     maxModelTurns: profile.maxModelTurns,
+    ...(profile.maxInputBytes !== undefined
+      ? { maxInputBytes: profile.maxInputBytes }
+      : {}),
+    ...(profile.maxOutputTokens !== undefined
+      ? { maxOutputTokens: profile.maxOutputTokens }
+      : {}),
+    ...(request.depth !== undefined ? { depth: request.depth } : {}),
+    ...(request.tags !== undefined ? { taskTags: request.tags } : {}),
+    ...(request.domains !== undefined ? { taskDomains: request.domains } : {}),
+    ...(profile.reasoningEffort !== undefined
+      ? { reasoningEffort: profile.reasoningEffort }
+      : {}),
     instructions: framing.length > 0 ? framing.join("\n\n") : undefined,
     model: profile.model ?? options.model,
     loomRetrievalConfigPath: profile.loomRetrievalConfig ??
@@ -170,7 +216,8 @@ export const localJobSpecOf = async (
         fabric.space,
         undefined,
       ),
-      inputs: {},
+      inputs: { ...request.inputs },
+      ...await foreignSpacesOf(fabric, request),
     },
     patternIndexUrl: profile.patternIndexUrl,
     patternIndexPublish: profile.patternIndexPublish,
@@ -180,10 +227,10 @@ export const localJobSpecOf = async (
 /**
  * The progress events one transcript event reports: a `step` for each tool
  * the model called, and a `command` for each command the host ran, one per
- * executed call of a `run_command` batch. Children carry their profile, run
- * id, parent call id and depth. Browser steps also name the action, so a
- * reader can distinguish clicking from waiting without receiving arguments,
- * URLs or page content.
+ * executed call of a `run_command` or `run_read_command` batch. Children
+ * carry their profile, run id, parent call id and depth. Browser steps also
+ * name the action, so a reader can distinguish clicking from waiting without
+ * receiving arguments, URLs or page content.
  */
 export const localJobEventsOf = (
   event: HarnessTranscriptEvent,
@@ -213,7 +260,11 @@ export const localJobEventsOf = (
       },
     }));
   }
-  if (message.role !== "tool" || message.toolName !== "run_command") return [];
+  if (
+    message.role !== "tool" ||
+    (message.toolName !== "run_command" &&
+      message.toolName !== "run_read_command")
+  ) return [];
   let output: unknown;
   try {
     output = JSON.parse(message.content);

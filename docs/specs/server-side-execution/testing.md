@@ -47,14 +47,15 @@ implemented as the gates below. Method inherited from the v1 learning run
 
 ## 2. CI arms
 
-From the first PR with testable behavior: the integration suites run
-twice — `EXPERIMENTAL_SERVER_EXECUTION` OFF (must be byte-identical
-to today up to the recorded acceptances — key-vocabulary §5's, and
-the verification-coverage register's recorded-acceptance rows (RULED
-2026-08-05, widened for stage G's claim-guard delta the same day);
-any other OFF-arm diff is a Phase-gate failure by
-itself) and
-ON. The ON arm is allowed to skip
+The integration suites run twice — `EXPERIMENTAL_SERVER_EXECUTION` OFF and
+ON. Each arm is held to its behavior in the
+[configuration registry](../../development/EXPERIMENTAL_OPTIONS.md#serverexecution).
+In OFF, session documents synchronize unless `localSessionDocuments` is enabled.
+Cross-runtime session fixtures run by default and skip only when that flag is
+on; their user-scope counterparts run in both settings. Tests that require the
+server to read session documents can also enable server execution for their
+producers and consumers. Both arms preserve mixed-transaction
+rollback and dependent-write rejection. The ON arm is allowed to skip
 not-yet-implemented phases via explicit skip lists per phase, never via
 silent filtering. (v1's terminal failure mode: the flags-on branch never
 went through CI at all.)

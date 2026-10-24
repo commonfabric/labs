@@ -1,0 +1,1 @@
+{"date":"2026-10-12","from":{"k":"unit","s":"runner","n":"cfc-current-principal-legacy > refuses to derive a held reference from an unresolved stored creator"},"to":{"k":"unit","s":"runner","n":"cfc-current-principal-legacy > binds a held reference to its writer and leaves the stored creator unresolved behind it"}}

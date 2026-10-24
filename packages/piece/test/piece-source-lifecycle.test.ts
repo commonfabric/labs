@@ -9,6 +9,7 @@ import {
   getPatternIdentityRef,
   getPatternSource,
   getPieceReconciliation,
+  getPieceSourceRevisions,
   getPieceSourceSnapshot,
   Runtime,
   type RuntimeProgram,
@@ -23,7 +24,10 @@ import {
   readPieceSourceState,
   reconcilePieceSource,
 } from "../src/ops/piece-origin.ts";
-import { PieceController } from "../src/ops/piece-controller.ts";
+import {
+  PieceController,
+  PieceSourceChangedError,
+} from "../src/ops/piece-controller.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 
@@ -63,6 +67,39 @@ function versionProgram(version: string): RuntimeProgram {
         "export default pattern<{ seed?: string }>(() => ({",
         "  [NAME]: 'Source lifecycle',",
         `  version: ${JSON.stringify(version)},`,
+        "}));",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+// `versionProgram(version)` with its entry at `route`, as a program fetched
+// from the deployment's patterns route names it.
+function routedVersionProgram(route: string, version: string): RuntimeProgram {
+  const [file] = versionProgram(version).files;
+  return { main: route, files: [{ ...file, name: route }] };
+}
+
+// A module whose default export and `other` export each take an optional
+// `seed` of the type named, selected by `mainExport`.
+function twoExportProgram(
+  seeds: { default: "string" | "number"; other: "string" | "number" },
+  version: string,
+  mainExport = "default",
+): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    mainExport,
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { pattern } from 'commonfabric';",
+        `export default pattern<{ seed?: ${seeds.default} }>(() => ({`,
+        `  version: ${JSON.stringify(`default-${version}`)},`,
+        "}));",
+        `export const other = pattern<{ seed?: ${seeds.other} }>(() => ({`,
+        `  version: ${JSON.stringify(`other-${version}`)},`,
         "}));",
         "",
       ].join("\n"),
@@ -179,6 +216,8 @@ function unionValueProgram(): RuntimeProgram {
 function installFetchStub(
   sources: Record<string, RuntimeProgram>,
   onFetch: () => void = () => {},
+  releases: Record<string, string> = {},
+  identities: Record<string, string> = {},
 ): () => void {
   const original = globalThis.fetch;
   globalThis.fetch = ((input: string | URL | Request) => {
@@ -190,6 +229,26 @@ function installFetchStub(
         : input.url,
     );
     onFetch();
+    // As the patterns route answers: `?identity` with the identity the
+    // program compiles to and the release time beside it, and the source
+    // itself with neither.
+    if (url.searchParams.has("identity")) {
+      const identity = identities[url.pathname];
+      const releasedAt = releases[url.pathname];
+      return Promise.resolve(
+        identity === undefined
+          ? new Response("not found", { status: 404 })
+          : new Response(identity, {
+            status: 200,
+            headers: {
+              "content-type": "text/plain",
+              ...(releasedAt === undefined
+                ? {}
+                : { "CF-Released-At": releasedAt }),
+            },
+          }),
+      );
+    }
     const program = sources[url.pathname];
     if (program === undefined) {
       return Promise.resolve(new Response("not found", { status: 404 }));
@@ -212,13 +271,22 @@ describe("piece source lifecycle", () => {
   let runtime: Runtime;
   let pieces: PiecesController;
   let webSources: Record<string, RuntimeProgram>;
+  let webReleases: Record<string, string>;
+  let webIdentities: Record<string, string>;
   let webFetches: number;
   let restoreFetch: () => void;
 
   beforeEach(async () => {
     webSources = {};
+    webReleases = {};
+    webIdentities = {};
     webFetches = 0;
-    restoreFetch = installFetchStub(webSources, () => webFetches++);
+    restoreFetch = installFetchStub(
+      webSources,
+      () => webFetches++,
+      webReleases,
+      webIdentities,
+    );
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
@@ -246,6 +314,23 @@ describe("piece source lifecycle", () => {
   ): Promise<void> {
     const { error } = await runtime.editWithRetry((tx) => {
       setPatternSource(piece.getCell(), tx, origin);
+    });
+    if (error !== undefined) throw error;
+  }
+
+  /**
+   * Empties `piece`'s source log, leaving it as a piece made by a path that
+   * records no creation revision.
+   */
+  async function clearSourceLog(
+    piece: Awaited<ReturnType<PiecesController["create"]>>,
+  ): Promise<void> {
+    const { error } = await runtime.editWithRetry((tx) => {
+      piece.getCell().withTx(tx).setMetaRaw(
+        "pieceSourceHistory",
+        undefined,
+        rawMetaWriteAuthorization,
+      );
     });
     if (error !== undefined) throw error;
   }
@@ -432,6 +517,107 @@ describe("piece source lifecycle", () => {
     });
   });
 
+  it("repoints a piece still on the pattern and empty source log it is pinned to", async () => {
+    webSources["/api/patterns/entered.tsx"] = versionProgram("entered-v1");
+    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+    await clearSourceLog(piece);
+    const pattern = getPatternIdentityRef(piece.getCell())!;
+
+    expect(
+      await piece.changeSource(
+        { kind: "repoint", url: "system:entered.tsx" },
+        { expectedPattern: pattern, expectedRevision: null },
+      ),
+    ).toEqual({ status: "applied" });
+
+    expect(getPatternSource(piece.getCell())).toBe("system:entered.tsx");
+    expect(await piece.result.get(["version"])).toBe("entered-v1");
+    const state = await readPieceSourceState(runtime, piece.getCell());
+    expect(state.history.map((revision) => revision.operation)).toEqual([
+      "baseline",
+      "repoint",
+    ]);
+  });
+
+  it("throws `PieceSourceChangedError` for an empty-log pin on a piece with a revision", async () => {
+    webSources["/api/patterns/entered.tsx"] = versionProgram("entered-v1");
+    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+
+    await expect(
+      piece.changeSource(
+        { kind: "repoint", url: "system:entered.tsx" },
+        { expectedRevision: null },
+      ),
+    ).rejects.toThrow(PieceSourceChangedError);
+
+    expect(getPatternSource(piece.getCell())).toBeUndefined();
+    expect(await piece.result.get(["version"])).toBe("v1");
+  });
+
+  it("throws `PieceSourceChangedError` for a revision pin a same-pattern detach moved past", async () => {
+    // The detach keeps the pattern, so a pattern pin alone would let the
+    // repoint below undo it; the revision pin is what refuses.
+    webSources["/api/patterns/entered.tsx"] = versionProgram("entered-v1");
+    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+    const pattern = getPatternIdentityRef(piece.getCell())!;
+    const proved = getPieceSourceSnapshot(piece.getCell())!.revisionId;
+    await stampOrigin(piece, "system:pattern.tsx");
+    expect(await piece.changeSource({ kind: "detach" })).toEqual({
+      status: "applied",
+    });
+    expect(getPatternIdentityRef(piece.getCell())).toEqual(pattern);
+
+    await expect(
+      piece.changeSource(
+        { kind: "repoint", url: "system:entered.tsx" },
+        { expectedPattern: pattern, expectedRevision: proved },
+      ),
+    ).rejects.toThrow(
+      /ends at revision .*, but this change was proved against one that ends at revision/,
+    );
+
+    expect(getPatternSource(piece.getCell())).toBeUndefined();
+    expect(await piece.result.get(["version"])).toBe("v1");
+  });
+
+  it("throws `PieceSourceChangedError` for a pinned repoint the piece moves under while it is prepared", async () => {
+    // The move lands after the pin check has read the piece and before the
+    // transition's baseline reads it again: the first `await` past the read.
+    webSources["/api/patterns/entered.tsx"] = versionProgram("entered-v1");
+    const piece = await pieces.create(versionProgram("v1"), { input: {} });
+    const pattern = getPatternIdentityRef(piece.getCell())!;
+    const proved = getPieceSourceSnapshot(piece.getCell())!.revisionId;
+    const runner = runtime.runner;
+    const pointerFor = runner.sessionPatternPointerFor.bind(runner);
+    let moved = false;
+    runner.sessionPatternPointerFor = (cell) => {
+      if (!moved) {
+        moved = true;
+        queueMicrotask(() => {
+          const tx = runtime.edit();
+          setPatternSource(piece.getCell(), tx, "system:pattern.tsx");
+          tx.commit();
+        });
+      }
+      return pointerFor(cell);
+    };
+
+    try {
+      await expect(
+        piece.changeSource(
+          { kind: "repoint", url: "system:entered.tsx" },
+          { expectedPattern: pattern, expectedRevision: proved },
+        ),
+      ).rejects.toThrow(PieceSourceChangedError);
+    } finally {
+      runner.sessionPatternPointerFor = pointerFor;
+    }
+
+    expect(moved).toBe(true);
+    expect(getPatternSource(piece.getCell())).toBe("system:pattern.tsx");
+    expect(await piece.result.get(["version"])).toBe("v1");
+  });
+
   it("points a piece at a fabric piece it has never followed", async () => {
     const source = await pieces.create(versionProgram("source-v1"), {
       input: {},
@@ -532,6 +718,68 @@ describe("piece source lifecycle", () => {
     expect(getPieceReconciliation(piece.getCell())).toMatchObject({
       outcome: "unreachable",
       origin,
+    });
+  });
+
+  describe("a release time the origin confirmed for the running source", () => {
+    // The reconciler orders `system:` releases by the release time it last
+    // confirmed for the source a piece runs. An explicit update that adopts
+    // nothing has learned nothing that moves that time back.
+
+    async function confirm(
+      piece: { getCell(): Cell<unknown> },
+      origin: string,
+    ) {
+      const running = getPatternIdentityRef(piece.getCell())!.identity;
+      const confirmed = { identity: running, releasedAt: Date.UTC(2024, 2, 5) };
+      const written = await runtime.editWithRetry((tx) => {
+        setPieceReconciliation(piece.getCell(), tx, {
+          outcome: "followed",
+          at: Date.now(),
+          origin,
+          confirmed,
+        });
+      });
+      expect(written.error).toBeUndefined();
+      return confirmed;
+    }
+
+    it("stays across an update that could not reach the origin", async () => {
+      const origin = "system:missing-confirmed.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await stampOrigin(piece, origin);
+      const confirmed = await confirm(piece, origin);
+
+      await expect(piece.changeSource({ kind: "adopt" })).rejects.toThrow();
+
+      expect(getPieceReconciliation(piece.getCell())).toMatchObject({
+        outcome: "unreachable",
+        origin,
+        confirmed,
+      });
+    });
+
+    it("stays across an update that found the origin already current", async () => {
+      const origin = "system:current-confirmed.tsx";
+      webSources["/api/patterns/current-confirmed.tsx"] = versionProgram(
+        "origin-v1",
+      );
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await stampOrigin(piece, origin);
+      expect(await piece.changeSource({ kind: "adopt" })).toEqual({
+        status: "applied",
+      });
+      const confirmed = await confirm(piece, origin);
+
+      expect(await piece.changeSource({ kind: "adopt" })).toEqual({
+        status: "applied",
+      });
+
+      expect(getPieceReconciliation(piece.getCell())).toMatchObject({
+        outcome: "followed",
+        origin,
+        confirmed,
+      });
     });
   });
 
@@ -1334,6 +1582,583 @@ describe("piece source lifecycle", () => {
     expect(after.pattern).toEqual(before.pattern);
     expect(after.currentRevisionId).toBe(before.currentRevisionId);
     expect(after.history).toEqual(before.history);
+  });
+
+  describe("a candidate from the `system:` origin the piece took its source from", () => {
+    // The release gate proves each release of a pattern's default export
+    // against the contracts its earlier releases recorded, so a later release
+    // is reviewed without comparing schemas. Every other step keeps the
+    // comparison, and every step keeps the checks of the piece's own data.
+
+    const earlier = "2026-10-16T10:00:00Z";
+    const later = "2026-10-16T11:00:00Z";
+    const latest = "2026-10-16T12:00:00Z";
+
+    // Points `piece` at `origin`, served at `route` as `program` released at
+    // `releasedAt`, or with no stated release time when it is undefined.
+    async function repointTo(
+      piece: PieceController,
+      origin: string,
+      route: string,
+      program: RuntimeProgram,
+      releasedAt: string | undefined,
+    ): Promise<void> {
+      await offer(route, program, releasedAt);
+      expect(await piece.changeSource({ kind: "repoint", url: origin }))
+        .toEqual({ status: "applied" });
+    }
+
+    // Serves `program` at `route` and advertises the identity it compiles to
+    // there, released at `releasedAt`, or with no stated release time when it
+    // is undefined.
+    async function offer(
+      route: string,
+      program: RuntimeProgram,
+      releasedAt: string | undefined,
+    ): Promise<void> {
+      const entry = program.files.find((file) => file.name === program.main)!;
+      const served = await runtime.patternManager.compilePattern(
+        { main: route, files: [{ name: route, contents: entry.contents }] },
+        { space: pieces.getSpace(), persist: false },
+      );
+      webSources[route] = program;
+      webIdentities[route] = runtime.patternManager.getArtifactEntryRef(
+        served,
+      )!.identity;
+      if (releasedAt === undefined) delete webReleases[route];
+      else webReleases[route] = releasedAt;
+    }
+
+    // The revision that last pointed `piece` at the export `symbol`.
+    function repointedTo(piece: PieceController, symbol: string): string {
+      return getPieceSourceRevisions(piece.getCell()).findLast((revision) =>
+        revision.operation === "repoint" && revision.pattern.symbol === symbol
+      )!.revisionId;
+    }
+
+    it("is applied over a schema change released later, and records its release time", async () => {
+      const origin = "system:gated.tsx";
+      const route = "/api/patterns/gated.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        origin,
+        route,
+        versionProgram("origin-v1"),
+        earlier,
+      );
+      await piece.changeSource({ kind: "detach" });
+      await offer(route, incompatibleSeedProgram("candidate"), later);
+
+      expect(await piece.changeSource({ kind: "repoint", url: origin }))
+        .toEqual({ status: "applied" });
+
+      expect(await piece.result.get(["version"])).toBe("candidate");
+      expect(getPieceSourceRevisions(piece.getCell()).at(-1)?.releasedAt)
+        .toBe(Date.parse(later));
+    });
+
+    it("is applied over a schema change the active origin offers in a later release", async () => {
+      const origin = "system:gated-active.tsx";
+      const route = "/api/patterns/gated-active.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        origin,
+        route,
+        versionProgram("origin-v1"),
+        earlier,
+      );
+      await offer(route, incompatibleSeedProgram("candidate"), later);
+
+      expect(await piece.changeSource({ kind: "adopt" })).toEqual({
+        status: "applied",
+      });
+
+      expect(await piece.result.get(["version"])).toBe("candidate");
+      expect(getPieceReconciliation(piece.getCell())).toMatchObject({
+        outcome: "followed",
+        origin,
+      });
+    });
+
+    it("is applied over a schema change when the source was taken from the origin's rooted patterns-route path", async () => {
+      const route = "/api/patterns/gated-rooted-from.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        route,
+        route,
+        versionProgram("origin-v1"),
+        earlier,
+      );
+      await piece.changeSource({ kind: "detach" });
+      await offer(route, incompatibleSeedProgram("candidate"), later);
+
+      expect(
+        await piece.changeSource({
+          kind: "repoint",
+          url: "system:gated-rooted-from.tsx",
+        }),
+      ).toEqual({ status: "applied" });
+    });
+
+    it("is applied over a schema change when the origin is written as its rooted patterns-route path", async () => {
+      const route = "/api/patterns/gated-rooted-to.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        "system:gated-rooted-to.tsx",
+        route,
+        versionProgram("origin-v1"),
+        earlier,
+      );
+      await piece.changeSource({ kind: "detach" });
+      await offer(route, incompatibleSeedProgram("candidate"), later);
+
+      expect(await piece.changeSource({ kind: "repoint", url: route }))
+        .toEqual({ status: "applied" });
+    });
+
+    it("returns an incompatibility warning for a release earlier than the running source's", async () => {
+      const origin = "system:gated-earlier.tsx";
+      const route = "/api/patterns/gated-earlier.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(piece, origin, route, versionProgram("origin-v1"), later);
+      await offer(route, incompatibleSeedProgram("candidate"), earlier);
+
+      const result = await piece.changeSource({ kind: "adopt" });
+
+      expect(result.status).toBe("incompatible");
+      expect(await piece.result.get(["version"])).toBe("origin-v1");
+    });
+
+    it("returns an incompatibility warning for a release earlier than one a reconciliation confirmed for the running source", async () => {
+      const origin = "system:gated-confirmed.tsx";
+      const route = "/api/patterns/gated-confirmed.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        origin,
+        route,
+        versionProgram("origin-v1"),
+        earlier,
+      );
+      const written = await runtime.editWithRetry((tx) => {
+        setPieceReconciliation(piece.getCell(), tx, {
+          outcome: "followed",
+          at: Date.now(),
+          origin,
+          confirmed: {
+            identity: getPatternIdentityRef(piece.getCell())!.identity,
+            releasedAt: Date.parse(latest),
+          },
+        });
+      });
+      expect(written.error).toBeUndefined();
+      await offer(route, incompatibleSeedProgram("candidate"), later);
+
+      const result = await piece.changeSource({ kind: "adopt" });
+
+      expect(result.status).toBe("incompatible");
+    });
+
+    it("returns an incompatibility warning for a release earlier than one confirmed before the piece was detached", async () => {
+      const origin = "system:gated-detached-confirmed.tsx";
+      const route = "/api/patterns/gated-detached-confirmed.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        origin,
+        route,
+        versionProgram("origin-v1"),
+        earlier,
+      );
+      await offer(route, versionProgram("origin-v1"), latest);
+      expect(await piece.changeSource({ kind: "adopt" })).toEqual({
+        status: "applied",
+      });
+      await piece.changeSource({ kind: "detach" });
+      expect(getPieceSourceRevisions(piece.getCell()).at(-1)).toMatchObject({
+        operation: "detach",
+        releasedAt: Date.parse(latest),
+      });
+      await offer(route, incompatibleSeedProgram("candidate"), later);
+
+      const result = await piece.changeSource({ kind: "repoint", url: origin });
+
+      expect(result.status).toBe("incompatible");
+      expect(await piece.result.get(["version"])).toBe("origin-v1");
+    });
+
+    it("returns an incompatibility warning when the running source is confirmed at a later release while the update is set up", async () => {
+      const origin = "system:gated-overtaken.tsx";
+      const route = "/api/patterns/gated-overtaken.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        origin,
+        route,
+        versionProgram("origin-v1"),
+        earlier,
+      );
+      await offer(route, incompatibleSeedProgram("candidate"), later);
+      const running = getPatternIdentityRef(piece.getCell())!.identity;
+      const mutablePieces = pieces as unknown as {
+        runPatternUpdate: typeof pieces.runPatternUpdate;
+      };
+      const runPatternUpdate = pieces.runPatternUpdate.bind(pieces);
+      mutablePieces.runPatternUpdate = async (...args) => {
+        const written = await runtime.editWithRetry((tx) => {
+          setPieceReconciliation(piece.getCell(), tx, {
+            outcome: "followed",
+            at: Date.now(),
+            origin,
+            confirmed: { identity: running, releasedAt: Date.parse(latest) },
+          });
+        });
+        expect(written.error).toBeUndefined();
+        return await runPatternUpdate(...args);
+      };
+      let result: Awaited<ReturnType<typeof piece.changeSource>>;
+      try {
+        result = await piece.changeSource({ kind: "adopt" });
+      } finally {
+        mutablePieces.runPatternUpdate = runPatternUpdate;
+      }
+
+      expect(result.status).toBe("incompatible");
+      expect(await piece.result.get(["version"])).toBe("origin-v1");
+      expect(
+        await piece.changeSource({ kind: "adopt" }, {
+          confirmedChange: result.status === "incompatible"
+            ? result.prepared
+            : undefined,
+        }),
+      ).toEqual({ status: "applied" });
+      expect(await piece.result.get(["version"])).toBe("candidate");
+    });
+
+    it("returns an incompatibility warning when the running source came from another `system:` origin", async () => {
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        "system:gated-first.tsx",
+        "/api/patterns/gated-first.tsx",
+        versionProgram("first-v1"),
+        earlier,
+      );
+      await piece.changeSource({ kind: "detach" });
+      await offer(
+        "/api/patterns/gated-second.tsx",
+        incompatibleSeedProgram("candidate"),
+        later,
+      );
+
+      const result = await piece.changeSource({
+        kind: "repoint",
+        url: "system:gated-second.tsx",
+      });
+
+      expect(result.status).toBe("incompatible");
+      expect(await piece.result.get(["version"])).toBe("first-v1");
+    });
+
+    it("returns an incompatibility warning when a supplied origin was claimed over source from another origin", async () => {
+      const second = "system:gated-claimed.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        "system:gated-claimed-from.tsx",
+        "/api/patterns/gated-claimed-from.tsx",
+        versionProgram("first-v1"),
+        earlier,
+      );
+      await piece.changeSource({ kind: "detach" });
+      await runtime.sourceReconciler.open(piece.getCell(), second);
+      expect(getPieceSourceRevisions(piece.getCell()).at(-1)).toMatchObject({
+        operation: "follow",
+        origin: second,
+      });
+      await offer(
+        "/api/patterns/gated-claimed.tsx",
+        incompatibleSeedProgram("candidate"),
+        later,
+      );
+
+      const result = await piece.changeSource({ kind: "repoint", url: second });
+
+      expect(result.status).toBe("incompatible");
+      expect(await piece.result.get(["version"])).toBe("first-v1");
+    });
+
+    it("applies a confirmed incompatibility once the step has become a later release", async () => {
+      const origin = "system:gated-became.tsx";
+      const route = "/api/patterns/gated-became.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        origin,
+        route,
+        versionProgram("origin-v1"),
+        undefined,
+      );
+      await offer(route, incompatibleSeedProgram("candidate"), later);
+      const warning = await piece.changeSource({ kind: "adopt" });
+      expect(warning.status).toBe("incompatible");
+      const written = await runtime.editWithRetry((tx) => {
+        setPieceReconciliation(piece.getCell(), tx, {
+          outcome: "followed",
+          at: Date.now(),
+          origin,
+          confirmed: {
+            identity: getPatternIdentityRef(piece.getCell())!.identity,
+            releasedAt: Date.parse(earlier),
+          },
+        });
+      });
+      expect(written.error).toBeUndefined();
+
+      expect(
+        await piece.changeSource({ kind: "adopt" }, {
+          confirmedChange: warning.status === "incompatible"
+            ? warning.prepared
+            : undefined,
+        }),
+      ).toEqual({ status: "applied" });
+
+      expect(await piece.result.get(["version"])).toBe("candidate");
+    });
+
+    it("applies a confirmed incompatibility the step raised as a later release", async () => {
+      const origin = "system:gated-linked.tsx";
+      const route = "/api/patterns/gated-linked.tsx";
+      const source = await pieces.create(unionValueProgram(), { input: {} });
+      const piece = await pieces.create(optionalModeProgram(1), {
+        input: { value: 4 },
+      });
+      await repointTo(piece, origin, route, optionalModeProgram(1), earlier);
+      await seedLegacyModeLink(
+        piece,
+        (await source.result.getCell()).key("value"),
+      );
+      await offer(route, incompatibleOptionalModeProgram(), later);
+      const warning = await piece.changeSource({ kind: "adopt" });
+      expect(warning.status).toBe("incompatible");
+      if (warning.status !== "incompatible") {
+        throw new Error("expected an incompatibility warning");
+      }
+      expect(warning.prepared.review?.issues.schema).toBeUndefined();
+      expect(warning.prepared.review?.issues.retainedLinks).toBeDefined();
+
+      expect(
+        await piece.changeSource({ kind: "adopt" }, {
+          confirmedChange: warning.prepared,
+        }),
+      ).toEqual({ status: "applied" });
+
+      expect(await piece.result.get(["value"])).toBe("changed");
+    });
+
+    it("returns an incompatibility warning for a release with no stated time", async () => {
+      const origin = "system:gated-untimed.tsx";
+      const route = "/api/patterns/gated-untimed.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        origin,
+        route,
+        versionProgram("origin-v1"),
+        earlier,
+      );
+      await offer(route, incompatibleSeedProgram("candidate"), undefined);
+
+      const result = await piece.changeSource({ kind: "adopt" });
+
+      expect(result.status).toBe("incompatible");
+    });
+
+    it("returns an incompatibility warning when the origin states its release time beside another identity", async () => {
+      const origin = "system:gated-other-identity.tsx";
+      const route = "/api/patterns/gated-other-identity.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        origin,
+        route,
+        versionProgram("origin-v1"),
+        earlier,
+      );
+      await offer(route, incompatibleSeedProgram("candidate"), later);
+      webIdentities[route] = "an-identity-the-candidate-does-not-have";
+
+      const result = await piece.changeSource({ kind: "adopt" });
+
+      expect(result.status).toBe("incompatible");
+    });
+
+    it("records the release time the origin states for the running source as confirmed", async () => {
+      const origin = "system:gated-reoffered.tsx";
+      const route = "/api/patterns/gated-reoffered.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        origin,
+        route,
+        versionProgram("origin-v1"),
+        earlier,
+      );
+      await offer(route, versionProgram("origin-v1"), later);
+
+      expect(await piece.changeSource({ kind: "adopt" })).toEqual({
+        status: "applied",
+      });
+
+      expect(getPieceReconciliation(piece.getCell())?.confirmed).toEqual({
+        identity: getPatternIdentityRef(piece.getCell())!.identity,
+        releasedAt: Date.parse(later),
+      });
+    });
+
+    it("returns an incompatibility warning when the running source records no release time", async () => {
+      const origin = "system:gated-untimed-running.tsx";
+      const route = "/api/patterns/gated-untimed-running.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        origin,
+        route,
+        versionProgram("origin-v1"),
+        undefined,
+      );
+      await offer(route, incompatibleSeedProgram("candidate"), later);
+
+      const result = await piece.changeSource({ kind: "adopt" });
+
+      expect(result.status).toBe("incompatible");
+    });
+
+    it("returns an incompatibility warning for a piece with no source log that runs the origin's file", async () => {
+      const route = "/api/patterns/gated-made.tsx";
+      const piece = await pieces.create(routedVersionProgram(route, "v1"), {
+        input: {},
+      });
+      await clearSourceLog(piece);
+      await offer(route, incompatibleSeedProgram("candidate"), later);
+
+      const result = await piece.changeSource({
+        kind: "repoint",
+        url: "system:gated-made.tsx",
+      });
+
+      expect(result.status).toBe("incompatible");
+      expect(await piece.result.get(["version"])).toBe("v1");
+    });
+
+    it("returns an incompatibility warning when the piece runs an export other than the default", async () => {
+      const origin = "system:gated-from-other.tsx";
+      const route = "/api/patterns/gated-from-other.tsx";
+      const piece = await pieces.create(
+        twoExportProgram({ default: "string", other: "string" }, "v1"),
+        { input: {} },
+      );
+      await repointTo(
+        piece,
+        origin,
+        route,
+        twoExportProgram({ default: "string", other: "string" }, "origin-v1"),
+        earlier,
+      );
+      const defaultRevision = repointedTo(piece, "default");
+      await piece.setPattern(
+        twoExportProgram({ default: "string", other: "string" }, "v2", "other"),
+      );
+      await repointTo(
+        piece,
+        origin,
+        route,
+        twoExportProgram({ default: "number", other: "string" }, "origin-v2"),
+        later,
+      );
+      await offer(
+        route,
+        twoExportProgram({ default: "number", other: "string" }, "origin-v3"),
+        latest,
+      );
+
+      const result = await piece.changeSource({
+        kind: "follow",
+        revisionId: defaultRevision,
+      });
+
+      expect(result.status).toBe("incompatible");
+      expect(await piece.result.get(["version"])).toBe("other-origin-v2");
+    });
+
+    it("returns an incompatibility warning when the candidate is an export other than the default", async () => {
+      const origin = "system:gated-to-other.tsx";
+      const route = "/api/patterns/gated-to-other.tsx";
+      const piece = await pieces.create(
+        twoExportProgram({ default: "string", other: "string" }, "v1", "other"),
+        { input: {} },
+      );
+      await repointTo(
+        piece,
+        origin,
+        route,
+        twoExportProgram({ default: "string", other: "string" }, "origin-v1"),
+        earlier,
+      );
+      const otherRevision = repointedTo(piece, "other");
+      await piece.setPattern(
+        twoExportProgram({ default: "string", other: "string" }, "v2"),
+      );
+      await repointTo(
+        piece,
+        origin,
+        route,
+        twoExportProgram({ default: "string", other: "number" }, "origin-v2"),
+        later,
+      );
+      await offer(
+        route,
+        twoExportProgram({ default: "string", other: "number" }, "origin-v3"),
+        latest,
+      );
+
+      const result = await piece.changeSource({
+        kind: "follow",
+        revisionId: otherRevision,
+      });
+
+      expect(result.status).toBe("incompatible");
+      expect(await piece.result.get(["version"])).toBe("default-origin-v2");
+    });
+
+    it("throws for a later release the stored argument does not satisfy", async () => {
+      const origin = "system:gated-needs-argument.tsx";
+      const route = "/api/patterns/gated-needs-argument.tsx";
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await repointTo(
+        piece,
+        origin,
+        route,
+        versionProgram("origin-v1"),
+        earlier,
+      );
+      await offer(route, incompatibleProgram(), later);
+
+      await expect(piece.changeSource({ kind: "adopt" })).rejects.toThrow(
+        "missing required property required",
+      );
+
+      expect(await piece.result.get(["version"])).toBe("origin-v1");
+      expect(getPieceReconciliation(piece.getCell())).toMatchObject({
+        outcome: "refused",
+        reason: "argument-mismatch",
+        origin,
+      });
+    });
   });
 
   it("validates every compatibility confirmation against current state", async () => {

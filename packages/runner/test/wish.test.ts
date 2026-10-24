@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { hashOf } from "@commonfabric/data-model";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { createBuilder } from "../src/builder/factory.ts";
@@ -2763,6 +2764,7 @@ describe("wish built-in", () => {
         name: "Ada Lovelace",
         initialNameApplied: "Ada Lovelace",
         avatar: "ada.png",
+        picture: new FabricBytes(new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
         bio: "Mathematician & first programmer.",
         elements: [],
       });
@@ -2791,6 +2793,7 @@ describe("wish built-in", () => {
           profile: wish({ query: "#profile" }),
           profileName: wish({ query: "#profileName" }),
           profileAvatar: wish({ query: "#profileAvatar" }),
+          profilePicture: wish({ query: "#profilePicture" }),
           profileBio: wish({ query: "#profileBio" }),
           profileSpace: wish({ query: "#profileSpace" }),
         };
@@ -2811,6 +2814,9 @@ describe("wish built-in", () => {
       expect(result.key("profile").get()?.result?.name).toBe("Ada Lovelace");
       expect(result.key("profileName").get()?.result).toBe("Ada Lovelace");
       expect(result.key("profileAvatar").get()?.result).toBe("ada.png");
+      expect(result.key("profilePicture").get()?.result?.slice()).toEqual(
+        new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      );
       expect(result.key("profileBio").get()?.result).toBe(
         "Mathematician & first programmer.",
       );

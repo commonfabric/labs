@@ -6,8 +6,9 @@ that is not known. It is what a pattern consults to decide what to offer a
 person, such as whether to show the controls only an owner can use, or whether
 a room it lists is one they belong to. The implementation is
 `packages/runner/src/builder/space-access.ts`, which also holds
-`spaceOf(target)`, the DID of that same space, described
-[below](#the-spaces-own-did).
+`spaceMembers(target)`, the principals that space's access list names,
+described [below](#a-spaces-members), and `spaceOf(target)`, the DID of that
+same space, described [below](#the-spaces-own-did).
 
 The answer is advisory. A memory server in `enforce` mode, which is toolshed's
 default (`MEMORY_ACL_MODE`), checks every read and write against the space's
@@ -82,6 +83,41 @@ memory server's refusal of this runtime's session, which says something only
 about the caller's own principal, does not enter into it: the list alone
 decides, and `undefined` means it has not arrived. A `principal` that is not a
 well-formed DID throws; `*` is not a principal.
+
+## A space's members
+
+`spaceMembers(target)` returns the principals the access list of `target`'s
+space names, each with the level its entry grants, as an object whose
+`principals` maps each principal's DID to its level. It is what a pattern reads
+to list a space's members, rather than keeping a list of its own. It lists
+principals, not people: pairing a member with the profile they joined with is
+the pattern's to do, over the participants the space's root lists.
+
+The list's `"*"` entry is not a member. It admits whoever the list does not
+name, and names no one, so it is reported apart, as `anyone`, and is absent
+when the list has no such entry. A reader can then tell whether the space is
+open only to its members or to anyone with its address. A configured service
+DID holds `OWNER` without an entry and is not listed, and the space's own DID
+is listed only where the list names it.
+
+Only a principal the list grants access gets the list: the caller, found as
+[above](#who-the-principal-is), whether through its own entry or through
+`"*"`. Anyone else gets `undefined`, as does every call for which
+`spaceAccess(target)` returns `undefined`, so the result is never an empty
+list, and a reader can show "not known yet" rather than "nobody". It tells a
+member nothing a member could not already read, since the memory server serves
+the whole list to anyone holding `READ`. On a serving runtime, which reads
+every space as its owner, the check on the caller is what keeps a non-member's
+demand from reading it. On a client, a runtime the memory server has refused
+the space gets `undefined`.
+
+The answer depends on who asks, so a call in a computation narrows its read
+scope to `user`, as `spaceAccess(target)` does, and its value lives in a
+per-user instance. It reads the list the same way, so a grant, a revoke, a
+refusal, or a readmission runs the computation again, as
+[below](#keeping-the-answer-current) describes. The result carries no label. It
+reads nothing but the access list, so a computation that calls it in a space
+and reads nothing from another can write what it returns into that space.
 
 ## `"none"` and `undefined`
 
@@ -182,6 +218,8 @@ a retry has been decided.
 The answer names no principal. It tells a member only what a member can
 already read, since the memory server serves the whole access list to anyone
 holding `READ`, and it tells a non-member only that they are one.
+`spaceMembers(target)` names every principal the list names, and does so only
+to a principal the list grants access, for the same reason.
 
 ## The space's own DID
 

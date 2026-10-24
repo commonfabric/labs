@@ -69,7 +69,7 @@ class Probe extends BaseFabricInstance {
     return Object.isFrozen(this);
   }
 
-  protected [DEEP_CLONE_CORE](_frozen: boolean): Probe {
+  [DEEP_CLONE_CORE](_frozen: boolean): Probe {
     this.counter.calls += 1;
     return new Probe(this.#tag, this.counter);
   }
@@ -123,7 +123,7 @@ class DeepProbe extends BaseFabricInstance {
       subIsDeepFrozen(this.state);
   }
 
-  protected [DEEP_CLONE_CORE](_frozen: boolean): DeepProbe {
+  [DEEP_CLONE_CORE](_frozen: boolean): DeepProbe {
     this.counter.calls += 1;
     return new DeepProbe({ ...this.state }, this.counter);
   }

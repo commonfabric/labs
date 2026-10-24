@@ -13,6 +13,10 @@ export interface SelectionCases {
   readonly filenames: readonly string[];
   readonly aliases: readonly string[];
   readonly shebangs?: readonly string[];
+
+  /** Names no language claims, under which the fixture's own source selects
+   * the language. */
+  readonly unclaimedFilenames?: readonly string[];
 }
 
 /**
@@ -156,9 +160,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "yaml",
-    // A Java properties line colors the key before its `:` as a property name,
-    // as JSON and YAML color their keys.
-    highlightingPeers: ["properties"],
+    // Java properties and INI lines color the key before a `:` as a property
+    // name, as YAML colors its keys.
+    highlightingPeers: ["properties", "ini"],
     surveyRepository: "common-cluster",
     surveyCommit: "50c7f1bb0b83dad6057b3bde73ce599f86624084",
     surveyPath: ".github/workflows/ci.yml",
@@ -369,6 +373,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "toml",
+    // An INI section header is a TOML table header, and INI colors its name
+    // as TOML colors a table's.
+    highlightingPeers: ["ini"],
     surveyRepository: "labs",
     surveyCommit: "fbdd14d3fa220dfffcb52a423d1180e514c5134b",
     surveyPath: "mise.toml",
@@ -389,6 +396,32 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "tools", className: "interfaceName" },
     afterEvidence: { text: "tools", className: "interfaceName" },
     incompleteEvidence: { text: "tools", className: "interfaceName" },
+  },
+  {
+    languageId: "hcl",
+    surveyRepository: "infra",
+    surveyCommit: "3ae071216e1aad454f2465e8d57164d6c38c90e3",
+    surveyPath: "tofu/ci-runners/alerts.tf",
+    before: new URL("./hcl-infra/before.tf", import.meta.url),
+    after: new URL("./hcl-infra/after.tf", import.meta.url),
+    incomplete: new URL("./hcl-infra/incomplete.tf", import.meta.url),
+    selection: {
+      filenames: [
+        "tofu/ci-runners/alerts.tf",
+        "tofu/ci-runners/prod.tfvars",
+        "tofu/iam/.terraform.lock.hcl",
+        "tofu/shell/override.tofu",
+        "tofu/shell/prod.tfbackend",
+        "tests/main.tftest.hcl",
+      ],
+      aliases: ["hcl", "opentofu", "tofu", "terraform", "tf"],
+    },
+    beforeEvidence: { text: "reconcile_passes", className: "interfaceName" },
+    afterEvidence: { text: "controller_errors", className: "interfaceName" },
+    incompleteEvidence: {
+      text: "controller_errors",
+      className: "interfaceName",
+    },
   },
   {
     languageId: "shell",
@@ -444,10 +477,33 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     incompleteEvidence: { text: "fi", className: "controlKeyword" },
   },
   {
+    languageId: "make",
+    surveyRepository: "infra",
+    surveyCommit: "574f4a94cebb04cd12134146a25f0d7ba804da67",
+    surveyPath: "tofu/postmark/Makefile",
+    before: new URL("./make-infra/before.mk", import.meta.url),
+    after: new URL("./make-infra/after.mk", import.meta.url),
+    incomplete: new URL("./make-infra/incomplete.mk", import.meta.url),
+    selection: {
+      filenames: [
+        "tofu/postmark/Makefile",
+        "website/assets/logos/makefile",
+        "GNUmakefile",
+        "tools/bazel.mk",
+      ],
+      aliases: ["make", "makefile", "mk"],
+      shebangs: ["#!/usr/bin/make -f", "#!/usr/bin/env make"],
+    },
+    beforeEvidence: { text: "servers", className: "functionName" },
+    afterEvidence: { text: "verify-domains", className: "functionName" },
+    incompleteEvidence: { text: "if", className: "callName" },
+  },
+  {
     languageId: "properties",
-    // A shell variable assignment is a `name=value` line, and shell colors the
-    // name as properties files color their keys.
-    highlightingPeers: ["shell"],
+    // A shell or make variable assignment, an HCL attribute, and an INI key are
+    // each a `name=value` line, and shell, make, HCL, and INI color the name as
+    // properties files color their keys.
+    highlightingPeers: ["hcl", "shell", "make", "ini"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "b457431c6f5e32305a2e6feb7901f8d05a9b2f6e",
     surveyPath: "android/gradle/wrapper/gradle-wrapper.properties",
@@ -468,6 +524,30 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "distributionUrl", className: "propertyName" },
     afterEvidence: { text: "distributionUrl", className: "propertyName" },
     incompleteEvidence: { text: "distributionUrl", className: "propertyName" },
+  },
+  {
+    languageId: "ini",
+    // An INI `name=value` line is a valid make assignment, and make colors
+    // the name as INI colors its keys.
+    highlightingPeers: ["make"],
+    surveyRepository: "infra",
+    surveyCommit: "cfe4ac630b0b1e223d57bed12ae02fa6c53b9eb2",
+    surveyPath: "ansible/rapids-inventory.ini",
+    before: new URL("./ini-infra/before.ini", import.meta.url),
+    after: new URL("./ini-infra/after.ini", import.meta.url),
+    incomplete: new URL("./ini-infra/incomplete.ini", import.meta.url),
+    selection: {
+      filenames: [
+        "ansible/rapids-inventory.ini",
+        "ansible/ansible.cfg",
+        "pytest.ini",
+        ".codespellrc",
+      ],
+      aliases: ["ini", "dosini", "cfg"],
+    },
+    beforeEvidence: { text: "ansible_user", className: "propertyName" },
+    afterEvidence: { text: "ansible_user", className: "propertyName" },
+    incompleteEvidence: { text: "ansible_user", className: "propertyName" },
   },
   {
     languageId: "proguard",
@@ -509,6 +589,10 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
         "FabricWeaver.xcworkspace/contents.xcworkspacedata",
       ],
       aliases: ["xml", "svg", "plist"],
+      unclaimedFilenames: [
+        "apple/FabricWeaver/Base.lproj/Main.storyboard",
+        "apple/FabricWeaver/MainMenu.xib",
+      ],
     },
     beforeEvidence: {
       text: "android:allowBackup",

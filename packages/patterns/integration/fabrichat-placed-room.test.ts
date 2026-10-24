@@ -12,7 +12,11 @@ import { fromFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
-import { type Cell, Runtime } from "@commonfabric/runner";
+import { type Cell, type JSONSchema, Runtime } from "@commonfabric/runner";
+import {
+  markRendererTrustedEvent,
+  reviewedActionProvenance,
+} from "@commonfabric/runner/cfc";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   EmulatedStorageManager,
@@ -107,5 +111,124 @@ describe("fabrichat-placed-room", () => {
       .get() as Cell<unknown>[];
     expect(listed.length).toBe(1);
     expect(listed[0].equalLinks(participant)).toBe(true);
+  });
+
+  it("stores a message in a social space while the viewer's manager has a confidential catalog in Home", async () => {
+    expect(runtime.cfcEnforcementMode).toBe("enforce-strict");
+    const home = signer.did();
+    const member = await Identity.fromPassphrase("fabrichat social member");
+    const social = await runtime.createSpace({
+      grants: { [member.did()]: "WRITE" },
+    });
+    const tx = runtime.edit();
+    const profile = runtime.getCell<{ name: string }>(home, "viewer profile", {
+      type: "object",
+      properties: { name: { type: "string" } },
+      ifc: { addIntegrity: ["fabrichat-test-profile"] },
+    }, tx);
+    profile.set({ name: "Viewer" });
+    const catalogSchema = {
+      type: "object",
+      properties: {
+        entries: { type: "object" },
+        offers: { type: "object" },
+      },
+      ifc: {
+        confidentiality: [{
+          type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+          owner: home,
+        }],
+      },
+    } as const satisfies JSONSchema;
+    const catalog = runtime.getCell(
+      home,
+      "private Home catalog",
+      catalogSchema,
+      tx,
+    );
+    catalog.set({ entries: {}, offers: {} });
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const roomTx = runtime.edit();
+    const program = await resolveLocalProgram(
+      (resolver) => runtime.harness.resolve(resolver),
+      {
+        main: fromFileUrl(
+          new URL(
+            "./fixtures/fabrichat-private-catalog/main.tsx",
+            import.meta.url,
+          ),
+        ),
+        root: PATTERNS,
+      },
+    );
+    const pattern = await runtime.patternManager.compilePattern(program, {
+      space: social,
+      tx: roomTx,
+    });
+    const room = runtime.run(
+      roomTx,
+      pattern,
+      { profile, catalog },
+      runtime.getCell(social, "social room", undefined, roomTx),
+    );
+    runtime.prepareTxForCommit(roomTx);
+    expect((await roomTx.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+    await room.pull();
+    expect(room.key("canSend").get()).toBe(true);
+    const click = {
+      type: "click",
+      requestId: "social-send",
+      target: { value: "Visible in the social room" },
+      provenance: reviewedActionProvenance("dom", {
+        surface: "ChatSendSurface",
+        action: "ChatSend",
+      }),
+    };
+    markRendererTrustedEvent(click);
+    const sendTx = runtime.edit();
+    room.withTx(sendTx).key("sendMessage").send(click);
+    expect((await sendTx.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+    await room.pull();
+    expect(room.key("messages").key("count").get()).toBe(1);
+    expect(
+      room.key("messages").key("latest").key("messages").key(0).key("body")
+        .get(),
+    )
+      .toBe("Visible in the social room");
+    expect(catalog.get()).toEqual({ entries: {}, offers: {} });
+    const memberStorage = EmulatedStorageManager.connectTo(server, {
+      as: member,
+    });
+    const memberRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: memberStorage,
+    });
+    try {
+      const argument = room.getArgumentCell();
+      if (argument === undefined) throw new Error("The room has no argument.");
+      const messages = argument.key("messages").asSchema<
+        Cell<{ body: string }>[]
+      >({
+        type: "array",
+        items: {
+          type: "object",
+          properties: { body: { type: "string" } },
+          asCell: ["cell"],
+        },
+      }).get();
+      expect(messages).toHaveLength(1);
+      const message = messages[0];
+      const body = memberRuntime.getCellFromLink(
+        message.getAsNormalizedFullLink(),
+      )
+        .key("body");
+      expect(await body.pull()).toBe("Visible in the social room");
+    } finally {
+      await memberRuntime.dispose();
+      await memberStorage.close();
+    }
   });
 });

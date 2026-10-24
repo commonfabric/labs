@@ -24,6 +24,7 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
 import {
   enrollRuntimeOwnedStore,
+  ownedStoreLinks,
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
 import { resultRowKeys, SQLITE_ROW_SALT } from "./sqlite/row-identity.ts";
@@ -213,6 +214,11 @@ export function sqliteRunActingPrincipal(
   return runtime.trustSnapshotProvider()?.actingPrincipal;
 }
 
+/** The cause {@link makeResultCell} mints a `label` builtin's result under. */
+function resultCellCause(label: string, cause: unknown): unknown {
+  return { [label]: { result: cause } };
+}
+
 /** Allocate a result cell linked to the parent cell, at `scope` (the
  *  author-declared scope of the SqliteDb / its query result). The base entity
  *  id is scope-independent; `scope` only re-addresses which scoped instance the
@@ -227,7 +233,7 @@ function makeResultCell<T>(
 ): Cell<T> {
   const base = runtime.getCell<T>(
     parentCell.space,
-    { [label]: { result: cause } },
+    resultCellCause(label, cause),
     undefined,
     tx,
   );
@@ -879,7 +885,12 @@ export function sqliteDatabase(
       });
     }
   };
-  return { action };
+  return {
+    action,
+    storeWrites: ownedStoreLinks(runtime, parentCell, [
+      resultCellCause("sqliteDatabase", cause),
+    ]),
+  };
 }
 
 type QueryState = {
@@ -1908,28 +1919,22 @@ export function sqliteQuery(
                 // A row's existence carries the label of the row and nothing
                 // of the request: a row is reached through a result slot,
                 // and the slot is where the request's label sits. A row
-                // holding a link column declares none: a label at a row's
-                // root subjects every link written beneath it to the link
-                // write policy, which refuses a link to a cell that carries
-                // no label metadata.
+                // holding a link column declares none, which leaves its
+                // existence without the join of its column labels
+                // (`docs/plans/cfc-independent-reference-labels.md`, stage 6).
                 const columnConfidentiality = staticConfidentialityOf(
                   labelSchema,
                 );
                 // A row to which neither its columns nor its row rule assign
                 // a label declares an empty one at its root, when the store
-                // carries a label or is written under one. The link write
-                // policy governs the slots of such a store, and refuses a
-                // link there to a document that stores no label and for
-                // which the transaction declares none. A settle that finds a
-                // row's document standing writes the slot and not the
-                // document, so every settle makes the declaration, and none
-                // relies on what the document stores. The declaration stores
-                // nothing on the row document. It subjects no link written
-                // beneath the row's root to the policy, which counts a
-                // declaration only by the atoms it holds. Into a store
-                // carrying no label the row declares nothing, so the rows of
-                // an unlabeled result do not make its settle relevant to
-                // commit preparation.
+                // carries a label or is written under one. A settle that
+                // finds a row's document standing writes the slot and not
+                // the document, so every settle makes the declaration. It
+                // stores nothing on the row document and no check depends on
+                // it (`docs/plans/cfc-independent-reference-labels.md`, stage
+                // 6). Into a store carrying no label the row declares
+                // nothing, so the rows of an unlabeled result do not make its
+                // settle relevant to commit preparation.
                 const storeCarriesLabel = storedMetadata !== undefined ||
                   schemaHasIfc(writeSchema as JSONSchema | undefined);
                 const storedRows = resultRows.map((row, i) => {
@@ -2003,5 +2008,10 @@ export function sqliteQuery(
       },
     );
   };
-  return { action };
+  return {
+    action,
+    storeWrites: ownedStoreLinks(runtime, parentCell, [
+      resultCellCause("sqliteQuery", cause),
+    ]),
+  };
 }

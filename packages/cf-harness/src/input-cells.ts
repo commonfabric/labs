@@ -25,6 +25,7 @@
  * addressing rules per client.
  */
 
+import { isDID } from "@commonfabric/identity/did";
 import { type MemorySpace, validateSlug } from "@commonfabric/runner";
 import { AGENT_INPUT_NAME_PATTERN } from "@commonfabric/runner/agent-run";
 import {
@@ -75,8 +76,9 @@ export interface ParsedInputCellArgument {
  */
 export interface NamedPieceAddress {
   /**
-   * The space the address names, absent when the address named none. A named
-   * space is checked against the session's own: named addresses resolve there.
+   * The space the address names, by legacy name or by DID, absent when the
+   * address named none. A named space is checked against the session's own:
+   * named addresses resolve there.
    */
   spaceName?: string;
 
@@ -131,24 +133,25 @@ export const parseNamedPieceAddress = (
  * another one is a mistake to report. Foreign attachments need a reference
  * carrying an operator-admitted DID.
  *
- * `spaceName` is the space's NAME, which is what an address carries; the
- * `MemorySpace` a mint checks a reference against is its DID, and the two are
- * never compared to each other.
+ * An address spells the space by its DID or by its legacy name, and each is
+ * checked against the session's own spelling of the same kind: `space` is its
+ * DID, and `spaceName` the legacy name it was opened by, if any. A DID this
+ * side does not know is left to a side that does. A name is refused once the
+ * DID is known and no name is, since the space then has none.
  *
  * @throws Error naming both spaces.
  */
 export const checkNamedPieceAddressSpace = (
   address: NamedPieceAddress,
+  space: string | undefined,
   spaceName: string | undefined,
 ): void => {
-  if (
-    address.spaceName === undefined || spaceName === undefined ||
-    address.spaceName === spaceName
-  ) {
-    return;
-  }
+  const named = address.spaceName;
+  if (named === undefined) return;
+  const own = isDID(named) ? space : spaceName ?? space;
+  if (own === undefined || own === named) return;
   throw new Error(
-    `piece address names space \`${address.spaceName}\`, and this session runs in \`${spaceName}\`; only pieces in the session's own space can be attached`,
+    `piece address names space \`${named}\`, and this session runs in \`${own}\`; only pieces in the session's own space can be attached`,
   );
 };
 
@@ -197,7 +200,7 @@ export const checkInputCellSpec = (
   }
   if (address !== undefined) {
     try {
-      checkNamedPieceAddressSpace(address, spaceName);
+      checkNamedPieceAddressSpace(address, space, spaceName);
     } catch (error) {
       throw new Error(
         `--input-cell \`${spec.name}\` ${
@@ -270,7 +273,7 @@ export interface InputCellSessionResolution {
   /** Operator admission snapshot from the Fabric session. */
   foreignSpaces?: HarnessForeignSpaces;
 
-  /** The session's space, by name. */
+  /** The legacy name the session's space was opened by, if any. */
   spaceName?: string;
 
   /**
@@ -305,18 +308,6 @@ const resolvedInputCellRef = async (
   if (session.resolvePiece === undefined) {
     throw new Error(
       `--input-cell \`${spec.name}\` names the piece \`${address.slug}\`, which needs a fabric session to resolve; configure --fabric-space`,
-    );
-  }
-  // A QUALIFIED ADDRESS IS RESOLVED IN THIS SPACE OR NOT AT ALL. The
-  // resolution below asks the session, which knows one space, so a space
-  // this side cannot check the name of is one the address cannot be
-  // honoured against: the same slug in another space is a different piece,
-  // and answering with this space's would hand back a cell nobody asked
-  // for. A space configured by `did:key` has no name, which is exactly
-  // when this fires.
-  if (address.spaceName !== undefined && session.spaceName === undefined) {
-    throw new Error(
-      `--input-cell \`${spec.name}\` names space \`${address.spaceName}\`, and this session's space has no name to check that against; name the space, or attach the piece by reference`,
     );
   }
   let pieceId: string;
@@ -393,6 +384,6 @@ export const inputCellsContextMessage = (
   return [
     "Input cells for this run:",
     ...inputCells.map((cell) => `- ${cell.token} — ${cell.name}`),
-    "You cannot read what an input cell holds. Wire it into run_pattern `inputs` to compute over it, or into any other tool input that accepts a handle; use describe_handle to see its shape.",
+    "describe_handle reports an input cell's shape, and the verbs of a piece. read_value returns what it holds once describe_handle has described it, where the run's policy lets the value reach you; what it reads joins the run's context and its label stays on the run. Wire it into run_pattern `inputs` to compute over it without reading it, or into any other tool input that accepts a handle.",
   ].join("\n");
 };

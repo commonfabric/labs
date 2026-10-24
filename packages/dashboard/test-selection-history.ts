@@ -26,6 +26,7 @@ import {
 import { dashboardCacheFile } from "./history-files.ts";
 import { escapeHtml, friendlyError, memo, multiSparkline } from "./lib.ts";
 import {
+  corpusSeconds,
   flakyCount,
   generatedAtOf,
   MANIFEST_SHARE_MS,
@@ -33,18 +34,27 @@ import {
   manifestNames,
   type ManifestReader,
   readManifest,
-  selectedCount,
+  selectedSeconds,
+  selectedShare,
   TEST_SELECTION_BUCKET,
   TEST_SELECTION_PREFIX,
 } from "./test-selection-manifest.ts";
 import { CHART_LINE } from "./theme.ts";
 import type { TileView } from "./types.ts";
 
-/** Counts retained from one validated manifest. */
+/**
+ * Counts and test times retained from one validated manifest. A cache entry
+ * missing any of them fails the file's validation, which rebuilds the cache
+ * from the bucket.
+ */
 const countsSchema = z.object({
-  known: z.number().int().nonnegative(),
-  selected: z.number().int().nonnegative(),
   flaky: z.number().int().nonnegative(),
+
+  /** Seconds one execution of every identity in the corpus costs. */
+  corpusSeconds: z.number().nonnegative(),
+
+  /** Seconds one execution of every identity the packing would run costs. */
+  selectedSeconds: z.number().nonnegative(),
 });
 
 /** Validated contents of the derived cache file. */
@@ -63,7 +73,10 @@ export interface SelectionSample {
   /** Manifest generation time in milliseconds since the Unix epoch. */
   at: number;
 
-  /** Counts, or `null` for an unreadable manifest or an empty corpus. */
+  /**
+   * Counts, or `null` for an unreadable manifest or a corpus with no test
+   * time.
+   */
   counts: SelectionCounts | null;
 }
 
@@ -88,9 +101,9 @@ export interface TestSelectionSource {
 /** Extracts the measurements plotted by the test tiles. */
 function countsOf(manifest: Manifest): SelectionCounts {
   return {
-    known: manifest.entries.length,
-    selected: selectedCount(manifest),
     flaky: flakyCount(manifest),
+    corpusSeconds: corpusSeconds(manifest),
+    selectedSeconds: selectedSeconds(manifest),
   };
 }
 
@@ -231,7 +244,7 @@ export function makeTestSelectionSource(options: {
             if (counts !== undefined) kept[name] = counts;
             return {
               at: Date.parse(generatedAtOf(name) ?? ""),
-              counts: counts === undefined || counts.known === 0
+              counts: counts === undefined || counts.corpusSeconds === 0
                 ? null
                 : counts,
             };
@@ -320,7 +333,9 @@ export function withSelectionHistory(
       series.push(segment);
     }
     segment.vals.push(
-      metric === "flaky" ? counts.flaky : counts.selected / counts.known * 100,
+      metric === "flaky"
+        ? counts.flaky
+        : selectedShare(counts.selectedSeconds, counts.corpusSeconds),
     );
     segment.xs?.push(duration === 0 ? 0.5 : (at - first) / duration);
   }

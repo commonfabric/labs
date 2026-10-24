@@ -425,6 +425,43 @@ describe("stored-argument-validation", () => {
     }
   });
 
+  it("accepts a stored `bigint` where the argument schema declares `integer`", () => {
+    // The shape a FabriChat row's argument carries: a map of places whose
+    // thread roots hold a `bigint` time, declared `bigint` and so typed
+    // `integer`.
+    const tx = runtime.edit();
+    try {
+      const argument = runtime.getCell(space, "argument", undefined, tx);
+      const schema: JSONSchema = {
+        type: "object",
+        properties: {
+          places: {
+            type: "object",
+            additionalProperties: {
+              type: "object",
+              properties: {
+                replies: { type: "number" },
+                latestReplyAt: { type: ["integer", "null"] },
+              },
+              required: ["replies"],
+            },
+          },
+        },
+        required: ["places"],
+      };
+      argument.set({
+        places: { root: { replies: 1, latestReplyAt: 1760600000000000000n } },
+      });
+      expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
+        .toBeUndefined();
+      argument.set({ places: { root: { replies: 1, latestReplyAt: "soon" } } });
+      expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
+        .toContain("latestReplyAt: value does not match type integer|null");
+    } finally {
+      tx.abort();
+    }
+  });
+
   it("preserves cycles and distinct stored locations without changing the snapshot", () => {
     const tx = runtime.edit();
     try {

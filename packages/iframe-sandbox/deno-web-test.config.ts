@@ -9,6 +9,7 @@ export default {
   // stands.
   include: {
     "test/fixtures/outer-frame.html": "outer-frame.html",
+    "test/fixtures/presentation.css": "presentation.css",
     "src/outer-frame-script.js": "outer-frame-script.js",
   },
   esbuildConfig: {

@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { Runtime } from "../src/runtime.ts";
 import { parseLink } from "../src/link-utils.ts";
 
@@ -18,7 +19,7 @@ describe("CFC link-write integrity gate", () => {
   // schema-derived labels; an author could persist a forged InjectionSafe
   // through a link's carried label view (or embedded link schema) and later
   // satisfy an InjectionSafe requiredIntegrity gate. Author-influenced link
-  // labels must be gated too; only the runtime-minted LinkReference survives.
+  // labels must be gated too.
 
   it("filters a forged InjectionSafe carried on a link's label view", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
@@ -172,7 +173,7 @@ describe("CFC link-write integrity gate", () => {
       });
       tx.prepareCfc();
       expect((await tx.commit().settled).error?.message).toContain(
-        "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+        "Link CurrentPrincipal confidentiality requires a concrete reader",
       );
     } finally {
       await runtime.dispose();
@@ -180,7 +181,7 @@ describe("CFC link-write integrity gate", () => {
     }
   });
 
-  it("refuses a link schema CurrentPrincipal reader without a stored source reader", async () => {
+  it("binds a link schema's CurrentPrincipal reader to the acting principal", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
@@ -202,7 +203,14 @@ describe("CFC link-write integrity gate", () => {
         path: ["field"],
       };
       tx.markCfcRelevant("test");
-      tx.writeValueOrThrow(address, "v");
+      tx.writeValueOrThrow(
+        address,
+        linkRefFrom({
+          space: signer.did(),
+          id: "of:cfc-link-schema-reader-source",
+          path: [],
+        }),
+      );
       tx.recordCfcWritePolicyInput({
         kind: "link-write",
         target: address,
@@ -223,8 +231,24 @@ describe("CFC link-write integrity gate", () => {
         },
       });
       tx.prepareCfc();
-      expect((await tx.commit().settled).error?.message).toContain(
-        "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+      expect((await tx.commit().settled).error).toBeUndefined();
+      // The slot's own restriction names the principal that wrote the link,
+      // as a declared `CurrentPrincipal` clause on a value write would.
+      const readTx = runtime.edit();
+      const metadata = readStoredCfcMetadata(readTx, {
+        space: address.space,
+        id: address.id,
+      });
+      readTx.abort();
+      const entry = (metadata?.labelMap.entries ?? []).find((candidate) =>
+        candidate.origin === "link" && candidate.path.length === 1 &&
+        candidate.path[0] === "field"
+      );
+      expect(JSON.stringify(entry?.label.confidentiality)).toContain(
+        signer.did(),
+      );
+      expect(JSON.stringify(entry?.label.confidentiality)).not.toContain(
+        "__ctCurrentPrincipal",
       );
     } finally {
       await runtime.dispose();

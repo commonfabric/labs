@@ -74,7 +74,7 @@ Deno.test("json: a shared .cfg extension needs an opening brace in the source", 
     "json",
   );
   assertEquals(languageForSource("tlaplus/LeaseOps.cfg", tlc).id, "plain-text");
-  assertEquals(languageForSource("ansible/ansible.cfg", ini).id, "plain-text");
+  assertEquals(languageForSource("ansible/ansible.cfg", ini).id, "ini");
   assertEquals(languageForSource("model.cfg", "").id, "plain-text");
   // The name alone never selects JSON, because a diff of a `.cfg` file shows
   // no source that could settle which syntax it holds.

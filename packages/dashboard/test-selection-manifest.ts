@@ -130,7 +130,19 @@ export async function readManifest(name: string, options: {
     throw new Error(`manifest ${name}: not a manifest`);
   }
   const manifest = parseManifest(body);
-  if (manifest !== undefined) return manifest;
+  if (manifest !== undefined) {
+    // A lane naming a test the corpus lacks leaves the share of the
+    // corpus's test time undefined, so that body is not a manifest the
+    // dashboard can report on.
+    try {
+      selectedSeconds(manifest);
+    } catch (error) {
+      throw new Error(
+        `manifest ${name}: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    return manifest;
+  }
   const schema = declaredSchema(body);
   if (schema !== undefined && writtenAhead(body)) {
     throw new ManifestSchemaError(name, schema);
@@ -193,6 +205,59 @@ export function selectedCount(manifest: Manifest): number {
     (total, lane) => total + laneTestCount(lane),
     0,
   );
+}
+
+/** Seconds one execution of every identity in the corpus costs. */
+export function corpusSeconds(manifest: Manifest): number {
+  return manifest.entries.reduce((total, entry) => total + entry.cost, 0);
+}
+
+/**
+ * Seconds one execution of every identity the whole packing would run costs,
+ * counting only the tests themselves, as `corpusSeconds` does. A lane names
+ * an identity by its test serialized as JSON, and every identity it names is
+ * one of the corpus's; this throws for a manifest whose lanes break that.
+ */
+export function selectedSeconds(manifest: Manifest): number {
+  const costs = new Map(
+    manifest.entries.map((entry) => [JSON.stringify(entry.test), entry.cost]),
+  );
+  let total = 0;
+  for (const lane of manifest.lanes) {
+    for (const batch of lane.batches) {
+      for (const identity of batch.identities) {
+        const cost = costs.get(identity);
+        if (cost === undefined) {
+          throw new Error(
+            `lane ${lane.lane} names ${identity}, which the corpus lacks`,
+          );
+        }
+        total += cost;
+      }
+    }
+  }
+  return total;
+}
+
+/**
+ * The percentage of the corpus's test time, `corpus` seconds, that `selected`
+ * seconds of it are. Dividing tests more finely into identities leaves it
+ * where it was.
+ */
+export function selectedShare(selected: number, corpus: number): number {
+  return (selected / corpus) * 100;
+}
+
+/**
+ * A share of the corpus's test time as the tiles and the page print it, to a
+ * tenth of a percent below ten percent, or a dash for a corpus with no test
+ * time to take a share of.
+ */
+export function shareLabel(selected: number, corpus: number): string {
+  if (corpus === 0) return "—";
+  const share = selectedShare(selected, corpus);
+  const tenths = share.toFixed(1);
+  return `${Number(tenths) < 10 ? tenths : share.toFixed(0)}%`;
 }
 
 /** How many identities are held back for being too noisy to judge by. */

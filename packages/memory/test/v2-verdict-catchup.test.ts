@@ -10,7 +10,7 @@
 // Automatic fan-out is held — a long refresh delay or the manual gate —
 // so each test drives delivery explicitly with flushSessions().
 
-import { assertEquals, assertExists } from "@std/assert";
+import { assertEquals, assertExists, assertStrictEquals } from "@std/assert";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -970,6 +970,104 @@ Deno.test("memory v2 server: an all-elided accept still delivers its marker on a
     .effect as SessionSync;
   assertEquals(frame.upserts, []);
   assertEquals(frame.caughtUpLocalSeq, 2);
+});
+
+Deno.test("memory v2 server: an all-elided accept leaves every session's tracked graphs in place", async () => {
+  const context = await setup({
+    subscriptionRefreshDelayMs: 60_000,
+    store: "memory://verdict-catchup-all-elided-untouched",
+  });
+  const { server, space, committer, committerMessages, committerSessionId } =
+    context;
+
+  // A second session watching the same space, so the pass's reach is
+  // observable on a session the commit owes nothing: a full evaluation
+  // replaces a session's `graphs` Map, and an untouched one keeps it. Its
+  // watch registration evaluates inline, so the parked `doc:b` is already
+  // in its replica when the flush runs and the flush owes it nothing.
+  const observerMessages: ServerMessage[] = [];
+  const observer = server.connect((message) => observerMessages.push(message));
+  await observer.receive(encodeMemoryBoundary(HELLO));
+  const observerSessionOpen = expectHelloOk(observerMessages);
+  await observer.receive(encodeMemoryBoundary({
+    type: "session.open",
+    requestId: "observer-open",
+    space,
+    session: {},
+    invocation: authInvocation(observerSessionOpen),
+  }));
+  const observerSessionId =
+    assertResponse<{ sessionId: string }>(shiftMessage(observerMessages))
+      .ok!.sessionId;
+  await observer.receive(
+    encodeMemoryBoundary(watchBoth(space, observerSessionId)),
+  );
+  assertResponse(shiftMessage(observerMessages));
+  await server.flushSessions([space]);
+  assertEffect(shiftMessage(committerMessages));
+  assertEquals(observerMessages, []);
+
+  await committer.receive(encodeMemoryBoundary({
+    type: "transact",
+    requestId: "committer-install",
+    space,
+    sessionId: committerSessionId,
+    commit: {
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set",
+        id: ALL_ELIDED_ID,
+        value: { value: { type: "string", title: "all-elided" } },
+      }],
+    },
+  }));
+  assertResponse(shiftMessage(committerMessages));
+  await server.flushSessions([space]);
+  assertEffect(shiftMessage(committerMessages));
+  assertEquals(observerMessages, []);
+
+  const sessions = server.accessForTestingOnly.sessionsForSpace(space);
+  assertEquals(sessions.length, 2);
+  const graphsBefore = new Map(
+    sessions.map((session) => [session.id, session.graphs]),
+  );
+  for (const session of sessions) {
+    assertEquals(session.graphs.size > 0, true);
+  }
+
+  await committer.receive(encodeMemoryBoundary({
+    type: "transact",
+    requestId: "committer-elided",
+    space,
+    sessionId: committerSessionId,
+    commit: {
+      localSeq: 2,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set",
+        id: ALL_ELIDED_ID,
+        value: { value: { type: "string", title: "all-elided" } },
+      }],
+    },
+  }));
+  const verdict = assertResponse<{ elidedOpIndexes?: number[] }>(
+    shiftMessage(committerMessages),
+  );
+  assertEquals(verdict.ok?.elidedOpIndexes, [0]);
+  await server.flushSessions([space]);
+
+  // The writer's frame carries the marker; every session, the writer
+  // included, keeps the graphs it tracked, and the observer hears nothing.
+  const frame = assertEffect(shiftMessage(committerMessages))
+    .effect as SessionSync;
+  assertEquals(frame.upserts, []);
+  assertEquals(frame.caughtUpLocalSeq, 2);
+  assertEquals(observerMessages, []);
+  for (const session of server.accessForTestingOnly.sessionsForSpace(space)) {
+    assertStrictEquals(session.graphs, graphsBefore.get(session.id));
+  }
+  observer.close();
 });
 
 Deno.test("memory v2 server: an identical direct re-write fans out nothing", async () => {

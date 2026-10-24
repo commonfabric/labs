@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -122,14 +123,13 @@ const compileHomePattern = async (
   runtime: Runtime,
   space: ReturnType<typeof alice.did>,
 ) => {
-  const repoRoot = new URL("../../..", import.meta.url).pathname.replace(
+  const repoRoot = fromFileUrl(new URL("../../..", import.meta.url)).replace(
     /\/$/,
     "",
   );
-  const sourcePath = new URL(
-    "../../patterns/system/home.tsx",
-    import.meta.url,
-  ).pathname;
+  const sourcePath = fromFileUrl(
+    new URL("../../patterns/system/home.tsx", import.meta.url),
+  );
   const program = await resolveLocalProgram(
     (resolver) => runtime.harness.resolve(resolver),
     { main: sourcePath, root: repoRoot },

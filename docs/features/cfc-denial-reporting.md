@@ -34,9 +34,9 @@ reportCfcDenial(
 
 `code` names the kind of decision, and is one of `CFC_DENIAL_CODES`:
 `write-policy-gate`, `write-prepare-crashed`, `write-unprepared`,
-`write-prepared-digest-mismatch`, `render-confidentiality-ceiling`,
-`render-remote-load`, `render-text-integrity`, and
-`render-literal-text-integrity`.
+`write-prepare-invalidated`, `write-prepared-digest-mismatch`,
+`render-confidentiality-ceiling`, `render-remote-load`,
+`render-text-integrity`, and `render-literal-text-integrity`.
 
 Only a decision that stopped something reports. Under `observe` the write gate
 records its reasons and lets the commit through, so nothing was turned away and
@@ -46,8 +46,26 @@ all, so there are no reasons and nothing to read.
 
 The write gate reports where prepare records its reasons, which is the point
 the decision is made: an enforcing transaction can no longer commit, whether or
-not it goes on to try. A refusal that only becomes one at commit, because a
-later invalidation added a reason prepare never saw, is reported at commit.
+not it goes on to try. A refusal that only becomes one at commit is reported at
+commit. The write kinds say which decision it was, and a kind follows from
+which pass recorded the reasons rather than from their text, since
+`invalidateCfc()` takes any string:
+
+- `write-policy-gate`: prepare evaluated the transaction and refused it,
+  recording why. Reasons an invalidation adds afterwards leave the kind as it
+  is, since a policy check did refuse.
+- `write-prepare-crashed`: prepare threw before the gate decided.
+- `write-prepare-invalidated`: prepare passed the transaction, and a change to
+  it afterwards — a read, a write, a decision input recorded, a dial set —
+  invalidated the preparation where the change was made. No policy check
+  refused the commit, and the rejection is retryable: `invalidateCfc()`
+  records its reason without a verdict tag, so no invalidation is a verdict.
+- `write-prepared-digest-mismatch`: prepare passed the transaction, and the
+  recheck at commit found that its activity changed with nothing having
+  invalidated the preparation.
+- `write-unprepared`: a CFC-relevant transaction reached commit with no
+  preparation run, and so with no reasons but those a caller recorded through
+  `invalidateCfc()`.
 
 ## What may be said out loud
 

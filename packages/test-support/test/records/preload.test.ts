@@ -15,6 +15,7 @@ import {
   parseJUnit,
   preloadModulePath,
   readNameMaps,
+  readRegistrations,
   recordedCases,
   recordingArguments,
   RECORDS_DIR_VARIABLE,
@@ -744,6 +745,29 @@ describe("preload", () => {
     }
   });
 
+  it("runs a file whose registrar another preload replaced without hooks", async () => {
+    // A preload ahead of this one can put a `Deno.test` in place that
+    // carries none of `beforeAll` and its siblings. The file's tests
+    // still run, and what it registered still reaches the name map.
+    const fixture = await makeFixture({
+      "bare.test.ts": BARE_FILE,
+      "hookless.ts": `const real = Deno.test;
+Reflect.set(Deno, "test", (...args: unknown[]) => Reflect.apply(real, Deno, args));
+`,
+    });
+    try {
+      const run = await runFixture(fixture, ["bare.test.ts"], {
+        before: ["./hookless.ts"],
+      });
+      assert(run.success, output(run));
+      expect(await readRegistrations(fixture.spool)).toEqual(
+        new Map([["bare.test.ts", new Set(["bare kept", "bare dropped"])]]),
+      );
+    } finally {
+      await Deno.remove(fixture.dir, { recursive: true });
+    }
+  });
+
   it("says so when the bdd re-export loaded before it", async () => {
     // Loading the re-export first is what makes it hand back the real
     // `describe` and `it`, and every leaf then reaches the report
@@ -1204,5 +1228,92 @@ describe("preload", () => {
       else Deno.env.set(SKIP_LIST_VARIABLE, outside);
       await Deno.remove(fixture.dir, { recursive: true });
     }
+  });
+
+  describe("what a name map says a file holds", () => {
+    it("names every test of a file that loaded and only that file", async () => {
+      // A file stopped part way through loading may have registered some
+      // of its tests, and run them, and its map says it was interrupted,
+      // whether or not the file handled what stopped it.
+      const fixture = await makeFixture({
+        "whole.test.ts": `
+import { describe, it } from "@std/testing/bdd";
+Deno.test("plain", () => {});
+describe("outer", () => {
+  it("leaf", () => {});
+});
+`,
+        "imported.test.ts": `
+Deno.test("before the import", () => {});
+await import("./missing.ts");
+Deno.test("after the import", () => {});
+`,
+        "rejected.test.ts": `
+Deno.test("before the rejection", () => {});
+await new Promise((_, reject) => setTimeout(() => reject(new Error("late")), 10));
+Deno.test("after the rejection", () => {});
+`,
+        "hooked.test.ts": `
+globalThis.addEventListener("unhandledrejection", (e) => e.preventDefault());
+Deno.test.beforeAll(async () => {
+  Promise.reject(new Error("expected"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+});
+Deno.test("after the hook", () => {});
+`,
+        "timer.test.ts": `
+Deno.test("before the timer", () => {});
+setTimeout(() => {
+  throw new Error("thrown from a timer while loading");
+}, 0);
+await new Promise((resolve) => setTimeout(resolve, 30));
+Deno.test("after the timer", () => {});
+`,
+        "handled.test.ts": `
+globalThis.addEventListener("unhandledrejection", (e) => e.preventDefault());
+Deno.test("before the handled rejection", () => {});
+await Promise.reject(new Error("handled while loading"));
+Deno.test("after the handled rejection", () => {});
+`,
+        "suppressed.test.ts": `
+globalThis.addEventListener("unhandledrejection", (e) => e.preventDefault());
+Deno.test("rejects once loaded", async () => {
+  Promise.reject(new Error("expected"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+});
+Deno.test("after the rejection", () => {});
+`,
+      });
+      try {
+        await runFixture(fixture, [
+          "whole.test.ts",
+          "imported.test.ts",
+          "rejected.test.ts",
+          "timer.test.ts",
+          "handled.test.ts",
+          "suppressed.test.ts",
+          "hooked.test.ts",
+        ]);
+        // An error once a file's hooks or tests have begun says nothing
+        // about what the file registered, which its module had finished
+        // doing.
+        expect(await readRegistrations(fixture.spool)).toEqual(
+          new Map([
+            ["whole.test.ts", new Set(["plain", "outer", "outer > leaf"])],
+            [
+              "suppressed.test.ts",
+              new Set(["rejects once loaded", "after the rejection"]),
+            ],
+            ["hooked.test.ts", new Set(["after the hook"])],
+          ]),
+        );
+        // An interrupted map still says which file each name came from.
+        const files = await readNameMaps(fixture.spool);
+        expect(files.get("before the import")).toEqual("imported.test.ts");
+        expect(files.get("before the rejection")).toEqual("rejected.test.ts");
+      } finally {
+        await Deno.remove(fixture.dir, { recursive: true });
+      }
+    });
   });
 });

@@ -294,6 +294,14 @@ export function assertValidFabricValueLayer(
  * a cycle among them.
  */
 export function isValidFabricValue(value: unknown): value is FabricValue {
+  return isValidFabricValueWithCache(value);
+}
+
+/** Checks membership with a failure cache discarded before any input mutation. */
+export function isValidFabricValueWithCache(
+  value: unknown,
+  invalidValues?: WeakSet<object>,
+): value is FabricValue {
   // Fast leaf paths first, so a function or a primitive returns without
   // allocating the cycle-tracking set or the recursion closure below.
   if (typeof value === "function") {
@@ -317,6 +325,8 @@ export function isValidFabricValue(value: unknown): value is FabricValue {
     if (!isObjectOrArray(item)) {
       // A non-function, non-symbol primitive.
       return true;
+    } else if (invalidValues?.has(item)) {
+      return false;
     } else if (seen.has(item)) {
       // Already being validated higher in the recursion; treat as a member for
       // the rest of this walk (a cycle back to an in-progress value).
@@ -324,6 +334,10 @@ export function isValidFabricValue(value: unknown): value is FabricValue {
     }
 
     seen.add(item);
+    const invalid = () => {
+      invalidValues?.add(item);
+      return false;
+    };
 
     if (BaseFabricPrimitive.isInstance(item)) {
       // A `FabricPrimitive` is a `FabricValue` with no outbound references.
@@ -341,10 +355,10 @@ export function isValidFabricValue(value: unknown): value is FabricValue {
       // fabric representation; an accessor-backed index is live code rather
       // than inert data, as is the prototype of an indirect instance such as
       // an `Array` subclass.
-      if (!isInertArray(item)) return false;
+      if (!isInertArray(item)) return invalid();
       for (let i = 0; i < item.length; i++) {
         if (!(i in item)) continue; // sparse hole
-        if (!check(item[i])) return false;
+        if (!check(item[i])) return invalid();
       }
       return true;
     } else if (isPlainObject(item)) {
@@ -353,15 +367,15 @@ export function isValidFabricValue(value: unknown): value is FabricValue {
       // accessor-backed property is live code rather than inert data. The
       // names this runtime reserves are a separate question from inertness --
       // see `unsafeObjectKeyIn()`.
-      if (!isInertPlainObject(item)) return false;
-      if (unsafeObjectKeyIn(item) !== undefined) return false;
+      if (!isInertPlainObject(item)) return invalid();
+      if (unsafeObjectKeyIn(item) !== undefined) return invalid();
       for (const key of Object.keys(item)) {
-        if (!check(item[key])) return false;
+        if (!check(item[key])) return invalid();
       }
       return true;
     } else {
       // An instance of a class not covered by the `FabricValue` type.
-      return false;
+      return invalid();
     }
   };
 

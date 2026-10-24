@@ -1,0 +1,1 @@
+{"date":"2026-10-12","from":{"k":"unit","s":"runner","n":"cfcLabelViewForResolvedCellWithStatus > answers a non-cell exactly as the one-hop reader does"},"to":{"k":"unit","s":"runner","n":"cfcLabelViewForResolvedCellWithStatus > answers a non-cell exactly as `cfcLabelViewForCellWithStatus()` does"}}

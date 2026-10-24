@@ -88,7 +88,10 @@ read's confidential locations:
   enclosing location does, so these locations cover every position of the value.
 - A location's integrity is its own resolution: per origin component, the most
   specific entry at or above it, joined across components. That is a claim
-  about the value at that location.
+  about the value at that location. A `TransformedBy` in that resolution is a
+  witness only where a flow stamp holds it, a `derived` or `structure` entry:
+  one a declared entry holds names no attempt (CFC §15.4) and is left out,
+  whatever the trust of the code that declared it.
 - An entry's `*` segment applies at every location beneath it. A location's `*`
   stands for the children that have no entry of their own, so a concrete
   sibling's entry does not resolve there.
@@ -127,7 +130,12 @@ transformation that follows a reference to confidential content consumed the
 reference as an input, whatever the slot holding it is labeled. Such a slot is
 a location of its own: its integrity is resolved over the value stamps at the
 slot, as a shallow read of it is, and it counts even when nothing labels the
-slot. So is a slot whose reference leads to another such slot. A reference
+slot. A value stamp is one the flow stage minted on the value an attempt
+wrote; a `TransformedBy` a schema declares at the slot, or in a template over
+the list's items, is no value stamp and witnesses nothing there, so a slot
+another writer filled under such a declaration witnesses only what that
+writer's own stamp says. So is a slot whose reference leads to another such
+slot. A reference
 counts when the transformation read the slot, or read recursively above it,
 and read the document it names at or below its target with confidentiality. A
 reference also counts when the transformation followed it and the label of
@@ -175,7 +183,9 @@ included. A destination qualifies only when all of these hold:
 - no reference sits anywhere in its final value, because a pointer the diff
   found in place, such as a write redirect it writes through, is not one the
   writer supplied;
-- the join fits every ceiling declared at or beneath it;
+- the join fits every ceiling declared at or beneath it, each joined with the
+  document's residency clauses (§8.12.4, as `cfc-enforcement-matrix.md` §4
+  describes them);
 - the transaction created the destination, or read no content at or beneath
   it, nor recursively above it. A writer that read its destination can carry a
   value it found there into what it sets, and the diff leaves that value in
@@ -225,6 +235,21 @@ entity's root, and not a write redirect. So:
   and
 - a `Cell.set` destination whose value holds such references, a record
   holding a list of objects, say, is stamped whole.
+
+A slot's stamp describes the reference the slot holds only in an envelope
+that says where its stamps sit, with `stampPlacement: "committed"`
+(`cfc-stored-envelope.md`). The runtime re-derives an attempt's labels
+against the committed placement (spec §8.10.2.2), and writes the member when
+the stored envelope carried it or the transaction stamped a slot beside a
+reference it anchored, and no stamp carried over from an envelope without it
+stands at a slot holding a reference. Before that rule, an append landed at
+the live tail while its envelope described the list the attempt read, so a
+stamp could sit beside another writer's reference. A writer's stamp at a
+reference slot of an envelope that does not carry the member is therefore
+no witness at all (spec §18.7, `slotStampPlacementUnknown` in `prepare.ts`),
+and an append beside such a stamp does not make it one: the list witnesses
+again once the endorsed step has rewritten the slots the earlier envelope
+stamped.
 
 A slot's stamp says who stored the reference there and nothing about what it
 refers to. A reader that follows it reads the entity as well, and each
@@ -312,8 +337,8 @@ Each of these refuses an honest release rather than admitting a crafted one:
 - **References the writer did not supply.** A reference stored any way other
   than by anchoring an object the writer put in an array — a cell set into a
   slot, a reference copied from another list — earns its slot no value stamp,
-  and its link entry (`LinkReference` provenance and the carried
-  confidentiality) has no `TransformedBy`. A transformation that reads such a
+  and its link entry (the reference's own restriction) has no
+  `TransformedBy`. A transformation that reads such a
   slot retains no witness, whoever wrote it. So does a standalone reference
   probe, which consumes the link entry alone.
 - **A list whose own node is confidential, grown by collection operations.** A

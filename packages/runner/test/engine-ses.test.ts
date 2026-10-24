@@ -2,6 +2,7 @@ import { FabricDurationNsec } from "@commonfabric/data-model/fabric-primitives";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 import {
   compileWithEntryBody,
   Engine,
@@ -420,6 +421,26 @@ describe("Engine in SES mode", () => {
     );
   });
 
+  it("evaluates a module exporting a function whose name begins with `new`", async () => {
+    const program: RuntimeProgram = {
+      main: "/main.ts",
+      files: [
+        {
+          name: "/main.ts",
+          contents: [
+            "export function newThing(n: number) {",
+            "  return n + 1;",
+            "}",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const { main } = await engine.compileAndEvaluateModules(program);
+
+    expect(main?.newThing(1)).toBe(2);
+  });
+
   it("allows top-level template literal snapshots", async () => {
     const program: RuntimeProgram = {
       main: "/main.ts",
@@ -491,14 +512,13 @@ describe("Engine in SES mode", () => {
   });
 
   it("compiles the self-improving classifier pattern", async () => {
-    const repoRoot = new URL("../../..", import.meta.url).pathname.replace(
+    const repoRoot = fromFileUrl(new URL("../../..", import.meta.url)).replace(
       /\/$/,
       "",
     );
-    const sourcePath = new URL(
-      "../../patterns/self-improving-classifier.tsx",
-      import.meta.url,
-    ).pathname;
+    const sourcePath = fromFileUrl(
+      new URL("../../patterns/self-improving-classifier.tsx", import.meta.url),
+    );
     const program = await resolveLocalProgram(
       (resolver) => engine.resolve(resolver),
       { main: sourcePath, root: repoRoot },

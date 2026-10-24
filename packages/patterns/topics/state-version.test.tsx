@@ -99,7 +99,6 @@ export default pattern(() => {
     editingTitle: new Writable(true),
     editingBody: new Writable(true),
     profileName: "Test person",
-    profileAvatar: "",
   };
   const browserAddComment = submitProfileComment(browserState);
   const browserRemoveComment = retractProfileComment(browserState);
@@ -205,7 +204,6 @@ export default pattern(() => {
     comments: oldComments,
     commentDraft: oldDraft,
     profileName: "Current person",
-    profileAvatar: "",
   });
   const assert_upgrade_waits_for_handler = assert(() =>
     oldVersion.get() === 0 && oldCreator.get()?.name === "" &&

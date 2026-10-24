@@ -6,6 +6,7 @@
 import {
   type AddIntegrity,
   assert,
+  type Cell,
   NAME,
   pattern,
   TESTS,
@@ -21,14 +22,9 @@ import FabriChatPlacement, {
 } from "./placement.tsx";
 import { FabriChatMessageRow } from "./message-row.tsx";
 import {
-  type ActivityCounters,
   type ComposerState,
   type MessageRecord,
   type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
-  type SentActivity,
-  type UsedTime,
 } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
 import {
@@ -56,7 +52,7 @@ const sendGesture = {
 };
 const reactGesture = { surface: CHAT_REACT_SURFACE, action: CHAT_REACT_ACTION };
 
-const reactionCount = (messages: Writable<MessagesValue>): number =>
+const reactionCount = (messages: Cell<MessagesValue>): number =>
   ((messages.get() as MessageRecord[])[0]?.reactions?.get() ?? []).length;
 
 // How the element `id` under `root` is displayed.
@@ -82,11 +78,6 @@ export default pattern(() => {
   const records = {
     about: { kind: "group" as const, title: "Team" },
     messages,
-    reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
-    requests: Writable.of<RequestMemo[]>([]),
-    usedTimes: Writable.of<UsedTime[]>([]),
-    activity: Writable.of<SentActivity[]>([]),
-    counters: Writable.of<ActivityCounters[]>([]),
   };
   const room = FabriChatRoomCore(
     { myProfile: aliceProfile, ...records } as RoomArg,
@@ -97,6 +88,10 @@ export default pattern(() => {
     inThread: false,
     kind: "group" as const,
     composer: Writable.of<ComposerState>({}),
+    // Stand-ins for what the room derives; a row's streams read none of it.
+    places: {},
+    cannotWrite: false,
+    isOwner: false,
     ...records,
   } as RowArg);
 
@@ -126,18 +121,13 @@ export default pattern(() => {
       },
       {
         action: aliceOnFirst.sendReaction,
-        event: { requestId: "r-1", emoji: "🎉" },
+        event: { emoji: "🎉" },
         trustedUi: reactGesture,
       },
       {
         assertion: assert(() => placement[VIEWS].chat.messages?.count === 1),
       },
       { assertion: assert(() => reactionCount(messages) === 1) },
-      {
-        assertion: assert(() =>
-          placement[VIEWS].chat.recentActivity.length === 2
-        ),
-      },
       {
         assertion: assert(() =>
           placement[VIEWS].chat.reactionTallies.length === 1 &&
@@ -159,7 +149,6 @@ export default pattern(() => {
         assertion: assert(() =>
           unreadable[VIEWS].chat.state === "unavailable" &&
           unreadable[VIEWS].chat.about === undefined &&
-          unreadable[VIEWS].chat.recentActivity.length === 0 &&
           unreadable[VIEWS].chat.canSend === false &&
           unreadableAdapter[NAME] === "Chat (unavailable)" &&
           shownPart(unreadableAdapter[UI]) === "room:none unavailable:block"

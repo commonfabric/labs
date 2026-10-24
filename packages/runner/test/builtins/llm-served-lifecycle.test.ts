@@ -80,7 +80,7 @@ async function fixture(
       }
       return mapSet.call(this, key, value);
     };
-    const action = builtins[name](
+    const { action } = builtins[name](
       input,
       (tx, result) => {
         announcements.push(tx.tx.scopeKeyIdentity);

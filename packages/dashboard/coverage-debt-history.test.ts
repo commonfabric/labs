@@ -128,6 +128,36 @@ describe("coverage-debt-history", () => {
       const reports = await source.read(coverageObjectName(run));
       expect(reports.map(workspaceDebtOf)).toEqual([78166]);
     });
+
+    it("asks GitHub whether an attempt concluded `success`", async () => {
+      const asked: string[] = [];
+      const answers = [
+        { run_attempt: 2, status: "completed", conclusion: "success" },
+        { run_attempt: 1, status: "completed", conclusion: "failure" },
+        { run_attempt: 1, status: "completed", conclusion: "cancelled" },
+        { run_attempt: 3, status: "completed", conclusion: "success" },
+        { run_attempt: 1, status: "in_progress", conclusion: null },
+      ];
+      const source = liveCoverageDebtSource(undefined, (path) => {
+        asked.push(path);
+        return Promise.resolve(answers.shift()!);
+      });
+      expect(await source.outcome(7, 2)).toEqual({ attempt: 2, passed: true });
+      expect(await source.outcome(8, 1)).toEqual({ attempt: 1, passed: false });
+      expect(await source.outcome(9, 1)).toEqual({ attempt: 1, passed: false });
+      // With no attempt named, the run's latest.
+      expect(await source.outcome(11)).toEqual({ attempt: 3, passed: true });
+      await expect(source.outcome(10, 1)).rejects.toThrow(
+        "GitHub run 10 attempt 1 has not finished",
+      );
+      expect(asked).toEqual([
+        "repos/commonfabric/labs/actions/runs/7/attempts/2",
+        "repos/commonfabric/labs/actions/runs/8/attempts/1",
+        "repos/commonfabric/labs/actions/runs/9/attempts/1",
+        "repos/commonfabric/labs/actions/runs/11",
+        "repos/commonfabric/labs/actions/runs/10/attempts/1",
+      ]);
+    });
   });
 
   describe("CoverageDebtStore", () => {
@@ -141,7 +171,7 @@ describe("coverage-debt-history", () => {
       const store = new CoverageDebtStore(file);
       await store.load();
       store.set("2026-09-01", {
-        measured: { uncoveredLines: 78404, runId: 7 },
+        measured: { uncoveredLines: 78404, runId: 7, attempt: 2 },
       });
       store.set("2026-09-02", {});
       await store.save(["2026-09-01", "2026-09-02"]);
@@ -149,7 +179,7 @@ describe("coverage-debt-history", () => {
       const reopened = new CoverageDebtStore(file);
       await reopened.load();
       expect(reopened.get("2026-09-01")).toEqual({
-        measured: { uncoveredLines: 78404, runId: 7 },
+        measured: { uncoveredLines: 78404, runId: 7, attempt: 2 },
       });
       expect(reopened.get("2026-09-02")).toEqual({});
     });
@@ -157,8 +187,12 @@ describe("coverage-debt-history", () => {
     it("forgets the days outside the window it is saved with", async () => {
       const store = new CoverageDebtStore(file);
       await store.load();
-      store.set("2026-08-01", { measured: { uncoveredLines: 1, runId: 1 } });
-      store.set("2026-09-02", { measured: { uncoveredLines: 2, runId: 2 } });
+      store.set("2026-08-01", {
+        measured: { uncoveredLines: 1, runId: 1, attempt: 1 },
+      });
+      store.set("2026-09-02", {
+        measured: { uncoveredLines: 2, runId: 2, attempt: 1 },
+      });
       await store.save(["2026-09-02"]);
 
       const reopened = new CoverageDebtStore(file);
@@ -173,12 +207,26 @@ describe("coverage-debt-history", () => {
         JSON.stringify({
           version: STORE_VERSION,
           days: {
-            "2026-09-01": { measured: { uncoveredLines: "lots", runId: 1 } },
-            "2026-09-02": { measured: { uncoveredLines: 5, runId: 2 } },
+            "2026-09-01": {
+              measured: { uncoveredLines: "lots", runId: 1, attempt: 1 },
+            },
+            "2026-09-02": {
+              measured: { uncoveredLines: 5, runId: 2, attempt: 1 },
+            },
             "2026-08-31": null,
             "2026-08-30": { listed: "not a count" },
-            "2026-08-29": { measured: { uncoveredLines: 5, runId: 0 } },
+            "2026-08-29": {
+              measured: { uncoveredLines: 5, runId: 0, attempt: 1 },
+            },
             "2026-08-28": { measured: 5 },
+            // Measured with nothing checking whether the run passed.
+            "2026-08-27": {
+              measured: { uncoveredLines: 5, runId: 3 },
+              listed: 1,
+            },
+            "2026-08-26": {
+              measured: { uncoveredLines: 5, runId: 3, attempt: 0 },
+            },
           },
         }),
       );
@@ -190,6 +238,11 @@ describe("coverage-debt-history", () => {
       expect(store.get("2026-08-30")).toBeUndefined();
       expect(store.get("2026-08-29")).toBeUndefined();
       expect(store.get("2026-08-28")).toBeUndefined();
+      expect(store.get("2026-08-27")).toEqual({
+        measured: { uncoveredLines: 5, runId: 3 },
+        listed: 1,
+      });
+      expect(store.get("2026-08-26")).toBeUndefined();
 
       // A `days` that is a list rather than a record of days reads as a
       // record whose keys are indices, and no index is a day.
@@ -254,9 +307,9 @@ describe("coverage-debt-history", () => {
         store: new CoverageDebtStore(file),
       });
       expect(history.samples).toEqual([
-        { day: "2026-08-31", uncoveredLines: 79552, runId: 11 },
-        { day: "2026-09-01", uncoveredLines: 78404, runId: 12 },
-        { day: "2026-09-02", uncoveredLines: 78166, runId: 13 },
+        { day: "2026-08-31", uncoveredLines: 79552, runId: 11, attempt: 1 },
+        { day: "2026-09-01", uncoveredLines: 78404, runId: 12, attempt: 1 },
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 13, attempt: 1 },
       ]);
       expect(history.error).toBeUndefined();
     });
@@ -273,7 +326,7 @@ describe("coverage-debt-history", () => {
         store: new CoverageDebtStore(file),
       });
       expect(history.samples).toEqual([
-        { day: "2026-09-02", uncoveredLines: 78166, runId: 22 },
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 22, attempt: 1 },
       ]);
     });
 
@@ -290,7 +343,68 @@ describe("coverage-debt-history", () => {
         store: new CoverageDebtStore(file),
       });
       expect(history.samples).toEqual([
-        { day: "2026-09-02", uncoveredLines: 78166, runId: 22 },
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 22, attempt: 1 },
+      ]);
+    });
+
+    it("passes over a run attempt that did not pass", async () => {
+      const source = fakeCoverageStore([
+        { day: "2026-09-02", runId: 26, lines: 87656, passed: false },
+        { day: "2026-09-02", runId: 25, lines: 78166 },
+        { day: "2026-09-01", runId: 24, lines: 78404, passed: false },
+      ]);
+      const history = await refreshCoverageDebt({
+        days: 2,
+        now: NOW,
+        source,
+        store: new CoverageDebtStore(file),
+      });
+      expect(history.samples).toEqual([
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 25, attempt: 1 },
+      ]);
+      expect(source.asked.toSorted()).toEqual(["24/1", "25/1", "26/1"]);
+    });
+
+    it("takes an earlier attempt that passed over a re-run that did not", async () => {
+      const history = await refreshCoverageDebt({
+        days: 1,
+        now: NOW,
+        source: fakeCoverageStore([
+          { day: "2026-09-02", runId: 27, lines: 78166 },
+          { day: "2026-09-02", runId: 27, attempt: 2, lines: 1, passed: false },
+        ]),
+        store: new CoverageDebtStore(file),
+      });
+      expect(history.samples).toEqual([
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 27, attempt: 1 },
+      ]);
+    });
+
+    it("leaves a day unread when GitHub cannot say whether its run passed", async () => {
+      const store = new CoverageDebtStore(file);
+      const run: CoverageRun = { day: "2026-09-02", runId: 28, lines: 78166 };
+      const stored = fakeCoverageStore([run]);
+      const first = await refreshCoverageDebt({
+        days: 1,
+        now: NOW,
+        source: {
+          ...stored,
+          outcome: () => Promise.reject(new Error("set GH_TOKEN")),
+        },
+        store,
+      });
+      expect(first.samples).toEqual([]);
+      expect((first.error as Error).message).toBe("set GH_TOKEN");
+      expect(store.get("2026-09-02")).toBeUndefined();
+
+      const second = await refreshCoverageDebt({
+        days: 1,
+        now: NOW,
+        source: fakeCoverageStore([run]),
+        store,
+      });
+      expect(second.samples).toEqual([
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 28, attempt: 1 },
       ]);
     });
 
@@ -309,7 +423,7 @@ describe("coverage-debt-history", () => {
         store: new CoverageDebtStore(file),
       });
       expect(history.samples).toEqual([
-        { day: "2026-09-02", uncoveredLines: 78166, runId: 31 },
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 31, attempt: 1 },
       ]);
       expect(source.readNames.length).toBe(4);
     });
@@ -333,11 +447,12 @@ describe("coverage-debt-history", () => {
             read.push(name);
             return stored.read(name);
           },
+          outcome: stored.outcome,
         },
         store: new CoverageDebtStore(file),
       });
       expect(history.samples).toEqual([
-        { day: "2026-09-02", uncoveredLines: 78166, runId: 71 },
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 71, attempt: 1 },
       ]);
       expect(read).toEqual([coverageObjectName(run)]);
     });
@@ -352,7 +467,9 @@ describe("coverage-debt-history", () => {
           source: fakeCoverageStore([first]),
           store,
         })).samples,
-      ).toEqual([{ day: "2026-09-02", uncoveredLines: 78060, runId: 41 }]);
+      ).toEqual([
+        { day: "2026-09-02", uncoveredLines: 78060, runId: 41, attempt: 1 },
+      ]);
       // Both attempts measured, and the one listed first is the older.
       const history = await refreshCoverageDebt({
         days: 1,
@@ -364,7 +481,7 @@ describe("coverage-debt-history", () => {
         store,
       });
       expect(history.samples).toEqual([
-        { day: "2026-09-02", uncoveredLines: 78166, runId: 41 },
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 41, attempt: 2 },
       ]);
     });
 
@@ -375,11 +492,11 @@ describe("coverage-debt-history", () => {
           version: STORE_VERSION,
           days: {
             "2026-08-31": {
-              measured: { uncoveredLines: 78404, runId: 12 },
+              measured: { uncoveredLines: 78404, runId: 12, attempt: 1 },
               newestRun: 12,
             },
             "2026-09-02": {
-              measured: { uncoveredLines: 78300, runId: 13 },
+              measured: { uncoveredLines: 78300, runId: 13, attempt: 1 },
               newestRun: 13,
             },
           },
@@ -395,10 +512,104 @@ describe("coverage-debt-history", () => {
         store: new CoverageDebtStore(file),
       });
       expect(history.samples).toEqual([
-        { day: "2026-08-31", uncoveredLines: 78404, runId: 12 },
-        { day: "2026-09-02", uncoveredLines: 78166, runId: 14 },
+        { day: "2026-08-31", uncoveredLines: 78404, runId: 12, attempt: 1 },
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 14, attempt: 1 },
       ]);
       expect(source.listed).toEqual(["2026-09-01", "2026-09-02"]);
+    });
+
+    describe("a day whose run nothing has checked", () => {
+      const unchecked = async (listed?: number) =>
+        await Deno.writeTextFile(
+          file,
+          JSON.stringify({
+            version: STORE_VERSION,
+            days: {
+              "2026-08-31": {
+                measured: { uncoveredLines: 78404, runId: 12 },
+                ...(listed === undefined ? {} : { listed }),
+              },
+            },
+          }),
+        );
+
+      it("is read again from the store when the store holds anything for it", async () => {
+        // The listing has not grown since the measurement was taken.
+        await unchecked(2);
+        const history = await refreshCoverageDebt({
+          days: 3,
+          now: NOW,
+          source: fakeCoverageStore([
+            { day: "2026-08-31", runId: 12, lines: 87656, passed: false },
+            { day: "2026-08-31", runId: 11, lines: 78404 },
+          ]),
+          store: new CoverageDebtStore(file),
+        });
+        expect(history.samples).toEqual([
+          { day: "2026-08-31", uncoveredLines: 78404, runId: 11, attempt: 1 },
+        ]);
+      });
+
+      it("is charted, while the store holds nothing for it, once its run's latest attempt passed", async () => {
+        await unchecked();
+        // The store holds the run's objects under a day outside the window.
+        const source = fakeCoverageStore([
+          { day: "2026-07-31", runId: 12, lines: 1, passed: false },
+          { day: "2026-07-31", runId: 12, attempt: 2, lines: 1 },
+        ]);
+        const history = await refreshCoverageDebt({
+          days: 3,
+          now: NOW,
+          source,
+          store: new CoverageDebtStore(file),
+        });
+        expect(history.samples).toEqual([
+          { day: "2026-08-31", uncoveredLines: 78404, runId: 12, attempt: 2 },
+        ]);
+        expect(source.asked).toEqual(["12/latest"]);
+
+        const again = fakeCoverageStore([]);
+        await refreshCoverageDebt({
+          days: 3,
+          now: NOW,
+          source: again,
+          store: new CoverageDebtStore(file),
+        });
+        expect(again.listed).toEqual(["2026-09-01", "2026-09-02"]);
+        expect(again.asked).toEqual([]);
+      });
+
+      it("has no measurement, while the store holds nothing for it, when its run's latest attempt did not pass", async () => {
+        await unchecked();
+        const store = new CoverageDebtStore(file);
+        const history = await refreshCoverageDebt({
+          days: 3,
+          now: NOW,
+          source: fakeCoverageStore([
+            { day: "2026-07-31", runId: 12, lines: 1, passed: false },
+          ]),
+          store,
+        });
+        expect(history.samples).toEqual([]);
+        expect(store.get("2026-08-31")).toEqual({ listed: 0 });
+      });
+
+      it("is not charted while GitHub cannot say whether its run passed", async () => {
+        await unchecked();
+        const store = new CoverageDebtStore(file);
+        const history = await refreshCoverageDebt({
+          days: 3,
+          now: NOW,
+          source: {
+            ...fakeCoverageStore([]),
+            outcome: () => Promise.reject(new Error("set GH_TOKEN")),
+          },
+          store,
+        });
+        expect(history.samples).toEqual([]);
+        expect((history.error as Error).message).toBe("set GH_TOKEN");
+        expect(store.get("2026-08-31")?.measured?.attempt).toBeUndefined();
+      });
     });
 
     it("leaves a day unread when its object cannot be read", async () => {
@@ -410,6 +621,7 @@ describe("coverage-debt-history", () => {
         source: {
           list: () => Promise.resolve([coverageObjectName(run)]),
           read: () => Promise.reject(new Error("HTTP 503")),
+          outcome: () => Promise.resolve({ attempt: 1, passed: true }),
         },
         store,
       });
@@ -423,7 +635,7 @@ describe("coverage-debt-history", () => {
         store,
       });
       expect(second.samples).toEqual([
-        { day: "2026-09-02", uncoveredLines: 78166, runId: 61 },
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 61, attempt: 1 },
       ]);
     });
 
@@ -446,7 +658,7 @@ describe("coverage-debt-history", () => {
         store,
       });
       expect(history.samples).toEqual([
-        { day: "2026-09-02", uncoveredLines: 78166, runId: 71 },
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 71, attempt: 1 },
       ]);
       expect(second.listed).toEqual(["2026-09-02"]);
       expect(second.readNames).toEqual([]);
@@ -471,7 +683,7 @@ describe("coverage-debt-history", () => {
         store,
       });
       expect(history.samples).toEqual([
-        { day: "2026-09-02", uncoveredLines: 78040, runId: 82 },
+        { day: "2026-09-02", uncoveredLines: 78040, runId: 82, attempt: 1 },
       ]);
     });
 
@@ -535,7 +747,7 @@ describe("coverage-debt-history", () => {
         store,
       });
       expect(history.samples).toEqual([
-        { day: "2026-09-01", uncoveredLines: 78404, runId: 61 },
+        { day: "2026-09-01", uncoveredLines: 78404, runId: 61, attempt: 1 },
       ]);
     });
 
@@ -555,6 +767,7 @@ describe("coverage-debt-history", () => {
               ? Promise.reject(new Error("HTTP 502"))
               : recovered.list(day),
           read: recovered.read,
+          outcome: recovered.outcome,
         },
         store,
       });
@@ -590,7 +803,7 @@ describe("coverage-debt-history", () => {
           store: new CoverageDebtStore(join(directory, "gone", "history.json")),
         });
         expect(history.samples).toEqual([
-          { day: "2026-09-02", uncoveredLines: 78166, runId: 101 },
+          { day: "2026-09-02", uncoveredLines: 78166, runId: 101, attempt: 1 },
         ]);
       } finally {
         console.error = error;
@@ -636,7 +849,9 @@ describe("coverage-debt-history", () => {
       const store = new CoverageDebtStore(file);
       await store.load();
       const old = utcDay(NOW - 30 * DAY_MS);
-      store.set(old, { measured: { uncoveredLines: 90000, runId: 1 } });
+      store.set(old, {
+        measured: { uncoveredLines: 90000, runId: 1, attempt: 1 },
+      });
       const history = await refreshCoverageDebt({
         days: 2,
         now: NOW,

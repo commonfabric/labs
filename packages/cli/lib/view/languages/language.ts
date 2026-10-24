@@ -3,9 +3,9 @@
  * color, navigate, edit and (optionally) reason about it, plus selecting the
  * right language and byte decoder for a file. A language is a stateless
  * strategy object: one instance describes each supported syntax. Selection
- * combines explicit language choices, filename, shared-extension, or shebang
- * metadata, and byte content detection. Once selected, the pager dispatches
- * every operation through that object's methods.
+ * combines explicit language choices, filename, shared-extension, shebang, or
+ * signature metadata, and byte content detection. Once selected, the pager
+ * dispatches every operation through that object's methods.
  *
  * Per-file mutable state (a warm incremental parse, a language service) is not
  * held on the language; the language is a factory for the small stateful
@@ -37,8 +37,11 @@ import { pythonLanguage } from "./python/language.ts";
 import { swiftLanguage } from "./swift/language.ts";
 import { kotlinLanguage } from "./kotlin/language.ts";
 import { propertiesLanguage } from "./properties/language.ts";
+import { iniLanguage } from "./ini/language.ts";
 import { tomlLanguage } from "./toml/language.ts";
+import { hclLanguage } from "./hcl/language.ts";
 import { shellLanguage } from "./shell/language.ts";
+import { makeLanguage } from "./make/language.ts";
 import { proguardLanguage } from "./proguard/language.ts";
 import { xmlLanguage } from "./xml/language.ts";
 import { binaryLanguage } from "./binary/language.ts";
@@ -229,9 +232,10 @@ export interface SharedExtension {
  * dot and compare without case. Exact filenames and regular-expression
  * patterns match a path's basename. Aliases name explicit language overrides.
  * Interpreters match the command words extracted from a shebang, whose first
- * word is the executable's basename. Shared
- * extensions name syntaxes that one extension cannot tell apart, and pair each
- * with the source evidence that settles it.
+ * word is the executable's basename. Signatures are text that only a source in
+ * this language starts with, such as an XML declaration, compared exactly.
+ * Shared extensions name syntaxes that one extension cannot tell apart, and
+ * pair each with the source evidence that settles it.
  */
 export interface LanguageMetadata {
   readonly extensions: readonly string[];
@@ -239,6 +243,7 @@ export interface LanguageMetadata {
   readonly filenamePatterns: readonly RegExp[];
   readonly aliases: readonly string[];
   readonly interpreters: readonly InterpreterPattern[];
+  readonly signatures: readonly string[];
   readonly sharedExtensions: readonly SharedExtension[];
 }
 
@@ -250,15 +255,15 @@ export interface Language {
   /**
    * Stable identifier, such as `"typescript"`, `"markdown"`, `"json"`,
    * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"kotlin"`, `"shell"`,
-   * `"binary"`, or `"plain-text"`.
+   * `"make"`, `"binary"`, or `"plain-text"`.
    */
   readonly id: string;
 
   /** Decoding and, for byte languages, incremental rendering behavior. */
   readonly input: LanguageInput;
 
-  /** Filename, shared-extension, explicit-name, and shebang selectors for
-   * this language. */
+  /** Filename, shared-extension, explicit-name, shebang, and signature
+   * selectors for this language. */
   readonly metadata: LanguageMetadata;
 
   /**
@@ -467,8 +472,11 @@ function allLanguages(): readonly Language[] {
     swiftLanguage,
     kotlinLanguage,
     tomlLanguage,
+    hclLanguage,
     shellLanguage,
+    makeLanguage,
     propertiesLanguage,
+    iniLanguage,
     proguardLanguage,
     xmlLanguage,
     binaryLanguage,
@@ -615,21 +623,26 @@ export function languageMatchingFilename(
   return undefined;
 }
 
-/** The language a shared extension or a shebang selects from source content. */
+/** The language a shared extension, a shebang, or a signature selects from
+ * source content. */
 function languageMatchingSource(
   fileName: string | undefined,
   text: string,
 ): Language | undefined {
-  const shared = allLanguages().find((language) =>
+  return allLanguages().find((language) =>
     metadataMatchesSharedExtension(language.metadata, fileName, text)
-  );
-  return shared ?? languageForShebang(text);
+  ) ?? languageForShebang(text) ??
+    allLanguages().find((language) =>
+      language.metadata.signatures.some((signature) =>
+        text.startsWith(signature)
+      )
+    );
 }
 
 /**
  * Select a language for complete source. A recognized filename takes
  * precedence. A shared extension takes the source evidence its metadata names,
- * and a filename with no metadata match can defer to a shebang.
+ * and a filename with no metadata match can defer to a shebang or a signature.
  */
 export function languageForSource(
   fileName: string | undefined,
@@ -640,8 +653,8 @@ export function languageForSource(
 
 /**
  * The language a recognized filename selects, or else the first language that
- * one of `sources` selects through a shared extension or a shebang, or
- * undefined when nothing selects one. Each source is a file's complete text or
+ * one of `sources` selects through a shared extension, a shebang, or a
+ * signature, or undefined when nothing selects one. Each source is a file's complete text or
  * a prefix of it. Sources are read in order and only until one selects a
  * language, so an expensive source can be produced on demand.
  */

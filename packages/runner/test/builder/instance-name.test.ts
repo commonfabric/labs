@@ -151,6 +151,12 @@ describe("instance-name", () => {
     });
   });
 
+  describe("instancePartialCause()", () => {
+    it("returns a record whose one key, `$instance`, holds the name", () => {
+      expect(instancePartialCause("a")).toStrictEqual({ $instance: "a" });
+    });
+  });
+
   describe("instanceNameOfPartialCause()", () => {
     it("returns the name an instance's partial cause carries", () => {
       expect(instanceNameOfPartialCause(instancePartialCause("a"))).toBe("a");
@@ -159,9 +165,13 @@ describe("instance-name", () => {
     it("returns `undefined` for a positional cause, a name under another key, and a cause with a key added", () => {
       expect([
         instanceNameOfPartialCause({ $generated: 0 }),
-        instanceNameOfPartialCause({ $generated: "other", name: "a" }),
+        instanceNameOfPartialCause({ $generated: "instance", name: "a" }),
         instanceNameOfPartialCause({ ...instancePartialCause("a"), x: 1 }),
       ]).toStrictEqual([undefined, undefined, undefined]);
+    });
+
+    it("returns `undefined` for a cause whose `$instance` is not a string", () => {
+      expect(instanceNameOfPartialCause({ $instance: 1 })).toBeUndefined();
     });
   });
 });

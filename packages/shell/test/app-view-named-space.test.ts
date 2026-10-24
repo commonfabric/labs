@@ -10,13 +10,58 @@ import { installBrowserGlobals } from "./browser-globals.ts";
 
 const PAGE_HREF = "http://localhost:8000/named";
 
+/** The value bound right after a template part ending in `marker`. */
+function boundAfter(value: unknown, marker: string): unknown {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = boundAfter(item, marker);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  if (value === null || typeof value !== "object") return undefined;
+  const template = value as {
+    strings?: readonly string[];
+    values?: readonly unknown[];
+  };
+  if (!template.strings || !template.values) return undefined;
+  const at = template.strings.findIndex((part) => part.endsWith(marker));
+  if (at >= 0) return template.values[at];
+  return boundAfter(template.values, marker);
+}
+
 describe("XAppView named-space loading", () => {
+  it("tells the render it opened the active piece, and not a view at a path inside it", async () => {
+    // A path inside the piece may lead to another piece, which the shell did
+    // not open; the render opens that one.
+    const restore = installBrowserGlobals(PAGE_HREF);
+    try {
+      const { XBodyView } = await import("../src/views/BodyView.ts");
+      const nested = { ref: () => ({ path: ["detail"] }) };
+      const root = { ref: () => ({ path: [] }), key: () => nested };
+      const body = new XBodyView();
+      body.activePattern = {
+        id: () => "of:fid1:root",
+        cell: () => root,
+      } as never;
+      expect(boundAfter(body.render(), '.hostOpened="')).toBe(true);
+      (body as unknown as { piecePath: string[] }).piecePath = ["detail"];
+      expect(boundAfter(body.render(), '.hostOpened="')).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
   it("renders the selected nested view rather than its document root", async () => {
     const restore = installBrowserGlobals(PAGE_HREF);
     try {
       const { XBodyView } = await import("../src/views/BodyView.ts");
-      const nested = { target: "nested view" };
+      const nested = {
+        target: "nested view",
+        ref: () => ({ path: ["detail"] }),
+      };
       const root = {
+        ref: () => ({ path: [] }),
         key: (key: string) => {
           expect(key).toBe("detail");
           return nested;

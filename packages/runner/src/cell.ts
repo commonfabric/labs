@@ -77,6 +77,7 @@ import {
   type HKT,
   type ICell,
   isReactiveMarker,
+  isStreamValue,
   type IsThisObject,
   type IStreamable,
   type JSONSchema,
@@ -101,8 +102,8 @@ import { checkSqliteWriteCeiling } from "./builtins/sqlite/write-ceiling.ts";
 import { type Cancel, isCancel, useCancelGroup } from "./cancel.ts";
 import { ContextualFlowControl, declaredSchemaScope } from "./cfc.ts";
 import {
+  cfcAcquisitionViewForDereferenceTraces,
   type CfcLabelView,
-  cfcLabelViewForDereferenceTraces,
   cloneCfcLabelView,
   mergeCfcLabelViews,
   rebaseCfcLabelView,
@@ -127,16 +128,28 @@ import {
 } from "./cfc/ui-contract.ts";
 import { createRef } from "./create-ref.ts";
 import { runtimeWritePolicyAuthorization } from "./cfc/types.ts";
-import { diffAndUpdate } from "./data-updating.ts";
+import { diffAndAppend, diffAndUpdate } from "./data-updating.ts";
 import {
-  dataUriFromValueWithResolvedLinks,
   findAndInlineDataUriLinks,
+  portableSnapshotId,
+  portableSnapshotLinks,
+  resolveImmutableValueLinks,
 } from "./data-uri.ts";
 import { actingForEmission, waveRunContextOf } from "./executor/wave.ts";
-import { type LastNode, resolveLink } from "./link-resolution.ts";
-import { areNormalizedLinksSame } from "./link-types.ts";
+import { immutableCellsFor, pinImmutableCell } from "./immutable-cell.ts";
+import { areLinksSame } from "./link-equality.ts";
 import {
-  areLinksSame,
+  type LastNode,
+  resolveLink,
+  resolveLinkTracingDereferences,
+} from "./link-resolution.ts";
+import {
+  addressKey,
+  areNormalizedLinksSame,
+  isPrimitiveCellLink,
+  isSigilLink,
+} from "./link-types.ts";
+import {
   createSigilLinkFromParsedLink,
   declareStreamSchema,
   isCellLink,
@@ -152,6 +165,8 @@ import {
   createQueryResultProxy,
   getCellOrThrow,
   isCellResultForDereferencing,
+  type ViewReadOut,
+  viewReadOut,
 } from "./query-result-proxy.ts";
 import type { Runtime } from "./runtime.ts";
 import { isRuntime } from "./runtime-brand.ts";
@@ -622,26 +637,60 @@ export type StreamSendOptions = {
 // import runner internals — can produce an array the send path accepts.
 const mintedRuntimeInjectedKeys = new WeakSet<readonly string[]>();
 
+/** How a sent event's delivery failed: its append was refused, or its
+ * served handling ended without committing (events.md §5) — the handler
+ * threw (`errored`), admission refused it (`refused`), it was dropped, or it
+ * needs attention. */
+export type EventDeliveryFailure =
+  | "append-refused"
+  | "errored"
+  | "refused"
+  | "dropped"
+  | "needs-attention";
+
+/** The error a sender's commit callback reads from `tx.status()` when the
+ * durable-ack coupling reports a failed delivery: `kind` says which failure
+ * and `reason` carries the outcome's own words, so a caller can tell a
+ * handler that refused the event (`errored`, `refused`) from one that never
+ * ran without reading the message. */
+export class EventDeliveryError extends Error {
+  #kind: EventDeliveryFailure;
+  #reason: string;
+
+  constructor(kind: EventDeliveryFailure, reason: string) {
+    super(
+      kind === "append-refused"
+        ? `event append refused: ${reason}`
+        : `event handling ${kind}: ${reason}`,
+    );
+    this.name = "EventDeliveryError";
+    this.#kind = kind;
+    this.#reason = reason;
+  }
+
+  get kind(): EventDeliveryFailure {
+    return this.#kind;
+  }
+
+  get reason(): string {
+    return this.#reason;
+  }
+}
+
 /** An error-status VIEW of a transaction (the durable-ack coupling;
  * verdict blocker, 2026-08-12): everything passes through except
- * `status()`, which reports the append/consequence failure — so a
- * caller that reads the settle callback's tx as the durable
- * acknowledgment (the CLI verb dispatch's verb-contract Settlement
- * read) sees the authoritative failure instead of the speculative
- * echo's local state. */
+ * `status()`, which reports the append/consequence failure as `error` — so
+ * a caller that reads the settle callback's tx as the durable
+ * acknowledgment (the CLI verb dispatch's verb-contract Settlement read)
+ * sees the authoritative failure instead of the speculative echo's local
+ * state. */
 const errorStatusTxView = (
   tx: IExtendedStorageTransaction,
-  message: string,
+  error: EventDeliveryError,
 ): IExtendedStorageTransaction => {
   const status = () => {
     const real = tx.status();
-    return {
-      ...real,
-      status: "error" as const,
-      error: Object.assign(new Error(message), {
-        name: "EventDeliveryError",
-      }),
-    };
+    return { ...real, status: "error" as const, error };
   };
   return new Proxy(tx, {
     get(target, prop, receiver) {
@@ -1180,7 +1229,7 @@ export function encodeSqliteParams(
       if (!isLinkCol) {
         throw new TypeError("cells may only be bound to _cf_link columns");
       }
-      return encodeCellToSigilString(cell);
+      return encodeCellToSigilString(cell, portableSnapshotId);
     }
     return encodeNested(value);
   };
@@ -1210,6 +1259,9 @@ export function encodeSqliteParams(
     ]),
   ) as SqliteParamsWire;
 }
+
+/** What a cell holds when its storage manager hands out no document hold. */
+const NO_DOCUMENT_HOLD = {};
 
 export function createCell<T>(
   runtime: Runtime,
@@ -1367,8 +1419,63 @@ export class CellImpl<T extends FabricValue>
     hash: string;
   };
 
-  #synced: boolean;
+  /**
+   * How many documents the storage manager had dropped when this cell's
+   * document was loaded, or `undefined` when it has not been.
+   */
+  #loadedAtDrops: number | undefined;
   #cfcLabelView?: CfcLabelView;
+
+  /**
+   * Keeps this cell's document loaded for as long as this cell can read it
+   * (`IStorageManager.holdDocument()`), once the cell has loaded it.
+   */
+  #documentHold: object | undefined;
+
+  /**
+   * Whether this cell's document is loaded: it was, and the storage manager
+   * has not dropped it since.
+   */
+  get #synced(): boolean {
+    if (this.#loadedAtDrops === undefined) return false;
+    this.#holdDocument();
+    const drops = this.#droppedDocuments();
+    if (this.#loadedAtDrops === drops) return true;
+    const { space, id, scope } = this.#link;
+    if (
+      this.#runtime.storageManager.open(space).replica
+        .hasLocalDocumentCoverage?.(
+          id,
+          scope,
+          this.#tx?.tx?.scopeKeyIdentity,
+        ) !==
+        true
+    ) {
+      return false;
+    }
+    this.#loadedAtDrops = drops;
+    return true;
+  }
+
+  set #synced(loaded: boolean) {
+    this.#loadedAtDrops = loaded ? this.#droppedDocuments() : undefined;
+    if (loaded) this.#holdDocument();
+  }
+
+  /** Takes this cell's document hold, once the cell's link is complete. */
+  #holdDocument(): void {
+    if (this.#documentHold !== undefined || !this.#hasFullLink()) return;
+    const { space, id, scope } = this.#link;
+    this.#documentHold = this.#runtime.storageManager.holdDocument?.(
+      { space, id, scope },
+      this.#tx?.tx?.scopeKeyIdentity,
+    ) ?? NO_DOCUMENT_HOLD;
+  }
+
+  /** How many documents the storage manager has dropped. */
+  #droppedDocuments(): number {
+    return this.#runtime.storageManager.droppedDocuments?.() ?? 0;
+  }
 
   /**
    * Constructs a cell bound to `runtime` and, when given, to `tx`. Pattern code
@@ -1389,7 +1496,8 @@ export class CellImpl<T extends FabricValue>
     }
     this.#runtime = runtime;
     this.#tx = requireTransaction(tx);
-    this.#synced = synced;
+    // The hold is taken on the first read, once the link is complete.
+    this.#loadedAtDrops = synced ? this.#droppedDocuments() : undefined;
     this.#cfcLabelView = _cfcLabelView;
     this.#frame = getTopFrame();
 
@@ -1496,8 +1604,8 @@ export class CellImpl<T extends FabricValue>
    * This affects all sibling cells (created via .key(), .asSchema(), .withTx()) since they
    * share the same container.
    *
-   * Record causes may not use the top-level key `$generated` — it is
-   * reserved for system-generated causes.
+   * Record causes may not use the top-level key `$generated` or `$instance` —
+   * they are reserved for the causes the pattern builder mints.
    * @param cause - The cause to associate with this cell
    * @param allowIfSet - If true, treat as suggestion and silently ignore if cause already set. If false (default), throw error if cause already set.
    * @returns This cell for method chaining
@@ -1517,8 +1625,8 @@ export class CellImpl<T extends FabricValue>
     }
 
     // Reject reserved keys before the cause can take effect: a user cause
-    // carrying a top-level `$generated` key would mimic the pattern builder's
-    // generated-cause namespace.
+    // carrying a top-level `$generated` or `$instance` key would mimic a cause
+    // the pattern builder mints.
     assertNoReservedCauseKeys(cause);
 
     // Store the cause in the shared container - all siblings will see this
@@ -2184,21 +2292,12 @@ export class CellImpl<T extends FabricValue>
       // the client side.
       //
       // TODO(danfuzz): constrain `T`, so that neither cast is needed.
-      //
-      // A `data:` link is dissolved into the value it carries, as a stored
-      // write dissolves one. An event leaves this runtime, for the stream's
-      // space and whichever runtime handles it there, and a `data:` id is
-      // good only where it was minted: a link inside one resolves its
-      // schema's references against documents this runtime holds.
-      //
-      // An event admits no `FabricInstance`. `convertCellsToLinks()` refuses
-      // one written into the event, and the dissolve refuses one inside the
-      // value a `data:` link carries, which would otherwise arrive in the
-      // event whole with any `data:` link in its state intact.
-      const event = findAndInlineDataUriLinks(
-        convertCellsToLinks(newValue as CellLinkInput),
-        { refuseCarriedInstances: true },
-      ) as AnyCellWrapping<T>;
+      // Local delivery retains immutable cell identity. Server execution
+      // persists events, so its echo and durable delivery use portable links.
+      const convertedEvent = convertCellsToLinks(newValue as CellLinkInput);
+      const event = (this.#runtime.experimental.serverExecution === true
+        ? portableSnapshotLinks(convertedEvent)
+        : convertedEvent) as AnyCellWrapping<T>;
       propagateRendererTrustedEvent(newValue, event);
 
       const mintedKeys = mintedRuntimeInjectedEventKeys(
@@ -2334,11 +2433,16 @@ export class CellImpl<T extends FabricValue>
                     ? doneStatusTxView(echoTx)
                     : echoTx,
                 );
-                if (callerOnCommit === undefined) return;
+                if (callerOnCommit === undefined) {
+                  return;
+                }
                 if (!delivery.delivered) {
                   callerOnCommit(errorStatusTxView(
                     echoTx,
-                    `event append refused: ${delivery.refused}`,
+                    new EventDeliveryError(
+                      "append-refused",
+                      delivery.refused,
+                    ),
                   ));
                   return;
                 }
@@ -2353,9 +2457,10 @@ export class CellImpl<T extends FabricValue>
                 ) {
                   callerOnCommit(errorStatusTxView(
                     echoTx,
-                    `event handling ${consequence.kind}: ${
-                      consequence.reason ?? consequence.kind
-                    }`,
+                    new EventDeliveryError(
+                      consequence.kind,
+                      consequence.reason ?? consequence.kind,
+                    ),
                   ));
                   return;
                 }
@@ -2601,7 +2706,9 @@ export class CellImpl<T extends FabricValue>
           this.#cleanup?.();
           const [cancel, addCancel] = useCancelGroup();
           this.#cleanup = cancel;
-          this.#listeners.forEach((callback) => addCancel(callback(event)));
+          this.#listeners.forEach((callback) =>
+            addCancel(callback(event))
+          );
           return this as unknown as Cell<T>;
         }
       }
@@ -2939,12 +3046,25 @@ export class CellImpl<T extends FabricValue>
     // The append's destination snapshot supplies storage positions without
     // exposing content or length to the caller. It joins neither observed
     // labels nor conflict preconditions; explicit handler reads retain both.
-    let currentValue = this.#tx.readValueOrThrow(resolvedLink, {
+    const currentValue = this.#tx.readValueOrThrow(resolvedLink, {
       meta: { ...mergeableOpRead, ...writeDestinationRead },
     });
     const cause = this.#frame?.cause;
 
-    if (!Array.isArray(currentValue)) {
+    if (Array.isArray(currentValue)) {
+      // The anchor id source makes sure each pushed object gets its own doc,
+      // its id drawn from the frame this cell was made in
+      // (`frameAnchorIds()`).
+      diffAndAppend(
+        this.#runtime,
+        this.#tx,
+        resolvedLink,
+        currentValue,
+        values,
+        cause,
+        frameAnchorIds(this.#frame),
+      );
+    } else {
       if (currentValue !== undefined) {
         throw new Error(
           "Cell.push() or Cell.pushAll() requires transaction and array " +
@@ -2963,9 +3083,7 @@ export class CellImpl<T extends FabricValue>
         cause,
       );
       const resolvedSchema = resolveSchema(this.schema);
-      // Annotated rather than inferred: `processDefaultValue()` returns `any`,
-      // and assigning that back to `currentValue` would discard the narrowing
-      // this block exists to establish.
+      // Annotated rather than inferred: `processDefaultValue()` returns `any`.
       const created: FabricValue[] =
         isObjectOrArray(resolvedSchema) && Array.isArray(resolvedSchema.default)
           ? processDefaultValue(
@@ -2975,35 +3093,17 @@ export class CellImpl<T extends FabricValue>
             resolvedSchema.default,
           )
           : [];
-      // From here on `currentValue` is the array just created, not what the
-      // read returned.
-      currentValue = created;
+      // As above, each pushed object gets its own doc.
+      diffAndUpdate(
+        this.#runtime,
+        this.#tx,
+        resolvedLink,
+        [...created, ...values],
+        cause,
+        undefined,
+        frameAnchorIds(this.#frame),
+      );
     }
-
-    // Read-only: a value that came from storage is a `FabricArray`, which is a
-    // `ReadonlyArray`, and though a freshly created one is not, this method
-    // only ever reads what it finds -- the replacement is `combined`, below.
-    const array: readonly unknown[] = currentValue;
-
-    // Append the new values to the array, preserving sparse holes in the original.
-    const combined = new Array(array.length + values.length);
-    array.forEach((v, i) => {
-      combined[i] = v;
-    });
-    for (let i = 0; i < values.length; i++) {
-      combined[array.length + i] = values[i];
-    }
-    // The anchor id source makes sure each pushed object gets its own doc,
-    // its id drawn from the frame this cell was made in (`frameAnchorIds()`).
-    diffAndUpdate(
-      this.#runtime,
-      this.#tx,
-      resolvedLink,
-      combined,
-      cause,
-      undefined,
-      frameAnchorIds(this.#frame),
-    );
 
     // Record the append intent so the commit emits a tail-relative, mergeable
     // operation instead of a position diffed against a possibly-stale base.
@@ -3047,6 +3147,7 @@ export class CellImpl<T extends FabricValue>
       meta: mergeableOpRead,
     });
     const cause = this.#frame?.cause;
+    const stored = Array.isArray(currentValue);
 
     if (!Array.isArray(currentValue)) {
       if (currentValue !== undefined) {
@@ -3125,15 +3226,27 @@ export class CellImpl<T extends FabricValue>
     }
     // The anchor id source makes sure each added object gets its own doc,
     // its id drawn from the frame this cell was made in (`frameAnchorIds()`).
-    diffAndUpdate(
-      this.#runtime,
-      this.#tx,
-      resolvedLink,
-      [...existing, ...toAdd],
-      cause,
-      undefined,
-      frameAnchorIds(this.#frame),
-    );
+    if (stored) {
+      diffAndAppend(
+        this.#runtime,
+        this.#tx,
+        resolvedLink,
+        existing,
+        toAdd,
+        cause,
+        frameAnchorIds(this.#frame),
+      );
+    } else {
+      diffAndUpdate(
+        this.#runtime,
+        this.#tx,
+        resolvedLink,
+        [...existing, ...toAdd],
+        cause,
+        undefined,
+        frameAnchorIds(this.#frame),
+      );
+    }
     this.#tx.recordMergeableOp?.(resolvedLink, {
       op: "add-unique",
       count: toAdd.length,
@@ -3759,7 +3872,10 @@ export class CellImpl<T extends FabricValue>
       "value",
       { markIfcCrossings: true },
     );
-    const dereferenceView = cfcLabelViewForDereferenceTraces(
+    // The handle carries how it was obtained, the restrictions of the slots
+    // the resolution left, and nothing of the document it names: those
+    // labels are read from the document when the handle is followed.
+    const dereferenceView = cfcAcquisitionViewForDereferenceTraces(
       readTx,
       readTx.getCfcState().dereferenceTraces.slice(tracesBefore),
     );
@@ -3778,7 +3894,7 @@ export class CellImpl<T extends FabricValue>
         );
       }
     }
-    link = maybeConvertArrayPathToDataURILink(readTx, link);
+    link = maybeConvertArrayPathToImmutableLink(readTx, link);
     return createCell(
       this.#runtime,
       link,
@@ -3811,7 +3927,7 @@ export class CellImpl<T extends FabricValue>
   }
 
   getAsNormalizedFullLink(): NormalizedFullLink {
-    return this.#link;
+    return pinImmutableCell(this.#link, this.#link.id);
   }
 
   /**
@@ -3885,13 +4001,12 @@ export class CellImpl<T extends FabricValue>
     const tx = this.#runtime.readTx(this.#tx);
     // Resolve all links ON THE WAY to the target, but don't resolve the final
     // link.
-    const value = tx.readValueOrThrow(
-      // A raw read still resolves links on the way to the target, and those
-      // crossings are content reads: the seam marks labeled hops.
-      resolveLink(this.#runtime, tx, this.#link, lastNode, {
-        markIfcCrossings: true,
-      }),
-      readOptions,
+    const resolved = resolveLink(this.#runtime, tx, this.#link, lastNode, {
+      markIfcCrossings: true,
+    });
+    const value = resolveImmutableValueLinks(
+      tx.readValueOrThrow(resolved, readOptions),
+      resolved.id,
     );
     // Deep-copy with desired frozenness, without unwrapping to JS form --
     // getRaw() and getRawUntyped() return fabric-layer values, not
@@ -4722,10 +4837,13 @@ function cellImplOf(value: unknown): CellImpl<FabricValue> | undefined {
  * it.
  */
 function frozenLink(link: NormalizedLink): NormalizedLink {
-  return Object.freeze(
-    Object.isFrozen(link.path)
-      ? link
-      : { ...link, path: Object.freeze([...link.path]) },
+  return pinImmutableCell(
+    Object.freeze(
+      Object.isFrozen(link.path)
+        ? link
+        : { ...link, path: Object.freeze([...link.path]) },
+    ),
+    link.id,
   );
 }
 
@@ -4927,7 +5045,13 @@ function subscribeToReferencedDocs<T>(
       const newValue = validateAndTransform(runtime, wrappedTx, ref, [], {
         synced: true,
       });
-      if (needsTraversal && newValue !== undefined && newValue !== null) {
+      // A projection reads what it delivers, and those reads are this sink's
+      // dependencies. A sink delivering the value itself hears every change
+      // under it, so the whole of the value is read.
+      if (
+        project === undefined && needsTraversal && newValue !== undefined &&
+        newValue !== null
+      ) {
         deepTraverse(newValue);
       }
       // Read the label on the SINK's transaction (`tx`), not the child `extraTx`,
@@ -4950,8 +5074,11 @@ function subscribeToReferencedDocs<T>(
       // cover what it reads: a field the schema leaves untyped holds a value
       // that reads what it holds only once it is looked at.
       const delivered = project === undefined ? newValue : project(newValue);
+      // Each consumed document's labels are read so that this sink sees
+      // them, as the label above is: a write of a label alone, the value
+      // left as it was, runs the sink again with what it then consumes.
       const consumed = options.includeConsumedLabel
-        ? collectConsumedLabel(tx)
+        ? collectConsumedLabel(tx, { subscribe: true })
         : undefined;
       sink.cleanup = callback(delivered, cfcLabel, consumed);
 
@@ -5081,7 +5208,22 @@ export function deepTraverse(
   }
 }
 
-function maybeConvertArrayPathToDataURILink(
+/**
+ * Returns `link` with its path rewritten to start at a snapshot of the deepest
+ * inline array element it passes through, or `link` itself where it passes
+ * through none. An inline element is an object or array stored in place in an
+ * array rather than linked to, and the snapshot gives the resolved cell an
+ * identity that stays with the element's content.
+ *
+ * The walk reads, without recursing, each container it steps into and each
+ * array element it passes, and nothing else of the document: what it decides
+ * rests on those containers' shapes and those elements' kinds alone. A
+ * recursive read of the whole document would put every other writer of the
+ * document into the transaction's conflict set, among them every append to a
+ * list beside the one the link names. The element a snapshot is taken of is
+ * read whole, since the snapshot's identity depends on all of it.
+ */
+function maybeConvertArrayPathToImmutableLink(
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
 ): NormalizedFullLink {
@@ -5089,17 +5231,6 @@ function maybeConvertArrayPathToDataURILink(
     return link;
   }
 
-  let rootValue: FabricValue;
-  try {
-    rootValue = tx.readValueOrThrow({ ...link, path: [] }, {
-      meta: ignoreReadForScheduling,
-    });
-  } catch {
-    return link;
-  }
-
-  let current: FabricValue = rootValue;
-  const prefix: string[] = [];
   let candidate:
     | {
       value: FabricValue;
@@ -5108,32 +5239,30 @@ function maybeConvertArrayPathToDataURILink(
     }
     | undefined;
 
-  for (let i = 0; i < link.path.length; i++) {
-    if (!isObjectOrArray(current)) {
-      break;
-    }
-
-    const segment = link.path[i];
-    let next: FabricValue;
-
-    if (Array.isArray(current)) {
-      if (!isArrayIndexPropertyName(segment)) {
-        break;
-      }
-      next = (current as unknown as Record<string, FabricValue>)[segment];
-      if (isObjectOrArray(next) && !isCellLink(next)) {
+  const shapeRead = { meta: ignoreReadForScheduling, nonRecursive: true };
+  try {
+    let container = tx.readValueOrThrow({ ...link, path: [] }, shapeRead);
+    for (let i = 0; i < link.path.length; i++) {
+      if (!isObjectOrArray(container)) break;
+      const inArray = Array.isArray(container);
+      if (inArray && !isArrayIndexPropertyName(link.path[i])) break;
+      // A link ending at an object's key passes through no element there,
+      // whatever the key holds.
+      const last = i === link.path.length - 1;
+      if (last && !inArray) break;
+      const slot = link.path.slice(0, i + 1);
+      const next = tx.readValueOrThrow({ ...link, path: slot }, shapeRead);
+      if (inArray && isObjectOrArray(next) && !isCellLink(next)) {
         candidate = {
           value: next,
-          path: [...prefix, segment],
+          path: slot,
           remainingPath: link.path.slice(i + 1),
         };
       }
-    } else {
-      next = (current as Record<string, FabricValue>)[segment];
+      container = next;
     }
-
-    prefix.push(segment);
-    current = next;
+  } catch {
+    return link;
   }
 
   if (candidate === undefined) {
@@ -5151,45 +5280,9 @@ function maybeConvertArrayPathToDataURILink(
 
   return {
     ...link,
-    id: inlineElementSnapshotId(candidate.value, baseLink),
+    id: immutableCellsFor(tx).createElement(candidate.value, baseLink).id,
     path: candidate.remainingPath,
   };
-}
-
-/**
- * The snapshot ids minted for inline elements, by the element's value and
- * then by the link it was read through, which decides how its relative links
- * resolve. A stored value is a frozen object the replica holds until the
- * document changes, so one element resolved by every reader of the same
- * document version is encoded once rather than per reader: the renderer
- * resolves each element it shows several times over.
- */
-const inlineElementSnapshotIds = new WeakMap<object, Map<string, URI>>();
-
-function inlineElementSnapshotId(
-  value: FabricValue,
-  base: NormalizedFullLink,
-): URI {
-  if (!isObjectOrArray(value)) {
-    return dataUriFromValueWithResolvedLinks(value, base);
-  }
-  const baseKey = JSON.stringify([
-    base.space,
-    base.id,
-    normalizeCellScope(base.scope),
-    base.path,
-  ]);
-  let byBase = inlineElementSnapshotIds.get(value);
-  if (byBase === undefined) {
-    byBase = new Map();
-    inlineElementSnapshotIds.set(value, byBase);
-  }
-  let id = byBase.get(baseKey);
-  if (id === undefined) {
-    id = dataUriFromValueWithResolvedLinks(value, base);
-    byBase.set(baseKey, id);
-  }
-  return id;
 }
 
 /**
@@ -5504,7 +5597,9 @@ export function readProjected<R>(
  * to the value: `callback` runs with the projection of each value, and the
  * labels of everything the read and the projection consumed, read on the
  * sink's own transaction so that a write to anything the projection reached,
- * labels included, runs it again. A stream holds no value to project, and is
+ * labels included, runs it again. What the projection reaches is what the
+ * subscription depends on: a part of the value it never reads is a part
+ * whose change does not run it. A stream holds no value to project, and is
  * refused.
  */
 export function sinkProjected<R>(
@@ -5639,12 +5734,17 @@ function convertOneToLinks(
         // subclass would return a subclass instance.
         container = value as unknown[] | Record<string, unknown>;
       } else {
-        // A query-result proxy serves the symbol from a trap rather than as
-        // an own property, and a subclass fails the prototype check. Either
-        // is read out into a plain copy first, which is a valid
-        // `FabricValueLayer` already and so wants no further conversion.
-        // Objects need this as much as arrays do -- the annotation goes on
-        // either (see `schema.ts`).
+        // A query-result view serves the symbol from a trap rather than as an
+        // own property. Its document is read out directly rather than member
+        // by member through its traps, each of which would build a view of
+        // its own, resolve its link and derive its label view for a member
+        // that is then only copied.
+        const readOut = viewReadOut(value);
+        if (readOut !== undefined) return readOutView(readOut, options, stack);
+        // A subclass fails the prototype check, and is read out into a plain
+        // copy first, which is a valid `FabricValueLayer` already and so wants
+        // no further conversion. Objects need this as much as arrays do -- the
+        // annotation goes on either (see `schema.ts`).
         container = (isArray
           ? shallowCleanArray(value, false)
           : shallowCleanPlainObject(value as object, false)) as
@@ -5720,7 +5820,7 @@ function convertOneToLinks(
     // filled by assignment costs about half again as much to structured-clone
     // as the same object built from entries, and every consumer of a converted
     // value pays that, the crossing to the client included.
-    return Object.freeze(Object.fromEntries(
+    const converted = Object.freeze(Object.fromEntries(
       Object.entries(container).map(([key, member]) => {
         stack.push(key);
 
@@ -5736,11 +5836,141 @@ function convertOneToLinks(
         return [key, converted];
       }),
     ));
+    return isPrimitiveCellLink(converted)
+      ? pinImmutableCell(converted, parseLink(converted).id)
+      : converted;
   } finally {
     // `popExpect()` instead of just `pop()`, as defense-in-depth against bugs
     // elsewhere in the code.
     ancestors.popExpect(original);
   }
+}
+
+/**
+ * Reads the document a view describes out as the data the view reads, in
+ * place of walking the view member by member: the stored value is frozen,
+ * and copying it from there costs no view, link resolution or label view per
+ * member.
+ *
+ * The document is read once, whole, through the view's own checked read, so
+ * a document that no longer holds what the view was built over refuses as
+ * every access through the view does; the read registers every position
+ * under it, where reading through the view registers each as it is reached. A stored link is followed where it sits, as the view follows
+ * one on access, with the same resolution, so the dereference traces and
+ * labeled crossings it records are the ones the view's reads record. A link
+ * that returns to a position the walk is inside yields a back-link to it, as
+ * a cycle does elsewhere in the walk. A stream position yields the link to
+ * the stream, carrying the label view a view of it would carry.
+ *
+ * `stack` is the path to the view from the walk's root, pushed to and popped
+ * from as {@link convertOneToLinks} does, so a back-link made here names a
+ * path from that same root.
+ */
+function readOutView(
+  view: ViewReadOut,
+  options: CellLinkOptions,
+  stack: string[],
+): FabricValue {
+  const { runtime } = view;
+  return view.atEpoch(() => {
+    const tx = view.readTx();
+    // The depth the walk entered each container it is inside, keyed by the
+    // container's document position, so that a link back to one yields a
+    // back-link to that depth.
+    const entered = new Map<string, number>();
+
+    const streamLink = (
+      link: NormalizedFullLink,
+      cfcLabelView: CfcLabelView | undefined,
+    ): FabricValue =>
+      linkToCell(
+        createCell(runtime, link, view.tx, false, "stream", cfcLabelView),
+        options,
+      );
+
+    // What `stored` holds, which sits at `position` inside the document
+    // `document` names, under the label view `cfcLabelView` carries for that
+    // document position. `position` is pushed to and popped from in step with
+    // `stack`.
+    const walk = (
+      stored: unknown,
+      document: NormalizedFullLink,
+      position: string[],
+      cfcLabelView: CfcLabelView | undefined,
+    ): FabricValue => {
+      if (isSigilLink(stored)) {
+        const resolved = resolveLinkTracingDereferences(
+          runtime,
+          tx,
+          { ...document, path: [...document.path, ...position] },
+          "value",
+          { markIfcCrossings: true },
+        );
+        const target = resolved.link;
+        const targetView = mergeCfcLabelViews([
+          rebaseCfcLabelView(cfcLabelView, position),
+          cfcAcquisitionViewForDereferenceTraces(tx, resolved.traces),
+        ]);
+        if (ContextualFlowControl.declaresStream(target.schema)) {
+          return streamLink(target, targetView);
+        }
+        const depth = entered.get(addressKey(target));
+        if (depth !== undefined) {
+          return deepFreeze(linkRefFrom({ path: stack.slice(0, depth) }));
+        }
+        return walk(tx.readValueOrThrow(target), target, [], targetView);
+      }
+      if (isStreamValue(stored)) {
+        return streamLink(
+          { ...document, path: [...document.path, ...position] },
+          rebaseCfcLabelView(cfcLabelView, position),
+        );
+      }
+      if (!isObjectOrArray(stored) || stored instanceof FabricPrimitive) {
+        return stored as FabricValue;
+      }
+      if (stored instanceof FabricInstance) {
+        // A view over an instance reports no own keys, so what a copy of one
+        // holds is an empty record; the marker above the view construction in
+        // `query-result-proxy.ts` says what closes this.
+        return Object.freeze({});
+      }
+      const member = (key: string, value: unknown): FabricValue => {
+        stack.push(key);
+        position.push(key);
+        try {
+          return walk(value, document, position, cfcLabelView);
+        } finally {
+          position.pop();
+          stack.pop();
+        }
+      };
+      // The container is an ancestor of everything below it for as long as
+      // the walk is inside it, and nothing else: a value reached again on
+      // another branch is shared, and is read out again there.
+      const here = addressKey({
+        ...document,
+        path: [...document.path, ...position],
+      });
+      entered.set(here, stack.length);
+      try {
+        if (Array.isArray(stored)) {
+          return Object.freeze(
+            stored.map((element, index) => member(String(index), element)),
+          );
+        }
+        return Object.freeze(Object.fromEntries(
+          Object.entries(stored).map((
+            [key, value],
+          ) => [key, member(key, value)]),
+        ));
+      } finally {
+        entered.delete(here);
+      }
+    };
+
+    return walk(view.readDocument(), view.link, [], view.cfcLabelView);
+  });
 }
 
 /**

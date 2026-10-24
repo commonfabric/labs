@@ -9,6 +9,7 @@
 import {
   type AddIntegrity,
   assert,
+  type Cell,
   pattern,
   TESTS,
   Writable,
@@ -46,7 +47,7 @@ const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
 const sendGesture = { surface: CHAT_SEND_SURFACE, action: CHAT_SEND_ACTION };
 
 const statusOf = (
-  requests: Writable<Record<string, ChatRequestOutcome>>,
+  requests: Cell<Record<string, ChatRequestOutcome>>,
   id: string,
 ): string => requests.get()?.[id]?.status ?? "none";
 

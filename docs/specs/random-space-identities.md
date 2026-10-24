@@ -88,12 +88,12 @@ costs one access-control document and is reachable by nobody.
 
 ## Recording a created space
 
-A DID is recorded by whatever refers to it, beside the reference. Nothing
-records a newly created space in a shared directory, there is no per-user
-name-to-DID map, and no provider keeps a table of names.
+A DID is recorded by whatever refers to it, beside the reference. Space
+creation itself records no DID in a shared directory or a per-user name-to-DID
+map, and no provider keeps a table of display names.
 
-Three things refer to a space created under this specification, and each
-records its own DID:
+References to a space created under this specification record its DID beside
+the reference:
 
 - **A pattern's `PatternFactory.inSpace(name)` target.** The space that calls
   `inSpace` holds an allocation record for that name. Resolution reads the
@@ -134,8 +134,17 @@ records its own DID:
   is not where another deployment keeps its spaces. A runtime whose deployment
   publishes no memory URL opens Memory on the entry's origin, as before.
 
-The allocation record is what makes repeated resolution converge. A handler that
-runs more than once for one logical event reads the record its first run wrote
+- **A host's calendar meeting association.** The
+  [meeting-room allocation boundary](../features/meeting-room-allocation.md)
+  retains a canonical space DID per portable occurrence signature. It creates
+  candidates through ordinary space creation and conditionally records one
+  before a meeting daemon publishes panels or sends invitations. A losing or
+  unrecorded candidate is abandoned. This application reference does not change
+  the creation operation or retain its private key.
+
+For `PatternFactory.inSpace`, the allocation record makes repeated resolution
+converge. A handler that runs more than once for one logical event reads the
+record its first run wrote
 and reaches the same space. Concurrent resolvers contend on one document in one
 logical writable history, and the resolver that loses adopts the recorded DID
 and abandons the space it created.
@@ -164,8 +173,8 @@ Before another process accepts writes, the provider must preserve the durable
 history and fence the previous writer. Process identity is neither space
 identity nor part of any routing decision this specification makes.
 
-Every allocation record lives in a space that reaches its durable history
-through that same route. No additional provider-owned storage is required for
+Each `inSpace` allocation record lives in a space that reaches its durable
+history through that same route. No additional provider-owned storage is required for
 space creation.
 
 ## Deployment mappings

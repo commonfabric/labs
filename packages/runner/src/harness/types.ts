@@ -97,6 +97,14 @@ export interface CompiledModuleArtifact {
 
   /** Compiler-issued policy manifests, transported separately from JS exports. */
   policyManifests?: readonly unknown[];
+
+  /**
+   * The modules `js` loads at run time: the specifiers its `require()` calls
+   * name, as the record compiler's scan of `js` lists them, in that order.
+   * Given, the record graph takes them from here and `js` is not parsed for
+   * them; absent, the record compiler scans `js`.
+   */
+  importSpecs?: readonly string[];
 }
 
 /**

@@ -48,8 +48,13 @@ const view = recommendation.pending
   labeled data into the text puts that label on the request. Pass the cell
   under `inputs` instead.
 - `inputs` are cells, keyed by the names the run sees them under. Each
-  reaches the run as a reference, and the run reads through it with the
-  tools it has; nothing here is copied into the request.
+  reaches the run as a handle; nothing here is copied into the request. The
+  run looks at a handle with `describe_handle`, which reports its shape and
+  never its value, and reads one `describe_handle` has described with
+  `read_value`. A read is measured against the run's read ceiling before it is
+  released, and the label of what was read joins the run's context, so
+  everything the model writes afterwards carries it. Every run has those two
+  tools, whatever `tools` selects.
 - `resultSchema` is the schema the run's structured result is validated
   against before it is written.
 - `maxConfidentiality` (optional) bounds what the run may observe. Declared,
@@ -60,7 +65,8 @@ const view = recommendation.pending
   or not this is declared (see below).
 - `tools` (optional) names the tools the run may use, from the list the
   deployment publishes (`AGENT_TOOL_NAMES` in
-  `packages/runner/src/builtins/agent-schemas.ts`). A name the user's
+  `packages/runner/src/builtins/agent-schemas.ts`); `describe_handle` and
+  `read_value` come with every run and need not be named. A name the user's
   registered runner does not offer fails the request with `INVALID_INPUT`
   before it is staged; with no runner registered the request queues.
 
@@ -77,11 +83,19 @@ const view = recommendation.pending
   the graph.
 - `INVALID_RESULT` means the model loop completed without a structured result
   satisfying `resultSchema`: the result was missing, malformed JSON, or
-  schema-invalid. Model and tool failures use `PROVIDER_FAILURE`.
+  schema-invalid. The model returns its result through `submit_result`, which
+  must be the only tool call in its model turn; a turn that pairs it with
+  another call is refused and the run continues. Model and tool failures use
+  `PROVIDER_FAILURE`.
 - `run` is a link to the run's `AgentRun` record: its `state`, `stateSince`,
   and, once finished, `outcome`, `usage`, `modelTurns`, and `toolCalls`, for
-  a pattern that wants to show progress or cost. `host` is the origin of the
-  toolshed serving the record's space, for a reader on another host.
+  a pattern that wants to show progress or cost. Optional `modelResponses`
+  records the model ID returned for each direct model response, with `null`
+  when the provider omitted it; `actualModels` lists the distinct observed IDs.
+  `modelAttributionComplete` is true only when every direct model turn has an
+  observed ID. Missing attribution fields mean unknown, including on older
+  records. `host` is the origin of the toolshed serving the record's space, for
+  a reader on another host.
 - `requestHash` identifies the request. The same request in the same user
   instance yields the same record, so a re-run of the node over unchanged
   inputs is a memo hit and creates nothing; a pattern that wants a fresh run

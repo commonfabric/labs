@@ -86,7 +86,6 @@ export const NO_CANDIDATES = new Map<string, string>([
   // docs/plans/cli-completion-coverage.md builds the candidates and is what
   // will route them here.
   ["piece call:tail", "the callable's own vocabulary"],
-  ["call:tail", "the same, under the superseded spelling"],
   ["exec:tail", "the same"],
 ]);
 
@@ -110,6 +109,14 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   [
     "profile repair-root:expect",
     "the receipt from the operator-reviewed inspection",
+  ],
+  [
+    "piece follow:expect",
+    "the pattern the caller inspected the piece running",
+  ],
+  [
+    "piece follow:expect-revision",
+    "the revision head the caller inspected, or none",
   ],
   ["piece new:request-key", "an opaque caller retry key"],
   [
@@ -233,8 +240,6 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   // Item 6 of docs/plans/cli-completion-coverage.md is what builds it.
   ["piece call:select", "the verb's own result shape"],
   ["piece call:schema", "the same"],
-  ["call:select", "the same, under the superseded spelling"],
-  ["call:schema", "the same"],
   ["exec:select", "the same"],
   ["exec:schema", "the same"],
   // `wish` projects what its query resolved to, and resolving a wish commits a

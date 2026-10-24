@@ -1,6 +1,9 @@
 import { isInternalMemberName } from "@commonfabric/schema-generator/property-name";
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
-import { namesValueBinding } from "@commonfabric/schema-generator/value-annotation";
+import {
+  namesValueBinding,
+  spellSameValue,
+} from "@commonfabric/schema-generator/value-annotation";
 import {
   carriesWriterPolicy,
   holdsWriterPolicy,
@@ -55,6 +58,7 @@ import {
   TransformationContext,
   type TypeRegistry,
 } from "../core/mod.ts";
+import { printedArrayElementNode } from "../closures/strategies/lift-applied-strategy.ts";
 import { analyzeFunctionCapabilities } from "../policy/mod.ts";
 import { unwrapExpression } from "../utils/expression.ts";
 import {
@@ -67,7 +71,6 @@ import {
   containsAnyOrUnknownTypeNode,
   getAuthoredCellValueTypeNode,
   isCellLikeTypeNode,
-  overlayContractCapabilities,
   preservedWrapperFor,
   printTypeNode,
   validateShrinkCoverage,
@@ -305,6 +308,27 @@ function findCapabilitySummaryForParameter(
   return summary.params.find((param) => param.name === paramName);
 }
 
+/**
+ * `node`, a verb's authored event, as the node its schema is generated from:
+ * a node of its own around it, which carries the handler body's capability
+ * summary (`SchemaHint.contractCapabilities`), so that only this reading of
+ * the node is narrowed; `node` itself where there is no state to record that
+ * in.
+ */
+function contractReading(
+  node: ts.TypeNode,
+  type: ts.Type | undefined,
+  summary: CapabilityParamSummary,
+  factory: ts.NodeFactory,
+  context: TransformationContext | undefined,
+): ts.TypeNode {
+  if (!context) return node;
+  const reading = factory.createParenthesizedType(node);
+  if (type) context.state.typeRegistry.set(reading, type);
+  context.state.recordSchemaHint(reading, { contractCapabilities: summary });
+  return reading;
+}
+
 function applyCapabilitySummaryToArgument(
   fn: ts.ArrowFunction | ts.FunctionExpression,
   argumentNode: ts.TypeNode | undefined,
@@ -334,21 +358,18 @@ function applyCapabilitySummaryToArgument(
     return argumentNode;
   }
   if (mode === "contract") {
-    // The contract half of docs/history/plans/verb-input-contract.md: the authored
-    // event serves verbatim in structure, with capabilities overlaid from
-    // the body's usage and unobserved cell positions made opaque. The
+    // The contract half of docs/history/plans/verb-input-contract.md: the
+    // authored event's schema is generated as written, and its cells take
+    // the capabilities the body's usage earns (`contractReading()`). The
     // body's observed paths still validate against the authored type — a
     // read of an unknown-typed property is an authoring error under either
     // mode.
-    const overlaid = overlayContractCapabilities(
+    const reading = contractReading(
       argumentNode,
       argumentType,
       paramSummary,
-      checker,
       factory,
-      sourceFile,
-      context?.state.typeRegistry,
-      context?.state,
+      context,
     );
     if (context) {
       validateShrinkCoverage(
@@ -360,13 +381,13 @@ function applyCapabilitySummaryToArgument(
           ...paramSummary.writePaths,
           ...paramSummary.fullShapePaths ?? [],
         ],
-        overlaid,
+        reading,
         context,
         fnNode ?? fn,
         checker,
       );
     }
-    return overlaid;
+    return reading;
   }
   let innerTypeNode = getAuthoredCellValueTypeNode(argumentNode, checker);
   if (!innerTypeNode && argumentType && isCellLikeType(argumentType, checker)) {
@@ -447,15 +468,12 @@ function applyCapabilitySummaryToParameter(
   }
   if (mode === "contract") {
     // See the matching branch in applyCapabilitySummaryToArgument.
-    const overlaid = overlayContractCapabilities(
+    const reading = contractReading(
       parameterNode,
       parameterType,
       paramSummary,
-      checker,
       factory,
-      sourceFile,
-      context?.state.typeRegistry,
-      context?.state,
+      context,
     );
     if (context) {
       validateShrinkCoverage(
@@ -467,13 +485,13 @@ function applyCapabilitySummaryToParameter(
           ...paramSummary.writePaths,
           ...paramSummary.fullShapePaths ?? [],
         ],
-        overlaid,
+        reading,
         context,
         fnNode ?? fn,
         checker,
       );
     }
-    return overlaid;
+    return reading;
   }
 
   const innerTypeNode = getAuthoredCellValueTypeNode(parameterNode, checker);
@@ -712,6 +730,7 @@ function collectFunctionSchemaTypeNodes(
     objectLiteralHasPreservedValueTypeNodes(
       unwrappedReturnExpr,
       checker,
+      sourceFile,
       context.state,
     )
   ) {
@@ -2668,6 +2687,7 @@ function buildObjectLiteralReturnTypeNode(
     const explicit = getExplicitValueTypeNode(
       valueExpr,
       checker,
+      sourceFile,
       typeRegistry,
       context?.state,
     );
@@ -2878,19 +2898,41 @@ function freshResultTypeNode(
   ) ?? "whole";
 }
 
-/** The authored type of a returned cell expression or identifier declaration. */
+/**
+ * The authored type of a value a callback returns as a member, inside any
+ * parentheses: a constructed cell's, an identifier's declaration's, an array
+ * literal's as the array of its elements' where every element has the same
+ * one, or the binding a lift applied there returns, at that binding's
+ * annotation. A node printed from the value's type spells a `typeof` binding
+ * as the structural type of the value it names, which no reader can tell the
+ * binding from; the authored node keeps it.
+ */
 function getExplicitValueTypeNode(
   valueExpr: ts.Expression,
   checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
   state?: CrossStageState,
 ): PreservedBindingType | undefined {
   const cellType = getConstructedCellTypeNode(valueExpr, checker, typeRegistry);
   if (cellType) return { typeNode: cellType };
-  if (!ts.isIdentifier(valueExpr)) {
+  const value = unwrapExpression(valueExpr);
+  if (ts.isArrayLiteralExpression(value)) {
+    return explicitArrayLiteralTypeNode(
+      value,
+      checker,
+      sourceFile,
+      typeRegistry,
+      state,
+    );
+  }
+  if (ts.isCallExpression(value)) {
+    return explicitLiftResultTypeNode(value, state);
+  }
+  if (!ts.isIdentifier(value)) {
     return undefined;
   }
-  const symbol = checker.getSymbolAtLocation(valueExpr);
+  const symbol = checker.getSymbolAtLocation(value);
   let declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
   if (declaration && ts.isShorthandPropertyAssignment(declaration)) {
     const shorthandValueSymbol = checker.getShorthandAssignmentValueSymbol(
@@ -2913,9 +2955,79 @@ function getExplicitValueTypeNode(
   return undefined;
 }
 
+/**
+ * The array of its elements' authored type, for an array literal whose every
+ * element has one spelling one value (`spellSameValue()`) and that spreads
+ * nothing; the first element's node stands for them. The array's own type is
+ * registered by the caller, so the node reads the array at its type and each
+ * element at the annotation its binding was declared with.
+ */
+function explicitArrayLiteralTypeNode(
+  literal: ts.ArrayLiteralExpression,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
+): PreservedBindingType | undefined {
+  let element: ts.TypeNode | undefined;
+  for (const written of literal.elements) {
+    if (ts.isSpreadElement(written) || ts.isOmittedExpression(written)) {
+      return undefined;
+    }
+    const explicit = getExplicitValueTypeNode(
+      written,
+      checker,
+      sourceFile,
+      typeRegistry,
+      state,
+    );
+    if (
+      !explicit ||
+      (element &&
+        !spellSameValue(
+          explicit.typeNode,
+          element,
+          checker,
+          (node) =>
+            getTypeFromTypeNodeWithFallback(node, checker, typeRegistry),
+        ))
+    ) {
+      return undefined;
+    }
+    element ??= explicit.typeNode;
+  }
+  return element && { typeNode: ts.factory.createArrayTypeNode(element) };
+}
+
+/**
+ * The authored type of what a lift applied as a member computes: the
+ * annotation its result print is read at (`SchemaHint.spelledBy`, recorded
+ * when the lift was lowered from the binding its callback returns), or the
+ * array of the annotation its print's element is read at. The lift's own
+ * result schema reads the print at that annotation; the member, printed afresh
+ * from the lift's type, would not, and the print spells the binding as the
+ * structural type of the value it names.
+ */
+function explicitLiftResultTypeNode(
+  call: ts.CallExpression,
+  state: CrossStageState | undefined,
+): PreservedBindingType | undefined {
+  const inner = getLiftAppliedInnerCall(call);
+  const printed = inner?.typeArguments?.[1];
+  if (!printed || !state) return undefined;
+  const whole = state.lookupSchemaHint(printed)?.spelledBy;
+  if (whole) return { typeNode: whole };
+  const element = printedArrayElementNode(printed);
+  const spelledBy = element && state.lookupSchemaHint(element)?.spelledBy;
+  return spelledBy
+    ? { typeNode: ts.factory.createArrayTypeNode(spelledBy) }
+    : undefined;
+}
+
 function objectLiteralHasPreservedValueTypeNodes(
   expr: ts.ObjectLiteralExpression,
   checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
   state: CrossStageState,
 ): boolean {
   for (const property of expr.properties) {
@@ -2932,6 +3044,7 @@ function objectLiteralHasPreservedValueTypeNodes(
     const explicit = getExplicitValueTypeNode(
       valueExpr,
       checker,
+      sourceFile,
       undefined,
       state,
     );

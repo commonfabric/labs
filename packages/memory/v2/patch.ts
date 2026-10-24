@@ -5,6 +5,7 @@ import {
   cloneIfNecessary,
   deepFreeze,
   hashStringOf,
+  missingContainerIsArray,
   type MutableFabricContainerValueLayer,
   tracePath,
   valueEqual,
@@ -221,12 +222,13 @@ const validateAddSpine = (root: FabricValue, path: string[]): void => {
         `path is not traversable at ${encodePointer(path)}`,
       );
     }
-    // Past a missing object key everything is freshly created, and a
-    // freshly-created array is empty, so an intermediate array index (or the
-    // `-` append marker) can never resolve to an existing element to traverse
-    // into -- reject it rather than fabricate one. Plain object keys are fine;
-    // they get created on the way down.
-    if (isArraySegment(segment) || segment === "-") {
+    // Past a missing object key everything is freshly created, and the
+    // container created to hold this segment is shaped for it. Where that is
+    // an array it is empty, so the segment -- an index, or the `-` append
+    // marker -- can never resolve to an existing element to traverse into:
+    // reject it rather than fabricate one. Any other segment is a key of the
+    // plain object created for it, digits past the array index range included.
+    if (missingContainerIsArray(segment)) {
       throw new PatchApplyError(`missing path ${encodePointer(path)}`);
     }
   }

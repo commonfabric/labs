@@ -10,6 +10,7 @@ import {
   readBindingAnnotation,
   readDeclaringSymbol,
   readValueSymbol,
+  spellSameValue,
 } from "../../src/typescript/value-annotation.ts";
 import { createTestProgramFromFiles } from "../utils.ts";
 
@@ -19,13 +20,19 @@ const ENTRY = `
   type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
   type Writes<T, W> = Cfc<T, { writeAuthorizedBy: W }>;
   export const rules = {};
+  export const other = {};
   export function save(): void {}
   type Labelled = Confidential<string, [PolicyOf<typeof rules>]>;
+  type OtherLabelled = Confidential<string, [PolicyOf<typeof other>]>;
   type Shape = { name: string };
   type Written = Writes<string, typeof save>;
   interface Input {
     labelled: Confidential<string, [PolicyOf<typeof rules>]>;
+    labelledAgain: Confidential<string, [PolicyOf<typeof rules>]>;
+    otherLabelled: Confidential<string, [PolicyOf<typeof other>]>;
     aliased: Labelled;
+    aliasedAgain: Labelled;
+    otherAliased: OtherLabelled;
     written: Writes<string, typeof save>;
     aliasedWriter: Written;
     both: Writes<Confidential<string, [PolicyOf<typeof rules>]>, typeof save>;
@@ -282,6 +289,98 @@ describe("value-annotation", () => {
 
       expect(readBindingAnnotation(undefined, memberType("plain"), checker))
         .toBeUndefined();
+    });
+  });
+
+  describe("spellSameValue", () => {
+    // `rules` and `other` are both `{}`, so every labelled member here denotes
+    // one type; only the bindings the annotations name tell them apart.
+
+    const annotation = (
+      members: Map<string, ts.PropertySignature>,
+      name: string,
+    ) => members.get(name)!.type!;
+
+    it("returns `true` for one node", async () => {
+      const { checker, members } = await program();
+      const labelled = annotation(members, "labelled");
+
+      expect(spellSameValue(labelled, labelled, checker)).toBe(true);
+    });
+
+    it("returns `true` for two annotations written alike, naming one binding", async () => {
+      const { checker, members } = await program();
+
+      expect(spellSameValue(
+        annotation(members, "labelled"),
+        annotation(members, "labelledAgain"),
+        checker,
+      )).toBe(true);
+    });
+
+    it("returns `false` for two annotations denoting one type that name different bindings", async () => {
+      const { checker, members } = await program();
+
+      expect(spellSameValue(
+        annotation(members, "labelled"),
+        annotation(members, "otherLabelled"),
+        checker,
+      )).toBe(false);
+    });
+
+    it("reads the bindings an alias names", async () => {
+      const { checker, members } = await program();
+
+      expect(spellSameValue(
+        annotation(members, "aliased"),
+        annotation(members, "aliasedAgain"),
+        checker,
+      )).toBe(true);
+      expect(spellSameValue(
+        annotation(members, "aliased"),
+        annotation(members, "otherAliased"),
+        checker,
+      )).toBe(false);
+    });
+
+    it("returns `false` for a type written through an alias beside the same type written out", async () => {
+      // The two denote a type apart (`denotesSameType`), so they are not held
+      // to spell one value, whatever bindings they name.
+      const { checker, members } = await program();
+
+      expect(spellSameValue(
+        annotation(members, "labelled"),
+        annotation(members, "aliased"),
+        checker,
+      )).toBe(false);
+    });
+
+    it("returns `false` for annotations denoting different types", async () => {
+      const { checker, members } = await program();
+
+      expect(spellSameValue(
+        annotation(members, "labelled"),
+        annotation(members, "plain"),
+        checker,
+      )).toBe(false);
+    });
+
+    it("returns `false` where a binding does not resolve, given one type for both", async () => {
+      // A `typeof` built without positions names nothing the checker can find,
+      // written alone or inside a built reference.
+      const { checker, members, memberType } = await program();
+      const query = () =>
+        ts.factory.createTypeQueryNode(ts.factory.createIdentifier("rules"));
+      const labelled = annotation(members, "labelled");
+      const type = () => memberType("labelled");
+
+      expect(spellSameValue(labelled, query(), checker, type)).toBe(false);
+      expect(spellSameValue(
+        labelled,
+        ts.factory.createTypeReferenceNode("PolicyOf", [query()]),
+        checker,
+        type,
+      )).toBe(false);
     });
   });
 });

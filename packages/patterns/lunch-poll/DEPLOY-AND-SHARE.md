@@ -87,9 +87,13 @@ sqlite3 <store>/engine-v3/engine-v3/<did>.sqlite "VACUUM INTO '<destination>'"
 
 ### `rapids` — the fast-moving instance
 
-`rapids.saga-castor.ts.net` redeploys on every push to `main`, so it runs close
-to tip and can move under you mid-session. Iterate here, in **a space of your
-own**: a scratch space costs nothing and leaves the shared ones alone.
+`rapids.saga-castor.ts.net` deploys coordinated release candidates selected from
+verified green `main` revisions across its components. Infra dispatches each
+candidate through the Labs receiver; see
+[coordinated Rapids releases](../../../docs/development/deploying.md#coordinated-rapids-releases).
+Frequent releases can change the host build mid-session. Iterate here, in **a
+space of your own**: a scratch space costs nothing and leaves the social spaces
+alone.
 
 The `team-lunch` space on this host is unusable as it stands. Its stored root
 pattern does not compile against the current API, so every command that loads

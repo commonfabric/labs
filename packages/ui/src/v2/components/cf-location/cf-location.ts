@@ -1,19 +1,13 @@
 import type { Schema } from "@commonfabric/api/schema";
 import { LocationDataSchema } from "@commonfabric/runner/component-read-contract";
 import { type CellHandle } from "@commonfabric/runtime-client";
-import { consume } from "@lit/context";
 import { css, html } from "lit";
 import { property, state } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createCellController } from "../../core/cell-controller.ts";
-import {
-  applyThemeToElement,
-  type CFTheme,
-  cfThemeContext,
-  defaultTheme,
-} from "../theme-context.ts";
+import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 
 // Schema for LocationData
 
@@ -234,10 +228,12 @@ export class CFLocation extends BaseElement {
     `,
   ];
 
-  /** The theme, consumed from the provider. */
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   /** The location data, or a cell binding for it. */
   @property({ attribute: false })
@@ -279,7 +275,6 @@ export class CFLocation extends BaseElement {
   override firstUpdated(changedProperties: Map<string, unknown>) {
     super.firstUpdated(changedProperties);
     this._cellController.bind(this.location, LocationDataSchema);
-    this._updateThemeProperties();
   }
 
   override willUpdate(changedProperties: Map<string, unknown>) {
@@ -291,18 +286,13 @@ export class CFLocation extends BaseElement {
 
   override updated(changedProperties: Map<string, unknown>) {
     if (changedProperties.has("theme")) {
-      this._updateThemeProperties();
+      applyThemeToElement(this, this.theme);
     }
   }
 
   override disconnectedCallback() {
     this._cleanup();
     super.disconnectedCallback();
-  }
-
-  private _updateThemeProperties() {
-    const currentTheme = this.theme || defaultTheme;
-    applyThemeToElement(this, currentTheme);
   }
 
   private _cleanup() {

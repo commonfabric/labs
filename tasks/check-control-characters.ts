@@ -68,6 +68,11 @@ const EXEMPT_PATHS: readonly string[] = [
   "packages/content-hash/test/fixture-frank.txt",
   // A drawing, stored as tab-separated data.
   "packages/memory/memory.tldr",
+  // Makefiles from a real repository, which the file viewer's tests read.
+  // Make starts a recipe line with a tab, and no escape stands in for one.
+  "packages/cli/test/fixtures/view-language/make-infra/after.mk",
+  "packages/cli/test/fixtures/view-language/make-infra/before.mk",
+  "packages/cli/test/fixtures/view-language/make-infra/incomplete.mk",
 ];
 
 /**

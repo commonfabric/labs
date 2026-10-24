@@ -13,13 +13,14 @@ FROM denoland/deno:2.9.4 AS builder
 WORKDIR /build/labs
 COPY . .
 
-RUN deno install --frozen
+RUN deno install --frozen \
+    && deno install --entrypoint --frozen packages/toolshed/index.ts
 
 # Docker layers make Deno.rename a cross-device move; patch build-binaries to cp.
 RUN sed -i 's|await Deno\.rename(shellOut, toolshedShellFrontend);|await new Deno.Command("cp", { args: ["-r", shellOut, toolshedShellFrontend] }).output(); await Deno.remove(shellOut, { recursive: true });|g' tasks/build-binaries.ts
 
 ARG COMMIT_SHA
-RUN COMMIT_SHA=$COMMIT_SHA deno task build-binaries
+RUN CF_DENO_DEPENDENCIES_INSTALLED=1 COMMIT_SHA=$COMMIT_SHA deno task build-binaries toolshed
 
 FROM denoland/deno:2.9.4
 

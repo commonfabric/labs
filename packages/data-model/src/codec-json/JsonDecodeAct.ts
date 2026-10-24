@@ -115,13 +115,14 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
 
         const inner = rawState as Record<string, JsonCodecValue>;
         const result: Record<string, FabricValue> = {};
-        for (const [key, val] of Object.entries(inner)) {
+        for (const key in inner) {
+          if (!Object.hasOwn(inner, key)) continue;
           // Same reservation as the plain-object arm below: the assignment
           // cannot rebuild these names.
           if (isUnsafeObjectKey(key)) {
             return this.reportReservedKey(key, inner);
           }
-          result[key] = this.decodeValue(val);
+          result[key] = this.decodeValue(inner[key]!);
         }
         return this.freezeUnlessMutable(result);
       }
@@ -231,7 +232,11 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
     data: Record<string, JsonCodecValue>,
   ): FabricValue {
     const result: Record<string, FabricValue> = {};
-    for (const [key, val] of Object.entries(data)) {
+    // `for...in` reads the keys off the object's own enumeration cache, where
+    // `Object.entries()` would allocate a pair per key of every object
+    // decoded.
+    for (const key in data) {
+      if (!Object.hasOwn(data, key)) continue;
       if (key.startsWith("/")) {
         return this.reportMalformed(
           key.slice(1),
@@ -255,7 +260,7 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
       if (isUnsafeObjectKey(key)) {
         return this.reportReservedKey(key, data);
       }
-      result[key] = this.decodeValue(val);
+      result[key] = this.decodeValue(data[key]!);
     }
     return this.freezeUnlessMutable(result);
   }

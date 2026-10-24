@@ -34,12 +34,36 @@ export const AGENT_TOOL_NAMES = [
   "loom_profile",
   "describe_handle",
   "run_pattern",
+  "call_verb",
+  "read_value",
   "web_fetch",
   "research",
 ] as const;
 
 /** One of {@link AGENT_TOOL_NAMES}. */
 export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
+
+/**
+ * The tools a run reads its inputs through. An input reaches the run as a
+ * handle, and a handle is looked at with `describe_handle` and read with
+ * `read_value`, so every run carries both whatever its request's `tools`
+ * selects: a request that grants a cell and withholds the means of reading
+ * it has granted nothing.
+ */
+export const AGENT_INPUT_ACCESS_TOOLS = [
+  "describe_handle",
+  "read_value",
+] as const satisfies readonly AgentToolName[];
+
+/** `tools` with {@link AGENT_INPUT_ACCESS_TOOLS} added after it, once each. */
+export function withAgentInputAccessTools(
+  tools: readonly string[],
+): string[] {
+  return [
+    ...tools,
+    ...AGENT_INPUT_ACCESS_TOOLS.filter((tool) => !tools.includes(tool)),
+  ];
+}
 
 /** The model-facing name of one input cell. */
 export const AGENT_INPUT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
@@ -190,6 +214,19 @@ export const AgentRunRecordSchema = internSchema(
       startedAt: { type: "string" },
       finishedAt: { type: "string" },
       modelTurns: { type: "number" },
+      actualModels: { type: "array", items: { type: "string" } },
+      modelAttributionComplete: { type: "boolean" },
+      modelResponses: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            modelTurn: { type: "number" },
+            model: { type: ["string", "null"] },
+          },
+          required: ["modelTurn", "model"],
+        },
+      },
       toolCalls: { type: "number" },
       usage: { type: "object", additionalProperties: true },
       usageCoverage: {

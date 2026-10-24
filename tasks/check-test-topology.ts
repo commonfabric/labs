@@ -119,6 +119,21 @@ const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
     reason: "a project the harness runs to prove a test can press trusted keys",
   },
   {
+    path: "packages/deno-web-test/test/late-registration-project/late.test.ts",
+    reason: "a project the harness runs to prove a run with a test it never " +
+      "ran claims nothing",
+  },
+  {
+    path: "packages/deno-web-test/test/load-error-project/loads.test.ts",
+    reason: "a project the harness runs to prove a run with a file that " +
+      "failed to load claims nothing",
+  },
+  {
+    path: "packages/deno-web-test/test/load-error-project/throws.test.ts",
+    reason: "a project the harness runs to prove a run with a file that " +
+      "failed to load claims nothing",
+  },
+  {
     path: "packages/deno-web-test/test/project-with-config/ed25519.test.ts",
     reason: "a project the harness runs to prove it reads a project config",
   },
@@ -490,6 +505,9 @@ export function checkStore(
     }
   }
   for (const suite of suites) {
+    // A gate's verdict is recorded by the job this check runs in, after it
+    // reads the lanes' records, so no gate is among them.
+    if (suite.judges !== undefined) continue;
     // A leaf declared unavailable leaves its unit expected to record,
     // because every other identity in that unit still runs.
     const unavailable = unavailableUnits(suite);

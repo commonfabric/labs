@@ -11,7 +11,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { deepFreeze, isValidDeepFrozenFabricValue } from "@";
+import { cloneIfNecessary, deepFreeze, isValidDeepFrozenFabricValue } from "@";
 import {
   CODEC,
   NULL_LIVE_ENVIRONMENT,
@@ -74,6 +74,24 @@ describe("UnknownValue", () => {
         expect(e).toBeInstanceOf(ProblematicStateError);
         expect((e as ProblematicStateError).wireTypeTag).toBe("42");
       }
+    });
+  });
+
+  describe("deepClone()", () => {
+    it("isolates mutable state and shares frozen children", () => {
+      const child = deepFreeze({ n: 1 });
+      const state = { child, n: 2 };
+      const value = new UnknownValue("Test@1", state);
+      const frozen = cloneIfNecessary(value);
+      expect(frozen).not.toBe(value);
+      expect(frozen.state).toEqual(state);
+      expect((frozen.state as typeof state).child).toBe(child);
+      state.n = 3;
+      expect((frozen.state as typeof state).n).toBe(2);
+      expect(isValidDeepFrozenFabricValue(frozen)).toBe(true);
+      const mutable = cloneIfNecessary(frozen, { frozen: false });
+      expect((mutable.state as typeof state).child).not.toBe(child);
+      expect(Object.isFrozen(mutable.state)).toBe(false);
     });
   });
 

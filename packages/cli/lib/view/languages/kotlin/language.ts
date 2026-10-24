@@ -28,6 +28,7 @@ export const kotlinLanguage: Language = {
     filenamePatterns: [],
     aliases: ["kt"],
     interpreters: ["kotlin"],
+    signatures: [],
     sharedExtensions: [],
   },
 

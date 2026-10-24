@@ -33,30 +33,28 @@ export const RUN_PATTERN_INPUT_SCHEMA = {
   properties: {
     sourceText: {
       type: "string",
-      description:
-        "Pattern source (TypeScript/TSX). At most 256 KiB. Return a durable result object directly. A whole-result derived wrapper is a known smell, but not a deterministic failure: after the run the harness checks the actual pattern pointer and refuses any piece materialized under a session-only identity.",
+      description: "Pattern source (TypeScript/TSX), at most 256 KiB.",
     },
     patternId: {
       type: "string",
       description:
-        "Id of a pattern published to the index, as search_patterns reports it. Exactly one of sourceText and patternId is given; the published program is fetched and compiled without passing through this conversation.",
+        "A published pattern's id, as search_patterns reports it. Give exactly one of sourceText and patternId.",
     },
     description: {
       type: "string",
       description:
-        'One line saying what the pattern you are running does, e.g. "Totals an invoice\'s line items and applies a discount". When pattern-index publication is enabled, source you wrote and ran successfully with a non-empty description and a durable content-addressed pattern identity is queued for the index; the tool result does not confirm publication. Fill this in for later evaluation and discovery. No contribution is queued when no index is configured, publication is disabled, the description is empty, or the pattern has no durable identity.',
+        "One line on what the pattern does; source that runs successfully is queued for the pattern index only when this is filled in.",
     },
     hashtags: {
       type: "array",
       items: { type: "string" },
-      description:
-        'Tags the recorded pattern will be found under if it earns discoverability, e.g. ["invoice", "arithmetic"]. Use the words someone searching for this capability would type.',
+      description: "Words someone searching for this capability would type.",
     },
     inputs: {
       type: "object",
       additionalProperties: true,
       description:
-        'Input values for the pattern. A string value that is a whole-string LLM-friendly link (e.g. "/of:fid1:abc.../path") is passed as a live cell reference; everything else passes through as plain JSON.',
+        "Named arguments: a string that is wholly a handle token or LLM-friendly link passes as a live cell reference, anything else as plain JSON.",
     },
     resultSchema: {
       anyOf: [
@@ -64,7 +62,7 @@ export const RUN_PATTERN_INPUT_SCHEMA = {
         { type: "object", additionalProperties: true },
       ],
       description:
-        'JSON Schema for the result value. Without it, value is omitted; resultRef and host-computed pending/hasError flags are returned when the release fit admits the flags. A refused host-only status fit silently omits the flags and keeps resultRef. Pass this schema to read computed values such as counts or rows. A value is returned only for the fields the schema models: an inert one (a number, a boolean, an enum or const string) comes back as itself; anything else is withheld as text and comes back as a reference token addressing that position, which describe_handle can inspect and a later run_pattern can wire by reference. Example: {"type":"object","properties":{"total":{"type":"number"}},"required":["total"]}. The framework\'s own result keys ($NAME, $UI and the other rendering variants) need not be declared. When the space\'s policy does not admit releasing the requested values to you, value is withheld, valueError says why and which input carried the refused label, and resultRef still names the result: pass it on by reference.',
+        "JSON Schema of the result fields to read back as `value`; without it value is omitted.",
     },
   },
   // Exactly one of `sourceText` and `patternId` is required, which is a

@@ -4,7 +4,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { DATA_URI_MEDIA_TYPE } from "@commonfabric/data-model/codec-data-uri";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
 import "@commonfabric/utils/equal-ignoring-symbols";
@@ -27,6 +26,7 @@ import {
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import { refuseAtCommitBoundary } from "./refused-commit.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
+import { hasInlineCellScheme } from "../src/immutable-cell.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -924,9 +924,7 @@ describe("Cell commit callbacks", () => {
         const resolvedLink = resolved.getAsNormalizedFullLink();
 
         expect(
-          resolvedLink.id.startsWith(
-            `data:${DATA_URI_MEDIA_TYPE},`,
-          ),
+          hasInlineCellScheme(resolvedLink.id),
         ).toBe(true);
         expect(resolvedLink.path).toEqual([]);
         expect(resolved.get()).toEqualIgnoringSymbols({ name: "first" });
@@ -1068,9 +1066,7 @@ describe("Cell commit callbacks", () => {
 
         const resolved = first.resolveAsCell();
         expect(
-          resolved.getAsNormalizedFullLink().id.startsWith(
-            `data:${DATA_URI_MEDIA_TYPE},`,
-          ),
+          hasInlineCellScheme(resolved.getAsNormalizedFullLink().id),
         ).toBe(true);
         expect(resolved.getAsNormalizedFullLink().path).toEqual([]);
         expect(resolved.get()).toEqualIgnoringSymbols({ foo: 1 });

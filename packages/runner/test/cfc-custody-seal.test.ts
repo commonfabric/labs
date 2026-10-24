@@ -1076,16 +1076,23 @@ describe("cfc-custody-seal", () => {
               ),
           );
         const runtime = fixture.runtimes.get(mallory)!;
-        // A record carrying no label cannot be linked into the cell the seal
-        // labeled.
+        // A record carrying no label can be linked into the cell the seal
+        // labeled: the pointer carries the record's labels no more than the
+        // record does, so a projector reading through it witnesses nothing.
         const unlabeled = runtime.getCell(S, "repeated-entries");
         expect(await attemptAsOtherCode(fixture, mallory, unlabeled, repeat))
           .toBeUndefined();
-        expect(await pointAt(unlabeled)).toContain(
-          "missing link source metadata",
+        expect(await pointAt(unlabeled)).toBeUndefined();
+        const throughUnlabeled = await projectThrough(
+          fixture,
+          carol,
+          binding,
+          "ballot-through-unlabeled",
         );
-        // One labeled for the room's readers can, and its own root, which
-        // the seal did not write, withholds the witness.
+        expect(projectedChoices).toEqual(bobTwice);
+        expect(hasWitnessed(throughUnlabeled)).toBe(false);
+        // One labeled for the room's readers is reached the same way, and
+        // its own root, which the seal did not write, withholds the witness.
         const labeled = runtime.getCell(S, "repeated-entries-labeled");
         expect(
           await attemptAsOtherCode(
@@ -2275,15 +2282,17 @@ describe("cfc-custody-seal", () => {
 
     it("reads a seat cell's attestation and its clauses from the same entries", async () => {
       const cases: [unknown[], RegExp][] = [
-        // An attestation a link carries from the document it points to says
-        // whom that document represents, not whom the seat cell does.
+        // A seat cell with no written name is read from every entry, an
+        // attestation a link carried included, so a private clause on that
+        // entry is the seat's too.
         [[{
           path: [],
           observes: "followRef",
           label: {
             integrity: [{ kind: "represents-principal", subject: carol.did() }],
+            confidentiality: [cfcAtom.user(bob.did())],
           },
-        }], /attests no principal/],
+        }], /the room's readers do not hold/],
         // A private clause on the cell's shape is as much the cell's as one
         // on its value.
         [[{

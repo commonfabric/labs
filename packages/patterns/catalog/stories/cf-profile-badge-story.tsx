@@ -1,25 +1,34 @@
-import { NAME, pattern, UI, type VNode, Writable } from "commonfabric";
+import {
+  FabricBytes,
+  NAME,
+  pattern,
+  UI,
+  type VNode,
+  Writable,
+} from "commonfabric";
 
 import { Controls, SelectControl } from "../ui/controls/index.ts";
 
-// Self-contained avatar image (data-URI SVG) — no network / CSP needed.
-const svgAvatar = (rgb: string, label: string): string =>
-  "data:image/svg+xml," +
-  encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">` +
-      `<rect width="96" height="96" rx="48" fill="${rgb}"/>` +
-      `<text x="48" y="50" font-family="sans-serif" font-size="40" ` +
-      `font-weight="600" fill="white" text-anchor="middle" ` +
-      `dominant-baseline="central">${label}</text></svg>`,
-  );
+// A profile picture is the bytes of a raster image. This one is a 24×24 PNG
+// of solid indigo.
+// deno-fmt-ignore
+const INDIGO_PNG = [
+  137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 24, 0,
+  0, 0, 24, 8, 2, 0, 0, 0, 111, 21, 170, 175, 0, 0, 0, 31, 73, 68, 65, 84, 120,
+  218, 99, 72, 78, 251, 72, 21, 196, 48, 106, 208, 168, 65, 163, 6, 141, 26,
+  52, 106, 208, 168, 65, 3, 111, 16, 0, 156, 174, 226, 174, 134, 65, 75, 203,
+  0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
 
 // A profile cell, as presented to <cf-profile-badge $profile={...} />. The badge
 // reads the cell's [NAME] (person's name under the multi-profile model) and
-// falls back to `name`, plus `avatar`. `bio` + `elements` (pinned pieces) feed
-// the hover/focus tooltip (CT-1648); items only need a `title` for the count.
+// falls back to `name`, plus `picture`, or else `avatar` text. `bio` +
+// `elements` (pinned pieces) feed the hover/focus tooltip (CT-1648); items only
+// need a `title` for the count.
 type ProfileValue = {
   [NAME]: string;
   name: string;
+  picture?: FabricBytes;
   avatar: string;
   bio?: string;
   elements?: Array<{ title: string }>;
@@ -28,7 +37,11 @@ type ProfileValue = {
 const makeProfile = (
   display: string,
   avatar: string,
-  extra: { bio?: string; elements?: Array<{ title: string }> } = {},
+  extra: {
+    picture?: FabricBytes;
+    bio?: string;
+    elements?: Array<{ title: string }>;
+  } = {},
 ) =>
   new Writable<ProfileValue>({
     [NAME]: display,
@@ -79,9 +92,11 @@ export interface ProfileBadgeStoryOutput {
 }
 
 export default pattern<ProfileBadgeStoryInput, ProfileBadgeStoryOutput>(() => {
-  // Three profiles exercising each avatar render path: image, emoji, initials —
-  // and each tooltip state (CT-1648): bio + pins, bio only, and none.
-  const ada = makeProfile("Ada Lovelace", svgAvatar("rgb(99,102,241)", "AL"), {
+  // Three profiles exercising each avatar render path: picture, emoji,
+  // initials — and each tooltip state (CT-1648): bio + pins, bio only, and
+  // none.
+  const ada = makeProfile("Ada Lovelace", "", {
+    picture: new FabricBytes(new Uint8Array(INDIGO_PNG)),
     bio:
       "Mathematician & writer; first to see that a computing engine could go beyond pure calculation.",
     elements: [

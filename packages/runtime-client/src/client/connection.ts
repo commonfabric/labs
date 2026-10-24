@@ -430,8 +430,11 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
           // A value seeds only a handle that holds nothing yet: what another
           // handle holds may be a write it made or a copy it was made with,
           // which ends no refusal the new one holds.
+          // The copy carries the label the other handle holds, as current as
+          // it is there.
           cell[$onCellUpdate](existing.value, {
             cfcLabel: existingInstance?.cfcLabel,
+            current: existingInstance?.cfcLabelCurrent ?? false,
           });
         }
       }
@@ -711,7 +714,7 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
     // label of `undefined` is still delivered and a value-only update never
     // touches the cached label.
     const labelUpdate = "cfcLabel" in message
-      ? { cfcLabel: message.cfcLabel }
+      ? { cfcLabel: message.cfcLabel, current: true }
       : undefined;
 
     if (subscribed && subscribed.size > 0) {

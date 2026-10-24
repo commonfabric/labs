@@ -39,6 +39,7 @@ import {
   isDefaultNodeWithUndefined,
   isOptionalSymbol,
 } from "../typescript/property-optionality.ts";
+import { propertiesInSourceOrder } from "../typescript/source-order.ts";
 import {
   holdsTypeParameter,
   typeParameterOfType,
@@ -279,7 +280,12 @@ export class ObjectFormatter implements TypeFormatter {
       context.typeNode,
     );
 
-    const props = checker.getPropertiesOfType(type);
+    const props = propertiesInSourceOrder(
+      type,
+      checker.getPropertiesOfType(type),
+      context.typeNode,
+      checker,
+    );
     // A CFC metadata carrier a mapped type folded into the object is a
     // label, not a member: no value holds it.
     let carrier: ts.Symbol | undefined;

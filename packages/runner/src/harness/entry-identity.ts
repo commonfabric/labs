@@ -1,8 +1,11 @@
-import type { Source } from "@commonfabric/js-compiler";
+import type { ModuleDeclarations, Source } from "@commonfabric/js-compiler";
 import { resolveImportSpecifier } from "@commonfabric/js-compiler/specifier";
 
 import { computeModuleIdentities } from "../sandbox/module-record-compiler.ts";
-import { attachDeclaredDataFiles } from "./declared-data-files.ts";
+import {
+  attachDeclaredDataFiles,
+  sourcePackageOwners,
+} from "./declared-data-files.ts";
 import {
   compilerStack,
   ensureCompilerStack,
@@ -10,6 +13,7 @@ import {
 import {
   type ModuleImportEdges,
   resolveModuleImports,
+  scanModules,
 } from "./module-identity.ts";
 
 // A fixed, arbitrary program id. `computeModuleIdentities` strips this prefix
@@ -28,8 +32,10 @@ function prefixName(name: string): string {
  * compiling — the same value `Engine.compileToRecordGraph` stores as
  * `patternIdentity.identity` for a same-build compile of the same source
  * package. A program carrying extra source roots or data files must name
- * them in `options`: the compiler folds both into the entry's hash, so the
- * bare import-closure identity is not the stored one for such a program.
+ * them in `options`: the compiler folds each into the hash of the module that
+ * owns its edge (see `sourcePackageOwners()`), and the entry's hash covers
+ * them through those modules, so the bare import-closure identity is not the
+ * stored one for such a program.
  *
  * `files` must include the entry's full internal import closure (a superset is
  * fine — unreachable files neither affect the entry's identity nor are they
@@ -42,8 +48,8 @@ function prefixName(name: string): string {
  * hashing the injected form here would diverge (see
  * `test/module-identity-engine.test.ts` "CT-1740").
  *
- * The caller must have `await ensureCompilerStack()`-ed first: import scanning
- * (via `resolveModuleImports`) parses with the TS parser.
+ * The caller must have `await ensureCompilerStack()`-ed first: the scan for
+ * imports and `dataFile()` calls parses with the TS parser, once per module.
  *
  * Throws if, walking the entry's reachable closure, any module still has an
  * internal-looking dependency (`./`, `../`, `/`) that did not resolve to an
@@ -56,6 +62,20 @@ export function computeEntryIdentity(
   main: string,
   files: readonly Source[],
   options: EntryIdentityOptions = {},
+): string {
+  return entryIdentityOf(main, files, options, new Map());
+}
+
+/**
+ * Helper for `computeEntryIdentity()` and `resolveEntryIdentity()`, which
+ * computes the identity reusing `scanned`, the modules already scanned under
+ * the names `files` gives them.
+ */
+function entryIdentityOf(
+  main: string,
+  files: readonly Source[],
+  options: EntryIdentityOptions,
+  scanned: ReadonlyMap<string, ModuleDeclarations>,
 ): string {
   const dataPaths = [...new Set(options.dataFiles ?? [])].sort();
   if (dataPaths.includes(main)) {
@@ -102,39 +122,50 @@ export function computeEntryIdentity(
     }
   }
 
+  // Every step below reads a module's declarations from this one scan. The
+  // prefix keeps a module's base name, so a scan made before it still holds.
+  const declarations = scanModules(
+    prefixedCode,
+    (file) => scanned.get(unprefix(file.name)),
+  );
+
   // Also validates each entry is present (throws if it is not among the
   // files), so `identities` is guaranteed to contain `entryKey` below. Every
   // source root is an entry of its own, so each root's closure has to be as
   // complete as the main entry's.
-  const edges = resolveModuleImports({ main: entryKey, files: prefixedCode });
-  assertClosureComplete(main, entryKey, edges);
+  const edges = resolveModuleImports(
+    { main: entryKey, files: prefixedCode },
+    { declarations },
+  );
+  const reached = assertClosureComplete(main, entryKey, edges);
   for (const root of rootPaths) {
-    assertClosureComplete(root, prefixName(root), edges);
+    for (const name of assertClosureComplete(root, prefixName(root), edges)) {
+      reached.add(name);
+    }
   }
 
+  // The engine compiles only what the entry and the roots reach, so only
+  // those modules may own a data file's edge.
+  const sourcePackages = sourcePackageOwners({
+    main: entryKey,
+    sourceRoots: rootPaths.map(prefixName),
+    dataPaths: dataPaths.map(prefixName),
+    modules: prefixedCode.filter((file) => reached.has(file.name)),
+    declarations,
+  }, unprefix);
   const identities = computeModuleIdentities(
     [...prefixedCode, ...prefixedData],
-    {
-      idPrefix: `/${ENTRY_ID}`,
-      ...(rootPaths.length || dataPaths.length
-        ? {
-          sourcePackages: [{
-            entryPath: entryKey,
-            rootPaths: rootPaths.map(prefixName),
-            dataPaths: dataPaths.map(prefixName),
-          }],
-        }
-        : {}),
-    },
+    { idPrefix: `/${ENTRY_ID}`, sourcePackages, declarations },
   );
   return identities.get(entryKey)!;
 }
 
 /**
  * The package half of a program's identity. The compiler folds extra source
- * roots and data files into the entry's hash, so a program carrying either
- * has an identity its bare import closure does not produce; passing them
- * here folds them the same way. Every named path must be among `files`.
+ * roots and data files into the hashes of the modules that own them, so a
+ * program carrying either has an identity its bare import closure does not
+ * produce; passing them here folds them the same way. Every named path must be
+ * among `files`.
  */
 export interface EntryIdentityOptions {
   /** Additional entry roots beyond `main`. */
@@ -158,14 +189,15 @@ export interface ResolveEntryIdentityOptions extends EntryIdentityOptions {
 
 /**
  * Helper for `computeEntryIdentity()`, which checks a root's reachable closure
- * against the shared import graph. Throws for dangling internal or fabric
- * imports; unreachable files do not affect this root's validation.
+ * against the shared import graph and returns the names of the modules in it.
+ * Throws for dangling internal or fabric imports; unreachable files do not
+ * affect this root's validation.
  */
 function assertClosureComplete(
   main: string,
   entryKey: string,
   edges: ReadonlyMap<string, ModuleImportEdges>,
-): void {
+): Set<string> {
   const seen = new Set<string>([entryKey]);
   const queue: string[] = [entryKey];
   while (queue.length > 0) {
@@ -204,6 +236,7 @@ function assertClosureComplete(
       }
     }
   }
+  return seen;
 }
 
 function unprefix(name: string): string {
@@ -246,7 +279,10 @@ export async function resolveEntryIdentity(
   // Every root is an entry of its own, so the import walk seeds from each.
   // A data file is read and never parsed: import-like text inside one is
   // data, and following it would read files the program never named.
-  const files = await collectEntryClosure([entry, ...sourceRoots], readFile);
+  const { files, declarations } = await collectEntryClosure(
+    [entry, ...sourceRoots],
+    readFile,
+  );
   const collected = new Set(files.map((file) => file.name));
   for (const dataPath of dataFiles) {
     if (!collected.has(dataPath)) {
@@ -259,30 +295,37 @@ export async function resolveEntryIdentity(
       resolveSource: sourceReader(readFile),
       resolveDataFile: sourceReader(readDataFile),
     },
+    declarations,
   );
-  return computeEntryIdentity(entry, program.files, {
+  return entryIdentityOf(entry, program.files, {
     sourceRoots,
     dataFiles: program.dataFiles,
-  });
+  }, declarations);
 }
 
+/**
+ * Helper for `resolveEntryIdentity()`, which reads the import closure of
+ * `entries` and returns its files together with each one's scan, so that the
+ * steps after it parse nothing again.
+ */
 async function collectEntryClosure(
   entries: readonly string[],
   readFile: (name: string) => Promise<string>,
-): Promise<Source[]> {
-  // Import scanning parses with the TS parser (compilerStack).
+): Promise<{ files: Source[]; declarations: Map<string, ModuleDeclarations> }> {
+  // Scanning parses with the TS parser (compilerStack).
   await ensureCompilerStack();
-  const { collectImportSpecifiers, ts } = compilerStack();
+  const { scanModuleDeclarations, ts } = compilerStack();
   const byName = new Map<string, Source>();
+  const declarations = new Map<string, ModuleDeclarations>();
   const queue: string[] = [...entries];
   while (queue.length > 0) {
     const name = queue.shift()!;
     if (byName.has(name)) continue;
     const source: Source = { name, contents: await readFile(name) };
     byName.set(name, source);
-    for (
-      const specifier of collectImportSpecifiers(source, ts.ScriptTarget.ES2023)
-    ) {
+    const declared = scanModuleDeclarations(source, ts.ScriptTarget.ES2023);
+    declarations.set(name, declared);
+    for (const specifier of declared.imports) {
       const resolved = resolveImportSpecifier(specifier, source);
       // resolveImportSpecifier returns the specifier unchanged for bare/`cf:`
       // imports; a changed value means it was relative and resolved to a path.
@@ -290,7 +333,7 @@ async function collectEntryClosure(
       if (!byName.has(resolved)) queue.push(resolved);
     }
   }
-  return [...byName.values()];
+  return { files: [...byName.values()], declarations };
 }
 
 /**

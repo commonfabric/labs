@@ -1037,7 +1037,11 @@ describe("hasVariantValue", () => {
 describe("CFRender variants", () => {
   type Internals = {
     _containerRef: { value?: HTMLDivElement };
-    _mount(container: HTMLElement, cell: CellHandle): () => void;
+    _mount(
+      container: HTMLElement,
+      cell: CellHandle,
+      piece: CellHandle,
+    ): () => void;
     _renderCell(): Promise<void>;
     _renderChipDefault(container: HTMLElement, cell: CellHandle): () => void;
     _renderTileDefault(container: HTMLElement, cell: CellHandle): () => void;
@@ -1096,10 +1100,12 @@ describe("CFRender variants", () => {
       const element = new CFRender();
       const internals = element as unknown as Internals;
       const mounted: (readonly string[])[] = [];
+      const opens: CellHandle[] = [];
       let defaults = 0;
       internals._containerRef = { value: {} as HTMLDivElement };
-      internals._mount = (_container, cell) => {
+      internals._mount = (_container, cell, displayed) => {
         mounted.push(cell.ref().path);
+        opens.push(displayed);
         return () => {};
       };
       internals._renderTileDefault = () => {
@@ -1109,6 +1115,8 @@ describe("CFRender variants", () => {
       element.cell = piece;
       element.variant = "tile";
       await internals._renderCell();
+      // The exported tile is the piece's own, and the piece is what opens.
+      expect(opens).toEqual([piece]);
       outcomes.push({ mounted, defaults, schemas, reads });
     }
     expect(outcomes[0]).toEqual({
@@ -1121,6 +1129,184 @@ describe("CFRender variants", () => {
       reads: [],
     });
     expect(outcomes[1]).toEqual(outcomes[0]);
+  });
+
+  it("opens the piece a link leads to, as navigating to it does, when it renders the link in full", async () => {
+    // A profile or a grid hands cf-render a link its own document holds; the
+    // piece to open is the one the link leads to, not that document.
+    const mockDocument = installMockDocument();
+    const element = new CFRender();
+    try {
+      const { cell: link, log } = createRenderableCellHandle<unknown>(
+        undefined,
+        {
+          id: "of:fid1:link-holder" as CellRef["id"],
+          path: ["elements", "0", "cell"],
+        },
+      );
+      const piece = createMockCellHandle<unknown>(undefined, {
+        id: "of:fid1:piece-abcdef" as CellRef["id"],
+      }) as CellHandle;
+      Object.assign(link, { resolveAsCell: () => Promise.resolve(piece) });
+      Object.assign(link.runtime(), { signal: new AbortController().signal });
+      const opened: unknown[][] = [];
+      Object.assign(piece.runtime(), {
+        getPiece: (...args: unknown[]) => {
+          opened.push(args);
+          return Promise.resolve(null);
+        },
+      });
+      const internals = element as unknown as Internals & {
+        _watchLinkTarget(
+          cell: CellHandle,
+          resolved: CellHandle,
+        ): Promise<CellHandle | undefined>;
+      };
+      internals._watchLinkTarget = (_cell, resolved) =>
+        Promise.resolve(resolved);
+      internals._containerRef = {
+        value: createMockElement("div") as unknown as HTMLDivElement,
+      };
+      element.cell = link;
+      await internals._renderCell();
+      expect(log.mounted.map((reference) => reference.path)).toEqual([
+        ["elements", "0", "cell"],
+      ]);
+      expect(opened).toEqual([[
+        piece.id(),
+        piece.space(),
+        true,
+        piece.ref().scope,
+      ]]);
+    } finally {
+      element.disconnectedCallback();
+      mockDocument.restore();
+    }
+  });
+
+  it("opens nothing for a host that has already opened the piece", async () => {
+    // The shell opens the piece it navigates to, then shows it here.
+    const mockDocument = installMockDocument();
+    const element = new CFRender();
+    try {
+      const { cell: piece, log } = createRenderableCellHandle<unknown>(
+        undefined,
+        { id: "of:fid1:piece-abcdef" as CellRef["id"] },
+      );
+      Object.assign(piece, { resolveAsCell: () => Promise.resolve(piece) });
+      Object.assign(piece.runtime(), { signal: new AbortController().signal });
+      const opened: unknown[][] = [];
+      Object.assign(piece.runtime(), {
+        getPiece: (...args: unknown[]) => {
+          opened.push(args);
+          return Promise.resolve(null);
+        },
+      });
+      const internals = element as unknown as Internals & {
+        _watchLinkTarget(
+          cell: CellHandle,
+          resolved: CellHandle,
+        ): Promise<CellHandle | undefined>;
+      };
+      internals._watchLinkTarget = (_cell, resolved) =>
+        Promise.resolve(resolved);
+      internals._containerRef = {
+        value: createMockElement("div") as unknown as HTMLDivElement,
+      };
+      element.cell = piece;
+      element.hostOpened = true;
+      await internals._renderCell();
+      expect(log.mounted.map((reference) => reference.id)).toEqual([
+        piece.ref().id,
+      ]);
+      expect(opened).toEqual([]);
+    } finally {
+      element.disconnectedCallback();
+      mockDocument.restore();
+    }
+  });
+
+  it("opens the piece its default tile shows", () => {
+    const mockDocument = installMockDocument();
+    const create = mockDocument.document.createElement;
+    mockDocument.document.createElement = (tagName) =>
+      Object.assign(create(tagName), {
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        remove: () => {},
+      });
+    try {
+      const { cell: piece } = createRenderableCellHandle<unknown>(undefined, {
+        id: "of:fid1:piece-abcdef" as CellRef["id"],
+      });
+      const opened: unknown[][] = [];
+      Object.assign(piece.runtime(), {
+        getPiece: (...args: unknown[]) => {
+          opened.push(args);
+          return Promise.resolve(null);
+        },
+      });
+      const element = new CFRender();
+      const internals = element as unknown as Internals;
+      const cleanup = internals._renderTileDefault(
+        createMockElement("div") as unknown as HTMLElement,
+        piece,
+      );
+      expect(opened).toEqual([[
+        piece.id(),
+        piece.space(),
+        true,
+        piece.ref().scope,
+      ]]);
+      cleanup();
+    } finally {
+      mockDocument.restore();
+    }
+  });
+
+  it("opens nothing for a value at a path inside a document", async () => {
+    // A link may lead into a piece's document rather than to the piece; only
+    // a piece opens.
+    const mockDocument = installMockDocument();
+    const element = new CFRender();
+    try {
+      const { cell: link } = createRenderableCellHandle<unknown>(undefined, {
+        id: "of:fid1:link-holder" as CellRef["id"],
+        path: ["shown"],
+      });
+      const inner = createMockCellHandle<unknown>(undefined, {
+        id: "of:fid1:piece-abcdef" as CellRef["id"],
+        path: ["field"],
+      }) as CellHandle;
+      Object.assign(link, { resolveAsCell: () => Promise.resolve(inner) });
+      Object.assign(link.runtime(), { signal: new AbortController().signal });
+      const opened: unknown[][] = [];
+      const record = {
+        getPiece: (...args: unknown[]) => {
+          opened.push(args);
+          return Promise.resolve(null);
+        },
+      };
+      Object.assign(inner.runtime(), record);
+      Object.assign(link.runtime(), record);
+      const internals = element as unknown as Internals & {
+        _watchLinkTarget(
+          cell: CellHandle,
+          resolved: CellHandle,
+        ): Promise<CellHandle | undefined>;
+      };
+      internals._watchLinkTarget = (_cell, resolved) =>
+        Promise.resolve(resolved);
+      internals._containerRef = {
+        value: createMockElement("div") as unknown as HTMLDivElement,
+      };
+      element.cell = link;
+      await internals._renderCell();
+      expect(opened).toEqual([]);
+    } finally {
+      element.disconnectedCallback();
+      mockDocument.restore();
+    }
   });
 
   it("renders the platform default when the piece's own document holds no variant", async () => {
@@ -1162,6 +1348,13 @@ describe("CFRender variants", () => {
         undefined,
         { id: "of:fid1:piece-abcdef" as CellRef["id"] },
       );
+      const opened: unknown[][] = [];
+      Object.assign(piece.runtime(), {
+        getPiece: (...args: unknown[]) => {
+          opened.push(args);
+          return Promise.resolve(null);
+        },
+      });
       const reads: string[] = [];
       Object.assign(piece, {
         sync: () => {
@@ -1205,6 +1398,8 @@ describe("CFRender variants", () => {
       expect(log.mounted.map((reference) => reference.path)).toEqual([
         ["$NAME"],
       ]);
+      // A chip only names the piece, so it does not open it.
+      expect(opened).toEqual([]);
       expect(reads).toEqual([]);
 
       let stopped = 0;
@@ -1565,6 +1760,22 @@ describe("CFRender piece context menu", () => {
 
     expect(rightClick(element, event)).toBeUndefined();
     expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("announces a piece shown in a non-editable island inside an editor", () => {
+    const element = new CFRender();
+    element.cell = createMockCellHandle({ name: "piece" }, {
+      id: "of:fid1:piece" as never,
+      space: "did:key:zSpace" as never,
+    }) as CellHandle;
+    const event = contextMenuEvent(
+      { tagName: "SPAN", isContentEditable: false } as unknown as EventTarget,
+      {},
+      [{ tagName: "DIV", isContentEditable: true } as unknown as EventTarget],
+    );
+
+    expect(rightClick(element, event)?.pieceId).toBe("of:fid1:piece");
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("leaves a shift-held click to the platform menu", () => {

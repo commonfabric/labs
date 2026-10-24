@@ -393,21 +393,21 @@ export class FabricError extends FabricNativeWrapper<Error>
    * @inheritDoc
    *
    * Round-trips through the codec, decoding mutable unless `frozen` (the
-   * `deepClone()` template owns the final deep freeze).
+   * canonical cloner owns the final deep freeze).
    *
-   * Known gap: `encode()` passes `cause` and the extras through by reference,
-   * so an unfrozen clone still _shares_ those nested values with the original,
-   * and is to that extent not deeply independent. Pinned by a test in
-   * `FabricError.test.ts`.
+   * Nested state shares the cloner's recursion and cycle tracking.
    */
-  protected override [DEEP_CLONE_CORE](frozen: boolean): FabricError {
+  override [DEEP_CLONE_CORE](
+    frozen: boolean,
+    subClone: (value: FabricValue) => FabricValue,
+  ): FabricError {
     const codec = FabricError[CODEC];
     const liveEnvironment = new NullLiveEnvironment(
       "no live environment (FabricError deep-clone path).",
     );
     return codec.decode(
       CODEC_TYPE_TAGS.Error,
-      codec.encode(this, liveEnvironment),
+      subClone(codec.encode(this, liveEnvironment)),
       liveEnvironment,
       !frozen,
     ) as FabricError;

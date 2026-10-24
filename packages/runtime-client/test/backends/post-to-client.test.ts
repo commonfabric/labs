@@ -16,7 +16,7 @@ import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { SetPropOp } from "@commonfabric/html/vdom-ops";
 import { WorkerReconciler } from "@commonfabric/html/worker";
 
-import { postToClient } from "@/backends/post-to-client.ts";
+import { ownerChannelSizes, postToClient } from "@/backends/post-to-client.ts";
 import {
   NotificationType,
   type VDomBatchNotification,
@@ -58,6 +58,33 @@ function capturing(): {
 }
 
 describe("post-to-client", () => {
+  describe("the owner's channel", () => {
+    it("counts a message posted over the worker's global, and the substitute for a refused one", () => {
+      // The count is the worker's for its lifetime, so it is read as a
+      // difference across the two posts.
+      const { posted, restore } = capturing();
+
+      try {
+        const before = ownerChannelSizes();
+        postToClient({
+          type: NotificationType.PendingWritesChanged,
+          pending: true,
+        });
+        postToClient({ msgId: 9, data: { value: forged() } } as never);
+
+        const after = ownerChannelSizes();
+        expect(posted).toHaveLength(2);
+        expect(after.messages - before.messages).toBe(2);
+        expect(after.sampledMessages).toBeGreaterThanOrEqual(
+          before.sampledMessages,
+        );
+        expect(after.approxBytes).toBeGreaterThan(0);
+      } finally {
+        restore();
+      }
+    });
+  });
+
   describe("a VDOM batch", () => {
     it("carries a FabricBytes prop emitted by the reconciler", () => {
       const content = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);

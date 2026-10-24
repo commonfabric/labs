@@ -15,16 +15,21 @@
  */
 
 import {
+  type AnyCell,
   type Cell,
+  computed,
   type Confidential,
   type CurrentPrincipal,
   currentPrincipal,
   Default,
+  entityRefToString,
   equals,
+  getEntityId,
   handler,
   isWellFormedDID,
   NAME,
   pattern,
+  spaceOf,
   type Stream,
   type TrustedActionWrite,
   UI,
@@ -35,6 +40,7 @@ import {
   type InboxPointable,
   pointAtInboxIfUnset,
   pointAtInboxInPlaceOf,
+  type ProfileInbox,
   type ShareInboxPiece,
 } from "./profile-home.tsx";
 
@@ -451,7 +457,7 @@ function createPrivateInbox(): Cell<PrivateInboxPiece> {
  * at none, as the pointer type reads it.
  */
 export function advertisedInbox(
-  profiles: readonly (PointTarget | undefined)[] | undefined,
+  profiles: readonly ({ inbox?: ProfileInbox } | undefined)[] | undefined,
 ): Cell<PrivateInboxPiece> | undefined {
   return (profiles ?? []).find((profile) => profile?.inbox?.piece !== undefined)
     ?.inbox?.piece;
@@ -666,6 +672,247 @@ export const pointProfilesAtPrivateInbox = handler<
   for (const profile of profiles ?? []) {
     pointAtInboxIfUnset(profile, privateInbox);
   }
+});
+
+/** What a client sends Home's `requestPrivateInbox`. */
+export type PrivateInboxRequest = {
+  /**
+   * The profile the client finds the owner by, which is to advertise Home's
+   * inbox: the one `#profile` answers with.
+   */
+  from?: Cell<PointTarget>;
+};
+
+/**
+ * Where a request for Home's private inbox stands, for the profile it names:
+ *
+ * - `pending` while Home is giving the profile its inbox: Home holds an inbox
+ *   the profile does not point at yet, or holds none and is creating one.
+ * - `ensured` once the profile points at the inbox Home holds.
+ * - `unlisted` when the request names no profile in Home's list, which Home
+ *   never points.
+ * - `unpointable` when the profile has no `setInbox`, through which alone Home
+ *   points it.
+ * - `not-held` when the profile advertises an inbox other than the one Home
+ *   holds, as when something other than Home sets its pointer first, which
+ *   Home never replaces, or Home holds none and creates none, because a
+ *   profile advertises an inbox that awaits the host's vetting.
+ */
+export type PrivateInboxAnswerStatus =
+  | "pending"
+  | "ensured"
+  | "unlisted"
+  | "unpointable"
+  | "not-held";
+
+/** How Home answers a request for its private inbox, for one profile. */
+export type PrivateInboxAnswer = {
+  /**
+   * Where the request stands. Once it is `ensured`, the inbox is the one the
+   * profile's own pointer names. The answer holds no link to it, which would
+   * carry the label the inbox gives its offers into Home's answers, and so
+   * into every run that reads them.
+   */
+  status: PrivateInboxAnswerStatus;
+};
+
+/**
+ * The result of Home's handling of a request for its inbox, which is its
+ * receipt: a link to one of Home's {@link PrivateInboxAnswers}.
+ */
+export type PrivateInboxReceipt = Cell<PrivateInboxAnswer>;
+
+/**
+ * Every answer Home gives a request for its inbox, which a request's receipt
+ * links to one of: one for each profile a request has named, keyed by the
+ * profile's document as {@link profileKeyOf} keys it, and one each for a
+ * request naming no profile in the list and for one naming a profile without
+ * `setInbox`.
+ */
+export type PrivateInboxAnswers = {
+  /**
+   * The answer for each profile a request has named, by the profile's entity,
+   * as {@link profileKeyOf} keys it: `unlisted` once the profile has left
+   * Home's list.
+   */
+  profiles: Record<string, PrivateInboxAnswer>;
+
+  /** The answer for a request naming no profile in Home's list. */
+  unlisted: PrivateInboxAnswer;
+
+  /** The answer for a request naming a profile without `setInbox`. */
+  unpointable: PrivateInboxAnswer;
+};
+
+/**
+ * A profile in Home's list as a request reads it: its pointer, and its
+ * `setInbox` as stored, which is absent from a profile of a vintage without
+ * one, so that Home can tell it never points such a profile. A `Stream` type
+ * would read as a stream whether or not the profile holds one.
+ */
+export type AnswerTarget = {
+  // The pointer is a typed link, for the reason `InboxPointable` gives.
+  inbox?: ProfileInbox;
+  setInbox?: unknown;
+};
+
+/**
+ * The key Home files its answer for `profile` under: the space of the
+ * profile's own document and the entity that document is, which together name
+ * one document wherever the profile sits in Home's list. `profile` is a
+ * profile as a handler or a computation reads it, a cell or the value a cell
+ * reads as. `undefined` for a profile that names no entity. Call it in a
+ * handler or a reactive computation, where `spaceOf()` can be called.
+ */
+export function profileKeyOf(profile: unknown): string | undefined {
+  const ref = getEntityId(profile);
+  // `spaceOf()` takes a cell or the value a cell reads as, as its own
+  // documentation says, though its declared type names only the cell.
+  const space = spaceOf(profile as AnyCell<unknown> | undefined);
+  return ref === undefined || space === undefined
+    ? undefined
+    : `${space}/${entityRefToString(ref)}`;
+}
+
+/**
+ * Returns Home's answer for each profile `requested` names, by
+ * {@link profileKeyOf}, given the inbox Home holds and the profiles in its
+ * list; Home's request handler links a request's receipt to the entry for the
+ * profile it names. A profile no longer in `profiles` is `unlisted`, so a
+ * receipt answers for its own profile whatever else leaves the list, and ends
+ * when that profile does. Otherwise an answer is `pending` only while Home
+ * is still to point the profile at the inbox it holds, so a pointer that comes
+ * to name anything else is a final status:
+ *
+ * - The profile points at an inbox other than the one Home holds, or Home
+ *   holds none: `not-held`, since Home points only a profile that points at
+ *   none.
+ * - The profile points at no inbox, Home holds none, and another profile
+ *   advertises one, so Home creates none: `not-held`.
+ */
+export function privateInboxAnswersOf(
+  held: Cell<PrivateInboxPiece> | undefined,
+  profiles: readonly ({ inbox?: ProfileInbox } | undefined)[] | undefined,
+  requested: Readonly<Record<string, boolean>> | undefined,
+): PrivateInboxAnswers {
+  const advertised = advertisedInbox(profiles);
+  const listed = new Map<string, { inbox?: ProfileInbox }>();
+  for (const profile of profiles ?? []) {
+    const key = profileKeyOf(profile);
+    if (profile !== undefined && key !== undefined) listed.set(key, profile);
+  }
+  const answerFor = (
+    profile: { inbox?: ProfileInbox } | undefined,
+  ): PrivateInboxAnswer => {
+    if (profile === undefined) return { status: "unlisted" };
+    const pointer = profile.inbox?.piece;
+    if (pointer === undefined) {
+      return held === undefined && advertised !== undefined
+        ? { status: "not-held" }
+        : { status: "pending" };
+    }
+    return held !== undefined && equals(pointer, held)
+      ? { status: "ensured" }
+      : { status: "not-held" };
+  };
+  const answers: Record<string, PrivateInboxAnswer> = {};
+  for (const key of Object.keys(requested ?? {})) {
+    answers[key] = answerFor(listed.get(key));
+  }
+  return {
+    profiles: answers,
+    unlisted: { status: "unlisted" },
+    unpointable: { status: "unpointable" },
+  };
+}
+
+/** Arguments for {@link PrivateInboxAnswering}. */
+export type PrivateInboxAnsweringInput = {
+  /** Home's holder of its inbox. */
+  privateInbox: PrivateInboxHolder;
+
+  /** Home's profiles, as any vintage of profile can be read. */
+  profiles: PointTarget[];
+
+  /**
+   * The profiles requests have named, by {@link profileKeyOf}, which
+   * {@link requestPrivateInbox} records.
+   */
+  requested: Record<string, boolean>;
+};
+
+/** The result of {@link PrivateInboxAnswering}. */
+export type PrivateInboxAnsweringOutput = {
+  /** Home's answers, as {@link privateInboxAnswersOf} computes them. */
+  answers: PrivateInboxAnswers;
+};
+
+/**
+ * Computes Home's answers to requests for its inbox, once for all the
+ * profiles requests have named. The list is read through {@link PointTarget},
+ * which a profile of any vintage satisfies.
+ */
+export const PrivateInboxAnswering = pattern<
+  PrivateInboxAnsweringInput,
+  PrivateInboxAnsweringOutput
+>(({ privateInbox, profiles, requested }) => ({
+  answers: computed(() =>
+    privateInboxAnswersOf(privateInbox?.piece, profiles, requested)
+  ),
+}));
+
+/**
+ * Has Home ensure its private inbox, as an event naming nothing has
+ * {@link ensurePrivateInbox} do, and answers with Home's answer for the
+ * profile the request names, which is `ensured` once that profile points at
+ * the inbox Home holds. Home keeps the inbox it holds, creates one when it
+ * holds none and no profile advertises one, and points each profile in its
+ * list that points at no inbox at its own; it adopts nothing, since adopting
+ * an inbox a profile advertises waits on the host's vetting.
+ *
+ * The answer is this handling's result, and so its receipt, which a client
+ * reads from the receipt link its send's completion carries. For a profile in
+ * Home's list it is a link to that profile's entry in `answers`, by the
+ * profile's entity, which this handler records in `requested`; Home computes
+ * an entry for every profile so recorded, with {@link PrivateInboxAnswering}.
+ * So a request leaves nothing running, and the entry goes on changing as
+ * Home's holder and the profile's pointer do: `pending` until the profile
+ * points at the inbox Home holds, then `ensured`, or a final status saying
+ * why it never will, `unlisted` among them once the profile leaves Home's
+ * list. The profile is pointed in events of their own, in Home's space and
+ * then in the profile's, after this run, which is why the answer is a link
+ * rather than a value. The receipt of a request naming no profile in the list
+ * links to the `unlisted` answer, and that of one naming a profile without
+ * `setInbox`, which Home never points, to the `unpointable` one, so every
+ * receipt is a link into Home's answers.
+ *
+ * The list is bound as a value, for the reason it is in
+ * {@link ensurePrivateInbox}.
+ */
+export const requestPrivateInbox = handler<
+  PrivateInboxRequest,
+  {
+    profiles: AnswerTarget[];
+    requested: Writable<Record<string, boolean>>;
+    answers: Writable<PrivateInboxAnswers>;
+    ensure: Stream<EnsurePrivateInboxEvent>;
+  },
+  PrivateInboxReceipt
+>((event, { profiles, requested, answers, ensure }) => {
+  ensure.send({});
+  const profile = event?.from;
+  const listed = profile === undefined ? undefined : (profiles ?? []).find(
+    (each) => each !== undefined && equals(each, profile),
+  );
+  const key = listed === undefined || profile === undefined
+    ? undefined
+    : profileKeyOf(profile.resolveAsCell());
+  if (listed === undefined || key === undefined) {
+    return answers.key("unlisted");
+  }
+  if (listed.setInbox === undefined) return answers.key("unpointable");
+  if (requested.get()?.[key] !== true) requested.key(key).set(true);
+  return answers.key("profiles").key(key);
 });
 
 /**

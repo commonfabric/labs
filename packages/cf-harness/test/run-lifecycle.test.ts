@@ -6,6 +6,7 @@
  */
 
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
@@ -592,6 +593,28 @@ describe("run-lifecycle", () => {
         expect(state.endedAt).toBeDefined();
         expect(state.primaryFailure?.detail).toContain("targets another space");
         expect(state.inputCells).toBeUndefined();
+      });
+    });
+
+    it("rethrows the setup failure when recording it fails too", async () => {
+      await withArtifactRoot(async (artifactRoot) => {
+        const engine = engineWithInputCell(
+          artifactRoot,
+          "run-setup-record-fails",
+          FOREIGN_REF,
+        );
+        using _failRun = stub(
+          engine,
+          "failRun",
+          () => Promise.reject(new Error("could not record the failure")),
+        );
+
+        await expect(
+          establishHarnessSessionContext({
+            engine,
+            config: { skillNames: [] },
+          }),
+        ).rejects.toThrow("targets another space");
       });
     });
   });

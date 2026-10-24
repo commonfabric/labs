@@ -312,6 +312,40 @@ describe("agent runner", () => {
     expect(result.key("result").get()).toEqual({ answer: "Hyperion" });
   });
 
+  for (const complete of [true, false, undefined]) {
+    it(`retains observed model attribution with completeness ${complete} across a new runtime`, async () => {
+      const result = await submit();
+      const runtime = connect(CLOUD);
+      const attribution = complete === undefined ? {} : {
+        actualModels: ["provider-served-model"],
+        modelAttributionComplete: complete,
+        modelResponses: [
+          { modelTurn: 1, model: "provider-served-model" },
+          { modelTurn: 2, model: complete ? "provider-served-model" : null },
+        ],
+      };
+      await startRunner(async (run) => {
+        const execution = await completing(() => runtime)(run);
+        return {
+          ...execution,
+          report: { ...execution.report, ...attribution },
+        };
+      }, { runtimeForHost: () => Promise.resolve(runtime) });
+      await waitForState(result, "completed");
+
+      const fresh = connect(CLOUD);
+      const record = await waitForCellValue<AgentRunRecord>(
+        fresh,
+        recordOf(result, fresh),
+        (value) => value?.state === "completed",
+      );
+      expect(record.actualModels).toEqual(attribution.actualModels);
+      expect(record.modelResponses).toEqual(attribution.modelResponses);
+      expect(record.modelAttributionComplete).toBe(complete);
+      expect(record.modelTurns).toBe(2);
+    });
+  }
+
   it("ends a record `failed` with the executor's error code", async () => {
     const result = await submit();
     await startRunner(() =>
@@ -665,6 +699,7 @@ describe("agent runner", () => {
     const recoveryReady = defer<void>();
     const releaseRenewal = defer<void>();
     const executionStarted = defer<ClaimedAgentRun>();
+    const wakeScheduled = defer<void>();
     const held = defer<AgentRunExecution>();
     const original = runnerSide.editWithRetry.bind(runnerSide);
     let delayedRenewal = false;
@@ -701,11 +736,29 @@ describe("agent runner", () => {
     let wake: (() => void) | undefined;
     const runner = await startRunner((run) => {
       executionStarted.resolve(run);
+      // The run ends when it is aborted, so that stopping the runner in
+      // teardown returns even when the case fails before it resolves `held`.
+      run.signal.addEventListener(
+        "abort",
+        () => held.resolve({ outcome: "cancelled" }),
+        { once: true },
+      );
       return held.promise;
     }, {
       runtimeForHost: () => Promise.resolve(runnerSide),
+      // The scan that claims the record schedules the lease's expiry wake
+      // only after the claim's registration completes, and the run starts
+      // without waiting for either. Holding the registration until the
+      // renewal is in flight makes the wake always come after the run has
+      // started. This case does not test registration, so nothing is written.
+      registerRunner: async (entry) => {
+        if (entry?.lastClaimAt !== undefined) await renewalReady.promise;
+      },
       scheduleAt: (at, scheduled) => {
-        if (at.toISOString() === "2026-09-18T12:01:00.000Z") wake = scheduled;
+        if (at.toISOString() === "2026-09-18T12:01:00.000Z") {
+          wake = scheduled;
+          wakeScheduled.resolve();
+        }
         return () => {};
       },
     });
@@ -715,6 +768,7 @@ describe("agent runner", () => {
     clock = new Date("2026-09-18T12:00:30.000Z");
     const renewal = active.renewLease();
     await renewalReady.promise;
+    await wakeScheduled.promise;
     clock = new Date("2026-09-18T12:01:00.000Z");
     wake!();
     await recoveryReady.promise;
@@ -885,13 +939,20 @@ describe("agent runner", () => {
   });
 
   it("writes nothing over a record another runner took while its run was out", async () => {
+    const runnerSide = connect(CLOUD);
     const held = defer<AgentRunExecution>();
+    const started = defer<ClaimedAgentRun>();
     const reports: string[] = [];
-    await startRunner(() => held.promise, {
+    await startRunner((run) => {
+      started.resolve(run);
+      return held.promise;
+    }, {
       report: (message) => reports.push(message),
+      runtimeForHost: () => Promise.resolve(runnerSide),
     });
     const result = await submit();
     await waitForState(result, "running");
+    const oldRun = await started.promise;
 
     // The lease passed and another runner recovered and claimed the record.
     await patternSide.editWithRetry((tx) => {
@@ -914,6 +975,21 @@ describe("agent runner", () => {
     expect(recordOf(result).get()?.claim?.runner).toBe("did:key:other#1");
     expect(reports.some((line) => line.includes("was no longer held"))).toBe(
       true,
+    );
+    const beforeLateRenewal = [...reports];
+    const editWithRetry = runnerSide.editWithRetry;
+    runnerSide.editWithRetry = () => {
+      throw new Error("a retired executor must not open a lease transaction");
+    };
+    try {
+      await oldRun.renewLease();
+    } finally {
+      runnerSide.editWithRetry = editWithRetry;
+    }
+    await runners[0].idle();
+    expect(reports).toEqual(beforeLateRenewal);
+    expect(recordOf(result).get()?.claim?.leaseUntil).toBe(
+      "2026-09-18T13:00:00.000Z",
     );
   });
 
@@ -1642,7 +1718,7 @@ describe("agent runner", () => {
           }),
         },
       });
-      await startRunner(execute, { tools: ["describe_handle"] });
+      await startRunner(execute, { tools: ["describe_handle", "web_fetch"] });
       return () => seen;
     };
 
@@ -1806,7 +1882,7 @@ describe("agent runner", () => {
       expect(seen().prompt).toBe("- recommend a book");
     });
 
-    it("allows `submit_result` alongside an explicit request tool list", async () => {
+    it("adds the tools that read the request's inputs to an explicit request tool list", async () => {
       const seen = await startHarnessRunner(async ({ resultPath }) => {
         await Deno.writeTextFile(
           resultPath,
@@ -1814,7 +1890,7 @@ describe("agent runner", () => {
         );
         return loopResult("run-explicit-tools");
       });
-      const result = await submit({ tools: ["describe_handle"] });
+      const result = await submit({ tools: ["web_fetch"] });
 
       const record = await waitForCellValue<AgentRunRecord>(
         patternSide,
@@ -1823,7 +1899,12 @@ describe("agent runner", () => {
       );
 
       expect(record.state).toBe("completed");
-      expect(seen().allowedTools).toEqual(["describe_handle", "submit_result"]);
+      expect(seen().allowedTools).toEqual([
+        "web_fetch",
+        "describe_handle",
+        "read_value",
+        "submit_result",
+      ]);
     });
 
     it("uses the runner's allowlist when the request omits `tools`", async () => {
@@ -1837,10 +1918,14 @@ describe("agent runner", () => {
       const result = await submit();
 
       await waitForState(result, "completed");
-      expect(seen().allowedTools).toEqual(["describe_handle", "submit_result"]);
+      expect(seen().allowedTools).toEqual([
+        "describe_handle",
+        "read_value",
+        "submit_result",
+      ]);
     });
 
-    it("allows only `submit_result` for an explicitly empty tool list", async () => {
+    it("keeps the tools that read the request's inputs for an explicitly empty tool list", async () => {
       const seen = await startHarnessRunner(async ({ resultPath }) => {
         await Deno.writeTextFile(
           resultPath,
@@ -1851,7 +1936,11 @@ describe("agent runner", () => {
       const result = await submit({ tools: [] });
 
       await waitForState(result, "completed");
-      expect(seen().allowedTools).toEqual(["submit_result"]);
+      expect(seen().allowedTools).toEqual([
+        "describe_handle",
+        "read_value",
+        "submit_result",
+      ]);
     });
 
     it("accepts a handle token at an `asCell` position and writes a link there", async () => {

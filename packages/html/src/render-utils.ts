@@ -1,3 +1,5 @@
+import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+
 export type SetPropHandler = <T>(
   target: T,
   key: string,
@@ -46,72 +48,67 @@ export const getBindingPropName = (key: string): string => {
   return key.startsWith("$") ? key.slice(1) : key;
 };
 
+/** CSS properties whose numeric value is a bare number, not a length. */
+const UNITLESS_PROPERTIES: ReadonlySet<string> = new Set([
+  "animation-iteration-count",
+  "column-count",
+  "fill-opacity",
+  "flex",
+  "flex-grow",
+  "flex-shrink",
+  "font-weight",
+  "line-height",
+  "opacity",
+  "order",
+  "orphans",
+  "stroke-opacity",
+  "widows",
+  "z-index",
+  "zoom",
+]);
+
 /**
- * Converts a React-style CSS object to a CSS string.
- * Supports vendor prefixes, pixel value shorthand, and comprehensive CSS properties.
- * @param styleObject - The style object with React-style camelCase properties
- * @returns A CSS string suitable for the style attribute
+ * Converts a style object with React-style camelCase keys to the text of a
+ * `style` attribute. A vendor-prefixed key becomes its leading-dash form, a
+ * custom property (`--*`) keeps its case, a number other than `0` takes `px`
+ * unless its property is unitless, and a `null` or `undefined` value is left
+ * out.
+ *
+ * The declarations come out in the UTF-8 order of the object's keys, whatever
+ * order the object enumerates them in. The order an object's keys were
+ * inserted in is not part of a fabric value, and a runtime can hold one stored
+ * object under either order: as its writer listed the keys, or as the store's
+ * encoding sorted them. Text that followed the enumeration would differ
+ * between two renders of the same value.
  */
 export const styleObjectToCssString = (
-  styleObject: Record<string, any>,
+  styleObject: Record<string, unknown>,
 ): string => {
-  return Object.entries(styleObject)
-    .map(([key, value]) => {
-      // Skip if value is null or undefined
-      if (value == null) return "";
+  const declarations: string[] = [];
+  for (const key of utf8SortedKeysOf(styleObject)) {
+    const value = styleObject[key];
+    if (value == null) continue;
 
-      // Convert camelCase to kebab-case, handling vendor prefixes
-      let cssKey = key;
-
-      // CSS custom properties (--*) are case-sensitive and should not be transformed
-      if (!key.startsWith("--")) {
-        // Handle vendor prefixes (WebkitTransform -> -webkit-transform)
-        if (/^(webkit|moz|ms|o)[A-Z]/.test(key)) {
-          cssKey = "-" + key;
-        }
-
-        // Convert camelCase to kebab-case
-        cssKey = cssKey.replace(/([A-Z])/g, "-$1").toLowerCase();
+    let cssKey = key;
+    // A custom property is case-sensitive, and is written as it is.
+    if (!key.startsWith("--")) {
+      // `WebkitTransform` and `webkitTransform` are both `-webkit-transform`.
+      if (/^(webkit|moz|ms|o)[A-Z]/.test(key)) {
+        cssKey = "-" + key;
       }
+      cssKey = cssKey.replace(/([A-Z])/g, "-$1").toLowerCase();
+    }
 
-      // Convert value to string
-      let cssValue = value;
-
-      // Add 'px' suffix to numeric values for properties that need it
-      // Exceptions: properties that accept unitless numbers
-      const unitlessProperties = new Set([
-        "animation-iteration-count",
-        "column-count",
-        "fill-opacity",
-        "flex",
-        "flex-grow",
-        "flex-shrink",
-        "font-weight",
-        "line-height",
-        "opacity",
-        "order",
-        "orphans",
-        "stroke-opacity",
-        "widows",
-        "z-index",
-        "zoom",
-      ]);
-
-      if (
-        typeof value === "number" &&
-        !cssKey.startsWith("--") && // CSS custom properties should never get px
-        !unitlessProperties.has(cssKey) &&
+    const cssValue = typeof value === "number" &&
+        !cssKey.startsWith("--") &&
+        !UNITLESS_PROPERTIES.has(cssKey) &&
         value !== 0
-      ) {
-        cssValue = `${value}px`;
-      } else {
-        cssValue = String(value);
-      }
+      ? `${value}px`
+      : String(value);
 
-      return `${cssKey}: ${cssValue}`;
-    })
-    .filter((s) => s !== "")
-    .join("; ");
+    declarations.push(`${cssKey}: ${cssValue}`);
+  }
+  return declarations.join("; ");
 };
 
 export const setPropDefault = <T>(target: T, key: string, value: unknown) => {

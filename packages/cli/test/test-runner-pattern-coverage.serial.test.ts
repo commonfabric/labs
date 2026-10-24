@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
 import { test as testCommand } from "../commands/test-command.ts";
 import { runTests } from "../lib/test-runner.ts";
-import { cf, checkStderr, withEnv } from "./utils.ts";
+import { argv, cf, checkStderr, withEnv } from "./utils.ts";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/pattern-coverage");
 const SUBJECT = join(FIXTURES, "subject.tsx").replaceAll("\\", "/");
@@ -248,9 +248,9 @@ describe(
     it("passes the coverage directory from the cf test option", async () => {
       await withTempDir(async (coverageDir) => {
         const { code, stderr } = await cf(
-          `test "${
+          argv`test ${
             fixture("single.test.tsx")
-          }" --root "${FIXTURES}" --pattern-coverage-dir "${coverageDir}"`,
+          } --root ${FIXTURES} --pattern-coverage-dir ${coverageDir}`,
         );
 
         expect(code).toBe(0);
@@ -269,7 +269,7 @@ describe(
     it("passes the coverage directory from CF_PATTERN_COVERAGE_DIR", async () => {
       await withTempDir(async (coverageDir) => {
         const { code, stderr } = await cf(
-          `test "${fixture("single.test.tsx")}" --root "${FIXTURES}"`,
+          argv`test ${fixture("single.test.tsx")} --root ${FIXTURES}`,
           {
             env: {
               CF_PATTERN_COVERAGE_DIR: coverageDir,

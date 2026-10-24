@@ -82,7 +82,10 @@ import {
 } from "./multi-runtime-ipc.ts";
 import { awaitAdmitted } from "../../runner/test/support/serving-waits.ts";
 
-import type { initializePiecesController } from "./pieces-controller.ts";
+import {
+  type initializePiecesController,
+  moduleByteCache,
+} from "./pieces-controller.ts";
 
 /** Host CFC settings carried into each independent test runtime. */
 export type MultiRuntimeCfcOptions = Pick<
@@ -210,7 +213,6 @@ export interface MultiRuntimeHarnessOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const RPC_TIMEOUT_MS = 120_000;
 
 /** Total event-consequence quiescence budget per `settle()` call on a
  * harness whose server serves, or that it cannot see into (see `settle`):
@@ -218,6 +220,19 @@ const RPC_TIMEOUT_MS = 120_000;
  * pipelined storm, small against the suite timeouts a wedged consequence
  * would otherwise eat. */
 const SERVED_SETTLE_QUIESCENCE_BUDGET_MS = 10_000;
+
+/**
+ * The execution-lease TTL of the serving loop the harness hosts. That loop
+ * shares the test's thread, and a pattern compile there does not yield, so on
+ * a slow runner one compile can hold the thread past the production TTL. Every
+ * space the loop serves then loses its lease at once, any wave in flight
+ * aborts, and a space that parks over it compiles again when it reactivates.
+ * Two minutes is well clear of the longest stall between renewals seen (22 s
+ * on a developer machine, with coverage on), and nothing in the harness
+ * contends for a lease, so a longer tenure costs no failover. A stall that
+ * outlasts it still loses the lease.
+ */
+const SERVED_LEASE_TTL_MS = 120_000;
 
 /**
  * The claims harnesses in this process hold on its pattern environment,
@@ -293,6 +308,7 @@ class WorkerClient {
   #worker: Worker;
   #ready = false;
   #terminated = false;
+  #failure?: string;
   #lifetimeLock?: string;
   #nextId = 1;
   #pending = new Map<
@@ -315,6 +331,14 @@ class WorkerClient {
       if ("ready" in event.data) {
         this.#ready = true;
         this.#lifetimeLock = event.data.lifetimeLock;
+        if (this.#lifetimeLock !== undefined) {
+          // The worker holds this lock until its runtime has been torn down,
+          // so being granted it means the worker will reply to nothing more.
+          void navigator.locks.request(
+            this.#lifetimeLock,
+            () => this.#fail("worker exited"),
+          );
+        }
         for (const pending of this.#pending.values()) {
           this.#worker.postMessage(pending.request);
         }
@@ -338,11 +362,7 @@ class WorkerClient {
       }
     };
     this.#worker.onerror = (event) => {
-      const error = new Error(`[${this.label}] worker error: ${event.message}`);
-      for (const pending of this.#pending.values()) {
-        pending.reject(error);
-      }
-      this.#pending.clear();
+      this.#fail(`worker error: ${event.message}`);
     };
   }
 
@@ -351,13 +371,17 @@ class WorkerClient {
    *
    * `args` and the answer each cross as one `codec-realm` encoding, so both
    * carry the whole `FabricValue` domain.
+   *
+   * The call waits for the worker's reply however long it takes. It is
+   * rejected, with an error naming it, once the worker errors, exits, or is
+   * terminated, and a call made after any of those is rejected at once.
    */
   call(
     cmd: string,
     args: Record<string, FabricValue> = {},
   ): Promise<FabricValue> {
-    if (this.#terminated) {
-      return Promise.reject(new Error(`[${this.label}] worker terminated`));
+    if (this.#failure !== undefined) {
+      return Promise.reject(this.#failureError(cmd));
     }
     const id = this.#nextId++;
     const request: WorkerRequest = {
@@ -366,25 +390,7 @@ class WorkerClient {
       args: realmFromFabricValue(args),
     };
     return new Promise<FabricValue>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.#pending.delete(id);
-        reject(
-          new Error(
-            `[${this.label}] ${cmd} timed out after ${RPC_TIMEOUT_MS}ms`,
-          ),
-        );
-      }, RPC_TIMEOUT_MS);
-      this.#pending.set(id, {
-        request,
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      });
+      this.#pending.set(id, { request, resolve, reject });
       if (this.#ready) this.#worker.postMessage(request);
     });
   }
@@ -414,11 +420,25 @@ class WorkerClient {
    */
   async terminate(): Promise<void> {
     this.#terminated = true;
+    this.#fail("worker terminated");
+    await terminateWorker(this.#worker, this.#lifetimeLock);
+  }
+
+  /**
+   * Rejects every call in flight, and every later one, for `reason`. The
+   * first reason given is the one every rejection carries.
+   */
+  #fail(reason: string): void {
+    this.#failure ??= reason;
     for (const pending of this.#pending.values()) {
-      pending.reject(new Error(`[${this.label}] worker terminated`));
+      pending.reject(this.#failureError(pending.request.cmd));
     }
     this.#pending.clear();
-    await terminateWorker(this.#worker, this.#lifetimeLock);
+  }
+
+  /** The error that rejects a call of `cmd` once this worker has failed. */
+  #failureError(cmd: string): Error {
+    return new Error(`[${this.label}] ${cmd}: ${this.#failure}`);
   }
 }
 
@@ -647,11 +667,12 @@ export class MultiRuntimeSession {
   }
 
   /**
-   * Wait — with no budget of its own, backstopped by the RPC timeout —
-   * until every event THIS session fired has its terminal consequence
-   * (consequenced, errored, dropped, or refused) arrived back here:
-   * the overlay's outstanding-intent set is empty (speculation.md §4
-   * step 2). Instant on the OFF arm and when nothing is outstanding.
+   * Wait — with no budget — until every event THIS session fired has its
+   * terminal consequence (consequenced, errored, dropped, or refused)
+   * arrived back here: the overlay's outstanding-intent set is empty
+   * (speculation.md §4 step 2). Instant on the OFF arm and when nothing
+   * is outstanding. A consequence that never arrives leaves this pending
+   * until the run is stopped.
    *
    * This is the gate between two CHAINED events whose second served
    * handler reads state the first one writes (a draft-then-trusted-
@@ -838,7 +859,16 @@ export class MultiRuntimeHarness {
     const server = options.apiUrl !== undefined
       ? undefined
       : serverExecutionOn
-      ? await listenServingMemoryServer({ serve, aclMode })
+      ? await listenServingMemoryServer({
+        serve,
+        aclMode,
+        // The suite's compile byte cache, the one `pieces-controller.ts`
+        // holds for this realm, shared by every serving runtime: a space that
+        // reactivates, or another space serving the same program, skips the
+        // transform-and-emit step on this thread.
+        moduleByteCache,
+        policy: { leaseTtlMs: SERVED_LEASE_TTL_MS },
+      })
       : StandaloneMemoryServer.start({
         serve,
         ...(aclMode !== undefined ? { acl: { mode: aclMode } } : {}),

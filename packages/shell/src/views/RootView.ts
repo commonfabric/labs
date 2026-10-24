@@ -339,7 +339,7 @@ export class XRootView extends BaseView implements ShellApp {
           this.runtime,
           () => this.runtime,
           () => this.space as DID,
-          () => this.#appView?.homeBringUp,
+          () => this.#appView?.settling,
         );
 
         return rt;

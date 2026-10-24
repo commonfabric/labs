@@ -15,6 +15,7 @@ import {
   CFC_VERDICT_REASON,
   isTerminalRefusal,
   isVerdictReason,
+  untaggedReason,
   verdictReason,
 } from "../src/cfc/verdict-reason.ts";
 
@@ -63,5 +64,14 @@ describe("cfc-verdict-reason", () => {
     // disturbed — and it cannot manufacture a terminal refusal.
     expect(isTerminalRefusal(["read-after-prepare"])).toBe(false);
     expect(isTerminalRefusal([`${CFC_VERDICT_REASON}`])).toBe(false);
+  });
+
+  it("returns a reason without every verdict tag at its front", () => {
+    expect(untaggedReason(verdictReason("forged"))).toBe("forged");
+    expect(untaggedReason(verdictReason(verdictReason("forged"))))
+      .toBe("forged");
+    expect(untaggedReason("read-after-prepare")).toBe("read-after-prepare");
+    expect(untaggedReason(`refused write at /${CFC_VERDICT_REASON}`))
+      .toBe(`refused write at /${CFC_VERDICT_REASON}`);
   });
 });

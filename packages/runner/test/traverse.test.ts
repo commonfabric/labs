@@ -1865,10 +1865,36 @@ const numericTypeCases = [
     value: 1.5,
     expected: false,
   },
+  // A `bigint` is an integer: the schema generator types `bigint` as
+  // `integer`, and `integer` is a subtype of `number`.
+  {
+    name: "integer accepts a bigint value",
+    schema: { type: "integer" },
+    value: 42n,
+    expected: true,
+  },
+  {
+    name: "number accepts a bigint value",
+    schema: { type: "number" },
+    value: 42n,
+    expected: true,
+  },
+  {
+    name: "a union containing integer accepts a bigint value",
+    schema: { type: ["null", "integer"] },
+    value: 42n,
+    expected: true,
+  },
+  {
+    name: "string rejects a bigint value",
+    schema: { type: "string" },
+    value: 42n,
+    expected: false,
+  },
 ] as const satisfies readonly {
   name: string;
   schema: JSONSchema;
-  value: number;
+  value: number | bigint;
   expected: boolean;
 }[];
 

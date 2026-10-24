@@ -386,15 +386,16 @@ function reconstructWithinBranch(
   rowOpIndex: number,
   options: { exact?: boolean } = {},
 ): StoredDocument {
+  // Tuple bounds follow the revision index's order, so SQLite can seek to
+  // the requested range instead of filtering the instance's entire history.
   const base = space.get<RevRow>(
     `SELECT seq, op_index, op, data FROM revision
      WHERE branch = ? AND id = ? AND scope_key = ? AND op IN ('set','delete')
-       AND (seq < ? OR (seq = ? AND op_index <= ?))
+       AND (seq, op_index) <= (?, ?)
      ORDER BY seq DESC, op_index DESC LIMIT 1`,
     branch,
     id,
     scope,
-    rowSeq,
     rowSeq,
     rowOpIndex,
   );
@@ -439,16 +440,14 @@ function reconstructWithinBranch(
   const patches = space.all<RevRow>(
     `SELECT seq, op_index, op, data FROM revision
      WHERE branch = ? AND id = ? AND scope_key = ? AND op = 'patch'
-       AND (seq > ? OR (seq = ? AND op_index > ?))
-       AND (seq < ? OR (seq = ? AND op_index <= ?))
+       AND (seq, op_index) > (?, ?)
+       AND (seq, op_index) <= (?, ?)
      ORDER BY seq ASC, op_index ASC`,
     branch,
     id,
     scope,
     baseSeq,
-    baseSeq,
     baseOpIndex,
-    rowSeq,
     rowSeq,
     rowOpIndex,
   );

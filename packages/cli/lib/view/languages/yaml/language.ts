@@ -23,6 +23,7 @@ export const yamlLanguage: Language = {
     filenamePatterns: [],
     aliases: ["yml"],
     interpreters: [],
+    signatures: [],
     sharedExtensions: [],
   },
 

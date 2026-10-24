@@ -765,7 +765,7 @@ settled before work starts.
    `cf piece inspect`: one group, one word for "one piece", and the later
    write stages follow the same shape. A separate bulk group would buy a
    second home at the cost of the consistency that
-   [CLI surface shape](cli-surface-shape.md) exists to protect.
+   [CLI surface shape](../history/plans/cli-surface-shape.md) established.
 2. ~~**Where preconditions are evaluated.**~~ **Resolved: over the API, and
    stage 1 builds the read.** A piece's pattern identity is readable from a
    live deployment without running the piece — the piece inspection path
@@ -870,7 +870,7 @@ than being settled here.
 - [Topics board migration](../history/plans/topics-migration-rehearsal.md) is a worked
   instance of the retarget operation, with a manifest, an ordering, and a
   rollback record.
-- [CLI surface shape](cli-surface-shape.md) governs the command vocabulary
-  that decision 1 above would change.
+- [CLI surface shape](../history/plans/cli-surface-shape.md), an executed plan now archived,
+  set the command vocabulary that decision 1 above would change.
 - [Piece source lifecycle](../specs/piece-source-lifecycle.md) specifies the
   revision log a piece keeps and the restore operation rollback is built on.

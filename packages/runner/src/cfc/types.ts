@@ -409,12 +409,30 @@ export type StoredCfcMetadata =
     version: 1;
     schemaHash: string;
     labelMap: { version: 1; entries: Array<LabelMapEntry> };
+    stampPlacement?: CfcStampPlacement;
   }
   | {
     version: 2;
     schemaHash: string;
     labelMap: { version: 1; entries: Array<StoredLabelMapEntry> };
+    stampPlacement?: CfcStampPlacement;
   };
+
+/**
+ * What an envelope says of where its writers' stamps sit. `"committed"`
+ * says that every stamp naming a writer at a slot that holds a reference
+ * was persisted beside the reference its attempt placed: the runtime that
+ * wrote it re-derives an attempt's labels against the committed placement
+ * (CFC §8.10.2.2), and carried no stamp over from an envelope that did not
+ * say the same. An envelope without the member says nothing of it, and a
+ * stamp at a reference slot in one is no input witness (§18.7).
+ *
+ * It is a member beside the ones the version defines, and not a version of
+ * its own, so that a reader that does not know it still reads the envelope,
+ * and a writer that does not know it drops it with the envelope it rewrites
+ * (`docs/specs/cfc-stored-envelope.md`).
+ */
+export type CfcStampPlacement = "committed";
 
 /**
  * `schemaHash` names the envelope's ROOT schema document. The root may be
@@ -449,6 +467,9 @@ export type CfcMetadata = {
      */
     documentEntries?: Array<LabelMapEntry>;
   };
+
+  /** See {@link CfcStampPlacement}. Absent where the envelope says nothing. */
+  stampPlacement?: CfcStampPlacement;
 };
 
 export type EntityDocumentWithCfc = {
@@ -905,6 +926,14 @@ export type PostCommitSideEffect = {
   abandon?(error: unknown): void;
 };
 
+/**
+ * Where a transaction's boundary verification stands. `prepared` holds the
+ * activity the verification ran over as `input`, frozen, and `digest` is the
+ * digest of that input. `invalidated` keeps the digest of the preparation it
+ * invalidated, when there was one. A transaction computes a digest when one
+ * is first read, so reading `digest` canonicalizes and hashes the input and
+ * copying a state reads it.
+ */
 export type CfcPrepareState =
   | { status: "unprepared" }
   | { status: "prepared"; digest: string; input: PreparedDigestInput }
@@ -1176,6 +1205,11 @@ export type CfcTxState = {
   // current-principal claim or owner binding may resolve to unless a run is
   // stamped as acting for that identity.
   servingIdentity?: string;
+  // The client runtime's own identity, set once by the Runtime at tx creation
+  // off the serving posture and absent on it: the principal its storage
+  // session authenticates as, which the memory server keys every `user` and
+  // `session` instance the client writes by.
+  clientIdentity?: string;
   // Addresses of writes to a document's ["cfc"] label-map path made OUTSIDE the
   // runtime's privileged persistence scope (audit S18). The runtime's own label
   // writes in prepareBoundaryCommit run privileged and never land here; anything
@@ -1222,4 +1256,6 @@ export type CfcPreparationWork =
   | "stagedReferenceDerivations"
   | "stagedReferenceCacheHits"
   | "flowTemplateEntriesMinted"
-  | "flowTemplateContainers";
+  | "flowTemplateContainers"
+  | "inputReadViewsBuilt"
+  | "inputReadViewsReused";

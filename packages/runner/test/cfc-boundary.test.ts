@@ -61,6 +61,7 @@ import {
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import { refuseAtCommitBoundary } from "./refused-commit.ts";
+import { labelsReached } from "./support/reached-labels.ts";
 import type { FabricValue } from "@commonfabric/data-model";
 import {
   setCfcImplementationIdentity,
@@ -1726,6 +1727,65 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
+  it("marks a link write CFC-relevant by what the link schema's `ifc` holds, and leaves alone one whose `ifc` holds nothing", async () => {
+    const { runtime, storageManager } = createRuntime();
+    try {
+      // Links a cell under `schema` into an unlabeled holder, and reports
+      // whether that made the transaction one the boundary prepares.
+      const relevantAfterLinking = (name: string, schema: JSONSchema) => {
+        const tx = runtime.edit();
+        const source = runtime.getCell(
+          signer.did(),
+          `cfc-link-relevance-source-${name}`,
+          schema,
+          tx,
+        );
+        runtime.getCell(
+          signer.did(),
+          `cfc-link-relevance-holder-${name}`,
+          undefined,
+          tx,
+        ).set({ slot: source });
+        const relevant = tx.getCfcState().relevant;
+        tx.abort("test");
+        return relevant;
+      };
+
+      expect(relevantAfterLinking("empty", { type: "string", ifc: {} }))
+        .toBe(false);
+      expect(
+        relevantAfterLinking("no-atoms", {
+          type: "string",
+          ifc: { confidentiality: [], integrity: [] },
+        }),
+      ).toBe(false);
+      // `observes` says which reads a declared label answers to, and there
+      // is no label here for it to classify.
+      expect(
+        relevantAfterLinking("observes-only", {
+          type: "string",
+          ifc: { observes: "shape" },
+        }),
+      ).toBe(false);
+      expect(
+        relevantAfterLinking("label", {
+          type: "string",
+          ifc: { confidentiality: ["secret"] },
+        }),
+      ).toBe(true);
+      // An empty ceiling is a ceiling: it admits nothing confidential.
+      expect(
+        relevantAfterLinking("ceiling", {
+          type: "string",
+          ifc: { maxConfidentiality: [] },
+        }),
+      ).toBe(true);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("marks labeled reads as CFC-relevant and leaves unlabeled reads alone", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
@@ -2851,7 +2911,12 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
-  it("persists CFC metadata for stored link writes without link schema", async () => {
+  it("stores no link entry for a link write without link schema, and reaches the source's labels through it", async () => {
+    // A slot persists the reference's own label and nothing of the source's
+    // (CFC §8.2, §8.12.8). A link written from a handle with no schema, by a
+    // transaction that observed nothing, has no label of its own, so the
+    // slot stores no entry at all; the source's labels are read where they
+    // are when the link is followed.
     const { runtime, storageManager } = createRuntime();
     try {
       const seed = runtime.edit();
@@ -2900,27 +2965,21 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         id: target.getAsNormalizedFullLink().id,
         path: [],
       }) as { cfc?: { labelMap?: { entries?: unknown[] } } };
-      const entries = stored.cfc?.labelMap?.entries as Array<{
+      const entries = (stored.cfc?.labelMap?.entries ?? []) as Array<{
         path: string[];
         label: IFCLabel;
+        origin?: string;
       }>;
-      expect(entries).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            path: [],
-            label: expect.objectContaining({
-              confidentiality: ["shared-space"],
-              integrity: expect.arrayContaining([
-                "authored-by-bob",
-                expect.objectContaining({
-                  type: "https://commonfabric.org/cfc/atom/LinkReference",
-                }),
-              ]),
-            }),
-          }),
-        ]),
-      );
+      expect(entries.filter((entry) => entry.origin === "link")).toEqual([]);
+      expect(entries.flatMap((entry) => entry.label.confidentiality ?? []))
+        .not.toContain("shared-space");
+      expect(entries.flatMap((entry) => entry.label.integrity ?? []))
+        .not.toContain("authored-by-bob");
       verify.abort();
+
+      const reached = labelsReached(runtime, target.getAsNormalizedFullLink());
+      expect(reached.confidentiality).toContain("shared-space");
+      expect(reached.integrity).toContain("authored-by-bob");
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -2975,12 +3034,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
             path: [],
             label: expect.objectContaining({
               confidentiality: ["same-tx-secret"],
-              integrity: expect.arrayContaining([
-                "same-tx-integrity",
-                expect.objectContaining({
-                  type: "https://commonfabric.org/cfc/atom/LinkReference",
-                }),
-              ]),
+              integrity: expect.arrayContaining(["same-tx-integrity"]),
             }),
           }),
         ]),
@@ -2992,7 +3046,12 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
-  it("persists carried link labels without storing transient label views", async () => {
+  it("persists a carried root restriction at the slot without the transient view or entries beneath it", async () => {
+    // A handle's carried view contributes its ROOT entry's confidentiality
+    // to the reference's own label, which is what the slot persists (CFC
+    // §8.2.3, §8.12.8). The view itself is not stored, and nothing is
+    // persisted beneath the slot: an entry the view carries below its root
+    // does not reach the receiving document.
     const { runtime, storageManager } = createRuntime();
     try {
       const seed = runtime.edit();
@@ -3014,7 +3073,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         version: 1,
         entries: [{
           path: [],
-          label: { integrity: ["selected-by-alice"] },
+          label: { confidentiality: ["alice-selection"] },
         }, {
           path: ["title"],
           label: { confidentiality: ["selected-title"] },
@@ -3043,39 +3102,19 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       expect(stored.value?.["/"][LINK_V1_TAG]).not.toHaveProperty(
         "cfcLabelView",
       );
-      const referenceIntegrity = {
-        type: "https://commonfabric.org/cfc/atom/LinkReference",
-        source: {
-          space: signer.did(),
-          id: source.getAsNormalizedFullLink().id,
+      const entries = (stored.cfc?.labelMap?.entries ?? []) as Array<{
+        path: string[];
+        label: IFCLabel;
+        origin?: string;
+      }>;
+      expect(entries.filter((entry) => entry.origin === "link")).toEqual([
+        {
           path: [],
+          label: { confidentiality: ["alice-selection"] },
+          origin: "link",
         },
-        target: {
-          space: signer.did(),
-          id: target.getAsNormalizedFullLink().id,
-          path: [],
-        },
-      };
-      expect(stored.cfc?.labelMap?.entries).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            path: [],
-            label: {
-              integrity: expect.arrayContaining([
-                referenceIntegrity,
-                "selected-by-alice",
-              ]),
-            },
-          }),
-          expect.objectContaining({
-            path: ["title"],
-            label: {
-              confidentiality: ["selected-title"],
-              integrity: [referenceIntegrity],
-            },
-          }),
-        ]),
-      );
+      ]);
+      expect(entries.filter((entry) => entry.path.length > 0)).toEqual([]);
       verify.abort();
     } finally {
       await runtime.dispose();
@@ -3083,7 +3122,10 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
-  it("persists CFC metadata for stored write-redirect links", async () => {
+  it("stores no link entry for a stored write-redirect link, and reaches the source's labels through it", async () => {
+    // A write redirect is a reference like any other: the slot persists the
+    // reference's own label, none here, and nothing of the source's (CFC
+    // §8.2, §8.12.8); following the redirect reaches the source's labels.
     const { runtime, storageManager } = createRuntime();
     try {
       const seed = runtime.edit();
@@ -3132,27 +3174,21 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         id: target.getAsNormalizedFullLink().id,
         path: [],
       }) as { cfc?: { labelMap?: { entries?: unknown[] } } };
-      const entries = stored.cfc?.labelMap?.entries as Array<{
+      const entries = (stored.cfc?.labelMap?.entries ?? []) as Array<{
         path: string[];
         label: IFCLabel;
+        origin?: string;
       }>;
-      expect(entries).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            path: [],
-            label: expect.objectContaining({
-              confidentiality: ["redirect-source-secret"],
-              integrity: expect.arrayContaining([
-                "redirect-source-integrity",
-                expect.objectContaining({
-                  type: "https://commonfabric.org/cfc/atom/LinkReference",
-                }),
-              ]),
-            }),
-          }),
-        ]),
-      );
+      expect(entries.filter((entry) => entry.origin === "link")).toEqual([]);
+      expect(entries.flatMap((entry) => entry.label.confidentiality ?? []))
+        .not.toContain("redirect-source-secret");
+      expect(entries.flatMap((entry) => entry.label.integrity ?? []))
+        .not.toContain("redirect-source-integrity");
       verify.abort();
+
+      const reached = labelsReached(runtime, target.getAsNormalizedFullLink());
+      expect(reached.confidentiality).toContain("redirect-source-secret");
+      expect(reached.integrity).toContain("redirect-source-integrity");
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -3232,7 +3268,12 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
-  it("rejects link writes when a PRE-EXISTING source has no metadata", async () => {
+  it("commits a link write to a PRE-EXISTING source that has no metadata, under the slot's own declared label", async () => {
+    // A link to an unlabeled source needs nothing from the source: the slot
+    // persists the reference's own label, none here, and the source's labels
+    // are read where they are (CFC §8.2, §8.12.8). What protects the slot is
+    // the label its own document declares there, which the link write leaves
+    // in place and a read through the link still answers to.
     const { runtime, storageManager } = createRuntime();
     try {
       const seed = runtime.edit();
@@ -3276,22 +3317,41 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       linkedTarget.set(unlabeledSource);
       tx.prepareCfc();
       const result = await tx.commit().settled;
-      expect(result.error?.message).toContain(
-        "missing link source metadata",
+      expect(result.error).toBeUndefined();
+
+      const verify = runtime.edit();
+      const metadata = readStoredCfcMetadata(verify, {
+        space: signer.did(),
+        id: linkedTarget.getAsNormalizedFullLink().id,
+        scope: "space",
+      });
+      const entries = metadata?.labelMap.entries ?? [];
+      expect(entries.filter((entry) => entry.origin === "link")).toEqual([]);
+      expect(
+        entries.find((entry) =>
+          entry.path.length === 0 && entry.origin === "declared"
+        )?.label.confidentiality,
+      ).toEqual(["personal-space"]);
+      verify.abort?.();
+      const reached = labelsReached(
+        runtime,
+        linkedTarget.getAsNormalizedFullLink(),
       );
+      expect(reached.confidentiality).toContain("personal-space");
     } finally {
       await runtime.dispose();
       await storageManager.close();
     }
   });
 
-  it("labels a SAME-TRANSACTION link source from the target's own schema", async () => {
+  it("commits a SAME-TRANSACTION link source under the location's own declared label", async () => {
     // A doc this transaction itself wrote and then linked into a labeled
     // location (the data layer does exactly this when an array/object entry
-    // is split into a child doc) is treated like the inline value it holds:
-    // the link label derives from the target's schema at the target path —
-    // here the location's own confidentiality — instead of failing closed
-    // (the profile element write shape).
+    // is split into a child doc) needs no label of its own for the link to
+    // commit: the slot persists the reference's own label, none here, and
+    // nothing of the source's (CFC §8.2, §8.12.8). The location's own
+    // declared confidentiality stays at the slot, and a read through the
+    // link answers to it.
     const { runtime, storageManager } = createRuntime();
     try {
       const seed = runtime.edit();
@@ -3348,35 +3408,45 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
 
-      // The persisted link label carries the location's confidentiality.
+      // The slot stores no link entry; the location's declared
+      // confidentiality is what the slot holds and what a read through the
+      // link answers to.
       const verify = runtime.edit();
       const metadata = readStoredCfcMetadata(verify, {
         space: signer.did(),
         id: linkedTarget.getAsNormalizedFullLink().id,
         scope: "space",
       });
-      const rootEntry = metadata?.labelMap.entries.find((entry) =>
-        entry.path.length === 0 && entry.origin === "link"
-      );
-      expect(rootEntry?.label.confidentiality).toEqual(["personal-space"]);
+      const entries = metadata?.labelMap.entries ?? [];
+      expect(entries.filter((entry) => entry.origin === "link")).toEqual([]);
+      expect(
+        entries.find((entry) =>
+          entry.path.length === 0 && entry.origin === "declared"
+        )?.label.confidentiality,
+      ).toEqual(["personal-space"]);
       verify.abort?.();
+      expect(
+        labelsReached(runtime, linkedTarget.getAsNormalizedFullLink())
+          .confidentiality,
+      ).toContain("personal-space");
     } finally {
       await runtime.dispose();
       await storageManager.close();
     }
   });
 
-  it("labels a SAME-TRANSACTION link source from its setup-written schema meta", async () => {
+  it("commits a SAME-TRANSACTION link source whose only schema is its setup-written meta, under the location's declared label", async () => {
     // A piece instantiated by this transaction gets its result schema written
     // at the doc's ["schema"] meta during setup (updateResultSchemaMeta). A
     // handler that materializes such a piece and links it into a protected
-    // list in ONE commit (profile-home's addElement) leaves the
-    // source with no stored CFC metadata and no pending schema input — the
-    // setup-written schema, read back read-your-writes, is what keeps the
-    // link write from failing closed. The persisted link label must derive
-    // from the SOURCE's own schema: the target-schema child-doc fallback
-    // (previous test) could only produce ["personal-space"] here, so
-    // ["card-space"] proves the setup-schema hatch supplied the label.
+    // list in ONE commit (profile-home's addElement) leaves the source with
+    // no stored CFC metadata and no pending schema input. The link write
+    // needs nothing from the source: the slot persists the reference's own
+    // label, none here, and nothing of the source's (CFC §8.2, §8.12.8).
+    // The location's declared confidentiality stays at the slot and is what
+    // a read through the link answers to; the source itself stores no label
+    // for the read to reach, its schema meta being a schema rather than a
+    // stored label.
     const { runtime, storageManager } = createRuntime();
     try {
       const seed = runtime.edit();
@@ -3426,11 +3496,19 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         id: linkedTarget.getAsNormalizedFullLink().id,
         scope: "space",
       });
-      const rootEntry = metadata?.labelMap.entries.find((entry) =>
-        entry.path.length === 0 && entry.origin === "link"
-      );
-      expect(rootEntry?.label.confidentiality).toEqual(["card-space"]);
+      const entries = metadata?.labelMap.entries ?? [];
+      expect(entries.filter((entry) => entry.origin === "link")).toEqual([]);
+      expect(
+        entries.find((entry) =>
+          entry.path.length === 0 && entry.origin === "declared"
+        )?.label.confidentiality,
+      ).toEqual(["personal-space"]);
       verify.abort?.();
+      const reached = labelsReached(
+        runtime,
+        linkedTarget.getAsNormalizedFullLink(),
+      );
+      expect(reached.confidentiality).toContain("personal-space");
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -3979,10 +4057,22 @@ describe("ExtendedStorageTransaction CFC gate", () => {
 
       const linkTx = runtime.edit();
       linkTx.setCfcEnforcementMode("enforce-explicit");
+      // The handle's schema declares the reference's own restriction, which
+      // is what the slot persists (CFC §8.2, §8.12.8): a link written from a
+      // schema-less handle would leave the slot no entry to preserve.
       const linkedSource = runtime.getCell(
         signer.did(),
         "cfc-link-label-preserve-source",
-        undefined,
+        {
+          type: "object",
+          ifc: {
+            confidentiality: ["linked-secret"],
+            integrity: ["linked-integrity"],
+          },
+          properties: {
+            title: { type: "string" },
+          },
+        },
         linkTx,
       );
       const target = runtime.getCell(
@@ -4033,12 +4123,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
             path: ["linked"],
             label: expect.objectContaining({
               confidentiality: ["linked-secret"],
-              integrity: expect.arrayContaining([
-                "linked-integrity",
-                expect.objectContaining({
-                  type: "https://commonfabric.org/cfc/atom/LinkReference",
-                }),
-              ]),
+              integrity: expect.arrayContaining(["linked-integrity"]),
             }),
           }),
           expect.objectContaining({

@@ -33,6 +33,7 @@ export const pythonLanguage: Language = {
       // is part of the claim.
       ["uv", "run"],
     ],
+    signatures: [],
     sharedExtensions: [],
   },
 

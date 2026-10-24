@@ -2,6 +2,12 @@ import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { isDID } from "@commonfabric/identity/did";
 import { decodeMemoryBoundary } from "@commonfabric/memory/v2";
+import {
+  asStoredBlobRecord,
+  blobDocumentId,
+  type BlobRecord,
+  isBlobFileName,
+} from "@commonfabric/runner/blob-record";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { Context } from "@hono/hono";
 
@@ -13,11 +19,6 @@ import { createRouter } from "@/lib/create-app.ts";
 import { memoryServer } from "@/routes/storage/memory.ts";
 
 const router = createRouter();
-
-type BlobContents = {
-  type: string;
-  body: FabricBytes;
-};
 
 const DEFAULT_SUFFIX_BY_TYPE: Record<string, string> = {
   "image/gif": "gif",
@@ -44,73 +45,23 @@ class BlobPayloadTooLarge extends Error {
 }
 
 /**
- * Interprets a stored blob's body as bytes, or returns `undefined` when it is
- * not byte-shaped. The result is always freshly allocated and unshared, so
- * a caller may cede it to something that takes ownership of a buffer.
- */
-const toByteArray = (value: unknown): Uint8Array | undefined => {
-  // The copy is what makes the contract above hold for this arm, and so is what
-  // lets the caller cede the result.
-  // TODO(seefeldb): This arm may be unreachable. Every value reaching here is
-  // decoded from a string, and binary in a string form arrives as a
-  // `FabricBytes`, which the caller returns before asking this. Remove the arm
-  // and its copy once that is confirmed.
-  if (value instanceof Uint8Array) {
-    return new Uint8Array(value);
-  }
-  if (
-    Array.isArray(value) &&
-    value.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)
-  ) {
-    return Uint8Array.from(value);
-  }
-  if (!isObjectNotArray(value)) {
-    return undefined;
-  }
-
-  const entries = Object.entries(value)
-    .map(([key, item]) => [Number(key), item] as const)
-    .filter(([index, item]) =>
-      Number.isInteger(index) && index >= 0 &&
-      typeof item === "number" && Number.isInteger(item) &&
-      item >= 0 && item <= 255
-    )
-    .toSorted(([left], [right]) => left - right);
-  if (
-    entries.length === 0 ||
-    entries.some(([index], position) => index !== position)
-  ) {
-    return undefined;
-  }
-  return Uint8Array.from(entries.map(([, item]) => item as number));
-};
-
-/**
  * Returns `value` as blob contents if its body is a `FabricBytes`, the one form
- * an upload may take, or `undefined` otherwise.
+ * an upload may take, and its `name`, if it has one, is a file name (see
+ * `isBlobFileName()`), or `undefined` otherwise.
  */
-const asBlobContents = (value: unknown): BlobContents | undefined =>
-  isObjectNotArray(value) && typeof value.type === "string" &&
-    value.body instanceof FabricBytes
-    ? { type: value.type, body: value.body }
-    : undefined;
-
-/**
- * Like {@link asBlobContents}, except that the body may also be one of the
- * byte-shaped forms {@link toByteArray} reads, which a stored blob may hold.
- */
-const asStoredBlobContents = (value: unknown): BlobContents | undefined => {
-  if (!isObjectNotArray(value) || typeof value.type !== "string") {
+const asBlobRecord = (value: unknown): BlobRecord | undefined => {
+  if (
+    !isObjectNotArray(value) || typeof value.type !== "string" ||
+    !(value.body instanceof FabricBytes)
+  ) {
     return undefined;
   }
-  if (value.body instanceof FabricBytes) {
+  if (value.name === undefined) {
     return { type: value.type, body: value.body };
   }
-  const bytes = toByteArray(value.body);
-  if (bytes) {
-    return { type: value.type, body: new FabricBytes(bytes, true) };
-  }
-  return undefined;
+  return isBlobFileName(value.name)
+    ? { type: value.type, body: value.body, name: value.name }
+    : undefined;
 };
 
 const parseBlobName = (
@@ -137,6 +88,37 @@ const suffixFor = (blobName: string | undefined, type: string): string => {
 
 const safeResponseType = (type: string): string =>
   SAFE_RESPONSE_TYPES.has(type) ? type : "application/octet-stream";
+
+/**
+ * Returns the `Content-Disposition` a blob of media type `type` is served with,
+ * naming its file when `name` is given: `inline` for a type served as itself,
+ * and `attachment` for one served as `application/octet-stream`, which a
+ * browser saves rather than shows, or for any type when `download` asks for the
+ * blob to be saved. A name is given twice, as RFC 6266
+ * describes: as percent-encoded UTF-8 in `filename*`, and as an ASCII stand-in
+ * in `filename`, with `_` for each character a quoted string can't carry, for a
+ * client that reads only that one.
+ */
+const contentDispositionFor = (
+  name: string | undefined,
+  type: string,
+  download: boolean,
+): string => {
+  const disposition = !download && SAFE_RESPONSE_TYPES.has(type)
+    ? "inline"
+    : "attachment";
+  if (name === undefined) {
+    return disposition;
+  }
+  const ascii = name.replace(/[^\x20-\x7e]|["\\]/gu, "_");
+  // `encodeURIComponent()` leaves `'`, `(`, `)` and `*` as they are, and RFC
+  // 5987 admits none of them unencoded.
+  const encoded = encodeURIComponent(name).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `${disposition}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+};
 
 const readLimitedText = async (request: Request): Promise<string> => {
   const contentLength = Number(request.headers.get("Content-Length"));
@@ -178,18 +160,18 @@ const readRequestContents = async (request: Request) => {
   if (!source) {
     return undefined;
   }
-  return asBlobContents(decodeMemoryBoundary(source));
+  return asBlobRecord(decodeMemoryBoundary(source));
 };
 
-const loadBlobContents = async (
+const loadBlobRecord = async (
   spaceDid: string,
   id: string,
-): Promise<BlobContents | undefined> => {
+): Promise<BlobRecord | undefined> => {
   const document = await memoryServer.readDocument(
     spaceDid,
-    `cid:${id}`,
+    blobDocumentId(id),
   );
-  return asStoredBlobContents(document?.value);
+  return asStoredBlobRecord(document?.value);
 };
 
 const upload = async (c: Context) => {
@@ -198,7 +180,7 @@ const upload = async (c: Context) => {
     return c.text("Invalid space DID", 400);
   }
 
-  let contents: BlobContents | undefined;
+  let contents: BlobRecord | undefined;
   try {
     contents = await readRequestContents(c.req.raw);
   } catch (error) {
@@ -213,9 +195,9 @@ const upload = async (c: Context) => {
 
   const id = hashOf(contents).toString();
   const blobName = c.req.param("blobName") as string | undefined;
-  const suffix = suffixFor(blobName, contents.type);
+  const suffix = suffixFor(blobName ?? contents.name, contents.type);
   const hash = id.slice("fid1:".length);
-  await memoryServer.writeDocument(spaceDid, `cid:${id}`, contents);
+  await memoryServer.writeDocument(spaceDid, blobDocumentId(id), contents);
 
   return c.json({ id, url: `blobs/${hash}.${suffix}` }, 201);
 };
@@ -234,19 +216,28 @@ router.get("/:spaceDid/blobs/:blobName", async (c) => {
     return c.text("Invalid blob name", 400);
   }
   const { id } = parsed;
-  const contents = await loadBlobContents(spaceDid, id);
+  const contents = await loadBlobRecord(spaceDid, id);
   if (!contents) {
     return c.text("Blob not found", 404);
   }
 
   const body = contents.body.slice();
-  return new Response(body, {
-    status: 200,
-    headers: {
-      "Content-Type": safeResponseType(contents.type),
-      "Cache-Control": "public, max-age=31536000, immutable",
-    },
+  // `nosniff` holds a browser to the `Content-Type` given, so bytes served as
+  // `application/octet-stream` are never read as a type it guesses at.
+  const headers = new Headers({
+    "Content-Type": safeResponseType(contents.type),
+    "Cache-Control": "public, max-age=31536000, immutable",
+    "X-Content-Type-Options": "nosniff",
+    // `?download` asks for the blob to be saved, which a browser does for an
+    // `attachment` from any origin, where it honors a link's `download`
+    // attribute only from its own.
+    "Content-Disposition": contentDispositionFor(
+      contents.name,
+      contents.type,
+      c.req.query("download") !== undefined,
+    ),
   });
+  return new Response(body, { status: 200, headers });
 });
 
 export default router;

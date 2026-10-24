@@ -4,6 +4,8 @@ import {
   assertNotMatch,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 
 import { injectCfHelpers } from "@commonfabric/ts-transformers";
 
@@ -241,4 +243,26 @@ Deno.test("helperInjectionLineOffset leaves a blank file alone", async () => {
       0,
     );
   }
+});
+
+describe("pretransform", () => {
+  it("splits a mixed import that follows a type assertion in a `.ts` module", () => {
+    // Parsed as TSX, `<number>value` would open a JSX element that swallows
+    // the import after it. The split reads the parse the helper injection
+    // makes, which takes the script kind from the file name.
+    const contents = [
+      "const value: unknown = 1;",
+      "const a = <number>value;",
+      'import D, { b } from "x";',
+      "export const c = [a, D, b];",
+    ].join("\n");
+    const transformed = transformInjectHelperModule({
+      main: "/m.ts",
+      files: [{ name: "/m.ts", contents }],
+    }).files[0].contents;
+
+    expect(transformed.split("\n")[3]).toBe(
+      'import D from "x"; import { b } from "x";',
+    );
+  });
 });

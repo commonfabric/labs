@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { runtimePresets } from "../src/runtime-presets.ts";
@@ -99,6 +100,52 @@ const Room = pattern<Input, Output>(({ entries, frozen, topic }) => ({
 
 // The room is a sub-piece, as it is wherever a pattern composes one: starting
 // the parent replays the room's setup.
+export default pattern<Record<string, never>, { room: Output }>(() => ({
+  room: Room({}),
+}));
+`,
+  }],
+};
+
+// A sub-piece whose input a UI contract guards: only an event from the
+// room's own surface may write it, whichever handler receives the event.
+const CONTRACT_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: `/// <cts-enable />
+import {
+  Default,
+  handler,
+  pattern,
+  Stream,
+  type TrustedActionUiContract,
+  Writable,
+} from "commonfabric";
+
+const pin = handler<{ text: string }, { badge: Writable<{ text: string }> }>(
+  ({ text }, { badge }) => {
+    badge.set({ text });
+  },
+);
+
+interface Input {
+  badge?: Default<
+    TrustedActionUiContract<{ text: string }, "Pin", "GuardedRoom">,
+    { text: "" }
+  >;
+}
+
+interface Output {
+  badge: { text: string };
+  pin: Stream<{ text: string }>;
+}
+
+const Room = pattern<Input, Output>(({ badge }) => ({
+  badge,
+  pin: pin({ badge }),
+}));
+
 export default pattern<Record<string, never>, { room: Output }>(() => ({
   room: Room({}),
 }));
@@ -495,5 +542,68 @@ describe("writer-policied inputs of a sub-piece", () => {
         await runtime.dispose();
       }
     });
+  });
+
+  it("starts one whose input a UI contract guards, and the surface's events write it from there", async () => {
+    const pinEvent = (text: string) => {
+      const event = {
+        text,
+        provenance: {
+          origin: "dom",
+          trusted: true,
+          ui: {
+            pattern: "GuardedRoom",
+            eventIntegrity: ["GuardedRoom"],
+            uiContractDataset: { uiAction: "Pin" },
+          },
+        },
+      };
+      markRendererTrustedEvent(event);
+      return event;
+    };
+    const creator = newRuntime();
+    const cold = newRuntime();
+    const failures = observeStartFailures(cold);
+    try {
+      const tx = creator.edit();
+      const pattern = await creator.patternManager.compilePattern(
+        CONTRACT_PROGRAM,
+        { space, tx },
+      );
+      const created = creator.getCell<{ room: { badge: { text: string } } }>(
+        space,
+        "contract-cold-start",
+        undefined,
+        tx,
+      );
+      const running = creator.run(tx, pattern, {}, created);
+      creator.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await running.pull();
+      await creator.idle();
+      await send(creator, running, "pin", pinEvent("first"));
+      expect(running.get().room.badge.text).toBe("first");
+      await creator.storageManager.synced();
+
+      const cell = cold.getCell<{ room: { badge: { text: string } } }>(
+        space,
+        "contract-cold-start",
+      );
+      await cell.sync();
+      expect(await cold.start(cell)).toBe(true);
+      await cell.pull();
+      await cold.idle();
+      expect(
+        failures,
+        "the piece-start commit was refused, so the started graph was torn " +
+          "down",
+      ).toEqual([]);
+
+      await send(cold, cell, "pin", pinEvent("second"));
+      expect(cell.get().room.badge.text).toBe("second");
+    } finally {
+      await cold.dispose();
+      await creator.dispose();
+    }
   });
 });

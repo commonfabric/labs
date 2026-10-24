@@ -10,11 +10,12 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 
 import { extractAstralConfig } from "../config.ts";
 
 /** A path that exists, whatever machine this runs on: this file. */
-const EXISTING_FILE = new URL(import.meta.url).pathname;
+const EXISTING_FILE = fromFileUrl(import.meta.url);
 
 /** A stand-in for the profile directory a run hands the launch. */
 const PROFILE_DIR = "/profile-dir";

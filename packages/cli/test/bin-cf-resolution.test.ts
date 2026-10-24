@@ -29,7 +29,8 @@ const binCf = join(
  * `deno run` and no `--config`, so it must not import anything.
  */
 const STUB_LAUNCHER = `
-const here = new URL("../..", import.meta.url).pathname.replace(/\\/$/, "");
+const here = decodeURIComponent(new URL("../..", import.meta.url).pathname)
+  .replace(/\\/$/, "");
 console.log(here);
 `;
 

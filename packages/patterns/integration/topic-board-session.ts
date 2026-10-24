@@ -7,6 +7,7 @@
  * have seen, with no polling interval added to it.
  */
 
+import { debugStr } from "@commonfabric/data-model";
 import { Browser, env, type Page } from "@commonfabric/integration";
 import { login } from "@commonfabric/integration/shell-utils";
 import type { Identity } from "@commonfabric/identity";
@@ -19,7 +20,11 @@ import {
   clickCellLink,
   waitForPieceView,
 } from "./topics-navigation-helpers.ts";
-import { type TopicBoardFixture, topicTitle } from "./topic-board-fixture.ts";
+import {
+  readTopicMentionState,
+  type TopicBoardFixture,
+  topicTitle,
+} from "./topic-board-fixture.ts";
 
 export interface BoardSessionTarget {
   fixture: TopicBoardFixture;
@@ -93,14 +98,22 @@ export class BoardSession {
    * and charge that segment for them.
    *
    * Returns the opened piece's id.
+   *
+   * @throws when the page never shows all of `expected`, naming what the topic
+   *   stores of its mentions and whether its References card rendered, with the
+   *   wait's own error as the cause.
    */
   async openTopic(
     expected: (openedPieceId: string) => readonly string[],
   ): Promise<string> {
     const pieceId = await clickCellLink(this.#page, "Open");
     await waitForPieceView(this.#page, this.#target.fixture.spaceDid, pieceId);
-    for (const text of expected(pieceId)) {
-      await waitForSettledText(this.#page, "body", text);
+    try {
+      for (const text of expected(pieceId)) {
+        await waitForSettledText(this.#page, "body", text);
+      }
+    } catch (cause) {
+      throw new Error(await this.#describeUnformedTopic(pieceId), { cause });
     }
     await settleView(this.#page);
     return pieceId;
@@ -123,5 +136,37 @@ export class BoardSession {
         }`,
       );
     }
+  }
+
+  /**
+   * What a topic page that never formed shows and stores. A sibling's title
+   * reaches the page through the topic's References card, which renders the
+   * `mentioned` list the `mention` handler writes. Under server execution the
+   * handler's stream entry says whether it ever ran, and `mentioned` says what
+   * it left.
+   */
+  async #describeUnformedTopic(pieceId: string): Promise<string> {
+    const { spaceDid } = this.#target.fixture;
+    const [referencesCard, state] = await Promise.all([
+      this.#page.evaluate(() => {
+        // The card's heading may sit in any shadow root on the page.
+        const visit = (root: Document | ShadowRoot): boolean =>
+          [...root.querySelectorAll("*")].some((element) =>
+            (element.localName === "cf-heading" &&
+              element.textContent?.trim() === "References") ||
+            (element.shadowRoot !== null && visit(element.shadowRoot))
+          );
+        return visit(document);
+      }).catch((error) => debugStr`unreadable: $quote,long${error}`),
+      readTopicMentionState({
+        apiUrl: new URL(env.API_URL),
+        identity: this.#target.identity,
+        spaceDid,
+        pieceId,
+      }).catch((error) => debugStr`unreadable: $quote,long${error}`),
+    ]);
+    return `Topic \`${pieceId}\` never finished forming. ` +
+      `References card rendered: ${referencesCard}. ` +
+      debugStr`Its stored mention state: $quote,indent,xlong${state}`;
   }
 }

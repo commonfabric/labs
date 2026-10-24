@@ -200,7 +200,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["enabled", "disabled"]
+            "enum": ["disabled", "enabled"]
         } as const satisfies __cfHelpers.JSONSchema, state.key("user", "settings", "notifications"), "enabled", "disabled")}</p>
         {__cfHelpers.ifElse({
             type: "boolean"

@@ -37,7 +37,7 @@ export const recordFeedbackToolDescriptor: HarnessToolDescriptor = {
   toolId: "record_feedback",
   title: "Record Feedback",
   description:
-    "Tell the pattern index what a pattern's result was worth. Call it when the person you are working for says a pattern did or did not do what they wanted — the index ranks on these votes, so a pattern that keeps disappointing stops being offered first.",
+    "Tell the pattern index what a pattern's result was worth, when the person says it did or did not do what they wanted. The index ranks on these votes.",
   effectClass: "side-effect",
   inputSchema: {
     type: "object",
@@ -45,18 +45,17 @@ export const recordFeedbackToolDescriptor: HarnessToolDescriptor = {
       patternId: {
         type: "string",
         description:
-          "Id of the pattern being judged, as search_patterns reported it or as you passed it to run_pattern.",
+          "As search_patterns reported it or you passed it to run_pattern.",
       },
       verdict: {
         type: "string",
         enum: ["up", "down"],
         description:
-          "up when the pattern did the job, down when it did not. Judge the pattern, not the request that led to it.",
+          "up when the pattern did the job, down when it did not; judge the pattern, not the request.",
       },
       note: {
         type: "string",
-        description:
-          "One sentence on what was good or wrong, for whoever reads the index later. Optional.",
+        description: "One sentence on what was good or wrong.",
       },
     },
     required: ["patternId", "verdict"],

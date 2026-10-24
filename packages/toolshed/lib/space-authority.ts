@@ -51,7 +51,7 @@ import { spaceReaderRole } from "@commonfabric/runner/cfc";
  */
 const SPACE_DID_RE = /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,120}$/;
 
-export const isValidSpaceDid = (space: string): boolean =>
+export const isValidSpaceDid = (space: string): space is DID =>
   SPACE_DID_RE.test(space);
 
 /**
@@ -59,7 +59,7 @@ export const isValidSpaceDid = (space: string): boolean =>
  * exact principal. A wildcard entry is never consulted — see the header.
  */
 export const isExplicitSpaceOwner = (
-  acl: ACL | null | undefined,
+  acl: unknown,
   principal: string,
 ): boolean => {
   if (!isACL(acl)) return false;

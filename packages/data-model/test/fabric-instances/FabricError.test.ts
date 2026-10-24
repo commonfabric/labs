@@ -634,18 +634,13 @@ describe("FabricError", () => {
         expect(fe.message).toBe("outer");
       });
 
-      it("returns a mutable clone that currently SHARES the nested `cause` reference (known gap)", () => {
-        // KNOWN GAP (pre-existing): the clone core round-trips through
-        // `[CODEC]`, whose `encode()` passes `cause` (and extras) through by
-        // reference, so an *unfrozen* deep clone still shares its nested
-        // `cause` with the original -- contrary to the `deepClone(false)`
-        // contract on `FabricInstance`. Pinned to record the actual behavior,
-        // not to bless it.
-
+      it("returns a mutable clone with independently mutable nested state", () => {
         const cause = { detail: 1 };
         const fe = FabricError.fromNativeError(new Error("outer", { cause }));
         const clone = fe.deepClone(false) as FabricError;
-        expect(clone.cause).toBe(cause);
+        expect(clone.cause).not.toBe(cause);
+        (clone.cause as { detail: number }).detail = 2;
+        expect(cause.detail).toBe(1);
       });
     });
   });

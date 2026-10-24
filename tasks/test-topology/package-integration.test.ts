@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { dirname, fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
 import type {
@@ -8,7 +9,7 @@ import type {
 import { loadPackageIntegrationSuites } from "./package-integration.ts";
 import { type Suite, unavailableUnits } from "./suite.ts";
 
-const root = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
+const root = dirname(dirname(dirname(fromFileUrl(import.meta.url))));
 
 /** The suites as they stand with a stated first-party default. */
 async function suitesWith(

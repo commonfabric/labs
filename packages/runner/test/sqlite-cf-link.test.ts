@@ -10,6 +10,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { areNormalizedLinksSame } from "../src/link-utils.ts";
+import { immutableCellsFor } from "../src/immutable-cell.ts";
 
 import {
   decodeCfLinkValue,
@@ -77,6 +78,16 @@ describe("_cf_link codec", () => {
 
   it("decodes NULL to null", () => {
     expect(decodeCfLinkValue(null, runtime, undefined, tx)).toBeNull();
+  });
+
+  it("stores immutable contents in a portable link string", () => {
+    const inner = runtime.getImmutableCell(space, { n: 42 });
+    const cell = runtime.getImmutableCell(space, { payload: inner });
+    const encoded = encodeCfLinkValue(cell);
+    expect(encoded).not.toContain("snapshot:");
+    immutableCellsFor(runtime).dispose();
+    const decoded = decodeCfLinkValue(encoded, runtime, undefined, tx);
+    expect(decoded!.get()).toEqual({ payload: { n: 42 } });
   });
 
   it("throws when encoding a non-cell value", () => {

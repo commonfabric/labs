@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
@@ -168,8 +169,12 @@ describe("memory v2 flags", () => {
       admissionNotice: true,
       elidedVerdicts: true,
       routedAuthV1: false,
+      routedCompressionV1: false,
       syncCrossingsV1: true,
+      watchRemoveV1: true,
       syncSchemaTableV2: false,
+      syncLabelTableV1: true,
+      commitLabelTableV1: true,
     });
 
     setModernCellRepConfig(true);
@@ -203,8 +208,12 @@ describe("memory v2 flags", () => {
       admissionNotice: true,
       elidedVerdicts: true,
       routedAuthV1: false,
+      routedCompressionV1: false,
       syncCrossingsV1: true,
+      watchRemoveV1: true,
       syncSchemaTableV2: true,
+      syncLabelTableV1: true,
+      commitLabelTableV1: true,
     });
 
     resetModernCellRepConfig();
@@ -222,6 +231,8 @@ describe("memory v2 flags", () => {
         commitPreconditions: true,
         applyOp: true,
         syncSchemaTableV2: true,
+        syncLabelTableV1: true,
+        commitLabelTableV1: true,
         messageCompressionV1: true,
         sqliteCommitRowLabelEval: true,
         sqliteQueryReader: true,
@@ -240,7 +251,9 @@ describe("memory v2 flags", () => {
         admissionNotice: true,
         elidedVerdicts: true,
         routedAuthV1: false,
+        routedCompressionV1: false,
         syncCrossingsV1: false,
+        watchRemoveV1: false,
       },
       {
         modernCellRep: true,
@@ -248,6 +261,8 @@ describe("memory v2 flags", () => {
         commitPreconditions: false,
         applyOp: false,
         syncSchemaTableV2: false,
+        syncLabelTableV1: false,
+        commitLabelTableV1: false,
         messageCompressionV1: false,
         // A peer without commit-time sqlite row-label evaluation stays
         // compatible — the capability only gates the runner's write-gate
@@ -271,13 +286,44 @@ describe("memory v2 flags", () => {
         admissionNotice: false,
         elidedVerdicts: false,
         routedAuthV1: false,
+        routedCompressionV1: false,
         syncCrossingsV1: false,
+        watchRemoveV1: false,
       },
     ));
   });
 });
 
 describe("parseMemoryProtocolFlags", () => {
+  it("requires an explicit boolean commit-label capability advertisement", () => {
+    expect(getMemoryProtocolFlags().commitLabelTableV1).toBe(true);
+    expect(parseMemoryProtocolFlags({})?.commitLabelTableV1).toBe(false);
+    for (const enabled of [false, true]) {
+      const flags = {
+        ...getMemoryProtocolFlags(),
+        commitLabelTableV1: enabled,
+      };
+      expect(parseMemoryProtocolFlags(flags)?.commitLabelTableV1).toBe(enabled);
+    }
+    for (const invalid of [null, 0, 1, "true", [], {}]) {
+      expect(parseMemoryProtocolFlags({ commitLabelTableV1: invalid }))
+        .toBeNull();
+    }
+  });
+  it("requires explicit boolean label-table capability advertisement", () => {
+    expect(getMemoryProtocolFlags().syncLabelTableV1).toBe(true);
+    expect(parseMemoryProtocolFlags({})?.syncLabelTableV1).toBe(false);
+    for (const enabled of [false, true]) {
+      const flags = { ...getMemoryProtocolFlags(), syncLabelTableV1: enabled };
+      expect(parseMemoryProtocolFlags(wireMemoryProtocolFlags(flags)))
+        .toEqual(flags);
+    }
+    for (const invalid of [null, 1, "true", [], {}]) {
+      expect(parseMemoryProtocolFlags({ syncLabelTableV1: invalid }))
+        .toBeNull();
+    }
+  });
+
   it("requires an explicit custom-root capability", () => {
     assertEquals(parseMemoryProtocolFlags({})?.genesisRoot, false);
     assertEquals(
@@ -362,6 +408,8 @@ describe("parseMemoryProtocolFlags", () => {
       commitPreconditions: false,
       applyOp: false,
       syncSchemaTableV2: false,
+      syncLabelTableV1: false,
+      commitLabelTableV1: false,
       messageCompressionV1: false,
       sqliteCommitRowLabelEval: false,
       sqliteQueryReader: false,
@@ -380,7 +428,9 @@ describe("parseMemoryProtocolFlags", () => {
       admissionNotice: false,
       elidedVerdicts: false,
       routedAuthV1: false,
+      routedCompressionV1: false,
       syncCrossingsV1: false,
+      watchRemoveV1: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
       genesisRoot: false,
@@ -390,6 +440,8 @@ describe("parseMemoryProtocolFlags", () => {
       commitPreconditions: false,
       applyOp: false,
       syncSchemaTableV2: false,
+      syncLabelTableV1: false,
+      commitLabelTableV1: false,
       messageCompressionV1: false,
       sqliteCommitRowLabelEval: false,
       sqliteQueryReader: false,
@@ -408,7 +460,9 @@ describe("parseMemoryProtocolFlags", () => {
       admissionNotice: false,
       elidedVerdicts: false,
       routedAuthV1: false,
+      routedCompressionV1: false,
       syncCrossingsV1: false,
+      watchRemoveV1: false,
     });
   });
 
@@ -425,6 +479,8 @@ describe("parseMemoryProtocolFlags", () => {
         commitPreconditions: true,
         applyOp: false,
         syncSchemaTableV2: false,
+        syncLabelTableV1: false,
+        commitLabelTableV1: false,
         messageCompressionV1: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
@@ -443,7 +499,9 @@ describe("parseMemoryProtocolFlags", () => {
         admissionNotice: false,
         elidedVerdicts: false,
         routedAuthV1: false,
+        routedCompressionV1: false,
         syncCrossingsV1: false,
+        watchRemoveV1: false,
       },
     );
   });
@@ -463,6 +521,19 @@ describe("parseMemoryProtocolFlags", () => {
     assertEquals(
       parseMemoryProtocolFlags({ operationCodecs: ["missing"] }),
       null,
+    );
+  });
+
+  it("accepts the watchRemoveV1 capability key", () => {
+    assertEquals(parseMemoryProtocolFlags({})?.watchRemoveV1, false);
+    assertEquals(
+      parseMemoryProtocolFlags({ watchRemoveV1: true })?.watchRemoveV1,
+      true,
+    );
+    assertEquals(parseMemoryProtocolFlags({ watchRemoveV1: "true" }), null);
+    assertEquals(
+      wireMemoryProtocolFlags(getMemoryProtocolFlags()).watchRemoveV1,
+      true,
     );
   });
 
@@ -492,6 +563,8 @@ describe("parseMemoryProtocolFlags", () => {
         commitPreconditions: false,
         applyOp: false,
         syncSchemaTableV2: true,
+        syncLabelTableV1: false,
+        commitLabelTableV1: false,
         messageCompressionV1: false,
         sessionHoldings: false,
         viewScopedReplicationV1: false,
@@ -503,7 +576,9 @@ describe("parseMemoryProtocolFlags", () => {
         admissionNotice: false,
         elidedVerdicts: false,
         routedAuthV1: false,
+        routedCompressionV1: false,
         syncCrossingsV1: false,
+        watchRemoveV1: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
         pendingReadStacks: false,
@@ -526,6 +601,8 @@ describe("parseMemoryProtocolFlags", () => {
         commitPreconditions: false,
         applyOp: false,
         syncSchemaTableV2: false,
+        syncLabelTableV1: false,
+        commitLabelTableV1: false,
         messageCompressionV1: true,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
@@ -544,7 +621,9 @@ describe("parseMemoryProtocolFlags", () => {
         admissionNotice: false,
         elidedVerdicts: false,
         routedAuthV1: false,
+        routedCompressionV1: false,
         syncCrossingsV1: false,
+        watchRemoveV1: false,
       },
     );
   });
@@ -562,6 +641,8 @@ describe("parseMemoryProtocolFlags", () => {
         commitPreconditions: false,
         applyOp: false,
         syncSchemaTableV2: false,
+        syncLabelTableV1: false,
+        commitLabelTableV1: false,
         messageCompressionV1: false,
         sqliteCommitRowLabelEval: true,
         sqliteQueryReader: false,
@@ -580,7 +661,9 @@ describe("parseMemoryProtocolFlags", () => {
         admissionNotice: false,
         elidedVerdicts: false,
         routedAuthV1: false,
+        routedCompressionV1: false,
         syncCrossingsV1: false,
+        watchRemoveV1: false,
       },
     );
   });
@@ -606,6 +689,8 @@ describe("parseMemoryProtocolFlags", () => {
         commitPreconditions: false,
         applyOp: false,
         syncSchemaTableV2: false,
+        syncLabelTableV1: false,
+        commitLabelTableV1: false,
         messageCompressionV1: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
@@ -624,7 +709,9 @@ describe("parseMemoryProtocolFlags", () => {
         admissionNotice: false,
         elidedVerdicts: false,
         routedAuthV1: false,
+        routedCompressionV1: false,
         syncCrossingsV1: false,
+        watchRemoveV1: false,
       },
     );
   });
@@ -643,6 +730,8 @@ describe("parseMemoryProtocolFlags", () => {
         commitPreconditions: false,
         applyOp: false,
         syncSchemaTableV2: false,
+        syncLabelTableV1: false,
+        commitLabelTableV1: false,
         messageCompressionV1: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
@@ -661,7 +750,9 @@ describe("parseMemoryProtocolFlags", () => {
         admissionNotice: false,
         elidedVerdicts: false,
         routedAuthV1: false,
+        routedCompressionV1: false,
         syncCrossingsV1: false,
+        watchRemoveV1: false,
       },
     );
   });
@@ -677,6 +768,8 @@ describe("parseMemoryProtocolFlags", () => {
         commitPreconditions: false,
         applyOp: false,
         syncSchemaTableV2: false,
+        syncLabelTableV1: false,
+        commitLabelTableV1: false,
         messageCompressionV1: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
@@ -695,7 +788,9 @@ describe("parseMemoryProtocolFlags", () => {
         admissionNotice: false,
         elidedVerdicts: false,
         routedAuthV1: false,
+        routedCompressionV1: false,
         syncCrossingsV1: false,
+        watchRemoveV1: false,
       },
     );
   });
@@ -715,7 +810,9 @@ describe("parseMemoryProtocolFlags", () => {
         admissionNotice: false,
         elidedVerdicts: false,
         routedAuthV1: false,
+        routedCompressionV1: false,
         syncCrossingsV1: false,
+        watchRemoveV1: false,
       }),
       {
         genesisRoot: false,
@@ -725,6 +822,8 @@ describe("parseMemoryProtocolFlags", () => {
         commitPreconditions: false,
         applyOp: false,
         syncSchemaTableV2: false,
+        syncLabelTableV1: false,
+        commitLabelTableV1: false,
         messageCompressionV1: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
@@ -743,7 +842,9 @@ describe("parseMemoryProtocolFlags", () => {
         admissionNotice: false,
         elidedVerdicts: false,
         routedAuthV1: false,
+        routedCompressionV1: false,
         syncCrossingsV1: false,
+        watchRemoveV1: false,
       },
     );
   });

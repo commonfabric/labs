@@ -34,15 +34,21 @@ import {
 } from "@commonfabric/data-model/codecs";
 import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 import type { JSONSchema } from "@commonfabric/api";
-import type { Cell, MemorySpace } from "@commonfabric/runner";
+import type {
+  Cell,
+  MemorySpace,
+  NormalizedFullLink,
+} from "@commonfabric/runner";
 import {
   cellRuntime,
   convertCellsToLinks,
+  createSpaceRootIfAbsent,
   isCell,
   markUiInputBlindWriteTx,
   parseLink,
   type RuntimeTelemetry,
   type RuntimeTelemetryEvent,
+  sendEvent,
   setBlindStructuralTarget,
   unmarkUiInputBlindWriteTx,
 } from "@commonfabric/runner";
@@ -53,9 +59,11 @@ import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import {
   ensurePrivateInboxOf,
+  inboxPieceLinkSchema,
+  requestPrivateInboxOf,
   type ShareIntake,
   startShareIntakeOf,
 } from "@commonfabric/piece/ops";
@@ -1108,6 +1116,101 @@ const handlers: Record<
   },
 
   /**
+   * Requests, as a loom daemon does, the private inbox of the Home stand-in
+   * reached from the piece result by `path`, naming its profile reached from
+   * that result by `profile`, and answers with Home's answer, naming the inbox
+   * by its link, and the link that profile's pointer holds once Home has
+   * answered, read after a sync.
+   */
+  async requestPrivateInbox({ path, profile, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    const cellAt = async (segments: unknown) => {
+      let cell = target;
+      for (const segment of (segments ?? []) as (string | number)[]) {
+        cell = cell.key(segment as never);
+      }
+      await cell.sync();
+      return cell.resolveAsCell();
+    };
+    const home = await cellAt(path);
+    const named = await cellAt(profile);
+    const answer = await requestPrivateInboxOf(
+      controller().runtime,
+      home,
+      named,
+    );
+    const pointer = await named.key("inbox").asSchema({
+      type: "object",
+      properties: { piece: inboxPieceLinkSchema },
+    }).pull();
+    const addressOf = (cell: Cell<unknown>) => {
+      const { id, space } = cell.getAsNormalizedFullLink();
+      return { id, space };
+    };
+    return {
+      status: answer.status,
+      ...("inbox" in answer ? { inbox: addressOf(answer.inbox) } : {}),
+      ...(isCell(pointer?.piece) ? { pointer: addressOf(pointer.piece) } : {}),
+    };
+  },
+
+  /**
+   * Sends the request `requestPrivateInbox` does, and answers with the
+   * receipt's address and the document and path it holds a link to, as it
+   * stands once the send has completed, or nothing when it holds no link.
+   */
+  async requestReceipt({ path, profile, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    const cellAt = async (segments: unknown) => {
+      let cell = target;
+      for (const segment of (segments ?? []) as (string | number)[]) {
+        cell = cell.key(segment as never);
+      }
+      await cell.sync();
+      return cell.resolveAsCell();
+    };
+    const home = await cellAt(path);
+    const named = await cellAt(profile);
+    const link = await new Promise<NormalizedFullLink>((resolve, reject) =>
+      sendEvent(home.key("requestPrivateInbox"), { from: named }, (tx) => {
+        const receipt = tx.handlingReceiptLink;
+        if (tx.status().status === "error" || receipt === undefined) {
+          reject(new Error("The request's handling wrote no receipt"));
+        } else resolve(receipt);
+      })
+    );
+    const receipt = controller().runtime.getCellFromLink(link);
+    await receipt.sync();
+    const linked = parseLink(receipt.getRaw());
+    return linked === undefined ? undefined : {
+      receipt: { id: link.id, space: link.space },
+      id: linked.id,
+      path: [...linked.path],
+    };
+  },
+
+  /**
+   * Reads the status the receipt at `receipt` holds, following the link it
+   * holds, as a client of `requestPrivateInbox` reads it.
+   */
+  async readReceiptStatus({ receipt }) {
+    const { id, space } = receipt as { id: string; space: MemorySpace };
+    const cell = controller().runtime.getCellFromLink({
+      id: id as `${string}:${string}`,
+      space,
+      path: [],
+      type: "application/json",
+    } as never, {
+      type: "object",
+      properties: { status: { type: "string" } },
+    });
+    const answer = await cell.pull() as { status?: string } | undefined;
+    return answer?.status;
+  },
+
+  /**
    * Starts the host's share intake over the Home stand-in reached from the
    * piece result by `path`, as `PiecesController.startShareIntake()` starts
    * the identity's own Home's, following it until the session is disposed.
@@ -1194,6 +1297,44 @@ const handlers: Record<
     return {};
   },
 
+  /**
+   * Creates a space the way a loom daemon's sidecar creates a social Loom's:
+   * its genesis commit reserves the Loom root at the Loom's publication cause
+   * and declares `spaceKind`, `loom` when absent and no kind for `null`, and
+   * grants `recipient` `WRITE`, as the daemon's offer does. Then provisions
+   * the root, titled `title`, from `system:loom/main.tsx` at the host this
+   * runtime reads. Answers the space and the address of its root.
+   */
+  async createLoomSpace({ recipient, spaceKind, title }) {
+    const runtime = controller().runtime;
+    const root = {
+      source: "system:loom/main.tsx",
+      sourceRoots: [
+        "system:loom/main.test.tsx",
+        "system:loom/presentation-refusals.test.tsx",
+        "system:loom/multi-user.test.tsx",
+        "system:loom/url-view.test.tsx",
+      ],
+      cause: JSON.stringify({
+        purpose: "loom-publication-root",
+        publication: crypto.randomUUID(),
+      }),
+      argument: { title: title as string },
+    };
+    const space = await runtime.createSpace({
+      grants: { [recipient as DID]: "WRITE" },
+      root,
+      ...(spaceKind === null
+        ? {}
+        : { spaceKind: (spaceKind ?? "loom") as string }),
+    });
+    const { error } = await createSpaceRootIfAbsent(runtime, space, root);
+    if (error) throw new Error(`createLoomSpace failed: ${error.message}`);
+    await idle();
+    const { id } = runtime.getCell(space, root.cause).getAsNormalizedFullLink();
+    return { space, root: { space, id } };
+  },
+
   /** Reads an explicit held address with the same stored-label gate as any Cell. */
   async readAddress({ link }) {
     const cell = controller().runtime.getCellFromLink(link as never);
@@ -1278,9 +1419,8 @@ const handlers: Record<
   // reading handler then no-ops SILENTLY (the 2026-08-22 ON-lane
   // group-chat flake). Once the first event's consequence has arrived
   // back, its commit is in the space's history, so any later-fired
-  // event is served against a view that includes it. Backstopped by
-  // the harness RPC timeout, which names this session and command;
-  // instant on the OFF arm (no overlay) and when nothing is
+  // event is served against a view that includes it. Nothing bounds
+  // the wait; instant on the OFF arm (no overlay) and when nothing is
   // outstanding. First-order only, like the count it drains — a
   // server-side cascade child is no session's intent.
   async awaitEventConsequences() {

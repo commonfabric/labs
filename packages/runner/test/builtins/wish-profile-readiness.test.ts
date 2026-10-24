@@ -255,7 +255,7 @@ describe("wish-profile-readiness", () => {
           seed.prepareTxForCommit(tx);
           expect((await tx.commit().settled).error).toBeUndefined();
         }
-        // A successful warm wish leaves the labeled state a cold client revisits.
+        // A successful warm wish leaves the state a cold client revisits.
         const seedAction = wish(
           inputs as Cell<[unknown, unknown]>,
           () => {},
@@ -284,12 +284,6 @@ describe("wish-profile-readiness", () => {
           runtime.getHomeSpaceCell().sync(),
           runtime.getCellFromLink(homeDefault.getAsNormalizedFullLink()).sync(),
         ]);
-        const inspect = runtime.edit();
-        expect(
-          readStoredCfcMetadata(inspect, stateCell.getAsNormalizedFullLink()),
-        )
-          .toBeDefined();
-        inspect.abort();
         let output: Cell<unknown> | undefined;
         const action = wish(
           input as Cell<[unknown, unknown]>,

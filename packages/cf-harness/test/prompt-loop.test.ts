@@ -5,6 +5,7 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
+import type { HarnessRunDepth } from "../src/contracts/run-depth.ts";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
@@ -21,6 +22,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   createFileSystemHarnessArtifactStore,
   type HarnessArtifactStore,
+  readHarnessRunReport,
 } from "../src/artifacts.ts";
 import { InMemoryHarnessCredentialStore } from "../src/auth/credential-store.ts";
 import { OpenAICodexCredentialResolver } from "../src/auth/openai-codex.ts";
@@ -445,6 +447,89 @@ Deno.test("CfHarnessPromptLoop persists a fresh Codex model selection before the
   );
 });
 
+describe("CfHarnessPromptLoop model attribution", () => {
+  for (const ending of ["observed", "omitted", "failed"]) {
+    it(`persists response identity when the last turn is ${ending}`, async () => {
+      const root = await Deno.makeTempDir({ prefix: "model-attribution-" });
+      try {
+        let turns = 0;
+        const artifactStore = createFileSystemHarnessArtifactStore({
+          artifactRoot: root,
+          runId: "attributed-run",
+        });
+        const loop = new CfHarnessPromptLoop({
+          engine: new CfHarnessEngine({
+            sandboxRuntime: new FakeSandboxRuntime(),
+            artifactStore,
+            runId: "attributed-run",
+            model: "requested-alias",
+            cfcEnforcementMode: "enforce-strict",
+          }),
+          modelClient: {
+            providerId: "test-provider",
+            complete() {
+              turns += 1;
+              if (turns === 1) {
+                return Promise.resolve({
+                  observedModel: "served-first",
+                  assistant: {
+                    role: "assistant",
+                    content: "",
+                    toolCalls: [{
+                      id: "call-read",
+                      type: "function",
+                      function: {
+                        name: "read_file",
+                        arguments: '{"path":"missing.txt"}',
+                      },
+                    }],
+                  },
+                });
+              }
+              if (ending === "failed") {
+                return Promise.reject(new Error("provider did not return"));
+              }
+              return Promise.resolve({
+                ...(ending === "observed"
+                  ? { observedModel: "served-last" }
+                  : {}),
+                assistant: { role: "assistant", content: "Done." },
+              });
+            },
+          },
+        });
+        const run = loop.runPrompt({ prompt: "Read the file." });
+        if (ending === "failed") {
+          await expect(run).rejects.toThrow("provider did not return");
+        } else {
+          await run;
+        }
+        const report = await readHarnessRunReport(
+          join(artifactStore.runRoot, "run-report.json"),
+        );
+        expect(turns).toBe(2);
+        expect(report.model).toBe("requested-alias");
+        expect(report.modelTurns).toBe(2);
+        expect(report.actualModels).toEqual(
+          ending === "observed"
+            ? ["served-first", "served-last"]
+            : ["served-first"],
+        );
+        expect(report.modelAttributionComplete).toBe(ending === "observed");
+        expect(report.modelResponses).toEqual([
+          { modelTurn: 1, model: "served-first" },
+          ...(ending === "failed" ? [] : [{
+            modelTurn: 2,
+            model: ending === "observed" ? "served-last" : null,
+          }]),
+        ]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+  }
+});
+
 Deno.test("CfHarnessPromptLoop executes injected model-client tool calls through the shared CFC loop", async () => {
   const sandbox = new FakeSandboxRuntime();
   let turns = 0;
@@ -456,6 +541,8 @@ Deno.test("CfHarnessPromptLoop executes injected model-client tool calls through
       assertEquals(request.cacheAffinityKey, "stable-cache");
       assertEquals(request.promptCacheMode, "explicit");
       assertEquals(request.reasoningEffort, "low");
+      assertEquals(request.maxInputBytes, 65536);
+      assertEquals(request.maxOutputTokens, 8192);
       return Promise.resolve(
         turns === 1
           ? {
@@ -497,6 +584,8 @@ Deno.test("CfHarnessPromptLoop executes injected model-client tool calls through
     cacheAffinityKey: "stable-cache",
     promptCacheMode: "explicit",
     reasoningEffort: "low",
+    maxInputBytes: 65536,
+    maxOutputTokens: 8192,
     engine: new CfHarnessEngine({
       sandboxRuntime: sandbox,
       runId: "run-model-client",
@@ -3081,6 +3170,141 @@ describe("CfHarnessPromptLoop opening research", () => {
     ).toBe(false);
   });
 
+  describe("after task classification", () => {
+    const researchKit = JSON.stringify({
+      status: "incomplete",
+      summary: "The task needs more exact evidence.",
+      inputs: [],
+      selectedPatternIds: [],
+      leads: [],
+      questions: [],
+      rules: [],
+      sourceIds: [],
+      missing: ["an exact implementation contract"],
+    });
+    const classifiedLoop = (
+      runId: string,
+      runIds: string[],
+      artifactRoot?: string,
+      depth?: HarnessRunDepth,
+    ) =>
+      new CfHarnessPromptLoop({
+        ...(depth !== undefined ? { depth } : {}),
+        engine: new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId,
+          model: "gpt-test",
+          ...(artifactRoot !== undefined
+            ? {
+              artifactStore: createFileSystemHarnessArtifactStore({
+                artifactRoot,
+                runId,
+              }),
+            }
+            : {}),
+        }),
+        modelClient: {
+          providerId: "test-provider",
+          complete: (request) => {
+            runIds.push(request.runId);
+            return Promise.resolve({
+              assistant: {
+                role: "assistant",
+                content: request.runId.includes(":research:")
+                  ? researchKit
+                  : "Done.",
+              },
+            });
+          },
+        },
+        allowedToolIds: ["research"],
+      });
+
+    it("runs no opening research for a respond task", async () => {
+      const runIds: string[] = [];
+      const root = await Deno.makeTempDir({ prefix: "cf-harness-classified-" });
+      try {
+        const loop = classifiedLoop("run-classified-respond", runIds, root);
+
+        const classification = await loop.classifyTask("thanks!");
+        const result = await loop.runPrompt({
+          prompt: "thanks!",
+          openingResearchTask: "thanks!",
+          promptSlotBinding: directPromptSlotBinding,
+        });
+
+        expect(classification.tags).toEqual(["respond"]);
+        expect(runIds).toEqual(["run-classified-respond"]);
+        expect(result.runState.openingResearch).toBeUndefined();
+        expect(result.runState.taskClassification).toMatchObject({
+          tags: ["respond"],
+          path: "rule",
+        });
+        const report = JSON.parse(
+          await Deno.readTextFile(
+            join(root, "run-classified-respond", "run-report.json"),
+          ),
+        );
+        expect(report.taskClassification).toMatchObject({
+          tags: ["respond"],
+          path: "rule",
+        });
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("makes no model call to tag a task no rule reads", async () => {
+      const task = "weather in Brisbane";
+      const runIds: string[] = [];
+      const loop = classifiedLoop("run-classified-assumed", runIds);
+
+      const classification = await loop.classifyTask(task);
+
+      expect(classification).toMatchObject({ tags: ["find"], path: "assumed" });
+      expect(runIds).toEqual([]);
+    });
+
+    it("runs opening research for a deep task about the fabric, and not for one elsewhere or at standard depth", async () => {
+      const fabric =
+        "How does a Common Fabric pattern react when a cell it reads changes?";
+      const researched = async (task: string, depth: HarnessRunDepth) => {
+        const runIds: string[] = [];
+        const loop = classifiedLoop(`run-${depth}`, runIds, undefined, depth);
+        await loop.classifyTask(task);
+        const result = await loop.runPrompt({
+          prompt: task,
+          openingResearchTask: task,
+          promptSlotBinding: directPromptSlotBinding,
+        });
+        expect(result.runState.taskClassification?.tags).toEqual(["find"]);
+        return result.runState.openingResearch?.status;
+      };
+
+      expect(await researched(fabric, "deep")).toBe("completed");
+      expect(await researched(fabric, "standard")).toBeUndefined();
+      expect(await researched("weather in Brisbane", "deep")).toBeUndefined();
+    });
+
+    it("runs opening research for an author task", async () => {
+      const runIds: string[] = [];
+      const loop = classifiedLoop("run-classified-author", runIds);
+
+      await loop.classifyTask("make me a pomodoro timer");
+      const result = await loop.runPrompt({
+        prompt: "make me a pomodoro timer",
+        openingResearchTask: "make me a pomodoro timer",
+        promptSlotBinding: directPromptSlotBinding,
+      });
+
+      expect(runIds).toEqual([
+        createToolOutputId("run-classified-author", "research", 1),
+        "run-classified-author",
+      ]);
+      expect(result.runState.openingResearch?.status).toBe("completed");
+    });
+  });
+
   it("does not start opening research for a child run", async () => {
     const runId = "root.subagent.1";
     const task = "Implement the delegated task.";
@@ -4520,6 +4744,8 @@ Deno.test("CfHarnessPromptLoop advertises run_pattern in the default tool surfac
       "assign_slug",
       "resolve_piece",
       "describe_handle",
+      "call_verb",
+      "read_value",
       "finish_task",
       "research",
     ],
@@ -4722,6 +4948,8 @@ Deno.test("CfHarnessPromptLoop advertises the pattern-index tools in the default
       "assign_slug",
       "resolve_piece",
       "describe_handle",
+      "call_verb",
+      "read_value",
       "finish_task",
       "search_patterns",
       "record_feedback",
@@ -7061,6 +7289,17 @@ Deno.test("CfHarnessPromptLoop does not authorize the browser profile by default
     denied.detail,
     'delegate_task profile "browser" is not allowed in this run',
   );
+  const firstRequest = JSON.parse(String(fetchCalls[0]?.body)) as {
+    tools: Array<{
+      name?: string;
+      parameters?: { properties?: { profile?: { enum?: string[] } } };
+    }>;
+  };
+  assertEquals(
+    firstRequest.tools.find((tool) => tool.name === "delegate_task")
+      ?.parameters?.properties?.profile?.enum,
+    ["default"],
+  );
   assertEquals(result.runState.subagentRuns, undefined);
   assertEquals(result.runState.toolOutputs, []);
   assertEquals(result.runState.policyEvents[0]?.toolInputSummary, {
@@ -7680,7 +7919,12 @@ Deno.test("CfHarnessPromptLoop denies delegate_task when the profile is not auth
     result.runState.policyEvents[0]?.detail,
     'delegate_task profile "default" is not allowed in this run',
   );
-  assertEquals(result.runState.primaryFailure?.kind, "tool_not_allowed");
+  assertEquals(result.runState.status, "completed");
+  assertEquals(
+    result.runState.failureRecords?.map((failure) => failure.kind),
+    ["subagent_profile_not_allowed"],
+  );
+  assertEquals(result.runState.primaryFailure, undefined);
 });
 
 Deno.test("CfHarnessPromptLoop completes a direct assistant response without tool calls", async () => {

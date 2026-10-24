@@ -243,6 +243,201 @@ describe("module identity delegation", () => {
     tx.abort?.("module-delegation snapshot pin test complete");
   });
 
+  describe("the snapshot a transaction is pinned to", () => {
+    const otherSpace = "did:key:z6MkModuleDelegationSnapshotOtherSpace";
+
+    it("is the one published when the transaction was created, so a later registration reaches only transactions created after it", () => {
+      const before = runtime.edit();
+      runtime.registerModuleDelegations(
+        space,
+        new Map([["successor", new Set(["predecessor"])]]),
+      );
+      const after = runtime.edit();
+      try {
+        expect(before.getCfcState().moduleDelegations.get(space))
+          .toBeUndefined();
+        expect(
+          after.getCfcState().moduleDelegations.get(space)?.get("successor"),
+        )
+          .toEqual(["predecessor"]);
+      } finally {
+        before.abort("snapshot pin test complete");
+        after.abort("snapshot pin test complete");
+      }
+    });
+
+    it("is the same object for every transaction until a registration adds a delegation", () => {
+      runtime.registerModuleDelegations(
+        space,
+        new Map([["successor", new Set(["predecessor"])]]),
+      );
+      const first = runtime.edit();
+      const second = runtime.edit();
+      runtime.registerModuleDelegations(
+        space,
+        new Map([["successor", new Set(["predecessor"])]]),
+      );
+      const third = runtime.edit();
+      runtime.registerModuleDelegations(
+        space,
+        new Map([["successor", new Set(["ancestor"])]]),
+      );
+      const fourth = runtime.edit();
+      try {
+        const snapshot = first.getCfcState().moduleDelegations;
+        expect(second.getCfcState().moduleDelegations).toBe(snapshot);
+        expect(third.getCfcState().moduleDelegations).toBe(snapshot);
+        expect(fourth.getCfcState().moduleDelegations).not.toBe(snapshot);
+        expect(snapshot.get(space)?.get("successor")).toEqual(["predecessor"]);
+        expect(
+          fourth.getCfcState().moduleDelegations.get(space)?.get("successor"),
+        )
+          .toEqual(["ancestor", "predecessor"]);
+      } finally {
+        for (const tx of [first, second, third, fourth]) {
+          tx.abort("snapshot identity test complete");
+        }
+      }
+    });
+
+    describe("is not writable through a transaction's read-only view", () => {
+      // Each probe is a way a holder of one transaction could reach the
+      // shared snapshot's backing map through the view. Every one is
+      // refused, and the runtime's grants and the other transactions stay
+      // as they were.
+
+      type Tx = ReturnType<Runtime["edit"]>;
+      const forged = () => new Map([["successor", ["forged"]]]);
+      const probes: [string, (tx: Tx) => void][] = [
+        ["`valueOf()` returns the view, and a write through it is refused", (
+          tx,
+        ) => {
+          const view = tx.getCfcState().moduleDelegations;
+          const unwrapped = view.valueOf() as Map<
+            string,
+            Map<string, string[]>
+          >;
+          expect(unwrapped).toBe(view);
+          expect(() => unwrapped.set(space, forged())).toThrow("read-only");
+        }],
+        ["freezing the view is refused, and the next read is still the view", (
+          tx,
+        ) => {
+          expect(() => Object.freeze(tx.getCfcState().moduleDelegations))
+            .toThrow("read-only");
+          const next = tx.getCfcState().moduleDelegations as Map<
+            string,
+            Map<string, string[]>
+          >;
+          expect(() => next.set(space, forged())).toThrow("read-only");
+        }],
+        ["an inherited getter-defining method is not reachable", (tx) => {
+          const view = tx.getCfcState().moduleDelegations as unknown as {
+            __defineGetter__?: unknown;
+          };
+          expect(view.__defineGetter__).toBeUndefined();
+        }],
+      ];
+
+      for (const [description, probe] of probes) {
+        it(description, () => {
+          const first = runtime.edit();
+          const second = runtime.edit();
+          let third: Tx | undefined;
+          try {
+            probe(first);
+            third = runtime.edit();
+            expect(runtime.grantsModuleDelegation(space, "successor", "forged"))
+              .toBe(false);
+            for (const tx of [first, second, third]) {
+              expect(tx.getCfcState().moduleDelegations.get(space))
+                .toBeUndefined();
+            }
+          } finally {
+            for (const tx of [first, second, third]) {
+              tx?.abort("snapshot view test complete");
+            }
+          }
+        });
+      }
+    });
+
+    it("carries a space's delegations under that space and under no other", () => {
+      runtime.registerModuleDelegations(
+        space,
+        new Map([["successor", new Set(["predecessor"])]]),
+      );
+      runtime.registerModuleDelegations(
+        otherSpace,
+        new Map([["other", new Set(["elder"])]]),
+      );
+      const tx = runtime.edit();
+      try {
+        const delegations = tx.getCfcState().moduleDelegations;
+        expect(delegations.get(space)?.get("successor")).toEqual([
+          "predecessor",
+        ]);
+        expect(delegations.get(space)?.has("other")).toBe(false);
+        expect(delegations.get(otherSpace)?.get("other")).toEqual(["elder"]);
+        expect(delegations.get(otherSpace)?.has("successor")).toBe(false);
+        expect(
+          runtime.grantsModuleDelegation(
+            otherSpace,
+            "successor",
+            "predecessor",
+          ),
+        )
+          .toBe(false);
+      } finally {
+        tx.abort("snapshot space test complete");
+      }
+    });
+
+    it("carries a source update's proposed delegations in the transaction staging it, and in no concurrent transaction", async () => {
+      const previous = moduleFor(moduleProgram("old"));
+      const candidate = moduleFor(moduleProgram("new"));
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          writeSourceDocs(runtime, space, [previous], previous.identity, tx);
+          writeSourceDocs(runtime, space, [candidate], candidate.identity, tx);
+        })).error,
+      ).toBeUndefined();
+      const prepared = await runtime.patternManager.prepareSourceUpdate(
+        space,
+        previous.identity,
+        candidate.identity,
+      );
+      const staging = runtime.edit({ sourceUpdate: prepared });
+      const concurrent = runtime.edit();
+      const later = runtime.edit();
+      try {
+        expect(
+          staging.getCfcState().moduleDelegations.get(space)?.get(
+            candidate.identity,
+          ),
+        ).toEqual([previous.identity]);
+        for (const tx of [concurrent, later]) {
+          expect(
+            tx.getCfcState().moduleDelegations.get(space)?.get(
+              candidate.identity,
+            ),
+          ).toBeUndefined();
+        }
+        expect(
+          runtime.grantsModuleDelegation(
+            space,
+            candidate.identity,
+            previous.identity,
+          ),
+        ).toBe(false);
+      } finally {
+        for (const tx of [staging, concurrent, later]) {
+          tx.abort("source update proposal test complete");
+        }
+      }
+    });
+  });
+
   it("rejects an update when the predecessor source closure is unavailable", async () => {
     await expect(
       runtime.patternManager.prepareSourceUpdate(

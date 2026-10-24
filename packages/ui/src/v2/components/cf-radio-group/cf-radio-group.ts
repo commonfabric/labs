@@ -64,18 +64,12 @@
  */
 
 import { type CellHandle } from "@commonfabric/runtime-client";
-import { consume } from "@lit/context";
 import { html, PropertyValues, unsafeCSS } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createCellController } from "../../core/cell-controller.ts";
-import {
-  applyThemeToElement,
-  type CFTheme,
-  cfThemeContext,
-  defaultTheme,
-} from "../theme-context.ts";
+import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 import { radioGroupStyles } from "./styles.ts";
 
 // TODO(v2-token-migration): Migrate this component to component-level tokens,
@@ -164,10 +158,12 @@ export class CFRadioGroup extends BaseElement {
     this.removeEventListener("keydown", this.handleKeydown);
   }
 
-  /** The theme, consumed from the provider. */
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   override firstUpdated() {
     // Initialize cell controller binding
@@ -177,9 +173,6 @@ export class CFRadioGroup extends BaseElement {
     this.updateRadioNames();
     this.updateRadioSelection();
     this.updateRadioDisabled();
-
-    // Apply theme on first render
-    applyThemeToElement(this, this.theme ?? defaultTheme);
   }
 
   override willUpdate(changedProperties: Map<string, unknown>) {
@@ -202,7 +195,7 @@ export class CFRadioGroup extends BaseElement {
       this.updateRadioDisabled();
     }
     if (changedProperties.has("theme")) {
-      applyThemeToElement(this, this.theme ?? defaultTheme);
+      applyThemeToElement(this, this.theme);
     }
   }
 

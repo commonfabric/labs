@@ -102,6 +102,22 @@ describe("patch", () => {
       ])).toBe("missing path /a/0/b");
     });
 
+    it("returns the objects it created given an integer past the array index range below a key that is being created", () => {
+      for (const key of ["4294967295", "1791869505000000000"]) {
+        expect(applyPatch({}, [
+          { op: "add", path: `/a/${key}/b`, value: 1 },
+        ])).toStrictEqual({ a: { [key]: { b: 1 } } });
+      }
+    });
+
+    it("sets a key written as an integer below an object", () => {
+      for (const key of ["0", "123", "4294967295", "1791869505000000000"]) {
+        expect(applyPatch({ a: { k: 1 } }, [
+          { op: "add", path: `/a/${key}`, value: 2 },
+        ])).toStrictEqual({ a: { k: 1, [key]: 2 } });
+      }
+    });
+
     it("throws given an intermediate key holding a number", () => {
       expect(inapplicable({ a: 5 }, [
         { op: "add", path: "/a/b/c", value: 1 },
@@ -147,6 +163,14 @@ describe("patch", () => {
     it("removes the key at the path", () => {
       expect(applyPatch({ a: 1, b: 2 }, [{ op: "remove", path: "/a" }]))
         .toEqual({ b: 2 });
+    });
+
+    it("removes a key written as an integer below an object", () => {
+      for (const key of ["0", "123", "4294967295", "1791869505000000000"]) {
+        expect(applyPatch({ a: { k: 1, [key]: 2 } }, [
+          { op: "remove", path: `/a/${key}` },
+        ])).toStrictEqual({ a: { k: 1 } });
+      }
     });
 
     it("throws given a key the object does not have", () => {

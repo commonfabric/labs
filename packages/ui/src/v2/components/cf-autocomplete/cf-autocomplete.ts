@@ -4,19 +4,13 @@ import {
   autocompleteValueSchema,
 } from "@commonfabric/runner/component-read-contract";
 import { type CellHandle } from "@commonfabric/runtime-client";
-import { consume } from "@lit/context";
 import { css, html, nothing, PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createCellController } from "../../core/cell-controller.ts";
-import {
-  applyThemeToElement,
-  type CFTheme,
-  cfThemeContext,
-  defaultTheme,
-} from "../theme-context.ts";
+import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 
 // TODO(v2-token-migration): Migrate this component to component-level tokens,
 // matching the prior phase-1 token migration pattern.
@@ -450,10 +444,12 @@ export class CFAutocomplete extends BaseElement {
     this.disabled = false;
   }
 
-  /** The theme, consumed from the provider. */
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -515,8 +511,6 @@ export class CFAutocomplete extends BaseElement {
       this.items as CellHandle<AutocompleteItem[]> | AutocompleteItem[],
       AutocompleteItemArraySchema,
     );
-
-    applyThemeToElement(this, this.theme ?? defaultTheme);
   }
 
   override willUpdate(changedProperties: PropertyValues) {
@@ -663,7 +657,7 @@ export class CFAutocomplete extends BaseElement {
 
   override updated(changedProperties: PropertyValues) {
     if (changedProperties.has("theme")) {
-      applyThemeToElement(this, this.theme ?? defaultTheme);
+      applyThemeToElement(this, this.theme);
     }
 
     // Update dropdown position when opening

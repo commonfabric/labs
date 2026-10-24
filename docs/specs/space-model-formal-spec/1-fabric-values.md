@@ -475,7 +475,7 @@ export abstract class FabricNativeWrapper<T extends object>
   /**
    * @inheritDoc Not yet implemented, so the inherited `deepClone()` throws.
    */
-  protected [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
+  [DEEP_CLONE_CORE](_frozen: boolean, _subClone: (value: FabricValue) => FabricValue): FabricInstance {
     throw new Error(
       `Cannot yet handle deep cloning of \`${this.constructor.name}\`.`,
     );
@@ -633,10 +633,10 @@ export class FabricError extends FabricNativeWrapper<Error> {
   // ([DEEP_FREEZE] / [IS_DEEP_FROZEN] freeze `this` and recurse into
   // `cause` + the extras-bag values; `[SHALLOW_UNFROZEN_CLONE]()` copies the
   // slots + bag; `wrappedValue` / `toNativeFrozen()` / `toNativeThawed()`
-  // build the JS `Error` projection on demand. `[DEEP_CLONE_CORE](frozen)`
-  // round-trips through the codec, decoding mutable unless `frozen`:
-  // `codec.decode(tag, codec.encode(this, env), env, !frozen)`; the
-  // `deepClone()` template owns the final deep freeze. Bodies omitted for
+  // build the JS `Error` projection on demand. `[DEEP_CLONE_CORE]` clones
+  // codec state through `subClone`, preserving ancestor tracking:
+  // `codec.decode(tag, subClone(codec.encode(this, env)), env, !frozen)`.
+  // The canonical cloner owns the final deep freeze. Bodies omitted for
   // brevity.)
 
   static #codec = Object.freeze(
@@ -1907,6 +1907,33 @@ encoded subtree appears at each position it appeared at. Whether the decoded
 objects are `===` to each other is a further promise, which an engine states
 only if it makes it.
 
+**A cell write keeps shared references within that write, and no further.**
+The runtime's write path (`Cell.set()` and the collection operations) stores a
+plain JavaScript object or array that appears at two positions of one written
+value once: each later occurrence is stored as a link to the first. A plain
+object that occurs as an array element is the exception: it is stored in a
+document of its own, which every occurrence links to, including one written
+at an object key earlier in the write. The link is stored, so the sharing
+outlives the write and holds across sessions:
+
+- A write inside the shared value, such as a push or a `set()` at a path below
+  either position, is read at both positions.
+- Replacing a position whole with `set()` writes at that position. A position
+  that holds a link has the link replaced, and stops sharing. The first
+  occurrence, where the others link to it, takes the new value, and every link
+  to it reads that value. Where every occurrence links to the object's own
+  document, no position is the one named, so replacing any of them ends only
+  that position's sharing.
+
+What is shared is the stored value, not the JavaScript object written: the
+object itself is left as it was. The sharing reaches only as far as one write.
+The same plain object written by two writes (two `set()` calls, even in one
+transaction, two handlers, or two cells) is stored as two independent values.
+A reference is different, because the reference is what is written: a `Cell`
+or link written at two positions names its target at both, however many writes
+put it there, and a position holding a write-redirect link passes a `set()` on
+to its target rather than replacing the link.
+
 Cycles *across* documents are a separate matter, and are supported whatever an
 engine does within one. They are written as explicit links (`FabricInstance`s
 referencing other documents), so two cells may reference each other and form a
@@ -2173,11 +2200,11 @@ export abstract class BaseFabricInstance extends FabricInstance {
   /**
    * Returns a new deep clone of this instance, cloning nested `FabricValue`s
    * to the requested frozenness (see `[DEEP_CLONE_CORE]`'s symbol doc). The
-   * returned instance itself is not yet frozen: the `deepClone()` template
-   * method owns the identity optimization and the final freeze. Called by
-   * `deepClone()` when a fresh instance is needed.
+   * returned instance itself is not yet frozen; the canonical cloner owns the
+   * identity optimization and final freeze. Nested values use `subClone`,
+   * preserving ancestor tracking across instance boundaries.
    */
-  protected abstract [DEEP_CLONE_CORE](frozen: boolean): FabricInstance;
+  abstract [DEEP_CLONE_CORE](frozen: boolean, subClone: (value: FabricValue) => FabricValue): FabricInstance;
 
   //
   // Instance members

@@ -1041,23 +1041,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/fabrichat-room-link-messages-break.md",
   },
   {
-    // A room's `about` record names `commitStart` and a reviewed `ChatStart`
-    // on `ChatStartSurface` as its only writer, where it named `commitManager`
-    // with no gesture. The record is written once, as the room is created, so
-    // a room that exists keeps the one it has.
-    pattern: "fabrichat/room.tsx",
-    baselines: [
-      "20261002T164437Z-1xU0r9QuhxWHgK6y",
-      "20261003T224731Z-o9skqwp4KfLbCDBT",
-      "20261005T182129Z-3RSVlUS0NdLuz2VP",
-      "20261005T224806Z-OeD1Mc2I_LQ_d8L_",
-    ],
-    paths: ["argument.about"],
-    reason:
-      "a room's `about` record now requires a reviewed start to write it, a write policy the recorded label, naming a writer with no gesture, differs from",
-    record: "docs/history/fabrichat-start-reviewed-break.md",
-  },
-  {
     // A manager's index entry gained `revision`, the revision of the room's
     // entry in the user's catalog, which a request to forget the room names,
     // so that a choice made since by another client is not overridden, and a
@@ -1113,42 +1096,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/fabrichat-room-link-roster-break.md",
   },
   {
-    // The room's `participantPrincipals` declares the per-session scope the
-    // computed deriving it already had. These baselines predate
-    // `participantEntries`.
-    pattern: "fabrichat/room.tsx",
-    baselines: [
-      "20261009T204342Z-CDs_MQ1XE2LCiH4u",
-      "20261009T224608Z-kbmYR940TBNMF_bI",
-    ],
-    paths: [
-      "result.$VIEWS.room.participantPrincipals",
-    ],
-    reason:
-      "a room's participant principals declare the per-session scope they are derived in; nothing is stored at that path for a reader to refuse",
-    record: "docs/history/fabrichat-view-scopes-break.md",
-  },
-  {
-    // The room's `participantEntries` and `participantPrincipals` declare the
-    // per-session scope the computeds deriving them already had. The proof
-    // reports one issue per role, so each of these baselines reports one of
-    // the two.
-    pattern: "fabrichat/room.tsx",
-    baselines: [
-      "20261009T232213Z--scSLE7mEm1_Fn1A",
-      "20261010T060935Z-zf5A0zVmTHpJWJf1",
-      "20261010T142754Z-6o6cHELOFbTiS6Hv",
-      "20261011T013628Z-OxhmgRqIGmFAsRKK",
-    ],
-    paths: [
-      "result.$VIEWS.room.participantPrincipals",
-      "result.$VIEWS.room.participantEntries",
-    ],
-    reason:
-      "a room's participant entries and principals declare the per-session scope they are derived in; nothing is stored at either path for a reader to refuse",
-    record: "docs/history/fabrichat-view-scopes-break.md",
-  },
-  {
     // The manager's `rooms` and `people` declare the per-session scope the
     // computeds deriving them already had. This is the one baseline that has
     // `people`; the baselines the entries above name report `rooms` beside
@@ -1170,6 +1117,32 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     reason:
       "a manager's rooms and people declare the per-session scope they are derived in; nothing is stored at either path for a reader to refuse",
     record: "docs/history/fabrichat-view-scopes-break.md",
+  },
+  {
+    // A room's policy gained an optional `maxAttachments`. The policy's
+    // schema allows other keys, so typing this one narrows it, and a
+    // manager's request outcomes carry the policy through the rooms they
+    // link.
+    pattern: "fabrichat/manager.tsx",
+    baselines: [
+      "20261011T221322Z-ESDR30hfSt52JJjG",
+      "20261012T173536Z-6WvdcsJ1uCY7_PMp",
+      "20261013T211911Z-_KGvbNdJDAorzeH2",
+      "20261014T030847Z--3DmbOSzIygprqSe",
+      "20261014T162031Z-5e6WmbJILlZPfDKs",
+      "20261015T201316Z-Sd2QSmU_za1kG0sR",
+      "20261015T211658Z-urNzNYcruTANHQRY",
+      "20261016T130411Z-0Lt2aLoYFhOy5W4t",
+      "20261016T131516Z-zwm-rd7FOQzgJmf2",
+      "20261016T150221Z-BMe3uZoF-rfz0nHI",
+      "20261016T232233Z-pyVPXvcNYTbzFVqa",
+      "20261018T181023Z-H3M1K82AIA1y33AS",
+      "20261022T220213Z-LlstD45te1meAfuA",
+    ],
+    paths: ["argument.requests.*"],
+    reason:
+      "a room's policy states `maxAttachments`, an optional number, where its schema took any value; no stored policy holds the key",
+    record: "docs/history/fabrichat-max-attachments-break.md",
   },
   {
     // Home types its `chatManager` as the manager's output, so the scope the
@@ -1324,5 +1297,196 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       reason:
         "taking home's part of the break once its roll-forward was measured: \"assuming the contract breakage can be automatically handled the way the previous one was, then that's okay\"",
     },
+  },
+  {
+    // A room's messages became objects pushed onto the list, each labeled
+    // with its writer under a policy naming the room's four send handlers,
+    // its edit, delete, and obliterate handlers; the stored shape, keyed
+    // records under a policy naming the old handlers, is left behind. Every
+    // recorded room baseline reads that as a changed `ifc` on the messages'
+    // elements, and each also reports a result the room no longer offers:
+    // its activity log, or its per-user record of act outcomes. The proof
+    // reports one issue per role, so each baseline names one of the two.
+    //
+    // These four, the oldest, report `argument.about` as well, the start
+    // reviewed break `fabrichat-start-reviewed-break.md` records; the entry
+    // that forgave it alone could forgive nothing once the messages broke
+    // beside it, so this entry names both.
+    pattern: "fabrichat/room.tsx",
+    baselines: [
+      "20261002T164437Z-1xU0r9QuhxWHgK6y",
+      "20261003T224731Z-o9skqwp4KfLbCDBT",
+      "20261005T182129Z-3RSVlUS0NdLuz2VP",
+      "20261005T224806Z-OeD1Mc2I_LQ_d8L_",
+    ],
+    paths: ["argument.about", "result.recentActivity"],
+    reason:
+      "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind",
+    record: "docs/history/fabrichat-pushed-messages-break.md",
+  },
+  {
+    // The same break, against the baselines that offered the activity log.
+    pattern: "fabrichat/room.tsx",
+    baselines: [
+      "20261006T233809Z-D8hKhP8UI9lV8o-V",
+      "20261006T235529Z-O5mJyExuecHZTzFi",
+      "20261007T155000Z-IuMW8BStP8yd3YI4",
+      "20261008T151801Z-2znk1fYLY0WPYJEd",
+      "20261008T164416Z-F91XV4kdnGBtzoC7",
+      "20261008T170824Z-jJ7xN7PhS-C9R7kR",
+      "20261008T220159Z-qhC4uKph2n7h9FAc",
+      "20261008T231303Z-tDxf_330zvg25E0f",
+      "20261009T151612Z-bGNnPCNd9MdwuN-E",
+      "20261009T161814Z-XcQsGUlUHykDvj3q",
+      "20261009T175600Z-hCz9KamK27xnIKtH",
+      "20261009T190753Z-ttsXGWoz9jzpIGm4",
+      "20261009T204342Z-CDs_MQ1XE2LCiH4u",
+      "20261009T224608Z-kbmYR940TBNMF_bI",
+      "20261009T232213Z--scSLE7mEm1_Fn1A",
+      "20261010T060935Z-zf5A0zVmTHpJWJf1",
+      "20261010T142754Z-6o6cHELOFbTiS6Hv",
+      "20261011T013628Z-OxhmgRqIGmFAsRKK",
+      "20261011T170654Z-UFD8OhjCLdeg6beK",
+      "20261011T215217Z-4O-p88WPN-QPVIFc",
+      "20261011T232405Z-u3fFO-4p-4g9Uwmb",
+      "20261012T012643Z-5qipj6ZBTegHULGC",
+      "20261012T173536Z-tFpgfWWy0En57xYi",
+      "20261012T175406Z-rQlPQaz2bt4YpckB",
+      "20261013T054345Z-TZbbPuHVZjx_WmV-",
+      "20261013T065554Z-t9eat6Sqm-vvdn2q",
+      "20261013T165014Z-HwNYLPqtGCoOwfhi",
+      "20261013T165725Z-20j_rjoiPR2WTBVX",
+      "20261013T175245Z-qSzSqmttfWLSJotw",
+      "20261013T181948Z-ESqKYLsNLOgxeFAL",
+      "20261013T223149Z-1UouAjk3LgOrndVt",
+    ],
+    paths: ["argument.messages[]", "result.recentActivity"],
+    reason:
+      "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind",
+    record: "docs/history/fabrichat-pushed-messages-break.md",
+  },
+  {
+    // The same break, against the baselines that offered the per-user act
+    // outcomes, which the proof reports ahead of the activity log.
+    pattern: "fabrichat/room.tsx",
+    baselines: [
+      "20261014T012736Z-lylYV6qdLO9BesnG",
+      "20261014T025519Z-0k_a1bve4vofmYu-",
+      "20261014T030847Z-kT_cHSAop5rMoIoq",
+      "20261014T032931Z-HZkjsOAXJP_gQyA3",
+      "20261014T123129Z-VlmPp0bPiXq8MNex",
+      "20261014T130013Z-uRhft5bPPY03WmU6",
+      "20261014T142812Z-p_fHr5eLl9Kdq7am",
+    ],
+    paths: ["argument.messages[]", "result.messageRequests"],
+    reason:
+      "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its per-user act outcomes are gone; rooms holding the keyed records are left behind",
+    record: "docs/history/fabrichat-pushed-messages-break.md",
+  },
+  {
+    // The same break, against the baselines that offered `closeWindow` at the
+    // room's top level, which the proof reports ahead of the per-user act
+    // outcomes they offered too; the room offers no windows.
+    pattern: "fabrichat/room.tsx",
+    baselines: [
+      "20261014T140128Z-95MKWhVw3ffYhuDn",
+      "20261014T151858Z-e6AvrFyYi8qb50yc",
+      "20261014T152002Z-S3S_T8pKGJ3XD0x_",
+      "20261014T162032Z-VqHxNEaxFBSWRpKw",
+      "20261014T173537Z-M6YKFg0N7b8Maarr",
+      "20261014T205901Z-5YIaRjVJC-zB1yRC",
+      "20261014T213629Z-w4GAFScO-yqWGIjk",
+      "20261014T215835Z-JQgYDEHDYD8Vx1AY",
+      "20261014T220435Z-JQgYDEHDYD8Vx1AY",
+      "20261015T011425Z-mx7tYDWFp1_T-wuZ",
+      "20261015T031259Z-18lMcHoeN5ytgVIF",
+      "20261015T180605Z-LucQidGJVpPHBLuf",
+      "20261015T190131Z-YWG2w2gfAFgIl6Fu",
+      "20261015T191100Z-4FcaX32yJN3zm_ei",
+      "20261015T201432Z-VBeuOsAwek05bCb6",
+      "20261015T220631Z-LjNm9_TjufQjzcNb",
+      "20261015T233043Z-sD47t42zpmQ9uLO-",
+      "20261015T233734Z-4o9kkrF1-4iWtsjg",
+      "20261016T001006Z-tkXuT3MmjsJ8Q9ut",
+      "20261015T211659Z-FIqM03M6AFq1f-yc",
+      "20261015T213453Z-WcfKJe6yCq6hHrKo",
+      "20261015T222422Z-gG3vXM2YlJWsGFve",
+      "20261015T230231Z-X4fbcCTNwmTh1D4M",
+      "20261016T004427Z-FEcfxYg99ADYSy58",
+      "20261016T130413Z-IjgiKFLGlXaYMQ9O",
+      "20261016T142642Z-FwoDtgccmQ6x6E51",
+      "20261016T144813Z-j7kfnbuq3vl_PTT8",
+      "20261016T145511Z-URDigmceiHUQTgYw",
+      "20261016T151336Z-qyuKzPzUZ0f_x9H1",
+    ],
+    paths: ["argument.messages[]", "result.closeWindow"],
+    reason:
+      "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its message windows are gone; rooms holding the keyed records are left behind",
+    record: "docs/history/fabrichat-pushed-messages-break.md",
+  },
+  {
+    // A placement no longer passes the room's activity log through, since
+    // the room keeps none.
+    pattern: "fabrichat/placement.tsx",
+    baselines: [
+      "20261002T164437Z-YHxasJyb9fC8x4pe",
+      "20261013T211911Z-zT2_vHqj25wS-uwm",
+    ],
+    paths: ["result.$VIEWS.chat.recentActivity"],
+    reason:
+      "the room keeps no activity log, so the placement's data face no longer carries one",
+    record: "docs/history/fabrichat-pushed-messages-break.md",
+  },
+  {
+    // The adapter re-exports the placement's data face, so it loses the same
+    // field.
+    pattern: "fabrichat/adapter.tsx",
+    baselines: [
+      "20261002T164437Z-2PzF8f6WgNbffWBh",
+      "20261013T211911Z-ucRdNCI0HJOQ7XAv",
+    ],
+    paths: ["result.$VIEWS.chat.recentActivity"],
+    reason:
+      "the room keeps no activity log, so the data face the adapter re-exports no longer carries one",
+    record: "docs/history/fabrichat-pushed-messages-break.md",
+  },
+  {
+    // A pick was a required link to a held finished book, so every valid
+    // result was five rereads. A pick is the recommended book inline now,
+    // with an optional link to the finished book it builds on.
+    pattern: "book-recommendations/main.tsx",
+    baselines: [
+      "20260920T171659Z-3vmp5U6KQQHIKzya",
+      "20261004T000822Z-RG9CkXhT9Y8zMON8",
+    ],
+    paths: ["result.recommendation.result"],
+    reason:
+      "a pick is the recommended book inline with an optional `basedOn` link, where the recorded result required a `book` link to a finished book",
+    record: "docs/history/book-recommendations-picks-break.md",
+  },
+  {
+    // The seeded demo composes the pattern and returns its result.
+    pattern: "book-recommendations/seeded-live-demo.tsx",
+    baselines: [
+      "20260922T074703Z-x2D--ODNVd-Doeie",
+      "20261004T000822Z-Uae2gNquN1m1hysE",
+    ],
+    paths: ["result.recommendation.result"],
+    reason:
+      "a pick is the recommended book inline with an optional `basedOn` link, where the recorded result required a `book` link to a finished book",
+    record: "docs/history/book-recommendations-picks-break.md",
+  },
+  {
+    // The view takes the state it displays as an argument and returns it,
+    // so the pick's new shape shows on both faces.
+    pattern: "book-recommendations/view.tsx",
+    baselines: ["20260920T171659Z-uSukTQQPKBcQgQSk"],
+    paths: [
+      "argument.state.result.picks[].title",
+      "result.state.result.picks[].book",
+    ],
+    reason:
+      "a pick carries `title`, `author` and `why` inline and `basedOn` in place of `book`",
+    record: "docs/history/book-recommendations-picks-break.md",
   },
 ];

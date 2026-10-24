@@ -3,6 +3,7 @@ import { join } from "@std/path";
 
 import type { sendEvent } from "@commonfabric/runner";
 import { decode, encode } from "@commonfabric/utils/encoding";
+import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPerfDiagnosticWarnKey } from "../lib/perf-diagnostic-logs.ts";
 
 /**
@@ -204,25 +205,81 @@ export function commandEnv(
   return env;
 }
 
-// Splits a command string into arguments on spaces outside of double quotes,
-// then strips the quotes.
-function parseCliCommand(command: string): string[] {
-  const match = command.match(/(?:[^\s"]+|"[^"]*")+/g);
-  if (!match || match.length === 0) {
-    throw new Error(`Could not parse command: ${command}.`);
+/**
+ * The arguments of a command line written as a template literal, for `cf` and
+ * `integrationCf`:
+ *
+ *     argv`space clone ${space} --from ${snapshot} --to ${clone}`
+ *
+ * The template's own text is split into arguments on whitespace. An
+ * interpolated string or number becomes part of one argument exactly as it
+ * stands, whatever characters it holds. It joins any text written against it,
+ * so `--to=${path}` is one argument, and an interpolated string standing alone
+ * is an argument of its own even when it is empty or holds whitespace. An
+ * interpolated array contributes each of its elements as an argument of its
+ * own, and has to stand apart from the text around it.
+ *
+ * Nothing else in the text is special. A quote or a backslash in the
+ * template's own text throws, because a reader would take it to group or
+ * escape what follows; an argument holding whitespace, a quote or a backslash
+ * is written as an interpolation.
+ */
+export function argv(
+  text: TemplateStringsArray,
+  ...values: readonly (string | number | readonly string[])[]
+): string[] {
+  const args: string[] = [];
+  // The argument being built, or `undefined` between arguments.
+  let current: string | undefined;
+  // Whether an interpolated array came last, with no whitespace after it.
+  let afterArray = false;
+  const refuse = (problem: string): never => {
+    throw new Error(`${problem}: ${backtickQuote(text.raw.join("${…}"))}`);
+  };
+  const separate = () => {
+    if (current !== undefined) args.push(current);
+    current = undefined;
+    afterArray = false;
+  };
+  const append = (piece: string) => {
+    if (afterArray) refuse("An interpolated array must stand apart");
+    current = (current ?? "") + piece;
+  };
+  for (const [index, literal] of text.raw.entries()) {
+    if (/["'\\]/.test(literal)) {
+      refuse(
+        "Interpolate an argument holding a quote, a backslash or whitespace",
+      );
+    }
+    for (const [position, word] of literal.split(/\s+/).entries()) {
+      if (position > 0) separate();
+      if (word !== "") append(word);
+    }
+    if (index === values.length) break;
+    const value = values[index];
+    if (typeof value !== "object") {
+      append(String(value));
+    } else {
+      if (current !== undefined || afterArray) {
+        refuse("An interpolated array must stand apart");
+      }
+      for (const arg of value) args.push(arg);
+      afterArray = true;
+    }
   }
-  return match.map((arg) => arg.replace(/"/g, ""));
+  separate();
+  return args;
 }
 
 async function spawnCli(
   executable: string,
-  args: string[],
+  args: readonly string[],
   options: CliOptions,
 ): Promise<CliResult> {
   const { stdin } = options;
   const child = new Deno.Command(executable, {
     cwd: join(import.meta.dirname!, ".."),
-    args,
+    args: [...args],
     clearEnv: true,
     env: commandEnv(Deno.env.toObject(), options.env ?? {}),
     // `.output()` requires stdout/stderr to be piped; `.spawn()` would
@@ -248,7 +305,7 @@ async function spawnCli(
 
 async function runCliTask(
   task: "cli-no-pwd-override",
-  command: string,
+  args: readonly string[],
   options: CliOptions,
 ): Promise<CliResult> {
   return await spawnCli(
@@ -261,21 +318,24 @@ async function runCliTask(
       // For tests, use a version of the cli task that does *not* override
       // user/deno's PWD.
       task,
-      ...parseCliCommand(command),
+      ...args,
     ],
     options,
   );
 }
 
-// Executes the `cf` command via CLI
-// `const { stdout, stderr, code } = cf("check --no-run ./pattern.tsx")`
+// Executes the `cf` command via CLI with `args` as its arguments, which `argv`
+// builds from a command line written as a template literal:
+//
+//     const { stdout, stderr, code } = await cf(argv`check ${pattern}`);
+//
 // Pass `stdin` to feed the command's standard input, and `env` to give it
 // fabric configuration; it starts with none.
 export async function cf(
-  command: string,
+  args: readonly string[],
   options: CliOptions = {},
 ): Promise<CliResult> {
-  return await runCliTask("cli-no-pwd-override", command, options);
+  return await runCliTask("cli-no-pwd-override", args, options);
 }
 
 let cfBinaryProbe: Promise<boolean> | undefined;
@@ -309,13 +369,13 @@ function cfBinaryAvailable(): Promise<boolean> {
 // the built binaries on PATH), the source-tree CLI task otherwise. Set
 // CF_CLI_INTEGRATION_USE_LOCAL=1 to force the source-tree CLI.
 export async function integrationCf(
-  command: string,
+  args: readonly string[],
   options: CliOptions = {},
 ): Promise<CliResult> {
   if (await cfBinaryAvailable()) {
-    return await spawnCli("cf", parseCliCommand(command), options);
+    return await spawnCli("cf", args, options);
   }
-  return await cf(command, options);
+  return await cf(args, options);
 }
 
 // Runs `fn` with `name` set on this process. Every test file in a

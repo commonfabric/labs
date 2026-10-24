@@ -71,6 +71,9 @@ const config: Config = {
       "$EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION": Deno.env.get(
         "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
       ),
+      "$EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS": Deno.env.get(
+        "EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS",
+      ),
       "$EXPERIMENTAL_SHARED_MEMORY_CONNECTION": Deno.env.get(
         "EXPERIMENTAL_SHARED_MEMORY_CONNECTION",
       ),
@@ -83,6 +86,7 @@ const config: Config = {
       "$EXPERIMENTAL_READER_SCHEMA_PRECEDENCE": Deno.env.get(
         "EXPERIMENTAL_READER_SCHEMA_PRECEDENCE",
       ),
+      "$EXPERIMENTAL_LOCAL_FOLD": Deno.env.get("EXPERIMENTAL_LOCAL_FOLD"),
       "globalThis.__cfCompileCacheRuntimeVersion":
         COMPILE_CACHE_RUNTIME_VERSION,
     },

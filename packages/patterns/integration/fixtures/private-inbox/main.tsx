@@ -12,7 +12,13 @@
  * whose space stops letting the owner read it, which its owner replaces.
  * `olderHome` stands in for a Home of the vintage whose ensure takes no
  * refusal, and `unreadableHome` for one whose profile keeps its pointer per
- * user. Fixture for `private-inbox-multi-runtime.test.ts`.
+ * user. `requestingHome`, `profilelessHome` and `leavingHome` are Homes whose
+ * inboxes a client requests, as a loom daemon does: a profile of the first's
+ * may be of a vintage without `setInbox`, the second has no profiles, and the
+ * third loses its first profile once its inbox is requested. `racingHome` is
+ * a Home whose one profile two runtimes of the owner's point at inboxes of
+ * their own, each only while it points at none. Fixture for
+ * `private-inbox-multi-runtime.test.ts`.
  */
 
 import {
@@ -42,13 +48,17 @@ import PrivateInbox, {
   type OfferEvent,
   pointProfilesAtPrivateInbox,
   type PointTarget,
+  PrivateInboxAnswering,
   type PrivateInboxHolder,
   type PrivateInboxOutput,
   type PrivateInboxPiece,
+  type PrivateInboxReceipt,
   type PrivateInboxRefusalHolder,
   type PrivateInboxReplacementHolder,
+  type PrivateInboxRequest,
   replaceRefusedPrivateInbox,
   repointProfilesFromReplacedInbox,
+  requestPrivateInbox,
   type RetainedPrivateInboxes,
 } from "../../../system/private-inbox.tsx";
 
@@ -138,6 +148,45 @@ const createEarlierProfile = handler<
   );
 });
 
+/** The result of {@link PointerOnlyProfile}. */
+interface PointerOnlyProfileOutput {
+  [NAME]: string;
+
+  /** The stand-in's name, which every profile vintage holds. */
+  name: string;
+
+  /** Where the stand-in points, which nothing here sets. */
+  inbox: { piece?: Cell<PrivateInboxPiece> };
+}
+
+/**
+ * Stands in for a profile of a vintage without `setInbox`, the stream through
+ * which alone Home points a profile: a name and a pointer.
+ */
+const PointerOnlyProfile = pattern<
+  Record<never, never>,
+  PointerOnlyProfileOutput
+>(() => ({
+  [NAME]: "Pointer-only profile",
+  name: "Pointer-only profile",
+  inbox: new Writable<{ piece?: Cell<PrivateInboxPiece> }>({}).for("inbox"),
+}));
+
+/**
+ * Creates a profile of a vintage without `setInbox`, in a space of its own that
+ * grants anyone `WRITE`.
+ */
+const createPointerOnlyProfile = handler<
+  void,
+  { profiles: Writable<ProfileHomeOutput[]> }
+>((_event, { profiles }) => {
+  profiles.push(
+    asProfile(
+      PointerOnlyProfile.inSpace(undefined, { grants: { "*": "WRITE" } })({}),
+    ),
+  );
+});
+
 /**
  * Creates a profile keeping its pointer per user, in a space of its own that
  * grants anyone `WRITE`.
@@ -200,6 +249,23 @@ const pointProfileAt = handler<
   });
 });
 
+/**
+ * Points one of the profiles in `profiles` at the inbox `inbox` holds, only
+ * while the profile points at no inbox, as Home and a loom daemon point one.
+ */
+const pointProfileAtIfUnset = handler<
+  PointElsewhereRequest,
+  {
+    profiles: Writable<ProfileHomeOutput[]>;
+    inbox: Writable<PrivateInboxHolder>;
+  }
+>((event, { profiles, inbox }) => {
+  profiles.key(event.index).resolveAsCell().key("setInbox").send({
+    inbox: inbox.get().piece?.resolveAsCell(),
+    replacing: undefined,
+  });
+});
+
 /** The principal an inbox's space is to let read it. */
 export interface ReaderRequest {
   /** The principal's DID. */
@@ -256,6 +322,17 @@ const recordRefusalOf = handler<
   });
 });
 
+/**
+ * Takes the first profile out of `profiles`, by removing its link, which
+ * leaves every other entry as it is stored.
+ */
+const dropFirstProfile = handler<
+  void,
+  { profiles: Writable<ProfileHomeOutput[]> }
+>((_event, { profiles }) => {
+  profiles.removeByValue(profiles.key(0).resolveAsCell());
+});
+
 /** Empties `profiles`. */
 const dropProfiles = handler<
   void,
@@ -297,6 +374,12 @@ export interface HomeStandInOutput {
   /** Gives the Home a private inbox, as Home's own stream does. */
   ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
 
+  /**
+   * Has the Home ensure its inbox and answers with it, as Home's own stream
+   * does.
+   */
+  requestPrivateInbox: Stream<PrivateInboxRequest, PrivateInboxReceipt>;
+
   /** Replaces the inbox the Home was refused, as Home's own stream does. */
   replaceRefusedPrivateInbox: Stream<void>;
 
@@ -327,6 +410,21 @@ const HomeStandIn = pattern<{ label: string }, HomeStandInOutput>(
     const defaultProfile = new Writable<DefaultProfileSlot>({}).for(
       "defaultProfileSlot",
     );
+    const requested = new Writable<Record<string, boolean>>({}).for(
+      "privateInboxRequests",
+    );
+    const ensure = ensurePrivateInbox({
+      privateInbox,
+      retainedPrivateInboxes,
+      privateInboxRefusal,
+      // deno-lint-ignore no-explicit-any
+      profiles: profiles as any,
+      pointProfiles: pointProfilesAtPrivateInbox({
+        privateInbox,
+        // deno-lint-ignore no-explicit-any
+        profiles: profiles as any,
+      }),
+    });
     return {
       [NAME]: label,
       privateInbox,
@@ -336,17 +434,18 @@ const HomeStandIn = pattern<{ label: string }, HomeStandInOutput>(
       profiles,
       defaultProfile,
       setDefaultProfile: setDefaultProfile({ profiles, defaultProfile }),
-      ensurePrivateInbox: ensurePrivateInbox({
-        privateInbox,
-        retainedPrivateInboxes,
-        privateInboxRefusal,
+      ensurePrivateInbox: ensure,
+      requestPrivateInbox: requestPrivateInbox({
         // deno-lint-ignore no-explicit-any
         profiles: profiles as any,
-        pointProfiles: pointProfilesAtPrivateInbox({
+        requested,
+        answers: PrivateInboxAnswering({
           privateInbox,
           // deno-lint-ignore no-explicit-any
           profiles: profiles as any,
-        }),
+          requested,
+        }).answers,
+        ensure,
       }),
       replaceRefusedPrivateInbox: replaceRefusedPrivateInbox({
         privateInbox,
@@ -513,6 +612,7 @@ export interface MainOutput {
   creatingHome: HomeStandInOutput;
   readoptingHome: HomeStandInOutput;
   replacingHome: HomeStandInOutput;
+  racingHome: HomeStandInOutput;
   ownSpaceHome: HomeStandInOutput;
   unreadableRefusedHome: HomeStandInOutput;
   olderHome: OlderHomeStandInOutput;
@@ -576,6 +676,21 @@ export interface MainOutput {
 
   /** Replaces the inbox `replacingHome` was refused. */
   replaceReplacingInbox: Stream<void>;
+
+  /** Creates one of `racingHome`'s profiles. */
+  createRacingProfile: Stream<void>;
+
+  /**
+   * Points one of `racingHome`'s profiles at the loom-shaped inbox, only while
+   * it points at none.
+   */
+  pointRacingProfileAtLoomIfUnset: Stream<PointElsewhereRequest>;
+
+  /**
+   * Points one of `racingHome`'s profiles at the other inbox, only while it
+   * points at none.
+   */
+  pointRacingProfileAtOtherIfUnset: Stream<PointElsewhereRequest>;
 
   /** Creates one of `ownSpaceHome`'s profiles. */
   createOwnSpaceProfile: Stream<void>;
@@ -684,6 +799,33 @@ export interface MainOutput {
 
   /** Ensures `unreadableHome`'s inbox, with the event the host sends. */
   ensureUnreadable: Stream<EnsurePrivateInboxEvent>;
+
+  /** A Home whose inbox a client requests, as a loom daemon does. */
+  requestingHome: HomeStandInOutput;
+
+  /** Creates one of `requestingHome`'s profiles. */
+  createRequestingProfile: Stream<void>;
+
+  /** Creates a profile of `requestingHome`'s without `setInbox`. */
+  createRequestingPointerOnlyProfile: Stream<void>;
+
+  /** Points one of `requestingHome`'s profiles at the loom-shaped inbox. */
+  pointRequestingProfileAtLoom: Stream<PointElsewhereRequest>;
+
+  /** A Home with no profiles, whose inbox a client requests. */
+  profilelessHome: HomeStandInOutput;
+
+  /** A Home whose first profile leaves its list once its inbox is requested. */
+  leavingHome: HomeStandInOutput;
+
+  /** Creates one of `leavingHome`'s profiles. */
+  createLeavingProfile: Stream<void>;
+
+  /** Points one of `leavingHome`'s profiles at the loom-shaped inbox. */
+  pointLeavingProfileAtLoom: Stream<PointElsewhereRequest>;
+
+  /** Takes `leavingHome`'s first profile out of its list. */
+  dropLeavingFirstProfile: Stream<void>;
 }
 
 export default pattern<MainInput, MainOutput>((
@@ -713,6 +855,7 @@ export default pattern<MainInput, MainOutput>((
   const olderHome = OlderHomeStandIn({});
   const readoptingHome = HomeStandIn({ label: "Home adopting again" });
   const replacingHome = HomeStandIn({ label: "Replacing Home" });
+  const racingHome = HomeStandIn({ label: "Home pointed twice at once" });
   const ownSpaceHome = HomeStandIn({ label: "Home refused its own inbox" });
   const unreadableRefusedHome = HomeStandIn({
     label: "Home refused an inbox it cannot read",
@@ -720,6 +863,9 @@ export default pattern<MainInput, MainOutput>((
   const unreadableHome = HomeStandIn({
     label: "Home of an unreadable profile",
   });
+  const requestingHome = HomeStandIn({ label: "Requested Home" });
+  const profilelessHome = HomeStandIn({ label: "Home with no profiles" });
+  const leavingHome = HomeStandIn({ label: "Home losing a profile" });
   return {
     [NAME]: "Private inbox fixture",
     [UI]: <div>private inbox fixture</div>,
@@ -737,9 +883,13 @@ export default pattern<MainInput, MainOutput>((
     creatingHome,
     readoptingHome,
     replacingHome,
+    racingHome,
     ownSpaceHome,
     unreadableRefusedHome,
     olderHome,
+    requestingHome,
+    profilelessHome,
+    leavingHome,
     copiedOffers,
     retainedPrivateInboxes,
     privateInboxRefusal,
@@ -782,6 +932,15 @@ export default pattern<MainInput, MainOutput>((
       inbox: strangerInbox,
     }),
     replaceReplacingInbox: replacingHome.replaceRefusedPrivateInbox,
+    createRacingProfile: racingHome.createProfile,
+    pointRacingProfileAtLoomIfUnset: pointProfileAtIfUnset({
+      profiles: racingHome.profiles,
+      inbox: loomInbox,
+    }),
+    pointRacingProfileAtOtherIfUnset: pointProfileAtIfUnset({
+      profiles: racingHome.profiles,
+      inbox: otherInbox,
+    }),
     createOwnSpaceProfile: ownSpaceHome.createProfile,
     pointOwnSpaceProfileAtPrivateInbox: pointProfileAt({
       profiles: ownSpaceHome.profiles,
@@ -842,6 +1001,22 @@ export default pattern<MainInput, MainOutput>((
       inbox: loomInbox,
     }),
     ensureUnreadable: unreadableHome.ensurePrivateInbox,
+    createRequestingProfile: requestingHome.createProfile,
+    createLeavingProfile: leavingHome.createProfile,
+    pointLeavingProfileAtLoom: pointProfileAt({
+      profiles: leavingHome.profiles,
+      inbox: loomInbox,
+    }),
+    dropLeavingFirstProfile: dropFirstProfile({
+      profiles: leavingHome.profiles,
+    }),
+    createRequestingPointerOnlyProfile: createPointerOnlyProfile({
+      profiles: requestingHome.profiles,
+    }),
+    pointRequestingProfileAtLoom: pointProfileAt({
+      profiles: requestingHome.profiles,
+      inbox: loomInbox,
+    }),
     createProfileThroughSurface: ProfileCreate({
       // deno-lint-ignore no-explicit-any
       profiles: profiles as any,

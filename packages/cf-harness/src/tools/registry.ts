@@ -14,6 +14,8 @@ import { LOOM_COMMAND_TOOLS } from "./loom-commands.ts";
 import { LOOM_RETRIEVAL_TOOLS } from "./loom-retrieval.ts";
 import { bashTool } from "./bash.ts";
 import { browserTool } from "./browser.ts";
+import { callVerbTool } from "./call-verb.ts";
+import { readValueTool } from "./read-value.ts";
 import { delegateTaskTool } from "./delegate-task.ts";
 import { describeHandleTool } from "./describe-handle.ts";
 import { editFileTool } from "./edit-file.ts";
@@ -52,6 +54,8 @@ export const BUILTIN_TOOLS = [
   assignSlugTool,
   resolvePieceTool,
   describeHandleTool,
+  callVerbTool,
+  readValueTool,
   finishTaskTool,
   weaverActionTool,
   searchPatternsTool,

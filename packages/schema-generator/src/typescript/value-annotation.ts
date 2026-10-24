@@ -15,7 +15,7 @@ import { denotesSameType, readMemberAnnotation } from "./type-node.ts";
  * The member `PolicyOf<Rules>` is: `{ readonly __ct_cfc_policy_of__?: Rules }`
  * (`@commonfabric/api/cfc`).
  */
-const POLICY_OF_BRAND = "__ct_cfc_policy_of__";
+export const CFC_POLICY_OF_BRAND = "__ct_cfc_policy_of__";
 
 /**
  * Whether authored type syntax names a value binding (`typeof handler`)
@@ -87,7 +87,9 @@ export function namesOnlyPolicyBindings(
     const properties = declared && (declared.flags & ts.TypeFlags.Object)
       ? checker.getPropertiesOfType(declared)
       : [];
-    if (properties.length === 1 && properties[0]!.name === POLICY_OF_BRAND) {
+    if (
+      properties.length === 1 && properties[0]!.name === CFC_POLICY_OF_BRAND
+    ) {
       return true;
     }
     for (const declaration of symbol?.declarations ?? []) {
@@ -105,6 +107,83 @@ export function namesOnlyPolicyBindings(
     node,
     (child) => namesOnlyPolicyBindings(child, checker, seen) ? undefined : true,
   ) !== true;
+}
+
+/**
+ * Whether `a` and `b`, two annotations, spell one value: the same node, or
+ * two nodes that denote one type and name the same value bindings in the
+ * same order, as two members each declared `Secret` do. The type alone does
+ * not settle it: `PolicyOf<typeof readers>` and `PolicyOf<typeof writers>`
+ * denote one type where the two rules share one. Bindings are read as
+ * `namesValueBinding()` reads them, through aliases declared in authored
+ * modules; a `typeof` whose binding does not resolve, as one in a node built
+ * without positions does not, leaves the two incomparable, so `false`.
+ * `typeOf` resolves a node's type, for a caller holding nodes the checker
+ * does not resolve on its own.
+ */
+export function spellSameValue(
+  a: ts.TypeNode,
+  b: ts.TypeNode,
+  checker: ts.TypeChecker,
+  typeOf: (node: ts.TypeNode) => ts.Type = (node) =>
+    checker.getTypeFromTypeNode(node),
+): boolean {
+  if (a === b) return true;
+  if (!denotesSameType(typeOf(a), typeOf(b))) return false;
+  const bound = namedBindings(a, checker);
+  const other = namedBindings(b, checker);
+  return bound !== undefined && other !== undefined &&
+    bound.length === other.length &&
+    bound.every((symbol, index) => symbol === other[index]);
+}
+
+/**
+ * The value bindings `node` names, in order, read as `namesValueBinding()`
+ * reads them, or `undefined` where one does not resolve.
+ */
+function namedBindings(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  seen = new Set<ts.Node>(),
+): ts.Symbol[] | undefined {
+  if (ts.isTypeQueryNode(node)) {
+    const name = ts.isIdentifier(node.exprName)
+      ? node.exprName
+      : node.exprName.right;
+    const symbol = checker.getSymbolAtLocation(name);
+    return symbol ? [resolveAliasedSymbol(symbol, checker)] : undefined;
+  }
+  const found: ts.Symbol[] = [];
+  let unresolved = false;
+  const collect = (part: ts.Node): void => {
+    const within = namedBindings(part, checker, seen);
+    if (within) {
+      for (const bound of within) found.push(bound);
+    } else {
+      unresolved = true;
+    }
+  };
+  if (ts.isTypeReferenceNode(node)) {
+    const name = ts.isIdentifier(node.typeName)
+      ? node.typeName
+      : node.typeName.right;
+    let symbol = checker.getSymbolAtLocation(name);
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+      symbol = checker.getAliasedSymbol(symbol);
+    }
+    for (const declaration of symbol?.declarations ?? []) {
+      if (
+        !(ts.isTypeAliasDeclaration(declaration) ||
+          ts.isInterfaceDeclaration(declaration)) ||
+        declaration.getSourceFile().isDeclarationFile ||
+        seen.has(declaration)
+      ) continue;
+      seen.add(declaration);
+      collect(declaration);
+    }
+  }
+  ts.forEachChild(node, collect);
+  return unresolved ? undefined : found;
 }
 
 /**

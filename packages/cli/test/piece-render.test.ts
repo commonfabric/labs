@@ -13,8 +13,18 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { assignSlug, pieceId, setSlugLink } from "@commonfabric/piece";
 import { PiecesController } from "@commonfabric/piece/ops";
-import { type Cell, createBuilder, Runtime, UI } from "@commonfabric/runner";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  type Cell,
+  createBuilder,
+  Runtime,
+  type RuntimeProgram,
+  UI,
+} from "@commonfabric/runner";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/utils/defer";
 
 import { parsePieceOptions } from "../commands/piece.ts";
@@ -61,6 +71,26 @@ const vnode = (name: string, props: unknown, children: unknown[]) => ({
   children,
 });
 
+/** A piece whose whole UI is one mapped list. */
+const LIST_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      'import { pattern, UI } from "commonfabric";',
+      "",
+      "interface Input { items: string[]; }",
+      "",
+      "export default pattern<Input>(({ items }) => ({",
+      "  [UI]: <ul>{items.map((item) => <li>{item}</li>)}</ul>,",
+      "}));",
+    ].join("\n"),
+  }],
+};
+
+/** The rows `LIST_PROGRAM` renders for the items the tests give it. */
+const LIST_ROWS = "<li>first</li><li>second</li><li>third</li>";
+
 describe("piece-render", () => {
   describe("renderVDomToHtml()", () => {
     describe("one-shot render", () => {
@@ -84,6 +114,60 @@ describe("piece-render", () => {
           );
         } finally {
           await runtime.dispose();
+        }
+      });
+
+      it("returns the same HTML from the runtime that wrote a tree and from one that loaded it", async () => {
+        // The writer holds the `style` object's keys in the order its write
+        // listed them, and the reader holds them in the order the store's
+        // encoding leaves them in.
+
+        const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+        const writerStorage = EmulatedStorageManager.connectTo(server, {
+          as: signer,
+        });
+        const readerStorage = EmulatedStorageManager.connectTo(server, {
+          as: signer,
+        });
+        const writer = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: writerStorage,
+        });
+        const reader = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: readerStorage,
+        });
+        try {
+          const written = await cellHolding(
+            writer,
+            "style-order",
+            vnode("div", {
+              style: { display: "none", gap: "0.25rem", alignItems: "center" },
+            }, ["picker"]),
+          );
+          const fromWriter = await renderVDomToHtml(
+            written,
+            () => writer.idle(),
+          );
+
+          const loaded = reader.getCell<unknown>(space, "style-order");
+          await loaded.sync();
+          const fromReader = await renderVDomToHtml(
+            loaded,
+            () => reader.idle(),
+          );
+
+          const html =
+            '<div style="align-items: center; display: none; gap: 0.25rem">' +
+            "picker</div>";
+          expect(fromWriter).toBe(html);
+          expect(fromReader).toBe(html);
+        } finally {
+          await writer.dispose();
+          await reader.dispose();
+          await writerStorage.close();
+          await readerStorage.close();
+          await server.close();
         }
       });
 
@@ -355,6 +439,191 @@ describe("piece-render", () => {
       } finally {
         await runtime.dispose();
       }
+    });
+
+    describe("a piece whose list no runtime has built", () => {
+      // The piece is set up and never started, so the store holds its
+      // argument and its pattern and nothing a list coordinator writes. The
+      // runtime that renders it resumes the piece over a connection of its
+      // own, where the coordinator's first reconcile finds no result container
+      // and waits for the container's load before it builds a row.
+      //
+      // Whether that load completes before the scheduler goes idle is a matter
+      // of timing. `SlowLoadStorage` fixes the order to the one a slow store
+      // produces, in which the scheduler has run all it can before any load
+      // the render started completes.
+
+      /** Whether a load requested now is held until the scheduler is idle. */
+      let holdingLoads: boolean;
+
+      /** How many loads have been held. */
+      let heldLoads: number;
+
+      let server: ReturnType<typeof newLoopbackServer>;
+      let storage: EmulatedStorageManager;
+      let runtime: Runtime;
+      let piece: string;
+
+      /**
+       * Storage that completes a load requested while `holdingLoads` is set
+       * only once the scheduler is idle.
+       */
+      class SlowLoadStorage extends EmulatedStorageManager {
+        /** @inheritDoc */
+        override async syncCell<T>(
+          cell: Cell<T>,
+          options?: Parameters<EmulatedStorageManager["syncCell"]>[1],
+        ): Promise<Cell<T>> {
+          const hold = holdingLoads;
+          const loaded = await super.syncCell(cell, options);
+          if (hold) {
+            heldLoads++;
+            await runtime.idle();
+          }
+          return loaded;
+        }
+      }
+
+      /**
+       * A controller over `runtime` that starts holding loads once it has
+       * handed a piece over, which is where the render's own loads begin. The
+       * render is handed `exposed` as the controller's runtime.
+       */
+      function controllerHoldingLoads(
+        exposed: Runtime = runtime,
+      ): PiecesController {
+        const pieces = new PiecesController({ as: signer, space }, runtime);
+        return {
+          runtime: exposed,
+          get: async (...args: Parameters<PiecesController["get"]>) => {
+            const got = await pieces.get(...args);
+            holdingLoads = true;
+            return got;
+          },
+        } as unknown as PiecesController;
+      }
+
+      /**
+       * `runtime` behind a storage manager that offers `synced()` and neither
+       * a count of its outstanding work nor a wait for that work alone.
+       */
+      function runtimeWithoutStorageProbes(): Runtime {
+        return {
+          scheduler: runtime.scheduler,
+          idle: () => runtime.idle(),
+          storageManager: { synced: () => storage.synced() },
+        } as unknown as Runtime;
+      }
+
+      beforeEach(async () => {
+        holdingLoads = false;
+        heldLoads = 0;
+        server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+        const writerStorage = EmulatedStorageManager.connectTo(server, {
+          as: signer,
+        });
+        const writer = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: writerStorage,
+        });
+        try {
+          const tx = writer.edit();
+          const pattern = await writer.patternManager.compilePattern(
+            LIST_PROGRAM,
+            { space, tx },
+          );
+          const result = writer.getCell<unknown>(
+            space,
+            "render-unbuilt-list",
+            undefined,
+            tx,
+          );
+          await writer.setup(
+            tx,
+            pattern,
+            { items: ["first", "second", "third"] },
+            result,
+          );
+          writer.prepareTxForCommit(tx);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await writer.patternManager.flushCompileCacheWrites();
+          piece = pieceId(result)!;
+        } finally {
+          await writer.dispose({ closeStorage: false });
+          await writerStorage.close();
+        }
+
+        storage = SlowLoadStorage.connectTo(server, { as: signer });
+        runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: storage,
+        });
+      });
+
+      afterEach(async () => {
+        await runtime.dispose({ closeStorage: false });
+        await storage.close();
+        await server.close();
+      });
+
+      it("returns the list's rows when its loads complete after the scheduler goes idle", async () => {
+        const html = await renderPiece({ ...config, piece }, {}, {
+          loadPieces: () => Promise.resolve(controllerHoldingLoads()),
+        });
+
+        expect(html).toContain(LIST_ROWS);
+        // The order was the slow one only if the render started a load.
+        expect(heldLoads).toBeGreaterThan(0);
+      });
+
+      it("leaves no commit pending when it returns", async () => {
+        const pieces = new PiecesController({ as: signer, space }, runtime);
+
+        await renderPiece({ ...config, piece }, {}, {
+          loadPieces: () => Promise.resolve(pieces),
+        });
+
+        expect(storage.hasPendingCommits()).toBe(false);
+      });
+
+      it("reports the list's rows in its first watch report", async () => {
+        const first = Promise.withResolvers<string>();
+
+        const cancel = await renderPiece(
+          { ...config, piece },
+          { watch: true, onUpdate: (html) => first.resolve(html) },
+          { loadPieces: () => Promise.resolve(controllerHoldingLoads()) },
+        ) as () => void;
+        try {
+          expect(await first.promise).toContain(LIST_ROWS);
+          // The order was the slow one only if the render started a load.
+          expect(heldLoads).toBeGreaterThan(0);
+        } finally {
+          cancel();
+        }
+      });
+
+      it("reports the list's rows first when storage offers no count of its outstanding work", async () => {
+        const first = Promise.withResolvers<string>();
+
+        const cancel = await renderPiece(
+          { ...config, piece },
+          { watch: true, onUpdate: (html) => first.resolve(html) },
+          {
+            loadPieces: () =>
+              Promise.resolve(
+                controllerHoldingLoads(runtimeWithoutStorageProbes()),
+              ),
+          },
+        ) as () => void;
+        try {
+          expect(await first.promise).toContain(LIST_ROWS);
+          // The order was the slow one only if the render started a load.
+          expect(heldLoads).toBeGreaterThan(0);
+        } finally {
+          cancel();
+        }
+      });
     });
 
     describe("stored references", () => {

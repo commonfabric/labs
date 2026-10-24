@@ -23,6 +23,12 @@ export interface MemorySocket {
   /** WebSocket connection state. */
   readonly readyState: number;
 
+  /**
+   * Bytes queued for the network and not yet written, where the backend
+   * reports them; the sizes read shows them as what a slow peer holds up.
+   */
+  readonly bufferedAmount?: number;
+
   /** Registers a listener using WebSocket event names. */
   addEventListener<K extends keyof MemorySocketEvents>(
     type: K,
@@ -67,7 +73,8 @@ export function createNativeMemorySocket(address: URL): MemorySocketConnection {
 export function createMemorySocket(address: URL): MemorySocketConnection {
   // Deno's native TLS WebSocket writer can finish with buffered ciphertext
   // and no surviving write future to drain it.
-  // TODO(gideon): Remove the Node backend once the pinned Deno flushes frames.
+  // TODO(gideon): Remove the Node backend once the pinned Deno flushes frames
+  // and its native WebSocket can enable TCP keepalive.
   return denoFactory && address.protocol === "wss:"
     ? denoFactory(address)
     : createNativeMemorySocket(address);

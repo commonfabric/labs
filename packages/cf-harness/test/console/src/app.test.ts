@@ -1,6 +1,9 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { freshConsoleRun } from "../../../console/src/app.ts";
+import {
+  consolePieceAfterTurn,
+  freshConsoleRun,
+} from "../../../console/src/app.ts";
 import type {
   ConsoleListedRun,
   ConsoleRunSource,
@@ -19,10 +22,33 @@ const row = (
   createdAt: "2026-01-01",
   updatedAt: "2026-01-01",
   toolCallCount: 0,
-  pieceUrls: [],
+  pieceSlugs: [],
 });
 
 describe("console/src/app", () => {
+  describe("consolePieceAfterTurn()", () => {
+    const piece = (slug: string) => ({
+      slug,
+      url: `http://localhost:8000/did:key:z6MkApp/${slug}`,
+    });
+
+    it("returns the last piece a turn named", () => {
+      expect(
+        consolePieceAfterTurn(
+          [piece("draft"), piece("final")],
+          piece("earlier"),
+        ),
+      ).toEqual(piece("final"));
+    });
+
+    it("keeps the piece already shown when a turn named none", () => {
+      expect(consolePieceAfterTurn([], piece("earlier"))).toEqual(
+        piece("earlier"),
+      );
+      expect(consolePieceAfterTurn([], undefined)).toBeUndefined();
+    });
+  });
+
   describe("freshConsoleRun()", () => {
     it("opens a new console parent while external runs and children appear first", () => {
       const runs = [

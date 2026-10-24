@@ -7,6 +7,7 @@ import "@commonfabric/utils/equal-ignoring-symbols";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { Server as MemoryV2Server } from "@commonfabric/memory/v2/server";
+import { patternLiteralForTestingOnly } from "@commonfabric/runner/for-testing-only";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
@@ -52,6 +53,10 @@ import {
   type URI,
 } from "../src/storage/interface.ts";
 import { trustExecutable } from "./support/trusted-builder.ts";
+import {
+  commitRefusal,
+  interceptPieceStartCommit,
+} from "./support/intercept-piece-start-commit.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
 
@@ -2488,7 +2493,8 @@ describe("setup/start", () => {
     const third = await compileReceiptPattern(runtime, "v3");
     await runtime.runSynced(resultCell, initial, {});
     const started: unknown[] = [];
-    using _start = stub(runtime.runner, "start", (cell) => {
+    // A receipt's start answers for its own commit, so it is this one.
+    using _start = stub(runtime.runner, "startWithCommit", (cell) => {
       started.push(cell);
       return Promise.resolve(true);
     });
@@ -2524,6 +2530,100 @@ describe("setup/start", () => {
       ),
     });
     expect(started).toHaveLength(1);
+  });
+
+  describe("startWithCommit()", () => {
+    // Each case starts a piece it stopped, so the start instantiates the
+    // graph again and commits its setup writes on a transaction of its own.
+
+    const stoppedPiece = async (name: string): Promise<Cell<unknown>> => {
+      const cell = runtime.getCell(space, name);
+      await runtime.runSynced(
+        cell,
+        await compileReceiptPattern(runtime, "v1"),
+        {},
+      );
+      runtime.runner.stop(cell);
+      return cell;
+    };
+
+    it("resolves only once the start's setup commit has landed", async () => {
+      const cell = await stoppedPiece("startWithCommit landed");
+      const intercepted = interceptPieceStartCommit(runtime, { held: true });
+      try {
+        let resolved = false;
+        const withCommit = runtime.runner.startWithCommit(cell).then(
+          (started) => {
+            resolved = true;
+            return started;
+          },
+        );
+        // A plain start of the same piece joins the one in flight, and
+        // resolves without waiting for the commit held above.
+        expect(await runtime.start(cell)).toBe(true);
+        await runtime.idle();
+        expect(resolved).toBe(false);
+
+        intercepted.release();
+        expect(await withCommit).toBe(true);
+        expect(runtime.runner.isRunning(cell)).toBe(true);
+      } finally {
+        intercepted.restore();
+      }
+    });
+
+    it("rejects with the reason storage refused the start's setup commit, and leaves the piece stopped", async () => {
+      const cell = await stoppedPiece("startWithCommit refused");
+      const refusal = commitRefusal("injected refusal of the start commit");
+      const intercepted = interceptPieceStartCommit(runtime, { refusal });
+      try {
+        await expect(runtime.runner.startWithCommit(cell)).rejects.toThrow(
+          `piece-start commit piece-instantiate/${cell.sourceURI} failed, ` +
+            "so the started graph's setup writes did not land: " +
+            refusal.message,
+        );
+        expect(runtime.runner.isRunning(cell)).toBe(false);
+      } finally {
+        intercepted.restore();
+      }
+    });
+
+    it("rejects when the start it joins has already committed the piece's setup", async () => {
+      // A plain start of a piece stopped here installs its graph, and makes
+      // the commit, before it returns, so this call joins a start whose
+      // commit is already under way.
+
+      const cell = await stoppedPiece("startWithCommit joined");
+      const refusal = commitRefusal("injected refusal of the start commit");
+      const intercepted = interceptPieceStartCommit(runtime, { refusal });
+      try {
+        const plain = runtime.start(cell);
+        await expect(runtime.runner.startWithCommit(cell)).rejects.toThrow(
+          refusal.message,
+        );
+        await plain;
+      } finally {
+        intercepted.restore();
+      }
+    });
+
+    it("rejects when the start follows a link to a piece whose setup commit is refused", async () => {
+      const cell = await stoppedPiece("startWithCommit link target");
+      const link = runtime.getCell(space, "startWithCommit link");
+      const pointing = runtime.edit();
+      link.withTx(pointing).setRaw(cell.getAsLink());
+      expect((await pointing.commit().settled).error).toBeUndefined();
+      const refusal = commitRefusal("injected refusal of the start commit");
+      const intercepted = interceptPieceStartCommit(runtime, { refusal });
+      try {
+        await expect(runtime.runner.startWithCommit(link)).rejects.toThrow(
+          `piece-start commit piece-instantiate/${cell.sourceURI} failed`,
+        );
+        expect(runtime.runner.isRunning(cell)).toBe(false);
+      } finally {
+        intercepted.restore();
+      }
+    });
   });
 
   it("runSynced refuses to grant update authority in a caller-owned transaction", async () => {
@@ -4248,7 +4348,7 @@ describe("runner utils", () => {
           schema: { asCell: ["stream"] },
         },
       };
-      const pattern: Pattern = {
+      const pattern: Pattern = patternLiteralForTestingOnly({
         argumentSchema: {
           type: "object",
           properties: {
@@ -4310,7 +4410,7 @@ describe("runner utils", () => {
             outputs: {},
           },
         ],
-      };
+      });
 
       const resultCell = runtime.getCell<any>(
         space,

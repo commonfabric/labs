@@ -114,8 +114,8 @@ consequences trip everyone up:
    — it shows you the join card and won't treat you as host. To act as the same
    person in both, import your CLI key into the browser (`Import CLI Key`); see
    [`docs/features/shared-identity.md`](../../../docs/features/shared-identity.md).
-   Verify with `cf id did "$CF_IDENTITY"` and the browser's `shell.identity`
-   log.
+   Verify with `cf id did "$CF_IDENTITY"` and, in the page's console,
+   `globalThis.app.state().identity?.did()`.
 
 2. **Names are unique (name-as-identity).** `joinAs` rejects a name already in
    `users`. So if a test/seed already claimed your preferred name, you can't

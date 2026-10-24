@@ -16,17 +16,23 @@ import { CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE } from "../../src/cfc/typ
 import { isCell } from "../../src/cell.ts";
 import { useCancelGroup } from "../../src/cancel.ts";
 import { getMetaCell } from "../../src/link-utils.ts";
+import { experimentalOptionsFromEnv } from "../../src/experimental-posture.ts";
 import { Runtime } from "../../src/runtime.ts";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "../../src/storage/v2-emulate.ts";
 
+const { localSessionDocuments } = experimentalOptionsFromEnv(Deno.env.get);
+
 /** One index coordinator stages distinct physical instances at shared scoped addresses. */
 describe("collection index serving", () => {
   for (const mode of ["group", "key"] as const) {
     for (const scope of ["user", "session"] as const) {
-      it(`stages ${mode} index ownership and member setup for both ${scope} identities`, async () => {
+      const test = scope === "session" && localSessionDocuments === true
+        ? it.ignore
+        : it;
+      test(`stages ${mode} index ownership and member setup for both ${scope} identities`, async () => {
         const signer = await Identity.fromPassphrase(
           `index-serving-${mode}-${scope}`,
         );
@@ -80,7 +86,10 @@ describe("collection index serving", () => {
               actorRuntime = new Runtime({
                 apiUrl: new URL(import.meta.url),
                 storageManager: actorStorage,
-                experimental: { serverExecution: false },
+                experimental: {
+                  serverExecution: false,
+                  localSessionDocuments,
+                },
               });
               const identity = { ...actorRuntime.scopeKeyIdentity };
               identities.push(identity);
@@ -153,7 +162,8 @@ describe("collection index serving", () => {
                 input,
               ) =>
                 input.kind === "structural-provenance" &&
-                input.claim === CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE &&
+                input.claim ===
+                  CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE &&
                 input.target.id === link.id && input.target.scope === scope &&
                 tx.isRuntimeWritePolicyInput(input)
               );
@@ -183,7 +193,8 @@ describe("collection index serving", () => {
             if (!isCell(keysChild)) throw new Error("Expected keys Cell");
             expect(keysChild.getAsNormalizedFullLink().scope).toBe(scope);
             expect(
-              keysChild.withTx(tx).resolveAsCell().getAsNormalizedFullLink().id,
+              keysChild.withTx(tx).resolveAsCell().getAsNormalizedFullLink()
+                .id,
             ).toBe(keysNames[position]);
             expect(
               getMetaCell(keysChild, "argument", tx).key("state")
@@ -196,7 +207,8 @@ describe("collection index serving", () => {
             }
             expect(entriesChild.getAsNormalizedFullLink().scope).toBe(scope);
             expect(
-              entriesChild.withTx(tx).resolveAsCell().getAsNormalizedFullLink()
+              entriesChild.withTx(tx).resolveAsCell()
+                .getAsNormalizedFullLink()
                 .id,
             ).toBe(keyEntriesNames[position]);
             expect(

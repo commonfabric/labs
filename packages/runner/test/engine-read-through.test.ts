@@ -719,6 +719,8 @@ describe("engine-read-through", () => {
       createSession: () =>
         Promise.reject(new Error("no session is opened for this pull")),
       syncReplayDependencies: () => Promise.resolve(undefined),
+      watchDocument: () =>
+        Promise.reject(new Error("no document is watched here")),
       storeReadThrough: () => ({ id }) => {
         reads.push(id);
         return undefined;

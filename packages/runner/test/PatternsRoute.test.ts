@@ -7,7 +7,10 @@ import { Identity } from "@commonfabric/identity";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import type { Engine } from "../src/harness/engine.ts";
 import { resolveEntryIdentity } from "../src/harness/entry-identity.ts";
-import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
+import {
+  PatternsRoute,
+  type PatternsRouteOptions,
+} from "../src/harness/patterns-route.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
@@ -31,10 +34,11 @@ async function tree(files: Record<string, string>): Promise<string> {
 async function withRoute(
   files: Record<string, string>,
   body: (route: PatternsRoute, root: string) => Promise<void>,
+  options: PatternsRouteOptions = {},
 ): Promise<void> {
   const root = await tree(files);
   try {
-    await body(new PatternsRoute(root), root);
+    await body(new PatternsRoute(root, [], options), root);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
@@ -309,6 +313,90 @@ describe("PatternsRoute", () => {
       );
       expect(second?.status).toBe(304);
       expect(await second?.text()).toBe("");
+    });
+  });
+
+  describe("release time", () => {
+    const RELEASED_AT = Date.UTC(2026, 9, 16, 14, 3, 0);
+
+    it("sends the deployment's release time beside an identity", async () => {
+      await withRoute({ "main.tsx": ENTRY }, async (route) => {
+        const response = await route.serve(
+          get("/api/patterns/main.tsx?identity"),
+        );
+        expect(response?.status).toBe(200);
+        expect(response?.headers.get("CF-Released-At")).toBe(
+          "2026-10-16T14:03:00.000Z",
+        );
+        expect(response?.headers.get("Access-Control-Expose-Headers"))
+          .toContain("CF-Released-At");
+        expect((await response?.text())?.trim()).toBe(
+          await route.identity("main.tsx"),
+        );
+      }, { releasedAt: RELEASED_AT });
+    });
+
+    it("sends no release time where the deployment states none", async () => {
+      await withRoute({ "main.tsx": ENTRY }, async (route) => {
+        const response = await route.serve(
+          get("/api/patterns/main.tsx?identity"),
+        );
+        expect(response?.status).toBe(200);
+        expect(response?.headers.has("CF-Released-At")).toBe(false);
+      });
+    });
+
+    it("sends no release time beside a file's source", async () => {
+      await withRoute({ "main.tsx": ENTRY }, async (route) => {
+        const response = await route.serve(get("/api/patterns/main.tsx"));
+        expect(response?.status).toBe(200);
+        expect(response?.headers.has("CF-Released-At")).toBe(false);
+      }, { releasedAt: RELEASED_AT });
+    });
+
+    it("returns a 304 carrying the release time for an identity revalidated in the same release", async () => {
+      await withRoute({ "main.tsx": ENTRY }, async (route) => {
+        const first = await route.serve(get("/api/patterns/main.tsx?identity"));
+        const second = await route.serve(
+          get("/api/patterns/main.tsx?identity", {
+            "If-None-Match": first!.headers.get("ETag")!,
+          }),
+        );
+        expect(second?.status).toBe(304);
+        expect(second?.headers.get("CF-Released-At")).toBe(
+          "2026-10-16T14:03:00.000Z",
+        );
+      }, { releasedAt: RELEASED_AT });
+    });
+
+    it("returns a 200 for an identity revalidated across a new release of the same source", async () => {
+      // The same tree served by two releases: one deploy of a commit, and a
+      // later deploy of the same commit, as a rollback is.
+
+      const root = await tree({ "main.tsx": ENTRY });
+      try {
+        const earlier = new PatternsRoute(root, [], {
+          releasedAt: RELEASED_AT,
+        });
+        const later = new PatternsRoute(root, [], {
+          releasedAt: RELEASED_AT + 60_000,
+        });
+        const first = await earlier.serve(
+          get("/api/patterns/main.tsx?identity"),
+        );
+        const second = await later.serve(
+          get("/api/patterns/main.tsx?identity", {
+            "If-None-Match": first!.headers.get("ETag")!,
+          }),
+        );
+        expect(second?.status).toBe(200);
+        expect(second?.headers.get("CF-Released-At")).toBe(
+          "2026-10-16T14:04:00.000Z",
+        );
+        expect(await second?.text()).toBe(await first?.text());
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
     });
   });
 

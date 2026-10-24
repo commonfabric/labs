@@ -34,6 +34,10 @@ import {
   stripEntityUriScheme,
   uriSchemeForEntityKind,
 } from "@commonfabric/runner/entity-kind";
+import {
+  parseReleaseTime,
+  RELEASED_AT_HEADER,
+} from "@commonfabric/runner/pattern-release-time";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { isObjectOrArray } from "@commonfabric/utils/types";
@@ -177,6 +181,41 @@ export function qualifyFabricOrigin(
   return ref === undefined || ref.space !== undefined
     ? recorded
     : formatFabricRef({ ...ref, space: sourceSpace });
+}
+
+/**
+ * When the deployment serving the `system:` origin `recorded` released the
+ * program whose content identity is `identity`, as its patterns route states
+ * beside the identity it advertises (`?identity`, `pattern-release-time.ts`).
+ *
+ * `undefined` when the origin is not a `system:` one, when the route
+ * advertises another identity or states no time, and when it cannot be asked
+ * at all. The time is about the program the route advertises, so it says
+ * nothing about any other, and a candidate it does not cover is one whose
+ * release is unknown.
+ */
+export async function advertisedSystemRelease(
+  runtime: Runtime,
+  space: MemorySpace,
+  recorded: string,
+  identity: string,
+): Promise<number | undefined> {
+  const origin = classifyOrigin(runtime, space, recorded);
+  if (origin.kind !== "system") return undefined;
+  const url = new URL(origin.url);
+  url.searchParams.set("identity", "");
+  let advertised: string;
+  let header: string | null;
+  try {
+    const response = await runtime.fetch(url, { cache: "no-cache" });
+    if (!response.ok) return undefined;
+    advertised = (await response.text()).trim();
+    header = response.headers.get(RELEASED_AT_HEADER);
+  } catch {
+    return undefined;
+  }
+  if (advertised !== identity || header === null) return undefined;
+  return parseReleaseTime(header.trim());
 }
 
 /**

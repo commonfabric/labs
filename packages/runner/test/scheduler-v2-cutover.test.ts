@@ -1441,6 +1441,7 @@ describe("scheduler v2 cutover fixtures", () => {
     record.gate.backoffStreak = 1;
     record.gate.convergenceHoldPasses = 1;
     record.gate.backoffUntil = performance.now() + 30_000;
+    scheduler.nodes.noteBackoff(record);
     scheduler.gates.scheduleWake(record.gate.backoffUntil);
 
     expect(scheduler.gates.hasWakeTimer()).toBe(true);
@@ -1458,6 +1459,7 @@ describe("scheduler v2 cutover fixtures", () => {
     scheduler.nodes.setStatus(action, "invalid");
     record.gate.convergenceHoldPasses =
       CONVERGENCE_IDLE_HOLD_MAX_BACKOFF_PASSES;
+    scheduler.nodes.noteBackoff(record);
 
     // No demand root reaches this invalid node, so idle resolves directly
     // without an execute/continuation cycle. That boundary must still reset the

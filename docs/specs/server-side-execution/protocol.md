@@ -510,7 +510,12 @@ resolution above, never a lease-trust widening. Refusal (i) is no load
 for served delivery to wait on, and it is never silently empty for the
 data a served run reads: a run that reads the value of a refused
 document — through its declared event or its bound state — fails
-permanently and terminalizes at once (events.md §5). A refused document
+permanently and terminalizes at once (events.md §5). A derivation run
+that reads one is withdrawn: nothing it wrote reaches the wave, it is not
+retried, and the instance is left to a runtime that can read the
+document (serving-loop.md §3d). A derivation run that reads an absent
+scoped instance the serving loop owes and has not produced yet is
+withdrawn the same way. A refused document
 that only the dispatch preflight's dependency walk reaches, or whose
 link a run passes along without reading it, does not stop dispatch.
 Remote attestation stays anticipated future work.

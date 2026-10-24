@@ -22,6 +22,7 @@ import {
   handle,
   heartbeat,
   nextFaviconRedSince,
+  onDelivery,
   page,
   resetBoardForTest,
   serveTick,
@@ -29,9 +30,11 @@ import {
   tick,
 } from "./server.ts";
 import {
+  CI_WORKFLOW,
   LOOM_CI_WORKFLOW,
   LOOM_REPO,
   PORT,
+  REPO,
 } from "./config.ts";
 import { TILES } from "./registry.ts";
 import { github } from "./lib.ts";
@@ -44,6 +47,8 @@ import {
   type TileView,
 } from "./types.ts";
 import { DASHBOARD_MESSAGE_LIFETIME_MS } from "./dashboard-message.ts";
+import { type GitHubDelivery, GitHubWebhooks } from "./github-webhooks.ts";
+import { FakeRelay, workflowRunPayload } from "./test/webhook-relay.ts";
 import { dashboardCacheFile } from "./history-files.ts";
 import {
   sampleManifest,
@@ -346,22 +351,22 @@ boardTest("simultaneous collector completions keep a red handoff's incident age"
 });
 
 boardTest("a tile stays wide through failures and keeps its last good view", async () => {
-  await tick([fake("recent main runs", () => {
+  await tick([fake("recent commits", () => {
     throw new Error("HTTP 404: Not Found");
   })]);
-  const firstFailure = tileHtml("recent main runs");
+  const firstFailure = tileHtml("recent commits");
   assert(firstFailure.startsWith(`unknown wide"`));
   assertStringIncludes(firstFailure, `<p class="big unknown">—</p>`);
   assertStringIncludes(firstFailure, `<p class="sub" title="not found">not found</p>`);
 
   const good: TileView = { status: "good", value: "passing", sub: "10 runs" };
-  await tick([fake("recent main runs", () => good)]);
-  assert(tileHtml("recent main runs").startsWith(`good wide"`));
+  await tick([fake("recent commits", () => good)]);
+  assert(tileHtml("recent commits").startsWith(`good wide"`));
 
-  await tick([fake("recent main runs", () => {
+  await tick([fake("recent commits", () => {
     throw new Error("error sending request for url");
   })]);
-  const html = tileHtml("recent main runs");
+  const html = tileHtml("recent commits");
   assert(html.startsWith(`unknown wide"`));
   assertStringIncludes(
     html,
@@ -852,7 +857,7 @@ boardTest("a multi-source tile stays active until every source update completes"
     env: () => undefined,
   };
   const tile: Tile = {
-    label: "recent main runs",
+    label: "recent commits",
     intervalMs: 0,
     runSources: [slowSource, fastSource],
     collect: () => {
@@ -867,7 +872,7 @@ boardTest("a multi-source tile stays active until every source update completes"
   let client: ReadableStreamDefaultController<Uint8Array> | undefined;
 
   try {
-    await tick([fake("recent main runs", () => ({
+    await tick([fake("recent commits", () => ({
       status: "good",
       value: "last source value",
     }))]);
@@ -876,7 +881,7 @@ boardTest("a multi-source tile stays active until every source update completes"
 
     now += 60_000;
     await tick([tile], sourceCtx);
-    const stale = tileHtml("recent main runs");
+    const stale = tileHtml("recent commits");
     assert(stale.startsWith(`unknown wide"`));
     assertStringIncludes(stale, "last source value");
     assertStringIncludes(stale, "refresh still pending");
@@ -892,7 +897,7 @@ boardTest("a multi-source tile stays active until every source update completes"
     fastRuns.resolve([]);
     await firstPublication;
     assertEquals(collections, 1, "the ready source collected the tile");
-    const partiallyComplete = tileHtml("recent main runs");
+    const partiallyComplete = tileHtml("recent commits");
     assert(partiallyComplete.startsWith(`unknown wide"`));
     assertStringIncludes(partiallyComplete, "fresh source value");
     assertStringIncludes(partiallyComplete, "refresh still pending");
@@ -911,7 +916,7 @@ boardTest("a multi-source tile stays active until every source update completes"
     }
   }
   assertEquals(collections, 2, "the pending source completes its original collection");
-  const complete = tileHtml("recent main runs");
+  const complete = tileHtml("recent commits");
   assert(complete.startsWith(`good wide"`));
   assertStringIncludes(complete, "fresh source value");
 });
@@ -964,7 +969,7 @@ boardTest("each run source publishes its dependent tiles as one batch", async ()
     sourceTile("labs ci trust", [labsSource]),
     sourceTile("dau", [loomSource]),
     sourceTile("loom ci trust", [loomSource]),
-    sourceTile("recent main runs", [labsSource, loomSource], true),
+    sourceTile("recent commits", [labsSource, loomSource], true),
   ];
 
   const messages: string[] = [];
@@ -986,7 +991,7 @@ boardTest("each run source publishes its dependent tiles as one batch", async ()
     assertStringIncludes(tileHtml("ci", first.gridHtml), "labs new");
     assertStringIncludes(tileHtml("labs ci trust", first.gridHtml), "labs new");
     assert(!tileHtml("dau", first.gridHtml).includes("loom new"));
-    assertStringIncludes(tileHtml("recent main runs", first.wideHtml), "labs new");
+    assertStringIncludes(tileHtml("recent commits", first.wideHtml), "labs new");
     assertStringIncludes(first.wideHtml, "loom-incremental pending");
     assertEquals(messages.length, 1, "one source arrival produces one broadcast");
 
@@ -1024,7 +1029,7 @@ boardTest("a ready source publishes while an older combined collection is still 
     env: () => undefined,
   };
   const combined: Tile = {
-    label: "recent main runs",
+    label: "recent commits",
     intervalMs: 0,
     runSources: [labsSource, loomSource],
     wide: true,
@@ -1060,7 +1065,7 @@ boardTest("a ready source publishes while an older combined collection is still 
   let refresh: Promise<void> | undefined;
   Date.now = () => now;
   try {
-    await tick([fake("recent main runs", () => ({
+    await tick([fake("recent commits", () => ({
       status: "good",
       value: "prior combined",
     }))]);
@@ -1071,26 +1076,26 @@ boardTest("a ready source publishes while an older combined collection is still 
 
     now += 60_000;
     await tick(tiles, sourceCtx);
-    assertStringIncludes(tileHtml("recent main runs"), "refresh still pending");
+    assertStringIncludes(tileHtml("recent commits"), "refresh still pending");
     messages.length = 0;
 
     const loomUpdate = nextMessage();
     loom.resolve([sourceRun(5, "loom ready")]);
     const first = updateFromEvent(await loomUpdate);
     assertStringIncludes(tileHtml("dau", first.gridHtml), "loom ready");
-    const firstRecent = tileHtml("recent main runs", first.wideHtml);
+    const firstRecent = tileHtml("recent commits", first.wideHtml);
     assertStringIncludes(firstRecent, "labs ready, loom ready");
     assert(firstRecent.startsWith(`unknown wide"`));
     assert(!tileHtml("ci", first.gridHtml).includes("labs ready"));
     publishOld({ status: "bad", value: "older cached merge" });
     assertEquals(messages.length, 1);
-    assertStringIncludes(tileHtml("recent main runs"), "labs ready, loom ready");
+    assertStringIncludes(tileHtml("recent commits"), "labs ready, loom ready");
 
     const labsUpdate = nextMessage();
     oldCollection.resolve(undefined);
     const second = updateFromEvent(await labsUpdate);
     assertStringIncludes(tileHtml("ci", second.gridHtml), "labs ready");
-    const secondRecent = tileHtml("recent main runs", second.wideHtml);
+    const secondRecent = tileHtml("recent commits", second.wideHtml);
     assertStringIncludes(secondRecent, "labs ready, loom ready");
     assert(secondRecent.startsWith(`good wide"`));
     assertEquals(messages.length, 2);
@@ -1148,6 +1153,146 @@ boardTest("a shared run source preserves each dependent tile's per-source interv
   assertEquals(fetches, 2);
   assertEquals(fastCollections, 2);
   assertEquals(slowCollections, 1);
+});
+
+// A relay delivery of a run on main of the workflow `file` in `repo`.
+function delivered(file: string, repo = "test/delivered"): GitHubDelivery {
+  return {
+    event: "workflow_run",
+    payload: workflowRunPayload(repo, {
+      id: 1,
+      event: "push",
+      head_branch: "main",
+      head_sha: "sha-1",
+      status: "completed",
+      conclusion: "failure",
+      run_attempt: 1,
+      display_title: "delivered",
+      created_at: new Date().toISOString(),
+      run_started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      html_url: "",
+      head_commit: null,
+    }, `.github/workflows/${file}`),
+  };
+}
+
+boardTest("a relay delivery that changes a run source fetches it at once, and one that does not fetches nothing", async () => {
+  const source = runSource("test/delivered", "ci.yml", "main");
+  let fetches = 0;
+  const sourceCtx: Ctx = {
+    runs: () => sourceCtx.runsFor(source),
+    runsFor: () => {
+      fetches++;
+      return Promise.resolve([sourceRun(1, `fetch ${fetches}`)]);
+    },
+    env: () => undefined,
+  };
+  const tiles = [{
+    ...sourceTile("labs ci trust", [source]),
+    intervalMs: 600_000,
+  }];
+  await tick(tiles, sourceCtx);
+
+  assertEquals(onDelivery(delivered("other.yml"), tiles), false);
+  await tick(tiles, sourceCtx);
+  assertEquals(fetches, 1);
+
+  using published = observeUpdate(() =>
+    tileHtml("labs ci trust").includes("fetch 2")
+  );
+  assertEquals(onDelivery(delivered("ci.yml"), tiles), true);
+  await tick(tiles, sourceCtx);
+  await published.promise;
+  assertEquals(fetches, 2);
+});
+
+boardTest("a relay delivery for a source whose tiles are all being collected fetches it at once, and collects them from it once they are free", async () => {
+  const delivered1 = runSource("test/delivered", "ci.yml", "main");
+  const other = runSource("test/other", "ci.yml", "main");
+  let deliveredFetches = 0;
+  const blocked = deferred<void>();
+  const release = deferred<void>();
+  let blocking = false;
+  const sourceCtx: Ctx = {
+    runs: () => sourceCtx.runsFor(delivered1),
+    runsFor: async (source) => {
+      if (source.repo === delivered1.repo) {
+        deliveredFetches++;
+      } else if (blocking) {
+        blocked.resolve();
+        await release.promise;
+      }
+      return [sourceRun(1, source.repo)];
+    },
+    env: () => undefined,
+  };
+  const tile = sourceTile("labs ci trust", [delivered1, other]);
+  let collections = 0;
+  const tiles = [{
+    ...tile,
+    intervalMs: 600_000,
+    collect: (collectionCtx: Ctx) => {
+      collections++;
+      return tile.collect(collectionCtx);
+    },
+  }];
+  await tick(tiles, sourceCtx);
+  blocking = true;
+  onDelivery(delivered("ci.yml", other.repo), tiles);
+  const busy = tick(tiles, sourceCtx);
+  await blocked.promise;
+
+  onDelivery(delivered("ci.yml"), tiles);
+  await tick(tiles, sourceCtx);
+  assertEquals(deliveredFetches, 2);
+  assertEquals(collections, 2);
+
+  // Once free, the tile is collected from the other source's fetch, and then
+  // from the delivered source's snapshot it missed.
+  using collected = observeUpdate(() => collections === 4);
+  release.resolve();
+  await busy;
+  await collected.promise;
+  assertEquals(deliveredFetches, 2);
+});
+
+boardTest("a relay delivery during a fetch of its source fetches the source again once that fetch is published", async () => {
+  const source = runSource("test/delivered", "ci.yml", "main");
+  let fetches = 0;
+  const started = deferred<void>();
+  const release = deferred<void>();
+  const sourceCtx: Ctx = {
+    runs: () => sourceCtx.runsFor(source),
+    runsFor: async () => {
+      const fetch = ++fetches;
+      if (fetch === 2) {
+        started.resolve();
+        await release.promise;
+      }
+      return [sourceRun(1, `fetch ${fetch}`)];
+    },
+    env: () => undefined,
+  };
+  const tiles = [{
+    ...sourceTile("labs ci trust", [source]),
+    intervalMs: 600_000,
+  }];
+  await tick(tiles, sourceCtx);
+  onDelivery(delivered("ci.yml"), tiles);
+  const second = tick(tiles, sourceCtx);
+  await started.promise;
+
+  using published = observeUpdate(() =>
+    tileHtml("labs ci trust").includes("fetch 3")
+  );
+  onDelivery(delivered("ci.yml"), tiles);
+  await tick(tiles, sourceCtx);
+  assertEquals(fetches, 2);
+  release.resolve();
+  await second;
+  await published.promise;
+  assertEquals(fetches, 3);
 });
 
 boardTest("a failed run source keeps its last good snapshot", async () => {
@@ -1940,7 +2085,7 @@ boardTest("start: serves the handler on the configured port and keeps collecting
       return undefined;
     }) as unknown as typeof Deno.serve, () => {
       collections++;
-    }).timer;
+    }, new GitHubWebhooks()).timer;
   } finally {
     clearInterval(timer);
     console.log = log;
@@ -1973,6 +2118,7 @@ boardTest("start: the work it schedules on its clock both heartbeats and collect
       () => {
         collections++;
       },
+      new GitHubWebhooks(),
     ));
   } finally {
     clearInterval(timer);
@@ -1987,6 +2133,81 @@ boardTest("start: the work it schedules on its clock both heartbeats and collect
   assertEquals(collections, 2);
 
   await reader.cancel();
+});
+
+boardTest("start: collects through its collector when a relay delivery changes a run source, and not otherwise", async () => {
+  const log = console.log;
+  console.log = () => {};
+  const relay = new FakeRelay();
+  let collections = 0;
+  const collected = deferred<void>();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  try {
+    ({ timer } = start(
+      ((opts: Deno.ServeTcpOptions) => {
+        opts.onListen?.({ transport: "tcp", hostname: "localhost", port: PORT });
+        return undefined;
+      }) as unknown as typeof Deno.serve,
+      () => {
+        if (++collections === 2) collected.resolve();
+      },
+      relay.webhooks,
+    ));
+  } finally {
+    clearInterval(timer);
+    console.log = log;
+  }
+  await relay.open();
+  await relay.deliver("issues", {});
+  const run = {
+    id: 1,
+    event: "push",
+    head_branch: "main",
+    head_sha: "sha-1",
+    status: "completed",
+    conclusion: "failure",
+    run_attempt: 1,
+    display_title: "delivered",
+    created_at: new Date().toISOString(),
+    run_started_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    html_url: "",
+    head_commit: null,
+  };
+  await relay.deliver(
+    "workflow_run",
+    workflowRunPayload(REPO, run, `.github/workflows/${CI_WORKFLOW}`),
+  );
+  await collected.promise;
+  assertEquals(collections, 2);
+});
+
+boardTest("start: connects to the relay, and connects again on its clock once the connection ends", async () => {
+  const log = console.log;
+  console.log = () => {};
+  const relay = new FakeRelay();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let onTick = () => Promise.resolve();
+  try {
+    ({ timer, onTick } = start(
+      ((opts: Deno.ServeTcpOptions) => {
+        opts.onListen?.({ transport: "tcp", hostname: "localhost", port: PORT });
+        return undefined;
+      }) as unknown as typeof Deno.serve,
+      () => {},
+      relay.webhooks,
+    ));
+  } finally {
+    clearInterval(timer);
+    console.log = log;
+  }
+  assertEquals(relay.connections, 1);
+  await onTick();
+  assertEquals(relay.connections, 1, "an open connection is kept");
+
+  await relay.end();
+  await onTick();
+  assertEquals(relay.connections, 2);
 });
 
 describe("workflow activity", () => {

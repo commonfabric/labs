@@ -9,10 +9,14 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { toDocumentPath } from "@commonfabric/memory/v2";
+import {
+  patchOverlapsNonRecursiveRead,
+  patchOverlapsRead,
+} from "@commonfabric/memory/v2/engine";
 import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import type { SpaceReplica } from "../src/storage/v2.ts";
+import { coarsenCommitReads, type SpaceReplica } from "../src/storage/v2.ts";
 import { Runtime } from "../src/runtime.ts";
 import { excludeReadFromConflict } from "../src/storage/reactivity-log.ts";
 import { txToReactivityLog } from "../src/scheduler.ts";
@@ -263,6 +267,148 @@ describe("memory-v2-read-compaction", () => {
         toDocumentPath(["value", "section0", "field0"]),
         toDocumentPath(["value", "section0", "field1"]),
       ]);
+
+      await runtime.dispose();
+      await storage.close();
+    });
+
+    it("coarsens a wire group of more than sixteen reads of one document to its common prefix", async () => {
+      // A pattern setup committed with its own reads (a source swap) read
+      // fifty-odd paths of every member document; one recursive read at
+      // the prefix is a coarser precondition and a message the server
+      // takes (MAX_UNTRUSTED_MESSAGE_SLOTS).
+      const { signer, storage, runtime } = await createRuntime(
+        "memory-v2-read-compaction-coarsen-wide",
+      );
+      const space = signer.did();
+      const members = Array.from({ length: 17 }, (_, i) => `member${i}`);
+
+      const seed = runtime.edit();
+      seed.writeValueOrThrow(
+        { ...DOCUMENT_ADDRESS, space },
+        {
+          section: Object.fromEntries(members.map((m) => [m, { n: 1 }])),
+          other: "unread",
+        },
+      );
+      expect((await seed.commit().settled).ok).toEqual({});
+
+      const tx = runtime.edit();
+      for (const member of members) {
+        tx.readValueOrThrow(
+          { ...DOCUMENT_ADDRESS, space, path: ["section", member] },
+          { nonRecursive: true },
+        );
+      }
+
+      const replica = storage.open(space).replica as SpaceReplica;
+      const built = replica.accessForTestingOnly.buildReads(tx.tx, 1);
+      // The replica's own set stays lossless: seventeen shape reads.
+      expect(built.confirmed).toHaveLength(17);
+      const reads = coarsenCommitReads(built);
+
+      expect(reads.pending).toEqual([]);
+      // Two reads: the shallow one keeps the ancestor key-set guard the
+      // member shape reads had (an indexed removal above the prefix injects
+      // its parent as a touched path, which only the shallow rule matches).
+      expect(reads.confirmed.map(({ path, nonRecursive }) => ({
+        path,
+        nonRecursive,
+      }))).toEqual([
+        { path: toDocumentPath(["value", "section"]), nonRecursive: true },
+        { path: toDocumentPath(["value", "section"]), nonRecursive: undefined },
+      ]);
+
+      await runtime.dispose();
+      await storage.close();
+    });
+
+    it("keeps a shallow read at the prefix, so an indexed removal above it still conflicts", async () => {
+      // Seventeen shape reads of the members of `list[1]` coarsen to a
+      // recursive read at `value/list/1` — and a shallow one beside it. A
+      // concurrent removal at `list/0` shifts other data into `list[1]`; the
+      // engine matches it against a shallow read through the removal's
+      // injected parent `value/list`, which the recursive rule, on leaves
+      // alone, does not reach. Without the shallow read a stale result
+      // would commit (Astra, labs #8851).
+      const { signer, storage, runtime } = await createRuntime(
+        "memory-v2-read-compaction-shallow-guard",
+      );
+      const space = signer.did();
+      const members = Array.from({ length: 17 }, (_, i) => `member${i}`);
+      const element = Object.fromEntries(members.map((m) => [m, { n: 1 }]));
+
+      const seed = runtime.edit();
+      seed.writeValueOrThrow(
+        { ...DOCUMENT_ADDRESS, space },
+        { list: [element, element, element] },
+      );
+      expect((await seed.commit().settled).ok).toEqual({});
+
+      const tx = runtime.edit();
+      for (const member of members) {
+        tx.readValueOrThrow(
+          { ...DOCUMENT_ADDRESS, space, path: ["list", "1", member] },
+          { nonRecursive: true },
+        );
+      }
+
+      const replica = storage.open(space).replica as SpaceReplica;
+      const reads = coarsenCommitReads(
+        replica.accessForTestingOnly.buildReads(tx.tx, 1),
+      );
+      const prefix = toDocumentPath(["value", "list", "1"]);
+      expect(reads.confirmed.map(({ path, nonRecursive }) => ({
+        path,
+        nonRecursive,
+      }))).toEqual([
+        { path: prefix, nonRecursive: true },
+        { path: prefix, nonRecursive: undefined },
+      ]);
+
+      const removal = [{ op: "remove" as const, path: "/value/list/0" }];
+      // The guard: the shallow read at the prefix catches the removal...
+      expect(patchOverlapsNonRecursiveRead(removal, [...prefix])).toBe(true);
+      // ...which the recursive read alone would not.
+      expect(patchOverlapsRead(removal, [...prefix])).toBe(false);
+
+      await runtime.dispose();
+      await storage.close();
+    });
+
+    it("keeps sixteen reads of one document apart", async () => {
+      const { signer, storage, runtime } = await createRuntime(
+        "memory-v2-read-compaction-sixteen-apart",
+      );
+      const space = signer.did();
+      const members = Array.from({ length: 16 }, (_, i) => `member${i}`);
+
+      const seed = runtime.edit();
+      seed.writeValueOrThrow(
+        { ...DOCUMENT_ADDRESS, space },
+        {
+          section: Object.fromEntries(members.map((m) => [m, { n: 1 }])),
+          other: "unread",
+        },
+      );
+      expect((await seed.commit().settled).ok).toEqual({});
+
+      const tx = runtime.edit();
+      for (const member of members) {
+        tx.readValueOrThrow(
+          { ...DOCUMENT_ADDRESS, space, path: ["section", member] },
+          { nonRecursive: true },
+        );
+      }
+
+      const replica = storage.open(space).replica as SpaceReplica;
+      const reads = replica.accessForTestingOnly.buildReads(tx.tx, 1);
+
+      expect(reads.confirmed.length).toBe(16);
+      expect(reads.confirmed.every((read) => read.nonRecursive === true))
+        .toBe(true);
+      // Sixteen is the bound: the wire set is the same object.
+      expect(coarsenCommitReads(reads)).toBe(reads);
 
       await runtime.dispose();
       await storage.close();

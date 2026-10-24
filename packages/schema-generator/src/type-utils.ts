@@ -165,7 +165,11 @@ export function safeGetPropertyType(
   checker: ts.TypeChecker,
   fallbackNode?: ts.TypeNode,
 ): ts.Type {
-  const decl = prop.valueDeclaration;
+  // A property a homomorphic mapped type makes, as `Pick`, `Omit` and
+  // `Partial` do, has no value declaration but keeps the declaration of the
+  // property it maps, which says what its type is where the mapping leaves it.
+  const decl = prop.valueDeclaration ??
+    prop.declarations?.find(ts.isPropertySignature);
   const isOptional = (prop.flags & ts.SymbolFlags.Optional) !== 0;
 
   // Get type from the resolved parent type (for generic instantiation and mapped types)
@@ -817,14 +821,18 @@ export function getArrayElementInfo(
     return undefined;
   }
 
-  // Use numeric index type as fallback (for tuples/array-like objects)
+  // An object that declares a `length` beside its numeric index is array-like,
+  // as a tuple, a type built on an array, and `ArrayLike<T>` are, and is read
+  // as an array of what that index holds. Any other object with a numeric
+  // index is a map from number-named keys, as a type literal writing it is
+  // read.
   const elementType = safeGetIndexTypeOfType(
     checker,
     type,
     ts.IndexKind.Number,
     "array numeric index",
   );
-  if (elementType) {
+  if (elementType && type.getProperty("length")) {
     return { elementType };
   }
 

@@ -116,14 +116,14 @@ Start the console with an index configured, from `packages/cf-harness`:
 CF_HARNESS_CONSOLE_PORT=8103 \
 CF_HARNESS_FABRIC_API_URL=http://localhost:8000 \
 CF_HARNESS_FABRIC_IDENTITY="$HOME/.cf/my-key.pkcs8" \
-CF_HARNESS_FABRIC_SPACE=pattern-index-demo \
+CF_HARNESS_FABRIC_SPACE=<space-did> \
 CF_HARNESS_PATTERN_INDEX_URL=https://index.example \
 deno task console
 ```
 
 [The console README](../console/README.md) covers the rest of its prerequisites
-— a local toolshed, a sandbox runtime, a connected model provider, and a space
-named by name rather than by `did:key`.
+— a local toolshed, a sandbox runtime, a connected model provider, and the DID
+of a space the identity can write to.
 
 Then, in another shell, run the suite:
 
@@ -260,7 +260,7 @@ passed.
   "requiredToolIds": ["run_pattern", "search_patterns", "record_feedback"],
   "forbiddenToolIds": ["web_search"],
   "requiredSubagentProfiles": ["pattern-author"],
-  "fabricSpace": "pattern-index-demo",
+  "fabricSpace": "<space-did>",
   "artifactRoot": "/Users/me/labs/packages/cf-harness/.cf-harness-console/runs",
   "sessionDbPath": "/Users/me/labs/packages/cf-harness/.cf-harness-console/sessions.sqlite"
 }

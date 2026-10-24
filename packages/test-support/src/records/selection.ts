@@ -18,15 +18,26 @@
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { type TestIdentity, testIdentityKey } from "./schema.ts";
 
-/** The inputs behind one identity's score, as a manifest records them. */
+/**
+ * The inputs behind one identity's score, as a manifest records them.
+ *
+ * The weighted count of new real test failures is named `catches`, and the
+ * most recent one's day `lastCatch`, because those are the names a
+ * published manifest holds them under. Every lane, the dashboard, and every
+ * command that reads a manifest looks for them by those names, and a reader
+ * that does not find them treats the manifest as unreadable.
+ */
 export interface ScoreInputs {
-  /** Catches, weighted by where each happened. */
+  /** New real test failures, weighted by where each happened. */
   catches: number;
 
-  /** The day of the most recent catch, absent when there are none. */
+  /**
+   * The day of the most recent new real test failure, absent when there
+   * are none.
+   */
   lastCatch?: string;
 
-  /** How many distinct sources are among the catches. */
+  /** How many distinct sources are among the new real test failures. */
   sources: number;
 
   /** Recent failures over recent runs, decayed as they age. */
@@ -60,7 +71,8 @@ export interface ScoreInputs {
  * number is read forward; and the publisher passes over a stored
  * aggregate above it for the newest one behind that it can read. No
  * change to this number calls for a bootstrap, which would throw away
- * the history the stored aggregates hold.
+ * the history the stored aggregates hold, and which refuses over any of
+ * them it can read.
  *
  * Lowering it asks one thing of an operator, and only where the number
  * it is lowered from stood for longer than the publisher's window: the
@@ -85,14 +97,13 @@ const UNIT_OVERHEAD_SINCE = 2;
 /**
  * The segment naming the area the selection store writes under.
  *
- * It does not move when the schema does. The area holds the publisher's
- * rolling aggregate, which is where every catch a test has ever been
- * credited with lives, and an area that moved with the schema would
- * leave that behind: the publisher would have no aggregate to carry
- * forward and would stop and ask for a bootstrap, which an operator runs
- * by hand and which reads only as far back as its window. Between the
- * two, nothing publishes, and a consumer with no manifest runs the whole
- * corpus.
+ * It does not move when the schema does. The area holds the publisher's rolling
+ * aggregate, which is where every new real test failure a test has ever been
+ * credited with lives, and an area that moved with the schema would leave that
+ * behind: the publisher would have no aggregate to carry forward and would stop
+ * and ask for a bootstrap, which an operator runs by hand and which reads only
+ * as far back as its window. Between the two, nothing publishes, and a consumer
+ * with no manifest runs the whole corpus.
  *
  * The publisher's identity holds create and not delete or overwrite, so
  * what is already stored stays in the area it was written under, which
@@ -257,6 +268,16 @@ export interface SuiteFit {
   overhead: number;
   correction: number;
   unitOverhead: number;
+
+  /**
+   * Seconds the hooks of each unit lanes have measured them for take, by
+   * unit: what its outermost tests took that no record holds, such as the
+   * setup and teardown its `describe`s declare. Counted with the tests each
+   * time a pass opens the unit, so `correction` applies to it. A unit
+   * not named here, and every unit of a fit carrying no map, is charged
+   * nothing for its hooks.
+   */
+  unitHooks?: Record<string, number>;
 }
 
 /** The fitted numbers a lane's own timing records produced. */
@@ -410,13 +431,18 @@ export interface Manifest {
   /** ISO 8601 UTC. */
   generatedAt: string;
 
-  /** Seeds the exploration draw, so five lanes draw the same set. */
+  /** Seeds the exploration draw, so every lane draws the same set. */
   seed: string;
 
   /** The `main` commit whose topology was enumerated. */
   commit: string;
 
-  /** How many workflow runs the aggregate behind this manifest saw. */
+  /**
+   * How many workflow runs the reports this publisher run read came from. A
+   * report is read once, by the first publisher run to find it, and folded
+   * into the aggregate, so this counts what is new since the previous
+   * manifest rather than what stands behind this one.
+   */
   runs: number;
 
   /** Every dial this manifest was built with. */
@@ -691,12 +717,33 @@ function parseFits(
       ? 0
       : carried;
     if (!isFiniteNumber(unitOverhead) || unitOverhead < 0) return undefined;
+    const unitHooks = fitted.unitHooks === undefined
+      ? undefined
+      : parseUnitHooks(fitted.unitHooks);
+    if (fitted.unitHooks !== undefined && unitHooks === undefined) {
+      return undefined;
+    }
     return {
       overhead: fitted.overhead,
       correction: fitted.correction,
       unitOverhead,
+      ...(unitHooks === undefined ? {} : { unitHooks }),
     };
   });
+}
+
+/**
+ * Reads a fit's seconds for each unit's hooks, failing whole if any is not
+ * a duration.
+ */
+function parseUnitHooks(value: unknown): Record<string, number> | undefined {
+  if (!isRecord(value)) return undefined;
+  const hooks: Record<string, number> = {};
+  for (const [unit, seconds] of Object.entries(value)) {
+    if (!isFiniteNumber(seconds) || seconds < 0) return undefined;
+    hooks[unit] = seconds;
+  }
+  return hooks;
 }
 
 function parseLane(value: unknown): LanePlan | undefined {

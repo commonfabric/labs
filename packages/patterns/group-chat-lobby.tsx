@@ -2,6 +2,7 @@ import {
   computed,
   Default,
   equals,
+  type FabricBytes,
   handler,
   ifElse,
   NAME,
@@ -12,6 +13,7 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import { profileLook } from "./system/profile-look.ts";
 import GroupChatRoom, {
   Message,
   ParticipantProfileCell,
@@ -24,7 +26,7 @@ import GroupChatRoom, {
  * Apple iOS-style lobby where unlimited users can join. Identity comes from
  * the viewer's shared profile (`wish({ query: "#profile" })`): the wish's
  * built-in UI lets the viewer pick one of their existing profiles or create a
- * new one, and joining snapshots the resolved name/avatar into the shared
+ * new one, and joining snapshots the resolved name/picture into the shared
  * user roster (see docs/specs/shared-profile-rosters.md).
  */
 
@@ -67,8 +69,8 @@ const resetLobby = handler<
   );
 });
 
-// Handler for joining the chat. `name`/`avatar` arrive as plain strings
-// resolved from the viewer's shared profile (named `computed` values
+// Handler for joining the chat. `name`/`picture`/`avatar` arrive as plain
+// values resolved from the viewer's shared profile (named `computed` values
 // auto-unwrap as handler state); `profile` is the live profile cell — the
 // STABLE identity key. Display names are mutable and not unique across users
 // (two profiles can both be "Alex"), so re-join detection compares profile
@@ -82,9 +84,10 @@ const joinChat = handler<
     // May be undefined until the viewer's `#profile` wish resolves.
     profile: ParticipantProfileCell | undefined;
     name: string;
-    avatar: string;
+    picture?: FabricBytes;
+    avatar?: string;
   }
->((_event, { messages, users, sessionId, profile, name, avatar }) => {
+>((_event, { messages, users, sessionId, profile, name, picture, avatar }) => {
   const trimmed = (name ?? "").trim();
   if (!trimmed || !profile) {
     console.log("[joinChat] No resolved profile yet, returning");
@@ -122,7 +125,8 @@ const joinChat = handler<
     users.push({
       name: displayName,
       joinedAt: Date.now(),
-      avatar: (avatar ?? "").trim(),
+      // The user is drawn with their picture, or else their avatar text.
+      ...profileLook(picture, avatar),
       profile,
     });
     console.log("[joinChat] User added:", displayName);
@@ -160,15 +164,17 @@ export default pattern<LobbyInput, LobbyOutput>(
     // Resolve THIS viewer's shared profile. The `#profile` wish's built-in UI
     // covers the whole lifecycle: a create surface when the viewer has no
     // profile, a link when they have one, and a picker (with inline create)
-    // when they have several. The field targets give the snapshot strings.
+    // when they have several. The field targets give the snapshot values.
     const profileWish = wish<{ name?: string; avatar?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
+    const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
     const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
 
     const myName = computed(() => profileNameWish.result ?? "");
-    const myAvatar = computed(() => profileAvatarWish.result ?? "");
+    const myPicture = computed(() => profilePictureWish.result);
+    const myAvatar = computed(() => profileAvatarWish.result);
     const hasProfile = computed(() =>
       (profileNameWish.result ?? "").trim() !== ""
     );
@@ -184,6 +190,7 @@ export default pattern<LobbyInput, LobbyOutput>(
       sessionId,
       profile: profileWish.result,
       name: myName,
+      picture: myPicture,
       avatar: myAvatar,
     });
 
@@ -321,7 +328,12 @@ export default pattern<LobbyInput, LobbyOutput>(
                         borderRadius: "20px",
                       }}
                     >
-                      <cf-avatar src={user.avatar} name={user.name} size="xs" />
+                      <cf-avatar
+                        bytes={user.picture}
+                        src={user.avatar}
+                        name={user.name}
+                        size="xs"
+                      />
                       <span
                         style={{
                           fontSize: "0.875rem",

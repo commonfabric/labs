@@ -42,6 +42,7 @@ Quick error reference and debugging workflows. For detailed explanations, see li
 | Per-row inline form (delete-confirm, edit, picker) never opens; no error | A `computed()` nested in a `.map()` over a computed-produced list reads a `perSession` cell; the narrower-scope follow is silently blocked | Read the perSession cell once at top level and emit a plain boolean per row ([gotchas/persession-read-in-mapped-computed](gotchas/persession-read-in-mapped-computed.md)) |
 | "Reactive reference from outer scope cannot be accessed via closure" / "Cannot access cell via closure" at pattern construction | An inner `(cellCall() ?? []).map(...)` nested in an outer `.map(...)` — the `?? []` hides the cell from the transformer. The shape is a code smell even on runtimes where it no longer throws | Map the cell directly; if you need to transform first, pre-bake a top-level `computed` ([gotchas/closure-capture-in-nested-map](gotchas/closure-capture-in-nested-map.md)) |
 | Writable-input computed causes churn or stale fan-out | A computed writes through a `Writable<>` input while also participating in reactive scheduling | Treat it as effectful and check for cycles ([non-idempotent-detection](non-idempotent-detection.md)) |
+| Of two declarations in a `style={{ ... }}` object that set the same property, the one listed last is not the one that takes effect | A style object's declarations are written in the UTF-8 order of their keys, not in the order listed, so the one whose key sorts later wins | Use one declaration for the whole value, or declarations that do not overlap ([quick gotchas](gotchas/quick.md#style-object-declaration-order)) |
 | `[object Object]` shown where a string was expected | A computed/`[NAME]` template string interpolates a whole object instead of a field | Interpolate the field, not the object, inside `computed()` ([quick gotchas](gotchas/quick.md#object-object-in-a-computed-string)) |
 | "secure mode %SharedMath%.random() throws" (or `Date.now` in computed) | SES gates ambient `Math.random()`/`Date.now()` in the pattern sandbox — allowed in a handler, forbidden in a lift/computed or pattern body | Call `Math.random()` / `Date.now()` directly from a handler; for reactive time in a computed, read the `#now` wish ([gotchas/scoped-cell-pitfalls](gotchas/scoped-cell-pitfalls.md), section 7) |
 | "Cannot read properties of null/undefined" exactly when a conditional section renders the fallback | Ternary branches are evaluated eagerly — the lowered `ifElse()` builds both branch expressions even when the condition is falsy | Defer the property-accessing branch in `computed()` ([gotchas/eager-ternary-branch-evaluation](gotchas/eager-ternary-branch-evaluation.md)) |
@@ -62,7 +63,8 @@ is not a function; `[object Object]` in a computed() string; handler binding
 error; lift() returns stale data; ifElse with composed pattern cells; onClick
 inside computed(); Stream subscribe doesn't exist; binding the whole item to
 `$checked`; Writable array element types; nested Writable types; handler state
-typed `any` unwraps Writables; performance quick tips.
+typed `any` unwraps Writables; style object declaration order; performance
+quick tips.
 
 **Longer gotchas** have their own files:
 

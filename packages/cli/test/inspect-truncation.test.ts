@@ -10,7 +10,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
-import { cf, type CliResult, stripAnsi } from "./utils.ts";
+import { argv, cf, type CliResult, stripAnsi } from "./utils.ts";
 
 const SESSION = "session:did%3Akey%3AzAlice:s1";
 const MODULE_IDENTITY = "pf1v3J_M5Nep7cq-Uh8EYG0ZQaE217FfDfcjbwGdjVI";
@@ -109,7 +109,7 @@ const notices = (result: CliResult): string[] =>
 describe("cf inspect capped listings", () => {
   it("names the cap, the space's size, and the flag that lifts it", async () => {
     await withStore(async (path) => {
-      const result = await cf(`inspect entities ${path} --limit 3`);
+      const result = await cf(argv`inspect entities ${path} --limit 3`);
       expect(result.code).toBe(0);
       expect(notices(result)).toEqual([
         `NOTE: capped at --limit 3 entities; the space holds ${TOTAL} ` +
@@ -120,7 +120,7 @@ describe("cf inspect capped listings", () => {
 
   it("says nothing when the limit covers the whole space", async () => {
     await withStore(async (path) => {
-      const result = await cf(`inspect entities ${path} --limit ${TOTAL}`);
+      const result = await cf(argv`inspect entities ${path} --limit ${TOTAL}`);
       expect(result.code).toBe(0);
       expect(notices(result)).toEqual([]);
       // The whole space is there to be silent about.
@@ -130,7 +130,7 @@ describe("cf inspect capped listings", () => {
 
   it("writes the same bare array to stdout under `--json` while noting the cap", async () => {
     await withStore(async (path) => {
-      const result = await cf(`inspect entities ${path} --limit 3 --json`);
+      const result = await cf(argv`inspect entities ${path} --limit 3 --json`);
       expect(result.code).toBe(0);
       const parsed = JSON.parse(result.stdout.join("\n"));
       expect(Array.isArray(parsed)).toBe(true);
@@ -143,14 +143,16 @@ describe("cf inspect capped listings", () => {
     await withStore(async (path) => {
       // Six cells outrank every piece, so the same limit without `--kind`
       // reaches no piece at all — which is what this composition has to beat.
-      const cellsOnly = await cf(`inspect entities ${path} --limit 6 --json`);
+      const cellsOnly = await cf(
+        argv`inspect entities ${path} --limit 6 --json`,
+      );
       const scanned = JSON.parse(cellsOnly.stdout.join("\n")) as {
         kind: string;
       }[];
       expect(scanned.filter((e) => e.kind === "piece")).toEqual([]);
 
       const result = await cf(
-        `inspect entities ${path} --kind piece --limit 6 --json`,
+        argv`inspect entities ${path} --kind piece --limit 6 --json`,
       );
       expect(result.code).toBe(0);
       const pieces = JSON.parse(result.stdout.join("\n")) as { kind: string }[];
@@ -162,7 +164,7 @@ describe("cf inspect capped listings", () => {
   it("names the kind in the notice when a kind outruns the limit", async () => {
     await withStore(async (path) => {
       const result = await cf(
-        `inspect entities ${path} --kind piece --limit 2`,
+        argv`inspect entities ${path} --kind piece --limit 2`,
       );
       expect(result.code).toBe(0);
       expect(notices(result)).toEqual([
@@ -174,7 +176,7 @@ describe("cf inspect capped listings", () => {
 
   it("rejects a `--kind` no entity classifies as, before opening the space", async () => {
     await withStore(async (path) => {
-      const result = await cf(`inspect entities ${path} --kind pieces`);
+      const result = await cf(argv`inspect entities ${path} --kind pieces`);
       expect(result.code).not.toBe(0);
       const stderr = stripAnsi(result.stderr.join("\n"));
       expect(stderr).toContain('Unknown --kind "pieces"');
@@ -184,16 +186,16 @@ describe("cf inspect capped listings", () => {
 
   it("notes the cap on a capped graph, rendered or as DOT", async () => {
     await withStore(async (path) => {
-      const rendered = await cf(`inspect graph ${path} --limit 3`);
+      const rendered = await cf(argv`inspect graph ${path} --limit 3`);
       expect(rendered.code).toBe(0);
       expect(notices(rendered).length).toBe(1);
 
-      const dot = await cf(`inspect graph ${path} --limit 3 --dot`);
+      const dot = await cf(argv`inspect graph ${path} --limit 3 --dot`);
       expect(dot.code).toBe(0);
       expect(dot.stdout.join("\n")).toContain("digraph");
       expect(notices(dot).length).toBe(1);
 
-      const whole = await cf(`inspect graph ${path} --limit ${TOTAL}`);
+      const whole = await cf(argv`inspect graph ${path} --limit ${TOTAL}`);
       expect(whole.code).toBe(0);
       expect(notices(whole)).toEqual([]);
     });
@@ -201,7 +203,7 @@ describe("cf inspect capped listings", () => {
 
   it("carries the cap into the graph's `--json`, where the shape can hold it", async () => {
     await withStore(async (path) => {
-      const result = await cf(`inspect graph ${path} --limit 3 --json`);
+      const result = await cf(argv`inspect graph ${path} --limit 3 --json`);
       expect(result.code).toBe(0);
       const graph = JSON.parse(result.stdout.join("\n")) as {
         extent: {
@@ -223,7 +225,7 @@ describe("cf inspect capped listings", () => {
   it("refuses a capped result under `--require-complete`, with nothing on stdout", async () => {
     await withStore(async (path) => {
       const result = await cf(
-        `inspect entities ${path} --limit 3 --json --require-complete`,
+        argv`inspect entities ${path} --limit 3 --json --require-complete`,
       );
       expect(result.code).not.toBe(0);
       // A partial payload written before the failure is the whole hazard: a
@@ -238,7 +240,7 @@ describe("cf inspect capped listings", () => {
   it("returns the whole listing under `--require-complete` when the limit covers the space", async () => {
     await withStore(async (path) => {
       const result = await cf(
-        `inspect entities ${path} --limit ${TOTAL} --json --require-complete`,
+        argv`inspect entities ${path} --limit ${TOTAL} --json --require-complete`,
       );
       expect(result.code).toBe(0);
       expect(JSON.parse(result.stdout.join("\n")).length).toBe(TOTAL);
@@ -248,13 +250,13 @@ describe("cf inspect capped listings", () => {
   it("refuses a capped graph and a capped HTML explorer under `--require-complete`", async () => {
     await withStore(async (path) => {
       const graph = await cf(
-        `inspect graph ${path} --limit 3 --require-complete`,
+        argv`inspect graph ${path} --limit 3 --require-complete`,
       );
       expect(graph.code).not.toBe(0);
       expect(graph.stdout.join("").trim()).toBe("");
 
       const html = await cf(
-        `inspect html ${path} --limit 3 --require-complete`,
+        argv`inspect html ${path} --limit 3 --require-complete`,
       );
       expect(html.code).not.toBe(0);
       expect(html.stdout.join("").trim()).toBe("");
@@ -273,7 +275,7 @@ describe("cf inspect capped listings", () => {
       ).run();
       db.close();
 
-      const noted = await cf(`inspect graph ${path}`);
+      const noted = await cf(argv`inspect graph ${path}`);
       expect(noted.code).toBe(0);
       expect(notices(noted).join("")).toContain(
         "could not be reconstructed and are absent",
@@ -282,7 +284,7 @@ describe("cf inspect capped listings", () => {
       // nothing here.
       expect(notices(noted).join("")).not.toContain("capped at --limit");
 
-      const refused = await cf(`inspect graph ${path} --require-complete`);
+      const refused = await cf(argv`inspect graph ${path} --require-complete`);
       expect(refused.code).not.toBe(0);
       expect(refused.stdout.join("").trim()).toBe("");
       expect(stripAnsi(refused.stderr.join("\n"))).toContain(
@@ -305,7 +307,7 @@ describe("cf inspect capped listings", () => {
       // consumer reads stdout, where a subset parses exactly like the whole
       // set.
       const refused = await cf(
-        `inspect entities ${path} --kind piece --require-complete --json`,
+        argv`inspect entities ${path} --kind piece --require-complete --json`,
       );
       expect(refused.code).not.toBe(0);
       expect(refused.stdout.join("").trim()).toBe("");
@@ -315,7 +317,7 @@ describe("cf inspect capped listings", () => {
 
       // Unfiltered, the same store is complete: the row is returned `unknown`.
       const kept = await cf(
-        `inspect entities ${path} --require-complete --json`,
+        argv`inspect entities ${path} --require-complete --json`,
       );
       expect(kept.code).toBe(0);
       expect(
@@ -327,7 +329,7 @@ describe("cf inspect capped listings", () => {
 
   it("rejects a fractional `--limit` rather than applying a cap no count can reach", async () => {
     await withStore(async (path) => {
-      const result = await cf(`inspect entities ${path} --limit 1.5`);
+      const result = await cf(argv`inspect entities ${path} --limit 1.5`);
       expect(result.code).not.toBe(0);
       expect(stripAnsi(result.stderr.join("\n"))).toContain("--limit");
     });
@@ -358,7 +360,7 @@ describe("cf inspect capped listings", () => {
       // into a rounded row count and the second into "drop the last".
       const rows = (out: string[]) => JSON.parse(out.join("\n")).length;
       for (const command of ["hot", "conflicts"]) {
-        const bad = await cf(`inspect ${command} ${path} --limit 1.5`);
+        const bad = await cf(argv`inspect ${command} ${path} --limit 1.5`);
         expect(bad.code).not.toBe(0);
         // The CLI's own message, not the library's fallback — the guard has to
         // fire before the space is opened, or the failure arrives as a stack.
@@ -366,12 +368,14 @@ describe("cf inspect capped listings", () => {
           "`--limit` must be a whole number of rows",
         );
 
-        const capped = await cf(`inspect ${command} ${path} --limit 1 --json`);
+        const capped = await cf(
+          argv`inspect ${command} ${path} --limit 1 --json`,
+        );
         expect(capped.code).toBe(0);
         expect(rows(capped.stdout)).toBe(1);
 
         const unlimited = await cf(
-          `inspect ${command} ${path} --limit -1 --json`,
+          argv`inspect ${command} ${path} --limit -1 --json`,
         );
         expect(unlimited.code).toBe(0);
         // Strictly more than the cap — `slice(0, -1)` would give one FEWER
@@ -383,7 +387,7 @@ describe("cf inspect capped listings", () => {
 
   it("notes the cap on a capped HTML explorer and marks the page itself", async () => {
     await withStore(async (path) => {
-      const result = await cf(`inspect html ${path} --limit 3`);
+      const result = await cf(argv`inspect html ${path} --limit 3`);
       expect(result.code).toBe(0);
       expect(notices(result).length).toBe(1);
       expect(result.stdout.join("\n")).toContain(

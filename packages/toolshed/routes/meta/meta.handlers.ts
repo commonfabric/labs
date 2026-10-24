@@ -1,5 +1,6 @@
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import { z } from "zod";
+import { formatReleaseTime } from "@commonfabric/runner/pattern-release-time";
 import env from "@/env.ts";
 import { resolveGitSha, shellServerExecutionDefine } from "@/lib/build-info.ts";
 import { cfcPosture } from "@/lib/cfc-posture.ts";
@@ -32,6 +33,10 @@ export const MetaResponseSchema = z.object({
   // read from the compiled marker; CI's server-execution lanes assert on
   // it (docs/specs/server-side-execution/testing.md §2).
   shellServerExecutionDefine: z.string().nullable(),
+  // When this deployment released what it serves (`TOOLSHED_RELEASED_AT`),
+  // as an RFC 3339 date-time: the time the patterns route sends beside each
+  // identity it advertises. `null` when the deployment states none.
+  releasedAt: z.string().nullable(),
   // The experimental-flag posture this server RUNS AT — its own Runtime's
   // resolved flags, with the ones a serving runtime forces applied over them
   // — which a client not built alongside it adopts rather than being
@@ -92,6 +97,9 @@ export const index: AppRouteHandler<IndexRoute> = (c) => {
     did: SERVER_DID,
     gitSha: GIT_SHA,
     shellServerExecutionDefine,
+    releasedAt: env.TOOLSHED_RELEASED_AT === undefined
+      ? null
+      : formatReleaseTime(env.TOOLSHED_RELEASED_AT),
     experimental: experimentalPosture(),
     memoryUrl: env.MEMORY_PUBLIC_URL ?? null,
     cfc: cfcPosture(),

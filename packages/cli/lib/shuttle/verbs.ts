@@ -46,6 +46,8 @@ import {
   resolvePieceReference,
   SlugResolutionError,
 } from "@commonfabric/piece";
+import { LINK_MARKER_KEY } from "@commonfabric/piece/verb-input";
+import type { PieceCallableListing } from "@commonfabric/piece/verb-listing";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
@@ -58,7 +60,6 @@ import { keysOf } from "../cell-listing.ts";
 import {
   type CellSelection,
   CellSelectionError,
-  LINK_MARKER_KEY,
   parseCellSelectionOptions,
 } from "../cell-selection.ts";
 import { normalizeLLMFriendlyRef } from "../llm-friendly-ref.ts";
@@ -70,7 +71,6 @@ import {
   LinkValidationError,
   listPieceCallables,
   partitionVerbListing,
-  type PieceCallableListing,
   type PieceConfig,
   type PieceResolutionDeps,
   setCellValue,

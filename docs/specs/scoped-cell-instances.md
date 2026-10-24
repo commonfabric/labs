@@ -28,6 +28,21 @@ space < user < session
 
 `space` is the broadest scope. `session` is the narrowest scope.
 
+When a runtime enables `localSessionDocuments` with server execution disabled,
+its own session instance lives in its local replica. Reads of that instance
+register no remote watches, and its values and read dependencies are omitted
+from outgoing commits. Explicitly named foreign session instances retain server
+reads and admission; coverage checks do not treat an unloaded foreign instance
+as locally absent. Local writes still notify reactive readers. A transaction
+that also writes space or
+user state settles its session writes with that transaction's server verdict.
+Later session writes wait for earlier pending writes to finish applying locally.
+Origin preconditions naming local-only commits are checked against their local
+outcomes; dependent writes are rejected when their origin fails.
+With the flag off (the default), session documents synchronize with the server.
+Server execution always synchronizes them so the serving runtime can read and
+derive them.
+
 Scope is not part of cause computation. Cause-derived ids remain the same across
 scopes. Scope is an addressing dimension layered over the id.
 

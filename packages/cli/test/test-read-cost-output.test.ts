@@ -2,14 +2,14 @@ import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
-import { cf, checkStderr } from "./utils.ts";
+import { argv, cf, checkStderr } from "./utils.ts";
 
 describe("test-read-cost-output", () => {
   it("reports initialization, render, and assertion costs with authored sites", async () => {
     const root = resolve(import.meta.dirname!, "fixtures/render-step");
     const path = resolve(root, "direct-array-render.test.tsx");
     const { code, stdout, stderr } = await cf(
-      `test "${path}" --root "${root}" --verbose --stats-threshold 0 --stats-action-limit 20 --no-idempotency-check`,
+      argv`test ${path} --root ${root} --verbose --stats-threshold 0 --stats-action-limit 20 --no-idempotency-check`,
       { env: { CF_LOG_LEVEL: "error" } },
     );
     expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
@@ -28,7 +28,7 @@ describe("test-read-cost-output", () => {
       "fixtures/expect-non-idempotent",
     );
     const path = resolve(root, "unexpected-violation.test.tsx");
-    const { code, stdout } = await cf(`test "${path}" --root "${root}"`);
+    const { code, stdout } = await cf(argv`test ${path} --root ${root}`);
     expect(code).not.toBe(0);
     expect(stdout.join("\n")).toContain("non-idempotent");
     expect(stdout.join("\n")).not.toContain("Read cost (");

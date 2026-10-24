@@ -36,6 +36,7 @@
 //   and no batch is ever built for the failed space.
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -79,6 +80,7 @@ import {
   stageSpaceAccessChanges,
   stampWaveRunContext,
   WaveAccumulator,
+  type WaveCommitOutcome,
   type WaveCommitRejection,
   type WaveCommitSink,
   waveRunContextOf,
@@ -101,6 +103,10 @@ import { txToReactivityLog } from "../src/scheduler/reactivity.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { flushMicrotasks } from "./speculation-intent-test-utils.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
+import {
+  isStaleReadConflict,
+  isStorageTransactionInconsistent,
+} from "../src/storage/rejection.ts";
 
 const signer = await Identity.fromPassphrase("executor wave test");
 const space = signer.did() as MemorySpace;
@@ -1046,6 +1052,141 @@ describe("stage D seal-into-wave", () => {
     expect(stored?.document).toEqual({ value: { value: 99 } });
   });
 
+  it("warns for each dropped reader with the chain of withdrawn writes it read, back to the superseded write", async () => {
+    const lease = liveLease();
+    const wave = newWave({ lease });
+    runtime.installSealDestination(wave);
+
+    const x = runtime.getCell<{ value: number }>(space, "chain-x", undefined);
+    const z = runtime.getCell<{ value: number }>(space, "chain-z", undefined);
+    const w = runtime.getCell<{ value: number }>(space, "chain-w", undefined);
+
+    const tx1 = runtime.edit();
+    stampWaveRunContext(tx1, { actionId: "derive-x", kind: "derivation" });
+    x.withTx(tx1).set({ value: 10 });
+    expect((await tx1.commit().settled).error).toBeUndefined();
+
+    const tx2 = runtime.edit();
+    stampWaveRunContext(tx2, { actionId: "derive-z", kind: "derivation" });
+    z.withTx(tx2).set({ value: x.withTx(tx2).get()!.value + 1 });
+    expect((await tx2.commit().settled).error).toBeUndefined();
+
+    const tx3 = runtime.edit();
+    stampWaveRunContext(tx3, { actionId: "derive-w", kind: "derivation" });
+    w.withTx(tx3).set({ value: z.withTx(tx3).get()!.value + 1 });
+    expect((await tx3.commit().settled).error).toBeUndefined();
+
+    const xId = x.getAsNormalizedFullLink().id;
+    const zId = z.getAsNormalizedFullLink().id;
+    Engine.applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: xId, value: { value: { value: 99 } } }],
+      },
+    });
+
+    runtime.clearSealDestination();
+    const warnings: string[] = [];
+    const warn = stub(console, "warn", (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    });
+    try {
+      await wave.commitWave(newSink());
+      await wave.settled();
+    } finally {
+      warn.restore();
+    }
+
+    const superseded = `written by action=derive-x kind=derivation ` +
+      `eventId=<none>, which had that write superseded by a concurrent ` +
+      `commit.`;
+    const dropped = warnings.filter((line) =>
+      line.includes("contribution-dropped")
+    );
+    expect(dropped).toHaveLength(2);
+    expect(dropped[0]).toContain(
+      `action=derive-z kind=derivation eventId=<none>: pure derivation ` +
+        `dropped`,
+    );
+    expect(dropped[0]).toContain(`It read \`${xId} space\`, ${superseded}`);
+    expect(dropped[1]).toContain(
+      `action=derive-w kind=derivation eventId=<none>: pure derivation ` +
+        `dropped`,
+    );
+    expect(dropped[1]).toContain(
+      `It read \`${zId} space\`, written by action=derive-z ` +
+        `kind=derivation eventId=<none>, which was dropped. ` +
+        `That run read \`${xId} space\`, ${superseded}`,
+    );
+  });
+
+  it("warns for a reader of a requeued event's write with that event's id", async () => {
+    const lease = liveLease();
+    const wave = newWave({ lease });
+    runtime.installSealDestination(wave);
+
+    const y = runtime.getCell<{ value: number }>(space, "chain-y", undefined);
+    const q = runtime.getCell<{ value: number }>(space, "chain-q", undefined);
+
+    const handlerTx = runtime.edit();
+    stampWaveRunContext(handlerTx, {
+      actionId: "handle-vote",
+      kind: "event-handler",
+      eventId: "e1",
+      acting: { user: "did:key:alice", session: "sess-1" },
+    });
+    y.withTx(handlerTx).set({ value: 1 });
+    expect((await handlerTx.commit().settled).error).toBeUndefined();
+
+    const readerTx = runtime.edit();
+    stampWaveRunContext(readerTx, { actionId: "derive-q", kind: "derivation" });
+    q.withTx(readerTx).set({ value: y.withTx(readerTx).get()!.value + 1 });
+    expect((await readerTx.commit().settled).error).toBeUndefined();
+
+    // A whole-doc set never commutes with the handler's, so the handler's
+    // consequence requeues rather than rebasing.
+    const yId = y.getAsNormalizedFullLink().id;
+    Engine.applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: yId, value: { value: { value: 9 } } }],
+      },
+    });
+
+    runtime.clearSealDestination();
+    const warnings: string[] = [];
+    const warn = stub(console, "warn", (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    });
+    let outcome: WaveCommitOutcome;
+    try {
+      outcome = await wave.commitWave(newSink());
+      await wave.settled();
+    } finally {
+      warn.restore();
+    }
+
+    expect(outcome.requeuedEventIds).toEqual(["e1"]);
+    const dropped = warnings.filter((line) =>
+      line.includes("contribution-dropped")
+    );
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toContain(
+      `action=derive-q kind=derivation eventId=<none>: pure derivation ` +
+        `dropped`,
+    );
+    expect(dropped[0]).toContain(
+      `It read \`${yId} space\`, written by action=handle-vote ` +
+        `kind=event-handler eventId=e1, which was requeued.`,
+    );
+  });
+
   it("drops a derived write over an intrusion the sealing replica had not taken, though the wave's basis covers it — never a blind clobber", async () => {
     // A wave's basis is the serverSeq it OPENED at, while the view its runs
     // read is the replica's. A commit admitted before the wave opened and
@@ -1787,6 +1928,234 @@ describe("stage D seal-into-wave", () => {
     ]);
     expect(stored?.entries?.[0].consequenced).toBe(true);
     expect(stored?.entries?.[1].consequenced).toBeUndefined();
+  });
+
+  describe("an event consequence a later write overwrites", () => {
+    // The session that fired an event writes over the event's speculative
+    // echo — a user typing into the edit form a click just opened — and the
+    // event's authoritative consequence then lands after that write, whether
+    // the handler ran late or the write arrived mid-wave. The handler here
+    // seeds `draft`, which the user overwrites, and sets `editing`, which
+    // nobody touches.
+
+    type Draft = { name: string; bio: string };
+
+    const firing = { user: "did:key:alice", session: "sess-fire" };
+
+    const seedDocs = async () => {
+      const draft = runtime.getCell<Draft>(space, "wave-draft", undefined);
+      const editing = runtime.getCell<boolean>(
+        space,
+        "wave-editing",
+        undefined,
+      );
+      const seedTx = runtime.edit();
+      draft.withTx(seedTx).set({ name: "", bio: "" });
+      editing.withTx(seedTx).set(false);
+      expect((await seedTx.commit().settled).error).toBeUndefined();
+      // The event's durable entry stands at this seq: every write below
+      // comes after the event was fired.
+      return { draft, editing, eventSeq: Engine.serverSeq(engine) };
+    };
+
+    const sealConsequence = async (
+      wave: WaveAccumulator,
+      docs: Awaited<ReturnType<typeof seedDocs>>,
+      writeDraft: (tx: IExtendedStorageTransaction) => void = (tx) =>
+        docs.draft.withTx(tx).set({ name: "Ada", bio: "Countess" }),
+    ) => {
+      runtime.installSealDestination(wave);
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "start-editing",
+        kind: "event-handler",
+        eventId: "e-edit",
+        acting: firing,
+        streamEntry: {
+          sidecarId: "stream-edit",
+          index: 0,
+          seq: docs.eventSeq,
+        },
+      });
+      writeDraft(tx);
+      docs.editing.withTx(tx).set(true);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      runtime.clearSealDestination();
+    };
+
+    const overwriteDraft = (
+      docs: Awaited<ReturnType<typeof seedDocs>>,
+      session: string,
+      path: string,
+      value: string | Draft,
+    ) => {
+      Engine.applyCommit(engine, {
+        sessionId: session,
+        principal: firing.user,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "patch",
+            id: docs.draft.getAsNormalizedFullLink().id,
+            patches: [{ op: "replace", path, value }],
+          }],
+        },
+      });
+    };
+
+    const stored = (cell: { getAsNormalizedFullLink(): { id: string } }) =>
+      Engine.readState(engine, { id: cell.getAsNormalizedFullLink().id })
+        ?.document;
+
+    const typed: Draft = { name: "Grace", bio: "Admiral" };
+
+    it("drops the consequence's write to a doc the firing session overwrote before the wave opened, and commits the rest of it", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+      overwriteDraft(docs, firing.session, "/value", typed);
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({ value: typed });
+      expect(stored(docs.editing)).toEqual({ value: true });
+      expect(outcome.dispositions[0]).toEqual({
+        kind: "partially-dropped",
+        droppedOps: 1,
+      });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+      expect(outcome.requeuedEventIds).toEqual([]);
+    });
+
+    it("drops the consequence's write to a doc the firing session overwrote mid-wave, rather than requeueing the event", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      overwriteDraft(docs, firing.session, "/value", typed);
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({ value: typed });
+      expect(stored(docs.editing)).toEqual({ value: true });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+      expect(outcome.requeuedEventIds).toEqual([]);
+    });
+
+    it("commits the consequence over a doc another session overwrote after the event", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+      overwriteDraft(docs, "sess-other", "/value", typed);
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({
+        value: { name: "Ada", bio: "Countess" },
+      });
+      expect(outcome.dispositions[0]).toEqual({ kind: "committed" });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+    });
+
+    it("drops only the patches of the consequence the firing session overwrote, and commits its other patches to the doc", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+      overwriteDraft(docs, firing.session, "/value/name", "Grace");
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({
+        value: { name: "Grace", bio: "Countess" },
+      });
+      expect(stored(docs.editing)).toEqual({ value: true });
+      expect(outcome.dispositions[0]).toEqual({
+        kind: "partially-dropped",
+        droppedOps: 1,
+      });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+    });
+
+    it("rebases the patches the firing session did not overwrite when its write lands mid-wave, rather than requeueing the event", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      overwriteDraft(docs, firing.session, "/value/name", "Grace");
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({
+        value: { name: "Grace", bio: "Countess" },
+      });
+      expect(stored(docs.editing)).toEqual({ value: true });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+      expect(outcome.requeuedEventIds).toEqual([]);
+    });
+
+    it("drops the consequence's writes to both paths of a value the firing session moved", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+      Engine.applyCommit(engine, {
+        sessionId: firing.session,
+        principal: firing.user,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "patch",
+            id: docs.draft.getAsNormalizedFullLink().id,
+            patches: [{ op: "move", from: "/value/bio", path: "/value/name" }],
+          }],
+        },
+      });
+
+      const wave = newWave({ lease });
+      await sealConsequence(wave, docs);
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({ value: { name: "" } });
+      expect(stored(docs.editing)).toEqual({ value: true });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+    });
+
+    it("commits a consequence write to a path above the one the firing session overwrote", async () => {
+      const lease = liveLease();
+      const docs = await seedDocs();
+      overwriteDraft(docs, firing.session, "/value/name", "Grace");
+
+      const wave = newWave({ lease });
+      // A raw write of the whole value, which commits as one write at
+      // `/value` rather than as a patch per field.
+      await sealConsequence(wave, docs, (tx) =>
+        tx.writeOrThrow(
+          {
+            space,
+            id: docs.draft.getAsNormalizedFullLink().id,
+            type: "application/json",
+            path: ["value"],
+          },
+          { name: "Ada", bio: "Countess" },
+        ));
+      const outcome = await wave.commitWave(newSink());
+      await wave.settled();
+
+      expect(stored(docs.draft)).toEqual({
+        value: { name: "Ada", bio: "Countess" },
+      });
+      expect(outcome.dispositions[0]).toEqual({ kind: "committed" });
+      expect(outcome.committedEventIds).toEqual(["e-edit"]);
+    });
   });
 
   it("aborts the wave commit when the lease tenure lapsed (work sealed under a lapsed tenure never commits)", async () => {
@@ -3956,6 +4325,110 @@ describe("stage D seal-into-wave", () => {
     ).toBe(0);
   });
 
+  it("warns for a read-only-space reader that sealed before the withdrawn writer without claiming it read that write", async () => {
+    const foreignSigner = await Identity.fromPassphrase(
+      "wave read-only space, reader first",
+    );
+    const foreign = foreignSigner.did() as MemorySpace;
+    const foreignEngine = await server.engineForSpace(foreign);
+    const lease = liveLease();
+    const engines = new Map<MemorySpace, Engine.Engine>([
+      [space, engine],
+      [foreign, foreignEngine],
+    ]);
+    const wave = newWave({ lease });
+    runtime.installSealDestination(wave);
+
+    const foreignDoc = runtime.getCell<{ value: number }>(
+      foreign,
+      "wave-ro-first-foreign",
+      undefined,
+    );
+    const homeIn = runtime.getCell<{ value: number }>(
+      space,
+      "wave-ro-first-home-in",
+      undefined,
+    );
+    const homeOut = runtime.getCell<{ value: number }>(
+      space,
+      "wave-ro-first-home-out",
+      undefined,
+    );
+
+    // The reader seals first: the foreign doc holds nothing yet.
+    const readerTx = runtime.edit();
+    stampWaveRunContext(readerTx, {
+      actionId: "derive-from-foreign",
+      kind: "derivation",
+    });
+    const seen = foreignDoc.withTx(readerTx).get();
+    expect(seen).toBeUndefined();
+    homeOut.withTx(readerTx).set({ value: 1 });
+    expect((await readerTx.commit().settled).error).toBeUndefined();
+
+    const writerTx = runtime.edit();
+    stampWaveRunContext(writerTx, {
+      actionId: "write-foreign",
+      kind: "event-handler",
+      eventId: "e-fw",
+      acting: { user: "did:key:alice", session: "sess-1" },
+      capabilityRef: "cap:test-grant",
+    });
+    writerTx.enableMultiSpaceWrites?.([foreign, space]);
+    foreignDoc.withTx(writerTx).set({ value: 5 });
+    homeIn.withTx(writerTx).set({ value: 5 });
+    expect((await writerTx.commit().settled).error).toBeUndefined();
+
+    // A whole-doc set never commutes, so the writer's home write requeues
+    // it, and its foreign write withdraws with it.
+    Engine.applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: homeIn.getAsNormalizedFullLink().id,
+          value: { value: { value: 99 } },
+        }],
+      },
+    });
+
+    runtime.clearSealDestination();
+    const sink = new EngineWaveCommitSink({
+      engineFor: (s) => engines.get(s)!,
+      sessionId: executionLeaseHolder(`service:${space}`),
+    });
+    const warnings: string[] = [];
+    const warn = stub(console, "warn", (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    });
+    let outcome: WaveCommitOutcome;
+    try {
+      outcome = await wave.commitWave(sink);
+      await wave.settled();
+    } finally {
+      warn.restore();
+    }
+
+    expect(outcome.dispositions).toEqual([
+      { kind: "dropped" },
+      { kind: "requeued" },
+    ]);
+    const dropped = warnings.filter((line) =>
+      line.includes("contribution-dropped")
+    );
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toContain(
+      `It read \`${foreignDoc.getAsNormalizedFullLink().id} space\` in ` +
+        `${foreign}, which action=write-foreign kind=event-handler ` +
+        `eventId=e-fw also wrote; that run was requeued. The match is by ` +
+        `doc alone, so the read may predate that write.`,
+    );
+    expect(dropped[0]).not.toContain("written by action=write-foreign");
+  });
+
   it("stage F: a bookkeeping contribution rebases commuting patches and carries derivedThrough; a semantic conflict drops it whole (Q4's sanctioned internal stamp kind)", async () => {
     const lease = liveLease();
     const wave = newWave({ lease });
@@ -4523,27 +4996,49 @@ describe("stage D seal-into-wave", () => {
     expect(witness.lastRunInstantiation()).toBe(3);
   });
 
-  it("keeps a stale-read instantiation refusal terminal off the flag", async () => {
-    const offManager = EmulatedStorageManager.connectTo(server, {
-      as: signer,
-    });
-    const offRuntime = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager: offManager,
-      experimental: { serverExecution: false },
-    });
-    try {
-      const witness = await stoppedWitnessPiece(
-        "off-piece-instantiate-stale-read",
-        { on: offRuntime },
-      );
+  describe("off the flag", () => {
+    // Off the flag the refusal reaches the instantiation commit directly, not
+    // through a seal destination, which an OFF runtime refuses. The
+    // instantiate transaction names itself through `stampServerRun`, which an
+    // OFF runtime still calls even though it records nothing, and that is the
+    // handle used here: a start mints several transactions, so intercepting
+    // merely the first would not say which one was refused.
 
-      // The instantiate transaction names ITSELF through `stampServerRun`,
-      // which an OFF runtime still calls even though it records nothing.
-      // That is the handle this test needs: an OFF runtime rejects the seal
-      // destination the flag-ON tests refuse through, and a start mints
-      // several transactions, so refusing merely the first would not say
-      // which one was refused.
+    type CommitReceipt = ReturnType<IExtendedStorageTransaction["commit"]>;
+
+    // Runs `body` against a runtime with the flag off, connected to the
+    // test's server, and disposes of the runtime afterwards.
+    const withOffRuntime = async (
+      body: (offRuntime: Runtime) => Promise<void>,
+    ): Promise<void> => {
+      const offManager = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const offRuntime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: offManager,
+        experimental: { serverExecution: false },
+      });
+      try {
+        await body(offRuntime);
+      } finally {
+        await offRuntime.dispose();
+        await offManager.close();
+      }
+    };
+
+    // Hands each piece-instantiate commit `offRuntime` makes to `commit`,
+    // with the attempt number, counting from 1, the transaction, and the
+    // commit it replaces. Returns what a test reads afterwards: the attempts,
+    // the readiness waits the recovery made, and the start failures reported.
+    const interceptInstantiateCommits = (
+      offRuntime: Runtime,
+      commit: (
+        attempt: number,
+        tx: IExtendedStorageTransaction,
+        original: () => CommitReceipt,
+      ) => CommitReceipt,
+    ) => {
       const instantiateTxs = new WeakSet<object>();
       const originalStamp = offRuntime.stampServerRun.bind(offRuntime);
       (offRuntime as { stampServerRun: typeof offRuntime.stampServerRun })
@@ -4557,28 +5052,17 @@ describe("stage D seal-into-wave", () => {
           return originalStamp(tx, info);
         }) as typeof offRuntime.stampServerRun;
 
-      const conflicted = witness.cell.getAsNormalizedFullLink().id;
-      const staleRead = {
-        name: "ConflictError" as const,
-        message: `stale confirmed read: ${conflicted} at seq 0 ` +
-          "conflicted with seq 1",
-        conflict: { space, the: "application/json", of: conflicted },
-        readyToRetry: () => Promise.resolve(),
-      };
-      let refusals = 0;
+      let attempts = 0;
       const originalEdit = offRuntime.edit.bind(offRuntime);
       (offRuntime as { edit: typeof offRuntime.edit }).edit = ((
         ...args: Parameters<typeof offRuntime.edit>
       ) => {
         const tx = originalEdit(...args);
-        const commit = tx.commit.bind(tx);
+        const original = tx.commit.bind(tx);
         (tx as { commit: typeof tx.commit }).commit = (() => {
-          if (!instantiateTxs.has(tx)) return commit();
-          refusals += 1;
-          tx.abort(staleRead.message);
-          return createTransactionCommitReceipt(
-            Promise.resolve({ error: staleRead as never }),
-          );
+          if (!instantiateTxs.has(tx)) return original();
+          attempts += 1;
+          return commit(attempts, tx, original);
         }) as typeof tx.commit;
         return tx;
       }) as typeof offRuntime.edit;
@@ -4594,46 +5078,298 @@ describe("stage D seal-into-wave", () => {
         return originalReadiness(...args);
       }) as typeof offRuntime.awaitCommitRetryReadiness;
 
-      const started = await offRuntime.start(witness.cell);
-      await offRuntime.idle();
-      await offRuntime.runner.idlePieceInstantiationSettlements();
+      const failures: unknown[] = [];
+      offRuntime.pieceStartCommitFailureObserver = ({ error }) => {
+        failures.push(error);
+      };
 
-      // The refusal reached the instantiate commit itself, and off the flag
-      // it stays terminal: no catch-up is awaited and no second attempt is
-      // made. The repaired view a retry would read is the serving side's to
-      // supply, and an OFF runtime has none, so the start reports the piece
-      // as not running rather than recovering it. The same refusal under
-      // the flag leaves `start` true and instantiates a third time.
-      expect(refusals).toBe(1);
-      expect(started).toBe(false);
-      expect(readinessCalls).toBe(0);
-      expect(witness.instantiations()).toBe(2);
-    } finally {
-      await offRuntime.dispose();
-      await offManager.close();
-    }
+      return {
+        attempts: () => attempts,
+        readinessCalls: () => readinessCalls,
+        failures,
+      };
+    };
+
+    // A stale-read refusal of `id`, in the shape `toRejectedError` hands the
+    // runner. The read is at a seq above `0`: a revision another writer moved
+    // past, which off the flag means another client raced. A read claiming
+    // the document absent is the absence refusal instead.
+    const staleReadOf = (id: string) => {
+      const conflict = { space, the: "application/json", of: id };
+      return {
+        name: "ConflictError" as const,
+        message: `stale confirmed read: ${id} at seq 1 conflicted with seq 2`,
+        conflict: { ...conflict, seq: 1 },
+        conflicts: [{ ...conflict, seq: 1 }],
+        readyToRetry: () => Promise.resolve(),
+      };
+    };
+
+    // Refuses `tx`'s commit with `error`, as storage would.
+    const refuseCommit = (
+      tx: IExtendedStorageTransaction,
+      error: { message: string },
+    ): CommitReceipt => {
+      tx.abort(error.message);
+      return createTransactionCommitReceipt(
+        Promise.resolve({ error: error as never }),
+      );
+    };
+
+    it("reinstantiates a piece once after the server refuses its instantiation for a read another client's write made stale", async () => {
+      // The refusal here is the engine's own. Another session commits to the
+      // piece's document after the instantiation read it, directly to the
+      // engine, so this runtime's replica has not seen the write when the
+      // instantiation commits, and the server judges the read stale.
+
+      await withOffRuntime(async (offRuntime) => {
+        const witness = await stoppedWitnessPiece(
+          "off-piece-instantiate-server-conflict",
+          { on: offRuntime },
+        );
+        const id = witness.cell.getAsNormalizedFullLink().id;
+        const firstVerdicts: unknown[] = [];
+        const counts = interceptInstantiateCommits(
+          offRuntime,
+          (attempt, _tx, original) => {
+            if (attempt > 1) return original();
+            Engine.applyCommit(engine, {
+              sessionId: "rival-session",
+              principal: signer.did(),
+              commit: {
+                localSeq: 1,
+                reads: { confirmed: [], pending: [] },
+                operations: [{
+                  op: "patch",
+                  id,
+                  patches: [{
+                    op: "replace",
+                    path: "/value/witness",
+                    value: 100,
+                  }],
+                }],
+              },
+            });
+            return createTransactionCommitReceipt(
+              original().settled.then((settled) => {
+                firstVerdicts.push(settled.error);
+                return settled;
+              }),
+            );
+          },
+        );
+
+        const started = await offRuntime.start(witness.cell);
+        await offRuntime.idle();
+        await offRuntime.runner.idlePieceInstantiationSettlements();
+
+        expect(firstVerdicts).toHaveLength(1);
+        expect(
+          isStaleReadConflict(
+            firstVerdicts[0] as { name?: string; message?: string },
+          ),
+          "the first instantiation commit must be refused as a stale read",
+        ).toBe(true);
+        expect(started).toBe(true);
+        expect(counts.attempts()).toBe(2);
+        expect(counts.readinessCalls()).toBe(1);
+        expect(counts.failures).toEqual([]);
+        expect(witness.instantiations()).toBe(3);
+        expect(witness.lastRunInstantiation()).toBe(3);
+        expect(
+          (Engine.readState(engine, { id })?.document as {
+            value?: { witness?: number };
+          })?.value?.witness,
+          "the retry's setup write is the one stored",
+        ).toBe(3);
+      });
+    });
+
+    it("reinstantiates a piece once after another client's write reaches its replica between its instantiation's read and commit", async () => {
+      // The refusal here is the replica's own: another client's write lands
+      // in this runtime's replica after the instantiation read the document,
+      // so the commit's consistency check fails before anything is sent.
+
+      await withOffRuntime(async (offRuntime) => {
+        const id = "off-piece-instantiate-replica-conflict";
+        const witness = await stoppedWitnessPiece(id, { on: offRuntime });
+        const rivalManager = EmulatedStorageManager.connectTo(server, {
+          as: signer,
+        });
+        const rival = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: rivalManager,
+          experimental: { serverExecution: false },
+        });
+        try {
+          const rivalCell = rival.getCell<{ witness?: number }>(
+            space,
+            id,
+            undefined,
+          );
+          await rivalCell.sync();
+          const firstVerdicts: unknown[] = [];
+          const counts = interceptInstantiateCommits(
+            offRuntime,
+            (attempt, _tx, original) => {
+              if (attempt > 1) return original();
+              return createTransactionCommitReceipt((async () => {
+                const rivalTx = rival.edit();
+                rivalCell.withTx(rivalTx).key("witness").set(100);
+                expect((await rivalTx.commit().settled).error)
+                  .toBeUndefined();
+                const settled = await original().settled;
+                firstVerdicts.push(settled.error);
+                return settled;
+              })());
+            },
+          );
+
+          const started = await offRuntime.start(witness.cell);
+          await offRuntime.idle();
+          await offRuntime.runner.idlePieceInstantiationSettlements();
+
+          expect(firstVerdicts).toHaveLength(1);
+          expect(
+            isStorageTransactionInconsistent(
+              firstVerdicts[0] as { name?: string },
+            ),
+            "the first instantiation commit must fail its consistency check",
+          ).toBe(true);
+          expect(started).toBe(true);
+          expect(counts.attempts()).toBe(2);
+          expect(counts.failures).toEqual([]);
+          expect(witness.instantiations()).toBe(3);
+          expect(witness.lastRunInstantiation()).toBe(3);
+          expect(
+            (Engine.readState(engine, {
+              id: witness.cell.getAsNormalizedFullLink().id,
+            })?.document as { value?: { witness?: number } })?.value
+              ?.witness,
+            "the retry's setup write is the one stored",
+          ).toBe(3);
+        } finally {
+          await rival.dispose();
+          await rivalManager.close();
+        }
+      });
+    });
+
+    it("reinstantiates a piece once after an immediate stale-read refusal", async () => {
+      await withOffRuntime(async (offRuntime) => {
+        const witness = await stoppedWitnessPiece(
+          "off-piece-instantiate-stale-read",
+          { on: offRuntime },
+        );
+        const staleRead = staleReadOf(
+          witness.cell.getAsNormalizedFullLink().id,
+        );
+        const counts = interceptInstantiateCommits(
+          offRuntime,
+          (attempt, tx, original) =>
+            attempt === 1 ? refuseCommit(tx, staleRead) : original(),
+        );
+
+        const started = await offRuntime.start(witness.cell);
+        await offRuntime.idle();
+        await offRuntime.runner.idlePieceInstantiationSettlements();
+
+        expect(started).toBe(true);
+        expect(counts.attempts()).toBe(2);
+        expect(counts.readinessCalls()).toBe(1);
+        expect(counts.failures).toEqual([]);
+        expect(witness.instantiations()).toBe(3);
+        expect(witness.lastRunInstantiation()).toBe(3);
+      });
+    });
+
+    it("reinstantiates a piece after successive stale-read refusals while rounds remain", async () => {
+      await withOffRuntime(async (offRuntime) => {
+        const witness = await stoppedWitnessPiece(
+          "off-piece-instantiate-stale-read-twice",
+          { on: offRuntime },
+        );
+        const staleRead = staleReadOf(
+          witness.cell.getAsNormalizedFullLink().id,
+        );
+        const counts = interceptInstantiateCommits(
+          offRuntime,
+          (attempt, tx, original) =>
+            attempt <= 2 ? refuseCommit(tx, staleRead) : original(),
+        );
+
+        expect(await offRuntime.start(witness.cell)).toBe(true);
+        await offRuntime.idle();
+        await offRuntime.runner.idlePieceInstantiationSettlements();
+
+        expect(counts.attempts()).toBe(3);
+        expect(counts.readinessCalls()).toBe(2);
+        expect(counts.failures).toEqual([]);
+        expect(witness.instantiations()).toBe(4);
+        expect(witness.lastRunInstantiation()).toBe(4);
+      });
+    });
+
+    it("tears down once its rounds over stale reads are spent", async () => {
+      await withOffRuntime(async (offRuntime) => {
+        const witness = await stoppedWitnessPiece(
+          "off-piece-instantiate-stale-read-unbounded",
+          { on: offRuntime },
+        );
+        const staleRead = staleReadOf(
+          witness.cell.getAsNormalizedFullLink().id,
+        );
+        let refusing = true;
+        const counts = interceptInstantiateCommits(
+          offRuntime,
+          (_attempt, tx, original) =>
+            refusing ? refuseCommit(tx, staleRead) : original(),
+        );
+
+        // The start resolves before its commit settles.
+        expect(await offRuntime.start(witness.cell)).toBe(true);
+        await offRuntime.idle();
+        await offRuntime.runner.idlePieceInstantiationSettlements();
+
+        // The first attempt and five rounds, the bound a retrying writer
+        // takes, and the last refusal retires the registration and reports
+        // the loss.
+        expect(counts.attempts()).toBe(6);
+        expect(counts.readinessCalls()).toBe(5);
+        expect(counts.failures).toEqual([staleRead]);
+        expect(witness.instantiations()).toBe(7);
+
+        // Retired, not wedged: a later start sets the piece up afresh.
+        refusing = false;
+        expect(await offRuntime.start(witness.cell)).toBe(true);
+        await offRuntime.idle();
+        await offRuntime.runner.idlePieceInstantiationSettlements();
+        expect(witness.instantiations()).toBe(8);
+      });
+    });
   });
 
-  it("tears down after a second stale-read refusal instead of spinning", async () => {
-    const witness = await stoppedWitnessPiece(
-      "wave-piece-instantiate-stale-read-twice",
-    );
-    let pieceInstantiationSeals = 0;
-    let readinessCalls = 0;
+  // A refusal claiming `id` in `inSpace` absent: a confirmed read of it at
+  // seq 0, as the engine names one.
+  const absenceOf = (id: string, inSpace: MemorySpace = space) => ({
+    name: "ConflictError" as const,
+    message: `stale confirmed read: ${id} at seq 0 conflicted with seq 1`,
+    conflict: { space: inSpace, the: "application/json", of: id, seq: 0 },
+    conflicts: [{ space: inSpace, the: "application/json", of: id, seq: 0 }],
+    readyToRetry: () => Promise.resolve(),
+  });
+
+  // Refuses the piece's instantiation commits with what `refusal` returns
+  // for each attempt, counting from 1, and commits the rest. Resolves with
+  // the number of attempts and the start failures reported.
+  const startRefusingInstantiations = async (
+    witness: Awaited<ReturnType<typeof stoppedWitnessPiece>>,
+    refusal: (attempt: number) => unknown,
+  ) => {
+    let attempts = 0;
     const failures: unknown[] = [];
     runtime.pieceStartCommitFailureObserver = ({ error }) => {
       failures.push(error);
-    };
-    const conflicted = witness.cell.getAsNormalizedFullLink().id;
-    const staleRead = {
-      name: "ConflictError" as const,
-      message: `stale confirmed read: ${conflicted} at seq 0 ` +
-        "conflicted with seq 1",
-      conflict: { space, the: "application/json", of: conflicted },
-      readyToRetry: () => {
-        readinessCalls += 1;
-        return Promise.resolve();
-      },
     };
     runtime.installSealDestination({
       seal: (tx) => {
@@ -4642,9 +5378,10 @@ describe("stage D seal-into-wave", () => {
         ) {
           return tx.tx.commit().settled;
         }
-        pieceInstantiationSeals += 1;
-        if (pieceInstantiationSeals <= 2) {
-          return Promise.resolve({ error: staleRead as never });
+        attempts += 1;
+        const error = refusal(attempts);
+        if (error !== undefined) {
+          return Promise.resolve({ error: error as never });
         }
         return tx.tx.commit().settled;
       },
@@ -4655,25 +5392,160 @@ describe("stage D seal-into-wave", () => {
           kind: info.kind,
         }),
     });
-
     expect(await runtime.start(witness.cell)).toBe(true);
     await runtime.idle();
     await runtime.runner.idlePieceInstantiationSettlements();
+    return { attempts, failures };
+  };
 
-    // Exactly one retry. A basis the serving side does not repair is a
-    // permanent refusal, so the second one retires the registration rather
-    // than spinning on it.
-    expect(pieceInstantiationSeals).toBe(2);
-    expect(readinessCalls).toBe(1);
-    expect(failures).toContain(staleRead);
-    expect(witness.instantiations()).toBe(3);
+  // A stale-read refusal of the witness piece's own document, counting the
+  // catch-ups the recovery waits for.
+  const staleReadOfWitness = (
+    witness: Awaited<ReturnType<typeof stoppedWitnessPiece>>,
+  ) => {
+    const conflicted = witness.cell.getAsNormalizedFullLink().id;
+    let readinessCalls = 0;
+    const refusal = {
+      name: "ConflictError" as const,
+      message: `stale confirmed read: ${conflicted} at seq 1 ` +
+        "conflicted with seq 2",
+      conflict: { space, the: "application/json", of: conflicted, seq: 1 },
+      readyToRetry: () => {
+        readinessCalls += 1;
+        return Promise.resolve();
+      },
+    };
+    return { refusal, readinessCalls: () => readinessCalls };
+  };
+
+  it("reinstantiates a piece after successive stale-read refusals while rounds remain", async () => {
+    // Each concurrent write that lands while a retry is in flight costs one
+    // round, and the retry after the last of them commits.
+
+    const witness = await stoppedWitnessPiece(
+      "wave-piece-instantiate-stale-read-twice",
+    );
+    const staleRead = staleReadOfWitness(witness);
+
+    const { attempts, failures } = await startRefusingInstantiations(
+      witness,
+      (attempt) => attempt <= 2 ? staleRead.refusal : undefined,
+    );
+
+    expect(attempts).toBe(3);
+    expect(staleRead.readinessCalls()).toBe(2);
+    expect(failures).toEqual([]);
+    expect(witness.instantiations()).toBe(4);
+    expect(witness.lastRunInstantiation()).toBe(4);
+  });
+
+  it("tears down once its rounds over stale reads are spent", async () => {
+    const witness = await stoppedWitnessPiece(
+      "wave-piece-instantiate-stale-read-unbounded",
+    );
+    const staleRead = staleReadOfWitness(witness);
+
+    const { attempts, failures } = await startRefusingInstantiations(
+      witness,
+      () => staleRead.refusal,
+    );
+
+    // The first attempt and five rounds, the bound a retrying writer takes.
+    expect(attempts).toBe(6);
+    expect(staleRead.readinessCalls()).toBe(5);
+    expect(failures).toEqual([staleRead.refusal]);
+    expect(witness.instantiations()).toBe(7);
 
     // Retired, not wedged: a later owner starts the piece afresh.
     runtime.clearSealDestination();
     expect(await runtime.start(witness.cell)).toBe(true);
     await runtime.idle();
     await runtime.runner.idlePieceInstantiationSettlements();
+    expect(witness.instantiations()).toBe(8);
+  });
+
+  it("reinstantiates a piece once per layer of documents its refusals claim absent", async () => {
+    // A retry can read documents that only the previous round's catch-up
+    // made readable, and find behind them documents it has not loaded. Each
+    // refusal naming a document no earlier round loaded earns another
+    // round.
+
+    const witness = await stoppedWitnessPiece(
+      "wave-piece-instantiate-absence-layers",
+    );
+    const layers = [
+      witness.cell.getAsNormalizedFullLink().id,
+      "of:wave-piece-instantiate-absence-second-layer",
+    ];
+
+    const { attempts, failures } = await startRefusingInstantiations(
+      witness,
+      (attempt) =>
+        attempt <= layers.length ? absenceOf(layers[attempt - 1]) : undefined,
+    );
+
+    expect(failures).toEqual([]);
+    expect(attempts).toBe(3);
     expect(witness.instantiations()).toBe(4);
+    expect(witness.lastRunInstantiation()).toBe(4);
+  });
+
+  it("tears down when a refusal claims absent a document an earlier round loaded", async () => {
+    // The first round's catch-up loaded the document, so a retry claiming
+    // it absent again has reached no further layer, and another round would
+    // read it the same way.
+
+    const witness = await stoppedWitnessPiece(
+      "wave-piece-instantiate-absence-repeated",
+    );
+    const repeated = absenceOf(witness.cell.getAsNormalizedFullLink().id);
+
+    const { attempts, failures } = await startRefusingInstantiations(
+      witness,
+      (attempt) => attempt <= 2 ? repeated : undefined,
+    );
+
+    expect(attempts).toBe(2);
+    expect(failures).toEqual([repeated]);
+    expect(witness.instantiations()).toBe(3);
+  });
+
+  it("reinstantiates a piece again for a document of another space under an id an earlier round loaded", async () => {
+    // A document is its space, scope and id together, so the same id in
+    // another space names a document no earlier round loaded.
+
+    const foreign = (await Identity.fromPassphrase(
+      "wave piece instantiate absence foreign space",
+    )).did() as MemorySpace;
+    seedGenesisAcl(await server.engineForSpace(foreign), foreign);
+    const witness = await stoppedWitnessPiece(
+      "wave-piece-instantiate-absence-spaces",
+    );
+    const id = witness.cell.getAsNormalizedFullLink().id;
+    const rounds = [absenceOf(id), absenceOf(id, foreign)];
+
+    const { attempts, failures } = await startRefusingInstantiations(
+      witness,
+      (attempt) => rounds[attempt - 1],
+    );
+
+    expect(failures).toEqual([]);
+    expect(attempts).toBe(3);
+    expect(witness.instantiations()).toBe(4);
+  });
+
+  it("tears down once its rounds over documents claimed absent are spent", async () => {
+    const witness = await stoppedWitnessPiece(
+      "wave-piece-instantiate-absence-unbounded",
+    );
+
+    const { attempts, failures } = await startRefusingInstantiations(
+      witness,
+      (attempt) => absenceOf(`of:wave-piece-instantiate-absence-${attempt}`),
+    );
+
+    expect(attempts).toBe(6);
+    expect(failures).toHaveLength(1);
   });
 
   it("declines a stale-read refusal the stopped piece no longer owns", async () => {

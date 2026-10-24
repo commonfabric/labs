@@ -764,7 +764,7 @@ describe("load-errors", () => {
             Object.assign(view, {
               activePattern: {
                 id: () => "fid1:partly-working-piece",
-                cell: () => ({}),
+                cell: () => ({ ref: () => ({ path: [] }) }),
               },
               runtimeError: {
                 kind: "piece",

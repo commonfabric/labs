@@ -1,4 +1,5 @@
-import { createContext } from "@lit/context";
+import { ContextConsumer, createContext } from "@lit/context";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 
 /**
  * Color scheme for dynamic theming (SwiftUI-style)
@@ -489,16 +490,16 @@ export function getAnimationDuration(speed: CFTheme["animationSpeed"]): string {
 }
 
 /**
- * Apply theme properties to an element's style
- * @param element - Element to apply theme properties to
+ * The style properties that carry `theme`, by name: the `--cf-theme-*` tokens
+ * and `font-family`.
  * @param theme - Theme configuration
- * @param additionalSpacing - Extra `--cf-theme-spacing-*` properties to emit
  */
-export function applyThemeToElement(
-  element: HTMLElement,
-  theme: CFTheme,
-  additionalSpacing: Record<string, string> = {},
-) {
+export function themeProperties(theme: CFTheme): Record<string, string> {
+  const properties: Record<string, string> = {};
+  const set = (name: string, value: string) => {
+    properties[name] = value;
+  };
+
   /*
    * Canonical theme contract:
    * - Semantic colors are emitted as `--cf-theme-color-*`.
@@ -512,32 +513,32 @@ export function applyThemeToElement(
   const colorScheme = resolveColorScheme(theme.colorScheme);
 
   // Typography and base properties
-  element.style.setProperty("--cf-theme-font-family", theme.fontFamily);
-  element.style.setProperty("font-family", theme.fontFamily);
-  element.style.setProperty(
+  set("--cf-theme-font-family", theme.fontFamily);
+  set("font-family", theme.fontFamily);
+  set(
     "--cf-theme-mono-font-family",
     theme.monoFontFamily,
   );
-  element.style.setProperty("--cf-theme-font-mono", theme.monoFontFamily);
+  set("--cf-theme-font-mono", theme.monoFontFamily);
   const effectiveBorderRadius = theme.borderRadius !== defaultTheme.borderRadius
     ? theme.borderRadius
     : `${theme.roundness * 0.5}rem`;
-  element.style.setProperty(
+  set(
     "--cf-theme-border-radius",
     effectiveBorderRadius,
   );
-  element.style.setProperty(
+  set(
     "--cf-theme-border-radius-full",
     "var(--cf-border-radius-full, 9999px)",
   );
   const effectiveFontSize = theme.fontSize !== defaultTheme.fontSize
     ? theme.fontSize
     : `${theme.scale}rem`;
-  element.style.setProperty("--cf-theme-font-size", effectiveFontSize);
+  set("--cf-theme-font-size", effectiveFontSize);
   const effectiveDuration = theme.animationSpeed !== "normal"
     ? getAnimationDuration(theme.animationSpeed)
     : `${Math.round(200 * theme.motion)}ms`;
-  element.style.setProperty(
+  set(
     "--cf-theme-animation-duration",
     effectiveDuration,
   );
@@ -577,7 +578,7 @@ export function applyThemeToElement(
   };
 
   Object.entries(colorMap).forEach(([key, token]) => {
-    element.style.setProperty(
+    set(
       `--cf-theme-color-${key}`,
       resolveColor(token, colorScheme),
     );
@@ -597,38 +598,38 @@ export function applyThemeToElement(
   };
 
   Object.entries(legacyColorAliases).forEach(([key, value]) => {
-    element.style.setProperty(`--cf-theme-${key}`, value);
+    set(`--cf-theme-${key}`, value);
   });
 
-  element.style.setProperty(
+  set(
     "--cf-theme-color-error-surface",
     `color-mix(in srgb, ${resolveColor(theme.colors.error, colorScheme)} 12%, ${
       resolveColor(theme.colors.surface, colorScheme)
     })`,
   );
-  element.style.setProperty(
+  set(
     "--cf-theme-color-error-light",
     `color-mix(in srgb, ${resolveColor(theme.colors.error, colorScheme)} 18%, ${
       resolveColor(theme.colors.surface, colorScheme)
     })`,
   );
-  element.style.setProperty(
+  set(
     "--cf-theme-color-primary-light",
     `color-mix(in srgb, ${
       resolveColor(theme.colors.primary, colorScheme)
     } 18%, ${resolveColor(theme.colors.surface, colorScheme)})`,
   );
-  element.style.setProperty(
+  set(
     "--cf-theme-color-success-light",
     `color-mix(in srgb, ${
       resolveColor(theme.colors.success, colorScheme)
     } 18%, ${resolveColor(theme.colors.surface, colorScheme)})`,
   );
-  element.style.setProperty(
+  set(
     "--cf-theme-color-muted",
     resolveColor(theme.colors.surfaceTertiary, colorScheme),
   );
-  element.style.setProperty(
+  set(
     "--cf-theme-color-text-secondary",
     resolveColor(theme.colors.textMuted, colorScheme),
   );
@@ -642,12 +643,12 @@ export function applyThemeToElement(
   for (const { name, base: token } of intentMap) {
     const base = resolveColor(token, colorScheme);
     const family = deriveColorFamily(base);
-    element.style.setProperty(
+    set(
       `--cf-theme-color-${name}-pressed`,
       family.pressed,
     );
-    element.style.setProperty(`--cf-theme-color-${name}-soft`, family.soft);
-    element.style.setProperty(
+    set(`--cf-theme-color-${name}-soft`, family.soft);
+    set(
       `--cf-theme-color-${name}-subtle`,
       family.subtle,
     );
@@ -681,20 +682,20 @@ export function applyThemeToElement(
   for (const { name, base: baseToken, fg: fgToken } of statusEntries) {
     const base = resolveColor(baseToken, colorScheme);
     const family = deriveColorFamily(base);
-    element.style.setProperty(`--cf-theme-color-status-${name}`, base);
-    element.style.setProperty(
+    set(`--cf-theme-color-status-${name}`, base);
+    set(
       `--cf-theme-color-status-${name}-pressed`,
       family.pressed,
     );
-    element.style.setProperty(
+    set(
       `--cf-theme-color-status-${name}-soft`,
       family.soft,
     );
-    element.style.setProperty(
+    set(
       `--cf-theme-color-status-${name}-subtle`,
       family.subtle,
     );
-    element.style.setProperty(
+    set(
       `--cf-theme-color-status-${name}-foreground`,
       resolveColor(fgToken, colorScheme),
     );
@@ -708,27 +709,150 @@ export function applyThemeToElement(
     "padding-message": getSemanticSpacing(theme.density, "lg", "normal"),
     "padding-code": getSemanticSpacing(theme.density, "sm", "tight"),
     "padding-block": getSemanticSpacing(theme.density, "md", "normal"),
-    ...additionalSpacing,
   };
 
   Object.entries(spacingMap).forEach(([key, value]) => {
-    element.style.setProperty(`--cf-theme-spacing-${key}`, value);
+    set(`--cf-theme-spacing-${key}`, value);
   });
 
-  element.style.setProperty("--cf-theme-spacing", spacingMap.normal);
-  element.style.setProperty("--cf-theme-spacing-compact", spacingMap.tight);
-  element.style.setProperty("--cf-theme-padding", spacingMap.normal);
+  set("--cf-theme-spacing", spacingMap.normal);
+  set("--cf-theme-spacing-compact", spacingMap.tight);
+  set("--cf-theme-padding", spacingMap.normal);
+
+  return properties;
+}
+
+let propertyNames: readonly string[] | undefined;
+
+/**
+ * The name of every style property `themeProperties` returns, which is the
+ * same set for every theme: the `--cf-theme-*` tokens and `font-family`.
+ */
+export function themePropertyNames(): readonly string[] {
+  propertyNames ??= Object.keys(themeProperties(defaultTheme));
+  return propertyNames;
+}
+
+/**
+ * What an element's own style held for each theme property before
+ * `applyThemeToElement` wrote it, so that taking the theme back off restores
+ * what the element's author set rather than clearing it.
+ */
+const authored = new WeakMap<HTMLElement, Map<string, string>>();
+
+/**
+ * Write `theme` onto `element`'s own style, where it overrides the theme the
+ * element would otherwise inherit, for the element and everything inside it.
+ * Passing `undefined` takes back what this function wrote, so the element
+ * inherits again; a style the element's author set is left, or put back.
+ * @param element - Element to apply theme properties to
+ * @param theme - Theme configuration, or `undefined` to inherit
+ * @param inherited - The theme an enclosing `cf-theme` already puts in effect
+ *   around `element`. Only the properties `theme` changes are written; the
+ *   rest are left to inherit, so a later change to the enclosing theme reaches
+ *   them.
+ */
+export function applyThemeToElement(
+  element: HTMLElement,
+  theme: CFTheme | undefined,
+  inherited?: CFTheme,
+) {
+  const properties = theme ? themeProperties(theme) : {};
+  const around = inherited ? themeProperties(inherited) : {};
+  const wrote = authored.get(element) ?? new Map<string, string>();
+  for (const name of themePropertyNames()) {
+    const value = properties[name];
+    if (value !== undefined && value !== around[name]) {
+      if (!wrote.has(name)) {
+        wrote.set(name, element.style.getPropertyValue(name));
+      }
+      element.style.setProperty(name, value);
+    } else if (wrote.has(name)) {
+      const before = wrote.get(name)!;
+      if (before) element.style.setProperty(name, before);
+      else element.style.removeProperty(name);
+      wrote.delete(name);
+    }
+  }
+  if (wrote.size) authored.set(element, wrote);
+  else authored.delete(element);
+}
+
+/**
+ * The value of the custom property `name` in effect around `element`, which is
+ * what the element would inherit, or `""` when nothing sets it. A host that
+ * themes by CSS alone is visible only this way.
+ */
+export function tokenAround(element: Element, name: string): string {
+  const root = element.getRootNode();
+  const parent = element.parentElement ??
+    (root instanceof ShadowRoot ? root.host : null);
+  return parent
+    ? globalThis.getComputedStyle(parent).getPropertyValue(name).trim()
+    : "";
+}
+
+/**
+ * Copy the theme in effect at `from`, resolved, onto `to`: for an element
+ * mounted outside `from`'s subtree, such as an overlay on the document body,
+ * which inheritance cannot reach.
+ */
+export function copyThemeProperties(from: Element, to: HTMLElement) {
+  const computed = globalThis.getComputedStyle(from);
+  for (const name of themePropertyNames()) {
+    const value = computed.getPropertyValue(name).trim();
+    if (value) to.style.setProperty(name, value);
+    else to.style.removeProperty(name);
+  }
+}
+
+/**
+ * Calls `onChange` when the theme in effect around `host` may have changed:
+ * the enclosing `cf-theme` provides a new theme, or the user's theme
+ * preference changes. An element that copies the theme onto an overlay
+ * outside its subtree uses it to copy again.
+ */
+export class AmbientThemeWatch implements ReactiveController {
+  #onChange: () => void;
+  #onPreference = () => this.#onChange();
+
+  constructor(
+    host: ReactiveControllerHost & HTMLElement,
+    onChange: () => void,
+  ) {
+    this.#onChange = onChange;
+    host.addController(this);
+    new ContextConsumer(host, {
+      context: cfThemeContext,
+      subscribe: true,
+      callback: () => this.#onChange(),
+    });
+  }
+
+  hostConnected() {
+    document.addEventListener("theme-preference-changed", this.#onPreference);
+  }
+
+  hostDisconnected() {
+    document.removeEventListener(
+      "theme-preference-changed",
+      this.#onPreference,
+    );
+  }
 }
 
 /**
  * Context for sharing theme across Common Fabric components.
  *
- * Default theme integration uses ambient CSS custom properties from `cf-theme`.
- * Most components should read `var(--cf-theme-*)` in CSS with sane fallbacks
- * rather than consuming this context directly.
+ * The theme reaches components as inherited CSS custom properties, which
+ * `cf-theme` or a host page sets on an ancestor. Components read
+ * `var(--cf-theme-*)` in CSS with sane fallbacks, and write tokens on their
+ * own host only for a theme given to them directly, since a token written on a
+ * component's host hides the one it inherits.
+ * An element mounted outside the subtree, such as an overlay on the document
+ * body, takes the tokens in effect through `copyThemeProperties()`.
  *
  * Only consume `cfThemeContext` when the JavaScript theme object is actually
- * needed for runtime logic, derived values, or calling `applyThemeToElement()`
- * on dynamically created elements.
+ * needed for runtime logic or derived values.
  */
 export const cfThemeContext = createContext<CFTheme>("cf-theme");

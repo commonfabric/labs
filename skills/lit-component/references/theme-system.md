@@ -110,51 +110,50 @@ type ColorToken = string | { light: string; dark: string };
 
 ### Basic Theme Consumption
 
-Most components should read `var(--cf-theme-*)` in CSS with sane fallbacks.
-Consume `cfThemeContext` only when JavaScript needs the theme object for runtime
-logic, derived values, or applying theme variables to dynamically created
-elements.
+A component reads `var(--cf-theme-*)` in CSS with sane fallbacks, and the values
+arrive by inheritance from the `cf-theme` or host page above it. It writes no
+tokens on its own host for the ambient theme: a token written there hides the
+one it inherits, so a host's look would stop at the component.
 
-Use `@consume` decorator to access theme context when needed:
+Consume `cfThemeContext` only when JavaScript needs the theme object for runtime
+logic or derived values, as `cf-code-editor` does to tell CodeMirror the color
+scheme.
+
+An element the component mounts outside its own subtree, such as an overlay on
+`document.body`, is out of inheritance's reach; copy the tokens in effect onto
+it when it is mounted:
 
 ```typescript
-import { consume } from "@lit/context";
+import { copyThemeProperties } from "../theme-context.ts";
+
+const overlay = document.createElement("div");
+document.body.appendChild(overlay);
+copyThemeProperties(this, overlay);
+```
+
+A component may also accept a theme given to it directly, written over the
+ambient one for its own subtree. `applyThemeToElement(this, undefined)` takes
+the tokens back off when the theme is withdrawn:
+
+```typescript
 import { property } from "lit/decorators.js";
-import {
-  applyThemeToElement,
-  type CFTheme,
-  cfThemeContext,
-  defaultTheme,
-} from "../theme-context.ts";
+import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 
 export class MyComponent extends BaseElement {
-  @consume({ context: cfThemeContext, subscribe: true })
   @property({ attribute: false })
-  declare theme?: CFTheme;
-
-  override firstUpdated(changed: Map<string | number | symbol, unknown>) {
-    super.firstUpdated(changed);
-    this._updateThemeProperties();
-  }
+  accessor theme: CFTheme | undefined = undefined;
 
   override updated(changed: Map<string | number | symbol, unknown>) {
     super.updated(changed);
-    if (changed.has("theme")) {
-      this._updateThemeProperties();
-    }
-  }
-
-  private _updateThemeProperties() {
-    const currentTheme = this.theme || defaultTheme;
-    applyThemeToElement(this, currentTheme);
+    if (changed.has("theme")) applyThemeToElement(this, this.theme);
   }
 }
 ```
 
 ### Using Theme CSS Variables
 
-After calling `applyThemeToElement()`, the following CSS variables are
-available:
+`cf-theme` sets the following CSS variables on itself, and every element inside
+it inherits them:
 
 **Typography:**
 

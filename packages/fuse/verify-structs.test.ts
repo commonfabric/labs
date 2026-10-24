@@ -4,14 +4,15 @@
  * the libfuse3 headers are available.
  */
 
+import { fromFileUrl } from "@std/path";
+
 Deno.test({
   name: "Linux struct offsets match C headers",
   ignore: Deno.build.os !== "linux",
   async fn() {
     const decoder = new TextDecoder();
     const isCi = Deno.env.get("CI") === "true";
-    const dir = new URL(".", import.meta.url).pathname;
-    const src = `${dir}verify-structs.c`;
+    const src = fromFileUrl(new URL("./verify-structs.c", import.meta.url));
     // The binary goes to a directory this test owns, removed however the
     // test ends, so a failing run leaves nothing in the package.
     const work = Deno.makeTempDirSync({ prefix: "fuse-verify-structs-" });

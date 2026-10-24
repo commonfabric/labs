@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cursor Canvas</title>
+    <style>
+    :root {
+      color-scheme: light;
+      --ink: #1f2430;
+      --muted: #6b7280;
+      --line: #e3e5ea;
+      --surface: #ffffff;
+      --stage: #eef0f4;
+      --accent: #2563eb;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body,
+    #root {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      color: var(--ink);
+      background: var(--stage);
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem 0.75rem;
+      padding: 0.5rem 0.875rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .toolbar h1 {
+      margin: 0 0.5rem 0 0;
+      font-size: 0.95rem;
+      font-weight: 650;
+    }
+
+    .tools {
+      display: flex;
+      gap: 0.25rem;
+    }
+
+    button {
+      font: inherit;
+      font-size: 0.8125rem;
+      padding: 0.35rem 0.7rem;
+      color: var(--ink);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 0.4rem;
+      cursor: pointer;
+    }
+
+    button:hover:not(:disabled) {
+      background: #f5f6f8;
+    }
+
+    button:focus-visible,
+    input:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    button:disabled {
+      color: #a3a8b3;
+      cursor: default;
+    }
+
+    .spacer {
+      flex: 1 1 auto;
+    }
+
+    .roster {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .roster li {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+      max-width: 11rem;
+      padding: 0.15rem 0.55rem 0.15rem 0.3rem;
+      font-size: 0.75rem;
+      background: #f5f6f8;
+      border-radius: 999px;
+    }
+
+    .roster span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dot {
+      flex: none;
+      width: 0.7rem;
+      height: 0.7rem;
+      border-radius: 50%;
+    }
+
+    .me {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .me input {
+      width: 9.5rem;
+      font: inherit;
+      font-size: 0.8125rem;
+      padding: 0.3rem 0.5rem;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 0.4rem;
+    }
+
+    .status {
+      min-width: 6.5rem;
+      margin: 0;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .status[data-status="live"] {
+      color: #15803d;
+    }
+
+    .alert {
+      margin: 0;
+      padding: 0.4rem 0.875rem;
+      font-size: 0.8125rem;
+      color: #991b1b;
+      background: #fef2f2;
+      border-bottom: 1px solid #fecaca;
+    }
+
+    .alert:empty {
+      display: none;
+    }
+
+    .stage {
+      flex: 1 1 auto;
+      overflow: auto;
+      padding: 1.25rem;
+    }
+
+    .board {
+      position: relative;
+      overflow: hidden;
+      background-color: var(--surface);
+      background-image: radial-gradient(#d6d9e0 1px, transparent 1px);
+      background-size: 20px 20px;
+      border: 1px solid var(--line);
+      border-radius: 0.5rem;
+      touch-action: none;
+    }
+
+    .hint {
+      position: absolute;
+      top: 5rem;
+      left: 0;
+      width: min(100%, 60rem);
+      margin: 0;
+      padding: 0 2rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+      text-align: center;
+      pointer-events: none;
+    }
+
+    .shape {
+      position: absolute;
+      top: 0;
+      left: 0;
+      border: 2px solid;
+      border-radius: 0.5rem;
+      cursor: grab;
+      user-select: none;
+    }
+
+    .shape[data-kind="ellipse"] {
+      border-radius: 50%;
+    }
+
+    .shape[data-selected] {
+      box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+    }
+
+    .shape[data-dragging] {
+      cursor: grabbing;
+    }
+
+    /*
+    ** A shape a peer holds takes that peer's color as a ring, set inline,
+    ** and moves and resizes with the same easing as the peer's cursor, so
+    ** the two arrive together.
+    */
+    .shape[data-held-by] {
+      box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--holder);
+      transition:
+        transform 70ms linear,
+        width 70ms linear,
+        height 70ms linear;
+    }
+
+    .handle {
+      position: absolute;
+      display: none;
+      width: 12px;
+      height: 12px;
+      background: var(--surface);
+      border: 2px solid var(--accent);
+      border-radius: 3px;
+    }
+
+    .shape[data-selected] .handle {
+      display: block;
+    }
+
+    .handle[data-corner="nw"] {
+      top: -8px;
+      left: -8px;
+      cursor: nwse-resize;
+    }
+
+    .handle[data-corner="ne"] {
+      top: -8px;
+      right: -8px;
+      cursor: nesw-resize;
+    }
+
+    .handle[data-corner="sw"] {
+      bottom: -8px;
+      left: -8px;
+      cursor: nesw-resize;
+    }
+
+    .handle[data-corner="se"] {
+      right: -8px;
+      bottom: -8px;
+      cursor: nwse-resize;
+    }
+
+    /*
+    ** On a side touching the board's edge, which clips, the handles sit
+    ** inside the shape. The 8px overhang above is `HANDLE_OVERHANG` in the
+    ** guest.
+    */
+    .shape[data-at-left] .handle[data-corner$="w"] {
+      left: 0;
+    }
+
+    .shape[data-at-right] .handle[data-corner$="e"] {
+      right: 0;
+    }
+
+    .shape[data-at-top] .handle[data-corner^="n"] {
+      top: 0;
+    }
+
+    .shape[data-at-bottom] .handle[data-corner^="s"] {
+      bottom: 0;
+    }
+
+    .cursor {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 2;
+      pointer-events: none;
+      transition: transform 70ms linear;
+    }
+
+    .cursor svg {
+      display: block;
+    }
+
+    .cursor span {
+      position: absolute;
+      top: 20px;
+      left: 14px;
+      max-width: 12rem;
+      padding: 0.1rem 0.45rem;
+      overflow: hidden;
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: #ffffff;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      border-radius: 0.3rem 0.6rem 0.6rem 0.6rem;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .cursor,
+      .shape[data-held-by] {
+        transition: none;
+      }
+    }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- PATTERN_IFRAME_SCRIPT -->
+  </body>
+</html>

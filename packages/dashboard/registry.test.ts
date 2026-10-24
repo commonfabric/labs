@@ -33,7 +33,7 @@ describe("registry", () => {
       "cloud spend",
       "github spend",
       "github users",
-      "recent main runs",
+      "recent commits",
     ]);
   });
 

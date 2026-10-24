@@ -293,6 +293,10 @@ export class XBodyView extends BaseView {
   }
 
   override render() {
+    // The shell opened the active piece itself (`getPattern`,
+    // `getSpaceRootPattern`), so its render need not; a view at a path inside
+    // it may lead to another piece, which the render opens.
+    const hostOpened = this.activeCell?.ref().path.length === 0;
     const mainContent = this.loadError?.kind === "space" &&
         isSpaceNotFound(this.loadError.error)
       ? this.#renderSpaceNotFound()
@@ -324,7 +328,10 @@ export class XBodyView extends BaseView {
       : this.activePattern
       ? html`
         <cf-piece slot="main" .pieceId="${this.activePattern.id()}">
-          <cf-render .cell="${this.activeCell}"></cf-render>
+          <cf-render
+            .cell="${this.activeCell}"
+            .hostOpened="${hostOpened}"
+          ></cf-render>
         </cf-piece>
       `
       : this.spaceHasNoRoot

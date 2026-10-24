@@ -145,16 +145,25 @@ export default pattern((__cf_pattern_input) => {
             }
         } as const satisfies __cfHelpers.JSONSchema, {
             anyOf: [{
-                    $ref: "https://commonfabric.org/schemas/vnode.json"
-                }, {
-                    $ref: "#/$defs/UIRenderable"
-                }, {
                     type: "array",
                     items: {
                         $ref: "#/$defs/JSXElement"
                     }
+                }, {
+                    $ref: "#/$defs/UIRenderable"
+                }, {
+                    $ref: "https://commonfabric.org/schemas/vnode.json"
                 }],
             $defs: {
+                UIRenderable: {
+                    type: "object",
+                    properties: {
+                        $UI: {
+                            $ref: "https://commonfabric.org/schemas/vnode.json"
+                        }
+                    },
+                    required: ["$UI"]
+                },
                 JSXElement: {
                     anyOf: [{
                             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -164,15 +173,6 @@ export default pattern((__cf_pattern_input) => {
                             type: "object",
                             properties: {}
                         }]
-                },
-                UIRenderable: {
-                    type: "object",
-                    properties: {
-                        $UI: {
-                            $ref: "https://commonfabric.org/schemas/vnode.json"
-                        }
-                    },
-                    required: ["$UI"]
                 }
             }
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ limit: limit }), items.mapWithPattern(__cfPattern_1, {}), <span>Hidden</span>)}

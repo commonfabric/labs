@@ -2,6 +2,7 @@
 // @ts-types="@types/ws"
 import type WebSocket from "ws";
 import { assert, assertEquals, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
 import { getMemoryProtocolFlags } from "../v2.ts";
@@ -14,6 +15,7 @@ import {
   RoutedReader,
   routedStatementPayload,
   RoutedWriter,
+  verifyRoutedRecord,
 } from "../v2/routed-wire.ts";
 import { Server } from "../v2/server.ts";
 
@@ -23,11 +25,12 @@ class Socket extends EventTarget {
   binaryType = "arraybuffer";
   output: Uint8Array[] = [];
   changed = Promise.withResolvers<void>();
-  send(bytes: string | Uint8Array) {
+  send(bytes: string | Uint8Array, done?: (error?: Error) => void) {
     this.output.push(
       typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes,
     );
     this.changed.resolve();
+    done?.();
   }
   close() {
     if (this.readyState !== 3) {
@@ -89,15 +92,33 @@ Deno.test("toolshed independently refuses context/epoch/proof replay and isolate
       "/memory/router-link",
       "127.0.0.1",
     );
-    const hello = new RoutedReader((await socket.take()).slice(0, -64), "mlh1");
+    const hello = new RoutedReader(
+      await verifyRoutedRecord(await socket.take(), toolshed.did()),
+      "rph1",
+    );
     assertEquals(hello.text(), toolshed.did());
     const nonce = hello.fixed(32);
+    hello.time();
+    expect(JSON.parse(new TextDecoder().decode(hello.blob())))
+      .toMatchObject({
+        routerEncodingNegotiation: true,
+        routerRequestCredit: true,
+      });
+    hello.end();
+    expect(
+      Object.hasOwn(server.memoryProtocolFlags(), "routerEncodingNegotiation"),
+    )
+      .toBe(false);
+    expect(
+      Object.hasOwn(server.memoryProtocolFlags(), "routerRequestCredit"),
+    )
+      .toBe(false);
     socket.receive(
-      await new RoutedWriter("mlc1").text("fixture").text(identity.did()).text(
+      await new RoutedWriter("rpc1").text("fixture").text(identity.did()).text(
         toolshed.did(),
-      ).fixed(epoch).fixed(nonce).sign(identity),
+      ).fixed(epoch).fixed(nonce).fixed(new Uint8Array([1])).sign(identity),
     );
-    assertEquals(new TextDecoder().decode(await socket.take()), "mlo1");
+    assertEquals(new TextDecoder().decode(await socket.take()), "rpo1");
     let sequence = 0;
     return {
       socket,
@@ -140,6 +161,31 @@ Deno.test("toolshed independently refuses context/epoch/proof replay and isolate
   const admit = (ctx: Uint8Array, p: Uint8Array) =>
     new RoutedWriter("mvp1").fixed(ctx).blob(flags).blob(p).bytes;
   try {
+    for (const capability of [[], [0], [1, 0]]) {
+      const rejected = new Socket();
+      host.accept(
+        rejected as unknown as WebSocket,
+        "/memory/router-link",
+        "127.0.0.1",
+      );
+      const hello = new RoutedReader(
+        await verifyRoutedRecord(await rejected.take(), toolshed.did()),
+        "rph1",
+      );
+      hello.text();
+      const nonce = hello.fixed(32);
+      rejected.receive(
+        await new RoutedWriter("rpc1").text("fixture").text(router.did()).text(
+          toolshed.did(),
+        )
+          .fixed(epoch).fixed(nonce).fixed(new Uint8Array(capability)).sign(
+            router,
+          ),
+      );
+      await assertRejects(() => rejected.take());
+      expect(rejected.readyState).toBe(3);
+      expect(rejected.output).toHaveLength(0);
+    }
     const first = await link(router, epoch),
       independent = await link(other, new Uint8Array(16).fill(8));
     const original = await proof();
@@ -275,14 +321,16 @@ Deno.test("a closed context ID may open again at once", async () => {
     "/memory/router-link",
     "127.0.0.1",
   );
-  const hello = new RoutedReader((await socket.take()).slice(0, -64), "mlh1");
+  const hello = new RoutedReader((await socket.take()).slice(0, -64), "rph1");
   hello.text();
   socket.receive(
-    await new RoutedWriter("mlc1").text("fixture").text(router.did()).text(
+    await new RoutedWriter("rpc1").text("fixture").text(router.did()).text(
       toolshed.did(),
-    ).fixed(epoch).fixed(hello.fixed(32)).sign(router),
+    ).fixed(epoch).fixed(hello.fixed(32)).fixed(new Uint8Array([1])).sign(
+      router,
+    ),
   );
-  assertEquals(new TextDecoder().decode(await socket.take()), "mlo1");
+  assertEquals(new TextDecoder().decode(await socket.take()), "rpo1");
   let sequence = 0;
   const request = async (op: number, payload: Uint8Array) => {
     socket.receive(

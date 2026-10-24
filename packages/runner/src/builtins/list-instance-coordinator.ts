@@ -6,6 +6,7 @@ import {
 } from "@commonfabric/memory/v2";
 
 import type { AddCancel } from "../cancel.ts";
+import type { NormalizedFullLink } from "../link-types.ts";
 import { isRawBuiltinResult, type RawBuiltinReturnType } from "../module.ts";
 import type { Action } from "../scheduler.ts";
 
@@ -14,10 +15,13 @@ import type { Action } from "../scheduler.ts";
  * The scheduler may invoke one registered raw action for several principals or
  * sessions. Their setup records and pending sync work belong to separate
  * closures even when the durable child addresses share a scope kind.
+ * `storeWrites` names the stores every instance shares, for the one action to
+ * declare.
  */
 export function listInstanceCoordinator(
   create: (identity: ScopeKeyIdentity | undefined) => RawBuiltinReturnType,
   addCancel: AddCancel,
+  storeWrites?: readonly NormalizedFullLink[],
 ): RawBuiltinReturnType {
   const instances = new Map<string, RawBuiltinReturnType>();
   let registeredAction: Action | undefined;
@@ -54,5 +58,6 @@ export function listInstanceCoordinator(
         if (isRawBuiltinResult(instance)) instance.onActionRegistered?.(action);
       }
     },
+    ...(storeWrites ? { storeWrites } : {}),
   };
 }

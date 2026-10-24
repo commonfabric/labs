@@ -455,37 +455,110 @@ export function activityOrderOf(
 }
 
 /**
- * The board's cards, most recently active first.
+ * One rendered card, derived once for the whole board.
  *
- * Sorts and returns the topics themselves. It does not build a card object per
- * topic, and that is the point: a constructed object is a new value with no
- * identity, so every render would hand the mapped sub-pattern fresh content
- * and every card's subtree would be re-addressed — new scheduler actions
- * registered and the old ones torn down — for topics whose content never
- * changed. Passing a topic through keeps the identity it already has.
+ * Everything a card shows is a plain string here, and that is the point: the
+ * card list is a mapped sub-pattern, so any helper call or conditional in the
+ * card's JSX — `snippet(card.body)`, `topicAuthorLabel(card.createdBy)`,
+ * `whenLabel(...)`, `x ? <a/> : null` — becomes a computed cell of its own,
+ * minted per card, persisted per session and watched by every reader. On the
+ * Topics board that was six computed documents a card, 934 cards deep, and
+ * the commits that re-persisted them on every headless survey. Deriving the
+ * strings here, in one lift over the board, is the same bound the mention
+ * universe takes (`../collection-naming/mentionable.ts`): one derivation pays
+ * the board-wide walk, once per change, in place of every card paying it on
+ * every load.
  *
- * The CONSTRAINT declares the two fields the sort reads, so ordering the board
- * expands no topic; the type parameter hands back what it was given, which is
- * the topics themselves. Those are two separate statements, and a cast could
- * only conflate them — the one here used to claim a card-shaped view the sort
- * never produced, which also hid `lastActivityAt`'s absence from the caller.
- * Both fields are already on the demand, so reading the second costs no read
- * the first did not already take.
- *
- * Each card still bounds its own read: the elements are links, and the mapped
- * sub-pattern's argument schema is shrunk to the fields its body renders. That
- * schema is why every field a card touches carries a default — it is what a
- * piece holding older topics is updated against.
+ * `topic` is the member itself, written as a reference and never read through
+ * here: the card's Open link navigates to it, as `MentionableRow.piece` is
+ * resolved only when a completion is picked.
  */
-const cardsByActivity = lift(
-  <
-    T extends {
-      lastActivityAt: number | Default<0> | undefined;
-      createdAt: number;
-    },
-  >(
-    { rows }: { rows: T[] | Default<[]> },
-  ): T[] => rows.toSorted((a, b) => activityOrderOf(b) - activityOrderOf(a)),
+export interface CardRow {
+  /** The topic, as a reference: what the card's Open link navigates to. */
+  topic: unknown;
+
+  /** The board's number for the topic, or the empty string where it publishes
+   * none — the one conditional the card keeps, since a badge with no text is
+   * still a badge. */
+  badge: string;
+  title: string;
+
+  /** The body's first 120 characters, or the empty string for a bodiless
+   * topic, which the card renders as no line at all. */
+  snippet: string;
+
+  /** The caption line: comment count, author, and when the topic was last
+   * active. */
+  caption: string;
+}
+
+/**
+ * The fields a card reads of each topic: the demand this lift declares, and
+ * so the ceiling on its walk. Every field but `createdAt` carries a default
+ * or is optional, for the reason `TopicSummary.title` gives: the stored topics
+ * a deployed board holds predate some of them.
+ */
+export interface CardSource {
+  title: string | Default<"">;
+  body: string | Default<"">;
+  createdAt: number;
+  createdBy?: TopicAuthor | Default<{ kind: "person"; name: "" }> | undefined;
+  commentCount: number | Default<0> | undefined;
+  lastActivityAt: number | Default<0> | undefined;
+  shortName?: string;
+}
+
+/**
+ * The cards' rows, most recently active first, from the topics as cells.
+ *
+ * Each topic is read ONCE, into a plain value, and sorted and rendered from
+ * that: reading through the reactive array costs a link resolution per read,
+ * and the sort reads every element many times. A topic with nothing behind it
+ * yet — appended a moment ago, still mid-sync — reads as `undefined` and gets
+ * no card rather than a junk one; it appears on the next run.
+ *
+ * The parameter is an array of CELLS, as `mentionableIndex`'s is, so each
+ * row's `topic` is the member's identity and writes as a link. Each row is
+ * addressed by the topic it describes — `Writable.for(topic)`, as the
+ * crossref table's rows are — so a card keeps its identity wherever its row
+ * sits in the order: an activity reorder moves rows, and the mapped card
+ * subtrees move with them rather than being re-addressed across the shifted
+ * range. An unchanged row recomputes to the same strings at the same address
+ * and writes nothing.
+ */
+export function cardRowsOf(
+  topics: readonly (
+    | { get(): CardSource | undefined }
+    | undefined
+  )[],
+): CardRow[] {
+  const read: { topic: unknown; value: CardSource }[] = [];
+  for (const topic of topics) {
+    const value = topic?.get();
+    if (value) read.push({ topic, value });
+  }
+  read.sort((a, b) => activityOrderOf(b.value) - activityOrderOf(a.value));
+  const rows: unknown[] = [];
+  for (const { topic, value } of read) {
+    rows.push(
+      Writable.for<CardRow>(topic).set({
+        topic,
+        badge: value.shortName ?? "",
+        title: value.title || "(untitled topic)",
+        snippet: value.body ? snippet(value.body, 120) : "",
+        caption: `${value.commentCount ?? 0} comments · by ${
+          topicAuthorLabel(value.createdBy)
+        } · ${whenLabel(value.lastActivityAt ?? 0)}`,
+      }),
+    );
+  }
+  return rows as CardRow[];
+}
+
+const cardRowsByActivity = lift(
+  (
+    { rows }: { rows: ReadonlyCell<CardSource>[] | Default<[]> },
+  ): CardRow[] => cardRowsOf(Array.from(rows)),
 );
 
 /**
@@ -587,18 +660,13 @@ export const submitProfileTopic = handler<void, {
 
   /** The mention universe, declared at the child's own demand — the three
    * strings a universe entry carries — so the board's index rows and a plain
-   * list of pieces both satisfy it. `Writable` for the handler-state reason
-   * `boardCrossrefs` states, and nothing here writes an entry. */
-  mentionable: Writable<TopicMentionable[] | Default<[]>>;
+   * list of pieces both satisfy it. Handed to the new topic as it arrives;
+   * nothing here writes an entry. */
+  mentionable: ReadonlyCell<TopicMentionable[] | Default<[]>>;
 
-  /** `Writable` because a `Cell` is what survives handler state: `HandlerState`
-   * passes one through whole and recursively maps everything else, and a
-   * `ReadonlyCell` is not a `Cell`, so it arrives as a plain readonly object
-   * that no longer satisfies the input this is handed straight to. The input
-   * is not what refuses it — it declares `ReadonlyCell`, and an intact
-   * `ReadonlyCell` and the plain rows `StripCell` unwraps it to both fit.
-   * Nothing here writes a row. */
-  boardCrossrefs: Writable<TopicCrossrefRow[] | Default<[]>>;
+  /** The board's pivot, handed to the new topic as it arrives; nothing here
+   * writes a row. */
+  boardCrossrefs: ReadonlyCell<TopicCrossrefRow[] | Default<[]>>;
 
   /** The namespace, written one key per create. Read for its keys and written
    * at one of them inside this handler, so the allocation and the append are
@@ -607,7 +675,6 @@ export const submitProfileTopic = handler<void, {
   names: Writable<Default<NamesMap, {}>>;
   newTitle: Writable<string>;
   profileName: string;
-  profileAvatar: string;
 }>((_, {
   topics,
   mentionable,
@@ -615,10 +682,9 @@ export const submitProfileTopic = handler<void, {
   names,
   newTitle,
   profileName,
-  profileAvatar,
 }) => {
   const trimmed = newTitle.get().trim();
-  const author = topicAuthorFromPerson(profileName, profileAvatar);
+  const author = topicAuthorFromPerson(profileName);
   if (!trimmed || !author) return;
   // The number, the create, and the append are one transaction, as they are
   // in `addTopic`: no reader observes the topic without its number, and a
@@ -651,7 +717,9 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // `.length` — or through a helper this analysis cannot see into — is what
   // puts the whole board back in the read.
   const topicCount = topics.get().length;
-  const cards = cardsByActivity({ rows: topics });
+  // Derived once for the whole board: the strings each card renders, so the
+  // card map mints nothing of its own beyond its two conditionals.
+  const cards = cardRowsByActivity({ rows: topics });
   // Derived once for the whole board; every topic reads its own row out of it.
   const crossrefs = crossrefTable({ sources: topics });
   // Also derived once for the whole board: the mention universe every
@@ -666,11 +734,10 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // Browser authorship comes from the current viewer's canonical Profile.
   // CLI streams below remain wish-free: agents sign each mutation in the
   // event payload, while Fabric records the human principal behind the key.
-  // One wish, not three: `#profile` resolves the profile itself, and `name`
-  // and `avatar` are fields on it. The `#profileName` / `#profileAvatar`
-  // targets are the same two fields reached through a second and third
-  // resolution of the same profile.
-  const profileWish = wish<{ name: string; avatar: string }>({
+  // One wish, not two: `#profile` resolves the profile itself, and `name` is a
+  // field on it. The `#profileName` target is the same field reached through a
+  // second resolution of the same profile.
+  const profileWish = wish<{ name: string }>({
     query: "#profile",
   });
   // A wish resolves after setup, so each of these stays a derivation. Reading
@@ -678,7 +745,6 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // started with: the Start button never enables, and a topic filed through it
   // carries blank attribution.
   const profileName = profileWish.result?.name ?? "";
-  const profileAvatar = profileWish.result?.avatar ?? "";
   const hasProfile = profileName.trim().length > 0;
 
   const addTopic = action<AddTopicEvent, AddTopicResult>((
@@ -739,7 +805,6 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     names,
     newTitle,
     profileName,
-    profileAvatar,
   });
 
   return {
@@ -774,33 +839,29 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
             {cards.map((card) => (
               <cf-card>
                 <cf-hstack gap="3" align="center">
-                  {card.shortName
+                  {card.badge
                     ? (
                       <cf-badge size="sm" color="primary" data-member-name="">
-                        {card.shortName}
+                        {card.badge}
                       </cf-badge>
                     )
                     : null}
                   <cf-vstack gap="0" style="flex: 1; min-width: 0;">
                     <cf-text block style="font-weight: 600;">
-                      {card.title || "(untitled topic)"}
+                      {card.title}
                     </cf-text>
-                    {card.body
+                    {card.snippet
                       ? (
                         <cf-text tone="muted" block truncate>
-                          {snippet(card.body, 120)}
+                          {card.snippet}
                         </cf-text>
                       )
                       : null}
                     <cf-text variant="caption" tone="muted">
-                      {card.commentCount} comments · by {topicAuthorLabel(
-                        card.createdBy,
-                      )}
-                      {" · "}
-                      {whenLabel(card.lastActivityAt ?? 0)}
+                      {card.caption}
                     </cf-text>
                   </cf-vstack>
-                  <cf-cell-link $cell={card} label="Open" static />
+                  <cf-cell-link $cell={card.topic} label="Open" static />
                 </cf-hstack>
               </cf-card>
             ))}

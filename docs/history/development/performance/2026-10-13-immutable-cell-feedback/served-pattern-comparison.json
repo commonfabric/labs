@@ -1,0 +1,110 @@
+{
+  "main-identity-served": [
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_3 (after action_2)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_4 (after action_2)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_9 (after action_5)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_10 (after action_5)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_13 (after action_6)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_15 (after action_8)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_17 (after action_10)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_20 (after action_12)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_23 (after action_14)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_24 (after action_14)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_26 (after action_15)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 1 console error(s) during test:"
+    ],
+    [
+      "main.test.tsx",
+      "\u2717 assertion_33 (after action_8)"
+    ],
+    [
+      "amount-ledger.test.tsx",
+      "\u2717 assertion_12 (after action_4)"
+    ],
+    [
+      "amount-ledger.test.tsx",
+      "\u2717 assertion_14 (after action_5)"
+    ],
+    [
+      "amount-ledger.test.tsx",
+      "\u2717 assertion_15 (after action_5)"
+    ],
+    [
+      "amount-ledger.test.tsx",
+      "\u2717 assertion_25 (after action_7)"
+    ],
+    [
+      "amount-ledger.test.tsx",
+      "\u2717 assertion_29 (after action_9)"
+    ],
+    [
+      "amount-ledger.test.tsx",
+      "\u2717 assertion_36 (after action_12)"
+    ],
+    [
+      "amount-ledger.test.tsx",
+      "\u2717 assertion_37 (after action_12)"
+    ]
+  ],
+  "feedback-identity-served": [
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_20 (after action_12)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_23 (after action_14)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 assertion_24 (after action_14)"
+    ],
+    [
+      "check-list.test.tsx",
+      "\u2717 1 console error(s) during test:"
+    ],
+    [
+      "amount-ledger.test.tsx",
+      "\u2717 assertion_4 (after action_1)"
+    ],
+    [
+      "amount-ledger.test.tsx",
+      "\u2717 assertion_5 (after action_1)"
+    ]
+  ]
+}

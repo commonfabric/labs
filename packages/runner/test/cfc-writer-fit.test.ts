@@ -25,7 +25,11 @@ import {
 } from "../src/cfc/types.ts";
 import type { JSONSchema, Pattern } from "../src/builder/types.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
-import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { stampWaveRunContext } from "../src/executor/wave.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-writer-fit");
 
@@ -33,28 +37,31 @@ type StoredEntry = {
   path: string[];
   label: { confidentiality?: string[]; integrity?: unknown[] };
   origin?: string;
+  observes?: string;
 };
 
 const storedDocument = (
   storageManager: ReturnType<typeof StorageManager.emulate>,
   id: string,
+  scope: "space" | "user" | "session" = "space",
 ):
   | { value?: unknown; cfc?: { labelMap?: { entries: StoredEntry[] } } }
   | undefined => {
   const replica = storageManager.open(signer.did()).replica as unknown as {
-    getDocument(id: string): {
+    getDocument(id: string, scope: "space" | "user" | "session"): {
       value?: unknown;
       cfc?: { labelMap?: { entries: StoredEntry[] } };
     } | undefined;
   };
-  return replica.getDocument(id);
+  return replica.getDocument(id, scope);
 };
 
 const replicaEntries = (
   storageManager: ReturnType<typeof StorageManager.emulate>,
   id: string,
+  scope: "space" | "user" | "session" = "space",
 ): StoredEntry[] =>
-  storedDocument(storageManager, id)?.cfc?.labelMap?.entries ?? [];
+  storedDocument(storageManager, id, scope)?.cfc?.labelMap?.entries ?? [];
 
 const newRuntime = (
   storageManager: ReturnType<typeof StorageManager.emulate>,
@@ -176,23 +183,27 @@ const seedSecretSource = async (
 
 // Read the seeded source in a fresh transaction at `mode`, derive a value
 // into `targetName`, and commit. `targetSchema` declares the target's store
-// policy; omitted, the target declares nothing.
+// policy; omitted, the target declares nothing. `scope` and `targetSpace` are
+// the target's.
 const deriveIntoTarget = async (
   runtime: Runtime,
   sourceName: string,
   targetName: string,
   mode: "enforce-strict" | "enforce-explicit" = "enforce-strict",
   targetSchema?: JSONSchema,
+  scope: "space" | "user" | "session" = "space",
+  targetSpace: `did:${string}:${string}` = signer.did(),
 ) => {
   const tx = runtime.edit();
   tx.setCfcEnforcementMode(mode);
   const source = runtime.getCell(signer.did(), sourceName, undefined, tx);
   const raw = source.getRaw() as { secret?: string };
   const target = runtime.getCell<{ copied?: string }>(
-    signer.did(),
+    targetSpace,
     targetName,
     targetSchema,
     tx,
+    scope,
   );
   target.set({ copied: `${raw.secret}!` });
   const targetId = target.getAsNormalizedFullLink().id;
@@ -858,6 +869,497 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         await runtime.dispose();
         await storageManager.close();
       }
+    });
+  });
+
+  describe("a scoped instance's principal is its reader", () => {
+    // §8.12.4 residency: a `user` or `session` document is one principal's
+    // instance, so `User(<that principal>)` joins its ceiling beside the
+    // space's clause, and a personal space that principal owns fits it. On a
+    // client the principal is the one its storage session authenticates as,
+    // the signer here. In a `space` document the same clauses are refused,
+    // as "rejects the personal-space principal form under enforce-strict"
+    // and "rejects a User clause naming the acting principal into an
+    // undeclared store" pin.
+
+    for (const scope of ["user", "session"] as const) {
+      it(`admits a personal-space clause naming the signer into a ${scope} document`, async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = newRuntime(storageManager);
+        try {
+          await seedSecretSource(runtime, `wf-${scope}-personal-source`, [
+            personalSpacePrincipal(signer.did()),
+          ]);
+          const { tx, targetId, result } = await deriveIntoTarget(
+            runtime,
+            `wf-${scope}-personal-source`,
+            `wf-${scope}-personal-derived`,
+            "enforce-strict",
+            undefined,
+            scope,
+          );
+          expect(result.error?.message).toBeUndefined();
+          expect(writerFitDiagnostics(tx)).toEqual([]);
+
+          // A write admission, not a relabeling: the instance's derived
+          // stamp still carries the atom the flow measured.
+          const flowEntry = replicaEntries(storageManager, targetId, scope)
+            .find((e) => e.origin === "derived");
+          expect(flowEntry!.label.confidentiality).toContainEqual(
+            personalSpacePrincipal(signer.did()),
+          );
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+
+      it(`admits a User clause naming the signer into a ${scope} document`, async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = newRuntime(storageManager);
+        try {
+          await seedSecretSource(runtime, `wf-${scope}-user-source`, [
+            userPrincipal(signer.did()),
+          ]);
+          const { tx, result } = await deriveIntoTarget(
+            runtime,
+            `wf-${scope}-user-source`,
+            `wf-${scope}-user-derived`,
+            "enforce-strict",
+            undefined,
+            scope,
+          );
+          expect(result.error?.message).toBeUndefined();
+          expect(writerFitDiagnostics(tx)).toEqual([]);
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+    }
+
+    it("admits the signer's personal space whose owner is a `{digestOf}` commitment", async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = newRuntime(storageManager);
+      try {
+        // The form an owner takes once its label has crossed a space
+        // boundary (§4.6.4.1).
+        await seedSecretSource(runtime, "wf-user-committed-source", [{
+          type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+          owner: commitCfcFieldValue(signer.did()),
+        }]);
+        const { tx, result } = await deriveIntoTarget(
+          runtime,
+          "wf-user-committed-source",
+          "wf-user-committed-derived",
+          "enforce-strict",
+          undefined,
+          "user",
+        );
+        expect(result.error?.message).toBeUndefined();
+        expect(writerFitDiagnostics(tx)).toEqual([]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("rejects a personal space someone else owns in a user document", async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = newRuntime(storageManager);
+      try {
+        await seedSecretSource(runtime, "wf-user-other-source", [
+          personalSpacePrincipal(OTHER_PRINCIPAL),
+        ]);
+        const { result } = await deriveIntoTarget(
+          runtime,
+          "wf-user-other-source",
+          "wf-user-other-derived",
+          "enforce-strict",
+          undefined,
+          "user",
+        );
+        expect(result.error?.message).toContain(
+          "writer-fit confidentiality misfit",
+        );
+        expect(result.error?.message).toContain(OTHER_PRINCIPAL);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    describe("in a space the signer does not own", () => {
+      // A room space, which is where FabriChat's per-user documents live.
+
+      it("admits a personal-space clause naming the signer into a user document", async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = newRuntime(storageManager);
+        try {
+          await seedSecretSource(runtime, "wf-room-personal-source", [
+            personalSpacePrincipal(signer.did()),
+          ]);
+          const { tx, result } = await deriveIntoTarget(
+            runtime,
+            "wf-room-personal-source",
+            "wf-room-personal-derived",
+            "enforce-strict",
+            undefined,
+            "user",
+            OTHER_SPACE,
+          );
+          expect(result.error?.message).toBeUndefined();
+          expect(writerFitDiagnostics(tx)).toEqual([]);
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+
+      it("rejects the signer's home space clause in a user document", async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = newRuntime(storageManager);
+        try {
+          // `Space` names the home's readers, which its ACL resolves, not
+          // the person the instance is keyed by.
+          await seedSecretSource(runtime, "wf-room-home-source", [
+            ownSpacePrincipal,
+          ]);
+          const { result } = await deriveIntoTarget(
+            runtime,
+            "wf-room-home-source",
+            "wf-room-home-derived",
+            "enforce-strict",
+            undefined,
+            "user",
+            OTHER_SPACE,
+          );
+          expect(result.error?.message).toContain(
+            "writer-fit confidentiality misfit",
+          );
+          expect(result.error?.message).toContain(signer.did());
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+    });
+
+    describe("a whole value a verified writer replaces", () => {
+      // A writer that sets a document's whole value is named on that value
+      // by a `TransformedBy` stamp at its root, even where the diff changes
+      // one member, provided the join fits the root's ceiling. Residency
+      // answers that fit as it answers the per-path one, so the instance's
+      // own principal's data is attributed whole.
+
+      const verifiedWriter = (symbol: string) => ({
+        kind: "verified" as const,
+        moduleIdentity: "module:writer-fit-whole-value",
+        symbol,
+        bindingPath: [symbol],
+      });
+
+      /**
+       * Has one verified writer create a `scope` document holding two
+       * members, and a second replace its whole value with one member
+       * changed, each after reading a source labeled `confidentiality`.
+       * Returns the integrity of the `value` stamp at the document's root.
+       */
+      const rootIntegrityAfterWholeWrite = async (
+        name: string,
+        scope: "user" | "session",
+        confidentiality: readonly FabricValue[],
+      ) => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = newRuntime(storageManager);
+        try {
+          await seedSecretSource(runtime, `${name}-source`, confidentiality);
+          const write = async (
+            symbol: string,
+            changed: (secret?: string) => string,
+          ) => {
+            const tx = runtime.edit();
+            tx.setCfcEnforcementMode("enforce-strict");
+            setCfcImplementationIdentity(tx, verifiedWriter(symbol));
+            const raw = runtime.getCell(
+              signer.did(),
+              `${name}-source`,
+              undefined,
+              tx,
+            ).getRaw() as { secret?: string };
+            const target = runtime.getCell(
+              signer.did(),
+              `${name}-target`,
+              undefined,
+              tx,
+              scope,
+            );
+            target.set({ unchanged: "same", changed: changed(raw.secret) });
+            tx.prepareCfc();
+            expect((await tx.commit().settled).error).toBeUndefined();
+            return target.getAsNormalizedFullLink().id;
+          };
+          await write("previousWriter", () => "old");
+          const targetId = await write("wholeWriter", (secret) => `${secret}`);
+          return replicaEntries(storageManager, targetId, scope).find((entry) =>
+            entry.path.length === 0 && entry.origin === "derived" &&
+            entry.observes === "value"
+          )?.label.integrity;
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      };
+
+      for (const scope of ["user", "session"] as const) {
+        for (
+          const [form, clause] of [
+            ["User", userPrincipal(signer.did())],
+            ["personal-space", personalSpacePrincipal(signer.did())],
+          ] as const
+        ) {
+          it(`names the writer on the whole value of a ${scope} document under a ${form} clause naming the signer`, async () => {
+            expect(
+              await rootIntegrityAfterWholeWrite(
+                `wf-whole-${scope}-${form}`,
+                scope,
+                [clause],
+              ),
+            ).toContainEqual({
+              type: "https://commonfabric.org/cfc/atom/TransformedBy",
+              identity: verifiedWriter("wholeWriter"),
+            });
+          });
+        }
+      }
+    });
+
+    describe("under a trust snapshot naming another principal as acting", () => {
+      // A host may name someone other than its storage session's principal
+      // as the one acting. The memory server still keys the client's
+      // instances by the session it authenticated, so that session's
+      // principal is the reader residency names.
+
+      const hostedRuntime = (
+        storageManager: ReturnType<typeof StorageManager.emulate>,
+      ) =>
+        new Runtime({
+          apiUrl: new URL("https://example.com"),
+          storageManager,
+          cfcEnforcementMode: "enforce-explicit",
+          cfcFlowLabels: "persist",
+          trustSnapshotProvider: () => ({
+            id: `principal:${OTHER_PRINCIPAL}`,
+            actingPrincipal: OTHER_PRINCIPAL,
+          }),
+        });
+
+      it("admits the storage session principal's personal space into a user document", async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = hostedRuntime(storageManager);
+        try {
+          await seedSecretSource(runtime, "wf-hosted-session-source", [
+            personalSpacePrincipal(signer.did()),
+          ]);
+          const { tx, result } = await deriveIntoTarget(
+            runtime,
+            "wf-hosted-session-source",
+            "wf-hosted-session-derived",
+            "enforce-strict",
+            undefined,
+            "user",
+          );
+          expect(result.error?.message).toBeUndefined();
+          expect(writerFitDiagnostics(tx)).toEqual([]);
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+
+      it("rejects the acting principal's personal space in a user document", async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = hostedRuntime(storageManager);
+        try {
+          await seedSecretSource(runtime, "wf-hosted-acting-source", [
+            personalSpacePrincipal(OTHER_PRINCIPAL),
+          ]);
+          const { result } = await deriveIntoTarget(
+            runtime,
+            "wf-hosted-acting-source",
+            "wf-hosted-acting-derived",
+            "enforce-strict",
+            undefined,
+            "user",
+          );
+          expect(result.error?.message).toContain(
+            "writer-fit confidentiality misfit",
+          );
+          expect(result.error?.message).toContain(OTHER_PRINCIPAL);
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+    });
+
+    describe("on the serving posture", () => {
+      // A served run's scoped writes land in the instance of the scope-key
+      // identity its serving loop stamped on it, not in the serving
+      // runtime's own. These cases stop at prepare, since committing a
+      // served run is the serving loop's work, and the signer here is the
+      // serving runtime's identity.
+
+      const servingRuntime = (
+        storageManager: ReturnType<typeof StorageManager.emulate>,
+      ) =>
+        new Runtime({
+          apiUrl: new URL("https://example.com"),
+          storageManager,
+          servingPosture: true,
+          experimental: { serverExecution: true },
+          cfcEnforcementMode: "enforce-explicit",
+          cfcFlowLabels: "persist",
+        });
+
+      /**
+       * Prepares a run that reads the seeded source and writes what it
+       * carries into a `user` document, and returns the writer-fit reasons
+       * its preparation recorded. Given a `principal`, the run is stamped as
+       * a derivation that principal demanded, whose wave context carries the
+       * identity, or, `onStorageOnly`, as a bookkeeping run whose storage
+       * transaction alone resolves under it, as a deferred piece start's
+       * does.
+       */
+      const preparedServedWrite = (
+        runtime: Runtime,
+        sourceName: string,
+        targetName: string,
+        principal?: string,
+        onStorageOnly = false,
+      ): string[] => {
+        const tx = runtime.edit();
+        tx.setCfcEnforcementMode("enforce-strict");
+        if (principal !== undefined && onStorageOnly) {
+          tx.tx.scopeKeyIdentity = { principal, sessionId: "served-session" };
+          stampWaveRunContext(tx, {
+            actionId: `test:${targetName}`,
+            kind: "bookkeeping",
+          });
+        } else if (principal !== undefined) {
+          stampWaveRunContext(tx, {
+            actionId: `test:${targetName}`,
+            kind: "derivation",
+            scopeKeyIdentity: { principal, sessionId: "served-session" },
+            attributionFromScope: true,
+          });
+          setCfcTrustSnapshot(tx, runtime.trustSnapshotForPrincipal(principal));
+        }
+        const source = runtime.getCell(signer.did(), sourceName, undefined, tx);
+        const raw = source.getRaw() as { secret?: string };
+        runtime.getCell<{ copied?: string }>(
+          signer.did(),
+          targetName,
+          undefined,
+          tx,
+          "user",
+        ).set({ copied: `${raw.secret}!` });
+        tx.prepareCfc();
+        const reasons = writerFitDiagnostics(tx);
+        tx.abort();
+        return reasons;
+      };
+
+      it("admits the stamped identity's personal space into a user document", async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = servingRuntime(storageManager);
+        try {
+          await seedSecretSource(runtime, "wf-served-own-source", [
+            personalSpacePrincipal(OTHER_PRINCIPAL),
+          ]);
+          expect(
+            preparedServedWrite(
+              runtime,
+              "wf-served-own-source",
+              "wf-served-own-derived",
+              OTHER_PRINCIPAL,
+            ),
+          ).toEqual([]);
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+
+      it("rejects the serving runtime's own personal space in a stamped run's user document", async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = servingRuntime(storageManager);
+        try {
+          await seedSecretSource(runtime, "wf-served-service-source", [
+            personalSpacePrincipal(signer.did()),
+          ]);
+          const reasons = preparedServedWrite(
+            runtime,
+            "wf-served-service-source",
+            "wf-served-service-derived",
+            OTHER_PRINCIPAL,
+          );
+          expect(reasons).toHaveLength(1);
+          expect(reasons[0]).toContain("writer-fit confidentiality misfit");
+          expect(reasons[0]).toContain(signer.did());
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+
+      it("rejects the serving runtime's own personal space in a user document of a run stamped with no identity", async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = servingRuntime(storageManager);
+        try {
+          // The transaction acts for the serving runtime's ambient
+          // identity, and carries no instance of its own.
+          await seedSecretSource(runtime, "wf-served-none-source", [
+            personalSpacePrincipal(signer.did()),
+          ]);
+          const reasons = preparedServedWrite(
+            runtime,
+            "wf-served-none-source",
+            "wf-served-none-derived",
+          );
+          expect(reasons).toHaveLength(1);
+          expect(reasons[0]).toContain("writer-fit confidentiality misfit");
+          expect(reasons[0]).toContain(signer.did());
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+
+      it("rejects a personal space in a user document whose principal only the storage transaction carries", async () => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = servingRuntime(storageManager);
+        try {
+          // The seal keys such a run's scoped writes by its wave context,
+          // which names no one, so the instance is not that principal's.
+          await seedSecretSource(runtime, "wf-served-storage-source", [
+            personalSpacePrincipal(OTHER_PRINCIPAL),
+          ]);
+          const reasons = preparedServedWrite(
+            runtime,
+            "wf-served-storage-source",
+            "wf-served-storage-derived",
+            OTHER_PRINCIPAL,
+            true,
+          );
+          expect(reasons).toHaveLength(1);
+          expect(reasons[0]).toContain("writer-fit confidentiality misfit");
+          expect(reasons[0]).toContain(OTHER_PRINCIPAL);
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
     });
   });
 

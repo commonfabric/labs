@@ -33,8 +33,13 @@ import { minOf } from "@commonfabric/utils/math";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { CI_WORKFLOW, PORT, REPO, TICK_MS } from "./config.ts";
 import { latestCiJobs, TILES } from "./registry.ts";
-import { makeCtx } from "./ctx.ts";
+import { changesRunSource, makeCtx } from "./ctx.ts";
 import { RunLists } from "./github-runs.ts";
+import {
+  type GitHubDelivery,
+  type GitHubWebhooks,
+  githubWebhooks,
+} from "./github-webhooks.ts";
 import { greenBranchOf } from "./green-branch.ts";
 import { dashboardCacheFile } from "./history-files.ts";
 import {
@@ -75,6 +80,8 @@ const activeActivityUpdates = new Set<string>();
 const runSnapshots = new Map<string, Run[]>();
 const runSourceErrors = new Map<string, string>();
 const lastSourceTileRun = new Map<string, number>();
+// The sources a relay delivery has changed since their fetch last started.
+const changedSources = new Set<string>();
 interface ActiveTileUpdate {
   count: number;
   startedAt: number;
@@ -486,12 +493,17 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
     now - (lastRun.get(tile.label) ?? 0) >= tile.intervalMs
   );
   const dueSources = sourceGroups.flatMap((group) => {
-    if (activeRunSourceUpdates.has(runSourceKey(group.source))) return [];
+    const key = runSourceKey(group.source);
+    if (activeRunSourceUpdates.has(key)) return [];
+    const changed = changedSources.has(key);
     const due = group.tiles.filter((tile) =>
+      changed ||
       now - (lastSourceTileRun.get(runSourceTileKey(group.source, tile)) ?? 0) >= tile.intervalMs
     );
     const free = due.filter((tile) => !activeAtTickStart.has(tile.label));
-    return free.length
+    // A changed source is fetched at once even when every tile reading it is
+    // being collected; they are collected from it once they are free.
+    return free.length || changed
       ? [{
         source: group.source,
         tiles: free,
@@ -509,6 +521,7 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
   for (const tile of dueActivity) activeActivityUpdates.add(tile.label);
   for (const group of dueSources) {
     activeRunSourceUpdates.add(runSourceKey(group.source));
+    changedSources.delete(runSourceKey(group.source));
     for (const tile of group.tiles) beginTileUpdate(tile, now);
   }
 
@@ -618,6 +631,10 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
         activeRunSourceUpdates.delete(runSourceKey(group.source));
         for (const tile of group.tiles) finishTileUpdate(tile);
       }
+      // A delivery that arrived during the fetch is fetched for at once.
+      if (changedSources.has(runSourceKey(group.source))) {
+        collectChanged(tiles, sourceCtx);
+      }
     }
   };
 
@@ -626,6 +643,34 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
     ...dueSources.map(refreshSource),
     ...dueActivity.map(refreshActivity),
   ]);
+}
+
+/**
+ * Takes in a delivery of the GitHub webhook relay: every source of `tiles`
+ * that it changes is due at once, rather than on its tiles' intervals. A
+ * source being fetched already is fetched again once that fetch is
+ * published, and the tiles reading a source that are being collected when it
+ * is fetched are collected from it once they are free. Returns whether any
+ * source is due.
+ */
+export function onDelivery(
+  delivery: GitHubDelivery,
+  tiles: Tile[] = TILES,
+): boolean {
+  let changed = false;
+  for (const { source } of groupRunSources(tiles)) {
+    if (!changesRunSource(source, delivery)) continue;
+    changedSources.add(runSourceKey(source));
+    changed = true;
+  }
+  return changed;
+}
+
+// Collects the sources a delivery changed, and every other tile due.
+function collectChanged(tiles: Tile[], sourceCtx: Ctx): void {
+  tick(tiles, sourceCtx).catch((error) =>
+    console.error("dashboard collection failed:", error)
+  );
 }
 
 /**
@@ -646,6 +691,7 @@ export function resetBoardForTest(): void {
   runSnapshots.clear();
   runSourceErrors.clear();
   lastSourceTileRun.clear();
+  changedSources.clear();
   collectionsStarted.clear();
   collectionsPublished.clear();
   publishedFrom.clear();
@@ -786,15 +832,31 @@ export async function serveTick(
   await Promise.all([collect(), pages.tick()]);
 }
 
-// The side effects: collect once, keep collecting, and serve. Running the file
-// starts them; importing it does not.
+// The side effects: collect once, keep collecting, follow the GitHub webhook
+// relay, and serve. Running the file starts them; importing it does not. A
+// relay connection that cannot be opened is tried again on each tick.
 export function start(
   serve: typeof Deno.serve = Deno.serve,
   collect: () => void | Promise<void> = tick,
+  webhooks: GitHubWebhooks = githubWebhooks,
 ) {
+  // Taken in once every other listener, the run lists among them, has taken
+  // the delivery in.
+  webhooks.listen((delivery) =>
+    queueMicrotask(() => {
+      if (!onDelivery(delivery)) return;
+      Promise.resolve(collect()).catch((error) =>
+        console.error("dashboard collection failed:", error)
+      );
+    })
+  );
+  void webhooks.connect();
   collect();
   // Returned so a caller can run one turn of the clock on demand.
-  const onTick = () => serveTick(collect);
+  const onTick = () => {
+    void webhooks.connect();
+    return serveTick(collect);
+  };
   const timer = setInterval(onTick, TICK_MS);
   const server = serve({
     port: PORT,

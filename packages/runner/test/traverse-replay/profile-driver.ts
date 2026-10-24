@@ -8,6 +8,8 @@
  *     [fixture-name] [rounds] [out-prefix]
  */
 
+import { fromFileUrl } from "@std/path";
+
 const fixtureName = Deno.args[0] ?? "notebook-test";
 const rounds = Deno.args[1] ?? "2";
 const outPrefix = Deno.args[2] ?? `/tmp/traverse-${fixtureName}`;
@@ -23,7 +25,7 @@ const target = new Deno.Command(Deno.execPath(), {
     `--inspect=127.0.0.1:${INSPECT_PORT}`,
     "--allow-read",
     "--allow-env",
-    new URL("./profile-target.ts", import.meta.url).pathname,
+    fromFileUrl(new URL("./profile-target.ts", import.meta.url)),
     fixtureName,
     rounds,
     ...(onlyInvocation !== undefined ? [onlyInvocation] : []),

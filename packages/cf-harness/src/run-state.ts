@@ -58,6 +58,7 @@ import type {
   HarnessModelAuthSource,
   HarnessModelProviderId,
 } from "./config.ts";
+import type { HarnessTaskClassification } from "./task-classification.ts";
 
 export type HarnessRunStatus =
   | "pending"
@@ -291,6 +292,9 @@ export interface HarnessRunState {
 
   /** Opening-research intent and recoverable model-context handoff. */
   openingResearch?: HarnessOpeningResearch;
+
+  /** The kinds of work a fresh root task was judged to call for. */
+  taskClassification?: HarnessTaskClassification;
 
   /**
    * How many `research` calls in this run and its descendants returned no kit.
@@ -704,6 +708,18 @@ export const setHarnessOpeningResearch = (
   patchHarnessRunState(
     state,
     { openingResearch: structuredClone(openingResearch) },
+    now,
+  );
+
+/** Records the tags a fresh root task was classified with. */
+export const setHarnessTaskClassification = (
+  state: HarnessRunState,
+  taskClassification: HarnessTaskClassification,
+  now = new Date().toISOString(),
+): HarnessRunState =>
+  patchHarnessRunState(
+    state,
+    { taskClassification: structuredClone(taskClassification) },
     now,
   );
 

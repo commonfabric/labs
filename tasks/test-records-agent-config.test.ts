@@ -7,6 +7,7 @@ import {
   type AgentHarness,
   exportFromAgentConfigs,
   installedHarnesses,
+  reexportFromAgentConfigs,
   unexportFromAgentConfigs,
   writeConfig,
 } from "./test-records-agent-config.ts";
@@ -15,7 +16,7 @@ import {
 const declines = () => Promise.resolve(false);
 
 const VARIABLE = "CF_TEST_RECORDS_KEY_FILE";
-const KEY = "/h/.config/common-fabric/test-records-key.json";
+const KEY = "/h/.config/commonfabric/test-records-key.json";
 
 describe("test-records-agent-config", () => {
   let home: string;
@@ -399,6 +400,72 @@ describe("test-records-agent-config", () => {
       await install();
       expect(await unexportFromAgentConfigs(VARIABLE, KEY, env, harnesses))
         .toEqual([]);
+    });
+  });
+
+  describe("reexportFromAgentConfigs()", () => {
+    const MOVED = "/h/.config/commonfabric/moved.json";
+
+    it("points a configuration carrying the old value at the new", async () => {
+      await install();
+      await Deno.writeTextFile(
+        config,
+        JSON.stringify({ theme: "auto", env: { [VARIABLE]: KEY, A: "b" } }),
+      );
+
+      expect(
+        await reexportFromAgentConfigs(VARIABLE, KEY, MOVED, env, harnesses),
+      ).toEqual([{ harness: "Test Harness", path: config, outcome: "added" }]);
+      expect(JSON.parse(await Deno.readTextFile(config))).toEqual({
+        theme: "auto",
+        env: { [VARIABLE]: MOVED, A: "b" },
+      });
+    });
+
+    it("leaves any other value alone and reports a file it cannot read", async () => {
+      await install();
+      const text = JSON.stringify({ env: { [VARIABLE]: "/elsewhere.json" } });
+      await Deno.writeTextFile(config, text);
+      expect(
+        await reexportFromAgentConfigs(VARIABLE, KEY, MOVED, env, harnesses),
+      ).toEqual([]);
+      expect(await Deno.readTextFile(config)).toBe(text);
+
+      await Deno.writeTextFile(config, "{ not json");
+      expect(
+        await reexportFromAgentConfigs(VARIABLE, KEY, MOVED, env, harnesses),
+      ).toEqual([
+        { harness: "Test Harness", path: config, outcome: "unreadable" },
+      ]);
+      expect(await Deno.readTextFile(config)).toBe("{ not json");
+
+      await Deno.writeTextFile(config, JSON.stringify({ env: [] }));
+      expect(
+        await reexportFromAgentConfigs(VARIABLE, KEY, MOVED, env, harnesses),
+      ).toEqual([
+        { harness: "Test Harness", path: config, outcome: "unreadable" },
+      ]);
+    });
+
+    it("reports an update that stood down as changed", async () => {
+      await install();
+      await Deno.writeTextFile(
+        config,
+        JSON.stringify({ env: { [VARIABLE]: KEY } }),
+      );
+
+      expect(
+        await reexportFromAgentConfigs(
+          VARIABLE,
+          KEY,
+          MOVED,
+          env,
+          harnesses,
+          declines,
+        ),
+      ).toEqual([
+        { harness: "Test Harness", path: config, outcome: "changed" },
+      ]);
     });
   });
 });

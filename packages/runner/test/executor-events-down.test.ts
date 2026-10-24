@@ -44,7 +44,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
-import { type Cell, sendEvent } from "../src/cell.ts";
+import { type Cell, EventDeliveryError, sendEvent } from "../src/cell.ts";
 import { handlingCommittedBy } from "../src/handling-commit.ts";
 import type {
   IExtendedStorageTransaction,
@@ -57,6 +57,12 @@ import type { JSONSchema } from "../src/builder/types.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import { deriveEventKey } from "../src/scheduler/event-identity.ts";
+import { EVENT_DEFERRAL_DROP_THRESHOLD } from "../src/scheduler/constants.ts";
+import {
+  ensurePieceRunningVerdict,
+  type EnsurePieceVerdict,
+} from "../src/ensure-piece-running.ts";
+import type { NormalizedFullLink } from "../src/link-types.ts";
 import { readWatermarkSeq } from "../src/executor/watermark.ts";
 import type {
   WaveCommitRejection,
@@ -70,6 +76,7 @@ import {
 } from "../src/cfc/ui-contract.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import {
+  admittedCommits,
   ArrivalLog,
   awaitAdmitted,
   awaitEach,
@@ -261,6 +268,13 @@ const bobSigner = await Identity.fromPassphrase("events down bob");
 const profileSpace = (await Identity.fromPassphrase("events down profiles"))
   .did() as MemorySpace;
 
+/** The scheduler's piece-start seam: how a queued event whose stream has no
+ * handler yet starts the piece behind it. */
+type LoadPieceForEvent = (
+  runtime: Runtime,
+  eventLink: NormalizedFullLink,
+) => Promise<EnsurePieceVerdict>;
+
 /** The TRUE sidecar doc ids in the store (the client derives the id
  * from the RESOLVED stream link — a pattern's stream resolves into an
  * internal fid doc, so tests read the ids back from the head prefix
@@ -446,6 +460,27 @@ const ORDERED_LOG_PATTERN = [
   ">(({ log }) => ({ log, a: pushA({ log }), b: pushB({ log }) }));",
 ].join("\n");
 
+/** A parent whose `create` handler instantiates a child piece, so that the
+ * child's `bump` stream exists only once that handler has run — the shape of
+ * a board whose `addTopic` creates the topic the next event addresses. */
+const CREATE_CHILD_PATTERN = [
+  "import { Default, handler, pattern, Stream, Writable } from 'commonfabric';",
+  "type ChildResult = { value: number; bump: Stream<unknown> };",
+  "const bump = handler<unknown, { value: Writable<number> }>(",
+  "  (_ev, { value }) => { value.set((value.get() ?? 0) + 1); },",
+  ");",
+  "const Child = pattern<{ value: Default<number, 0> }, ChildResult>(",
+  "  ({ value }) => ({ value, bump: bump({ value }) }),",
+  ");",
+  "const create = handler<unknown, { child: Writable<ChildResult | null> }>(",
+  "  (_ev, { child }) => { child.set(Child({ value: 0 })); },",
+  ");",
+  "export default pattern<",
+  "  { child: Writable<ChildResult | null> },",
+  "  { child: ChildResult | null; create: Stream<unknown> }",
+  ">(({ child }) => ({ child, create: create({ child }) }));",
+].join("\n");
+
 /** The ORDERED_LOG_PATTERN's sibling with DISJOINT handler closures: `pushA`
  * additionally reads `gate`, which the test links to a SEPARATE doc, while
  * `pushB` reads only the shared log. Arming the load-park failure on the gate
@@ -526,7 +561,7 @@ const ambiguousEnvelopeSchema: JSONSchema = {
         altProfileViewSchema,
       ],
     },
-    candidates: { type: "array", items: profileViewSchema },
+    candidate: profileViewSchema,
   },
 } as JSONSchema;
 
@@ -597,6 +632,12 @@ describe("Phase 3 events-down (serving side)", () => {
   let failNextServingCommit: ServingCommitFailure | undefined;
   let failServingCommitSequence: ServingCommitFailure[];
   let failServingCommitActionPrefix: string | undefined;
+
+  /** The serving scheduler's piece-start seam, installed on each serving
+   * runtime as it is created when set: a pin that must hold one event's
+   * piece start open while the drain re-delivers another sets it before the
+   * host comes up. */
+  let servingLoadPieceForEvent: LoadPieceForEvent | undefined;
 
   const decorateWaveCommitSink = (sink: WaveCommitSink): WaveCommitSink => ({
     currentHeads: (space, docs) => sink.currentHeads(space, docs),
@@ -695,6 +736,11 @@ describe("Phase 3 events-down (serving side)", () => {
           };
           return tx;
         };
+        if (servingLoadPieceForEvent !== undefined) {
+          (runtime.scheduler.accessForTestingOnly.eventQueueState as {
+            loadPieceForEvent?: LoadPieceForEvent;
+          }).loadPieceForEvent = servingLoadPieceForEvent;
+        }
         servingRuntime = runtime;
         servingManager = manager;
         return {
@@ -740,6 +786,7 @@ describe("Phase 3 events-down (serving side)", () => {
     failNextServingCommit = undefined;
     failServingCommitSequence = [];
     failServingCommitActionPrefix = undefined;
+    servingLoadPieceForEvent = undefined;
   });
 
   afterEach(async () => {
@@ -1956,7 +2003,10 @@ describe("Phase 3 events-down (serving side)", () => {
         ambiguousEnvelopeSchema,
         tx,
       );
-      cell.set({ candidates: [{ name: "Bob" }] });
+      // A labeled value held inline: an element of a list would be minted
+      // as a document of its own, and the envelope would then be stored
+      // there rather than on the document whose schema is the ambiguous one.
+      cell.set({ candidate: { name: "Bob" } });
       tx.prepareCfc();
       expect((await tx.commit().settled).error).toBeUndefined();
     }
@@ -2013,9 +2063,9 @@ describe("Phase 3 events-down (serving side)", () => {
     ).sync();
 
     // The probe replaces the pattern's handler on the serving runtime:
-    // a served handler whose write meets the stored ambiguous envelope,
-    // so its commit-prep records the refusal and the commit is rejected
-    // before storage.
+    // a served handler whose reference write at `/candidate` meets the
+    // stored ambiguous envelope, so its commit-prep crashes in the merge
+    // and the commit is rejected before storage.
     /** Every served run of the probe handler, by event kind — the
      * handler's own report, so a wait names the run rather than a
      * counter turning true. */
@@ -2045,7 +2095,7 @@ describe("Phase 3 events-down (serving side)", () => {
           poisonedDocName,
           ambiguousEnvelopeSchema,
           tx,
-        ).set({ result: resolved, candidates: [] });
+        ).set({ result: resolved, candidate: resolved });
       },
       streamLink,
     );
@@ -2264,6 +2314,491 @@ describe("Phase 3 events-down (serving side)", () => {
       cancelProbe();
       cancelDemand();
     }
+  });
+
+  it("seals a write floor's verdict on a served event as the entry's error consequence, and runs its handler once", async () => {
+    // The probe links the pattern's own argument document, which the serving
+    // runtime holds and which carries no integrity, into a list whose
+    // elements require some. Every document the floor weighs is held, so its
+    // refusal is a verdict (`verifyWriteFloor` in cfc/prepare.ts).
+
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { result } = await standUp(clientRuntime, BUMP_PATTERN, {
+      arg: "floor-verdict-arg",
+      result: "floor-verdict-result",
+    });
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+
+    host = newHost();
+    result.key("bump").send({ kind: "warmup" });
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    const sidecarId = sidecarIdsIn(engine)[0];
+    const sidecarValue = () =>
+      Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+    const entryByKind = (kind: string) =>
+      (sidecarValue()?.entries ?? []).find((entry) =>
+        (entry.payload as { kind?: string } | undefined)?.kind === kind
+      );
+    await awaitAdmitted(
+      server,
+      () => entryByKind("warmup")?.consequenced === true,
+    );
+    await awaitActive();
+
+    const warmup = entryByKind("warmup")!;
+    const streamLink = {
+      space,
+      id: warmup.stream.id as never,
+      path: [...warmup.stream.path],
+      scope: (warmup.stream.scope ?? "space") as never,
+    };
+    const floorSchema = {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            type: "string",
+            ifc: { requiredIntegrity: ["admin-approved"] },
+          },
+        },
+      },
+    } as const satisfies JSONSchema;
+    /** Every served run of the probe, by event kind. */
+    const probeRuns = new ArrivalLog<string>();
+    /** The commit outcome of every served run of the probe. */
+    const commitOutcomes = new ArrivalLog<{ kind: string; error: unknown }>();
+    const cancelProbe = servingRuntime!.scheduler.addEventHandler(
+      (tx, event) => {
+        const kind = (event as { kind?: string }).kind ?? "unknown";
+        probeRuns.record(kind);
+        tx.addCommitCallback((_tx, outcome) =>
+          commitOutcomes.record({ kind, error: outcome.error })
+        );
+        if (kind !== "refused") return;
+        const argument = servingRuntime!.getCell(
+          space,
+          "floor-verdict-arg",
+          undefined,
+          tx,
+        );
+        servingRuntime!.getCell(
+          space,
+          "floor-verdict-sink",
+          floorSchema,
+          tx,
+        ).set({ items: [argument as unknown as string] });
+      },
+      streamLink,
+    );
+    try {
+      result.key("bump").send({ kind: "refused" });
+      await clientRuntime.idle();
+      await clientRuntime.storageManager.synced();
+      const refusal = (await commitOutcomes.matching((outcome) =>
+        outcome.kind === "refused"
+      )).error as { name?: string; message?: string } | undefined;
+      expect(refusal?.name).toBe("CfcCommitRefusalError");
+      expect(refusal?.message).toContain("write floor failed at /items/0");
+      await awaitAdmitted(server, () => {
+        const entry = entryByKind("refused");
+        return entry?.consequenced === true && typeof entry.error === "string";
+      });
+      const refused = entryByKind("refused")!;
+      expect(refused.error).toContain("write floor failed at /items/0");
+      expect(refused.status).toBeUndefined();
+
+      // A later event is consequenced behind it, and the refused entry's
+      // handler does not run again.
+      result.key("bump").send({ kind: "follower" });
+      await clientRuntime.idle();
+      await clientRuntime.storageManager.synced();
+      await awaitAdmitted(
+        server,
+        () => entryByKind("follower")?.consequenced === true,
+      );
+      expect(probeRuns.count((kind) => kind === "refused")).toBe(1);
+      expect(sidecarValue()?.eventWatermark).toBe(
+        entryByKind("follower")!.seq,
+      );
+    } finally {
+      cancelProbe();
+      cancelDemand();
+    }
+  });
+
+  // Stands up `BUMP_PATTERN` on a host whose delivery-failure clock the case
+  // drives, with a probe handler on the pattern's stream. For an event of kind
+  // `refused` the probe links the document named `names.source` into a list
+  // whose elements require `admin-approved`; for any other kind it writes
+  // nothing. While the serving runtime does not hold that document, the write
+  // floor refuses the link with a reason that is not a verdict
+  // (`verifyWriteFloor` in cfc/prepare.ts).
+  const standUpUntaggedRefusalProbe = async (
+    names: { arg: string; result: string; source: string },
+    clock: { now: number },
+    /** Holds the `run`th run for `refused` open until `until` settles. */
+    hold?: { run: number; started: () => void; until: Promise<void> },
+  ) => {
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { result } = await standUp(clientRuntime, BUMP_PATTERN, names);
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+
+    host = newHost({
+      flushDeadlineMs: 5_000,
+      idleParkMs: 600_000,
+      deliveryFailureBudgetMs: 60_000,
+      deliveryFailureNow: () => clock.now,
+    });
+    result.key("bump").send({ kind: "warmup" });
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    const sidecarId = sidecarIdsIn(engine)[0];
+    const sidecarValue = () =>
+      Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+    const entryByKind = (kind: string) =>
+      (sidecarValue()?.entries ?? []).find((entry) =>
+        (entry.payload as { kind?: string } | undefined)?.kind === kind
+      );
+    await awaitAdmitted(
+      server,
+      () => entryByKind("warmup")?.consequenced === true,
+    );
+    await awaitActive();
+
+    const warmup = entryByKind("warmup")!;
+    const streamLink = {
+      space,
+      id: warmup.stream.id as never,
+      path: [...warmup.stream.path],
+      scope: (warmup.stream.scope ?? "space") as never,
+    };
+    const floorSchema = {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            type: "string",
+            ifc: { requiredIntegrity: ["admin-approved"] },
+          },
+        },
+      },
+    } as const satisfies JSONSchema;
+    /** Every served run of the probe, by event kind, in the order they ran. */
+    const probeRuns = new ArrivalLog<string>();
+    /** The commit error of each run for `refused`, `undefined` once one lands. */
+    const refusedOutcomes = new ArrivalLog<
+      { name?: string; message?: string } | undefined
+    >();
+    const runtime = servingRuntime!;
+    const cancelProbe = runtime.scheduler.addEventHandler(
+      async (tx, event) => {
+        const kind = (event as { kind?: string }).kind ?? "unknown";
+        probeRuns.record(kind);
+        if (kind !== "refused") return;
+        if (probeRuns.count((run) => run === "refused") === hold?.run) {
+          hold.started();
+          await hold.until;
+        }
+        tx.addCommitCallback((_tx, outcome) =>
+          refusedOutcomes.record(
+            outcome.error as { name?: string; message?: string } | undefined,
+          )
+        );
+        const source = runtime.getCell(space, names.source, undefined, tx);
+        runtime.getCell(space, `${names.source}-list`, floorSchema, tx)
+          .set({ items: [source as unknown as string] });
+      },
+      streamLink,
+    );
+    const send = async (kind: string) => {
+      result.key("bump").send({ kind });
+      await clientRuntime.idle();
+      await clientRuntime.storageManager.synced();
+    };
+    // A failed delivery is checkpointed on its entry, and the first failure
+    // earns one immediate clean retry; `failures` counts both.
+    const awaitFailures = (failures: number) =>
+      awaitAdmitted(
+        server,
+        () =>
+          (entryByKind("refused")?.deliveryDeferral?.failureCount ?? 0) >=
+            failures,
+      );
+    return {
+      sidecarId,
+      sidecarValue,
+      entryByKind,
+      probeRuns,
+      refusedOutcomes,
+      send,
+      awaitFailures,
+      [Symbol.dispose]: () => {
+        cancelProbe();
+        cancelDemand();
+      },
+    };
+  };
+
+  it("defers a served event whose commit a CFC refusal that is not a verdict turns away, holds the events behind it, and delivers it once the document it lacked arrives", async () => {
+    // The linked document arrives with the atom the list requires, so a fresh
+    // attempt lands the write: the reason the refusal defers the entry rather
+    // than sealing it as an error.
+
+    const clock = { now: 10_000 };
+    using probe = await standUpUntaggedRefusalProbe({
+      arg: "untagged-defer-arg",
+      result: "untagged-defer-result",
+      source: "untagged-defer-source",
+    }, clock);
+
+    await probe.send("refused");
+    await probe.awaitFailures(2);
+    const deferred = probe.entryByKind("refused")!;
+    expect(deferred.consequenced).not.toBe(true);
+    expect(deferred.error).toBeUndefined();
+    expect(deferred.status).toBeUndefined();
+    expect(deferred.deliveryDeferral).toMatchObject({
+      phase: "commit-preparation",
+      failureClass: "unknown",
+      state: "failed",
+    });
+    const refusal = probe.refusedOutcomes.entries[0];
+    expect(refusal?.name).toBe("StorageTransactionAborted");
+    expect(refusal?.message).toContain("write floor failed at /items/0");
+
+    // A later append wakes one more attempt, which the floor refuses again,
+    // and the later event waits behind the failed head.
+    await probe.send("follower-1");
+    await probe.awaitFailures(3);
+    expect(probe.entryByKind("follower-1")?.consequenced).not.toBe(true);
+
+    // The document arrives with the atom, and the serving runtime holds it.
+    {
+      const tx = clientRuntime.edit();
+      clientRuntime.getCell(space, "untagged-defer-source", {
+        type: "string",
+        ifc: { addIntegrity: ["admin-approved"] },
+      }, tx).set("endorsed");
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    await clientRuntime.storageManager.synced();
+    await servingRuntime!.getCell(space, "untagged-defer-source").sync();
+
+    await probe.send("follower-2");
+    await awaitAdmitted(
+      server,
+      () => probe.entryByKind("follower-2")?.consequenced === true,
+    );
+    const delivered = probe.entryByKind("refused")!;
+    expect(delivered.consequenced).toBe(true);
+    expect(delivered.error).toBeUndefined();
+    expect(delivered.status).toBeUndefined();
+    expect(delivered.deliveryDeferral).toBeUndefined();
+    expect(probe.refusedOutcomes.entries.at(-1)).toBeUndefined();
+    expect(
+      probe.refusedOutcomes.entries.slice(0, -1).map((error) => error?.name),
+    ).toEqual(
+      probe.refusedOutcomes.entries.slice(0, -1).map(() =>
+        "StorageTransactionAborted"
+      ),
+    );
+    // Arrival order: neither later event ran before the head landed.
+    const order = probe.probeRuns.entries;
+    expect(order.indexOf("follower-1")).toBeGreaterThan(
+      order.lastIndexOf("refused"),
+    );
+    expect(order.indexOf("follower-2")).toBeGreaterThan(
+      order.indexOf("follower-1"),
+    );
+    expect(probe.entryByKind("follower-1")?.consequenced).toBe(true);
+    expect(probe.sidecarValue()?.eventWatermark).toBe(
+      probe.entryByKind("follower-2")!.seq,
+    );
+  });
+
+  it("holds an event queued in the same drain pass behind a served event whose first commit a CFC refusal that is not a verdict turns away, and delivers both in arrival order", async () => {
+    // A transient failure to sync the stream's sidecar holds the drain while
+    // both events are appended, so the pass after it queues them together,
+    // before the head's first failure is known.
+
+    const clock = { now: 10_000 };
+    using probe = await standUpUntaggedRefusalProbe({
+      arg: "untagged-pass-arg",
+      result: "untagged-pass-result",
+      source: "untagged-pass-source",
+    }, clock);
+
+    GatedStorageManager.syncThrowWhen = (id) => id === probe.sidecarId;
+    try {
+      await probe.send("refused");
+      await probe.send("follower");
+      await awaitAdmitted(
+        server,
+        () => probe.entryByKind("follower") !== undefined,
+      );
+      // One failing pass that began with both entries durable.
+      const failingPassesBefore = GatedStorageManager.syncThrows.entries.length;
+      await GatedStorageManager.syncThrows.reached(failingPassesBefore + 1);
+    } finally {
+      GatedStorageManager.syncThrowWhen = undefined;
+    }
+    await probe.awaitFailures(1);
+    expect(probe.entryByKind("follower")?.consequenced).not.toBe(true);
+
+    // The document arrives with the atom, and a later append wakes the head.
+    {
+      const tx = clientRuntime.edit();
+      clientRuntime.getCell(space, "untagged-pass-source", {
+        type: "string",
+        ifc: { addIntegrity: ["admin-approved"] },
+      }, tx).set("endorsed");
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    await clientRuntime.storageManager.synced();
+    await servingRuntime!.getCell(space, "untagged-pass-source").sync();
+    await probe.send("wake");
+    await awaitAdmitted(
+      server,
+      () => probe.entryByKind("wake")?.consequenced === true,
+    );
+    const delivered = probe.entryByKind("refused")!;
+    expect(delivered.consequenced).toBe(true);
+    expect(delivered.error).toBeUndefined();
+    expect(probe.entryByKind("follower")?.consequenced).toBe(true);
+    const order = probe.probeRuns.entries;
+    expect(order.indexOf("follower")).toBeGreaterThan(
+      order.lastIndexOf("refused"),
+    );
+    expect(order.indexOf("wake")).toBeGreaterThan(order.indexOf("follower"));
+  });
+
+  it("holds the events behind a served event while its retry after a CFC refusal that is not a verdict is in flight, and retries it again for the input that arrived meanwhile", async () => {
+    // The probe holds its third run for `refused`, a retry an input woke,
+    // open, so a later append reaches the head while that retry is in flight.
+
+    const clock = { now: 10_000 };
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    using probe = await standUpUntaggedRefusalProbe(
+      {
+        arg: "untagged-flight-arg",
+        result: "untagged-flight-result",
+        source: "untagged-flight-source",
+      },
+      clock,
+      { run: 3, started: started.resolve, until: release.promise },
+    );
+    try {
+      await probe.send("refused");
+      await probe.awaitFailures(2);
+      await probe.send("wake-1");
+      await started.promise;
+
+      const passesBefore = drainPasses.entries.length;
+      const skipsBefore = host!.stats().events.drainInFlightSkips;
+      await probe.send("follower");
+      await awaitEach(
+        drainSkips,
+        () => host!.stats().events.drainInFlightSkips > skipsBefore,
+      );
+      await drainPasses.reached(passesBefore + 1);
+      // The pass that found the retry in flight queued nothing behind it.
+      expect(drainPasses.entries.slice(passesBefore)).toEqual(
+        drainPasses.entries.slice(passesBefore).map(() => 0),
+      );
+
+      // The held retry fails again, and the follower's append, which arrived
+      // while it ran, wakes one more.
+      release.resolve();
+      await probe.awaitFailures(4);
+    } finally {
+      release.resolve();
+    }
+
+    {
+      const tx = clientRuntime.edit();
+      clientRuntime.getCell(space, "untagged-flight-source", {
+        type: "string",
+        ifc: { addIntegrity: ["admin-approved"] },
+      }, tx).set("endorsed");
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    await clientRuntime.storageManager.synced();
+    await servingRuntime!.getCell(space, "untagged-flight-source").sync();
+    await probe.send("wake-2");
+    await awaitAdmitted(
+      server,
+      () => probe.entryByKind("wake-2")?.consequenced === true,
+    );
+    expect(probe.entryByKind("refused")?.error).toBeUndefined();
+    const order = probe.probeRuns.entries;
+    expect(order.indexOf("wake-1")).toBeGreaterThan(
+      order.lastIndexOf("refused"),
+    );
+    expect(order.indexOf("follower")).toBeGreaterThan(order.indexOf("wake-1"));
+  });
+
+  it("covers a served event that a CFC refusal that is not a verdict keeps turning away with one needs-attention notice once its failed-state budget is spent, and delivers the events behind it", async () => {
+    const clock = { now: 10_000 };
+    using probe = await standUpUntaggedRefusalProbe({
+      arg: "untagged-attention-arg",
+      result: "untagged-attention-result",
+      source: "untagged-attention-source",
+    }, clock);
+
+    await probe.send("refused");
+    await probe.awaitFailures(2);
+
+    // Spend the failed-state budget, then let a later append wake the drain.
+    clock.now += 60_000;
+    await probe.send("follower");
+    await awaitAdmitted(server, () => {
+      const entry = probe.entryByKind("refused");
+      return entry?.consequenced === true &&
+        entry.status === "needs-attention" &&
+        entry.seq !== undefined &&
+        (probe.sidecarValue()?.eventWatermark ?? 0) >= entry.seq;
+    });
+    const covered = probe.entryByKind("refused")!;
+    expect(covered.error).toBeUndefined();
+    expect(covered.deliveryDeferral).toBeUndefined();
+    expect(covered.attention).toMatchObject({
+      phase: "commit-preparation",
+      failureClass: "unknown",
+      code: "delivery-failure-budget-exhausted",
+      recovery: "explicit-retry",
+    });
+    const refusedRuns = probe.probeRuns.count((kind) => kind === "refused");
+    await probe.probeRuns.matching((kind) => kind === "follower");
+    await awaitAdmitted(
+      server,
+      () => probe.entryByKind("follower")?.consequenced === true,
+    );
+    expect(probe.probeRuns.count((kind) => kind === "refused")).toBe(
+      refusedRuns,
+    );
+    expect(
+      probe.refusedOutcomes.entries.map((error) => error?.name),
+    ).toEqual(
+      probe.refusedOutcomes.entries.map(() => "StorageTransactionAborted"),
+    );
+    expect(host!.stats().events.needsAttention.byPhase["commit-preparation"])
+      .toBe(1);
   });
 
   it("a served RetryImmediately retry remains settlement and never creates a delivery checkpoint", async () => {
@@ -2652,6 +3187,31 @@ describe("Phase 3 events-down (serving side)", () => {
     cancelDemand();
   });
 
+  it("reports a served handler's throw to its sender as an EventDeliveryError of kind `errored`, carrying the handler's words", async () => {
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const { result } = await standUp(clientRuntime, THROW_PATTERN, {
+      arg: "delivery-error-arg",
+      result: "delivery-error-result",
+    });
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+
+    host = newHost();
+    const fired = fireVerb(result, "explode", {}, "delivery-error-1");
+    await clientRuntime.idle();
+    await fired.reached(1);
+    const status = fired.entries[0].tx.status();
+    expect(status.status).toBe("error");
+    const error = status.status === "error" ? status.error : undefined;
+    expect(error).toBeInstanceOf(EventDeliveryError);
+    if (!(error instanceof EventDeliveryError)) return;
+    expect(error.kind).toBe("errored");
+    expect(error.reason).toContain("handler exploded deliberately");
+    expect(error.message).toBe(`event handling errored: ${error.reason}`);
+    cancelDemand();
+  });
+
   it("writes a receipt for a served handler that returns `undefined` (result carriage, value-less arm): the `{}` existence witness, one derived commit, atomic with the mark", async () => {
     ({ manager: clientManager, runtime: clientRuntime } = openClient());
     const engine = await server.engineForSpace(space);
@@ -2994,6 +3554,229 @@ describe("Phase 3 events-down (serving side)", () => {
     // loop's own bookkeeping produced. Back-to-back waves spend the
     // whole budget in one quiet moment and the drop lands at once.
     expect(elapsed).toBeGreaterThanOrEqual(1_000);
+  });
+
+  /**
+   * Stands up `CREATE_CHILD_PATTERN` on a fresh client and appends its
+   * `create` event while no host serves the space, so that a later append is
+   * drained behind it. Every serving runtime then holds the parent's piece
+   * start open until `releaseCreate()`, and records the verdict of every
+   * other piece start by the stream it was for. `bringUp()` starts the host
+   * and activates the space. `kickUntil()` commits authored writes, each one
+   * input that re-drains a deferred event, until `done()` holds.
+   */
+  const standUpHeldCreate = async () => {
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: CREATE_CHILD_PATTERN }],
+    }, { space });
+    const argument = clientRuntime.getCell<{ child: unknown }>(
+      space,
+      "create-child-arg",
+      undefined,
+    );
+    const result = clientRuntime.getCell<Record<string, unknown>>(
+      space,
+      "create-child-result",
+      compiled.resultSchema,
+    );
+    await argument.sync();
+    await result.sync();
+    {
+      const seed = clientRuntime.edit();
+      argument.withTx(seed).set({ child: null });
+      expect((await seed.commit().settled).error).toBeUndefined();
+    }
+    {
+      const tx = clientRuntime.edit();
+      clientRuntime.run(tx, compiled, argument, result);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    const resolvedLinkOf = (cell: Cell<unknown>): NormalizedFullLink =>
+      resolveLink(
+        clientRuntime,
+        clientRuntime.readTx(),
+        cell.getAsNormalizedFullLink(),
+      );
+    const send = (cell: Cell<unknown>) =>
+      (cell as unknown as { send(value: unknown): unknown }).send({});
+    const entryFor = (streamId: string) =>
+      sidecarIdsIn(engine)
+        .flatMap((id) =>
+          (Engine.read(engine, { id })?.value as
+            | StreamEventsDocValue
+            | undefined)?.entries ?? []
+        )
+        .find((entry) => entry?.stream?.id === streamId);
+
+    const createCell = result.key("create") as Cell<unknown>;
+    const createLink = resolvedLinkOf(createCell);
+    send(createCell);
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => entryFor(createLink.id) !== undefined);
+
+    const createStarts = new ArrivalLog<string>();
+    const starts = new ArrivalLog<
+      { id: string; verdict: EnsurePieceVerdict }
+    >();
+    const createStartGate = Promise.withResolvers<void>();
+    servingLoadPieceForEvent = async (runtime, eventLink) => {
+      if (eventLink.id === createLink.id) {
+        createStarts.record(eventLink.id);
+        await createStartGate.promise;
+        return await ensurePieceRunningVerdict(runtime, eventLink);
+      }
+      const verdict = await ensurePieceRunningVerdict(runtime, eventLink);
+      starts.record({ id: eventLink.id, verdict });
+      return verdict;
+    };
+    const startsOf = (streamId: string) =>
+      starts.entries.filter((start) => start.id === streamId);
+
+    const bringUp = async () => {
+      // A short flush deadline: the parent's held start keeps the scheduler
+      // busy, so each cycle ends at the deadline.
+      host = newHost({ flushDeadlineMs: 100, idleParkMs: 600_000 });
+      // An authored poke activates the space, standing in for the reconnect
+      // a real restart's clients make.
+      const poke = clientRuntime.edit();
+      clientRuntime.getCell<number>(space, "create-child-activate", undefined)
+        .withTx(poke).set(1);
+      expect((await poke.commit().settled).error).toBeUndefined();
+    };
+
+    const kickUntil = async (done: () => boolean) => {
+      while (!done()) {
+        const seen = starts.entries.length;
+        kicks += 1;
+        const kick = clientRuntime.edit();
+        clientRuntime.getCell<{ n: number }>(
+          space,
+          "create-child-kick",
+          undefined,
+        ).withTx(kick).set({ n: kicks });
+        expect((await kick.commit().settled).error).toBeUndefined();
+        await awaitEdges(
+          [starts.edge, admittedCommits(server)],
+          () => starts.entries.length > seen || done(),
+        );
+      }
+    };
+
+    return {
+      engine,
+      result,
+      createLink,
+      createStarts,
+      resolvedLinkOf,
+      send,
+      entryFor,
+      startsOf,
+      bringUp,
+      kickUntil,
+      releaseCreate: () => createStartGate.resolve(),
+    };
+  };
+
+  it("delivers an event to a piece an earlier arrival's handler creates, re-drained by that arrival's consequence however many re-drains came before it (events.md §5: a piece not yet created by an arrival still pending ahead is the run racing, not an unrunnable handler)", async () => {
+    // The live shape is a board's `addTopic` and the first comment on the
+    // topic it creates: the client's own echo hands it the new topic's stream
+    // before the serving side has run `addTopic`, and on a cold server that
+    // run waits on the board's piece start. Input keeps re-draining the
+    // child's event past the deferral budget while the parent's start is
+    // held; once it is released, nothing else arrives.
+
+    const held = await standUpHeldCreate();
+    const bumpCell = held.result.key("child").key("bump") as Cell<unknown>;
+    const bumpLink = held.resolvedLinkOf(bumpCell);
+    expect(bumpLink.id).not.toBe(held.createLink.id);
+    held.send(bumpCell);
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(
+      server,
+      () => held.entryFor(bumpLink.id) !== undefined,
+    );
+    const bumpEntry = () => held.entryFor(bumpLink.id);
+
+    await held.bringUp();
+    try {
+      await held.kickUntil(() =>
+        held.startsOf(bumpLink.id).length > EVENT_DEFERRAL_DROP_THRESHOLD ||
+        bumpEntry()?.consequenced === true
+      );
+      expect(held.createStarts.entries).toEqual([held.createLink.id]);
+      for (const { verdict } of held.startsOf(bumpLink.id)) {
+        expect(verdict.started).toBe(false);
+        expect(verdict.reason).toBe("no-pattern-meta");
+      }
+      expect(bumpEntry()?.consequenced).toBeUndefined();
+      expect(host!.stats().events.arrivalHeldDeferrals)
+        .toBeGreaterThan(EVENT_DEFERRAL_DROP_THRESHOLD);
+    } finally {
+      held.releaseCreate();
+    }
+
+    await awaitAdmitted(server, () => bumpEntry()?.consequenced === true);
+    const entry = bumpEntry();
+    expect(entry?.status).toBeUndefined();
+    expect(entry?.reason).toBeUndefined();
+    const valueLink = held.resolvedLinkOf(
+      held.result.key("child").key("value") as Cell<unknown>,
+    );
+    const stored = valueLink.path.reduce<unknown>(
+      (value, key) => (value as Record<string, unknown> | undefined)?.[key],
+      Engine.read(held.engine, { id: valueLink.id })?.value,
+    );
+    expect(stored).toBe(1);
+    // No backstop was ever armed, so what re-drained the child's event after
+    // the release was the parent's committed consequence.
+    expect(host!.stats().events.deferredRescansArmed).toBe(0);
+  });
+
+  it("drops an event whose piece nothing creates once the earlier arrival it was held behind has its consequence (events.md §5: the earliest pending entry spends the deferral budget)", async () => {
+    const held = await standUpHeldCreate();
+    const neverAPieceStream = { id: "of:no-such-child", path: ["stream"] };
+    const delivered = await server.commitDelegatedAppend({
+      targetSpace: space,
+      targetStream: streamEntriesDocId(neverAPieceStream),
+      targetStreamLink: neverAPieceStream,
+      eventId: "evt-held-unrunnable",
+      payload: {},
+      actingPrincipal: aliceSigner.did(),
+      actingSession: "held-drop-session",
+      capabilityRef: "cap-held-drop",
+      sessionId: `service:${space}`,
+      localSeq: 990_300,
+    });
+    expect(delivered.deduped).toBe(false);
+    const neverEntry = () => held.entryFor(neverAPieceStream.id);
+    const createEntry = () => held.entryFor(held.createLink.id);
+    expect(neverEntry()?.seq).toBeGreaterThan(createEntry()?.seq ?? 0);
+
+    await held.bringUp();
+    try {
+      await held.kickUntil(() =>
+        held.startsOf(neverAPieceStream.id).length >
+          EVENT_DEFERRAL_DROP_THRESHOLD ||
+        neverEntry()?.consequenced === true
+      );
+      expect(neverEntry()?.consequenced).toBeUndefined();
+    } finally {
+      held.releaseCreate();
+    }
+
+    await awaitAdmitted(server, () => neverEntry()?.consequenced === true);
+    expect(createEntry()?.consequenced).toBe(true);
+    expect(createEntry()?.status).toBeUndefined();
+    const entry = neverEntry();
+    expect(entry?.status).toBe("dropped");
+    expect(entry?.reason).toContain("no runnable handler");
   });
 
   it("reactivates the space on an event-only admission RACING a park: the fire-time gate honors the undelivered-events criterion, not just live sessions", async () => {

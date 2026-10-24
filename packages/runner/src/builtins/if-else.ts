@@ -4,7 +4,7 @@ import { type Cell } from "../cell.ts";
 import { type RawBuiltinResult, type RawNodeCause } from "../module.ts";
 import { type Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import { forwardReferenceAction } from "./forward-reference.ts";
+import { forwardReference } from "./forward-reference.ts";
 
 /**
  * Argument schema for ifElse. The action value-reads ONLY `condition`; the
@@ -44,15 +44,13 @@ export function ifElse(
   parentCell: Cell<any>,
   runtime: Runtime, // Runtime will be injected by the registration function
 ): RawBuiltinResult {
-  return {
-    action: forwardReferenceAction({
-      name: "ifElse",
-      inputsCell,
-      sendResult,
-      cause,
-      parentCell,
-      runtime,
-      select: (truthy) => truthy ? "ifTrue" : "ifFalse",
-    }),
-  };
+  return forwardReference({
+    name: "ifElse",
+    inputsCell,
+    sendResult,
+    cause,
+    parentCell,
+    runtime,
+    select: (truthy) => truthy ? "ifTrue" : "ifFalse",
+  });
 }

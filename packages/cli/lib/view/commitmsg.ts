@@ -29,7 +29,8 @@ const EMAIL_COMMIT_RE = new RegExp(
   `^From (${OBJECT_ID}) Mon Sep 17 00:00:00 2001$`,
 );
 
-const withoutTransportCR = (line: string): string =>
+/** `line` without the carriage return a CRLF line ending leaves on it. */
+export const withoutTransportCR = (line: string): string =>
   line.endsWith("\r") ? line.slice(0, -1) : line;
 
 const emailCommitAt = (
@@ -259,6 +260,10 @@ export interface GitRunner {
 
   /** Resolve an abbreviated commit name to its full object id. */
   resolveCommit?(sha: string): string | null;
+
+  /** The working tree's top-level directory, against which a diff's paths
+   * resolve, or null (not a repo, or git failed). */
+  repoRoot?(): string | null;
 
   /** Whether the old and new blob names in one file diff belong to a commit
    * and its first parent. Paths use Git's repository-relative form. */
@@ -745,6 +750,13 @@ export function realGit(cwd: string): GitRunner {
       try {
         return run(["rev-parse", "--symbolic-full-name", "HEAD"]).trim() ||
           null;
+      } catch {
+        return null;
+      }
+    },
+    repoRoot() {
+      try {
+        return repoRoot();
       } catch {
         return null;
       }

@@ -35,6 +35,7 @@ export const shellLanguage: Language = {
     filenamePatterns: [],
     aliases: ["sh", "bash"],
     interpreters: ["sh", "bash", "dash", "ash"],
+    signatures: [],
     sharedExtensions: [],
   },
 

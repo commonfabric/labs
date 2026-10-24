@@ -11,6 +11,7 @@
  * change).
  */
 
+import { fromFileUrl } from "@std/path";
 import { readMaybeGzippedText, writeGzippedText } from "./gzip.ts";
 import type { ReplayOracle } from "./replay.ts";
 
@@ -25,14 +26,14 @@ export function listFixturePaths(): { name: string; path: string }[] {
     if (match === null) continue;
     out.push({
       name: match[1],
-      path: new URL(entry.name, fixturesDir).pathname,
+      path: fromFileUrl(new URL(entry.name, fixturesDir)),
     });
   }
   return out.sort((a, b) => a.name < b.name ? -1 : 1);
 }
 
 export function goldenPath(name: string): string {
-  return new URL(`${name}.golden.json.gz`, goldensDir).pathname;
+  return fromFileUrl(new URL(`${name}.golden.json.gz`, goldensDir));
 }
 
 export async function loadGolden(

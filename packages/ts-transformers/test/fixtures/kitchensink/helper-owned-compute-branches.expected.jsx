@@ -283,9 +283,9 @@ visibleProjects.map((project, projectIndex) => {
         }
     } as const satisfies __cfHelpers.JSONSchema, {
         anyOf: [{
-                $ref: "https://commonfabric.org/schemas/vnode.json"
-            }, {
                 $ref: "#/$defs/UIRenderable"
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
             }],
         $defs: {
             UIRenderable: {
@@ -382,9 +382,9 @@ visibleProjects.map((project, projectIndex) => {
     type: "array",
     items: {
         anyOf: [{
-                $ref: "https://commonfabric.org/schemas/vnode.json"
-            }, {
                 $ref: "#/$defs/UIRenderable"
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
             }]
     },
     $defs: {

@@ -16,6 +16,7 @@
 import { isAbsolute } from "@std/path";
 
 import { parseCfHarnessCliToolId } from "@commonfabric/cf-harness/cli";
+import type { HarnessModelLimits } from "@commonfabric/cf-harness/model/client";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
 import {
   BROWSER_SUBAGENT_PROFILE,
@@ -28,10 +29,18 @@ import {
   type HarnessToolBackingAvailability,
   withheldToolIds,
 } from "@commonfabric/cf-harness/contracts/tool-descriptor";
+import { validateHarnessForeignSpaces } from "@commonfabric/cf-harness/foreign-spaces";
+import { parseHandleRef } from "@commonfabric/cf-harness/handle-table";
+import {
+  checkInputCellSpec,
+  parseNamedPieceAddress,
+} from "@commonfabric/cf-harness/input-cells";
+import { isDID } from "@commonfabric/identity/did";
+import type { MemorySpace } from "@commonfabric/runner";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 /** One profile, as the host file states it. */
-export interface LocalJobProfile {
+export interface LocalJobProfile extends HarnessModelLimits {
   /** The tools a job may use; `submit_result` is always added. */
   tools: string[];
 
@@ -55,6 +64,16 @@ export interface LocalJobProfile {
 
   /** Model name passed to `cf-harness`. */
   model?: string;
+
+  /**
+   * The reasoning effort a job runs at, and the most a request may ask for;
+   * the provider's default when absent, and then a request may name none. It
+   * sets the effort of the job's own model calls and of children that share
+   * its model. The research tool runs at the runner's research effort, and a
+   * child on another model at that provider's default, so it does not bound
+   * every model call in the job.
+   */
+  reasoningEffort?: ReasoningEffort;
 
   /**
    * Whether a job may declare a browser host. A job that does browses
@@ -109,15 +128,44 @@ export interface LocalJobFabric {
 export type LocalJobProfiles = ReadonlyMap<string, LocalJobProfile>;
 
 /** What a caller may ask of a profile. */
-export interface LocalJobNarrowing {
+export interface LocalJobNarrowing extends HarnessModelLimits {
   tools?: readonly string[];
   maxModelTurns?: number;
+  reasoningEffort?: ReasoningEffort;
 
   /** The request's browser host declaration, when it made one. */
   browserHost?: unknown;
+
+  /** The pieces the request hands the job, by name. */
+  inputs?: Readonly<Record<string, string>>;
+
+  /** Where each space an input names outside the profile's is served. */
+  foreignSpaces?: Readonly<Record<string, string>>;
 }
 
 const ROLES: readonly PromptSlotRole[] = ["direct-command", "context", "quote"];
+
+/**
+ * Reasoning efforts from least to most, as the providers the harness speaks
+ * to name them; a model may support only some of them.
+ */
+export const REASONING_EFFORTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export type ReasoningEffort = typeof REASONING_EFFORTS[number];
+
+/** `value` as a reasoning effort, or undefined when it names none. */
+export const reasoningEffortOf = (
+  value: unknown,
+): ReasoningEffort | undefined =>
+  REASONING_EFFORTS.find((effort) => effort === value);
 
 /** The tool that spawns a subagent. */
 const DELEGATE_TOOL: BuiltinToolId = "delegate_task";
@@ -170,11 +218,14 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
   const {
     tools,
     maxModelTurns,
+    maxInputBytes,
+    maxOutputTokens,
     taskRole,
     retry,
     loomRetrievalConfig,
     loomCommandsConfig,
     model,
+    reasoningEffort,
     browserHost,
     fabric,
     patternIndexUrl,
@@ -197,6 +248,21 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
   ) {
     fail("`maxModelTurns` must be a whole number of 1 or more");
   }
+  for (
+    const [field, limit] of [["maxInputBytes", maxInputBytes], [
+      "maxOutputTokens",
+      maxOutputTokens,
+    ]]
+  ) {
+    const minimum = field === "maxOutputTokens" ? 16 : 1;
+    if (
+      limit !== undefined &&
+      (typeof limit !== "number" || !Number.isSafeInteger(limit) ||
+        limit < minimum)
+    ) {
+      fail(`\`${field}\` must be a safe whole number of ${minimum} or more`);
+    }
+  }
   if (!ROLES.includes(taskRole as PromptSlotRole)) {
     fail(`\`taskRole\` must be one of ${ROLES.join(", ")}`);
   }
@@ -215,6 +281,10 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
   }
   if (model !== undefined && typeof model !== "string") {
     fail("`model` must be a string");
+  }
+  const effort = reasoningEffortOf(reasoningEffort);
+  if (reasoningEffort !== undefined && effort === undefined) {
+    fail(`\`reasoningEffort\` must be one of ${REASONING_EFFORTS.join(", ")}`);
   }
   if (browserHost !== undefined && typeof browserHost !== "boolean") {
     fail("`browserHost` must be true or false");
@@ -282,6 +352,8 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
   return {
     tools: [...(tools as string[])],
     maxModelTurns: maxModelTurns as number,
+    ...(typeof maxInputBytes === "number" ? { maxInputBytes } : {}),
+    ...(typeof maxOutputTokens === "number" ? { maxOutputTokens } : {}),
     taskRole: taskRole as PromptSlotRole,
     retry: "never",
     ...(loomRetrievalConfig !== undefined
@@ -291,6 +363,7 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
       ? { loomCommandsConfig: loomCommandsConfig as string }
       : {}),
     ...(model !== undefined ? { model: model as string } : {}),
+    ...(effort !== undefined ? { reasoningEffort: effort } : {}),
     ...(browserHost === true ? { browserHost: true } : {}),
     ...(session !== undefined ? { fabric: session } : {}),
     ...(patternIndexUrl !== undefined
@@ -347,6 +420,137 @@ export const readLocalJobProfiles = async (
   );
 };
 
+/** The space a link input names by DID, or `undefined` for any other input. */
+const spaceOf = (ref: string): string | undefined => {
+  try {
+    if (parseNamedPieceAddress(ref) !== undefined) return undefined;
+    const space = parseHandleRef(ref).space;
+    return space !== undefined && isDID(space) ? space : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * The space each of `inputs` names by DID, other than `ownSpace`: the spaces
+ * a job handed those pieces reaches beyond its own. An input naming no space,
+ * naming one by name, or not parsing at all adds none here; the input check
+ * reports the last.
+ */
+const inputSpaces = (
+  inputs: Readonly<Record<string, string>> | undefined,
+  ownSpace: string,
+): Set<string> => {
+  const spaces = new Set<string>();
+  for (const ref of Object.values(inputs ?? {})) {
+    const space = spaceOf(ref);
+    if (space !== undefined && space !== ownSpace) spaces.add(space);
+  }
+  return spaces;
+};
+
+/**
+ * The foreign spaces a job's session is admitted to: each space an input
+ * names outside `ownSpace`, routed to the origin the request names for it.
+ * Only those the inputs name are passed, so nothing the request lists beyond
+ * them widens the run — {@link narrowLocalJobProfile} has refused such a
+ * request already.
+ */
+export const localJobForeignSpaces = (
+  inputs: Readonly<Record<string, string>> | undefined,
+  foreignSpaces: Readonly<Record<string, string>> | undefined,
+  ownSpace: string,
+): Record<string, string> => {
+  const routes = validateHarnessForeignSpaces(foreignSpaces ?? {});
+  const admitted: Record<string, string> = {};
+  for (const space of inputSpaces(inputs, ownSpace)) {
+    if (Object.hasOwn(routes, space)) admitted[space] = routes[space];
+  }
+  return admitted;
+};
+
+/**
+ * Why `profile` cannot hold `inputs` with `foreignSpaces`, or `undefined`
+ * when it can: each input is held to the rule the harness mints an input cell
+ * under. A link may name a piece in another space by DID, provided the
+ * request says which origin serves that space — the profile's own host is
+ * never assumed to, since a space it does not serve reads as empty and
+ * nothing reports it — and every space `foreignSpaces` lists must be one an
+ * input names. A piece address names a slug, which resolves only in the
+ * profile's own space, so one naming another space is refused. Under a profile
+ * naming its space by DID, an address names it by that DID, and one qualified
+ * by a name is refused, since that space has none. Under a profile naming its
+ * space by a legacy name, an address naming a space by DID is left to the
+ * session, which alone knows the DID that name resolves to.
+ */
+const refuseInputs = (
+  profile: LocalJobProfile,
+  inputs: Readonly<Record<string, string>> | undefined,
+  foreignSpaces: Readonly<Record<string, string>> | undefined,
+): string | undefined => {
+  const listed = Object.keys(foreignSpaces ?? {});
+  if (
+    (inputs === undefined || Object.keys(inputs).length === 0) &&
+    listed.length === 0
+  ) {
+    return undefined;
+  }
+  const { fabric } = profile;
+  if (fabric === undefined) {
+    return "The profile has no fabric session, so it can hold no inputs.";
+  }
+  let routes: Readonly<Record<string, string>>;
+  try {
+    routes = validateHarnessForeignSpaces(foreignSpaces ?? {});
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  const named = inputSpaces(inputs, fabric.space);
+  const unused = listed.filter((space) => !named.has(space));
+  if (unused.length > 0) {
+    return `\`foreignSpaces\` lists ${
+      unused.map((space) => `\`${space}\``).join(", ")
+    }, which no input names.`;
+  }
+  const byDid = isDID(fabric.space);
+  for (const [name, ref] of Object.entries(inputs ?? {})) {
+    // Asked first, in the request's own terms: the harness check below would
+    // otherwise refuse the same input in the vocabulary of its command line.
+    if (
+      named.has(spaceOf(ref) ?? "") && !Object.hasOwn(routes, spaceOf(ref)!)
+    ) {
+      return `Input \`${name}\` names a piece in \`${
+        spaceOf(ref)
+      }\`; pass the origin serving that space in \`foreignSpaces\`.`;
+    }
+    let address;
+    try {
+      address = parseNamedPieceAddress(ref);
+    } catch {
+      // A malformed address is the harness check's to describe, below.
+    }
+    if (
+      byDid && address?.spaceName !== undefined && !isDID(address.spaceName)
+    ) {
+      return `Input \`${name}\` names its space by name, and the profile names its space by DID; name the space by its DID, or send the space-relative /of:<id> form.`;
+    }
+    try {
+      checkInputCellSpec(
+        { name, ref },
+        byDid ? fabric.space as MemorySpace : undefined,
+        byDid ? undefined : fabric.space,
+        routes,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return message.includes(`\`${name}\``)
+        ? message
+        : `Input \`${name}\`: ${message}`;
+    }
+  }
+  return undefined;
+};
+
 /**
  * The profile a caller's request runs under: `profile` narrowed to the tools
  * and turns the caller asked for, and to a browser host only when the
@@ -357,7 +561,29 @@ export const narrowLocalJobProfile = (
   profile: LocalJobProfile,
   narrowing: LocalJobNarrowing,
 ): { profile: LocalJobProfile } | { refusal: string } => {
-  const { tools, maxModelTurns, browserHost } = narrowing;
+  const {
+    tools,
+    maxModelTurns,
+    reasoningEffort,
+    browserHost,
+    maxInputBytes,
+    maxOutputTokens,
+  } = narrowing;
+  for (const name of ["maxInputBytes", "maxOutputTokens"] as const) {
+    const value = narrowing[name];
+    const maximum = profile[name];
+    if (
+      value !== undefined &&
+      (!Number.isSafeInteger(value) ||
+        value < (name === "maxOutputTokens" ? 16 : 1) ||
+        (maximum !== undefined && value > maximum))
+    ) {
+      return {
+        refusal:
+          `The request exceeds or invalidates the profile ${name} bound.`,
+      };
+    }
+  }
   const beyond = tools?.filter((tool) => !profile.tools.includes(tool)) ?? [];
   if (beyond.length > 0) {
     return {
@@ -372,9 +598,32 @@ export const narrowLocalJobProfile = (
         `The profile allows at most ${profile.maxModelTurns} model turns.`,
     };
   }
+  if (reasoningEffort !== undefined) {
+    if (profile.reasoningEffort === undefined) {
+      return {
+        refusal:
+          "The profile sets no reasoning effort, so a request may not name one.",
+      };
+    }
+    if (
+      REASONING_EFFORTS.indexOf(reasoningEffort) >
+        REASONING_EFFORTS.indexOf(profile.reasoningEffort)
+    ) {
+      return {
+        refusal:
+          `The profile allows at most \`${profile.reasoningEffort}\` reasoning effort.`,
+      };
+    }
+  }
   if (browserHost !== undefined && profile.browserHost !== true) {
     return { refusal: "The profile does not admit a browser host." };
   }
+  const inputRefusal = refuseInputs(
+    profile,
+    narrowing.inputs,
+    narrowing.foreignSpaces,
+  );
+  if (inputRefusal !== undefined) return { refusal: inputRefusal };
   const { browserHost: _admitted, subagentProfiles, ...rest } = profile;
   // Narrowed away from `delegate_task`, a job has nothing to spawn its
   // subagents with, and so is granted none.
@@ -389,6 +638,9 @@ export const narrowLocalJobProfile = (
         : {}),
       ...(tools !== undefined ? { tools: [...tools] } : {}),
       ...(maxModelTurns !== undefined ? { maxModelTurns } : {}),
+      ...(maxInputBytes !== undefined ? { maxInputBytes } : {}),
+      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
       ...(browserHost !== undefined ? { browserHost: true } : {}),
     },
   };

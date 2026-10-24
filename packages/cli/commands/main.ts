@@ -20,7 +20,7 @@ import { init } from "./init.ts";
 import { inspect } from "./inspect.ts";
 import { invocationSession } from "./invocation-session.ts";
 import { cell } from "./cell.ts";
-import { piece, pieceDataCommand } from "./piece.ts";
+import { piece } from "./piece.ts";
 import { profile } from "./profile.ts";
 import { space } from "./space.ts";
 import { sh } from "./sh.ts";
@@ -210,23 +210,4 @@ export const main = new Command()
   .command("invocation-session", invocationSession)
   .command("sh", sh)
   .command("test", createTestCommand({ recordResults: true }))
-  .command("wish", wish)
-  // The superseded top-level spellings of the data commands. Each is the one
-  // definition its blessed mount uses, reached under the noun it acts on --
-  // `cf cell get`, `cf cell set`, `cf piece call` -- and kept here, hidden,
-  // so a caller who learned the top-level spelling still works.
-  // @ts-ignore for the above type issue
-  .command(
-    "get",
-    pieceDataCommand("get", { replacedBy: "cell get" }).hidden(),
-  )
-  // @ts-ignore for the above type issue
-  .command(
-    "set",
-    pieceDataCommand("set", { replacedBy: "cell set" }).hidden(),
-  )
-  // @ts-ignore for the above type issue
-  .command(
-    "call",
-    pieceDataCommand("call", { replacedBy: "piece call" }).hidden(),
-  );
+  .command("wish", wish);

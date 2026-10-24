@@ -3,6 +3,7 @@ import { basename } from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
 import {
   FragmentWriter,
+  markWholeRun,
   repositoryRelativePath,
 } from "@commonfabric/test-support/records";
 import {
@@ -64,7 +65,8 @@ export class Runner {
     // directory the consuming task runs in; the directory's own name is
     // the fallback for a package without one. A file that fails to import
     // produces no per-test results and so records nothing; the run's
-    // failure stays visible in CI.
+    // failure stays visible in CI. A file inside no repository is no test
+    // of one and records nothing either.
     const recordsFragment = FragmentWriter.openForRun();
     const scope = await packageScope();
 
@@ -74,6 +76,11 @@ export class Runner {
     // whose tests are steps of one registration keeps them in place.
     const seed = shuffleSeed();
     console.log(shuffleNotice(seed));
+
+    // How many tests the files registered. A run that loaded every file
+    // and has a result for every test each registered names those tests
+    // in the spool, and a run that does not says nothing.
+    let registered = 0;
 
     try {
       for (const tsTestPath of shuffledPaths(this.manifest.tests, seed)) {
@@ -92,6 +99,7 @@ export class Runner {
 
         const testCount = await this.browser.getTestCount();
         this.reporter.onFileStart(tsTestPath, testCount);
+        const file = repositoryRelativePath(tsTestPath);
 
         const order = shuffled(
           Array.from({ length: testCount }, (_, index) => index),
@@ -104,15 +112,36 @@ export class Runner {
           }
           results.tests.push(testResult);
           this.reporter.onTestCompleted(testResult);
+          if (file === undefined) continue;
           recordsFragment?.append({
             line: "record",
             test: { k: "browser", s: scope, n: testResult.name },
             outcome: testResult.error === null ? "pass" : "fail",
             durationMs: Math.round(testResult.duration),
-            file: repositoryRelativePath(tsTestPath),
+            file,
           });
         }
         this.reporter.onFileEnd(tsTestPath);
+        // Counted again once the file's tests have run, so that a test the
+        // page registered after the first count counts too.
+        registered += await this.browser.getTestCount();
+      }
+      const ran = this.results.reduce(
+        (total, file) => total + file.tests.length,
+        0,
+      );
+      // A file inside no repository is no test of one, so it has no place
+      // in the mark either, and a run of only such files leaves none.
+      const tests = Object.fromEntries(
+        this.results.flatMap((file) => {
+          const path = repositoryRelativePath(file.fileName);
+          return path === undefined
+            ? []
+            : [[path, file.tests.map((test) => test.name)]];
+        }),
+      );
+      if (ran === registered && Object.keys(tests).length > 0) {
+        markWholeRun({ kind: "browser", scope, tests });
       }
 
       const summary = summarize(this.results);

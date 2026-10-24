@@ -34,7 +34,23 @@ Deno.test("meta routes", async (t) => {
     assertEquals(json.shellServerExecutionDefine, null);
     // No MEMORY_PUBLIC_URL: clients open Memory on the API host.
     assertEquals(json.memoryUrl, null);
+    // No TOOLSHED_RELEASED_AT: the deployment states no release time.
+    assertEquals(json.releasedAt, null);
   });
+
+  await t.step(
+    "GET /api/meta publishes TOOLSHED_RELEASED_AT as an RFC 3339 date-time",
+    async () => {
+      const previous = env.TOOLSHED_RELEASED_AT;
+      env.TOOLSHED_RELEASED_AT = Date.UTC(2026, 9, 16, 14, 3, 0);
+      try {
+        const json = await (await app.request("/api/meta")).json();
+        assertEquals(json.releasedAt, "2026-10-16T14:03:00.000Z");
+      } finally {
+        env.TOOLSHED_RELEASED_AT = previous;
+      }
+    },
+  );
 
   await t.step(
     "GET /api/meta publishes MEMORY_PUBLIC_URL, which a deployed client opens Memory on",

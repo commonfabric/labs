@@ -32,8 +32,9 @@ rewrite. In particular:
   than a server-issued, principal-bound identifier
 - the public one-shot read surfaces are `graph.query`, `entity-id.list`, and
   `entity-id.exists`
-- watch-set mutations return inline `sync` payloads, and steady-state topology
-  shrink does not yet guarantee automatic `removes`
+- watch-set mutations return inline `sync` payloads; a pushed frame retracts a
+  document a write left no watch reaching, and a client shrinks its watch set
+  explicitly
 
 ## 4.1 Transport
 
@@ -56,6 +57,8 @@ The client MUST declare its protocol version in the first WebSocket message:
     "stableExpressionResultIds": true,
     "messageCompressionV1": true,
     "syncSchemaTableV2": true,
+    "syncLabelTableV1": true,
+    "commitLabelTableV1": true,
     "verdictCatchUpMarkers": true,
     "entityIdListing": true,
     "entityIdPagination": true,
@@ -81,6 +84,8 @@ If the server accepts the protocol, it returns:
     "stableExpressionResultIds": true,
     "messageCompressionV1": true,
     "syncSchemaTableV2": true,
+    "syncLabelTableV1": true,
+    "commitLabelTableV1": true,
     "verdictCatchUpMarkers": true,
     "entityIdListing": true,
     "entityIdPagination": true,
@@ -91,7 +96,8 @@ If the server accepts the protocol, it returns:
     "sessionClose": true,
     "admissionNotice": true,
     "sessionReportV1": true,
-    "syncCrossingsV1": true
+    "syncCrossingsV1": true,
+    "watchRemoveV1": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -237,12 +243,31 @@ when absent. The server sends compact sync payloads only when both peers
 advertise the capability; otherwise it sends the historical fully expanded
 shape.
 
+`syncLabelTableV1` advertises per-sync label and label-path tables, independently
+of schema tables and message compression. It is a build capability, always
+advertised by this build, and defaults to `false` when absent. The server
+compacts labels and paths only
+when both peers advertise it. A client refuses a sync carrying either table
+unless the connection negotiated the capability.
+
+`commitLabelTableV1` independently advertises label and label-path tables for
+client `transact` requests and server transaction acknowledgments. This build
+advertises `true`; omission means `false`. Both peers must advertise it before
+either endpoint compacts transaction metadata.
+`syncLabelTableV1` authorizes only server sync encoding and does not authorize
+compact commits. See [commit metadata encoding](#negotiated-commit-metadata-encoding).
+
 `syncCrossingsV1` is a server capability: its session sync payloads carry
 `crossings`, the links its schema traversals followed out of the space, as
 described in [Session Sync Payload](#423-session-sync-payload). It defaults to
 `false` when absent. A client of a server that does not advertise it finds
 those links by reading the documents it synced, and sends nothing on account
 of the flag.
+
+`watchRemoveV1` advertises support for `session.watch.remove` (section
+4.3.9). It defaults to `false` when absent. A client must not send the request
+unless the server advertises the capability; a client of an older server
+removes a watch by replacing the session's watch set.
 
 `entityIdListing` advertises support for `entity-id.list`. It defaults to
 `false` when absent. A client must not send the request unless the server
@@ -360,6 +385,11 @@ interface SessionOpenRequest {
     sessionId?: SessionId;
     seenSeq?: number;
     sessionToken?: string;
+    // A random key the client makes for one session and sends on every open
+    // of it, and the number of the open among that session's opens, from 1
+    // (see the rules). Both inside the signed descriptor.
+    resumeKey?: string;
+    resumeAttempt?: number;
     // The read ceiling every `db.query` served as this session reads
     // under (see the rules). Inside the signed descriptor: a bound on
     // what the session is served, declared by the session itself.
@@ -412,10 +442,14 @@ interface SessionOpenInvocation {
   aud: DID;
   args: {
     protocol: "memory";
+    // The request's `session` descriptor, field for field: the server refuses
+    // an open whose descriptor differs from the signed one.
     session: {
       sessionId?: SessionId;
       seenSeq?: number;
       sessionToken?: string;
+      resumeKey?: string;
+      resumeAttempt?: number;
     };
   };
   challenge: string;
@@ -475,6 +509,26 @@ Rules:
   carry the same kind. Every open of a space with history is told the kind its
   genesis declares, in `spaceKind`, whether the session declared one or not
 - the server rotates `sessionToken` on every successful `session.open`
+- a client sends the same `resumeKey` on every open of one session, a random
+  value it makes for that session alone, with a `resumeAttempt` that counts
+  the session's opens from 1. The server keeps the key, the attempt and the
+  presented `sessionToken` of a session's latest open, and resumes the session
+  from that presented token, as well as from the latest one, when the resume
+  carries the same key and a greater attempt: the connection can drop after
+  the server handles a resume and before its response arrives, and the client
+  then holds only the token it presented. The attempt orders resumes: one the
+  client gave up on carries the same key and token as the one that replaced
+  it, and is refused when it reaches the server after that one has restored
+  the session. Only this fallback needs the key; the latest token resumes the
+  session without one
+- an open whose connection closes while the server admits it opens nothing
+- a resume whose connection closes during catch-up fails; the connection
+  detaches its session as it closes, so the session's grace period runs while
+  catch-up is pending
+- an open that fails after registering session ownership releases its
+  connection's session handle and detaches the session; catch-up computed for
+  that open is rolled back for redelivery, unless a newer open has already
+  replaced it
 - at most one connection may own a given `(space, sessionId)` at a time
 - a successful resume transfers ownership to the new connection, invalidates the
   old owner for that session, and MAY emit `session/revoked` to the previous
@@ -482,9 +536,12 @@ Rules:
 - a successful `session.open` returns a new challenge in `sessionOpen` for
   signed-open clients; a connection-auth client does not replace its audience
   or held challenge from that response
-- a stale `sessionToken` MUST fail with `SessionRevokedError`
-- when a resumed session already has watches installed, `sync` carries the
-  catch-up delta the client missed while offline
+- any other stale `sessionToken` MUST fail with `SessionRevokedError`
+- when a resumed session already has watches installed, a non-routed connection
+  may receive `session/effect` while catch-up is pending, before the
+  `session.open` response; the response's `sync` carries only the remaining
+  catch-up delta. Reconnecting clients route early frames to their existing
+  session and apply them as they arrive
 - a resuming client that advertises `sessionHoldings` (and whose server does)
   sends `holdings`: the documents its replica holds, each at the seq it holds
   it at. The server replaces its memory of what the session was delivered with
@@ -547,7 +604,10 @@ interface HelloMessage {
     stableExpressionResultIds?: boolean;
     messageCompressionV1?: boolean;
     syncSchemaTableV2?: boolean;
+    syncLabelTableV1?: boolean;
+    commitLabelTableV1?: boolean;
     syncCrossingsV1?: boolean;
+    watchRemoveV1?: boolean;
     entityIdListing?: boolean;
     entityIdPagination?: boolean;
     entityIdLookup?: boolean;
@@ -572,6 +632,7 @@ interface RequestMessage {
     | "entity-id.exists"
     | "session.watch.set"
     | "session.watch.add"
+    | "session.watch.remove"
     | "session.ack"
     | "session.close"
     | "event.attention.resolve"
@@ -897,6 +958,97 @@ whose resulting stored document uses that prefix as an opaque schema string in
 a recognized schema position; ordinary strings in other document positions are
 unaffected.
 
+#### Negotiated label-table encoding
+
+The label tables were motivated by a rehearsal sync they reduced from 3,930,754
+to 669,274 bytes and from 211,817 to 58,476 values. Since labs #8767, #8788 and
+#8790 changed how link labels are carried, documents written carry few labels:
+measured again on 2026-10-23, the tables changed under 1% of the Memory messages
+in a Topics run and in a lunch-poll run, and saved at most 0.1% of those
+messages' gzipped bytes. Documents written by the labs builds of 2026-10-01 to
+10-15, before those changes, keep their labels until rewritten; in the heaviest
+such space on the rehearsal copy, the tables reduce syncs of its label-bearing
+documents from 17.6 MB to 3.8 MB, and the largest of those syncs from 190,663 to
+56,201 values, under the routed default of 150,000 values per frame. The tables
+change neither stored documents nor CFC decisions: they are a wire
+representation that every receiver expands before reading.
+
+When both peers advertise `syncLabelTableV1`, a `SessionSync` in
+`response.ok.sync` or `session/effect.effect` may carry dense `labelTable` and
+`labelPathTable` arrays. Only `upserts[].doc.cfc.labelMap.entries[]` uses these
+tables: a `.label` object or `.path` array may be replaced with its nonnegative
+integer index into the corresponding table. Each table is selected independently
+when it saves bytes. Canonical content hashes deduplicate equal labels and paths
+internally; the wire carries only indices and one copy of each selected value.
+
+Inline, nonindexed CFC metadata is preserved unchanged for semantic readers,
+including malformed metadata and `cfc: null` (no stored policy). The codec
+validates dictionary contents and indexed references, not inline CFC semantics.
+A number in a whole entry's `label` or `path` field is a dictionary reference
+exactly when the sync carries that field's table, even when the sibling field is
+missing, an envelope version is unsupported, or the entry sits at a numeric key
+in a malformed `entries` record. Invalid indices are rejected. Without the table
+the number is stored data and passes through inline on negotiated and
+unnegotiated connections alike; the server emits no table beside such a number,
+and commit admission refuses to store one (see the commit section below).
+Numeric values inside labels, path components, or application data are not
+whole-field references.
+
+For example, these two entries refer to the same label and path:
+
+```json
+{
+  "type": "sync",
+  "fromSeq": 10,
+  "toSeq": 11,
+  "upserts": [{
+    "branch": "",
+    "id": "of:donuts",
+    "seq": 11,
+    "doc": {
+      "value": { "flavor": "chocolate" },
+      "cfc": {
+        "version": 1,
+        "schemaHash": "fid1:...",
+        "labelMap": {
+          "version": 1,
+          "entries": [
+            { "path": 0, "label": 0 },
+            { "path": 0, "origin": "derived", "label": 0 }
+          ]
+        }
+      }
+    }
+  }],
+  "removes": [],
+  "labelTable": [{ "confidentiality": [], "integrity": [] }],
+  "labelPathTable": [["flavor"]]
+}
+```
+
+Both tables belong to this sync alone. The server compacts labels and paths
+before schemas. The client expands schemas first, then labels and paths, before
+delivering the sync to session consumers. It removes both metadata tables and
+restores exact labels, paths, and ordering. Invalid table contents and invalid or
+out-of-range indices reject the frame. One shared 16 MiB expansion budget counts
+the cumulative canonical encoded label and path bytes referenced by the sync,
+including the codec tag at each occurrence. Schemas nested inside label links
+are complete before this accounting. This encoding changes neither stored
+documents nor CFC policy decisions.
+
+A client that cannot decode or expand a server frame discards that connection:
+skipping an effect would let a later sequence acknowledge state the client never
+received. The failed frame reaches no session consumer and receives no
+acknowledgment. A reconnectable transport resets its connection, fences queued
+frames from it, and restores sessions from their last applied state. A transport
+that cannot reset terminates its sessions with the receive error. Recovery
+declares the replica provider's holdings, or the local watch view's holdings when
+there is no provider. The server's delivery cache is not a valid baseline for a
+frame the client could not apply. A server without `sessionHoldings`, or a view
+of explicit scope instances without a provider, terminates the affected session
+instead. An invalid handshake fails the connection attempt before sessions are
+admitted.
+
 ### 4.2.4 Batching
 
 The current JSON wire format does not define a separate batch envelope. Clients
@@ -948,11 +1100,95 @@ Path conventions on the wire:
 - `ClientCommit` reads and writes use full document paths.
 - `readValue` / `writeValue` style helpers are client-side conveniences that
   prepend `"value"` before constructing those commit paths.
-- Inline `data:` document reads are local-only. Clients may read them during
+- Immutable `snapshot:` and Fabric `data:` document reads are local-only. Clients may read them during
   traversal, but must not serialize them into `ClientCommit.reads` because they
   have no server sequence and do not participate in conflict validation.
 - query selectors remain value-relative and are re-rooted by the shared
   traversal layer.
+
+#### Negotiated commit metadata encoding
+
+When both peers advertise `commitLabelTableV1`, a `transact` may carry dense
+`commit.labelTable` and `commit.labelPathTable` arrays. Each table is local to
+that commit and selected independently when interning saves bytes. Nonnegative
+integer references replace only labels and paths in actual CFC metadata carried
+by set operations or supported patch payloads at their document-relative metadata
+positions. Patch payloads include newly supplied and compared values; patch
+pointers, order and indices retain their meaning.
+Application values, reads, preconditions and unrelated operation payloads retain
+their original representation. Metadata-looking application objects do not
+become reference positions merely because they have `label` or `path` keys.
+
+As with sync tables, nonindexed inline metadata, including malformed CFC
+subtrees and `cfc: null`, reaches semantic CFC readers unchanged. Such a subtree
+does not prevent compression of eligible metadata elsewhere in the commit.
+Dictionary contents, including unused slots, and indexed references remain
+codec-validated. A numeric whole entry `label` or `path` is a reference exactly
+when the commit carries the corresponding dictionary, even under an unsupported
+version, with a missing sibling field, or at a numeric key in a malformed
+`entries` record; it must then resolve through that dictionary. This rule also
+applies at document-rooted patch positions. Without the dictionary the number is
+not transport metadata: the request parses, and commit admission refuses a
+resulting document whose whole entry `label` or `path` is a number, including
+one a `move` or `increment` patch produces from application data, because no
+dictionary is stored with a document and a stored number could never be
+resolved. The one exception keeps a document stored with such a number before
+this rule existed writable: admission accepts a resulting document whose
+`cfc.labelMap` equals the one the write replaces, so only a write that changes
+the label map must leave no number in it.
+
+The client compacts a temporary outgoing message before Fabric encoding and
+transport byte/node validation. It retains the original inline commit for
+pending requests, conflict handling and reconnect replay. Each send uses the
+current connection's negotiation; a replacement connection without the
+capability receives the inline representation even for a retained commit.
+
+The server performs bounded wire decoding, then expands negotiated metadata
+before validating the request's commit shape or running CFC and storage checks.
+Unnegotiated tables, malformed table contents, out-of-range references, and
+expansion beyond the codec's shared 16 MiB referenced-label/path byte budget
+reject the request before commit application.
+That budget counts cumulative canonical encoded label and path bytes at every
+reference, including the codec tag. Expansion removes the tables and restores
+exact metadata; internal and stored commits use the inline representation.
+
+The same capability permits tables at `response.ok.labelTable` and
+`response.ok.labelPathTable` in transaction acknowledgments. These dictionaries
+replace only metadata labels and paths in set revisions' `.document.cfc` and
+patch revisions' `.patches` operands at document-rooted metadata positions. Delete
+revisions carry no metadata payload. Revision identifiers, sequence numbers,
+operation indices, patch order and pointers, and application values retain their
+meaning. Each acknowledgment has its own 16 MiB cumulative
+referenced-label/path expansion budget, independent of the request's budget.
+Dictionary labels are self-contained: the sender never interns a label that
+carries a reserved schema reference at a schema position, leaving that label
+inline where schema expansion handles it, and a receiver rejects a dictionary
+that carries one, even in an unused slot. Sync schema tables do not supply
+schemas to acknowledgment label tables. Nonindexed inline CFC metadata is preserved for semantic readers,
+including malformed subtrees and `cfc: null`; the numeric-reference rules above
+apply independently of sibling fields and envelope versions.
+
+The server compacts a temporary response in the connection's send path before
+wire encoding and byte/node validation. Normal accepts and exact replay results,
+including commits resent after session resumption, use the current connection's
+capability. Stored results and original commits remain inline; a replacement
+connection without the capability receives inline acknowledgments.
+
+The client expands acknowledgment metadata before resolving the request or
+delivering revisions to commit consumers and replica caches. It rejects
+unnegotiated tables or references and malformed or over-budget encodings through
+the same connection-discard and recovery path as invalid sync metadata. Send
+preparation runs sync and acknowledgment label transforms before schema
+compression; receive preparation expands schemas before either label transform.
+Sync and acknowledgment dictionaries have separate contexts, and
+`syncLabelTableV1` does not authorize acknowledgment tables.
+
+Routed transport validates the compact frame's structural bounds and routing
+fields and forwards its original payload to the Memory endpoint. It neither
+expands commit metadata nor re-encodes an expanded body through the transport's
+node limit. The generic signed effective-capability descriptor includes this
+boolean under the same client/public-offer intersection as other encodings;
+original client flags retain their existing authentication bindings.
 
 ### 4.3.2 `query` — Deferred In This Pass
 
@@ -1148,11 +1384,11 @@ Semantics:
   entity-plus-selector pair
 - the server returns the inline `sync` needed for the mutation; pure additive
   growth does not emit `removes`
-- in the current pass, `removes` are only guaranteed for explicit watch-set
-  replacement; steady-state topology shrink does not yet drive automatic
-  unwatch behavior
+- a later write that leaves a document reached by no watch, because the link
+  that reached it changed, is pushed as a `remove` by the refresh that re-walks
+  the changed document (section 4.6.3)
 - watch mutations are applied in order per session; clients must serialize
-  `session.watch.set` and `session.watch.add`
+  `session.watch.set`, `session.watch.add` and `session.watch.remove`
 
 ### 4.3.7 `session.close` — End One Session
 
@@ -1194,6 +1430,40 @@ Semantics:
 Branch create / delete / merge lifecycle commands are not currently exposed on
 the v2 wire. The engine already carries branch state internally, but public wire
 commands for that surface remain deferred in this pass.
+
+### 4.3.9 `session.watch.remove` — Shrink the Session Watch Set
+
+`session.watch.remove` removes watch specs from the existing session watch set
+by `id`. A server advertises it with the `watchRemoveV1` capability flag; a
+client talking to a server that does not removes a watch by sending the
+remaining set with `session.watch.set`.
+
+```typescript
+// Shown at module scope.
+interface WatchRemoveRequest {
+  type: "session.watch.remove";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  watchIds: string[];
+}
+
+interface WatchRemoveResult {
+  serverSeq: number;
+  sync: SessionSync;
+}
+```
+
+Semantics:
+
+- each listed watch is removed from the session watch set; an id the set does
+  not hold is ignored
+- the server releases what the removed watches alone reached (section 4.6.3):
+  the union of watched entities is what the watches that remain reach
+- the response carries the difference between what the session has been
+  delivered and the new union: an entity the union no longer covers is sent
+  in `removes`, and an entity it still covers is not resent unless it changed
+- the cursors of operation watches that remain are kept
 
 ## 4.4 Selectors
 
@@ -1491,18 +1761,22 @@ Because the watch set is a union, overlapping watches dedupe naturally:
 
 ### 4.6.3 Watch Changes
 
-When the client replaces the watch set:
+When the client replaces the watch set, or removes watches from it:
 
 - newly relevant entities are sent as `upserts`
 - entities no longer relevant are sent as `removes`
 - entities still relevant but unchanged are not resent when the replacement
-  declares `holdings` (section 4.3.5); a replacement that declares none is
-  delivered in full, since the server does not assume a silent client holds
-  anything
+  declares `holdings` (section 4.3.5), or after a removal (section 4.3.9); a
+  replacement that declares none is delivered in full, since the server does
+  not assume a silent client holds anything
 
-In the current pass, that `removes` guarantee only applies to explicit
-watch-set replacement. Steady-state topology shrink during background refresh
-does not yet drive automatic unwatch behavior.
+A background refresh retracts in the same way: the server attributes each
+tracked document to the watch root or the linking document whose walk reached
+it, and a re-walk after a write releases the attributions it does not make
+again. A document left with no attribution, and one kept only by documents
+that are themselves no longer reached, is sent as a `remove` in the pushed
+frame. A document reached through a different link, or by another watch, is
+not resent.
 
 ### 4.6.4 Cross-Session Delivery
 
@@ -1625,11 +1899,16 @@ the session cache rather than distinct server-routed effect streams.
 
 On disconnect:
 
-1. pending promises reject with `ConnectionError`
+1. requests awaiting a response get none; retained commits and watch mutations
+   stay pending, and every other request rejects with `ConnectionError`
 2. the logical session may still be resumable
 3. the client reconnects, replays retained commits, restores the watch set, and
    resumes integrating sync from `seenSeq` — declaring what its replica holds
    (section 4.1.2) so the server re-delivers exactly what it lacks
+4. the client sends again, in their original order, the pending watch
+   mutations from the first one whose answer it lacks onwards (every pending
+   one, when the session was re-established), and every watch mutation made
+   after them follows them
 
 ## 4.9 Blob Transfer
 
@@ -2044,3 +2323,14 @@ The opt-in router path uses the dedicated [Mode A contract](routed-mode-a.md):
 router-audience client signatures, attested issuance and exact-byte receipt,
 single-use socket-bound tickets, durable replay custody and independent toolshed
 ACL/ownership checks. Direct Memory hosts keep the protocol described above.
+
+Private router-to-toolshed requests additionally use
+[header admission](routed-mode-a.md#private-request-body-admission): a
+consecutive per-socket request ordinal, and 8-byte binary `mri\x02` request
+credit in declared body bytes. The endpoint grants its whole input budget once
+the socket is ready and returns each request's bytes when its turn ends; the
+router sends a request only within the credit it holds. Public upload and
+private response headers carry no request ordinal.
+The private `routerRequestCredit` capability is required on authenticated
+peers and excluded from public and effective Memory flags. It changes neither
+logical Memory messages nor public `mrt\x01` framing and `mrc\x01` upload credits.

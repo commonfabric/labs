@@ -5,6 +5,7 @@ import {
   computed,
   Default,
   equals,
+  type FabricBytes,
   handler,
   type JSONSchema,
   lift,
@@ -20,6 +21,7 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import { profileLook } from "../system/profile-look.ts";
 import type {} from "commonfabric/schema";
 
 import { isMemberName } from "../collection-naming/allocator.ts";
@@ -52,6 +54,10 @@ export interface TopicAuthor {
    * whose author kind is unknown. */
   kind: string;
   name: string;
+  /** The bytes of the author's profile picture, when they have one. */
+  picture?: FabricBytes;
+  /** Avatar text, snapshotted instead when the author's profile has no
+   * picture. */
   avatar?: string;
 }
 
@@ -998,12 +1004,12 @@ export const topicAuthorFromAgent = (
 /** Snapshot the canonical Profile fields used by browser mutations. */
 export const topicAuthorFromPerson = (
   profileName: string,
-  profileAvatar = "",
+  picture?: FabricBytes,
+  avatar?: string,
 ): TopicAuthor | undefined => {
   const name = (profileName ?? "").trim();
   if (!name) return undefined;
-  const avatar = (profileAvatar ?? "").trim();
-  return avatar ? { kind: "person", name, avatar } : { kind: "person", name };
+  return { kind: "person", name, ...profileLook(picture, avatar) };
 };
 
 /** Reject a mutation loudly. To a headless caller a silent early-return is
@@ -1369,8 +1375,11 @@ type SubmitProfileCommentState = {
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
 
-  /** Resolved canonical Profile avatar for attribution. */
-  profileAvatar: string;
+  /** Resolved canonical Profile picture for attribution. */
+  profilePicture?: FabricBytes;
+
+  /** Resolved canonical Profile avatar text, used when there is no picture. */
+  profileAvatar?: string;
 };
 
 /** Browser comment submit with Profile fields already resolved by the pattern.
@@ -1385,9 +1394,23 @@ export const submitProfileComment = handler<void, SubmitProfileCommentState>(
       upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
     },
   },
-  (_, { upgrade, comments, commentDraft, profileName, profileAvatar }) => {
+  (
+    _,
+    {
+      upgrade,
+      comments,
+      commentDraft,
+      profileName,
+      profilePicture,
+      profileAvatar,
+    },
+  ) => {
     const text = commentDraft.get();
-    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    const author = topicAuthorFromPerson(
+      profileName,
+      profilePicture,
+      profileAvatar,
+    );
     if (!text.trim() || !author) return;
     upgradeTopicState(upgrade.get(), "submitProfileComment");
     appendComment(comments, text, author);
@@ -1411,9 +1434,6 @@ type RetractProfileCommentState = {
 
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
-
-  /** Resolved canonical Profile avatar for attribution. */
-  profileAvatar: string;
 };
 
 /** Browser comment retraction under the current Profile snapshot.
@@ -1439,8 +1459,8 @@ export const retractProfileComment = handler<void, RetractProfileCommentState>(
       upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
     },
   },
-  (_, { upgrade, comments, comment, profileName, profileAvatar }) => {
-    const author = topicAuthorFromPerson(profileName, profileAvatar);
+  (_, { upgrade, comments, comment, profileName }) => {
+    const author = topicAuthorFromPerson(profileName);
     if (!author) return;
     if (!comment || comment.get() === undefined) return;
     if (!isElementOf(comments, comment)) return;
@@ -1498,9 +1518,6 @@ type SaveProfileTitleState = {
 
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
-
-  /** Resolved canonical Profile avatar for attribution. */
-  profileAvatar: string;
 };
 
 /** Browser title save under the current Profile snapshot. The header binds a
@@ -1527,11 +1544,10 @@ export const saveProfileTitle = handler<void, SaveProfileTitleState>(
       titleUpdatedBy,
       titleUpdatedAt,
       profileName,
-      profileAvatar,
     },
   ) => {
     const text = titleDraft.get();
-    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    const author = topicAuthorFromPerson(profileName);
     if (!text.trim() || !author) return;
     upgradeTopicState(upgrade.get(), "saveProfileTitle");
     persistTitle(title, titleUpdatedBy, titleUpdatedAt, text, author);
@@ -1572,9 +1588,6 @@ type SaveProfileBodyState = {
 
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
-
-  /** Resolved canonical Profile avatar for attribution. */
-  profileAvatar: string;
 };
 
 /** Browser body save under the current Profile snapshot. */
@@ -1599,10 +1612,9 @@ export const saveProfileBody = handler<void, SaveProfileBodyState>(
       bodyUpdatedBy,
       bodyUpdatedAt,
       profileName,
-      profileAvatar,
     },
   ) => {
-    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    const author = topicAuthorFromPerson(profileName);
     if (!author) return;
     upgradeTopicState(upgrade.get(), "saveProfileBody");
     // One whole-value set per explicit save keeps the conflict window small; a
@@ -1673,9 +1685,6 @@ type RetractProfileLinkState = {
 
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
-
-  /** Resolved canonical Profile avatar for attribution. */
-  profileAvatar: string;
 };
 
 /** Browser link retraction under the current Profile snapshot.
@@ -1693,8 +1702,8 @@ export const retractProfileLink = handler<void, RetractProfileLinkState>(
       upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
     },
   },
-  (_, { upgrade, links, link, profileName, profileAvatar }) => {
-    const author = topicAuthorFromPerson(profileName, profileAvatar);
+  (_, { upgrade, links, link, profileName }) => {
+    const author = topicAuthorFromPerson(profileName);
     if (!author) return;
     if (!link || link.get() === undefined) return;
     if (!isElementOf(links, link)) return;
@@ -1724,9 +1733,6 @@ type SubmitProfileLinkState = {
 
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
-
-  /** Resolved canonical Profile avatar for attribution. */
-  profileAvatar: string;
 };
 
 /** Browser link submit under the current Profile snapshot. */
@@ -1748,11 +1754,10 @@ export const submitProfileLink = handler<void, SubmitProfileLinkState>(
       linkLabelDraft,
       linkKindDraft,
       profileName,
-      profileAvatar,
     },
   ) => {
     const url = linkUrlDraft.get();
-    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    const author = topicAuthorFromPerson(profileName);
     if (!url.trim() || !isSafeLinkUrl(url) || !author) return;
     upgradeTopicState(upgrade.get(), "submitProfileLink");
     appendLink(links, url, linkKindDraft.get(), linkLabelDraft.get(), author);
@@ -2294,8 +2299,10 @@ export default pattern<TopicInput, TopicOutput>(
     // Agent-facing streams below deliberately remain wish-free and accept the
     // agent's content-level signature in the same event as the mutation.
     // One wish, not three: `#profile` resolves the profile itself, and `name`
-    // and `avatar` are fields on it.
-    const profileWish = wish<{ name: string; avatar: string }>({
+    // and `picture` and `avatar` are fields on it.
+    const profileWish = wish<
+      { name: string; picture?: FabricBytes; avatar?: string }
+    >({
       query: "#profile",
     });
     // A wish resolves after setup, so each of these stays a derivation. Reading
@@ -2303,7 +2310,8 @@ export default pattern<TopicInput, TopicOutput>(
     // opened with: the composer's controls never enable, and a comment or edit
     // made through them carries blank attribution.
     const profileName = profileWish.result?.name ?? "";
-    const profileAvatar = profileWish.result?.avatar ?? "";
+    const profilePicture = profileWish.result?.picture;
+    const profileAvatar = profileWish.result?.avatar;
     const hasProfile = profileName.trim().length > 0;
     const createdByView = createdByOf({ createdBy });
 
@@ -2361,6 +2369,7 @@ export default pattern<TopicInput, TopicOutput>(
       comments,
       commentDraft,
       profileName,
+      profilePicture,
       profileAvatar,
     });
 
@@ -2377,7 +2386,6 @@ export default pattern<TopicInput, TopicOutput>(
       titleUpdatedBy,
       titleUpdatedAt,
       profileName,
-      profileAvatar,
     });
 
     // Nothing to undo: the draft is session-local, so leaving it behind IS
@@ -2405,7 +2413,6 @@ export default pattern<TopicInput, TopicOutput>(
       bodyUpdatedBy,
       bodyUpdatedAt,
       profileName,
-      profileAvatar,
     });
 
     // Nothing to undo: the prose and its mention map are both session drafts,
@@ -2421,7 +2428,6 @@ export default pattern<TopicInput, TopicOutput>(
       linkLabelDraft,
       linkKindDraft,
       profileName,
-      profileAvatar,
     });
 
     // --- Derived values ---
@@ -2675,7 +2681,6 @@ export default pattern<TopicInput, TopicOutput>(
                               links,
                               link,
                               profileName,
-                              profileAvatar,
                             })}
                           >
                             Retract
@@ -2737,6 +2742,7 @@ export default pattern<TopicInput, TopicOutput>(
                         >
                           <cf-hstack gap="2" align="center">
                             <cf-avatar
+                              bytes={comment.author?.picture}
                               src={comment.author?.avatar || ""}
                               name={topicAuthorLabel(comment.author)}
                               size="xs"
@@ -2774,7 +2780,6 @@ export default pattern<TopicInput, TopicOutput>(
                                 comments,
                                 comment,
                                 profileName,
-                                profileAvatar,
                               })}
                             >
                               Retract

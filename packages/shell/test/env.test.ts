@@ -244,88 +244,93 @@ Deno.test({
   },
 });
 
-Deno.test({
-  name:
-    "sharedMemoryConnection: the deployment's value governs where no define pins it",
-  permissions: { read: true },
-  async fn() {
-    for (const sharedMemoryConnection of [true, false]) {
-      await withShellPage(
-        JSON.stringify({
-          memoryUrl: null,
-          experimental: { sharedMemoryConnection },
-        }),
-        [],
-        async (mod) => {
-          // The define is unset in a release build; the shell takes the
-          // deployment's word, whichever way it goes.
-          expect(mod.EXPERIMENTAL.sharedMemoryConnection).toBeUndefined();
-          const deployment = await mod.shellDeployment.get();
-          expect(
-            mod.experimentalForDeployment(deployment.experimental)
-              .sharedMemoryConnection,
-          ).toBe(sharedMemoryConnection);
-        },
-      );
-    }
-  },
-});
+for (
+  const [flag, defineName] of [
+    ["sharedMemoryConnection", "$EXPERIMENTAL_SHARED_MEMORY_CONNECTION"],
+    ["localSessionDocuments", "$EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS"],
+  ] as const
+) {
+  Deno.test({
+    name: `${flag}: the deployment's value governs where no define pins it`,
+    permissions: { read: true },
+    async fn() {
+      for (const published of [true, false]) {
+        await withShellPage(
+          JSON.stringify({
+            memoryUrl: null,
+            experimental: { [flag]: published },
+          }),
+          [],
+          async (mod) => {
+            // The define is unset in a release build; the shell takes the
+            // deployment's word, whichever way it goes.
+            expect(mod.EXPERIMENTAL[flag]).toBeUndefined();
+            const deployment = await mod.shellDeployment.get();
+            expect(
+              mod.experimentalForDeployment(deployment.experimental)[flag],
+            ).toBe(published);
+          },
+        );
+      }
+    },
+  });
 
-Deno.test({
-  name:
-    "sharedMemoryConnection: the shell's default governs where the deployment says nothing",
-  permissions: { read: true },
-  async fn() {
-    // A page from a toolshed without a Runtime, one whose Runtime left the
-    // flag unresolved, and a page that reads a meta document saying nothing.
-    for (
-      const [tag, responses] of [
-        [JSON.stringify({ memoryUrl: null, experimental: null }), []],
-        [JSON.stringify({ memoryUrl: null, experimental: {} }), []],
-        [undefined, [() => Response.json({ memoryUrl: null })]],
-      ] as const
-    ) {
-      await withShellPage(tag, [...responses], async (mod) => {
-        const deployment = await mod.shellDeployment.get();
-        expect(deployment.experimental).toEqual({});
-        const resolved = mod.experimentalForDeployment(deployment.experimental);
-        expect(resolved.sharedMemoryConnection).toBeUndefined();
-        // Nothing else moved.
-        expect(resolved).toEqual(mod.EXPERIMENTAL);
-      });
-    }
-  },
-});
-
-Deno.test({
-  name:
-    "sharedMemoryConnection: an explicit define overrides the deployment either way",
-  permissions: { read: true },
-  async fn() {
-    for (
-      const [define, published] of [["false", true], ["true", false]] as const
-    ) {
-      await withShellPage(
-        JSON.stringify({
-          memoryUrl: null,
-          experimental: { sharedMemoryConnection: published },
-        }),
-        [],
-        async (mod) => {
+  Deno.test({
+    name:
+      `${flag}: the shell's default governs where the deployment says nothing`,
+    permissions: { read: true },
+    async fn() {
+      // A page from a toolshed without a Runtime, one whose Runtime left the
+      // flag unresolved, and a page that reads a meta document saying nothing.
+      for (
+        const [tag, responses] of [
+          [JSON.stringify({ memoryUrl: null, experimental: null }), []],
+          [JSON.stringify({ memoryUrl: null, experimental: {} }), []],
+          [undefined, [() => Response.json({ memoryUrl: null })]],
+        ] as const
+      ) {
+        await withShellPage(tag, [...responses], async (mod) => {
           const deployment = await mod.shellDeployment.get();
-          expect(deployment.experimental).toEqual({
-            sharedMemoryConnection: published,
-          });
-          expect(
-            mod.experimentalForDeployment(deployment.experimental)
-              .sharedMemoryConnection,
-          ).toBe(define === "true");
-        },
-        { $EXPERIMENTAL_SHARED_MEMORY_CONNECTION: define },
-      );
-    }
-  },
-});
+          expect(deployment.experimental).toEqual({});
+          const resolved = mod.experimentalForDeployment(
+            deployment.experimental,
+          );
+          expect(resolved[flag]).toBeUndefined();
+          // Nothing else moved.
+          expect(resolved).toEqual(mod.EXPERIMENTAL);
+        });
+      }
+    },
+  });
+
+  Deno.test({
+    name: `${flag}: an explicit define overrides the deployment either way`,
+    permissions: { read: true },
+    async fn() {
+      for (
+        const [define, published] of [["false", true], ["true", false]] as const
+      ) {
+        await withShellPage(
+          JSON.stringify({
+            memoryUrl: null,
+            experimental: { [flag]: published },
+          }),
+          [],
+          async (mod) => {
+            const deployment = await mod.shellDeployment.get();
+            expect(deployment.experimental).toEqual({
+              [flag]: published,
+            });
+            expect(
+              mod.experimentalForDeployment(deployment.experimental)[flag],
+            ).toBe(define === "true");
+          },
+          { [defineName]: define },
+        );
+      }
+    },
+  });
+}
 
 Deno.test({
   name:

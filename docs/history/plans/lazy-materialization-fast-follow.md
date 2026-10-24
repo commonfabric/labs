@@ -19,7 +19,7 @@ measurements transferred by its
 [implementation record](pattern-computation-cost-implementation.md). It does not
 authorize a live lunch-poll update.
 
-The [lazy materialization design](../../plans/lazy-cell-materialization.md)
+The [lazy materialization design](lazy-cell-materialization.md)
 defines the schema-observing view and snapshot contracts. Lift arguments use
 that view under the default-on `lazyMaterialization` flag. The handler path in
 [`runner.ts`](../../../packages/runner/src/runner.ts) still reads its argument

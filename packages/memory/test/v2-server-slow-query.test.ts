@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { Database } from "@db/sqlite";
 import { applyCommit, createBranch, open as openEngine } from "../v2/engine.ts";
 import { getSlowQueries, Server } from "../v2/server.ts";
 import {
@@ -9,6 +10,7 @@ import {
   type ResponseMessage,
   type ServerMessage,
   type SessionOpenAuthMetadata,
+  type SqliteQueryRequest,
   toDocumentPath,
   type TransactRequest,
 } from "../v2.ts";
@@ -460,5 +462,116 @@ describe("v2 server slow queries", () => {
     } finally {
       connection.close();
     }
+  });
+
+  describe("SQLite reads", () => {
+    // A read has no callback inside its measured window, so the clock steps
+    // forward on every reading instead: any two readings are at least 150 ms
+    // apart, which puts every read past the 100 ms default threshold.
+    const stepClock = () => {
+      performance.now = () => realNow() + (nowOffsetMs += 150);
+    };
+
+    const queryMessage = (
+      space: string,
+      sessionId: string,
+      id: string,
+      sql: string,
+    ): SqliteQueryRequest => ({
+      type: "sqlite.query",
+      requestId: crypto.randomUUID(),
+      space,
+      sessionId,
+      db: { id },
+      sql,
+    });
+
+    it("records a slow read of a cell-derived database with its handle and rows", async () => {
+      const space = "did:key:z6Mk-slow-query-sqlite-cell";
+      const server = createServer("memory://slow-query-sqlite-cell");
+      const messages: ServerMessage[] = [];
+      const connection = server.connect((message) => messages.push(message));
+      try {
+        const sessionId = await openSession(connection, messages, space);
+        stepClock();
+        const response = await server.sqliteQuery(
+          queryMessage(space, sessionId, "of:cell-db", "SELECT 1 AS one"),
+        );
+        expect(response.error).toBeUndefined();
+
+        const entry = getSlowQueries().find((slow) =>
+          slow.space === space && slow.operation === "sqlite.query"
+        );
+        expect(entry).toBeDefined();
+        expect(entry!.elapsed).toBeGreaterThanOrEqual(150);
+        expect(entry!.db).toBe("of:cell-db");
+        expect(entry!.outcome).toBe("ok");
+        // A cell-derived database nothing has written has no file yet, and
+        // reads as no rows.
+        expect(entry!.rows).toBe(0);
+      } finally {
+        connection.close();
+        await server.close();
+      }
+    });
+
+    it("records a slow read of an injected source with its handle and rows", async () => {
+      const space = "did:key:z6Mk-slow-query-sqlite-injected";
+      const path = Deno.makeTempFileSync({ suffix: ".sqlite" });
+      const seed = new Database(path);
+      seed.exec("CREATE TABLE lookup (k TEXT)");
+      seed.exec("INSERT INTO lookup (k) VALUES ('a'), ('b')");
+      seed.close();
+      const server = createServer("memory://slow-query-sqlite-injected");
+      const messages: ServerMessage[] = [];
+      const connection = server.connect((message) => messages.push(message));
+      try {
+        const sessionId = await openSession(connection, messages, space);
+        await server.registerDiskSource(space, "of:injected", path);
+        stepClock();
+        const response = await server.sqliteQuery(
+          queryMessage(space, sessionId, "of:injected", "SELECT k FROM lookup"),
+        );
+        expect(response.error).toBeUndefined();
+
+        const entry = getSlowQueries().find((slow) =>
+          slow.space === space && slow.operation === "sqlite.query"
+        );
+        expect(entry).toBeDefined();
+        expect(entry!.db).toBe("of:injected");
+        expect(entry!.outcome).toBe("ok");
+        expect(entry!.rows).toBe(2);
+      } finally {
+        connection.close();
+        await server.close();
+        Deno.removeSync(path);
+      }
+    });
+
+    it("records a slow read that failed with the error's name and no rows", async () => {
+      const space = "did:key:z6Mk-slow-query-sqlite-failed";
+      const server = createServer("memory://slow-query-sqlite-failed");
+      const messages: ServerMessage[] = [];
+      const connection = server.connect((message) => messages.push(message));
+      try {
+        const sessionId = await openSession(connection, messages, space);
+        stepClock();
+        const response = await server.sqliteQuery(
+          queryMessage(space, sessionId, "of:cell-db", "DELETE FROM lookup"),
+        );
+        expect(response.error).toBeDefined();
+
+        const entry = getSlowQueries().find((slow) =>
+          slow.space === space && slow.operation === "sqlite.query"
+        );
+        expect(entry).toBeDefined();
+        expect(entry!.outcome).toBe(response.error!.name);
+        expect(entry!.outcome).not.toBe("ok");
+        expect(entry!.rows).toBeUndefined();
+      } finally {
+        connection.close();
+        await server.close();
+      }
+    });
   });
 });

@@ -105,9 +105,11 @@ cell means none confirmed — check the component source before assuming.
 | `cf-autocomplete` | Search input with filterable dropdown; single/multi select | `$value`, `$items` |
 | `cf-autolayout` | Responsive multi-panel layout | |
 | `cf-autostart` | Zero-UI element that emits a `start` event once on connect | |
-| `cf-avatar` | Avatar showing data-URI image, emoji glyph, or initials | |
+| `cf-avatar` | Avatar showing image bytes, a data-URI image, an emoji glyph, or initials | |
+| `cf-avatar-input` | Picks an image and fires it as profile-picture bytes, cropped square and scaled down | |
 | `cf-badge` | Status indicator / label with visual variants | |
 | `cf-bar-mark` | Bar mark rendered inside `cf-chart` | `$data` |
+| `cf-blob-link` | Link that downloads a blob from a space's blob store, given its reference `{ space, id }` (see [files](../capabilities/files.md)) | |
 | `cf-button` | Interactive button with color/variant/size options | |
 | `cf-calendar` | Month-grid mini calendar | `$value`, `$markedDates` |
 | `cf-canvas` | Fixed-size canvas surface emitting `cf-canvas-click` with x/y | |
@@ -145,7 +147,8 @@ cell means none confirmed — check the component source before assuming.
 | `cf-hover-reveal` | Content whose `actions` slot appears on hover or focus (see [cf-hover-reveal](#cf-hover-reveal)) | |
 | `cf-hscroll` | Horizontal scroll container | |
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
-| `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, or service capabilities | |
+| `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities | |
+| `cf-image` | Image from raw `bytes` and a `media-type`, or from a blob reference `{ space, id }` (see [files](../capabilities/files.md)) | |
 | `cf-image-input` | Image capture/upload with compression, EXIF, camera support | |
 | `cf-input` | Text input with validation and reactive binding | `$value` |
 | `cf-input-otp` | One-time-password input with individual digit fields | |
@@ -417,6 +420,11 @@ the policy placeholder in the same places. The exceptions:
   nothing otherwise. A nested render does not verify text integrity, so under
   an authorship boundary the piece's own text shows whether or not it carries
   the required endorsement.
+
+Showing a piece bound to `cf-render` (full, its exported tile or chip, or the
+default tile) opens it the way navigating to it does, so a view computed for
+the viewer renders, and the piece keeps running after the display goes, as an
+opened one does. The default chip only names the piece and opens nothing.
 
 `cf-picker` shows each of its `$items` through a `cf-render` of its own, so
 each item passes the same gates as a piece bound to `cf-render`, with the same
@@ -884,12 +892,14 @@ interface MapPolyline {
 | Event | Detail | Description |
 |-------|--------|-------------|
 | `cf-click` | `{ lat, lng }` | Map background clicked |
-| `cf-bounds-change` | `{ bounds, center, zoom }` | Viewport changed |
+| `cf-bounds-change` | `{ bounds, center, zoom, userInitiated }` | Viewport changed; `userInitiated` is true when a person moved the map, false when cf-map did (bound values, fitting, resize) |
 | `cf-marker-click` | `{ marker, index, lat, lng }` | Marker clicked |
 | `cf-marker-drag-end` | `{ marker, index, position, oldPosition }` | Marker drag completed |
 | `cf-circle-click` | `{ circle, index, lat, lng }` | Circle clicked |
 
 **Note:** Polylines do not emit click events. For clickable segments, use circles as waypoints.
+
+**Who moves the map:** while a person is dragging, zooming, or gliding after a drag, cf-map holds its own moves (a feature fit, a bound `center`/`zoom`/ `bounds` value) until their move ends. The person's view then wins: a refit set off by changed features and any queued bound value are dropped, while a fit asked for meanwhile (turning `fitToBounds` on) still runs. The first bound `bounds` value the map is given, the stored view, applies ahead of a bound `center`/`zoom`, whether it is there at mount or loads later; while `fitToBounds` is on, the fit to the features wins over it. Later `bounds` values always apply.
 
 ### Usage
 
@@ -1088,11 +1098,13 @@ Untrusted avatar primitive — safe for any code to render, for any person.
 
 ```tsx
 // Shown for illustration only.
-<cf-avatar name="Ada Lovelace" src={person.avatar} size="sm" /> // data: URI image
-<cf-avatar name="Grace Hopper" src="🦊" />                       // emoji glyph
-<cf-avatar name="Alan Turing" />                                 // initials "AT"
+<cf-avatar name="Ada Lovelace" bytes={person.picture} size="sm" /> // image bytes
+<cf-avatar name="Grace Hopper" src="🦊" />                          // emoji glyph
+<cf-avatar name="Alan Turing" />                                    // initials "AT"
 ```
 
+- `bytes`: the bytes of a raster image, such as a profile's `picture`.
+  Non-empty bytes take precedence over `src`.
 - `src`: a `data:` URI image, an emoji/glyph, or `""`. **Only `data:` URIs render
   as an image** — `http(s)`, `blob:`, and path URLs degrade to initials and are
   never fetched (no tracking/exfil beacon).
@@ -1104,11 +1116,25 @@ self-contained piece, or a participant whose remote profile space is offline. Wh
 you have the live profile cell (which you do for every participant who joined by
 contributing it), prefer `cf-profile-badge`.
 
+### cf-avatar-input
+
+A button that picks an image file and fires `cf-change` with
+`{ bytes: FabricBytes }`: the image's centered square, scaled to 128 pixels on
+each side. A profile's edit form binds it to the profile's `setPicture` stream,
+which reads `detail.bytes`. A file that is not an image fires `cf-error` with
+`{ message }` instead.
+
+```tsx
+// Shown for illustration only.
+<cf-avatar-input oncf-change={profile.setPicture} />
+```
+
 ### cf-profile-badge
 
 Trusted presentation of **a participant's profile** — the viewer's own, or anyone
 whose profile cell you stored on join. Bind a profile **cell** (not strings) via
-`$profile`; it renders name + avatar + a verified seal derived from the owner's
+`$profile`; it renders name + picture (or, without one, the profile's avatar
+text) + a verified seal derived from the owner's
 identity that user-space cannot mint.
 
 ```tsx

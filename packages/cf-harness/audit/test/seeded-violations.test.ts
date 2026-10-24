@@ -1055,6 +1055,9 @@ describe("seeded violations", () => {
         (stateOf(root) as Mutable<HarnessRunState>).cellLabels = labels;
       });
 
+    /** The path at which a result cell holds the link to its first row. */
+    const ROW_LINK = ["result", "0"];
+
     /** A cell record carrying one labeled row behind the link at `result/0`. */
     const labeledRowEntry = () => ({
       path: ["result", "0", "subject"],
@@ -1068,15 +1071,12 @@ describe("seeded violations", () => {
       integrity: [],
     });
 
-    /** The link a result cell holds at `result/0`, as the reader reports one. */
+    /** The entry a link's own label leaves at `result/0`, where it has one. */
     const linkEntry = () => ({
       path: ["result", "0"],
       origin: "link",
       confidentiality: [],
-      integrity: [{
-        type: "https://commonfabric.org/cfc/atom/LinkReference",
-        name: "LinkReference",
-      }],
+      integrity: [],
     });
 
     it("is not applicable to a run that configured no fabric session", () => {
@@ -1099,11 +1099,13 @@ describe("seeded violations", () => {
       // The shape a broken derivation leaves: the result cell still splits
       // each row into its own doc and links to it, and nothing came back on
       // the far side — with nothing in the snapshot saying the far side went
-      // unread.
+      // unread. A bare link carries no label of its own either, so the path
+      // the reader lists it at is all that says a link is there.
       expect(
         verdicts(withCellLabels([{
           entityId: "of:fid1:seededResult",
-          entries: [linkEntry()],
+          linkPaths: [ROW_LINK],
+          entries: [],
         }])),
       ).toEqual({ ...SESSION_CLEAN, [at("AUD-25")]: "warn" });
     });
@@ -1115,8 +1117,8 @@ describe("seeded violations", () => {
       expect(
         verdicts(withCellLabels([{
           entityId: "of:fid1:seededResult",
+          linkPaths: [ROW_LINK],
           entries: [
-            linkEntry(),
             {
               path: ["result", "0", "subject"],
               origin: "declared",
@@ -1145,8 +1147,8 @@ describe("seeded violations", () => {
       expect(
         verdicts(withCellLabels([{
           entityId: "of:fid1:seededResult",
+          linkPaths: [ROW_LINK],
           entries: [
-            linkEntry(),
             { ...labeledRowEntry(), path: ["elsewhere", "subject"] },
           ],
         }])),
@@ -1160,6 +1162,7 @@ describe("seeded violations", () => {
       expect(
         verdicts(withCellLabels([{
           entityId: "of:fid1:seededPlain",
+          linkPaths: [],
           entries: [{
             path: ["total"],
             origin: "declared",
@@ -1168,6 +1171,57 @@ describe("seeded violations", () => {
           }],
         }])),
       ).toEqual({ ...SESSION_CLEAN, [at("AUD-25")]: "not-applicable" });
+    });
+
+    it("counts the links a record lists and not the entries a link's own label left", () => {
+      // The list is the reader's own account of the links it found, so a
+      // record carrying one is read by it alone. An entry a link's label
+      // left names a path the list does not, and adds no link to the count.
+
+      expect(
+        verdicts(withCellLabels([{
+          entityId: "of:fid1:seededResult",
+          linkPaths: [],
+          entries: [linkEntry()],
+        }])),
+      ).toEqual({ ...SESSION_CLEAN, [at("AUD-25")]: "not-applicable" });
+    });
+
+    describe("for a record that lists no link paths", () => {
+      // A record holding no such list says a link is there only where the
+      // link's own label left an entry, so those entries are what is counted.
+
+      it("warns when a path holding a link's own label leads to no label", () => {
+        expect(
+          verdicts(withCellLabels([{
+            entityId: "of:fid1:seededResult",
+            entries: [linkEntry()],
+          }])),
+        ).toEqual({ ...SESSION_CLEAN, [at("AUD-25")]: "warn" });
+      });
+
+      it("passes when a label sits beneath a path holding a link's own label", () => {
+        expect(
+          verdicts(withCellLabels([{
+            entityId: "of:fid1:seededResult",
+            entries: [linkEntry(), labeledRowEntry()],
+          }])),
+        ).toEqual({ ...SESSION_CLEAN, [at("AUD-25")]: "pass" });
+      });
+
+      it("is not applicable when no entry is a link's own label", () => {
+        expect(
+          verdicts(withCellLabels([{
+            entityId: "of:fid1:seededPlain",
+            entries: [{
+              path: ["total"],
+              origin: "declared",
+              confidentiality: [],
+              integrity: [],
+            }],
+          }])),
+        ).toEqual({ ...SESSION_CLEAN, [at("AUD-25")]: "not-applicable" });
+      });
     });
 
     it("reads the snapshot off the run state when the artifact is gone", () => {
@@ -1179,7 +1233,8 @@ describe("seeded violations", () => {
         verdicts(
           withCellLabels([{
             entityId: "of:fid1:seededResult",
-            entries: [linkEntry(), labeledRowEntry()],
+            linkPaths: [ROW_LINK],
+            entries: [labeledRowEntry()],
           }], "state-only"),
         ),
       ).toEqual({ ...SESSION_CLEAN, [at("AUD-25")]: "pass" });
@@ -1211,7 +1266,8 @@ describe("seeded violations", () => {
       expect(
         verdicts(withCellLabels([{
           entityId: "of:fid1:seededResult",
-          entries: [linkEntry()],
+          linkPaths: [ROW_LINK],
+          entries: [],
           truncationReason: "node-budget-exhausted",
         }])),
       ).toEqual({ ...SESSION_CLEAN, [at("AUD-25")]: "inconclusive" });
@@ -1258,7 +1314,8 @@ describe("seeded violations", () => {
       expect(
         verdicts(withCellLabels([{
           entityId: "of:fid1:seededResult",
-          entries: [linkEntry()],
+          linkPaths: [ROW_LINK],
+          entries: [],
           unreadPaths: [{ path: ["result", "0"], reason: "beyond-link-hops" }],
         }])),
       ).toEqual({ ...SESSION_CLEAN, [at("AUD-25")]: "inconclusive" });

@@ -74,7 +74,11 @@ const nativeProvenance = (control: { surface: string; action: string }) => ({
   },
 });
 
-/** A pattern whose one writer is gated on `ChatSend` from `ChatSendSurface`. */
+/**
+ * A pattern whose one writer is gated on `ChatSend` from `ChatSendSurface`.
+ * Its handler turns down an empty body by throwing, with a reason, and an
+ * `"unwanted"` one by returning without writing.
+ */
 const chatPatternSource = `
   import {
     AuthoredByCurrentUser,
@@ -90,6 +94,8 @@ const chatPatternSource = `
 
   const save = handler<{ body: string }, { items: Writable<{ body: string }[]> }>(
     (event, { items }) => {
+      if (event.body === "") throw new Error("This send has no text.");
+      if (event.body === "unwanted") return;
       const record = new Writable<AuthoredMessage>();
       record.set({ body: event.body });
       items.push(record);
@@ -466,6 +472,28 @@ describe("send-reviewed", () => {
               "the mismatched send's handling",
             )).rejects.toThrow(refusalOf(serverExecution));
           }
+
+          expect(await room.stored()).toEqual([]);
+        });
+
+        it("rejects with the reason its handler throws, and commits nothing", async () => {
+          await using room = await chatRoom(serverExecution);
+          await expect(settled(
+            serverExecution,
+            room.save.sendReviewed({ body: "" }, chatSend),
+            "the turned-down send's handling",
+          )).rejects.toThrow("This send has no text.");
+
+          expect(await room.stored()).toEqual([]);
+        });
+
+        it("resolves when its handler's run writes nothing", async () => {
+          await using room = await chatRoom(serverExecution);
+          await settled(
+            serverExecution,
+            room.save.sendReviewed({ body: "unwanted" }, chatSend),
+            "the send its handler writes nothing for",
+          );
 
           expect(await room.stored()).toEqual([]);
         });

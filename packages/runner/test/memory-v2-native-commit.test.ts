@@ -1,10 +1,5 @@
-import {
-  assert,
-  assertEquals,
-  assertExists,
-  assertRejects,
-  assertThrows,
-} from "@std/assert";
+import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path/from-file-url";
 
 import type { FabricValue } from "@commonfabric/data-model";
@@ -1244,6 +1239,20 @@ Deno.test("v2 patch generator never emits indexed-array add/remove/move (leaf-on
     assertEquals(offendingOps(growPatches), []);
     record(growPatches.map((patch) => patch.op));
 
+    // A write beneath an element the array lacks. The element arrives holding
+    // what was written, as a nested array and as a record holding an array.
+    for (const beneath of [["0", "0"], ["0", "tags", "0"]]) {
+      await writeItems([]);
+      drafts.length = 0;
+      const deep = storage.edit();
+      const path = ["value", "items", ...beneath];
+      expect(deep.write({ space, id, type, path }, "x").error).toBeUndefined();
+      expect((await deep.commit().settled).error).toBeUndefined();
+      const deepPatches = patchesInDrafts();
+      expect(offendingOps(deepPatches)).toEqual([]);
+      record(deepPatches.map((patch) => patch.op));
+    }
+
     // Sanity: the idioms above actually exercised the array diff path and
     // produced the safe shapes, so the no-indexed-op assertions aren't vacuous.
     assert(seen.has("splice"), `expected a splice op; saw ${[...seen]}`);
@@ -1254,36 +1263,54 @@ Deno.test("v2 patch generator never emits indexed-array add/remove/move (leaf-on
 });
 
 Deno.test("assertNoIndexedArrayStructuralOps rejects indexed-array structural ops and allows the rest", () => {
-  // The guard's throw and `move` paths are unreachable through the diff generator
-  // (that's the invariant the previous test pins), so they're exercised directly
-  // here with hand-built patches.
+  // The guard is handed patches written by hand, with the documents they
+  // would have been diffed between. What a pointer's last segment names is
+  // decided by those documents: `arr` holds an array in both, `obj` a plain
+  // object in both, `grown` an array in the second alone, and `shrunk` an array
+  // in the first alone.
+  const before = {
+    value: { arr: ["a", "b", "c"], obj: { "1": "a", k: "b" }, shrunk: ["a"] },
+  };
+  const after = {
+    value: { arr: ["a", "b", "c"], obj: { "1": "a", k: "b" }, grown: ["a"] },
+  };
+  const check = (patches: PatchOp[]) => () =>
+    assertNoIndexedArrayStructuralOps(patches, before, after);
+
   const rejected: PatchOp[][] = [
     [{ op: "add", path: "/value/arr/1", value: "x" }],
     [{ op: "remove", path: "/value/arr/2" }],
     [{ op: "add", path: "/value/arr/0", value: "x" }],
     [{ op: "remove", path: "/value/arr/10" }],
-    // move: numeric on `path`, and numeric on `from` (covers both operands).
+    // An index on `path`, and an index on `from` alone.
     [{ op: "move", from: "/value/arr/0", path: "/value/arr/2" }],
     [{ op: "move", from: "/value/arr/0", path: "/value/obj/k" }],
+    // An array in one of the two documents is an array.
+    [{ op: "add", path: "/value/grown/0", value: "x" }],
+    [{ op: "remove", path: "/value/shrunk/0" }],
   ];
   for (const patches of rejected) {
-    assertThrows(
-      () => assertNoIndexedArrayStructuralOps(patches),
-      Error,
-      "indexed-array",
-    );
+    expect(check(patches)).toThrow("indexed-array");
   }
 
   const allowed: PatchOp[][] = [
-    [{ op: "add", path: "/value/obj/key", value: "x" }], // object key, not index
+    [{ op: "add", path: "/value/obj/key", value: "x" }],
     [{ op: "remove", path: "/value/obj/key" }],
-    [{ op: "add", path: "/value/arr/-", value: "x" }], // append marker, not index
-    [{ op: "replace", path: "/value/arr/0", value: "x" }], // in-place, no shift
+    [{ op: "move", from: "/value/a", path: "/value/b" }],
+    // A key of a plain object, written as an index inside the array index
+    // range and past it.
+    [{ op: "add", path: "/value/obj/2", value: "x" }],
+    [{ op: "remove", path: "/value/obj/1" }],
+    [{ op: "add", path: "/value/obj/1791869505000000000", value: "x" }],
+    [{ op: "move", from: "/value/obj/1", path: "/value/obj/2" }],
+    // The append marker is not an index.
+    [{ op: "add", path: "/value/arr/-", value: "x" }],
+    // Neither of these is a structural op.
+    [{ op: "replace", path: "/value/arr/0", value: "x" }],
     [{ op: "splice", path: "/value/arr", index: 0, remove: 1, add: ["z"] }],
-    [{ op: "move", from: "/value/a", path: "/value/b" }], // object-key move
     [],
   ];
   for (const patches of allowed) {
-    assertNoIndexedArrayStructuralOps(patches); // must not throw
+    expect(check(patches)).not.toThrow();
   }
 });

@@ -98,6 +98,17 @@ beside its label (spec §4.6.4). Refusing those would read a labeled document
 as unreadable with its labels sitting right there, which costs availability
 and buys no confidentiality.
 
+`stampPlacement` is such a member, and the reason it is one. An envelope
+carrying `stampPlacement: "committed"` says that each writer's stamp at a
+slot holding a reference was persisted beside the reference its attempt
+placed, which is what lets such a stamp count as an input witness
+(`cfc-transformed-by-input-witnesses.md`). A reader that predates the member
+reads the envelope and its labels as it always did. A writer that predates it
+rewrites the envelope without it, and the envelope then says nothing of its
+stamps, which is the conservative reading. A version of its own would have
+made every document carrying it unreadable to those builds for the sake of a
+statement they lose nothing by ignoring.
+
 A member this build does not read is also one the resolved envelope does not
 carry. The reader builds its answer from the members it validated, so a
 stored label map's own `documentEntries` member, which no stored format

@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { dirname, fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { SKIP_LIST_VARIABLE } from "@commonfabric/test-support/records";
 import { readPatternTestList } from "../integration.ts";
@@ -7,7 +8,7 @@ import { loadPatternSuites } from "./patterns.ts";
 import { loadPackageIntegrationSuites } from "./package-integration.ts";
 import type { CommandContext, Suite } from "./suite.ts";
 
-const root = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
+const root = dirname(dirname(dirname(fromFileUrl(import.meta.url))));
 const suites = [
   ...await loadPatternSuites(root),
   ...await loadPackageIntegrationSuites(root),

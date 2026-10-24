@@ -286,9 +286,18 @@ first, since the op carries only the delta.
 
 - **Call sites** — `Cell.pushAll` (`packages/runner/src/cell.ts`), which
   `Cell.push` calls with its arguments as the list, calls
-  `recordMergeableOp` with an `append` delta after writing the combined array, so
-  id anchoring, cross-space link elements, and CFC write-policy recording
-  continue to run through the existing `diffAndUpdate` path unchanged.
+  `recordMergeableOp` with an `append` delta after writing the combined array.
+  Where the array already exists, it and `Cell.addUnique` write that array
+  through `diffAndAppend()` (`packages/runner/src/data-updating.ts`), the same
+  diff walk `diffAndUpdate` runs, so id anchoring, cross-space link elements,
+  and CFC write-policy recording apply to the appended elements as to any write.
+  The walk passes over each element carried through from the stored array
+  without descending into it. Copying the stored elements into the combined
+  array and stepping past them is still linear in the list's length, a constant
+  per element; element normalization, link recognition, and element writes cover
+  the appended elements alone, beside the write of the array's new `length`.
+  Where the array does not exist yet, both create it through `diffAndUpdate`,
+  which has no stored elements to pass over.
 
 ## Semantics and limitations
 

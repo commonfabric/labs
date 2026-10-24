@@ -36,6 +36,7 @@ import {
   type ViewExecutionNode,
 } from "../view-replication.ts";
 import { ViewReadCache } from "./view-read-cache.ts";
+import { hasInlineCellScheme } from "../immutable-cell.ts";
 
 const logger = getLogger("view-replication");
 type Selection = Omit<ViewPlan, "id" | "revision" | "generation"> & {
@@ -172,7 +173,7 @@ export class ViewPlanPublisher {
           id: string,
           scope: ViewQuery["roots"][number]["scope"] = "space",
         ) => {
-          if (id.startsWith("data:")) return;
+          if (hasInlineCellScheme(id)) return;
           roots.set([scope ?? "space", id], {
             id,
             scope,

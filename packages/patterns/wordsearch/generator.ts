@@ -369,3 +369,33 @@ export const placementCells = (
       (placement.row + placement.dRow * i) * cols + placement.col +
       placement.dCol * i,
   );
+
+/**
+ * The hidden words whose run has its ends at the cells `a` and `b`: what a
+ * player selects by tapping a word's first and last letter. Those read from
+ * `a` to `b` come first. More than one can match, since a word and its
+ * reversal (STAR, RATS) share one run when words may run backwards.
+ */
+export const placementsBetween = (
+  puzzle: { readonly cols: number; readonly placements: readonly Placement[] },
+  a: number,
+  b: number,
+): Placement[] => {
+  const ends = (p: Placement) => {
+    const cells = placementCells(p, puzzle.cols);
+    return [cells[0], cells[cells.length - 1]];
+  };
+  const forward = puzzle.placements.filter((p) => {
+    const [first, last] = ends(p);
+    return first === a && last === b;
+  });
+  const backward = puzzle.placements.filter((p) => {
+    const [first, last] = ends(p);
+    return first === b && last === a;
+  });
+  return [...forward, ...backward];
+};
+
+/** A placement's identity: its word and where it runs, so a reshuffled puzzle shares none. */
+export const placementKey = (p: Placement): string =>
+  `${p.word}@${p.row},${p.col},${p.dRow},${p.dCol}`;

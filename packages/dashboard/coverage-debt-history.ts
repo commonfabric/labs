@@ -11,12 +11,20 @@
  * One sample a day is enough for a trend measured in weeks, and it bounds what
  * the collection costs: a day's coverage objects are found by one listing that
  * the store filters by name, and they are opened newest first until one
- * measured. Three things disqualify a run. A run whose compile byte cache
- * missed covers branches that only a cold compile reaches, which lowers its
- * debt by around a tenth of a percent — the same size as a week's real
- * movement. A run that is not a push to `main` measured code `main` does not
- * carry. And a run that recorded no repository-wide figure measured nothing
- * this can use.
+ * measured. Four things disqualify a run. A run attempt that did not pass
+ * measured through tests that failed or never ran, and reads high by however
+ * much those tests would have covered, which can be thousands of lines. A run
+ * whose compile byte cache missed covers branches that only a cold compile
+ * reaches, which lowers its debt by around a tenth of a percent — the same
+ * size as a week's real movement. A run that is not a run of the head of
+ * `main` measured code `main` does not carry. And a run that recorded no
+ * repository-wide figure measured nothing this can use.
+ *
+ * The store does not say whether a run passed, so that comes from GitHub, one
+ * request per attempt opened. A day held on disk with a measurement that
+ * names no attempt has not had its run checked. It is read again from the
+ * store when the store holds anything for it, and otherwise is charted once
+ * its run's latest attempt is found to have passed.
  *
  * A day that has been read keeps its answer, including the answer that it has
  * no usable run, once it is two days old. A run is filed under the day it
@@ -30,7 +38,7 @@ import {
   coverageArtifactAttempt,
   coverageFiguresOf,
   datePartition,
-  isMainPush,
+  isMainRun,
   listObjects,
   readObject,
   RECORD_SCHEMA_VERSION,
@@ -38,9 +46,11 @@ import {
 } from "@commonfabric/test-support/records";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { dashboardCacheFile } from "./history-files.ts";
+import { github } from "./lib.ts";
 import {
   TEST_RECORDS_BUCKET,
   TEST_RECORDS_CI_PREFIX,
+  TEST_RECORDS_REPO,
 } from "./test-records-history.ts";
 
 /** The group holding the repository-wide uncovered-line count. */
@@ -77,15 +87,31 @@ export interface CoverageDebtSample {
 
   /** The run the number was read from. */
   runId: number;
+
+  /** The attempt of that run, which passed. */
+  attempt: number;
 }
 
-/** Where the collection reads the store, so a test can supply its own. */
+/**
+ * Where the collection reads the store and the runs' outcomes, so a test can
+ * supply its own.
+ */
 export interface CoverageDebtSource {
   /** The names of the coverage objects stored for one day, `YYYY-MM-DD`. */
   list(day: string): Promise<string[]>;
 
   /** The reports one object holds. */
   read(objectName: string): Promise<StoredReportGroup[]>;
+
+  /**
+   * Attempt `attempt` of run `runId`, or its latest when `attempt` is absent,
+   * and whether it concluded `success`. The store holds an attempt's objects
+   * only once the attempt has finished, so this rejects for one that has not.
+   */
+  outcome(
+    runId: number,
+    attempt?: number,
+  ): Promise<{ attempt: number; passed: boolean }>;
 }
 
 /** What a day's runs came to, when one of them measured. */
@@ -94,6 +120,12 @@ interface DayMeasurement {
 
   /** The run the number was read from. */
   runId: number;
+
+  /**
+   * The attempt of that run, which passed. Absent while nothing has checked
+   * whether the run passed.
+   */
+  attempt?: number;
 }
 
 interface StoredDay {
@@ -114,15 +146,22 @@ interface StoredHistory {
   days: Record<string, StoredDay>;
 }
 
-const isRunId = (value: unknown): boolean =>
+const isPositiveInteger = (value: unknown): boolean =>
   Number.isInteger(value) && (value as number) > 0;
 
 const isMeasurement = (value: unknown): value is DayMeasurement => {
   if (typeof value !== "object" || value === null) return false;
   const measured = value as DayMeasurement;
   return Number.isFinite(measured.uncoveredLines) &&
-    measured.uncoveredLines >= 0 && isRunId(measured.runId);
+    measured.uncoveredLines >= 0 && isPositiveInteger(measured.runId) &&
+    (measured.attempt === undefined || isPositiveInteger(measured.attempt));
 };
+
+/** A day's measurement, when nothing has checked whether its run passed. */
+const uncheckedOf = (
+  day: StoredDay | undefined,
+): DayMeasurement | undefined =>
+  day?.measured?.attempt === undefined ? day?.measured : undefined;
 
 const isStoredDay = (value: unknown): value is StoredDay => {
   if (!isObjectOrArray(value)) return false;
@@ -152,23 +191,46 @@ export function daysEndingAt(now: number, count: number): string[] {
 
 /**
  * The repository-wide uncovered-line count one stored report records, or
- * `undefined` where it is not a push to `main`, carries no such figure, or was
+ * `undefined` where it is not a run of `main`, carries no such figure, or was
  * measured on a cold compile cache.
  */
 export function workspaceDebtOf(report: StoredReportGroup): number | undefined {
-  if (report.context === undefined || !isMainPush(report.context)) {
+  if (report.context === undefined || !isMainRun(report.context)) {
     return undefined;
   }
   const figures = coverageFiguresOf(report.records);
   return figures.cold ? undefined : figures.groups.get(WORKSPACE_GROUP);
 }
 
-/** The store as it really is. */
+/** The fields of a GitHub workflow run attempt this reads. */
+interface RunAttempt {
+  run_attempt: number;
+  status: string;
+  conclusion: string | null;
+}
+
+/** The store and GitHub as they really are. */
 export function liveCoverageDebtSource(
   fetchImpl?: typeof fetch,
+  githubImpl: (path: string) => Promise<RunAttempt> = github,
 ): CoverageDebtSource {
   const bucket = TEST_RECORDS_BUCKET;
   return {
+    outcome: async (runId, attempt) => {
+      const run = await githubImpl(
+        `repos/${TEST_RECORDS_REPO}/actions/runs/${runId}` +
+          (attempt === undefined ? "" : `/attempts/${attempt}`),
+      );
+      if (run.status !== "completed") {
+        throw new Error(
+          `GitHub run ${runId} attempt ${run.run_attempt} has not finished`,
+        );
+      }
+      return {
+        attempt: run.run_attempt,
+        passed: run.conclusion === "success",
+      };
+    },
     list: (day) =>
       listObjects({
         bucket,
@@ -291,9 +353,21 @@ async function readDay(
 ): Promise<DayReading> {
   try {
     const names = await source.list(day);
+    const unchecked = uncheckedOf(known);
     // Objects are only ever added, so a day listing what it listed last
     // time holds nothing the last reading did not see.
-    if (names.length === known?.listed) return { outcome: "unchanged" };
+    if (unchecked === undefined && names.length === known?.listed) {
+      return { outcome: "unchanged" };
+    }
+    if (unchecked !== undefined && names.length === 0) {
+      const latest = await source.outcome(unchecked.runId);
+      return {
+        outcome: "read",
+        day: latest.passed
+          ? { measured: { ...unchecked, attempt: latest.attempt }, listed: 0 }
+          : { listed: 0 },
+      };
+    }
     // Newest run first, and a run's newest attempt ahead of the one it
     // measured again.
     const objects = names
@@ -302,13 +376,17 @@ async function readDay(
         return upload === undefined ? [] : [{ name, ...upload }];
       })
       .sort((a, b) => b.runId - a.runId || b.attempt - a.attempt);
-    for (const { name, runId } of objects) {
+    for (const { name, runId, attempt } of objects) {
       for (const report of await source.read(name)) {
         const uncoveredLines = workspaceDebtOf(report);
         if (uncoveredLines === undefined) continue;
+        if (!(await source.outcome(runId, attempt)).passed) break;
         return {
           outcome: "read",
-          day: { measured: { uncoveredLines, runId }, listed: names.length },
+          day: {
+            measured: { uncoveredLines, runId, attempt },
+            listed: names.length,
+          },
         };
       }
     }
@@ -328,9 +406,9 @@ export interface CoverageDebtHistory {
 }
 
 /**
- * Fills in every day of the window the store has not read, then returns the
- * samples it holds. Today and yesterday are read again on every refresh,
- * because they can still gain runs.
+ * Fills in every day of the window the store has not read or whose run it has
+ * not checked, then returns the samples it holds. Today and yesterday are read
+ * again on every refresh, because they can still gain runs.
  */
 export async function refreshCoverageDebt(options: {
   days: number;
@@ -342,9 +420,11 @@ export async function refreshCoverageDebt(options: {
   await store.load();
   const window = daysEndingAt(options.now, options.days);
   const open = new Set(window.slice(-2));
-  const wanted = window.filter((day) =>
-    open.has(day) || store.get(day) === undefined
-  );
+  const wanted = window.filter((day) => {
+    const stored = store.get(day);
+    return open.has(day) || stored === undefined ||
+      uncheckedOf(stored) !== undefined;
+  });
   let error: unknown;
   for (let at = 0; at < wanted.length; at += FETCH_CONCURRENCY) {
     const batch = wanted.slice(at, at + FETCH_CONCURRENCY);
@@ -360,8 +440,8 @@ export async function refreshCoverageDebt(options: {
   const samples: CoverageDebtSample[] = [];
   for (const day of window) {
     const measured = store.get(day)?.measured;
-    if (measured === undefined) continue;
-    samples.push({ day, ...measured });
+    if (measured?.attempt === undefined) continue;
+    samples.push({ day, ...measured, attempt: measured.attempt });
   }
   return error === undefined ? { samples } : { samples, error };
 }

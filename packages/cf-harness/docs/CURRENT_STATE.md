@@ -657,9 +657,25 @@ The current package provides:
   and shows each command as a one-line typed signature; `run_command` takes one
   call or a batch of up to sixteen, run four at a time, refuses a name the held
   listing does not show with the nearest listed names, and returns a host
-  `bad-args` refusal with the command's signature. Each answer is measured
-  against the run's observation ceiling like a retrieval row, a batch's answers
-  within one output bound. See [Host commands](LOOM_COMMANDS.md);
+  `bad-args` refusal with the command's signature. `run_command` carries write
+  authority; `run_read_command` takes the same calls, requires a fresh listing's
+  read effect and explicit broker grant for each, and sends a separate read-only
+  demand for execution revalidation. Explicitly context-bound broker reads work
+  under both enforcing modes; strict mode still refuses quoted or absent
+  authority. Each answer is measured against the run's observation ceiling like
+  a retrieval row, a batch's answers within one output bound. See
+  [Host commands](LOOM_COMMANDS.md);
+- durable local jobs with a 1 MiB enqueue body bound, SQLite FULL
+  acknowledgment, and inline image bytes snapshotted into their job workspace. A
+  valid structured submission completes the run on its turn, including the last
+  allowed turn; an agent job requires it alone in its model turn. Failed jobs
+  retain partial measured usage and attempted turns when known, without claiming
+  complete usage. Optional host input-byte and output-token ceilings can only
+  narrow through callers and follow the shared model client into children.
+  Bounded Codex calls check final request bytes, send the output ceiling
+  including reasoning, and make one provider attempt; unverified gateway limits
+  refuse before dispatch. Native search context and image token expansion need
+  separate accounting. See [Local jobs](../../cli/README.md#local-jobs);
 - batch CLI execution with bounded model turns and optional streamed events;
 - machine-readable capability discovery with `--describe-capabilities`;
 - refusal of any flag an entrypoint does not declare — the batch CLI and its

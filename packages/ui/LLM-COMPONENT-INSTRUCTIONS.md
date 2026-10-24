@@ -39,9 +39,12 @@ remain available as a fallback for older components.
 
 ## Theme System First
 
-When composing a polished UI with `cf-*` components, prefer `cf-theme` for
-overall typography, color, spacing, radius, and motion, then use component
-`--cf-*` custom properties only for local refinement.
+A pattern inherits its host's theme: typography, color, spacing, radius, and
+motion arrive from the host or a `cf-theme` around the pattern. To change any of
+them, tint that theme with a nested `cf-theme` carrying only what changes, such
+as `{ accentColor }`; the rest is inherited. Never declare a full theme. Prefer
+theme tokens to literal colors and fonts; use the documented component `--cf-*`
+custom properties for local refinement.
 
 Working references:
 

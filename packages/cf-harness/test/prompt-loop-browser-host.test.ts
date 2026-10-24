@@ -8,6 +8,7 @@ import type {
   HarnessBrowserHost,
 } from "../src/contracts/browser-host.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
+import { createHarnessRunState } from "../src/run-state.ts";
 import { CFC_ATOM_TYPE, CFC_CONCEPT_KIND } from "@commonfabric/api/cfc";
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
@@ -235,6 +236,82 @@ describe("prompt-loop with a browser host", () => {
     } finally {
       await Deno.remove(artifactRoot, { recursive: true });
     }
+  });
+
+  it("classifies a web purchase as acting when the run can drive the browser", async () => {
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "run-browser-host-classified",
+        model: "gpt-5.4",
+        cfcEnforcementMode: "disabled",
+        browserHost: new RecordingBrowserHost(),
+      }),
+      allowedToolIds: ["delegate_task"],
+      allowedSubagentProfiles: ["browser"],
+    });
+
+    const classification = await loop.classifyTask("buy the cheapest oat milk");
+
+    expect(classification).toMatchObject({ tags: ["act"], path: "rule" });
+  });
+
+  it("briefs the parent of an acting task on the browser and not the parent of a task that only replies", async () => {
+    const firstMessages = async (task: string) => {
+      const requestBodies: unknown[] = [];
+      const loop = new CfHarnessPromptLoop({
+        apiKey: "test-key",
+        engine: new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId: "run-browser-host-briefing",
+          model: "gpt-5.4",
+          cfcEnforcementMode: "disabled",
+          browserHost: new RecordingBrowserHost(),
+        }),
+        allowedToolIds: ["delegate_task"],
+        allowedSubagentProfiles: ["browser"],
+        fetchFn: scriptedFetch([finalTurn("Done.")], requestBodies),
+      });
+      await loop.classifyTask(task);
+      await loop.runPrompt({ prompt: task });
+      return JSON.stringify(chatViewOfRequest(requestBodies[0]).messages);
+    };
+
+    expect(await firstMessages("buy the cheapest oat milk")).toContain(
+      "this run has a browser the owner watches",
+    );
+    expect(await firstMessages("thanks!")).not.toContain(
+      "this run has a browser the owner watches",
+    );
+  });
+
+  it("briefs a resumed run's parent on the browser, since a resumed run is never classified", async () => {
+    const requestBodies: unknown[] = [];
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runState: createHarnessRunState({
+          runId: "run-browser-host-resumed",
+          model: "gpt-5.4",
+          cfcEnforcementMode: "disabled",
+          currentDir: "/workspace",
+        }),
+        browserHost: new RecordingBrowserHost(),
+      }),
+      allowedToolIds: ["delegate_task"],
+      allowedSubagentProfiles: ["browser"],
+      fetchFn: scriptedFetch([finalTurn("Done.")], requestBodies),
+    });
+
+    const result = await loop.runTranscript({
+      transcript: [{ role: "user", content: "weather in Brisbane" }],
+    });
+
+    expect(result.runState.taskClassification).toBeUndefined();
+    expect(JSON.stringify(chatViewOfRequest(requestBodies[0]).messages))
+      .toContain("this run has a browser the owner watches");
   });
 
   it("asks a parent whose browser child did not finish to end through finish_task, rather than accept its text", async () => {

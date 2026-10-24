@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { NAME } from "@commonfabric/runtime-client";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
@@ -347,6 +348,7 @@ describe("CFProfileBadge", () => {
       el._deriveVerification(
         representsPrincipalLabel(OWNER_DID),
         el._resolveGeneration,
+        false,
       );
 
       expect(el._state).toBe("verified");
@@ -388,14 +390,67 @@ describe("CFProfileBadge", () => {
       expect(el._seal?.did).toBe(OWNER_DID);
     });
 
+    it("enters the verified state for the owner a written name names, and stays presented for the same label with no name written", async () => {
+      const el = new CFProfileBadge() as any;
+      markConnected(el, true);
+
+      // A default field the runtime that set the profile up stamped with its
+      // own principal, beside the owner's.
+      const stamped = {
+        version: 1,
+        entries: [
+          {
+            path: ["name"],
+            label: {
+              integrity: [{ kind: "represents-principal", subject: OWNER_DID }],
+            },
+          },
+          {
+            path: ["avatar"],
+            label: {
+              integrity: [
+                { kind: "represents-principal", subject: OWNER_DID },
+                { kind: "represents-principal", subject: "did:key:zRunner" },
+              ],
+            },
+          },
+        ],
+      };
+      let deliver: ((val: unknown, label?: unknown) => void) | undefined;
+      const resolved = {
+        ref: () => ({ path: [] }),
+        space: () => "did:key:zSpace",
+        id: () => "fid1:piece",
+        asSchema: () => ({
+          subscribe: (cb: (val: unknown, label?: unknown) => void) => {
+            deliver = cb;
+            return () => {};
+          },
+        }),
+      };
+      el.profile = { resolveAsCell: () => Promise.resolve(resolved) };
+      await el._resolve();
+
+      deliver?.({ name: "" }, stamped);
+      expect(el._state).toBe("presented");
+
+      deliver?.({ name: "Ada" }, stamped);
+      expect(el._state).toBe("verified");
+      expect(el._seal?.did).toBe(OWNER_DID);
+    });
+
     it("stays presented (no seal) when the label has no represents-principal atom", () => {
       const el = new CFProfileBadge() as any;
       markConnected(el, true);
 
-      el._deriveVerification({
-        version: 1,
-        entries: [{ path: [], label: { integrity: ["profile-link"] } }],
-      }, el._resolveGeneration);
+      el._deriveVerification(
+        {
+          version: 1,
+          entries: [{ path: [], label: { integrity: ["profile-link"] } }],
+        },
+        el._resolveGeneration,
+        false,
+      );
 
       expect(el._state).toBe("presented");
       expect(el._seal).toBeUndefined();
@@ -431,6 +486,7 @@ describe("CFProfileBadge", () => {
       el._deriveVerification(
         representsPrincipalLabel(OWNER_DID),
         staleGeneration,
+        false,
       );
 
       expect(el._state).toBe("presented");
@@ -777,6 +833,8 @@ describe("CFProfileBadge", () => {
   });
 
   describe("profileDisplayFromValue", () => {
+    const picture = new FabricBytes(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+
     it("prefers the profile's name field over the cell [NAME]", () => {
       // On main, profile-home's [NAME] is the static placeholder "Profile"
       // (profile-home.tsx:303); the editable `name` field is the real name.
@@ -787,6 +845,7 @@ describe("CFProfileBadge", () => {
       };
       expect(profileDisplayFromValue(val)).toEqual({
         name: "Ben",
+        picture: undefined,
         avatar: "https://example.com/ben.png",
       });
     });
@@ -795,23 +854,39 @@ describe("CFProfileBadge", () => {
       const val = { [NAME]: "Ada Lovelace", name: "  ", avatar: "🦊" };
       expect(profileDisplayFromValue(val)).toEqual({
         name: "Ada Lovelace",
+        picture: undefined,
         avatar: "🦊",
       });
     });
 
+    it("returns the picture's bytes beside the avatar text", () => {
+      const val = { name: "Ada", picture, avatar: "🦊" };
+      expect(profileDisplayFromValue(val)).toEqual({
+        name: "Ada",
+        picture,
+        avatar: "🦊",
+      });
+    });
+
+    it("returns no picture for empty bytes or a value that is not bytes", () => {
+      for (
+        const notAPicture of [
+          new FabricBytes(new Uint8Array()),
+          "data:image/png;base64,iVBORw0KGgo=",
+          { length: 4 },
+        ]
+      ) {
+        expect(
+          profileDisplayFromValue({ name: "Ada", picture: notAPicture }),
+        ).toEqual({ name: "Ada", picture: undefined, avatar: undefined });
+      }
+    });
+
     it("returns undefined fields for empty / non-object input", () => {
-      expect(profileDisplayFromValue(undefined)).toEqual({
-        name: undefined,
-        avatar: undefined,
-      });
-      expect(profileDisplayFromValue("nope")).toEqual({
-        name: undefined,
-        avatar: undefined,
-      });
-      expect(profileDisplayFromValue({})).toEqual({
-        name: undefined,
-        avatar: undefined,
-      });
+      const none = { name: undefined, picture: undefined, avatar: undefined };
+      expect(profileDisplayFromValue(undefined)).toEqual(none);
+      expect(profileDisplayFromValue("nope")).toEqual(none);
+      expect(profileDisplayFromValue({})).toEqual(none);
     });
   });
 

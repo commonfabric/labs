@@ -17,7 +17,7 @@ import { Database } from "@db/sqlite";
 
 import * as Engine from "../v2/engine.ts";
 import { readGenesisRoot, readSpaceKind } from "../v2/genesis-root.ts";
-import { Server, SessionRegistry } from "../v2/server.ts";
+import { getSlowQueries, Server, SessionRegistry } from "../v2/server.ts";
 import { resolveSpaceStoreUrl } from "../v2/storage-path.ts";
 import { sameAcl } from "../acl.ts";
 import {
@@ -2394,6 +2394,11 @@ describe("v2-server-acl", () => {
         const readStarted = Promise.withResolvers<void>();
         const resumeRead = Promise.withResolvers<void>();
         let opens = 0;
+        // The held read also counts as slow: the clock moves 250 ms while it
+        // waits, so its slow-query entry says what the caller was told.
+        const realNow = performance.now.bind(performance);
+        let nowOffsetMs = 0;
+        performance.now = () => realNow() + nowOffsetMs;
         server.accessForTestingOnly.engineOpener = async (
           requestedSpace,
           open,
@@ -2402,6 +2407,7 @@ describe("v2-server-acl", () => {
           // database for I/O. Hold that read so revocation occurs after initial
           // admission and before the final authorization check.
           if (++opens === 2) {
+            nowOffsetMs += 250;
             readStarted.resolve();
             await resumeRead.promise;
           }
@@ -2419,19 +2425,28 @@ describe("v2-server-acl", () => {
         await readStarted.promise;
         let revoked;
         try {
-          revoked = await transactSet(
-            ownerHarness,
-            space,
-            owner.ok.sessionId,
-            `of:${space}`,
-            { [ALICE]: "OWNER" },
-            1,
-          );
+          try {
+            revoked = await transactSet(
+              ownerHarness,
+              space,
+              owner.ok.sessionId,
+              `of:${space}`,
+              { [ALICE]: "OWNER" },
+              1,
+            );
+          } finally {
+            resumeRead.resolve();
+            server.accessForTestingOnly.engineOpener = undefined;
+          }
+          expect((await reading).error?.name).toBe("AuthorizationError");
         } finally {
-          resumeRead.resolve();
-          server.accessForTestingOnly.engineOpener = undefined;
+          performance.now = realNow;
         }
-        expect((await reading).error?.name).toBe("AuthorizationError");
+        const slowRead = getSlowQueries().find((slow) =>
+          slow.space === space && slow.operation === "sqlite.query"
+        );
+        expect(slowRead?.outcome).toBe("AuthorizationError");
+        expect(slowRead?.rows).toBeUndefined();
         expectExists(revoked.ok);
         expect((await query(service.ok.sessionId, BOB)).error?.name).toBe(
           "AuthorizationError",

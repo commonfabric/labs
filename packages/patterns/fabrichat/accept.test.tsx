@@ -111,7 +111,7 @@ const emptyCatalog = () =>
 
 /** Why the request `id` was refused, or its status if it wasn't. */
 const reasonOf = (
-  requests: Writable<Record<string, ChatRequestOutcome>>,
+  requests: Cell<Record<string, ChatRequestOutcome>>,
   id: string,
 ): string => {
   const outcome = requests.get()?.[id];
@@ -207,8 +207,8 @@ const forgetListed = handler<unknown, ForgetListedState>((
 
 /** The state of `catalog`'s entry for the held room. */
 const stateOf = (
-  catalog: Writable<SharedSpaceCatalogStorage>,
-  held: Writable<{ room?: Cell<HeldRoom> }>,
+  catalog: Cell<SharedSpaceCatalogStorage>,
+  held: Cell<{ room?: Cell<HeldRoom> }>,
 ): string | undefined =>
   readSharedSpaceCatalog(catalog).entries[spaceOf(held.key("room")) ?? ""]
     ?.state;

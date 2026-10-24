@@ -180,6 +180,8 @@ export class HarnessRun {
 
 // Runs deno-web-test in `projectDir` with `environment` added to the
 // variables it inherits, and caches the results for multiple test usages.
+// With `inRepository`, the directory the project is copied into is marked
+// as a repository's root, so the run's test files lie inside one.
 //
 // Due to running within a workspace, these test subprojects
 // need to be workspace members in order to run deno tasks.
@@ -188,8 +190,11 @@ export class HarnessRun {
 export const runDenoWebTest = async (
   projectDir: string,
   environment: Record<string, string> = {},
+  { inRepository = false }: { inRepository?: boolean } = {},
 ): Promise<HarnessRun> => {
-  const cacheKey = `${projectDir} ${JSON.stringify(environment)}`;
+  const cacheKey = `${projectDir} ${
+    JSON.stringify(environment)
+  } ${inRepository}`;
   const fromCache = DenoWebTestCache.get(cacheKey);
   if (fromCache) {
     return fromCache;
@@ -197,6 +202,7 @@ export const runDenoWebTest = async (
 
   // Copy over test project to temp directory.
   const tmp = await Deno.makeTempDir();
+  if (inRepository) await Deno.mkdir(path.join(tmp, ".git"));
   const projectPath = path.join(dirname, projectDir);
   const tmpProjectPath = path.join(tmp, projectDir);
   await copy(projectPath, tmpProjectPath);

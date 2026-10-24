@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
-import { cf } from "./utils.ts";
+import { argv, cf } from "./utils.ts";
 
 describe("test-cfc-posture", () => {
   const fixture = resolve(
@@ -18,14 +18,14 @@ describe("test-cfc-posture", () => {
     for (
       const [flags, posture] of [
         [
-          "--cfc-enforcement-mode disabled --cfc-flow-labels off",
+          argv`--cfc-enforcement-mode disabled --cfc-flow-labels off`,
           "disabled flowLabels=off",
         ],
-        ["--cfc-shell-posture", "enforce-explicit flowLabels=persist"],
+        [argv`--cfc-shell-posture`, "enforce-explicit flowLabels=persist"],
       ]
     ) {
       const { code, stdout, stderr } = await cf(
-        `test "${fixture}" ${flags} --verbose --stats-threshold 0 --no-idempotency-check`,
+        argv`test ${fixture} ${flags} --verbose --stats-threshold 0 --no-idempotency-check`,
       );
       expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
       const report = stdout.join("\n");
@@ -54,11 +54,16 @@ describe("test-cfc-posture", () => {
       ) {
         expect(report).toContain(span);
       }
-      if (flags === "--cfc-shell-posture") {
+      if (flags.includes("--cfc-shell-posture")) {
+        expect(report).toMatch(/prepareCfc\s+Δn=\s*[1-9]/);
         expect(report).toMatch(/cfc\/deriveFlowJoin\s+Δn=\s*[1-9]/);
-        expect(report).toMatch(/cfc\/preparedDigestFor\s+Δn=\s*[1-9]/);
-        // Successful writes skip refusal-source collection, but its zero count
-        // must remain visible beside the active preparation spans.
+        // A commit whose activity stands since its preparation hashes no
+        // digest, and a successful write skips refusal-source collection.
+        // Each zero count must remain visible beside the active preparation
+        // spans. A step that prepares nothing counts no digest either way, so
+        // the digest's row is also held to zero on every step.
+        expect(report).toMatch(/cfc\/preparedDigestFor\s+Δn=\s*0/);
+        expect(report).not.toMatch(/cfc\/preparedDigestFor\s+Δn=\s*[1-9]/);
         expect(report).toMatch(/cfc\/collectConsumedLabel\s+Δn=\s*0/);
       } else {
         expect(report).not.toMatch(/cfc\/deriveFlowJoin\s+Δn=\s*[1-9]/);
@@ -68,7 +73,7 @@ describe("test-cfc-posture", () => {
 
   it("resolves the derive alias to the runtime observe mode", async () => {
     const { code, stdout } = await cf(
-      `test "${small}" --cfc-flow-labels derive`,
+      argv`test ${small} --cfc-flow-labels derive`,
     );
     expect(code).toBe(0);
     expect(stdout.join("\n")).toContain(
@@ -79,15 +84,15 @@ describe("test-cfc-posture", () => {
   it("rejects invalid modes and conflicting shorthand in either order", async () => {
     for (
       const flags of [
-        "--cfc-flow-labels typo",
-        "--cfc-enforcement-mode typo",
-        "--cfc-shell-posture --cfc-flow-labels off",
-        "--cfc-flow-labels off --cfc-shell-posture",
-        "--cfc-shell-posture --cfc-enforcement-mode disabled",
-        "--cfc-enforcement-mode disabled --cfc-shell-posture",
+        argv`--cfc-flow-labels typo`,
+        argv`--cfc-enforcement-mode typo`,
+        argv`--cfc-shell-posture --cfc-flow-labels off`,
+        argv`--cfc-flow-labels off --cfc-shell-posture`,
+        argv`--cfc-shell-posture --cfc-enforcement-mode disabled`,
+        argv`--cfc-enforcement-mode disabled --cfc-shell-posture`,
       ]
     ) {
-      const { code, stdout } = await cf(`test "${small}" ${flags}`);
+      const { code, stdout } = await cf(argv`test ${small} ${flags}`);
       expect(code).not.toBe(0);
       expect(stdout.join("\n")).not.toContain("CFC posture:");
     }

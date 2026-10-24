@@ -61,11 +61,16 @@ const space = signer.did();
 //   through the REAL wish builtin (the profile-embed lift condition).
 // - `ambiguousWishShapedSchema` keeps the CRASH class alive for the OW50
 //   detectability pins: TWO ifc-carrying branches is genuine ambiguity, which
-//   the narrowed assert still refuses. The `candidates.items` position (plain
-//   properties/items) is what makes the doc cfc-relevant, the metadata apply,
-//   and the candidate schema recordable; a confidentiality label needs no
+//   the narrowed assert still refuses. The `candidate.name` position (plain
+//   properties) is what makes the doc store an envelope of its own: a labeled
+//   value the doc holds itself, where an element of an array of objects is
+//   minted as a document of its own and labeled there, and a reference
+//   carries none of its target's labels. A confidentiality label needs no
 //   write authority, so the FIRST writer's commit lands, poisoning the stored
-//   envelope for every later merging writer.
+//   envelope for every later merging writer. The claim at `candidate.name`
+//   is also what a later link write at `/candidate` overlays onto its
+//   writer's schema for verification; that overlay is the merge that walks
+//   into the assert.
 const profileViewSchema: JSONSchema = {
   type: "object",
   properties: {
@@ -96,7 +101,7 @@ const ambiguousWishShapedSchema: JSONSchema = {
         altProfileViewSchema,
       ],
     },
-    candidates: { type: "array", items: profileViewSchema },
+    candidate: profileViewSchema,
   },
 } as JSONSchema;
 
@@ -121,32 +126,31 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
     /** Seed the doc so its STORED envelope carries the AMBIGUOUS divergent
      * shape — the class RULING 5's narrowing still refuses (the first writer
      * never merges — nothing is stored yet — so this commit lands). The
-     * labeled VALUE under `candidates.items.name` is what makes the label
-     * metadata persist. */
+     * labeled VALUE under `candidate.name` is what makes the label metadata
+     * persist. */
     async function seedStoredEnvelope(
       rt: Runtime,
       id: string,
     ): Promise<void> {
       const tx = rt.edit();
       const cell = rt.getCell(space, id, ambiguousWishShapedSchema, tx);
-      cell.set({ candidates: [{ name: "Bob" }] });
+      cell.set({ candidate: { name: "Bob" } });
       tx.prepareCfc();
       const result = await tx.commit().settled;
       expect(result.error).toBeUndefined();
     }
 
     /** A second-writer transaction reproducing the raw:wish shape: a full-doc
-     * write through the schema-carrying cell whose /result now holds a LINK.
-     * Its prep meets the stored envelope + a link write and walks into the
-     * divergence assert. */
+     * write through the schema-carrying cell, with a LINK at a slot the
+     * stored envelope declares a claim under. Its prep overlays that claim
+     * onto the writer's schema for verification, and the overlay merge walks
+     * into the divergence assert at /result. */
     function secondWriterTx(
       rt: Runtime,
       id: string,
     ): IExtendedStorageTransaction {
       const tx = rt.edit();
       const cell = rt.getCell(space, id, ambiguousWishShapedSchema, tx);
-      // The link SOURCE carries the ifc-labeled view (as the live resolved
-      // profile does), so the /result link write is CFC-recorded.
       const resolved = rt.getCell<{ name: string }>(
         space,
         `${id}-resolved`,
@@ -154,7 +158,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
         tx,
       );
       resolved.set({ name: "Ada" });
-      cell.set({ result: resolved, candidates: [] });
+      cell.set({ candidate: resolved });
       return tx;
     }
 
@@ -256,7 +260,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
           actionTx,
         );
         resolved.set({ name: "Ada" });
-        cell.set({ result: resolved, candidates: [] });
+        cell.set({ candidate: resolved });
       };
       runtime.scheduler.subscribe(crashingAction, {
         reads: [],
@@ -503,7 +507,7 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
             ambiguousWishShapedSchema,
             tx,
           );
-          cell.set({ candidates: [{ name: "Bob" }] });
+          cell.set({ candidate: { name: "Bob" } });
           rt.runtime.prepareTxForCommit(tx);
           const res = await tx.commit().settled;
           expect(res.error).toBeUndefined();

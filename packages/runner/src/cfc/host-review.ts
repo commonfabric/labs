@@ -101,6 +101,39 @@ export const hasExactKeys = (
   keys.every((key) => Object.hasOwn(value, key));
 
 /**
+ * Whether one confidentiality alternative stands for the actor alone. Each
+ * shape is matched on its exact key set, so an atom carrying any further
+ * field (a `hash` binding a named policy, a `scope`) is never the actor's.
+ */
+export const isActorOwnedAlternative = (
+  atom: unknown,
+  actor: string,
+): boolean => {
+  if (typeof atom === "string") return atom === actor;
+  if (!isObjectNotArray(atom)) return false;
+  switch (atom.type) {
+    case CFC_ATOM_TYPE.User:
+      return hasExactKeys(atom, ["type", "subject"]) &&
+        atom.subject === actor;
+    case CFC_ATOM_TYPE.Context:
+      return hasExactKeys(atom, ["type", "name", "subject"]) &&
+        typeof atom.name === "string" && atom.subject === actor;
+    case CFC_ATOM_TYPE.Resource:
+      return hasExactKeys(atom, ["type", "class", "subject"]) &&
+        typeof atom.class === "string" && atom.subject === actor;
+    // The actor's home space is the space named by the actor's own DID. Its
+    // access list is the actor's to write, so what it admits is the actor's
+    // decision, as with a clause naming the actor.
+    case CFC_ATOM_TYPE.Space:
+      return hasExactKeys(atom, ["type", "id"]) && atom.id === actor;
+    case CFC_ATOM_TYPE.PersonalSpace:
+      return hasExactKeys(atom, ["type", "owner"]) && atom.owner === actor;
+    default:
+      return false;
+  }
+};
+
+/**
  * `value` as JSON text with every object's keys in UTF-8 order, so that equal
  * values have equal text. Stored as one string, a value is a leaf: no write
  * below it can alter part of it, and a reader compares it byte for byte.

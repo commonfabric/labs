@@ -17,6 +17,7 @@ import type {
   PresenceRecord,
 } from "@commonfabric/memory/v2";
 import type { PresenceEvent } from "@commonfabric/memory/v2/client";
+import type { JoinVisitDecision } from "@commonfabric/piece/ops";
 import { NameSchema } from "@commonfabric/runner/schemas";
 import type {
   ActionRunTraceEntry,
@@ -57,6 +58,7 @@ import {
   EventNeedsAttentionNotification,
   InitializationData,
   type LoggerCountsData,
+  type LoggerCountsResponse,
   type LoggerFlagsData,
   type LoggerMetadata,
   type LoggerTimingData,
@@ -973,6 +975,25 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   }
 
   /**
+   * Tells the user's chat manager that the user has joined the FabriChat room
+   * declared by `space`: the writable standalone root or the writable
+   * container root's explicit `chatRoom`. The manager makes the room
+   * one of the user's chats, lists a forgotten one again, and records nothing
+   * for one their chats list already. Home is never created for it.
+   *
+   * Resolves with what was decided, once any event is sent, which is before
+   * the manager has handled it: `sent`, `no-chat-manager`, or the reason
+   * vetting refused the space; `undefined` where the user has no Home.
+   */
+  async joinVisitedRoom(space: DID): Promise<JoinVisitDecision | undefined> {
+    const response = await this.#conn.request<RequestType.JoinVisitedRoom>({
+      type: RequestType.JoinVisitedRoom,
+      space,
+    });
+    return response.decision;
+  }
+
+  /**
    * Wait until the worker runtime is quiescent AND every issued commit has
    * been confirmed by the server (or terminally failed). This is the client's
    * "safe to navigate or reload" checkpoint: once it resolves, tearing the
@@ -1506,6 +1527,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     timing: LoggerTimingData;
     flags: LoggerFlagsData;
     cfc: Record<string, number>;
+    compileCache: Record<string, number>;
+    sizes: LoggerCountsResponse["sizes"];
   }> {
     const res = await this.#conn.request<RequestType.GetLoggerCounts>({
       type: RequestType.GetLoggerCounts,
@@ -1516,6 +1539,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       timing: res.timing,
       flags: res.flags,
       cfc: res.cfc,
+      compileCache: res.compileCache,
+      sizes: res.sizes,
     };
   }
 
@@ -1733,12 +1758,14 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   /**
    * Uploads a blob to the given space. `body` is given as a view or as a whole
    * buffer, and is copied into the immutable value that crosses, so the caller
-   * may keep using it.
+   * may keep using it. `name`, when given, is the name of the file the bytes
+   * came from, which the stored blob keeps (see `UploadBlobRequest`).
    */
   async uploadBlob(options: {
     space: DID;
     contentType: string;
     body: Uint8Array | ArrayBufferLike;
+    name?: string;
     suffix?: string;
   }): Promise<UploadBlobResponse> {
     return await this.#conn.request<RequestType.UploadBlob>({
@@ -1746,8 +1773,27 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       space: options.space,
       contentType: options.contentType,
       body: new FabricBytes(options.body),
+      name: options.name,
       suffix: options.suffix,
     });
+  }
+
+  /**
+   * Returns the URL the host of `options.space` serves the blob `options.id`
+   * at: the URL `uploadBlob()` returns for a blob it stores, without the file
+   * suffix it appends. With `options.download`, the URL is one to save the
+   * blob from, which its host serves as an attachment.
+   */
+  async blobUrl(
+    options: { space: DID; id: string; download?: boolean },
+  ): Promise<string> {
+    const response = await this.#conn.request<RequestType.BlobUrl>({
+      type: RequestType.BlobUrl,
+      space: options.space,
+      id: options.id,
+      ...(options.download === true ? { download: true } : {}),
+    });
+    return response.url;
   }
 
   async detectNonIdempotent(

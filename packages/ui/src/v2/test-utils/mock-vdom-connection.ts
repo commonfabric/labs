@@ -105,7 +105,12 @@ export function createRenderableCellHandle<T>(
     listenerCount: () => 0,
   } as unknown as InitializedRuntimeConnection;
 
-  const rt = { [$conn]: () => conn } as unknown as RuntimeClient;
+  // `getPiece` finds nothing: it is what `cf-render` opens a displayed piece
+  // with, and a test that asserts the open replaces it.
+  const rt = {
+    [$conn]: () => conn,
+    getPiece: () => Promise.resolve(null),
+  } as unknown as RuntimeClient;
   const cell = new CellHandle<T>(
     rt,
     { ...DEFAULT_REF, ...ref },

@@ -190,7 +190,7 @@ The initial profile default pattern should export this contract:
 
 ```ts
 // Shown at module scope.
-import type { Cell, RequiresIntegrity } from "commonfabric";
+import type { Cell, FabricBytes, RequiresIntegrity } from "commonfabric";
 
 type ProfileElement = {
   cell: Cell<unknown>;
@@ -223,6 +223,7 @@ type ProfileDefaultPattern = {
   [UI]: VNode;
   name: string;
   avatar: string;
+  picture?: FabricBytes;
   bio: string;
   externalLinks: ExternalProfileLink[];
   verifiedIdentities: VerifiedExternalIdentityCell[];
@@ -253,11 +254,26 @@ type ProfileInbox = {
 
 type SetProfileInboxEvent = {
   inbox?: Cell<ShareInboxPiece>;
+  replacing?: Cell<ShareInboxPiece> | undefined;
 };
 ```
 
-`avatar` starts as a string. The first implementation can use a URL, data URL,
-or emoji-like text. Binary/blob avatar upload is out of scope.
+`picture` is the profile picture: the bytes of a raster image, in any format
+an HTML `<img>` decodes. No media type is stored with it, because the browser
+determines the format of a raster image from its bytes. A profile with no
+picture holds no `picture` property. The owner sets it through `setPicture`,
+which the profile's edit form drives from an image picked with
+`<cf-avatar-input>`; that component crops the image to its centered square and
+scales it to 128 pixels on each side, so the bytes stay small enough to store
+inline and to copy into snapshots.
+
+`avatar` is free text: a URL, a `data:` URL, or a glyph. Its writer
+`setAvatar` remains, but no form or pattern in this repository sends to it, and
+new profiles hold `""`. It stays in the contract because stored profiles and
+deployed readers hold and read it as a string. Every reader draws a profile's
+picture, or else its avatar text, or else initials: `<cf-profile-badge>` does
+so from the live profile, and a pattern that snapshots a profile's appearance
+copies the picture when there is one and the avatar text when there is not.
 
 `bio` (CT-1648) is a short, owner-authored free-text description, the canonical
 shared-profile bio — distinct from Home's legacy `learned.summary`. Like `name`
@@ -293,8 +309,16 @@ uses the host it read the profile from. The pointer holds no secret, since it
 only says where to knock and the inbox decides what it keeps, and it is
 owner-protected, written only through `setInbox`, which takes the link alone
 (`{ inbox: <link> }`) and stores it as `piece`, or nothing (`{}`) to clear the
-pointer. A profile with no inbox holds a pointer without `piece`; a stored
-profile predating the pointer has no `inbox` property.
+pointer. An optional `replacing` makes the write conditional, checked in the
+transaction that writes it: present and `undefined`, it sets the pointer only
+while the profile points at no inbox, and a link, only while the profile
+points at the inbox that link names. An event without the property writes
+unconditionally, so `{ inbox, replacing: undefined }` and `{ inbox }` are
+different events. A link to an inbox holding nothing is a link, and names it.
+A sender that points a profile only when it has no pointer sends
+`replacing: undefined`, since its own read of the pointer is a transaction of
+its own and guards nothing. A profile with no inbox holds a pointer without
+`piece`; a stored profile predating the pointer has no `inbox` property.
 
 The link sits under `piece` rather than being the stored value itself because
 a write to a cell whose document root holds a link goes through the link into
@@ -407,7 +431,7 @@ If `profile` is missing:
 If `profile` is present:
 
 - render the profile default pattern or a compact summary based on
-  `profile.name` and `profile.avatar`
+  `profile.name` and `profile.picture`
 
 This write targets the home default pattern because that is the current durable
 home-field convention used by favorites. If custom home pattern replacement
@@ -441,6 +465,7 @@ and element mutations:
 
 - `profileDefault.name`
 - `profileDefault.avatar`
+- `profileDefault.picture`
 - `profileDefault.elements`
 - `profileDefault.addElement` / `profileDefault.removeElement` writes that
   mutate `elements`
@@ -543,6 +568,7 @@ wish({ query: "#profile" })            // homeDefault.profile
 wish({ query: "#profileSpace" })       // the profile space cell, derived from the profile link
 wish({ query: "#profileName" })        // default profile's initialNameApplied (no `profileName` mirror field post-#3830)
 wish({ query: "#profileAvatar" })      // homeDefault.profile.avatar
+wish({ query: "#profilePicture" })     // homeDefault.profile.picture (image bytes)
 wish({ query: "#profileBio" })         // homeDefault.profile.bio (CT-1648)
 ```
 
@@ -636,7 +662,5 @@ how multi-user patterns build live participant lists on this profile model.
   until explicitly shared?
 - Should the profile default pattern expose `elements` only, or also a
   default-app-compatible `addPiece` stream for reuse?
-- Should avatar be a string permanently, or should the first implementation
-  reserve a future blob shape?
 - How should a user intentionally reset or migrate their profile space if the
   home-space link points to a broken or obsolete profile?

@@ -22,10 +22,10 @@ const LINK_TARGET_ATTR = "data-topics-link-target";
 /**
  * A predicate that tags one `cf-cell-link` for a click.
  *
- * Both of the ones here take the same four arguments — what to look for, the
- * token to tag with, and the two attributes the tag goes in — so the
- * resolve-and-click tail below is written once and handed whichever predicate
- * found the link.
+ * The predicates used for initial selection take the same four arguments —
+ * what to look for, the token to tag with, and the two attributes the tag goes
+ * in. The identity predicate below refines what to look for, but keeps the last
+ * three marking arguments in the same order.
  */
 type MarkLinkPredicate = (
   probe: ProbeApi,
@@ -121,6 +121,49 @@ const markCardOpenLink: MarkLinkPredicate = (
 };
 
 /**
+ * Finds the resolved root cell link at `targetSpace`, `targetScope`, and
+ * `targetId`, and tags it the way {@link markCellLink} does. The complete cell
+ * address keeps replacement marking bound to the link already chosen: one
+ * piece id can name documents in several spaces and scopes.
+ */
+const markResolvedCellLink = (
+  probe: ProbeApi,
+  targetSpace: string,
+  targetScope: string,
+  targetId: string,
+  targetToken: string,
+  clickTargetAttribute: string,
+  linkTargetAttribute: string,
+) => {
+  for (const element of probe.collect("cf-cell-link")) {
+    const link = element as HTMLElement & {
+      _resolvedCell?: {
+        space(): string;
+        id(): string;
+        ref(): { scope?: string; path: readonly unknown[] };
+      };
+    };
+    const cell = link._resolvedCell;
+    if (!cell) continue;
+    const ref = cell.ref();
+    if (
+      cell.space() !== targetSpace ||
+      (ref.scope ?? "space") !== targetScope ||
+      cell.id() !== targetId ||
+      ref.path.length > 0
+    ) continue;
+
+    const chip = link.shadowRoot?.querySelector("cf-chip");
+    const button = chip?.shadowRoot?.querySelector("button");
+    if (!button || !probe.isRendered(button)) continue;
+    link.setAttribute(linkTargetAttribute, targetToken);
+    probe.addToken(button, clickTargetAttribute, targetToken);
+    return true;
+  }
+  return false;
+};
+
+/**
  * Wait for `predicate` to mark a resolved cell link, then issue one trusted
  * browser click on it. Returning the id of the cell the link resolved lets the
  * caller confirm the shell selected exactly the destination the rendered data
@@ -129,8 +172,9 @@ const markCardOpenLink: MarkLinkPredicate = (
  * The view is settled before marking, so the link is resolved against a page
  * that has caught up rather than one mid-render. `clickMarked` carries the rest:
  * it holds until the marked button's box stops moving, measures again just
- * before dispatch, and is handed the mark predicate so a link the page rebuilds
- * in between is tagged again on whatever replaced it.
+ * before dispatch, and is handed a predicate for the resolved destination so a
+ * rebuilt link is tagged again and a surviving link is revalidated without
+ * selecting a different cell carrying the same label or id.
  *
  * `description` names the link in a failure, as the caller would describe it.
  */
@@ -160,13 +204,22 @@ async function markResolveAndClick(
         ) as
           | (HTMLElement & {
             _resolvedCell?: {
+              space(): string;
               id(): string;
-              ref(): { path: readonly unknown[] };
+              ref(): { scope?: string; path: readonly unknown[] };
             };
           })
           | null;
         const cell = found?._resolvedCell;
-        if (cell) return { id: cell.id(), depth: cell.ref().path.length };
+        if (cell) {
+          const ref = cell.ref();
+          return {
+            space: cell.space(),
+            scope: ref.scope ?? "space",
+            id: cell.id(),
+            depth: ref.path.length,
+          };
+        }
         for (const element of root.querySelectorAll("*")) {
           if (element.shadowRoot) stack.push(element.shadowRoot);
         }
@@ -188,9 +241,21 @@ async function markResolveAndClick(
     );
   }
 
+  const remarkArgs: [string, string, string, string, string, string] = [
+    resolved.space,
+    resolved.scope,
+    resolved.id,
+    token,
+    CLICK_TARGET_ATTR,
+    LINK_TARGET_ATTR,
+  ];
   await clickMarked(page, {
     token,
-    remark: { predicate, args: markArgs },
+    remark: {
+      predicate: markResolvedCellLink,
+      args: remarkArgs,
+      revalidateBeforeClick: true,
+    },
   });
   return resolved.id;
 }

@@ -38,6 +38,7 @@ for (const writes of [5, 50, 200]) {
   for (const bytes of [1024, 10240]) {
     for (
       const phase of [
+        "snapshot",
         "first",
         "unchanged",
         "one-write",
@@ -69,7 +70,8 @@ for (const writes of [5, 50, 200]) {
             const input = phase === "warm-parts"
               ? access.buildPreparedDigestInput()
               : undefined;
-            const first = phase === "first" || phase === "prepare-and-recheck"
+            const first = phase === "snapshot" || phase === "first" ||
+                phase === "prepare-and-recheck"
               ? undefined
               : input === undefined
               ? access.preparedDigest()
@@ -77,6 +79,17 @@ for (const writes of [5, 50, 200]) {
             if (phase === "one-write") write(tx, writes, bytes);
             const hitsBefore = getFrozenObjectHashCacheHitsForTestingOnly();
             let recheck: string | undefined;
+            if (phase === "snapshot") {
+              // What a preparation pays for a digest nothing reads: the
+              // deep-frozen input, and neither canonicalization nor a hash.
+              b.start();
+              const snapshot = access.buildPreparedDigestInput();
+              b.end();
+              if (snapshot.consumedReads.length !== 300) {
+                throw new Error("Snapshot did not bind the reads");
+              }
+              return;
+            }
             b.start();
             const digest = input === undefined
               ? access.preparedDigest()

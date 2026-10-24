@@ -202,6 +202,21 @@ opened a thread in 320ms, five people with 6 rows on screen took 1.4-3.5s.
 carries the measurements; `skills/perf-investigation/SKILL.md` is the route to
 take when a pattern is actually slow rather than merely shaped this way.
 
+The same question applies to a list a pattern maps: what one element's child
+reads. A child handed the whole list, usually because its handlers need it, can
+read it in a `computed()` with nothing in the code looking wrong, and then every
+child scans the list on load and again on any change to it.
+
+| Violation                                                                                                               | Fix                                                                                                                                                                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a mapped child's `computed()` that reads the list it is an element of, directly or through a helper it hands the list   | Derive the fact for every element once in the mapping pattern, as a record keyed by element; pass the record as a `ReadonlyCell` and read `record.key(ownKey).get()` in the child, which reads and re-runs on that one entry at run time though the transformer declares the whole record for a key it cannot see |
+| a helper that only reads a cell, declared with a `Writable<T>` parameter or an alias of one, called from a `computed()` | Declare the parameter `Cell<T>` or `ReadonlyCell<T>`; a `materializerWriteInputPaths` entry in `--show-transformed` names a computation the scheduler treats as a writer                                                                                                                                          |
+| a whole value handed to an imported helper inside a `computed()` when the helper uses a few of its fields               | Project the fields before the call, so the emitted schema declares only those                                                                                                                                                                                                                                     |
+
+`skills/pattern-dev/SKILL.md` states the reasons, and
+`packages/patterns/fabrichat/room.tsx` with its `message-row.tsx` is the worked
+case.
+
 ### Visual Review Reminder
 
 When UI is important to the pattern, also look for:

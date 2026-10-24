@@ -109,7 +109,11 @@ describe("initialize-init-data", () => {
         spaceHostMap: { "did:key:zSpace": "https://shard.test" },
         identity,
         spaceDid: identity.did(),
-        experimental: { modernCellRep: true, agentBuiltin: false },
+        experimental: {
+          modernCellRep: true,
+          agentBuiltin: false,
+          localSessionDocuments: true,
+        },
         cfcEnforcementMode: "enforce-strict",
         cfcFlowLabels: "persist",
         cfcReadMaxConfidentiality: ["did:key:zOwner"],

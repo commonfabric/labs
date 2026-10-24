@@ -40,9 +40,8 @@
  * and routes are in [`README.md`](README.md); the operator procedure is in
  * [`../docs/WEAVER.md`](../docs/WEAVER.md).
  */
-import { isDID } from "@commonfabric/identity/did";
 import { parseArgs } from "@std/cli/parse-args";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import {
@@ -321,7 +320,7 @@ const objectField = (
  */
 const storeDirectoryPath = (memoryDir: string): string => {
   try {
-    return decodeURIComponent(new URL(memoryDir).pathname);
+    return fromFileUrl(memoryDir);
   } catch {
     return memoryDir;
   }
@@ -410,12 +409,6 @@ export const resolveConsoleLaunchPlan = (
     "--fabric-api-url",
     "CF_HARNESS_FABRIC_API_URL",
   );
-  if (isDID(space.value)) {
-    throw new Error(
-      `the space must be a name rather than a DID: \`assign_slug\` composes ` +
-        `a piece's URL from the name, and offers none for ${space.value}`,
-    );
-  }
   const store = required(
     options.store,
     instance === undefined || nonEmpty(instance.toolshedStoreDir) === undefined

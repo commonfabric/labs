@@ -2,7 +2,7 @@ export {
   buildObjectBody,
   ciObjectName,
   datePartition,
-  isMainPush,
+  isMainRun,
   isSeed,
   localObjectName,
   objectNameSlug,
@@ -88,11 +88,12 @@ export {
   readNameMaps,
   readRegistrations,
   repositoryPathOf,
-  repositoryRootOf,
   serializeSkipList,
   SKIP_LIST_VARIABLE,
 } from "./registration.ts";
 export type { NameMap, RegistrationCapture, SkipList } from "./registration.ts";
+export type { WholeRun } from "./whole-run.ts";
+export { markWholeRun, readWholeRuns } from "./whole-run.ts";
 export {
   preloadArgument,
   preloadModulePath,
@@ -104,6 +105,7 @@ export {
   isRelativeSourcePath,
   JUnitParseError,
   parseJUnit,
+  readJUnit,
   recordedCases,
 } from "./junit.ts";
 export type { IngestJUnitOptions, JUnitCase } from "./junit.ts";

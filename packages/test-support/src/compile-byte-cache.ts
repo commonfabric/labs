@@ -25,6 +25,7 @@ export interface SerializedModuleBytes {
   patternCoverageSpans?: CachedPatternCoverageSpan[];
   builderSourceSites?: CachedBuilderSourceSitesV1;
   policyManifests?: readonly unknown[];
+  importSpecs?: readonly string[];
 }
 
 export interface CachedBuilderSourceSitesV1 {
@@ -51,6 +52,9 @@ export interface CompiledModuleArtifact {
   patternCoverageSpans?: CachedPatternCoverageSpan[];
   builderSourceSites?: CachedBuilderSourceSitesV1;
   policyManifests?: readonly unknown[];
+
+  /** Specifiers of the `require()` calls in `js`, as the runner lists them. */
+  importSpecs?: readonly string[];
 }
 
 export interface ModuleByteCache {
@@ -118,6 +122,9 @@ export class ProcessModuleByteCache implements ModuleByteCache {
     }
     if (artifact.policyManifests !== undefined) {
       size += JSON.stringify(artifact.policyManifests).length;
+    }
+    if (artifact.importSpecs !== undefined) {
+      size += JSON.stringify(artifact.importSpecs).length;
     }
     return size;
   }
@@ -220,6 +227,9 @@ export class ProcessModuleByteCache implements ModuleByteCache {
       if (artifact.policyManifests !== undefined) {
         serialized.policyManifests = artifact.policyManifests;
       }
+      if (artifact.importSpecs !== undefined) {
+        serialized.importSpecs = artifact.importSpecs;
+      }
       out.push(serialized);
     }
     return out;
@@ -251,6 +261,11 @@ export class ProcessModuleByteCache implements ModuleByteCache {
         e.policyManifests !== undefined &&
         !Array.isArray(e.policyManifests)
       ) continue;
+      if (
+        e.importSpecs !== undefined &&
+        !(Array.isArray(e.importSpecs) &&
+          e.importSpecs.every((spec) => typeof spec === "string"))
+      ) continue;
       const artifact: CompiledModuleArtifact = { js: e.js };
       if (e.sourceMap !== undefined) artifact.sourceMap = e.sourceMap;
       if (patternCoverageSpans !== undefined) {
@@ -261,6 +276,9 @@ export class ProcessModuleByteCache implements ModuleByteCache {
       }
       if (e.policyManifests !== undefined) {
         artifact.policyManifests = [...e.policyManifests];
+      }
+      if (e.importSpecs !== undefined) {
+        artifact.importSpecs = [...e.importSpecs];
       }
       this.#insert(
         e.key,
@@ -297,6 +315,9 @@ function artifactFromModule(
   }
   if (module.policyManifests !== undefined) {
     artifact.policyManifests = [...module.policyManifests];
+  }
+  if (module.importSpecs !== undefined) {
+    artifact.importSpecs = [...module.importSpecs];
   }
   return artifact;
 }

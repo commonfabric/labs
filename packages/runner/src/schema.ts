@@ -20,12 +20,14 @@ import {
   isNontrivialSchema,
   schemaWithProperties,
 } from "@commonfabric/data-model-schema";
+import { hasInlineCellScheme, pinImmutableCell } from "./immutable-cell.ts";
 import { readStatsActive, recordLinkResolution } from "./read-stats.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import { schemaForSpaceCrossing, toMemorySpaceAddress } from "./link-utils.ts";
 import { opaqueReference, toCell } from "./back-to-cell.ts";
+import { literalMemberMatches } from "./schema-literal-match.ts";
 import { type JSONSchema, type SchemaScope } from "./builder/types.ts";
 import { createCell, isCell } from "./cell.ts";
 import {
@@ -36,11 +38,10 @@ import {
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { CfcLabelViewRebaser } from "./cfc/label-view-rebaser.ts";
 import {
+  cfcAcquisitionViewForDereferenceTraces,
   type CfcDocumentLabels,
   type CfcLabelView,
   cfcLabelViewForAddress,
-  cfcLabelViewForDereference,
-  cfcLabelViewForDereferenceTraces,
   cfcLabelViewInDocument,
   cfcLabelViewOriginSpaces,
   cloneCfcLabelView,
@@ -304,13 +305,16 @@ const matchesConcreteValue = (
     return false;
   }
   if (
-    resolved.const !== undefined && !fabricAwareEqual(resolved.const, value)
+    resolved.const !== undefined &&
+    !literalMemberMatches(resolved.const, value, fabricAwareEqual)
   ) {
     return false;
   }
   if (
     Array.isArray(resolved.enum) &&
-    !resolved.enum.some((candidate) => fabricAwareEqual(candidate, value))
+    !resolved.enum.some((candidate) =>
+      literalMemberMatches(candidate, value, fabricAwareEqual)
+    )
   ) {
     return false;
   }
@@ -954,6 +958,7 @@ export function annotateWithBackToCellSymbols(
   synced = false,
   cfcLabelView?: CfcLabelView,
 ) {
+  pinImmutableCell(link, link.id);
   if (
     !isObjectOrArray(value) || isCell(value) ||
     value instanceof FabricPrimitive
@@ -1017,9 +1022,14 @@ export function annotateWithBackToCellSymbols(
  * child. They are kept out of the scheduler's view of what the ACTION read:
  * addresses the declared scope summary does not cover drop the action's
  * execution-context floor to `session`, which stops its observations being
- * adopted across users. The labels themselves are still derived and still
- * applied — CFC's own prepare pass reads the raw activity list and skips
- * internal verifier reads there regardless.
+ * adopted across users. CFC's own prepare pass reads the raw activity list
+ * and skips internal verifier reads there regardless.
+ *
+ * What the view holds is the restriction the handle acquires: the reference
+ * restrictions of the slot each dereference left (CFC §8.2.3), confidentiality
+ * alone. The target's labels are read for the dependency alone and left out
+ * of the view; they are read again, where they are, by whatever consumes the
+ * handle.
  */
 function deriveDereferenceLabelView(
   tx: IExtendedStorageTransaction,
@@ -1027,7 +1037,7 @@ function deriveDereferenceLabelView(
   viewChild: boolean,
 ): CfcLabelView | undefined {
   const derive = () =>
-    cfcLabelViewForDereferenceTraces(
+    cfcAcquisitionViewForDereferenceTraces(
       tx,
       tx.getCfcState().dereferenceTraces.slice(traceStart),
     );
@@ -1328,15 +1338,13 @@ export function validateAndTransform(
       // it, so resolveLink's cap check never sees this hop. Apply it here too,
       // or reading THROUGH the handle escapes the cap the schema declared
       // (#5230).
+      // The handle minted here carries the restrictions of the slot it
+      // stands for, and nothing of the document behind it (CFC §8.2.3).
       cfcLabelView = mergeCfcLabelViews([
         cfcLabelView,
-        isUnknownCellSchema(effectiveSchema)
-          ? cfcLabelViewForAddress(tx, cfcAddressFromLink(link))
-          : cfcLabelViewForDereference(
-            tx,
-            cfcAddressFromLink(link),
-            cfcAddressFromLink(next),
-          ),
+        referenceRestrictionsOf(
+          cfcLabelViewForAddress(tx, cfcAddressFromLink(link)),
+        ),
       ]);
       // We leave the asCell/asStream in the schema, so that createObject
       // knows to create a cell
@@ -1389,7 +1397,7 @@ export function validateAndTransform(
             },
           });
           if (
-            blocked || slot.pendingHopDoc || slot.id.startsWith("data:") ||
+            blocked || slot.pendingHopDoc || hasInlineCellScheme(slot.id) ||
             tx.readValueOrThrow(slot, {
                 nonRecursive: true,
                 meta: linkResolutionProbe,

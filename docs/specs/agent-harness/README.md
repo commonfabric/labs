@@ -24,6 +24,10 @@ are normative. A conforming implementation publishes a conformance statement as
 described in [03-conformance.md](03-conformance.md), including every known
 deviation and reduced-assurance mode.
 
+Each normative clause carries an identifier made of `AH`, for agent harness, an
+area, and a number, such as `AH-CFC-16`. Conformance statements and the audit in
+`packages/cf-harness/audit` cite clauses by that identifier.
+
 ## Reading order
 
 1. [01-runtime-contract.md](01-runtime-contract.md) — invocation, lifecycle,

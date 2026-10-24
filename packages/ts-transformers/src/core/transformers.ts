@@ -57,13 +57,12 @@ export type SchemaHint = {
   readonly definesDocument?: true;
 
   /**
-   * Set on the remainder of a recursion the contract overlay of a handler's
-   * event or state cuts (`overlayContractCapabilities()`): every cell its
-   * reading reaches, outside the value of another cell, is opaque, since no
-   * use the body makes reaches it. Schema generation reads it as
-   * `SchemaHint.cellsOpaque`.
+   * Set on the node a verb's authored event is generated from: the handler
+   * body's capability summary of the event, which narrows each cell of the
+   * generated schema to the capability the body earns at its data path
+   * (`narrowEventCapabilities()`).
    */
-  readonly cellsOpaque?: true;
+  readonly contractCapabilities?: CapabilityParamSummary;
 };
 
 export type ReactiveCapability =
@@ -95,6 +94,15 @@ export type CapabilityParamSummary = {
   readonly escapedPaths?: readonly (readonly string[])[];
   readonly passthrough: boolean;
   readonly wildcard: boolean;
+
+  /**
+   * The static path prefixes below which the body reaches members this
+   * analysis does not name one by one: a wildcard's, and a read through a key
+   * that can name any member. `[]` is the whole parameter. A position below
+   * one may be used in any way the analysis did not record; the use of a
+   * prefix itself is recorded with the other paths.
+   */
+  readonly wildcardPaths?: readonly (readonly string[])[];
 
   /**
    * Write-exhaustiveness is unverifiable for this parameter — `writePaths`
@@ -243,6 +251,16 @@ export type TransformationOptions = {
    * there the author is present and can fix the shape.
    */
   readonly storedSource?: boolean;
+
+  /**
+   * Whether a pattern factory call bound to a `const` is wrapped in
+   * `__cfHelpers.nameInstance(<call>, "<name>")`, so that the pattern builder
+   * takes the binding's name as the instance's identity. Defaults to false:
+   * every sub-pattern instance then keeps its positional identity. The runner
+   * sets it from its `instanceNames` experimental flag
+   * (`docs/development/EXPERIMENTAL_OPTIONS.md`).
+   */
+  readonly instanceNames?: boolean;
 };
 
 export type DiagnosticSeverity = "error" | "warning";

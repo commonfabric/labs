@@ -5,6 +5,7 @@ import { isInertArray } from "@commonfabric/utils/arrays";
 import { isInertPlainObject } from "@commonfabric/utils/objects";
 import {
   assertValidFabricValueLayer,
+  deepFreeze,
   FabricInstance,
   FabricPrimitive,
   refuseFabricInstance,
@@ -68,17 +69,43 @@ function refuseBoundFabricInstance(value: FabricInstance): never {
   refuseFabricInstance(value, "in a pattern binding");
 }
 
+/**
+ * The state one binding walk carries: what resolves a cell, the path to the
+ * value being bound, and the records being rebuilt above it. One is made per
+ * walk and handed down the recursion, so binding a member allocates nothing
+ * beyond the member's own bound form: the path is a stack the walk pushes and
+ * pops around each member, copied only for a resolver, which may keep what it
+ * is given.
+ */
+type BindingWalk = {
+  readonly resolveCellAlias: CellAliasResolver | undefined;
+  readonly ignoreSelfAliases: boolean;
+  readonly path: PropertyKey[];
+  readonly ancestors: IndexTrackingStack<object>;
+};
+
 export function withAliasBindings(
   value: unknown,
   resolveCellAlias?: CellAliasResolver,
   ignoreSelfAliases: boolean = false,
   path: readonly PropertyKey[] = [],
-  ancestors?: IndexTrackingStack<object>,
+  ancestors: IndexTrackingStack<object> = new IndexTrackingStack(),
 ): FabricExecValue {
-  // Turn strongly typed builder values into the serialized binding structure:
-  // cell references become `$alias` records, and data leaves come through as
-  // the `FabricValue`s they are.
+  return bindValue(value, {
+    resolveCellAlias,
+    ignoreSelfAliases,
+    path: [...path],
+    ancestors,
+  });
+}
 
+/**
+ * Helper for `withAliasBindings()`, which binds one value of a walk. Turns
+ * strongly typed builder values into the serialized binding structure: cell
+ * references become `$alias` records, and data leaves come through as the
+ * `FabricValue`s they are.
+ */
+function bindValue(value: unknown, walk: BindingWalk): FabricExecValue {
   // Convert regular cells and results from Cell.get() to opaque refs
   if (isCellResultForDereferencing(value)) value = getCellOrThrow(value);
 
@@ -97,10 +124,10 @@ export function withAliasBindings(
 
     // Otherwise it's an internal reference. Ask the pattern builder how this
     // cell should be represented in the serialized pattern.
-    const alias = resolveCellAlias?.(
+    const alias = walk.resolveCellAlias?.(
       value as Reactive<any>,
-      path,
-      ignoreSelfAliases,
+      [...walk.path],
+      walk.ignoreSelfAliases,
     );
     if (alias === null) return undefined;
     if (alias !== undefined) return alias as unknown as FabricExecValue;
@@ -141,21 +168,14 @@ export function withAliasBindings(
 
   // If this is an INERT array, process each element recursively. A non-inert
   // array falls through to the sanctioned conversion below, which refuses it,
-  // for the same reason a non-inert plain object is refused there: `.map()`
-  // rebuilds by index, so it drops a named or symbol-keyed property and
+  // for the same reason a non-inert plain object is refused there: an
+  // index-by-index rebuild drops a named or symbol-keyed property and
   // EVALUATES an accessor-backed index into a data property, and -- since
   // `.map()` honors `Symbol.species` -- hands back an `Array` subclass instance
   // still carrying its live prototype. The first two produce an array that
   // satisfies `isValidFabricValue()` while meaning something else; the last
   // produces one that does not satisfy it at all.
-  if (isInertArray(value)) {
-    return value.map((v, i) =>
-      withAliasBindings(v, resolveCellAlias, ignoreSelfAliases, [
-        ...path,
-        i,
-      ], ancestors)
-    );
-  }
+  if (isInertArray(value)) return bindElements(value, walk, bindValue);
 
   // A `FabricPrimitive` is an atomic value whose state lives in private fields
   // (zero enumerable own-props), so the `for...in` copy below would flatten it
@@ -212,13 +232,8 @@ export function withAliasBindings(
 
   // If this is an object or a pattern, process each key recursively. A
   // pattern's `nodes` are bound node by node, each node's module as a module;
-  // see `nodesWithAliasBindings()`.
+  // see `bindGraphMember()`.
   if (isObjectOrArray(value) || isPattern(value)) {
-    // Guard against circular object references (e.g. schema objects with
-    // shared identity between $defs and sibling properties); see
-    // `recordWithAliasBindings()`.
-    const ancestorStack = ancestors ?? new IndexTrackingStack<object>();
-
     // If this is a pattern, serialize it through the INTERNAL graph
     // serializer (its toJSON under the internal-serialization context): this
     // function builds the in-memory node representation, so embedded
@@ -229,27 +244,28 @@ export function withAliasBindings(
         ? serializePatternGraph(value)
         : (value as Readonly<Record<string, unknown>>);
 
-    return recordWithAliasBindings(
+    const bound = bindRecord(
       value,
       record,
-      ancestorStack,
-      (key, member) =>
-        (isGraph && key === "nodes")
-          ? nodesWithAliasBindings(
-            member,
-            resolveCellAlias,
-            ignoreSelfAliases,
-            [...path, key],
-            ancestorStack,
-          )
-          : withAliasBindings(
-            member,
-            resolveCellAlias,
-            ignoreSelfAliases,
-            [...path, key],
-            ancestorStack,
-          ),
+      walk,
+      isGraph ? bindGraphMember : bindValue,
     );
+    // A graph holds its schemas deep-frozen: binding the graph's nodes
+    // narrows the argument schema at every slot, and `schemaAtPath()` keeps a
+    // narrowing only for a deep-frozen schema. The walk has just rebuilt
+    // both, record by record and array by array, so the graph has schema
+    // objects of its own to freeze. The same holds for the manifest of
+    // derived internal cells: the runtime keeps the id a partial cause names
+    // by the cause's identity only where the cause is deep-frozen, and a
+    // piece's start asks for each of those ids once per node and per action.
+    if (isGraph) {
+      deepFreeze(bound.argumentSchema);
+      deepFreeze(bound.resultSchema);
+      if (bound.derivedInternalCells !== undefined) {
+        deepFreeze(bound.derivedInternalCells);
+      }
+    }
+    return bound;
   }
 
   // What remains is a leaf that is not an object: a primitive or a function.
@@ -258,16 +274,27 @@ export function withAliasBindings(
   // The only function an execution graph holds is a builder artifact, which
   // stands as itself. A module's own functions (a JavaScript module's
   // `implementation`, an artifact's serializers) never reach here, a module
-  // being bound through its members by `moduleWithAliasBindings()`; so any
-  // other function has no place in the graph, and is refused here rather than
-  // carried to wherever it would fail with less to say about where it came
-  // from.
+  // being bound through its members by `bindModule()`; so any other function
+  // has no place in the graph, and is refused here rather than carried to
+  // wherever it would fail with less to say about where it came from.
   if (!hasEncodableForm(value)) {
     throw new Error(
       "Cannot bind a function that is not a builder artifact into a pattern",
     );
   }
   return value as FabricExecFunction;
+}
+
+/**
+ * Helper for `bindValue()`, which binds a member of a pattern graph: its
+ * `nodes` node by node, every other member as a value.
+ */
+function bindGraphMember(
+  member: unknown,
+  walk: BindingWalk,
+  key: string,
+): FabricExecValue {
+  return key === "nodes" ? bindNodes(member, walk) : bindValue(member, walk);
 }
 
 /**
@@ -288,33 +315,36 @@ export function moduleWithAliasBindings(
   path: readonly PropertyKey[] = [],
   ancestors: IndexTrackingStack<object> = new IndexTrackingStack(),
 ): Module {
+  return bindModule(module, {
+    resolveCellAlias,
+    ignoreSelfAliases,
+    path: [...path],
+    ancestors,
+  });
+}
+
+/** Helper for `moduleWithAliasBindings()`, which binds a module of a walk. */
+function bindModule(module: Module, walk: BindingWalk): Module {
   // A module is read by key here, which its declared type does not offer.
   const members = module as unknown as Readonly<Record<string, unknown>>;
-  const result = recordWithAliasBindings(
-    module,
-    members,
-    ancestors,
-    (key, member) =>
-      ((typeof member === "function") && !isPattern(member))
-        ? member
-        : withAliasBindings(
-          member,
-          resolveCellAlias,
-          ignoreSelfAliases,
-          [...path, key],
-          ancestors,
-        ),
-  );
+  const result = bindRecord(module, members, walk, bindModuleMember);
 
   // Rebuilt key by key from a module, each member either standing as it was
   // or bound as the value it was, so the result has the module's shape.
   return result as unknown as Module;
 }
 
+/** Helper for `bindModule()`, which binds one member of a module. */
+function bindModuleMember(member: unknown, walk: BindingWalk): unknown {
+  return ((typeof member === "function") && !isPattern(member))
+    ? member
+    : bindValue(member, walk);
+}
+
 /**
  * Binds a pattern graph's `nodes`: each node is a record whose `module` is a
- * module, bound by `moduleWithAliasBindings()`, and whose other members are
- * execution values.
+ * module, bound by `bindModule()`, and whose other members are execution
+ * values.
  *
  * What is only asserted by position is checked before it is relied on: a
  * `nodes` that is not an inert array, a node that is not an inert plain object,
@@ -322,82 +352,77 @@ export function moduleWithAliasBindings(
  * accepts are each walked as the value they are, which refuses what is not
  * inert rather than rebuilding it member by member.
  */
-function nodesWithAliasBindings(
-  nodes: unknown,
-  resolveCellAlias: CellAliasResolver | undefined,
-  ignoreSelfAliases: boolean,
-  path: readonly PropertyKey[],
-  ancestors: IndexTrackingStack<object>,
-): FabricExecValue {
-  if (!isInertArray(nodes)) {
-    return withAliasBindings(
-      nodes,
-      resolveCellAlias,
-      ignoreSelfAliases,
-      path,
-      ancestors,
-    );
-  }
+function bindNodes(nodes: unknown, walk: BindingWalk): FabricExecValue {
+  if (!isInertArray(nodes)) return bindValue(nodes, walk);
+  return bindElements(nodes, walk, bindNode);
+}
 
-  return nodes.map((node, i) => {
-    const nodePath = [...path, i];
-    if (!isInertPlainObject(node)) {
-      return withAliasBindings(
-        node,
-        resolveCellAlias,
-        ignoreSelfAliases,
-        nodePath,
-        ancestors,
-      );
-    }
-    return recordWithAliasBindings(
-      node,
-      node,
-      ancestors,
-      (key, member) =>
-        ((key === "module") && isInertPlainObject(member) && isModule(member))
-          ? moduleWithAliasBindings(
-            member,
-            resolveCellAlias,
-            ignoreSelfAliases,
-            [...nodePath, key],
-            ancestors,
-          )
-          : withAliasBindings(
-            member,
-            resolveCellAlias,
-            ignoreSelfAliases,
-            [...nodePath, key],
-            ancestors,
-          ),
-    );
-  });
+/** Helper for `bindNodes()`, which binds one node of a pattern graph. */
+function bindNode(node: unknown, walk: BindingWalk): FabricExecValue {
+  if (!isInertPlainObject(node)) return bindValue(node, walk);
+  return bindRecord(node, node, walk, bindNodeMember);
+}
+
+/** Helper for `bindNode()`, which binds one member of a node. */
+function bindNodeMember(
+  member: unknown,
+  walk: BindingWalk,
+  key: string,
+): FabricExecValue {
+  return ((key === "module") && isInertPlainObject(member) && isModule(member))
+    ? bindModule(member, walk) as unknown as FabricExecValue
+    : bindValue(member, walk);
+}
+
+/**
+ * Helper for the binding walks, which binds each element of an inert array
+ * through `bindElement`, at its index on the walk's path. A hole stays a
+ * hole: the data model tells one from a stored `undefined`.
+ */
+function bindElements<Element>(
+  elements: readonly unknown[],
+  walk: BindingWalk,
+  bindElement: (element: unknown, walk: BindingWalk) => Element,
+): Element[] {
+  const result: Element[] = new Array(elements.length);
+  for (let index = 0; index < elements.length; index++) {
+    if (!(index in elements)) continue;
+    walk.path.push(index);
+    result[index] = bindElement(elements[index], walk);
+    walk.path.pop();
+  }
+  return result;
 }
 
 /**
  * Helper for the binding walks, which rebuilds a record key by key through
- * `bindMember`, dropping a member that binds to `undefined`.
+ * `bindMember`, each member at its key on the walk's path, dropping a member
+ * that binds to `undefined`.
  *
- * `original` is what goes onto `ancestors`, and what a pattern's derivation link
- * is carried from: the record walked may be a pattern's serialized graph rather
- * than the pattern itself. `ancestors` holds the records being rebuilt above
- * this one, each only for as long as it is being rebuilt. So a record reached
- * again while it is on `ancestors` closes a cycle, and binds to `{}`; one
- * reached again afterward is shared structure, and is rebuilt at each site.
+ * `original` is what goes onto the walk's ancestors, and what a pattern's
+ * derivation link is carried from: the record walked may be a pattern's
+ * serialized graph rather than the pattern itself. The ancestors are the
+ * records being rebuilt above this one, each only for as long as it is being
+ * rebuilt. So a record reached again while it is among them closes a cycle,
+ * and binds to `{}`; one reached again afterward is shared structure, and is
+ * rebuilt at each site.
  */
-function recordWithAliasBindings<Member>(
+function bindRecord<Member>(
   original: object,
   record: Readonly<Record<string, unknown>>,
-  ancestors: IndexTrackingStack<object>,
-  bindMember: (key: string, member: unknown) => Member,
+  walk: BindingWalk,
+  bindMember: (member: unknown, walk: BindingWalk, key: string) => Member,
 ): Record<string, Member> {
+  const ancestors = walk.ancestors;
   if (ancestors.has(original)) return {};
   ancestors.push(original);
 
   const result: Record<string, Member> = {};
   try {
     for (const key in record) {
-      const bound = bindMember(key, record[key]);
+      walk.path.push(key);
+      const bound = bindMember(record[key], walk, key);
+      walk.path.pop();
       if (bound !== undefined) {
         result[key] = bound;
       }

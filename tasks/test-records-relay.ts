@@ -225,7 +225,7 @@ async function readArtifactRecords(dir: string): Promise<TestRecord[]> {
     if (line.length === 0) continue;
     const record = parseRecordLine(line);
     if (record === undefined) {
-      console.warn(`test records: dropped an unparsable line in ${dir}`);
+      console.warn(`test records: dropped a line no reader accepts in ${dir}`);
       continue;
     }
     records.push(record);

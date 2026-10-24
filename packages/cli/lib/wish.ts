@@ -21,10 +21,10 @@ import { throwOnSpaceAuthorizationError } from "./utils.ts";
  * The blessed, headless read path for wish targets (CT-1834).
  *
  * A wish target — `#profile`, the profile scalars (`#profileName`,
- * `#profileAvatar`, `#profileBio`, `#profileSpace`), or any other well-known
- * target — is resolved through the SAME runner builtin the runtime uses
- * (`packages/runner/src/builtins/wish.ts`), driven with `headless: true` so the
- * suggestion/picker UI patterns never spin up. Resolution (default → MRU →
+ * `#profileAvatar`, `#profilePicture`, `#profileBio`, `#profileSpace`), or any
+ * other well-known target — is resolved through the SAME runner builtin the
+ * runtime uses (`packages/runner/src/builtins/wish.ts`), driven with
+ * `headless: true` so the suggestion/picker UI patterns never spin up. Resolution (default → MRU →
  * first, runtime-enforced labels at read time) lives entirely in that builtin;
  * this helper never re-implements it. That is the whole point: consumers that
  * "cannot wish" (offline caches demoting to witness/echo, agents, scripts) get

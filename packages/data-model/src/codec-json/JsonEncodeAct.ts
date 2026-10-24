@@ -1,11 +1,46 @@
-import { isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 import type { FabricValue } from "@/interface.ts";
 import { BaseEncodeAct } from "@/codec-common";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { ENCODING_PREFIX_TAG, type JsonCodecValue } from "./interface.ts";
-import { isEncodedInstance } from "./wire-text.ts";
+
+/**
+ * What an act tracks from its first `/`-keyed object on, so that each such
+ * object can choose its escape when its own walk returns, without walking what
+ * it encoded a second time.
+ */
+type EscapeState = {
+  /** How many `/`-keyed objects are being encoded right now. */
+  depth: number;
+
+  /**
+   * How many forms the act has built that are not quote-safe, which is to say
+   * that a `/quote` cannot hold: every tagged value, `/hole` run, and `/object`
+   * escape. A subtree is quote-safe exactly when this is the same after
+   * encoding it as before.
+   */
+  unquotableCount: number;
+
+  /**
+   * The `/quote` wrap built most recently, or `undefined` before the first. A
+   * wrap is a fresh object, so an encoded value is the wrap just built exactly
+   * when it is identical to this one.
+   */
+  latestQuote: JsonCodecValue | undefined;
+
+  /** The literal that `latestQuote` quotes. */
+  latestLiteral: JsonCodecValue;
+
+  /**
+   * One entry per `/quote` wrap sitting in a container under a `/`-keyed
+   * object that is being encoded, kept until the nearest such object is
+   * finished. Calling an entry replaces its wrap, where it sits, with the
+   * literal it quotes. Entries are in the order their wraps were built, so
+   * those under an object are the ones added since its walk began.
+   */
+  readonly pendingUnwraps: (() => void)[];
+};
 
 /**
  * One act of encoding a `FabricValue` to this format's JSON text.
@@ -17,6 +52,17 @@ import { isEncodedInstance } from "./wire-text.ts";
  * being neither `null` nor absent.
  */
 export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
+  /**
+   * The escape bookkeeping, or `undefined` until this act encodes its first
+   * `/`-keyed object, so that an act which encodes none allocates nothing for
+   * it.
+   */
+  #escape: EscapeState | undefined;
+
+  //
+  // Instance members
+  //
+
   /**
    * @inheritDoc
    *
@@ -34,17 +80,27 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
    * Prepends `/` to the tag to produce the JSON key. See `3-json-encoding.md`
    * Section 2.
    *
-   * The result is not frozen. An encode-side tree is stringified and
-   * discarded without ever reaching a caller, so the deep-frozen invariant
-   * `JsonCodecValue` states does not cover it, and freezing every tagged node
-   * on the way out is measurable on small values. The meta-tag call sites
-   * below freeze what they build, where the cost is already paid by the
-   * rebuild around it.
+   * Every form built here is one a `/quote` cannot hold, this class's own
+   * `/hole` and `/object` forms included, and is counted as such. A `/quote`
+   * wrap is the one `/`-keyed form that is not built here.
+   *
+   * The result is not frozen, and neither is anything else this act builds. An
+   * encode-side tree is stringified and discarded without ever reaching a
+   * caller, so the deep-frozen invariant `JsonCodecValue` states does not
+   * cover it, and freezing every tagged node on the way out is measurable on
+   * small values.
    */
   protected override wrapTag(
     tag: string,
     state: JsonCodecValue,
   ): JsonCodecValue {
+    // With no bookkeeping there has been no `/`-keyed object, and so there is
+    // nothing whose quote-safety this form could decide.
+    const escape = this.#escape;
+    if (escape !== undefined) {
+      escape.unquotableCount++;
+    }
+
     return { [`/${tag}`]: state } as JsonCodecValue;
   }
 
@@ -60,6 +116,7 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
     this.enter(value);
 
     const result: JsonCodecValue[] = [];
+    const tracking = JsonEncodeAct.#ifEscaping(this.#escape);
     try {
       let i = 0;
       while (i < value.length) {
@@ -69,11 +126,14 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
             count++;
             i++;
           }
-          result.push(
-            Object.freeze(this.wrapTag(CODEC_META_TAGS.hole, count)),
-          );
+          result.push(this.wrapTag(CODEC_META_TAGS.hole, count));
         } else {
-          result.push(this.encodeValue(value[i]!));
+          const encoded = this.encodeValue(value[i]!);
+
+          result.push(encoded);
+          if (tracking !== undefined && encoded === tracking.latestQuote) {
+            JsonEncodeAct.#deferUnwrap(tracking, result, result.length - 1);
+          }
           i++;
         }
       }
@@ -81,7 +141,7 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
       this.leave(value);
     }
 
-    return result as JsonCodecValue;
+    return result;
   }
 
   /**
@@ -93,16 +153,14 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
    * order. See `3-json-encoding.md` Section 10.
    *
    * A `/`-prefixed key collides with the tag form, so an object bearing one is
-   * escaped per `3-json-encoding.md` Section 6: all values are encoded first,
-   * and if every one is quote-safe the whole object is wrapped in `/quote` with
-   * any `/quote` children collapsed into it, and otherwise in `/object` so that
-   * the decoder walks the entries.
+   * escaped per `3-json-encoding.md` Section 6. If everything under it is
+   * quote-safe, the whole object is wrapped in `/quote`, with each `/quote`
+   * wrap beneath it replaced by the literal that one quotes, and otherwise it
+   * is wrapped in `/object` so that the decoder walks the entries.
    */
   protected override encodePlainObject(
     value: Record<string, FabricValue>,
   ): JsonCodecValue {
-    this.enter(value);
-
     // TODO(danfuzz): The UTF-8 order computed here does not survive the
     // assignment below. JavaScript enumerates integer-index-like keys first
     // and in numeric order, so an object carrying `"10"` and `"2"` is written
@@ -113,39 +171,79 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
     // would actually deliver it. The case
     // `record keys that read as integers` in
     // `packages/data-model/test/fixtures/fvj1-conformance.json` records it.
+    const keys = utf8SortedKeysOf(value);
+
+    this.enter(value);
+
     const result: Record<string, JsonCodecValue> = {};
-    let anySlashKey = false;
+
+    // `escaped` is the bookkeeping if this object is itself `/`-keyed, and
+    // `tracking` is the bookkeeping if this object or one enclosing it is. The
+    // two counts are read only for an escaped object.
+    const escaped = JsonEncodeAct.#anySlashKey(keys)
+      ? (this.#escape ??= {
+        depth: 0,
+        unquotableCount: 0,
+        latestQuote: undefined,
+        latestLiteral: null,
+        pendingUnwraps: [],
+      })
+      : undefined;
+    const tracking = escaped ?? JsonEncodeAct.#ifEscaping(this.#escape);
+    const unquotableBefore = escaped?.unquotableCount ?? 0;
+    const unwrapsBefore = escaped?.pendingUnwraps.length ?? 0;
+
+    if (escaped !== undefined) {
+      escaped.depth++;
+    }
     try {
-      for (const key of utf8SortedKeysOf(value)) {
+      for (const key of keys) {
         JsonEncodeAct.assertEncodableKey(key);
 
-        if (key.startsWith("/")) {
-          anySlashKey = true;
+        const encoded = this.encodeValue(value[key]!);
+
+        result[key] = encoded;
+        if (tracking !== undefined && encoded === tracking.latestQuote) {
+          JsonEncodeAct.#deferUnwrap(tracking, result, key);
         }
-        result[key] = this.encodeValue(value[key]!);
       }
     } finally {
+      if (escaped !== undefined) {
+        escaped.depth--;
+      }
       this.leave(value);
     }
 
-    if (anySlashKey) {
-      if (Object.values(result).every((v) => JsonEncodeAct.#isQuoteSafe(v))) {
-        const unquoted = Object.freeze(
-          Object.fromEntries(
-            Object.entries(result).map((
-              [k, v],
-            ) => [k, JsonEncodeAct.#unquote(v)]),
-          ),
-        );
-        return Object.freeze(
-          this.wrapTag(CODEC_META_TAGS.quote, unquoted),
-        );
-      }
-      return Object.freeze(this.wrapTag(CODEC_META_TAGS.object, result));
+    if (escaped === undefined) {
+      return result;
     }
 
-    return result as JsonCodecValue;
+    const unwraps = escaped.pendingUnwraps;
+
+    if (escaped.unquotableCount !== unquotableBefore) {
+      // Something under this object is not quote-safe, which is as true of
+      // every object enclosing it, so nothing will quote the wraps beneath.
+      unwraps.length = unwrapsBefore;
+      return this.wrapTag(CODEC_META_TAGS.object, result);
+    }
+
+    // Everything under this object is literal but for the wraps beneath it,
+    // and a wrap left inside a `/quote` decodes as a plain object keyed
+    // `/quote`. So each is replaced by the literal it quotes.
+    for (let at = unwrapsBefore; at < unwraps.length; at++) {
+      unwraps[at]!();
+    }
+    unwraps.length = unwrapsBefore;
+
+    const quote = { [`/${CODEC_META_TAGS.quote}`]: result };
+    escaped.latestQuote = quote;
+    escaped.latestLiteral = result;
+    return quote;
   }
+
+  //
+  // Static members
+  //
 
   static {
     Object.freeze(this);
@@ -153,46 +251,56 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
   }
 
   /**
-   * Returns true if the already-encoded codec value `v` can be embedded
-   * inside a /quote wrap without inner decoding: primitives, plain
-   * objects/arrays free of non-/quote encoded instances, and /quote-wrapped
-   * values (which `#unquote()` can collapse).
+   * Indicates whether any of `keys` is `/`-prefixed, given them in UTF-8 byte
+   * order. That order puts the `/`-prefixed keys together, after nothing but
+   * the empty key and keys whose first character is below `/`, so the first
+   * key past those decides it.
    */
-  static #isQuoteSafe(v: JsonCodecValue): boolean {
-    if (!isObjectOrArray(v)) return true;
-    if (Array.isArray(v)) {
-      return v.every((item) => JsonEncodeAct.#isQuoteSafe(item));
+  static #anySlashKey(keys: readonly string[]): boolean {
+    const slash = 0x2f;
+
+    for (let at = 0; at < keys.length; at++) {
+      // `NaN` for the empty key, which is neither of these.
+      const first = keys[at]!.charCodeAt(0);
+
+      if (first === slash) {
+        return true;
+      } else if (first > slash) {
+        return false;
+      }
     }
-    if (!isEncodedInstance(v)) {
-      return Object.values(v).every((item) =>
-        JsonEncodeAct.#isQuoteSafe(item as JsonCodecValue)
-      );
-    }
-    return Object.keys(v)[0] === "/quote";
+
+    return false;
   }
 
   /**
-   * Unwraps /quote forms one level so their literal content can be embedded
-   * directly inside a parent /quote. The inner content of a /quote is already
-   * literal and must not be recursed into.
+   * Returns `escape` if a `/`-keyed object is being encoded, and `undefined`
+   * otherwise. A container tracks the `/quote` wraps among its members only in
+   * the first case, because a wrap with no such object around it is never
+   * replaced.
    */
-  static #unquote(v: JsonCodecValue): JsonCodecValue {
-    if (!isObjectOrArray(v)) {
-      return v;
-    } else if (Array.isArray(v)) {
-      const result = v.map(JsonEncodeAct.#unquote) as JsonCodecValue;
-      return Object.freeze(result);
-    } else if (
-      isEncodedInstance(v) && Object.keys(v)[0] === "/quote"
-    ) {
-      return (v as Record<string, JsonCodecValue>)["/quote"]!;
-    } else {
-      const result = Object.fromEntries(
-        Object.entries(v).map(
-          ([k, val]) => [k, JsonEncodeAct.#unquote(val as JsonCodecValue)],
-        ),
-      ) as JsonCodecValue;
-      return Object.freeze(result);
-    }
+  static #ifEscaping(
+    escape: EscapeState | undefined,
+  ): EscapeState | undefined {
+    return (escape !== undefined && escape.depth > 0) ? escape : undefined;
+  }
+
+  /**
+   * Helper for the two container walks, which records that `holder[key]` is
+   * the wrap `escape.latestQuote`, so that an enclosing `/quote` can put the
+   * literal there instead. The walks call this for a wrap alone, which is what
+   * keeps their loops from allocating anything for the members that are not
+   * one.
+   */
+  static #deferUnwrap<K extends PropertyKey>(
+    escape: EscapeState,
+    holder: Record<K, JsonCodecValue>,
+    key: K,
+  ): void {
+    const literal = escape.latestLiteral;
+
+    escape.pendingUnwraps.push(() => {
+      holder[key] = literal;
+    });
   }
 }

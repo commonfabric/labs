@@ -295,6 +295,7 @@ describe("CFMap Types - CfBoundsChangeDetail", () => {
       bounds: { north: 38, south: 37, east: -122, west: -123 },
       center: { lat: 37.5, lng: -122.5 },
       zoom: 10,
+      userInitiated: false,
     };
     expect(detail.bounds.north).toBe(38);
     expect(detail.center.lat).toBe(37.5);

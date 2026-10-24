@@ -7,9 +7,10 @@ on:
   pull_request:
     branches:
       - main
-    # A label is how a pull request asks for the full run, so adding or
-    # removing one starts a run that reads the labels it now carries. A
-    # re-run would read the labels of the event it repeats.
+    # A label is how a pull request asks for the full run or for more or
+    # fewer of the tests chosen by score, so adding or removing one starts a
+    # run that reads the labels it now carries. A re-run would read the
+    # labels of the event it repeats.
     types: [opened, synchronize, reopened, labeled, unlabeled]
   # The run of the suites in the next day's order calls this workflow with that
   # day's seed; see .github/workflows/test-order-tomorrow.yml. A called run
@@ -84,29 +85,27 @@ jobs:
   # test, or a configuration of existing tests is a change to the topology and
   # never to this file. docs/development/test-selection.md is the guide.
   #
-  # A pull request runs five lanes over a selection chosen from the record
-  # store. A push to main, a called run, and a pull request labelled `ci: full`
-  # run every test instead, over as many lanes as `plan-full` counts.
+  # A pull request runs a selection chosen from the record store. A push to
+  # main, a called run, and a pull request labelled `ci: full` run every test
+  # instead. Either way the run takes as many lanes as `plan` counts.
   # ---------------------------------------------------------------------------
-  plan-full:
-    name: "Plan Full Run"
-    if: >-
-      github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.labels.*.name, 'ci: full')
+  plan:
+    name: "Plan the Run"
     runs-on: ubuntu-latest
     timeout-minutes: *job-timeout
     permissions:
       contents: read
-    # The lanes read these, and fall back to a pull request's five lanes over
-    # a selection where this job was skipped.
     outputs:
       of: ${{ steps.count.outputs.of }}
       lanes: ${{ steps.count.outputs.lanes }}
-      args: --full
+      args: ${{ steps.count.outputs.args }}
     steps:
+      # A pull request's plan reads what the change touched, which is the
+      # diff against the merge base, so it needs real history.
       - name: 📥 Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
           persist-credentials: false
 
       - name: 🦕 Setup Deno
@@ -115,26 +114,42 @@ jobs:
       - name: 🔍 Verify lock file & install dependencies
         uses: ./.github/actions/deno-install
 
-      # A count is all of the plan that passes from here to the lanes. Each lane
-      # reads the same tree against the same manifest and packs the same plan
-      # for itself, so there is no second planner to disagree with the lanes.
-      - name: 🗺️ Count the lanes the full run needs
+      # A count and the arguments every lane takes are all of the plan that
+      # passes from here to the lanes. Each lane reads the same tree against
+      # the same manifest and packs the same plan for itself, so there is no
+      # second planner to disagree with the lanes. A pull request's labels
+      # decide whether it runs everything and how much it chooses by score,
+      # and a label the count cannot read fails this step.
+      - name: 🗺️ Count the lanes the run needs
         id: count
         timeout-minutes: *work-timeout
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
-          of=$(deno run -A tasks/ci-lane.ts --full --lane-count)
+          if [ "$EVENT" = pull_request ]; then
+            set -- --base "origin/$BASE_REF"
+            labels=$(jq -r '.[]' <<< "$LABELS")
+            while IFS= read -r label; do
+              if [ -n "$label" ]; then set -- "$@" --label "$label"; fi
+            done <<< "$labels"
+          else
+            set -- --full
+          fi
+          run=$(deno run -A tasks/ci-lane.ts --lane-count "$@")
+          of=$(jq -er '.of | numbers' <<< "$run")
+          args=$(jq -er '.args | join(" ")' <<< "$run")
           lanes=$(jq -cn --argjson of "$of" '[range(1; $of + 1)]')
-          echo "of=$of" >> "$GITHUB_OUTPUT"
-          echo "lanes=$lanes" >> "$GITHUB_OUTPUT"
+          {
+            echo "of=$of"
+            echo "lanes=$lanes"
+            echo "args=$args"
+          } >> "$GITHUB_OUTPUT"
 
   tests:
-    name: "Tests (${{ matrix.lane }}/${{ needs.plan-full.outputs.of || 5 }})"
-    needs: plan-full
-    # A pull request skips `plan-full`, so its lanes start at once; a run of
-    # every test waits for the count.
-    if: >-
-      !cancelled() &&
-      (needs.plan-full.result == 'success' || needs.plan-full.result == 'skipped')
+    name: "Tests (${{ matrix.lane }}/${{ needs.plan.outputs.of }})"
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: *lane-job-timeout
     permissions:
@@ -142,16 +157,15 @@ jobs:
     env:
       CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
       LANE_ARGS: >-
-        --lane ${{ matrix.lane }} --of ${{ needs.plan-full.outputs.of || 5 }}
-        ${{ needs.plan-full.outputs.args ||
-        format('--base origin/{0}', github.base_ref) }}
-      LANE_JOB: Tests (${{ matrix.lane }}/${{ needs.plan-full.outputs.of || 5 }})
+        --lane ${{ matrix.lane }} --of ${{ needs.plan.outputs.of }}
+        ${{ needs.plan.outputs.args }}
+      LANE_JOB: Tests (${{ matrix.lane }}/${{ needs.plan.outputs.of }})
     strategy:
       fail-fast: false
       matrix:
         # Every lane of the run packs the same plan and takes its own share of
         # it, so nothing tells a lane what to run beyond its number.
-        lane: ${{ fromJSON(needs.plan-full.outputs.lanes || '[1, 2, 3, 4, 5]') }}
+        lane: ${{ fromJSON(needs.plan.outputs.lanes) }}
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -204,13 +218,13 @@ jobs:
       # it needs, and one entry holding both would keep whichever the first
       # lane to save happened to build.
       - name: ♻️ Restore/save the lanes' default-posture Toolshed binary
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-cache/binaries/toolshed-baked-default
           key: lane-binary-toolshed-baked-default-${{ steps.binary-cache-key.outputs.key }}
 
       - name: ♻️ Restore/save the lanes' opposite-posture Toolshed binary
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-cache/binaries/toolshed-baked-opposite
           key: lane-binary-toolshed-baked-opposite-${{ steps.binary-cache-key.outputs.key }}
@@ -221,7 +235,7 @@ jobs:
       # lane restoring an older entry saves a fresher one; an entry an exact
       # key hits is never saved again.
       - name: ♻️ Restore/save the lanes' pattern compile byte cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-cache/compile
           key: cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ github.job }}-${{ matrix.lane }}-${{ hashFiles('packages/patterns/**', 'packages/generated-patterns/**') }}
@@ -302,17 +316,20 @@ jobs:
       !cancelled() &&
       (github.event_name == 'pull_request' || github.event_name == 'push')
     needs:
-      - plan-full
+      - plan
       - tests
     runs-on: ubuntu-latest
     timeout-minutes: *job-timeout
-    # The coverage gate reads the pull request's description as it stands,
-    # which is where an acceptance is written.
+    # The coverage gates read the pull request's description as it stands,
+    # which is where an acceptance is written, and on a push read what the
+    # parent commit's run measured from that run's artifacts.
     permissions:
+      actions: read
       contents: read
       pull-requests: read
-    # The coverage report writes the run's coverage figures into this spool as
-    # measurements, which the shipping step sends to the record store.
+    # The coverage gates write the record of each gate they judge into this
+    # spool, and the coverage report writes the run's coverage figures into it
+    # as measurements. The shipping step sends both to the record store.
     env:
       CF_TEST_RECORDS_DIR: ${{ github.workspace }}/test-records-spool
     steps:
@@ -364,23 +381,47 @@ jobs:
           deno task check-test-topology --commit "$GITHUB_SHA"
           --records test-records-artifacts
 
-      # Coverage measured through a failing run says nothing about whether the
-      # change was tested, so a run whose tests did not pass is reported
-      # rather than gated. The description is read as it stands rather than
-      # from the event, since a re-run repeats the event it was started by,
-      # and an acceptance written after the push is what a re-run is for.
+      # Each coverage gate the lanes' plan chose is judged and recorded, on
+      # every run: the records are what score the gates. Only a pull request
+      # can fail for one, and only for a set its change reaches. Coverage
+      # measured through a failing run says nothing about whether the change
+      # was tested, so a run whose tests did not pass is reported rather than
+      # gated. The description is read as it stands rather than from the
+      # event, since a re-run repeats the event it was started by, and an
+      # acceptance written after the push is what a re-run is for. A push
+      # reads the description of the pull request it merged, so that a rise
+      # that pull request accepted is not recorded as a failure. The gate
+      # packs the lanes' plan from the count and the arguments `plan` handed
+      # them. The arguments are a list of words, and splitting them is the
+      # point.
       - name: 🔎 Hold the measured sets to their baselines
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() }}
         timeout-minutes: *work-timeout
         env:
-          BASE_REF: ${{ github.base_ref }}
+          EVENT: ${{ github.event_name }}
+          OF: ${{ needs.plan.outputs.of }}
+          PLAN_ARGS: ${{ needs.plan.outputs.args }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           JOB_RESULTS: ${{ toJSON(needs) }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          body=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""')
-          args=(--base "origin/$BASE_REF" --reports lane-coverage
-            --body "$body" --comment coverage-comment.json --pr "$PR_NUMBER")
+          if [[ "$EVENT" == pull_request ]]; then
+            body=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""')
+            args=(--body "$body" --comment coverage-comment.json
+              --pr "$PR_NUMBER")
+          else
+            # Nothing a gate finds fails the default branch, so a description
+            # it cannot read leaves its gates judged as though nothing were
+            # accepted, and says so.
+            if ! body=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].body // ""'); then
+              echo "::warning::The description of the pull request this push merged could not be read, so no rise is accepted."
+              body=""
+            fi
+            args=(--default-branch --body "$body")
+          fi
+          # shellcheck disable=SC2206
+          args+=(--of "$OF" $PLAN_ARGS --reports lane-coverage)
           if [[ "$(jq -r '.tests.result' <<< "$JOB_RESULTS")" != success ]]; then
             args+=(--tests-failed)
           fi
@@ -407,13 +448,14 @@ jobs:
         timeout-minutes: *work-timeout
         run: deno run -A tasks/coverage-report.ts --reports lane-coverage
 
-      # The run's coverage measurements, for the dashboard's trend and the
-      # test-selection publisher, which read them from the record store, and
-      # for the run report, which reads them from this run's artifacts. Only
-      # a push ships them, because every reader takes a figure from a push to
-      # main alone. This job runs no test, so it ships nothing else.
+      # The record of each coverage gate this run judged, for the
+      # test-selection publisher, which scores them, and for the run report,
+      # which reads them from this run's artifacts. A push ships the run's
+      # coverage measurements beside them, for the dashboard's trend and the
+      # publisher's baselines; only a push writes those, because every reader
+      # takes a figure from a push to main alone.
       - name: 📤 Ship test records
-        if: ${{ !cancelled() && github.event_name == 'push' }}
+        if: ${{ !cancelled() }}
         uses: ./.github/actions/test-records-ship
         with:
           artifact: coverage
@@ -616,7 +658,7 @@ jobs:
       - name: 📝 Generate attestation for toolshed binary
         id: attest_toolshed
         timeout-minutes: *work-timeout
-        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1.4.4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ./dist/toolshed
           subject-digest: sha256:${{ steps.binary_processing.outputs.toolshed_hash }}
@@ -624,7 +666,7 @@ jobs:
       - name: 📝 Generate attestation for cf binary
         id: attest_cf
         timeout-minutes: *work-timeout
-        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1.4.4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ./dist/cf
           subject-digest: sha256:${{ steps.binary_processing.outputs.cf_hash }}
@@ -632,7 +674,7 @@ jobs:
       - name: 📝 Generate attestation for tarball
         id: attest_tarball
         timeout-minutes: *work-timeout
-        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1.4.4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: https://storage.cloud.google.com/commontools-build-artifacts/workspace-artifacts/labs-${{ github.sha }}.tar.gz
           subject-digest: sha256:${{ steps.binary_processing.outputs.tarball_hash }}
@@ -663,12 +705,12 @@ jobs:
           done
 
       - name: 🔑 Authenticate to Google Cloud
-        uses: google-github-actions/auth@3a3c4c57d294ef65efaaee4ff17b22fa88dd3c69 # v1.3.0
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: ⚙️ Setup Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@e30db14379863a8c79331b04a9969f4c1e225e0b # v1.1.1
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       # A release artifact is named after the commit it was built from, and a
       # host keeps whatever it has already downloaded under that name. So the
@@ -708,30 +750,6 @@ jobs:
           fi
           echo "::endgroup::"
 
-  # Automatic deployment to staging (rapids)
-  deploy-rapids:
-    name: "Deploy to Rapids (Staging)"
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: ["attest-binaries"]
-    runs-on: ubuntu-latest
-    environment: toolshed
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🦕 Setup Deno
-        uses: ./.github/actions/deno-setup
-        with:
-          cache: false
-
-      - name: 🚀 Deploy application to Rapids (Staging)
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
-        with:
-          host: ${{ secrets.BASTION_HOST }}
-          username: bastion
-          key: ${{ secrets.BASTION_SSH_PRIVATE_KEY }}
-          script: /opt/cf/deploy.sh rapids ${{ github.sha }}
-
   # Deploy shell static assets to staging GCS bucket
   deploy-shell-staging:
     name: "Deploy Shell to Staging"
@@ -750,7 +768,7 @@ jobs:
         uses: ./.github/actions/deno-install
 
       # STAGING_SHELL_API_URL names the API host this shell talks to, which is
-      # the host the deploy-rapids job above keeps current. It is a variable
+      # the server the coordinated Rapids release keeps current. It is a variable
       # rather than a secret because it is served in plaintext inside the
       # bundle, and because the checks below can then name it when they fail.
       - name: 🔎 Validate staging shell endpoints
@@ -781,12 +799,12 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
 
       - name: 🔑 Authenticate to Google Cloud
-        uses: google-github-actions/auth@3a3c4c57d294ef65efaaee4ff17b22fa88dd3c69 # v1.3.0
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: ⚙️ Setup Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@e30db14379863a8c79331b04a9969f4c1e225e0b # v1.1.1
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       - name: 📤 Upload shell assets to Staging GCS
         run: |

@@ -1,7 +1,8 @@
-import { css, html } from "lit";
+import { css, html, unsafeCSS } from "lit";
 import { property } from "lit/decorators.js";
 import { BaseElement } from "../../core/base-element.ts";
 import type { ColorIntent, ComponentSize } from "../theme-context.ts";
+import { pillGeometryCSS } from "../../styles/variables.ts";
 
 /**
  * CFChip - Reusable pill/chip component
@@ -31,6 +32,7 @@ export class CFChip extends BaseElement {
     BaseElement.baseStyles,
     css`
       :host {
+        ${unsafeCSS(pillGeometryCSS)};
         --cf-chip-border-radius: var(
           --cf-pill-border-radius,
           var(--cf-border-radius-full, 9999px)

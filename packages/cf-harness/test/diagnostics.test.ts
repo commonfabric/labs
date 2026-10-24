@@ -341,6 +341,20 @@ Deno.test("classifyHarnessPolicyEventFailure records denied tool usage", () => {
   });
 });
 
+Deno.test("classifyHarnessPolicyEventFailure records no failure for an event that denied nothing", () => {
+  const failure = classifyHarnessPolicyEventFailure(
+    createHarnessPolicyEvent({
+      severity: "warning",
+      mode: "observe",
+      toolId: "write_file",
+      detail: "write_file would require direct-command authorization",
+      at: "2026-04-22T23:10:00.000Z",
+    }),
+  );
+
+  assertEquals(failure, undefined);
+});
+
 Deno.test("classifyBashToolFailure uses the capability snapshot to explain missing python", async () => {
   const snapshot = await collectHarnessCapabilitySnapshot(
     new FakeSandboxRuntime(),
@@ -662,4 +676,24 @@ Deno.test("selectPrimaryHarnessFailure prefers the highest-signal failure kind",
   ]);
 
   assertEquals(primary?.kind, "tool_not_allowed");
+});
+
+Deno.test("selectPrimaryHarnessFailure never selects a refused subagent profile", () => {
+  const refusal = createHarnessFailureRecord({
+    kind: "subagent_profile_not_allowed",
+    source: "policy_event",
+    detail: 'delegate_task profile "web_search" is not allowed in this run',
+    at: "2026-10-14T21:00:00.000Z",
+    toolId: "delegate_task",
+  });
+  const invalid = createHarnessFailureRecord({
+    kind: "invalid_tool_call",
+    source: "tool_call",
+    detail: "goal must be a string",
+    at: "2026-10-14T21:00:01.000Z",
+    toolId: "delegate_task",
+  });
+
+  assertEquals(selectPrimaryHarnessFailure([refusal]), undefined);
+  assertEquals(selectPrimaryHarnessFailure([refusal, invalid]), invalid);
 });

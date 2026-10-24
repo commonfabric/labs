@@ -7,7 +7,7 @@ import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
 import { runTests } from "../lib/test-runner.ts";
-import { cf, checkStderr } from "./utils.ts";
+import { argv, cf, checkStderr } from "./utils.ts";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/render-step");
 const SUBJECT = join(FIXTURES, "subject.tsx").replaceAll("\\", "/");
@@ -201,9 +201,9 @@ describe(
       const coverageDir = await Deno.makeTempDir();
       try {
         const { code, stderr } = await cf(
-          `test "${
+          argv`test ${
             fixture("continuous-ui.test.tsx")
-          }" --root "${FIXTURES}" --pattern-coverage-dir "${coverageDir}"`,
+          } --root ${FIXTURES} --pattern-coverage-dir ${coverageDir}`,
           {
             env: {
               CF_TEST_CONTINUOUS_UI: "1",

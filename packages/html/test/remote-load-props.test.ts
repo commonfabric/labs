@@ -18,7 +18,7 @@ const LOADS =
 /** Components that show a sign of loading but load nothing a value chooses. */
 const LOADS_NOTHING_A_VALUE_CHOOSES: Readonly<Record<string, string>> = {
   "cf-avatar":
-    "renders only `data:` URIs; anything else falls back to initials",
+    "renders bytes through `cf-image` and only `data:` URIs as an image source",
   "cf-button": "its stylesheet's background-image is `none`",
   "cf-file-input": "previews files the user chose, from its own state",
   "cf-image": "renders an object URL it makes from bytes",

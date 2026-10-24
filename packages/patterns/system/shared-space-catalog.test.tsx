@@ -12,11 +12,14 @@ import {
   changeSharedSpaceMembershipIn,
   readSharedSpaceCatalog,
   registerSharedSpaceIn,
+  retitleSharedSpaceIn,
   type SharedSpaceCatalogStorage,
   type SharedSpaceMembershipChange,
   type SharedSpaceMembershipResult,
   type SharedSpaceRegistration,
   type SharedSpaceRegistrationResult,
+  type SharedSpaceRetitle,
+  type SharedSpaceRetitleResult,
 } from "./shared-space-catalog.ts";
 
 const ROOM = "did:key:catalog-core-room";
@@ -62,6 +65,21 @@ const chooseAndRecord = handler<
   outcomes.push(changeSharedSpaceMembershipIn(catalog, event));
 });
 
+/**
+ * Retitles the event's space in `catalog` from a handler of its own, which
+ * also records the outcome, in one transaction, as a manager refreshes the
+ * title of a room it lists.
+ */
+const retitleAndRecord = handler<
+  SharedSpaceRetitle,
+  {
+    catalog: Writable<SharedSpaceCatalogStorage>;
+    retitles: Writable<SharedSpaceRetitleResult[]>;
+  }
+>((event, { catalog, retitles }) => {
+  retitles.push(retitleSharedSpaceIn(catalog, event));
+});
+
 export default pattern(() => {
   const catalog = new Writable<SharedSpaceCatalogStorage>({
     entries: {
@@ -88,6 +106,8 @@ export default pattern(() => {
   const chosen = new Writable<string[]>([]);
   const outcomes = new Writable<SharedSpaceMembershipResult[]>([]);
   const choose = chooseAndRecord({ catalog, chosen, outcomes });
+  const retitles = new Writable<SharedSpaceRetitleResult[]>([]);
+  const retitle = retitleAndRecord({ catalog, retitles });
   // Assertions read the catalog as Home's result does, validated.
   const view = computed(() => readSharedSpaceCatalog(catalog));
 
@@ -200,6 +220,45 @@ export default pattern(() => {
       view.entries[SAVED]?.revision.startsWith("2:") === true;
   });
 
+  // A retitle changes the entry's title and nothing else: its membership and
+  // revision stay as they were, so a choice naming the revision observed
+  // before the retitle still applies.
+  const action_retitle_archived = action(() => {
+    retitle.send({ space: ARCHIVED, title: "Renamed" });
+  });
+  const assert_retitle_keeps_membership = assert(() =>
+    retitles.get()[0]?.status === "retitled" &&
+    view.entries[ARCHIVED]?.title === "Renamed" &&
+    view.entries[ARCHIVED]?.state === "archived" &&
+    view.entries[ARCHIVED]?.revision === "2:archived" &&
+    view.entries[ARCHIVED]?.lastAction === undefined
+  );
+  const action_restore_after_retitle = action(() => {
+    choose.send({
+      space: ARCHIVED,
+      id: "restore-renamed",
+      expectedRevision: "2:archived",
+      state: "saved",
+    });
+  });
+  const assert_choice_still_current = assert(() =>
+    outcomes.get()[3]?.status === "applied" &&
+    view.entries[ARCHIVED]?.state === "saved" &&
+    view.entries[ARCHIVED]?.title === "Renamed"
+  );
+  // The same title again writes nothing, and a space with no entry is
+  // refused.
+  const action_retitle_same_and_missing = action(() => {
+    retitle.send({ space: ARCHIVED, title: "Renamed" });
+    retitle.send({ space: "did:key:catalog-core-missing", title: "Nowhere" });
+  });
+  const assert_same_unchanged_missing_conflict = assert(() => {
+    const missing = retitles.get()[2];
+    return retitles.get()[1]?.status === "unchanged" &&
+      missing?.status === "conflict" && missing.reason === "missing" &&
+      view.entries["did:key:catalog-core-missing"] === undefined;
+  });
+
   return {
     [TESTS]: [
       { action: action_register },
@@ -216,6 +275,12 @@ export default pattern(() => {
       { assertion: assert_repeat_confirmed },
       { action: action_restore_stale },
       { assertion: assert_stale_writes_nothing },
+      { action: action_retitle_archived },
+      { assertion: assert_retitle_keeps_membership },
+      { action: action_restore_after_retitle },
+      { assertion: assert_choice_still_current },
+      { action: action_retitle_same_and_missing },
+      { assertion: assert_same_unchanged_missing_conflict },
     ],
   };
 });

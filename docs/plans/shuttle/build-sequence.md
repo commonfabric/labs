@@ -578,7 +578,7 @@ Landed:
   objects.** `sinkCellValue` (`packages/cli/lib/piece.ts`) is the subscription
   seam: it resolves the target the way a read does, sinks the cell, and reports
   once per quiet runtime through a reentrancy guard plus `runtime.idle()` —
-  `renderVDomToHtml`'s form, and no timer anywhere under it. Starting the piece
+  `renderVDomToHtml`'s guard, and no timer anywhere under it. Starting the piece
   stays the caller's own act, so a caller watching several cells of one piece
   starts it once.
 

@@ -260,6 +260,14 @@ Deliberate extensions beyond the 2020-12 vocabulary:
   gets it.
 - `{ "type": "undefined" }` — preserved as an explicit union member (e.g.
   `string | undefined`) so optionality survives schema round-trips.
+- `{ "type": "integer" }` accepts a `bigint` as well as a whole `number`: a
+  `bigint` is an integer, and `"integer"` is a subtype of `"number"`, so a
+  `number` schema accepts one too. The schema generator types a TypeScript
+  `bigint` as `integer`, and a bigint literal type as the number of its
+  value, so a whole-number `enum` or `const` member matches the bigint of
+  that value; no other member matches across the two types. A
+  `FabricPrimitive` wrapping one, such as a `FabricEpochNsec`, is its own type
+  below, not an integer.
 - `FabricPrimitive` types — `"FabricBytes"`, `"FabricDurationDay"`,
   `"FabricDurationNsec"`, `"FabricEpochDay"`, `"FabricEpochNsec"`,
   `"FabricHash"`, `"FabricKeyPair"`, `"FabricRegExp"`, `"FabricUnavailable"` —

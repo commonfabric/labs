@@ -13,7 +13,9 @@
  * series measures is the walker and the container handling rather than any one
  * codec. The single-value group covers the codecs themselves, one subject each,
  * and the omnibus groups cover what a mixed tree costs when escaping, holes,
- * and several codecs all appear at once.
+ * and several codecs all appear at once. The linked-inputs series covers the
+ * one thing none of those do, an escaped object that is large: each of its
+ * `/`-keyed objects sits over a plain subtree of some hundreds of values.
  */
 
 import type { FabricValue } from "@";
@@ -342,6 +344,103 @@ export function makeRealmPassThroughOmnibus(leaves: number): FabricValue {
   });
 }
 
+/**
+ * Builds a link in the plain-object form it takes inside a `data:` document:
+ * a `link@1` payload under the key `linkKey`, which for a real link is `/`.
+ * That key is why JSON escapes the value, and the payload under it is plain
+ * data throughout, so the escape is `/quote`.
+ */
+function makeSigilLink(
+  linkKey: string,
+  id: number,
+  schema?: FabricValue,
+): FabricValue {
+  const payload: Record<string, FabricValue> = {
+    id: `of:bench-entity-${id}`,
+    path: Object.freeze(["rows", String(id), "value"]),
+    space: "did:key:bench-space",
+  };
+
+  if (schema !== undefined) {
+    payload.schema = schema;
+  }
+
+  return Object.freeze({
+    [linkKey]: Object.freeze({ "link@1": Object.freeze(payload) }),
+  });
+}
+
+/**
+ * Builds the schema of a record `depth` levels below this one, written out in
+ * full the way a link carries its schema inline: six properties a level, two
+ * of them records in turn. At `depth` of zero one property defaults to a link
+ * under `linkKey`, which for `/` puts a second escaped object inside the
+ * first.
+ */
+function makeRecordSchema(linkKey: string, depth: number): FabricValue {
+  const properties: Record<string, FabricValue> = {};
+  const required: string[] = [];
+
+  for (let i = 0; i < 6; i++) {
+    const name = `field${i}`;
+    required.push(name);
+
+    if (depth > 0 && i < 2) {
+      properties[name] = makeRecordSchema(linkKey, depth - 1);
+    } else if (depth === 0 && i === 0) {
+      properties[name] = Object.freeze({
+        description: `A record's field ${i}.`,
+        default: makeSigilLink(linkKey, i),
+      });
+    } else {
+      properties[name] = Object.freeze({
+        type: (i % 2) === 0 ? "string" : "number",
+        description: `A record's field ${i}.`,
+      });
+    }
+  }
+
+  return Object.freeze({
+    type: "object",
+    properties: Object.freeze(properties),
+    required: Object.freeze(required),
+    additionalProperties: false,
+  });
+}
+
+/**
+ * Builds the inputs of a computation bound to `links` cells, each binding a
+ * link carrying its schema inline. This is the shape a runtime writes when it
+ * records what a computation reads: little data of its own, and a schema of
+ * some hundreds of values under every link.
+ *
+ * Every link is a `/`-keyed object, which JSON escapes and a realm-crossing
+ * format carries as it stands. What the series measures under JSON is
+ * therefore what choosing and applying that escape costs over a large plain
+ * subtree, which the omnibus series cannot show: its escaped objects are a
+ * handful of values each.
+ *
+ * `linkKey` is the key each link holds its payload under. Any key but the
+ * default gives the control for that measurement: the same tree with nothing
+ * in it for a format to escape.
+ */
+export function makeLinkedInputs(links: number, linkKey = "/"): FabricValue {
+  const schema = makeRecordSchema(linkKey, 3);
+  const bindings: FabricValue[] = [];
+
+  for (let i = 0; i < links; i++) {
+    bindings.push(Object.freeze({
+      name: `binding${i}`,
+      value: makeSigilLink(linkKey, i, schema),
+    }));
+  }
+
+  return Object.freeze({
+    kind: "linked-inputs",
+    bindings: Object.freeze(bindings),
+  });
+}
+
 //
 // Pre-built subjects, so that a benchmark measures only the call under test.
 //
@@ -373,6 +472,23 @@ export const JSON_PASS_THROUGH_OMNIBUSES = OMNIBUS_SIZES.map(
 );
 export const REALM_PASS_THROUGH_OMNIBUSES = OMNIBUS_SIZES.map(
   (n) => [n, makeRealmPassThroughOmnibus(n)] as const,
+);
+
+/** Link counts for both linked-inputs series, so the two are read together. */
+const LINK_COUNTS = [1, 10, 100] as const;
+
+/** Linked inputs by the number of links they bind. */
+export const LINKED_INPUTS = LINK_COUNTS.map(
+  (n) => [n, makeLinkedInputs(n)] as const,
+);
+
+/**
+ * The control for {@link LINKED_INPUTS}: the same trees with each link under a
+ * key no format reserves, so that the two series differ by that one character
+ * in every link and by nothing else.
+ */
+export const PLAIN_LINKED_INPUTS = LINK_COUNTS.map(
+  (n) => [n, makeLinkedInputs(n, "_")] as const,
 );
 
 /**

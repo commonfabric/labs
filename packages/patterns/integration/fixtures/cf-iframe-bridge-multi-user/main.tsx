@@ -1,7 +1,9 @@
 /// <cts-enable />
 // Browser-integration fixture for cf-iframe's real CellHandle bridge. The
 // surrounding pattern exposes scoped cells as sibling readouts while the
-// sandboxed guest performs every mutation through the bridge.
+// sandboxed guest performs every mutation through the bridge. The guest also
+// joins the presence room of the space-scoped cell on command, and reports
+// the room to the page that embeds the piece.
 import {
   action,
   cfSqlite,
@@ -41,6 +43,7 @@ interface IframeContextInput {
   database: SqliteDb;
   userDatabase: SqliteDb;
   sessionDatabase: SqliteDb;
+  room: TextCell;
 }
 
 export interface IframeContextOutput extends IframeContextInput {}
@@ -108,6 +111,11 @@ const GUEST_HTML = `<!doctype html>
     const subscription = "guest-" + nextSubscriptionId++;
     subscriptions.set(subscription, listener);
     await request("sink", { resource, subscription });
+    return subscription;
+  };
+  const unsink = async (resource, subscription) => {
+    subscriptions.delete(subscription);
+    await request("unsink", { resource, subscription });
   };
 
   const databaseRows = {
@@ -132,6 +140,66 @@ const GUEST_HTML = `<!doctype html>
     );
   };
 
+  // This guest's membership in the presence room: the sink it is held
+  // through, the id the room gave it, and every other member's latest record.
+  const room = {
+    subscription: undefined,
+    participantId: undefined,
+    participants: new Map(),
+  };
+
+  // Tells the embedding page what the room holds. A facet is a peer's, so its
+  // text is read only when it is a string.
+  const reportRoom = (error) => {
+    globalThis.parent.parent.postMessage({
+      type: "cf-iframe-bridge-test-presence",
+      generation,
+      ...(room.participantId !== undefined && {
+        participantId: room.participantId,
+      }),
+      participants: [...room.participants.values()].map((participant) => {
+        const text = participant.facets.status?.text;
+        return {
+          participantId: participant.participantId,
+          name: participant.name,
+          status: typeof text === "string" ? text : "",
+        };
+      }),
+      ...(error && { error: error.message }),
+    }, "*");
+  };
+
+  const receiveRoomEvent = (event, error) => {
+    if (error) {
+      // A failure ends the room: the guest holds nothing of it, and may join
+      // again.
+      if (room.subscription !== undefined) {
+        subscriptions.delete(room.subscription);
+      }
+      room.subscription = undefined;
+      room.participantId = undefined;
+      room.participants = new Map();
+      reportRoom(error);
+      return;
+    }
+    if (event.kind === "snapshot") {
+      room.participantId = event.participantId;
+      room.participants = new Map(
+        event.participants.map((participant) => [
+          participant.participantId,
+          participant,
+        ]),
+      );
+    } else if (event.kind === "upsert") {
+      room.participants.set(event.participant.participantId, event.participant);
+    } else if (event.kind === "remove") {
+      room.participants.delete(event.participantId);
+    } else {
+      return;
+    }
+    reportRoom();
+  };
+
   const handleCommand = async (command) => {
     if (command.operation === "ping") {
       await ready;
@@ -152,6 +220,29 @@ const GUEST_HTML = `<!doctype html>
       await Promise.all(
         Object.values(databaseRows).map((resource) => set(resource, "")),
       );
+    } else if (command.operation === "presence-join") {
+      if (room.subscription !== undefined) {
+        throw new Error("The presence room is already joined.");
+      }
+      room.subscription = await sink("room", receiveRoomEvent);
+    } else if (command.operation === "presence-publish") {
+      if (command.name !== undefined) {
+        await call("room", "setName", command.name);
+      }
+      await call("room", "setFacet", {
+        facet: "status",
+        value: { text: command.value },
+      });
+    } else if (command.operation === "presence-leave") {
+      const subscription = room.subscription;
+      if (subscription === undefined) {
+        throw new Error("The presence room is not joined.");
+      }
+      room.subscription = undefined;
+      room.participantId = undefined;
+      room.participants = new Map();
+      await unsink("room", subscription);
+      reportRoom();
     } else {
       throw new Error("Unknown command: " + command.operation);
     }
@@ -177,7 +268,7 @@ const GUEST_HTML = `<!doctype html>
       message.version !== 2
     ) return;
     if (message.type === "event") {
-      subscriptions.get(message.subscription)?.(message.value);
+      subscriptions.get(message.subscription)?.(message.value, message.error);
       return;
     }
     if (message.type !== "response") return;
@@ -267,6 +358,9 @@ export default pattern<BridgeFixtureInput, BridgeFixtureOutput>((state) => {
     database,
     userDatabase,
     sessionDatabase,
+    // A presence room is the one derived from its cell's resolved field, and
+    // a space-scoped field is the same for every session of every identity.
+    room: state.shared,
   });
   const source = computed(() =>
     GUEST_HTML + '<span hidden data-reload="' + state.reloadRevision.get() +
@@ -298,6 +392,7 @@ export default pattern<BridgeFixtureInput, BridgeFixtureOutput>((state) => {
               database: "sqlite",
               userDatabase: "sqlite",
               sessionDatabase: "sqlite",
+              room: "presence",
             }}
           />
         </div>

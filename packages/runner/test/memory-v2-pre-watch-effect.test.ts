@@ -238,10 +238,8 @@ describe("memory-v2-pre-watch-effect", () => {
     );
 
     try {
-      await expect(session.watchAddSync([watch(watchedId)]))
-        .rejects.toThrow("scripted session replacement");
-      await client.restoreConnection();
-
+      // The connection drops under the first request, which the restore
+      // sends again on the session that replaces the one the effect came on.
       const result = await session.watchAddSync([watch(watchedId)]);
 
       expect(transport.watchAddCount).toBe(2);

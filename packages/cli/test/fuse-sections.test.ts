@@ -20,6 +20,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 
 import { loadCliSuites } from "../../../tasks/test-topology/cli.ts";
 
@@ -33,7 +34,7 @@ const SCRIPT = await Deno.readTextFile(
  * `cli-fuse` suite, each named for this script and one section of it.
  */
 const CI_SECTIONS = (await loadCliSuites(
-  new URL("../../..", import.meta.url).pathname.replace(/\/$/, ""),
+  fromFileUrl(new URL("../../..", import.meta.url)).replace(/\/$/, ""),
 ))
   .find((suite) => suite.id === "cli-fuse")?.units
   .filter((unit) => unit.startsWith("fuse-exec.sh "))

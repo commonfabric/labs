@@ -29,6 +29,10 @@ export interface CoverageRun {
   lines?: number;
 
   cold?: boolean;
+
+  /** Whether the attempt concluded `success`, which it does by default. */
+  passed?: boolean;
+
   event?: string;
   branch?: string;
   fork?: boolean;
@@ -86,6 +90,9 @@ export interface FakeCoverageStore extends CoverageDebtSource {
 
   /** The objects read, in the order they were asked for. */
   readNames: string[];
+
+  /** The attempts asked about, as `<run>/<attempt>`, in order. */
+  asked: string[];
 }
 
 /**
@@ -101,9 +108,11 @@ export function fakeCoverageStore(
   );
   const listed: string[] = [];
   const readNames: string[] = [];
+  const asked: string[] = [];
   return {
     listed,
     readNames,
+    asked,
     list: (day) => {
       listed.push(day);
       if (failure !== undefined) return Promise.reject(failure);
@@ -119,6 +128,23 @@ export function fakeCoverageStore(
         return Promise.reject(new Error(`no such object ${objectName}`));
       }
       return Promise.resolve(parseReportGroups(text));
+    },
+    outcome: (runId, attempt) => {
+      asked.push(`${runId}/${attempt ?? "latest"}`);
+      if (failure !== undefined) return Promise.reject(failure);
+      const run = runs
+        .filter((run) =>
+          run.runId === runId &&
+          (attempt === undefined || (run.attempt ?? 1) === attempt)
+        )
+        .sort((a, b) => (b.attempt ?? 1) - (a.attempt ?? 1))[0];
+      if (run === undefined) {
+        return Promise.reject(new Error(`no such attempt ${runId}/${attempt}`));
+      }
+      return Promise.resolve({
+        attempt: run.attempt ?? 1,
+        passed: run.passed ?? true,
+      });
     },
   };
 }

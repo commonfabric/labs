@@ -125,6 +125,12 @@ Most packages with benches define a `bench` task for running them locally
 (see `packages/runner/deno.jsonc`); otherwise invoke `deno bench` on a
 single file.
 
+`packages/state-inspector/test/reconstruct-range.bench.ts` is a local replay
+benchmark. It holds the replay suffix fixed while growing the preceding history
+from 100 to 10,000 revisions, covering snapshot-backed reads and exact-row reads
+within a multi-operation commit. Fixture construction and output assertions are
+outside the timed interval. Run it with `deno bench -A` and the file path.
+
 `packages/runner/test/view-replication.bench.ts` measures view selection through
 chains of 100, 300, and 1,000 computations, each mixed with an equally large
 unrelated chain. Fixture construction stays outside timing; index construction
@@ -796,8 +802,8 @@ Four things follow from that shape:
   the board benchmark's size does. CI leaves both unset, and the size in force
   is written to stderr.
 
-Ten runtimes is the largest footprint of any benchmark in the job, and the cost
-is worth knowing before adding a voter to it. **Measured on a default hosted
+Ten runtimes is a large footprint, and the cost is worth knowing before adding
+a voter to it. **Measured on a default hosted
 runner — four cores, 15.6GB — the file takes 89 seconds and peaks at 4.76GB
 resident**, under a third of that host with around 9GB still free. The runner
 group this workflow uses is a larger machine than that one, so the share it
@@ -926,6 +932,209 @@ the functional assertions, declared collection sizes, and render windows when
 adjusting a ceiling; a budget failure should lead to attribution of the added
 reads before changing the limit.
 
+## A piece grid of stopped pieces
+
+`packages/patterns/integration/piece-grid-stopped.bench.ts` measures what a
+display costs when it starts the piece it shows. `cf-render` opens every piece
+it displays, so a `piece-grid` of note tiles starts each note in the viewer's
+runtime. Each size, 13 and 60 notes, seeds a space of its own, starts the notes
+in the seeding process, and disposes that process's runtime before any browser
+opens, so the notes hold stored results and are stopped in the runtime under
+measurement.
+
+- `load <n>` runs from signing in on a page already routed to the grid until
+  the view has settled and every tile shows its note's body. It holds the
+  runtime's start, the grid's render, and every tile's open of its note.
+- `first interaction <n>` types one character into the first tile's editor and
+  commits it, until the view has settled. Work a start defers past the load
+  lands here.
+
+Each iteration launches a fresh browser. For a local run, start the dev servers
+as described in [Local dev servers](LOCAL_DEV_SERVERS.md), then run:
+
+```sh
+API_URL=http://localhost:8000/ FRONTEND_URL=http://localhost:5173/ \
+deno bench -A packages/patterns/integration/piece-grid-stopped.bench.ts
+```
+
+## The FabriChat room benchmarks
+
+Three bench files measure a FabriChat group room, on the pattern in
+`packages/patterns/fabrichat/`. Two drive a browser against a running toolshed
+as the Topics benchmarks do, and one runs many runtimes against one storage
+server as the lunch-poll contention benchmark does.
+
+### The seeded room
+
+`packages/patterns/integration/fabrichat-room-fixture.ts` builds a room the way
+people come to have one, and `fabrichat-room-seed.ts` runs it in a child Deno so
+that the members' runtimes do not stay with the process that drives the
+browser. Each member is an identity derived from a passphrase, with a real Home
+brought up by `ensureDefaultPattern()` and a profile created through Home's
+`createProfile` under its reviewed action. That profile is the root of a space
+of its own and carries the `represents-principal` label, as one created in the
+browser does. The starter creates the room from their manager's `createGroup`,
+naming every other member by address, and the members write in it with trusted
+`ChatSend` events. Writing is what joins a member to the room's roster. In a
+room of fewer messages than members, a member left with nothing to write joins
+the way a visit joins them in the shell, through `joinVisitedRoomOf()` and their
+manager's `joinRoom`, so every room has all of its members on the roster
+whatever its size.
+
+The profiles are the reason the fixture goes through Home rather than a
+stand-in. Every participant chip and every author badge reads a profile in
+another space, so a room of twelve members opens thirteen spaces besides its
+own, and a stand-in profile would leave all of those reads out.
+
+The room's write policy admits a message only from `ChatSend`, and the room
+stamps each message with the time it arrives, refusing a proposed time more
+than ten minutes old. So a room cannot be written in bulk or back-dated, and the
+seed sends one message at a time. Members write in blocks of consecutive
+messages, and a member's runtime runs only while they write their block: every
+runtime running the room recomputes it on each message, so a room whose members
+all stayed open would cost one recompute per member per message. A second member
+stays open throughout, to add a reaction to every third message while it is the
+newest, and to write the thread's replies alongside the last writer.
+
+Each act is followed by a wait for its effect in the acting member's copy of
+the room. A room handler refuses an act by throwing, which writes nothing, so a
+refused act's effect never arrives. The member's runtime reports the handler's
+error, and that report ends the pending wait instead: the seed fails with an
+error naming the member, the act, and the handler's message, and the child
+exits non-zero. The child writes to the benchmark's own stderr as it runs, so
+its progress and the reason for a failure reach the workflow log as they
+happen, not only once the child has exited.
+
+Every body is derived from its index, so two rooms of one size carry the same
+text. Each benchmark process derives its members from a passphrase new to that
+process, so each starter's Home lists only that process's room, and a toolshed
+that kept an earlier run's spaces does not change what a later run loads.
+
+A seeded room's first load in a browser builds and commits the derived state of
+every row, which no later load repeats. Each room is therefore loaded once,
+untimed, before any benchmark visits it.
+
+### The fixed-size room
+
+`packages/patterns/integration/fabrichat-room.bench.ts` measures a visit to a
+room of twelve members and thirty messages, with one thread of five replies,
+signed in as the starter. Its `fabrichat room` group has one series per
+segment: `load` (until the shell has routed to the room), `sign in` (until the
+runtime is idle), `messages` (until the last message has rendered and a badge
+names every member), `send` (a message sent from the composer, until its row
+renders), `react` (the viewer's reaction added to one another member left,
+until the tally counts both), `thread` (until every reply renders in the thread
+pane), and `journey` (`load`, `sign in` and `messages` together). Each segment
+reaches its starting point untimed in a browser of its own, as the navigation
+benchmark's do.
+
+`send` and `react` write, so each visits a room of its own of the same shape,
+and neither changes what another segment measures. Each `send` adds one message
+to its room, so the room holds thirty messages before the first send and
+thirty-six before the last; each `react` adds one reaction, to a different
+message each time, and leaves the messages as they were. The three rooms seed
+together, each in a child of its own, and all three finish before the first
+segment starts, so no seed child is alive and no setup work runs in a measured
+interval. One read-accounted sample each of `messages` and `send`, taken in a
+browser of its own, goes to stderr with the same counters the rendered
+lunch-poll benchmark records.
+
+`react` adds to an existing reaction's tally rather than picking one from the
+row's reaction picker. At the shell's 1024-pixel viewport, the picker the row
+opens lays its quick reactions out under the row's author avatar, which takes
+the click.
+
+`CF_FABRICHAT_MEMBERS` and `CF_FABRICHAT_MESSAGES` resize all three rooms for a
+local run. The `react` segment needs one seeded reaction per invocation, which
+a room of fewer than nineteen messages does not carry, and the file says so
+before it seeds anything.
+
+### Room size
+
+`packages/patterns/integration/fabrichat-room-scale.bench.ts` measures two of
+those segments across rooms of 10, 30, 100 and 300 messages, all with twelve
+members, in a `fabrichat room scale` group: `<size>` is `messages`, and
+`send <size>` is `send`. A room renders a row for every message of its main
+conversation, however many its `latest` holds, so a room of three hundred
+messages builds a main-conversation row for each of them except the replies in
+the thread the fixture seeds, which render in the thread pane; these curves say
+what that costs. Each size seeds two
+rooms, one for each series, so that sends do not grow the room `<size>` loads.
+The `send <size>` room does grow, by one message per send: it holds `<size>`
+messages before the first of its five sends — one per invocation of the body,
+`n + 2` of them, and one for its read-accounted sample — and four more before
+the last. A
+fresh room per send would multiply each size's seeding by five, and against
+sizes a factor of three or more apart that growth stays well inside one step of
+the curve.
+Sizes above 30 are declared and skipped; `CF_FABRICHAT_SCALE_LIMIT` raises
+the limit. On the Benchmarks workflow's runner a hundred-message room takes
+about seven minutes to seed and over a minute and a half to load, and a send
+into it does not settle within the browser driver's five-minute bound, which
+fails the run.
+
+### Concurrent sends
+
+`packages/patterns/integration/fabrichat-send-burst.bench.ts` has four members,
+each a `MultiRuntimeHarness` session with a profile, send two messages each
+into one room, all eight dispatched before any settles, timed until every
+member's runtime holds every message. Its `fabrichat` group carries one series,
+`send burst 4x2`. The members use the `fabrichat-add-offer` fixture as their
+Home: it holds a profile created as Home creates one and a manager the room's
+`#chatManager` wish resolves to. The harness hosts its own storage server,
+enforcing access.
+
+A message is a keyed write, but the same send also appends to the room's recent
+activity, reading the activity list and the counters record every send writes,
+and claims its recorded time from the times the room has used. Concurrent sends
+from different members therefore collide, which a lunch-poll vote does not. A
+contention accounting of rejected commits and rolled-back writes over one
+untimed burst goes to stderr; at four members sending two messages each it
+counted 30 and 98.
+
+The size is small because larger ones do not complete. At twelve members
+sending five messages each, sends conflicted for thirty seconds and more, after
+which the runtime drops the message, and the members' runtimes never held the
+same messages. At six sending three, a send outlasted the harness's two-minute
+call limit. Those runs were on a heavily loaded developer machine, where time
+limits are easier to reach, but the conflicts do not depend on load.
+
+The burst is the largest memory footprint in the job, though it has fewer
+runtimes than the lunch-poll burst: four members peaked at 8.6GB resident on an
+Apple M3 Max, and twelve at 13.75GB. Each iteration's room keeps running in
+every member's runtime, so the footprint grows over a run. The file releases
+the runtimes after the last of the `n + 2` invocations `Deno.bench` makes of its
+body, so they are not a floor under the benchmarks measured after it; the file
+throws if it is invoked once more than that, rather than run on released
+workers. A run stopped early releases them at process exit instead.
+
+A burst adds eight messages, so each iteration sends into a room of its own,
+created outside the measurement by the first member, into which each member has
+written one message. Every burst therefore lands in a room of four messages and
+four participants. `CF_FABRICHAT_BURST_MEMBERS` and
+`CF_FABRICHAT_BURST_MESSAGES` resize it for a local run, and the size names the
+series.
+
+### Running them locally
+
+Start client-execution dev servers as described in
+[Local dev servers](LOCAL_DEV_SERVERS.md), then run, for example:
+
+```sh
+EXPERIMENTAL_SERVER_EXECUTION=false \
+API_URL=http://localhost:8000 FRONTEND_URL=http://localhost:5173 \
+CF_LOG_LEVEL=silent \
+deno bench --json -A \
+  packages/patterns/integration/fabrichat-room.bench.ts \
+  > /tmp/fabrichat-room.json 2> /tmp/fabrichat-room.log
+```
+
+The browser benchmarks read the server-execution posture the deployment declares
+and refuse one that declares none; the send burst resolves its posture from
+`EXPERIMENTAL_SERVER_EXECUTION` as the contention benchmark does. To build a
+room by hand for profiling, run `fabrichat-room-seed.ts` directly; its header
+gives the flags.
+
 ## Consumed CFC source collection
 
 `packages/runner/test/cfc-consumed-source-dedup.bench.ts` calls
@@ -967,12 +1176,17 @@ Construction, initial hashing for warm cases, validation, and abort are outside
 the timed interval. Policy names are distinct, so sorting does not repeatedly
 hash large records to break name ties.
 
-The five series measure the first digest, an unchanged second digest, a
-second digest after one additional write, direct hashing over warmed records
-in a fresh input wrapper, and preparation plus its unchanged recheck in one
-interval. The direct-hashing series bypasses the transaction epoch memo; the
-combined series measures the normal two-request shape. Diagnostics on stderr
-report the immutable-object hash-cache hits during the measured interval; an
+The six series measure the activity snapshot alone, the first digest read, an
+unchanged second read, a second read after one additional write, direct
+hashing over warmed records in a fresh input wrapper, and a first read plus
+its unchanged second read in one interval. The snapshot series is what a
+transaction pays toward a digest nothing reads, which is the scheduler's
+shape: `prepareForCommit()` seals the snapshot, and a commit whose activity
+epoch has not moved accepts it without hashing. The first-read series adds
+canonicalization and the hash, which a caller reading `prepareCfc()`'s result
+or the prepared state's `digest` pays. The direct-hashing series bypasses the
+transaction epoch memo. Diagnostics on stderr report the immutable-object
+hash-cache hits during the measured interval for the series that hash; an
 epoch-memo hit performs no hashing. Stdout remains the benchmark JSON report.
 
 ```sh
@@ -980,11 +1194,14 @@ deno bench --no-lock -A --json packages/runner/test/cfc-prepared-digest.bench.ts
 ```
 
 Prepared digests are process-local equality tokens over canonical activity.
-The transaction reuses the complete token until its activity epoch changes;
-decision-input recorders and write paths advance that epoch. A changed snapshot
-is canonicalized and hashed in full. The token belongs to one transaction: a
-fresh transaction prepares independently even when its effective CFC label is
-unchanged.
+The transaction keeps one frozen snapshot of its activity per activity epoch,
+and computes that snapshot's token when something first reads it;
+decision-input recorders and write paths advance the epoch. A snapshot whose
+token is read is canonicalized and hashed in full, once. The token belongs to
+one transaction: a fresh transaction prepares independently even when its
+effective CFC label is unchanged.
+[CFC commit preparation](../specs/cfc-commit-preparation.md#the-prepared-digest-and-the-commit-time-recheck)
+describes the arrangement.
 
 Compare cache designs over preparation plus recheck as well as individual
 calls: a cold setup cost must be recovered within the requests a transaction
@@ -1524,6 +1741,34 @@ The collector and scheduler effects are tracked by
 `packages/runner/test/cfc-consumed-source-dedup.bench.ts` and
 `packages/runner/test/scheduler-invalid-causes.bench.ts` respectively.
 
+## JSON codec escapes over linked inputs
+
+The `links` groups of `packages/data-model/bench/codec-json.bench.ts` measure
+encoding and decoding the inputs of a computation bound to 1, 10, and 100
+links. Each link is written the way a `data:` document carries one: a plain
+object under a `/` key, holding its schema inline. A link comes to about 470
+values, eight of them further `/`-keyed objects nested inside it. Every subject
+is built before any measurement, so the timed interval is the one call.
+
+The JSON format escapes a `/`-keyed object, and here each escape covers a large
+plain subtree, where the other subjects of that file escape objects of a
+handful of values. The `plain-links` groups are the control: the same trees
+with each link under a key the format does not reserve, so that nothing in them
+is escaped. A `links` encode row and the `plain-links` encode row of the same
+size differ by what choosing and applying the escape costs, and by nothing
+else. The encoder decides an escape from a count it keeps while walking, and
+replaces a nested escape where it sits, so a `links` row is expected within
+about a tenth of its control. A `links` row well above that means the encoder
+is walking an escaped subtree more than once.
+
+The `realm-links` groups of `packages/data-model/bench/codec-realm.bench.ts`
+measure the `links` subjects under the format that carries a `/` key as an
+ordinary key. Run with:
+
+```sh
+deno bench --no-check --allow-read packages/data-model/bench/codec-json.bench.ts --filter links
+```
+
 ## Cold-runtime piece operations
 
 `packages/piece/test/piece-cold-runtime.bench.ts` measures two
@@ -1599,9 +1844,11 @@ Add `--timing-measures-out /tmp/mapped-B.json` (a distinct path per run) for
 unrounded spans and `cf:runTestPattern/step/render_N/materialize#...` boundaries.
 Use the aggregation and attribution tools in
 [profiling](debugging/profiling.md) to locate the CFC work inside each interval.
-Nested timing totals overlap: `prepareCfc` includes its derivation and initial
-digest, while a commit recheck can hash again outside preparation. The spans
-measure elapsed time, not CPU attribution.
+Nested timing totals overlap: `prepareCfc` includes its derivation, and a
+digest only where `prepareCfc()` itself was called, which hashes the one it
+returns; `prepareForCommit()` hashes none, and a commit recheck whose
+activity moved hashes outside preparation. The spans measure elapsed time,
+not CPU attribution.
 
 This `cf test` probe runs on demand, outside the scheduled `deno bench` suite.
 Keep its source and step order stable across the optimizations it measures.

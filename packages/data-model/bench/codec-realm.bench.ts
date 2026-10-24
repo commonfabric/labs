@@ -63,6 +63,7 @@ import {
   BYTES,
   groupKey,
   JSON_PASS_THROUGH_OMNIBUSES,
+  LINKED_INPUTS,
   OBJECTS,
   OMNIBUSES,
   REALM_PASS_THROUGH_OMNIBUSES,
@@ -94,6 +95,9 @@ const JSON_PASS_THROUGH_REALM = JSON_PASS_THROUGH_OMNIBUSES.map(([n, v]) =>
   [n, realmFromFabricValue(v)] as const
 );
 const REALM_PASS_THROUGH_REALM = REALM_PASS_THROUGH_OMNIBUSES.map(([n, v]) =>
+  [n, realmFromFabricValue(v)] as const
+);
+const LINKED_INPUTS_REALM = LINKED_INPUTS.map(([n, v]) =>
   [n, realmFromFabricValue(v)] as const
 );
 
@@ -172,6 +176,9 @@ const SERIES: readonly (readonly [
   ["bigint", BIGINTS, BIGINTS_REALM],
   ["json-pass-through", JSON_PASS_THROUGH_OMNIBUSES, JSON_PASS_THROUGH_REALM],
   ["pass-through", REALM_PASS_THROUGH_OMNIBUSES, REALM_PASS_THROUGH_REALM],
+  // Plain data to this format, a `/` key being an ordinary key here, so the
+  // tree crosses as it stands.
+  ["links", LINKED_INPUTS, LINKED_INPUTS_REALM],
 ];
 
 for (const [prefix, subjects, encodedForms] of SERIES) {

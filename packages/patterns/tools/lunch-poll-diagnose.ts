@@ -11,6 +11,7 @@
  * measurement of the pattern's own graph, not of a deployed topology.
  */
 
+import { dirname, fromFileUrl, join } from "@std/path";
 import { parseLink } from "@commonfabric/runner";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
@@ -289,9 +290,8 @@ async function collectConvergence(
 const traceCursors = new Map<string, number>();
 const VOTE_COLORS = ["green", "yellow", "red"] as const;
 let matrixProgram = "main.tsx";
-const ROOT_PATH = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
-const LUNCH_POLL_DIR = new URL("../lunch-poll/", import.meta.url).pathname
-  .replace(/\/$/, "");
+const ROOT_PATH = dirname(dirname(fromFileUrl(import.meta.url)));
+const LUNCH_POLL_DIR = join(ROOT_PATH, "lunch-poll");
 
 const asString = (value: unknown): string =>
   typeof value === "string" ? value : "";

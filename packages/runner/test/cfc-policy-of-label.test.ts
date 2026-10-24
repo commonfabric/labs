@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
-import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { CfcConfClause } from "../src/cfc/clause.ts";
@@ -20,6 +19,7 @@ import {
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import type { Engine } from "../src/harness/engine.ts";
+import { labelsReached } from "./support/reached-labels.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
@@ -403,17 +403,28 @@ describe("PolicyOf label-time binding", () => {
         cell.getAsNormalizedFullLink(),
       );
       readTx.abort?.();
-      const held = metadata?.labelMap.entries.find((entry) =>
-        entry.path.join("/") === "inner/held"
-      );
-      expect(held?.label.confidentiality).toEqual([{
+      // The holder's declaration binds the policy to every key of `inner`;
+      // the scoped document each key links to is labeled by itself, and a
+      // read of it through the link reaches the policy.
+      const policy = {
         type: CFC_ATOM_TYPE.Policy,
         policyRefKind: "module",
         subject: space,
         moduleIdentity: compiled.entryIdentity,
         symbol: "rules",
         policyDigest: expect.any(String),
+      };
+      expect(metadata?.labelMap.entries).toEqual([{
+        path: ["inner", "*"],
+        origin: "declared",
+        label: { confidentiality: [policy] },
       }]);
+      expect(
+        labelsReached(runtime, cell.getAsNormalizedFullLink(), [
+          "inner",
+          "held",
+        ]).confidentiality,
+      ).toEqual([policy]);
     });
   }
 
@@ -568,7 +579,11 @@ describe("PolicyOf label-time binding", () => {
     }
   });
 
-  it("copies a carried policy manifest into a cross-space destination", async () => {
+  it("leaves a policy manifest with the label that selects it across a cross-space link", async () => {
+    // A link carries none of its source's labels, so a destination in
+    // another space stores no policy reference and needs no manifest. The
+    // policy is reached through the link and resolves in the space whose
+    // document stores the label.
     runtime.registerCfcPolicyManifests(space, [artifact]);
     const sourceTx = runtime.edit();
     const source = runtime.getCell(space, "policy-source", schema, sourceTx);
@@ -584,22 +599,6 @@ describe("PolicyOf label-time binding", () => {
       policyDigest: artifact.policyDigest,
       subject: space,
     };
-    const scopedProbe = runtime.edit();
-    source.withTx(scopedProbe).get();
-    runtime.getCell(
-      destinationSpace,
-      "missing-destination-policy",
-      undefined,
-      scopedProbe,
-    ).get();
-    expect(
-      scopedProbe.resolveCfcPolicyManifest(
-        boundReference,
-        destinationSpace,
-      ),
-    ).toBeUndefined();
-    scopedProbe.abort();
-
     const copyTx = runtime.edit();
     const target = runtime.getCell(
       destinationSpace,
@@ -625,39 +624,31 @@ describe("PolicyOf label-time binding", () => {
     try {
       const coldTx = coldRuntime.edit();
       target.withTx(coldTx).get();
-      const metadata = readStoredCfcMetadata(coldTx, targetLink);
-      const reference = metadata?.labelMap.entries
-        .flatMap((entry) => entry.label.confidentiality ?? [])
-        .find((value) =>
-          isObjectOrArray(value) &&
-          (value as Record<string, unknown>).policyRefKind === "module"
-        );
-      expect(reference).toBeDefined();
+      expect(readStoredCfcMetadata(coldTx, targetLink)).toBeUndefined();
+      expect(
+        coldRuntime.hasCfcPolicyManifest(
+          destinationSpace,
+          boundReference,
+          coldTx,
+        ),
+      ).toBe(false);
+      coldTx.abort();
+      expect(labelsReached(coldRuntime, targetLink).confidentiality).toEqual([
+        boundReference,
+      ]);
+      const sourceSpaceTx = coldRuntime.edit();
       const evaluated = evaluateExchangeRules(
-        { confidentiality: [reference as CfcConfClause] },
+        { confidentiality: [boundReference as CfcConfClause] },
         undefined,
         {
           integrity: [{ type: "IntegrityEvidence" }],
           modulePolicyResolver: (candidate) =>
-            coldTx.resolveCfcPolicyManifest(
-              candidate,
-              destinationSpace,
-            ) as never,
+            sourceSpaceTx.resolveCfcPolicyManifest(candidate, space) as never,
         },
       );
       expect(evaluated.resolutionFailures).toEqual([]);
       expect(evaluated.label.confidentiality).toEqual([]);
-      expect(
-        coldTx.resolveCfcPolicyManifest(reference, destinationSpace),
-      ).toBeDefined();
-      expect(
-        coldRuntime.hasCfcPolicyManifest(
-          destinationSpace,
-          reference,
-          coldTx,
-        ),
-      ).toBe(true);
-      coldTx.abort();
+      sourceSpaceTx.abort();
     } finally {
       await coldRuntime.dispose();
     }

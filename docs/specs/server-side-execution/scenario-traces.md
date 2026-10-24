@@ -678,8 +678,9 @@ these.
 - Q4: whole-wave CAS failure FORBIDDEN (livelock). [serving-loop §3d]
 - Q5: on budget exhaustion W advances only to the input head the
   settle's PREFIX COVERAGE proved (a completed frame barrier over the
-  head, then an idle scheduler with no re-armed root pending, clamped
-  by the shadow, event-visibility and re-armed-root floors); with no proof the commit
+  head, then an idle scheduler, clamped by the shadow, event-visibility
+  and re-armed-root floors; a re-armed root's retry starts at that
+  barrier, on either side of T_flush); with no proof the commit
   carries `derivedThrough` = current W; continuation waves carry the
   cascade. [serving-loop §3]
 

@@ -2,7 +2,10 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
-import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  FabricBytes,
+  FabricEpochNsec,
+} from "@commonfabric/data-model/fabric-primitives";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
@@ -649,6 +652,84 @@ describe("cfc schema sanitization", () => {
       .toContain("value does not match type FabricBytes");
     expect(validateSchemaValue({ type: "FabricBytes" }, "bytes-ish"))
       .toContain("value does not match type FabricBytes");
+  });
+
+  it("accepts a `bigint` under `integer` and `number`, and under nothing else", () => {
+    // A `bigint` is an integer, and `integer` is a subtype of `number`. A
+    // `FabricPrimitive` wrapping one, such as a `FabricEpochNsec`, is its own
+    // type and not an integer.
+    expect(validateSchemaValue({ type: "integer" }, 42n)).toBeUndefined();
+    expect(validateSchemaValue({ type: "number" }, 42n)).toBeUndefined();
+    expect(validateSchemaValue({ type: ["integer", "null"] }, 42n))
+      .toBeUndefined();
+    expect(validateSchemaValue({ type: "string" }, 42n))
+      .toContain("value does not match type string");
+    expect(validateSchemaValue({ type: "object" }, 42n))
+      .toContain("value does not match type object");
+    expect(validateSchemaValue({ type: "integer" }, new FabricEpochNsec(42n)))
+      .toContain("value does not match type integer");
+  });
+
+  it("holds a `bigint` to the numeric bounds and to `multipleOf`", () => {
+    expect(validateSchemaValue({ type: "integer", minimum: 0 }, 42n))
+      .toBeUndefined();
+    expect(validateSchemaValue({ type: "integer", minimum: 43 }, 42n))
+      .toContain("value is below minimum 43");
+    expect(validateSchemaValue({ type: "integer", exclusiveMinimum: 42 }, 42n))
+      .toContain("value is not above exclusiveMinimum 42");
+    expect(validateSchemaValue({ type: "integer", maximum: 41 }, 42n))
+      .toContain("value is above maximum 41");
+    expect(validateSchemaValue({ type: "integer", exclusiveMaximum: 42 }, 42n))
+      .toContain("value is not below exclusiveMaximum 42");
+    expect(validateSchemaValue({ type: "integer", multipleOf: 7 }, 42n))
+      .toBeUndefined();
+    expect(validateSchemaValue({ type: "integer", multipleOf: 5 }, 42n))
+      .toContain("value is not a multiple of 5");
+    // A fractional `multipleOf` is measured exactly too, beyond the range and
+    // the precision of a number.
+    expect(
+      validateSchemaValue({ type: "integer", multipleOf: 0.5 }, 10n ** 400n),
+    )
+      .toBeUndefined();
+    expect(
+      validateSchemaValue(
+        { type: "integer", multipleOf: 0.75 },
+        2n ** 60n + 2n,
+      ),
+    ).toBeUndefined();
+    expect(
+      validateSchemaValue(
+        { type: "integer", multipleOf: 0.75 },
+        2n ** 60n + 1n,
+      ),
+    ).toContain("value is not a multiple of 0.75");
+    // A bound a `number` cannot state exactly still orders against a
+    // `bigint` by value.
+    expect(
+      validateSchemaValue(
+        { type: "integer", maximum: 2 ** 60 },
+        2n ** 60n + 1n,
+      ),
+    ).toContain("value is above maximum");
+  });
+
+  it("matches a `bigint` to a whole-number `enum` or `const` member by value", () => {
+    // The schema generator writes a bigint literal type as a number member,
+    // and a stored bigint is that member's integer.
+    expect(validateSchemaValue({ type: "integer", enum: [41, 42] }, 42n))
+      .toBeUndefined();
+    expect(validateSchemaValue({ const: 42 }, 42n)).toBeUndefined();
+    expect(validateSchemaValue({ type: "integer", enum: [41] }, 42n))
+      .toContain("value is not in enum");
+    expect(validateSchemaValue({ const: 42.5 }, 42n))
+      .toContain("value does not match const");
+    expect(validateSchemaValue({ const: "42" }, 42n))
+      .toContain("value does not match const");
+    // A member is the number it is: one past the number's precision does not
+    // stand for its neighbors.
+    expect(validateSchemaValue({ const: 2 ** 53 }, 2n ** 53n + 1n))
+      .toContain("value does not match const");
+    expect(validateSchemaValue({ const: 2 ** 53 }, 2n ** 53n)).toBeUndefined();
   });
 
   it("checks an object schema's required keys against a FabricPrimitive's accessors", () => {

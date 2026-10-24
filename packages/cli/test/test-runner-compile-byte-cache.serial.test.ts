@@ -10,7 +10,7 @@ import {
 import { runMultiUserTestPattern } from "../lib/multi-user-test-runner.ts";
 import type * as compileByteCacheModule from "../lib/compile-byte-cache.ts";
 import { runTests } from "../lib/test-runner.ts";
-import { cf, checkStderr, withEnv } from "./utils.ts";
+import { argv, cf, checkStderr, withEnv } from "./utils.ts";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/pattern-coverage");
 const TEST_FILE = join(FIXTURES, "single.test.tsx").replaceAll("\\", "/");
@@ -182,7 +182,7 @@ describe(
         prefix: "cf-test-compile-byte-cache-env-",
       });
       const cacheFile = join(dir, "cache.json");
-      const command = `test "${TEST_FILE}" --root "${FIXTURES}"`;
+      const command = argv`test ${TEST_FILE} --root ${FIXTURES}`;
 
       try {
         const env = { CF_COMPILE_CACHE_FILE: cacheFile, CF_LOG_LEVEL: "info" };
@@ -227,7 +227,7 @@ describe(
 
       try {
         const first = await cf(
-          `test --compile-only "${TEST_FILE}" --root "${FIXTURES}"`,
+          argv`test --compile-only ${TEST_FILE} --root ${FIXTURES}`,
           { env },
         );
         expect(first.code).toBe(0);
@@ -251,7 +251,7 @@ describe(
           Deno.errors.NotFound,
         );
 
-        const second = await cf(`test "${TEST_FILE}" --root "${FIXTURES}"`, {
+        const second = await cf(argv`test ${TEST_FILE} --root ${FIXTURES}`, {
           env,
         });
         expect(second.code).toBe(0);
@@ -276,7 +276,7 @@ describe(
       });
       const cacheFile = join(dir, "cache.json");
       const coverageDir = join(dir, "coverage");
-      const command = `test "${TEST_FILE}" --root "${FIXTURES}"`;
+      const command = argv`test ${TEST_FILE} --root ${FIXTURES}`;
 
       try {
         const env = {

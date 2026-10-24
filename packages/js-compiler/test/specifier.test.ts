@@ -5,6 +5,7 @@ import {
   assertDataFileInsideProgramRoot,
   importEscapesProgramRoot,
   resolveDataFilePath,
+  resolveDeclaredDataFile,
   resolveImportSpecifier,
 } from "../specifier.ts";
 
@@ -179,6 +180,19 @@ describe("specifier", () => {
         "data/cities.json",
         from("/examples/reader.tsx"),
       );
+    });
+  });
+
+  describe("resolveDeclaredDataFile", () => {
+    it("returns the path resolved against the reading module", () => {
+      expect(
+        resolveDeclaredDataFile("../shared/words.txt", from("/games/main.tsx")),
+      ).toBe("/shared/words.txt");
+    });
+
+    it("throws for a path that climbs above the root", () => {
+      expect(() => resolveDeclaredDataFile("../outside.txt", from("/main.tsx")))
+        .toThrow('Data file "../outside.txt" read in "/main.tsx"');
     });
   });
 });

@@ -66,6 +66,67 @@ describe("in-process-attributes", () => {
     }
   });
 
+  it("renders the same `style` attribute whichever order a style object lists its keys in", async () => {
+    // The reconciler turns a style object into the attribute's text. A
+    // runtime holds the object's keys in the order its writer listed them,
+    // and holds the same object loaded from the store in UTF-8 order.
+
+    const signer = await Identity.fromPassphrase("in-process style order");
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: StorageManager.emulate({ as: signer }),
+    });
+    const mock = new MockDoc('<div id="root"></div>');
+    const container = mock.document.getElementById("root")!;
+    let render: ReturnType<typeof renderInProcess> | undefined;
+    try {
+      const tx = runtime.edit();
+      const vdom = runtime.getCell<unknown>(
+        signer.did(),
+        "style-order",
+        undefined,
+        tx,
+      );
+      vdom.set({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [
+          {
+            type: "vnode",
+            name: "span",
+            props: {
+              style: { display: "none", gap: "0.25rem", alignItems: "center" },
+            },
+            children: [],
+          },
+          {
+            type: "vnode",
+            name: "span",
+            props: {
+              style: { alignItems: "center", display: "none", gap: "0.25rem" },
+            },
+            children: [],
+          },
+        ],
+      });
+      await tx.commit().settled;
+      render = renderInProcess(container, vdom, {
+        document: mock.document,
+        setProp: mock.renderOptions.setProp,
+      });
+      await runtime.idle();
+      render.flush();
+
+      const span = '<span style="align-items: center; display: none; ' +
+        'gap: 0.25rem"></span>';
+      expect(container.innerHTML).toBe(`<div>${span}${span}</div>`);
+    } finally {
+      render?.cancel();
+      await runtime.dispose();
+    }
+  });
+
   it("updates and removes ARIA attributes through the default property setter", async () => {
     const signer = await Identity.fromPassphrase("in-process ARIA attributes");
     const runtime = new Runtime({

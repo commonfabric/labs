@@ -4,6 +4,9 @@ if (!customElements.get("cf-keybind")) {
   customElements.define("cf-keybind", CFKeybind);
 }
 
-export type { CFKeybind as CFKeybindElement } from "./cf-keybind.ts";
+export type {
+  CFKeybind as CFKeybindElement,
+  CFKeybindDetail,
+} from "./cf-keybind.ts";
 
 export { CFKeybind };

@@ -65,10 +65,15 @@ describe("prepareBoundaryCommit()", () => {
   for (const inspectWrites of [true, false]) {
     it(`rederives labels from reused backend objects with write inspection ${inspectWrites ? "available" : "unavailable"}`, async () => {
       const storageManager = StorageManager.emulate({ as: signer });
+      // A link slot persists nothing of its source, so what shows that the
+      // second target's preparation read the source's envelope afresh is a
+      // write floor on the slot: the floor is met by the source's evidence
+      // as the envelope holds it when that target is prepared.
       const runtime = new Runtime({
         apiUrl: new URL("https://example.com"),
         storageManager,
         cfcFlowLabels: "off",
+        cfcWriteFloor: "enforce",
       });
       try {
         const metadata: CfcMetadata = {
@@ -78,10 +83,7 @@ describe("prepareBoundaryCommit()", () => {
             version: 1,
             entries: [{
               path: ["entry"],
-              label: { confidentiality: ["old-root"] },
-            }, {
-              path: ["entry", "old"],
-              label: { confidentiality: ["old-detail"] },
+              label: { integrity: ["old-endorsement"] },
             }],
           },
         };
@@ -110,6 +112,19 @@ describe("prepareBoundaryCommit()", () => {
               }),
             );
             tx.recordCfcWritePolicyInput({
+              kind: "schema",
+              target: { ...target, path: [] },
+              schema: {
+                type: "object",
+                properties: {
+                  field: {
+                    type: "object",
+                    ifc: { requiredIntegrity: ["new-endorsement"] },
+                  },
+                },
+              } as JSONSchema,
+            });
+            tx.recordCfcWritePolicyInput({
               kind: "link-write",
               target: { ...target, path: ["field"] },
               source: { ...source, path: ["entry"] },
@@ -131,10 +146,7 @@ describe("prepareBoundaryCommit()", () => {
                   if (++inspections === 2) {
                     metadata.labelMap.entries = [{
                       path: ["entry"],
-                      label: { confidentiality: ["new-root"] },
-                    }, {
-                      path: ["entry", "new"],
-                      label: { confidentiality: ["new-detail"] },
+                      label: { integrity: ["new-endorsement"] },
                     }];
                     expect(
                       tx.tx.write({ ...source, path: ["cfc"] }, metadata).ok,
@@ -162,20 +174,25 @@ describe("prepareBoundaryCommit()", () => {
                 : member;
             },
           });
-          expect(prepareBoundaryCommit(view)).toEqual([]);
+          // The first target was prepared against the old endorsement and
+          // fails its floor; the second read the envelope again and passes.
+          const reasons = prepareBoundaryCommit(view);
+          expect(reasons.length).toBe(1);
+          expect(reasons[0]).toContain("write floor failed at /field");
           expect(inspections).toBe(2);
-          const envelope = loadStoredCfcEnvelope(tx, targets[1]);
-          expect(envelope.status).toBe("loaded");
-          if (envelope.status !== "loaded") throw new Error(envelope.status);
-          const entries = envelope.metadata.labelMap.entries;
-          expect(entries.some((entry) =>
-            entry.path.join("/") === "field/new" &&
-            entry.label.confidentiality?.includes("new-detail")
-          )).toBe(true);
-          expect(entries.flatMap((entry) => entry.label.confidentiality ?? []))
-            .not.toContain("old-root");
-          expect(entries.flatMap((entry) => entry.label.confidentiality ?? []))
-            .not.toContain("old-detail");
+          // Neither slot stores the source's endorsement, old or new: the
+          // floor consumed it as evidence, and the slot persists only what
+          // the reference itself declares.
+          for (const target of targets) {
+            const envelope = loadStoredCfcEnvelope(tx, target);
+            const integrity = envelope.status === "loaded"
+              ? envelope.metadata.labelMap.entries.flatMap((entry) =>
+                entry.label.integrity ?? []
+              )
+              : [];
+            expect(integrity).not.toContain("old-endorsement");
+            expect(integrity).not.toContain("new-endorsement");
+          }
         } finally {
           tx.abort();
         }

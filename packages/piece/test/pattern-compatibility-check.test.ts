@@ -442,6 +442,21 @@ describe("setsrc compatibility preflight", () => {
     expect(report.message).toContain("required");
   });
 
+  it("throws when the compiled candidate has no pattern identity", async () => {
+    const piece = await livePiece();
+    const manager = runtime.patternManager;
+    const originalGetRef = manager.getArtifactEntryRef.bind(manager);
+    manager.getArtifactEntryRef = () => undefined;
+
+    try {
+      await expect(piece.checkPattern(compatibleProgram())).rejects.toThrow(
+        "the candidate source has no pattern identity",
+      );
+    } finally {
+      manager.getArtifactEntryRef = originalGetRef;
+    }
+  });
+
   it("changes nothing — a refused check leaves the piece applying its old source", async () => {
     const piece = await livePiece();
     await runtime.idle();

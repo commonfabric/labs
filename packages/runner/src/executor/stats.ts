@@ -511,6 +511,17 @@ export type ServingLoopStats = {
      * argument never resolves. */
     handlerNotRunDeferrals: number;
 
+    /**
+     * Drain deferrals that spent none of the deferral budget because an entry
+     * that arrived earlier in the same space was still pending (events.md
+     * §5): the deferred event may address a piece that the earlier one's
+     * handler creates. Counted per deferral, so an event held behind a slow
+     * earlier one reads as a growing count. A count that grows while
+     * `processed` does not names an earlier event that never completes, and
+     * the events held behind it.
+     */
+    arrivalHeldDeferrals: number;
+
     /** The pre-dispatch LOAD-PARK deferrals (verification-coverage.md's
      * OW45 residue member, fixed 2026-08-26): a served event's dispatch
      * preflight parked on an in-flight replica load its closure reads
@@ -732,6 +743,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     lt1LateSealsRefused: 0,
     orphanDeliveriesRefused: 0,
     handlerNotRunDeferrals: 0,
+    arrivalHeldDeferrals: 0,
     loadParkDeferrals: 0,
     loadParkFailures: 0,
     deliveryDeferralsActive: 0,

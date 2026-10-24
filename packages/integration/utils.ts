@@ -233,27 +233,17 @@ export type PageCondition<
 ) => boolean | R | Promise<boolean | R>;
 
 /**
- * Installed in the page by {@link waitForCondition}. Re-evaluates `predicate`
- * whenever the UI could have changed — a shared pulse hub observes the document
- * and every shadow root (subtree, character data, and attributes), including
- * shadow roots created after the wait began, so the predicate runs the instant
- * the DOM reflects new state instead of on a fixed timer. When the predicate
- * holds, it calls the CDP binding `bindingName`, which wakes the awaiting test
- * process. An async predicate that awaits a runtime signal (such as
- * `rt.idle()`) resolves the moment that signal fires, with no DOM change
- * required.
+ * Builds the {@link ProbeApi} that a {@link waitForCondition} predicate and a
+ * {@link readWithProbe} reader are handed, so a read and a wait judge the page
+ * by the same rules.
  *
- * Self-contained: it is serialized and run in the page, so it closes over none
- * of the module scope. `predicateSource` is the predicate's source text,
- * reconstructed here because a function cannot cross the evaluate boundary as a
- * callable value.
+ * Self-contained: its source is serialized and run in the page, so it closes
+ * over none of the module scope.
  */
-function installWaiter(
-  bindingName: string,
-  predicateSource: string,
-  predicateArgs: unknown[],
-  events: string[],
-): void {
+function createProbe(): ProbeApi {
+  // The return type makes a method added to `ProbeApi` one this has to
+  // implement. The annotation is erased before the source is serialized, so it
+  // adds no runtime reference to module scope.
   const isRendered = (element: Element): boolean => {
     const style = globalThis.getComputedStyle(element);
     if (style.display === "none" || style.visibility === "hidden") return false;
@@ -265,11 +255,7 @@ function installWaiter(
     element.hasAttribute("disabled") ||
     element.getAttribute("aria-disabled") === "true";
 
-  // Typed as the ProbeApi the predicates are handed, so a method added to that
-  // interface has to be implemented here too. The annotation is erased before
-  // this function is serialized into the page, so it adds no runtime reference
-  // to module scope.
-  const probe: ProbeApi = {
+  return {
     collect(selector) {
       const out: Element[] = [];
       const walk = (root: Document | ShadowRoot) => {
@@ -354,6 +340,129 @@ function installWaiter(
       element.setAttribute(attribute, [...tokens].join(" "));
     },
   };
+}
+
+/**
+ * Copies `value` into the exact value JSON will carry, or throws a `TypeError`
+ * naming where it is not JSON-safe. `JSON.stringify` alone is not a validator:
+ * it silently drops functions, symbols, and `undefined` properties, turns a
+ * `Map` into `{}`, and changes non-finite numbers to `null`. An answer handed
+ * back from the page has to be delivered as given or reported as undeliverable;
+ * a silently different value reads as an answer the page never produced.
+ *
+ * Self-contained: its source is serialized and run in the page, so it closes
+ * over none of the module scope.
+ */
+function copyJsonAnswer(
+  value: unknown,
+  path = "$",
+  seen = new WeakSet<object>(),
+): unknown {
+  if (
+    value === null || typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || Object.is(value, -0)) {
+      const kind = Object.is(value, -0) ? "Negative zero" : "Non-finite number";
+      throw new TypeError(`${kind} at ${path} is not JSON-safe`);
+    }
+    return value;
+  }
+  if (typeof value !== "object") {
+    throw new TypeError(`${typeof value} at ${path} is not JSON-safe`);
+  }
+  if (seen.has(value)) {
+    throw new TypeError(`Cycle at ${path} is not JSON-safe`);
+  }
+
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
+        throw new TypeError(`toJSON at ${path} is not JSON-safe`);
+      }
+      if (
+        Object.keys(value).some((key) => {
+          const index = Number(key);
+          return !Number.isInteger(index) || index < 0 ||
+            index >= value.length || String(index) !== key;
+        }) ||
+        Object.getOwnPropertySymbols(value).some((symbol) =>
+          Object.prototype.propertyIsEnumerable.call(value, symbol)
+        )
+      ) {
+        throw new TypeError(`Array properties at ${path} are not JSON-safe`);
+      }
+
+      const copy: unknown[] = [];
+      for (let index = 0; index < value.length; index++) {
+        if (!Object.prototype.hasOwnProperty.call(value, index)) {
+          throw new TypeError(`Sparse array at ${path} is not JSON-safe`);
+        }
+        copy.push(copyJsonAnswer(value[index], `${path}[${index}]`, seen));
+      }
+      return copy;
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      const tag = Object.prototype.toString.call(value);
+      throw new TypeError(`${tag} at ${path} is not a plain JSON object`);
+    }
+    if (
+      Object.getOwnPropertySymbols(value).some((symbol) =>
+        Object.prototype.propertyIsEnumerable.call(value, symbol)
+      )
+    ) {
+      throw new TypeError(
+        `Enumerable symbol key at ${path} is not JSON-safe`,
+      );
+    }
+
+    const copy = Object.create(null) as Record<string, unknown>;
+    for (const key of Object.keys(value)) {
+      copy[key] = copyJsonAnswer(
+        (value as Record<string, unknown>)[key],
+        `${path}.${key}`,
+        seen,
+      );
+    }
+    return copy;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+/**
+ * Installed in the page by {@link waitForCondition}. Re-evaluates `predicate`
+ * whenever the UI could have changed — a shared pulse hub observes the document
+ * and every shadow root (subtree, character data, and attributes), including
+ * shadow roots created after the wait began, so the predicate runs the instant
+ * the DOM reflects new state instead of on a fixed timer. When the predicate
+ * holds, it calls the CDP binding `bindingName`, which wakes the awaiting test
+ * process. An async predicate that awaits a runtime signal (such as
+ * `rt.idle()`) resolves the moment that signal fires, with no DOM change
+ * required.
+ *
+ * Self-contained: it is serialized and run in the page, so it closes over none
+ * of the module scope. `probeSource`, `copyJsonAnswerSource` and
+ * `predicateSource` are the source texts of {@link createProbe},
+ * {@link copyJsonAnswer} and the predicate, each reconstructed here because a
+ * function cannot cross the evaluate boundary as a callable value.
+ */
+function installWaiter(
+  bindingName: string,
+  probeSource: string,
+  copyJsonAnswerSource: string,
+  predicateSource: string,
+  predicateArgs: unknown[],
+  events: string[],
+): void {
+  const probe =
+    (new Function("return (" + probeSource + ")")() as () => ProbeApi)();
 
   const predicate = new Function("return (" + predicateSource + ")")() as (
     probe: ProbeApi,
@@ -434,96 +543,9 @@ function installWaiter(
   // reaches the caller without a second round trip.
   let answer: unknown = true;
 
-  // Copy an answer into the exact value JSON will carry. JSON.stringify alone
-  // is not a validator: it silently drops functions, symbols, and undefined
-  // properties, turns Map into {}, and changes non-finite numbers to null. A
-  // wait must either deliver the predicate's answer or report that it cannot;
-  // silently delivering a different value makes the condition look satisfied
-  // with an answer it never produced.
-  const copyJsonAnswer = (
-    value: unknown,
-    path = "$",
-    seen = new WeakSet<object>(),
-  ): unknown => {
-    if (
-      value === null || typeof value === "string" ||
-      typeof value === "boolean"
-    ) {
-      return value;
-    }
-    if (typeof value === "number") {
-      if (!Number.isFinite(value) || Object.is(value, -0)) {
-        const kind = Object.is(value, -0)
-          ? "Negative zero"
-          : "Non-finite number";
-        throw new TypeError(`${kind} at ${path} is not JSON-safe`);
-      }
-      return value;
-    }
-    if (typeof value !== "object") {
-      throw new TypeError(`${typeof value} at ${path} is not JSON-safe`);
-    }
-    if (seen.has(value)) {
-      throw new TypeError(`Cycle at ${path} is not JSON-safe`);
-    }
-
-    seen.add(value);
-    try {
-      if (Array.isArray(value)) {
-        if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
-          throw new TypeError(`toJSON at ${path} is not JSON-safe`);
-        }
-        if (
-          Object.keys(value).some((key) => {
-            const index = Number(key);
-            return !Number.isInteger(index) || index < 0 ||
-              index >= value.length || String(index) !== key;
-          }) ||
-          Object.getOwnPropertySymbols(value).some((symbol) =>
-            Object.prototype.propertyIsEnumerable.call(value, symbol)
-          )
-        ) {
-          throw new TypeError(`Array properties at ${path} are not JSON-safe`);
-        }
-
-        const copy: unknown[] = [];
-        for (let index = 0; index < value.length; index++) {
-          if (!Object.prototype.hasOwnProperty.call(value, index)) {
-            throw new TypeError(`Sparse array at ${path} is not JSON-safe`);
-          }
-          copy.push(copyJsonAnswer(value[index], `${path}[${index}]`, seen));
-        }
-        return copy;
-      }
-
-      const prototype = Object.getPrototypeOf(value);
-      if (prototype !== Object.prototype && prototype !== null) {
-        const tag = Object.prototype.toString.call(value);
-        throw new TypeError(`${tag} at ${path} is not a plain JSON object`);
-      }
-      if (
-        Object.getOwnPropertySymbols(value).some((symbol) =>
-          Object.prototype.propertyIsEnumerable.call(value, symbol)
-        )
-      ) {
-        throw new TypeError(
-          `Enumerable symbol key at ${path} is not JSON-safe`,
-        );
-      }
-
-      const copy = Object.create(null) as Record<string, unknown>;
-      for (const key of Object.keys(value)) {
-        copy[key] = copyJsonAnswer(
-          (value as Record<string, unknown>)[key],
-          `${path}.${key}`,
-          seen,
-        );
-      }
-      return copy;
-    } finally {
-      seen.delete(value);
-    }
-  };
+  const copyJsonAnswer = new Function(
+    "return (" + copyJsonAnswerSource + ")",
+  )() as (value: unknown) => unknown;
 
   // A predicate that throws is a stuck wait whose cause the page alone knows,
   // so its message is sent over the same binding, tagged so the test process
@@ -722,6 +744,8 @@ export const waitForCondition = async <
     await page.evaluate(installWaiter, {
       args: [
         bindingName,
+        createProbe.toString(),
+        copyJsonAnswer.toString(),
         predicate.toString(),
         (args ?? []) as unknown[],
         events,
@@ -771,3 +795,48 @@ export const waitForCondition = async <
     }, { args: [bindingName] }).catch(() => {});
   }
 };
+
+/**
+ * Evaluates `reader` in the page once, handed the {@link ProbeApi} a
+ * {@link waitForCondition} predicate is, and returns its answer: for reading
+ * the page as a wait reads it, where nothing is being waited for. `reader` is
+ * serialized into the page, so it closes over none of the module scope.
+ *
+ * @throws If the page cannot be evaluated, `reader` throws, or its answer is
+ *   not JSON-safe, as {@link copyJsonAnswer} decides.
+ */
+export const readWithProbe = async <
+  A extends readonly unknown[],
+  R extends PageConditionValue,
+>(
+  page: Page,
+  reader: (probe: ProbeApi, ...args: A) => R | Promise<R>,
+  { args }: { args?: A } = {},
+): Promise<R> =>
+  await page.evaluate(
+    async (
+      probeSource: string,
+      copyJsonAnswerSource: string,
+      readerSource: string,
+      readerArgs: unknown[],
+    ) => {
+      const probe =
+        (new Function("return (" + probeSource + ")")() as () => ProbeApi)();
+      const copyJsonAnswer = new Function(
+        "return (" + copyJsonAnswerSource + ")",
+      )() as (value: unknown) => unknown;
+      const read = new Function("return (" + readerSource + ")")() as (
+        probe: ProbeApi,
+        ...args: unknown[]
+      ) => unknown;
+      return copyJsonAnswer(await read(probe, ...readerArgs));
+    },
+    {
+      args: [
+        createProbe.toString(),
+        copyJsonAnswer.toString(),
+        reader.toString(),
+        (args ?? []) as unknown[],
+      ],
+    },
+  ) as R;

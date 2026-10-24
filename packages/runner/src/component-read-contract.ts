@@ -279,6 +279,7 @@ export const ProfileBadgeSchema = {
   properties: {
     [NAME]: { type: "string" },
     name: { type: "string" },
+    picture: { type: "FabricBytes" },
     avatar: { type: "string" },
     bio: { type: "string" },
     elements: {

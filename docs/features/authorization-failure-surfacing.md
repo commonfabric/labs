@@ -78,13 +78,14 @@ a connection-authentication denial, client-wide for a handshake mismatch), and
 only recoverable and transport-level conditions retry, on transports that can
 discard a failed connection.
 
-`SpaceSession.subscribeAccessLoss` also delivers an authoritative
-`AuthorizationError` immediately when an established session loses access. An
-`unauthorized` revocation carries that error. A `taken-over` revocation closes
-with `SessionRevokedError` and does not emit access loss. Normal close,
-disconnect, protocol failure, and a recoverable challenge race do not emit it
-either. A late subscriber receives the retained authorization verdict until the
-session is replaced successfully.
+`SpaceSession.subscribeTermination` delivers the error that ends an established
+session immediately, and the runner's replica reports it as access loss when it
+is a permanent (non-retriable) `AuthorizationError`. An `unauthorized` revocation carries
+that error. A `taken-over` revocation closes with `SessionRevokedError`, which
+is a termination but not access loss. A recoverable challenge race that ends the
+session is likewise not access loss. Normal close and an ordinary disconnect do
+not terminate the session. A late subscriber receives the retained error until
+the session is replaced successfully.
 
 `StorageManager.subscribeSpaceAccessChange` observes both a new authoritative
 denial and its clearance after a successful authorized reopen. Renderers use

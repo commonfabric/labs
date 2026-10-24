@@ -8,6 +8,7 @@ import {
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import type { SpaceReplica } from "../src/storage/v2.ts";
+import { experimentalOptionsFromEnv } from "../src/experimental-posture.ts";
 import { Runtime } from "../src/runtime.ts";
 import { entityKey } from "../src/scheduler/keys.ts";
 import type {
@@ -19,6 +20,8 @@ import { excludeReadFromConflict } from "../src/storage/reactivity-log.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
+
+const { localSessionDocuments } = experimentalOptionsFromEnv(Deno.env.get);
 
 const signer = await Identity.fromPassphrase("absence reconciliation test");
 const space = signer.did();
@@ -576,162 +579,142 @@ describe("editWithRetry absence reconciliation", () => {
     }
   });
 
-  it("reconciles the served transaction's user and session instances", async () => {
-    const actor = await Identity.fromPassphrase(
-      "absence reconciliation served actor",
-    );
-    const service = await Identity.fromPassphrase(
-      "absence reconciliation serving runtime",
-    );
-    const actorIdentity = {
-      principal: actor.did(),
-      sessionId: "absence-actor-session",
-    };
-    const server = newSharedServer();
-    let actorStorage: EmulatedStorageManager | undefined =
-      EmulatedStorageManager.connectTo(server, {
-        as: actor,
-        id: actorIdentity.sessionId,
-      });
-    let actorRuntime: Runtime | undefined = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager: actorStorage,
-    });
-    let servingStorage: EmulatedStorageManager | undefined;
-    let servingRuntime: Runtime | undefined;
-    let lease: ExecutionLeaseCycle | undefined;
-    try {
-      const userCell = actorRuntime.getCell<{ value: number }>(
-        space,
-        "served-identity-user",
-        valueSchema,
-        undefined,
-        "user",
-      );
-      const sessionCell = actorRuntime.getCell<{ value: number }>(
-        space,
-        "served-identity-session",
-        valueSchema,
-        undefined,
-        "session",
-      );
-      const seed = actorRuntime.edit();
-      userCell.withTx(seed).set({ value: 11 });
-      sessionCell.withTx(seed).set({ value: 22 });
-      expect((await seed.commit().settled).error).toBeUndefined();
-      await actorStorage.synced();
-      const userId = userCell.getAsNormalizedFullLink().id;
-      const sessionId = sessionCell.getAsNormalizedFullLink().id;
-      await actorRuntime.dispose();
-      actorRuntime = undefined;
-      await actorStorage.close();
-      actorStorage = undefined;
-
-      const holder = executionLeaseHolder(service.did());
-      servingStorage = EmulatedStorageManager.connectTo(server, {
-        as: service,
-        id: holder,
-        servingHomeSpace: space,
-      });
-      servingRuntime = new Runtime({
-        apiUrl: new URL(import.meta.url),
-        storageManager: servingStorage,
-        servingPosture: true,
-        experimental: { serverExecution: true },
-      });
-      const engine = await server.engineForSpace(space);
-      lease = new ExecutionLeaseCycle({ engine, space, holder });
-      expect(lease.acquire()).toBe(true);
-
-      const tx = servingRuntime.edit();
-      stampWaveRunContext(tx, {
-        actionId: "reconcile-served-identity",
-        kind: "derivation",
-        scopeKeyIdentity: actorIdentity,
-        actionScopeKey: resolveScopeKey("user", actorIdentity),
-      });
-      tx.read({
-        space,
-        id: userId,
-        type: "application/json",
-        scope: "user",
-        path: [],
-      }, { trackReadWithoutLoad: true });
-      tx.read({
-        space,
-        id: sessionId,
-        type: "application/json",
-        scope: "session",
-        path: [],
-      }, { trackReadWithoutLoad: true });
-
-      const provider = servingStorage.open(space);
-      const absences = provider.unexaminedAbsences!(tx.tx);
-      expect(absences.map((absence) => absence.id).sort()).toEqual(
-        [userId, sessionId].sort(),
-      );
-      // Each names the actor's instance, the way a load for it is keyed.
-      for (const absence of absences) {
-        expect(absence.scopeKey).toBe(
-          resolveScopeKey(absence.scope, actorIdentity),
+  for (const scope of ["user", "session"] as const) {
+    it({
+      name: `reconciles the served transaction's ${scope} instance`,
+      ignore: scope === "session" && localSessionDocuments === true,
+      fn: async () => {
+        const actor = await Identity.fromPassphrase(
+          "absence reconciliation served actor",
         );
-      }
-      expect(provider.presentCount!(absences)).toBe(0);
-      // The loads a served run's reads register name that instance too, and
-      // under the key the runtime waits on; once they land, the absences
-      // count as present.
-      const loads = absences.map((absence) =>
-        servingStorage!.syncCell(
-          servingRuntime!.getCellFromLink({
+        const service = await Identity.fromPassphrase(
+          "absence reconciliation serving runtime",
+        );
+        const actorIdentity = {
+          principal: actor.did(),
+          sessionId: "absence-actor-session",
+        };
+        const server = newSharedServer();
+        let actorStorage: EmulatedStorageManager | undefined =
+          EmulatedStorageManager.connectTo(server, {
+            as: actor,
+            id: actorIdentity.sessionId,
+          });
+        let actorRuntime: Runtime | undefined = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: actorStorage,
+          experimental: { serverExecution: false, localSessionDocuments },
+        });
+        let servingStorage: EmulatedStorageManager | undefined;
+        let servingRuntime: Runtime | undefined;
+        let lease: ExecutionLeaseCycle | undefined;
+        try {
+          const cell = actorRuntime.getCell<{ value: number }>(
             space,
-            id: absence.id,
+            `served-identity-${scope}`,
+            valueSchema,
+            undefined,
+            scope,
+          );
+          const seed = actorRuntime.edit();
+          cell.withTx(seed).set({ value: 11 });
+          expect((await seed.commit().settled).error).toBeUndefined();
+          await actorStorage.synced();
+          const id = cell.getAsNormalizedFullLink().id;
+          await actorRuntime.dispose();
+          actorRuntime = undefined;
+          await actorStorage.close();
+          actorStorage = undefined;
+
+          const holder = executionLeaseHolder(service.did());
+          servingStorage = EmulatedStorageManager.connectTo(server, {
+            as: service,
+            id: holder,
+            servingHomeSpace: space,
+          });
+          servingRuntime = new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager: servingStorage,
+            servingPosture: true,
+            experimental: { serverExecution: true },
+          });
+          const engine = await server.engineForSpace(space);
+          lease = new ExecutionLeaseCycle({ engine, space, holder });
+          expect(lease.acquire()).toBe(true);
+
+          const tx = servingRuntime.edit();
+          stampWaveRunContext(tx, {
+            actionId: "reconcile-served-identity",
+            kind: "derivation",
+            scopeKeyIdentity: actorIdentity,
+            actionScopeKey: resolveScopeKey(scope, actorIdentity),
+          });
+          tx.read({
+            space,
+            id,
+            type: "application/json",
+            scope,
             path: [],
-            scope: absence.scope,
-          }),
-          { scopeKeyIdentity: actorIdentity },
-        )
-      );
-      for (const absence of absences) {
-        expect(
-          servingStorage.pendingLoadGeneration(
-            entityKey(absence, servingRuntime.scopeKeyIdentity),
-          ),
-        ).toBeDefined();
-      }
-      await Promise.all(loads);
-      expect(provider.presentCount!(absences)).toBe(2);
-      expect(
-        (provider.replica.getDocument(userId, "user", actorIdentity)?.value as
-          | { value?: number }
-          | undefined)?.value,
-      ).toBe(11);
-      expect(
-        (provider.replica.getDocument(
-          sessionId,
-          "session",
-          actorIdentity,
-        )?.value as { value?: number } | undefined)?.value,
-      ).toBe(22);
-      // Both loads are keyed under the ACTOR's instance. The serving
-      // replica holds no record at all for its OWN instance of either
-      // document.
-      const replica = provider.replica as SpaceReplica;
-      expect(
-        replica.accessForTestingOnly.hasDocumentRecord(userId, "user"),
-      ).toBe(false);
-      expect(
-        replica.accessForTestingOnly.hasDocumentRecord(sessionId, "session"),
-      ).toBe(false);
-      tx.abort("inspection only");
-    } finally {
-      lease?.release();
-      await servingRuntime?.dispose();
-      await actorRuntime?.dispose();
-      await servingStorage?.close();
-      await actorStorage?.close();
-      await server.close();
-    }
-  });
+          }, { trackReadWithoutLoad: true });
+
+          const provider = servingStorage.open(space);
+          const absences = provider.unexaminedAbsences!(tx.tx);
+          expect(absences.map((absence) => absence.id).sort()).toEqual(
+            [id],
+          );
+          // Each names the actor's instance, the way a load for it is keyed.
+          for (const absence of absences) {
+            expect(absence.scopeKey).toBe(
+              resolveScopeKey(absence.scope, actorIdentity),
+            );
+          }
+          expect(provider.presentCount!(absences)).toBe(0);
+          // The loads a served run's reads register name that instance too, and
+          // under the key the runtime waits on; once they land, the absences
+          // count as present.
+          const loads = absences.map((absence) =>
+            servingStorage!.syncCell(
+              servingRuntime!.getCellFromLink({
+                space,
+                id: absence.id,
+                path: [],
+                scope: absence.scope,
+              }),
+              { scopeKeyIdentity: actorIdentity },
+            )
+          );
+          for (const absence of absences) {
+            expect(
+              servingStorage.pendingLoadGeneration(
+                entityKey(absence, servingRuntime.scopeKeyIdentity),
+              ),
+            ).toBeDefined();
+          }
+          await Promise.all(loads);
+          expect(provider.presentCount!(absences)).toBe(1);
+          expect(
+            (provider.replica.getDocument(id, scope, actorIdentity)?.value as
+              | { value?: number }
+              | undefined)?.value,
+          ).toBe(11);
+          // The load names the actor's instance; the serving replica has no
+          // record for its own instance of the document.
+          const replica = provider.replica as SpaceReplica;
+          expect(
+            replica.accessForTestingOnly.hasDocumentRecord(id, scope),
+          ).toBe(false);
+          tx.abort("inspection only");
+        } finally {
+          lease?.release();
+          await servingRuntime?.dispose();
+          await actorRuntime?.dispose();
+          await servingStorage?.close();
+          await actorStorage?.close();
+          await server.close();
+        }
+      },
+    });
+  }
 
   it("names the unexamined absences through the provider, and counts them present once loaded", async () => {
     const server = newSharedServer();

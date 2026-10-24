@@ -248,7 +248,7 @@ describe("cf agent runner", () => {
       maxConcurrent: 1,
       leaseMs: 300_000,
       workRoot: "/home/me/.cf-harness/agent-runs",
-      tools: ["describe_handle", "web_fetch"],
+      tools: ["web_fetch", "describe_handle", "read_value"],
     });
     expect(started[0].loomRetrievalConfigPath).toBeUndefined();
     expect(started[0].model).toBeUndefined();
@@ -329,7 +329,11 @@ describe("cf agent runner", () => {
       "/var/agent-runs",
     ]);
 
-    expect(started[0].tools).toEqual(["loom_search", "describe_handle"]);
+    expect(started[0].tools).toEqual([
+      "loom_search",
+      "describe_handle",
+      "read_value",
+    ]);
     expect(started[0].workRoot).toBe("/var/agent-runs");
   });
 

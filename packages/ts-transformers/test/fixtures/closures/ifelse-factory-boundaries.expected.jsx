@@ -87,9 +87,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         anyOf: [{
                 type: "null"
             }, {
-                $ref: "https://commonfabric.org/schemas/vnode.json"
-            }, {
                 $ref: "#/$defs/UIRenderable"
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
             }],
         $defs: {
             UIRenderable: {
@@ -131,9 +131,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     anyOf: [{
             type: "null"
         }, {
-            $ref: "https://commonfabric.org/schemas/vnode.json"
-        }, {
             $ref: "#/$defs/UIRenderable"
+        }, {
+            $ref: "https://commonfabric.org/schemas/vnode.json"
         }],
     $defs: {
         UIRenderable: {
@@ -215,9 +215,9 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     } as const satisfies __cfHelpers.JSONSchema, {
         anyOf: [{
-                $ref: "https://commonfabric.org/schemas/vnode.json"
-            }, {
                 $ref: "#/$defs/UIRenderable"
+            }, {
+                $ref: "https://commonfabric.org/schemas/vnode.json"
             }],
         $defs: {
             UIRenderable: {
@@ -269,9 +269,9 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
     }
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
-            $ref: "https://commonfabric.org/schemas/vnode.json"
-        }, {
             $ref: "#/$defs/UIRenderable"
+        }, {
+            $ref: "https://commonfabric.org/schemas/vnode.json"
         }],
     $defs: {
         UIRenderable: {

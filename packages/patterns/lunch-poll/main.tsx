@@ -8,7 +8,7 @@
  *
  * Identity is the viewer's shared profile CELL, compared with `equals()`:
  * - `users` is a per-space roster; each entry carries the participant's
- *   `#profile` cell as its identity, plus a name/avatar snapshot that is
+ *   `#profile` cell as its identity, plus a name snapshot that is
  *   purely cosmetic. Two people who share a display name are two participants,
  *   and renaming yourself orphans nothing.
  * - "Am I joined?" is DERIVED by comparing the viewer's profile against the
@@ -136,7 +136,8 @@ export interface User {
   /** Display name at join time — cosmetic, may duplicate another participant. */
   name: string;
 
-  /** Avatar URL or glyph, snapshotted from the joiner's shared profile. */
+  /** Avatar text a stored entry may carry. Nothing writes or reads it; the
+   * roster shows each participant's live profile. */
   avatar?: string;
   color: string;
 }
@@ -178,8 +179,10 @@ export type ClockValue = ClockOverride | Default<typeof DEFAULT_CLOCK>;
 export interface ViewerOverride {
   readonly profile?: LunchProfileCell;
 
-  /** Stands in for `#profileName` / `#profileAvatar`, which also need a wish. */
+  /** Stands in for `#profileName`, which also needs a wish. */
   readonly name?: string;
+
+  /** Accepted in a claim and ignored. */
   readonly avatar?: string;
 }
 
@@ -698,7 +701,7 @@ const isHost = (
 
 /**
  * Test seam: claim the sender's viewer identity — the headless stand-in for
- * the `#profile` / `#profileName` / `#profileAvatar` wishes, which have no
+ * the `#profile` / `#profileName` wishes, which have no
  * resolving environment in a unit test. The handler runs in the SENDING
  * session's runtime, so the write lands in the sender's own per-user slot: a
  * multi-user test claims a distinct identity per participant on one shared
@@ -708,11 +711,10 @@ const isHost = (
 const overrideViewer = handler<ViewerOverride, {
   viewer: ViewerCell;
 }>((event, { viewer }) => {
-  const { profile, name, avatar } = event;
+  const { profile, name } = event;
   viewer.set({
     ...(profile !== undefined ? { profile } : {}),
     ...(name !== undefined ? { name } : {}),
-    ...(avatar !== undefined ? { avatar } : {}),
   });
 });
 
@@ -1302,14 +1304,13 @@ export default pattern<CozyPollInput, CozyPollOutput>(
     // Resolve the viewer's shared profile at the TOP LEVEL, per the
     // shared-profile-rosters spec (docs/specs/shared-profile-rosters.md): the
     // `#profile` cell is the stable identity (badge + `equals()` dedup), and
-    // `#profileName` / `#profileAvatar` are the display strings. Simple schema
+    // `#profileName` is the display string. Simple schema
     // on purpose — a rich schema fails to resolve the cross-space result. The
     // claimed override (tests) takes precedence over the wish cell. These pass
     // DOWN into the identity card; the card no longer wishes for itself, so
     // resolution happens in this piece's top-level context where it works.
     const profileWish = wish<LunchProfile>({ query: "#profile" });
     const profileNameWish = wish<string>({ query: "#profileName" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
     // The override cell when a test has claimed an identity, else the resolved
     // wish. The predicate gates on the claim's NAME STRING, never on the
     // profile cell: a presence test on a cell-typed field lowers to an
@@ -1332,9 +1333,6 @@ export default pattern<CozyPollInput, CozyPollOutput>(
     // Strings, unlike cells, are honestly absent when unset, so `??` is safe.
     const viewerProfileName = computed(() =>
       trimmedName(viewer.name ?? profileNameWish.result ?? "")
-    );
-    const viewerProfileAvatar = computed(() =>
-      (viewer.avatar ?? profileAvatarWish.result ?? "").trim()
     );
     // Who this viewer is in THIS poll: their roster entry, found by comparing
     // profile cells. Derived, never stored per-user — so a viewer is recognised
@@ -1365,7 +1363,6 @@ export default pattern<CozyPollInput, CozyPollOutput>(
       host,
       profile: viewerProfileCell,
       profileName: viewerProfileName,
-      profileAvatar: viewerProfileAvatar,
       profileSetupUI: profileWish[UI],
     });
     const boundOverrideViewer = overrideViewer({ viewer });

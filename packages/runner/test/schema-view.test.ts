@@ -19,6 +19,7 @@ import { getTransactionReadActivities } from "../src/storage/transaction-inspect
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { toCell } from "../src/back-to-cell.ts";
 import { ensureSchemaDocument } from "../src/cfc/prepare.ts";
+import { hasInlineCellScheme } from "../src/immutable-cell.ts";
 
 const signer = await Identity.fromPassphrase("schema-view");
 const space = signer.did();
@@ -541,7 +542,7 @@ describe("schema-view", () => {
       properties: {
         title: { type: "string" },
         // Primitives on purpose. An inline object element is rebased onto a
-        // `data:` identity derived from its own value, and a read of one never
+        // snapshot identity derived from its own value, and a read of one never
         // reaches the document — so a list of them would hold its elements
         // still whether or not the instant did any work.
         xs: { type: "array", items: { type: "number" } },
@@ -1651,7 +1652,7 @@ describe("schema-view", () => {
     it("takes its identity from its own value, not from the slot it sits in", async () => {
       // `toCell` on `xs[0]` must not name INDEX 0 of the array: written
       // anywhere else that link would follow whatever lands there next rather
-      // than this object. An eager read rebases such an element onto a `data:`
+      // than this object. An eager read rebases such an element onto a snapshot
       // URI, and the value is already in hand, so the identity costs no read.
       await seededRaw("inline-element", { xs: [{ n: 1 }, { n: 2 }] });
 
@@ -1661,7 +1662,7 @@ describe("schema-view", () => {
       try {
         const eager = linkOfElement(eagerTx, "inline-element");
         const lazy = linkOfElement(lazyTx, "inline-element");
-        expect(eager.id.startsWith("data:")).toBe(true);
+        expect(hasInlineCellScheme(eager.id)).toBe(true);
         expect(lazy.id).toBe(eager.id);
         expect(lazy.path).toEqual(eager.path);
       } finally {

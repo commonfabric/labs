@@ -1,9 +1,12 @@
 import type { Context } from "@hono/hono";
+import env from "@/env.ts";
 import { createPatternsRoute } from "./patterns-server.ts";
 
 // Reuse the route's bounded cache across requests. Each identity includes the
 // requested entry and retained roots; evicted combinations are recomputed.
-const patternsRoute = createPatternsRoute();
+const patternsRoute = createPatternsRoute({
+  releasedAt: env.TOOLSHED_RELEASED_AT,
+});
 
 /**
  * Handler for serving pattern files from the patterns directory. The router

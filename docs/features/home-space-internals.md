@@ -27,7 +27,8 @@ request-time readiness for browser, server, and CLI callers.
 
 The authenticated browser worker starts a read-only subscription to
 `Home.defaultPattern.profiles` during initialization. Its schema reads only
-`name`, `avatar`, and `initialNameApplied` from each profile. Roster changes warm
+`name`, `picture` (the picture's bytes), `avatar`, and `initialNameApplied`
+from each profile. Roster changes warm
 new entries; unrelated profile content is outside the subscription.
 
 The subscription belongs to the worker's authenticated identity, independently

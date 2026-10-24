@@ -1358,7 +1358,7 @@ describe("materialization-parity", () => {
         ).get();
         const link = value[0][toCell]().getAsNormalizedFullLink();
         links.push({ id: link.id, path: link.path });
-        expect(link.id.startsWith("data:")).toBe(true);
+        expect(link.id.startsWith("snapshot:")).toBe(true);
       } finally {
         await tx.commit().settled;
       }

@@ -723,6 +723,20 @@ describe("run-pattern over the pattern index", () => {
       expect(output.message).toContain("404");
     });
 
+    it("returns an error naming the pattern when the index answers without its program", async () => {
+      const { program: _program, ...withoutProgram } = INDEXED_PATTERN;
+      const index = stubIndex({ "pat-doubler": withoutProgram });
+      const result = await createEngine(index).invokeBuiltinTool(
+        "run_pattern",
+        { patternId: "pat-doubler" },
+      );
+      const output = result.output as RunPatternToolErrorOutput;
+      expect(output.status).toBe("error");
+      expect(output.message).toContain(
+        'the pattern index returned no program for "pat-doubler"',
+      );
+    });
+
     it("withholds the failure text when an indexed pattern fails while starting", async () => {
       const index = stubIndex({ "pat-doubler": INDEXED_PATTERN });
       const result = await createEngine(index, {

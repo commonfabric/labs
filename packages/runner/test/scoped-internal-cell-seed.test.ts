@@ -274,8 +274,24 @@ describe("scoped-internal-cell-seed", () => {
     expect(draft.getMetaRaw("result")).toBeDefined();
   });
 
-  for (const explicitPublic of [false, true]) {
-    it(`${explicitPublic ? "refuses to widen an explicitly public" : "preserves the owning piece's confidentiality on a"} cold session default`, async () => {
+  for (
+    const [explicitPublic, title] of [
+      [
+        false,
+        "preserves the owning piece's confidentiality on a cold session default",
+      ],
+      [
+        true,
+        "labels an explicitly public cold session default without widening its declaration",
+      ],
+    ] as const
+  ) {
+    it(title, async () => {
+      // The owner's session instance is read by the owner alone, so its
+      // residency admits the owning piece's `User` label over any
+      // declaration (§8.12.4), and the label lands as the value's derived
+      // stamp. Nothing is declared, so a public declaration stays public.
+
       const first = openRuntime(owner);
       const compiled = await first.patternManager.compilePattern({
         main: "/main.tsx",
@@ -313,46 +329,40 @@ describe("scoped-internal-cell-seed", () => {
       const second = openRuntime(owner);
       const piece = second.getCell(space, "private owner with session state");
       await piece.sync();
-      if (explicitPublic) {
-        await expect(second.runner.start(piece)).rejects.toThrow(
-          "writer-fit confidentiality misfit",
-        );
-      } else {
-        expect(await second.runner.start(piece)).toBe(true);
-        await second.idle();
-      }
+      expect(await second.runner.start(piece)).toBe(true);
+      await second.idle();
       const tab = piece.key("tab").resolveAsCell();
-      expect(tab.getRawUntyped()).toBe(explicitPublic ? undefined : "overview");
+      expect(tab.getRawUntyped()).toBe("overview");
       const inspect = second.edit();
       try {
-        const metadata = readStoredCfcMetadata(
+        const entries = readStoredCfcMetadata(
           inspect,
           tab.getAsNormalizedFullLink(),
-        );
-        if (explicitPublic) {
-          expect(metadata).toBeUndefined();
-        } else {
-          expect(metadata?.labelMap.entries).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-              path: [],
-              origin: "declared",
-              label: expect.objectContaining({
-                confidentiality: expect.arrayContaining([ownerLabel]),
-              }),
+        )?.labelMap.entries;
+        expect(entries).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            path: [],
+            origin: "derived",
+            observes: "value",
+            label: expect.objectContaining({
+              confidentiality: expect.arrayContaining([ownerLabel]),
             }),
-          ]));
-        }
+          }),
+        ]));
+        expect(entries?.filter((entry) => entry.origin === "declared"))
+          .toEqual([]);
       } finally {
         inspect.abort("cold session label assertions complete");
       }
     });
   }
 
-  it("declares the owning piece's committed personal-space label on a cold session default", async () => {
+  it("labels a cold session default with the owning piece's committed personal-space label", async () => {
     // A piece whose label crossed a space boundary holds its personal-space
     // owner as a `{digestOf}` commitment. A cold start seeds its session
-    // default under that label, and the default lives in the very space the
-    // commitment names.
+    // default under that label, in the owner's own session instance, whose
+    // residency admits it (§8.12.4), so the label lands as the value's
+    // derived stamp.
 
     const first = openRuntime(owner);
     const compiled = await first.patternManager.compilePattern({
@@ -402,7 +412,8 @@ describe("scoped-internal-cell-seed", () => {
       expect(metadata?.labelMap.entries).toEqual(expect.arrayContaining([
         expect.objectContaining({
           path: [],
-          origin: "declared",
+          origin: "derived",
+          observes: "value",
           label: expect.objectContaining({
             confidentiality: expect.arrayContaining([committedPersonalSpace]),
           }),

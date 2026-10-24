@@ -1,3 +1,4 @@
+import { MAX_DOCUMENT_INTEREST_SESSIONS } from "@commonfabric/memory/v2/server";
 import { createRoute } from "@hono/zod-openapi";
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import { jsonContent } from "stoker/openapi/helpers";
@@ -153,6 +154,59 @@ export const dash = createRoute({
   },
 });
 
+/** On-demand attribution of one content-addressed document to retained sessions. */
+export const documentInterests = createRoute({
+  path: "/api/health/document-interests",
+  method: "get",
+  tags,
+  request: {
+    query: z.object({
+      space: z.string().min(1).max(1024),
+      id: z.string().startsWith("cid:").min(5).max(4096),
+      branch: z.string().max(1024).default(""),
+      // Bound HTTP input before dispatch; the inspector also guards direct calls.
+      limit: z.coerce.number().int().min(1)
+        .max(MAX_DOCUMENT_INTEREST_SESSIONS)
+        .default(MAX_DOCUMENT_INTEREST_SESSIONS),
+    }),
+  },
+  responses: {
+    [HttpStatusCodes.OK]: jsonContent(
+      z.object({
+        timestamp: z.number(),
+        space: z.string(),
+        id: z.string(),
+        branch: z.string(),
+        scope: z.literal("space"),
+        totalMatches: z.number().int().nonnegative(),
+        truncated: z.boolean(),
+        sessions: z.array(z.object({
+          sessionId: z.string(),
+          principal: z.string().nullable(),
+          actingPrincipal: z.string().nullable(),
+          connectionId: z.string().nullable(),
+          expiresAt: z.number().nullable(),
+          expired: z.boolean(),
+          watchCount: z.number().int().nonnegative(),
+          directWatchCount: z.number().int().nonnegative(),
+          cached: z.boolean(),
+          graphCount: z.number().int().nonnegative(),
+          viewDemandCached: z.boolean(),
+          viewDemandGraphCount: z.number().int().nonnegative(),
+        })).max(MAX_DOCUMENT_INTEREST_SESSIONS),
+      }),
+      "Session metadata for one document; no document contents or tokens",
+    ),
+    [HttpStatusCodes.SERVICE_UNAVAILABLE]: jsonContent(
+      z.object({ error: z.string() }),
+      "No memory server is registered in this process",
+    ),
+  },
+});
+
 export type IndexRoute = typeof index;
 export type StatsRoute = typeof stats;
 export type DashRoute = typeof dash;
+
+/** Handler contract for the document-interest diagnostic. */
+export type DocumentInterestsRoute = typeof documentInterests;

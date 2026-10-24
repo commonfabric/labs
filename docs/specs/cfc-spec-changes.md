@@ -6,7 +6,7 @@ up while designing implementation work. Started 2026-06-10 during the S16
 gap is filed as a specs pull request, as
 [`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
 describes, and the `open` entries below are being migrated to specs pull
-requests one group at a time, after which this list is archived. Each item: where, what's missing or contradictory, proposed edit. Tags:
+requests one group at a time, after which this list is archived. Each item, numbered `SC-<n>` for spec change: where, what's missing or contradictory, proposed edit. Tags:
 [clarify] prose fix, [normative] new requirement/profile text, [reconcile] two
 spec passages disagree, [registry] table data.
 
@@ -531,7 +531,12 @@ one and nothing where it does not. Contract text in
 `docs/specs/cfc-enforcement-matrix.md` §4; tests `cfc-writer-fit.test.ts`.
 
 (d) **[normative] Residency fit — the ceiling a document carries by living
-where it lives.** The fit measurement joins the target's declared policy with
+where it lives.** `proposed` in
+[specs#68](https://github.com/commonfabric/specs/pull/68), option (b) on both
+of its questions: residency joins `Space(S)` over a declared policy as well as
+without one, and a store bound to one principal also carries
+`User(<that principal>)`; the runner conforms to both.
+The fit measurement joins the target's declared policy with
 one RESIDENCY clause, `Space(<the space the document resides in>)`. A flow
 clause listing that space among its alternatives therefore fits the document
 whatever it declares. The soundness argument is that writing into the space

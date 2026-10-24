@@ -5,13 +5,14 @@ import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
-import type { MemorySpace } from "@commonfabric/memory/interface";
+import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
+import { labelsReached, labelsThroughLink } from "./support/reached-labels.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { stampExternalIngest } from "../src/cfc/external-ingest.ts";
 import {
@@ -49,14 +50,17 @@ type PersistedEntry = {
 };
 
 describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", () => {
-  // Inv-12 Stage 1 (SC-25; docs/specs/cfc-label-metadata-confidentiality.md
-  // §2/§5; spec §4.6.4.1 "Cross-space derived labels"): at the cross-space
-  // persist seam, prepareBoundaryCommit applies the classification table to
-  // every source-bearing atom field of entries whose observations originate
-  // OUTSIDE the destination space — link-origin entries whose link source lives
-  // in another space (including the carried sigil `cfcLabelView` entries, the
-  // in-value copy) and flow-derived entries whose join consumed a labeled
-  // foreign observation. Same-space-only labels persist verbatim. Behind
+  // At the cross-space persist seam (docs/specs/
+  // cfc-label-metadata-confidentiality.md §2/§5; spec §4.6.4.1 "Cross-space
+  // derived labels"), prepareBoundaryCommit applies the classification table
+  // to every source-bearing atom field of entries whose observations
+  // originate OUTSIDE the destination space: the link entry a link write
+  // mints at its slot when the reference names a document of another space
+  // (the reference's own label, the carried sigil `cfcLabelView` root among
+  // its parts), and flow-derived entries whose join consumed a labeled
+  // foreign observation. A link write persists nothing of its source's
+  // labels, so those stay where they are and are reached through the link.
+  // Same-space-only labels persist verbatim. Behind
   // `cfcLabelMetadataProtection: off | observe | enforce`.
 
   const fullSource = { space: spaceA, id: "of:remote-origin", path: [] };
@@ -104,9 +108,9 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
   };
 
   // Seed a source doc in `sourceSpace` whose STORED cfc metadata carries a
-  // root User clause and a sub-path Caveat entry (the authoritative label
-  // state the link machinery re-derives from). `extraRootClauses` adds
-  // further clauses to the root entry.
+  // root User clause and a sub-path Caveat entry, the labels a read through
+  // a link to it reaches where they are. `extraRootClauses` adds further
+  // clauses to the root entry.
   const seedSource = async (
     runtime: Runtime,
     sourceSpace: MemorySpace,
@@ -144,15 +148,21 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
     return sourceId;
   };
 
+  // The restriction a handle to the seeded source carries at its root: the
+  // foreign reader, a caveat naming the foreign document, and an atom with
+  // nothing to classify.
+  const carriedRoot = [userAtom, caveatAtom, "opaque-tag"];
+
   // One cross-space (or same-space) link write: a value write in the target
   // space plus the link-write policy input naming the seeded source, with a
-  // carried `cfcLabelView` (the in-value sigil copy) that ADDS a sub-path
-  // entry beyond the stored metadata.
+  // carried `cfcLabelView` (the in-value sigil copy) whose root holds
+  // `rootClauses` and which also describes a position below the root.
   const commitLinkWrite = async (
     runtime: Runtime,
     sourceSpace: MemorySpace,
     sourceId: string,
     targetName: string,
+    rootClauses: unknown[] = carriedRoot,
   ): Promise<{ targetId: string; tx: ReturnType<Runtime["edit"]> }> => {
     const tx = runtime.edit();
     const target = runtime.getCell(spaceB, targetName, undefined, tx);
@@ -181,22 +191,47 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
       cfcLabelView: {
         version: 1,
         entries: [{
-          // The carried in-value copy adds an entry the stored metadata
-          // does not have — it must get the SAME transform (one transform,
-          // two sinks).
+          path: [],
+          label: { confidentiality: rootClauses as never },
+        }, {
+          // Below the root the view describes a position of the target,
+          // which the target labels itself; nothing of it is persisted.
           path: ["carriedOnly"],
           label: { confidentiality: [userAtom] },
-        }, {
-          // An eligible entry with NOTHING classified (string atom):
-          // pins the transform's nothing-to-commit passthrough arm.
-          path: ["stringOnly"],
-          label: { confidentiality: ["opaque-tag"] },
         }],
       },
     });
     tx.prepareCfc();
     expect((await tx.commit().settled).ok).toBeDefined();
     return { targetId, tx };
+  };
+
+  // The same link write with no carried view: a reference acquired under no
+  // restriction, by an attempt that observed nothing.
+  const commitBareLinkWrite = async (
+    tx: ReturnType<Runtime["edit"]>,
+    sourceId: string,
+    targetId: URI,
+    field: string,
+  ) => {
+    tx.markCfcRelevant("test");
+    tx.writeValueOrThrow({
+      space: spaceB,
+      scope: "space",
+      id: targetId,
+      path: [field],
+    }, linkRefFrom({ space: spaceA, id: sourceId, path: [] }));
+    tx.recordCfcWritePolicyInput({
+      kind: "link-write",
+      target: { space: spaceB, scope: "space", id: targetId, path: [field] },
+      source: { space: spaceA, scope: "space", id: sourceId, path: [] },
+      cfcLabelView: {
+        version: 1,
+        entries: [{ path: [], label: { confidentiality: [userAtom] } }],
+      },
+    });
+    tx.prepareCfc();
+    expect((await tx.commit().settled).ok).toBeDefined();
   };
 
   const entryAt = (
@@ -208,67 +243,69 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
       entry.path.every((seg, i) => seg === path[i])
     );
 
-  for (const mode of ["off", "observe", "enforce"] as const) {
-    for (const backReference of [false, true]) {
-      it(`preserves ${mode} representation across a pending foreign reference followed by a local reference${backReference ? " through an object back-reference" : ""}`, async () => {
-        const { storageManager, runtime } = makeRuntime(mode);
-        try {
-          await seedSource(runtime, spaceA, "chain-source");
-          const tx = runtime.edit();
-          const schema: JSONSchema = {
-            type: "object",
-            properties: {
-              field: { type: "object", ifc: { integrity: ["argument"] } },
-              self: { type: "object", ifc: { integrity: ["object"] } },
-            },
-          };
-          const first = runtime.getCell(spaceB, "chain-first", schema, tx);
-          const second = runtime.getCell(spaceB, "chain-second", schema, tx);
-          second.set({
-            field: backReference
-              ? first.key("self").key("self").key("field")
-              : first.key("field"),
-          });
-          first.set({
-            field: runtime.getCell(spaceA, "chain-source", undefined, tx),
-            ...(backReference ? { self: first } : {}),
-          });
-          for (const cell of [second, first]) {
-            recordReferencedArgumentFields(tx, cell.getAsNormalizedFullLink(), [
-              "field",
-              "self",
-            ]);
-          }
-          runtime.prepareTxForCommit(tx);
-          expect((await tx.commit().settled).error).toBeUndefined();
+  for (const backReference of [false, true]) {
+    it(`stores no foreign clause along a pending foreign reference followed by a local reference${backReference ? " through an object back-reference" : ""}`, async () => {
+      // Neither link carries its source's labels: the foreign reader and
+      // the caveat naming the foreign document stay in the foreign space,
+      // and a read through the chain reaches them there. With nothing
+      // foreign persisted in this space, the transform has nothing to
+      // commit, in its strictest mode as in any other.
+
+      const { storageManager, runtime } = makeRuntime("enforce");
+      try {
+        await seedSource(runtime, spaceA, "chain-source");
+        const tx = runtime.edit();
+        const schema: JSONSchema = {
+          type: "object",
+          properties: {
+            field: { type: "object", ifc: { integrity: ["argument"] } },
+            self: { type: "object", ifc: { integrity: ["object"] } },
+          },
+        };
+        const first = runtime.getCell(spaceB, "chain-first", schema, tx);
+        const second = runtime.getCell(spaceB, "chain-second", schema, tx);
+        second.set({
+          field: backReference
+            ? first.key("self").key("field")
+            : first.key("field"),
+        });
+        first.set({
+          field: runtime.getCell(spaceA, "chain-source", undefined, tx),
+          ...(backReference ? { self: first } : {}),
+        });
+        for (const cell of [second, first]) {
+          recordReferencedArgumentFields(tx, cell.getAsNormalizedFullLink(), [
+            "field",
+            "self",
+          ]);
+        }
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        for (const cell of [second, first]) {
           const entries = persistedEntriesFor(
             storageManager,
             spaceB,
-            second.getAsNormalizedFullLink().id,
-          )
-            .filter((entry) => entry.origin === "link");
-          expect(entryAt(entries, ["field"])!.label.confidentiality).toEqual([{
-            ...userAtom,
-            subject: mode === "enforce"
-              ? commitCfcFieldValue(userAtom.subject)
-              : userAtom.subject,
-          }]);
-          expect(entryAt(entries, ["field", "secret"])!.label.confidentiality)
-            .toEqual([{
-              ...caveatAtom,
-              source: mode === "enforce"
-                ? commitCfcFieldValue(fullSource)
-                : fullSource,
-            }]);
-        } finally {
-          await runtime.dispose();
+            cell.getAsNormalizedFullLink().id,
+          );
+          expect(JSON.stringify(entries)).not.toContain("did:key:alice");
+          expect(JSON.stringify(entries)).not.toContain("remote-origin");
+          expect(containsCfcFieldCommitment(entries)).toBe(false);
         }
-      });
-    }
+        const reached = labelsReached(
+          runtime,
+          second.getAsNormalizedFullLink(),
+          ["field", "secret"],
+        );
+        expect(reached.confidentiality).toContainEqual(userAtom);
+        expect(reached.confidentiality).toContainEqual(caveatAtom);
+      } finally {
+        await runtime.dispose();
+      }
+    });
   }
 
   describe("enforce", () => {
-    it("persists committed fields for a cross-space link write (both label sources)", async () => {
+    it("persists committed fields for a cross-space link write", async () => {
       const { storageManager, runtime } = makeRuntime("enforce");
       try {
         const sourceId = await seedSource(runtime, spaceA, "xspace-source");
@@ -280,58 +317,39 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
         );
         const entries = persistedEntriesFor(storageManager, spaceB, targetId);
         const linkEntries = entries.filter((e) => e.origin === "link");
-        expect(linkEntries.length).toBeGreaterThan(0);
+        // One entry, at the slot: the reference's own label.
+        expect(linkEntries.map((e) => e.path)).toEqual([["field"]]);
+        const rootEntry = linkEntries[0];
 
-        // The direct source-path label: the root User clause committed.
-        const rootEntry = entryAt(linkEntries, ["field"]);
-        expect(rootEntry).toBeDefined();
-        expect(rootEntry!.label.confidentiality).toContainEqual({
+        // The carried root's User clause committed.
+        expect(rootEntry.label.confidentiality).toContainEqual({
           type: CFC_ATOM_TYPE.User,
           subject: commitCfcFieldValue("did:key:alice"),
         });
-        // The runtime-minted LinkReference provenance atom: source/target
-        // committed per the table (display/provenance only).
-        const linkRef = rootEntry!.label.integrity?.find((atom) =>
-          atom.type === CFC_ATOM_TYPE.LinkReference
-        );
-        expect(linkRef).toBeDefined();
-        expect(linkRef!.source).toEqual(
-          commitCfcFieldValue({
-            space: spaceA,
-            id: sourceId,
-            path: [],
-          }),
-        );
-
-        // The re-derived label VIEW (the sigil cfcLabelView first copy):
-        // the source's sub-path Caveat entry, source committed.
-        const secretEntry = entryAt(linkEntries, ["field", "secret"]);
-        expect(secretEntry).toBeDefined();
-        expect(secretEntry!.label.confidentiality).toContainEqual({
+        // Its Caveat, source committed.
+        expect(rootEntry.label.confidentiality).toContainEqual({
           type: CFC_ATOM_TYPE.Caveat,
           kind: "derived-from",
           source: commitCfcFieldValue(fullSource),
         });
-
-        // The CARRIED view (the in-value sigil copy) gets the same
-        // transform: its added entry persists committed.
-        const carriedEntry = entryAt(linkEntries, ["field", "carriedOnly"]);
-        expect(carriedEntry).toBeDefined();
-        expect(carriedEntry!.label.confidentiality).toContainEqual({
-          type: CFC_ATOM_TYPE.User,
-          subject: commitCfcFieldValue("did:key:alice"),
-        });
-        // An eligible entry with nothing classified persists verbatim (the
+        // An atom with nothing classified persists verbatim (the
         // transform's copy-on-write passthrough).
-        const stringEntry = entryAt(linkEntries, ["field", "stringOnly"]);
-        expect(stringEntry).toBeDefined();
-        expect(stringEntry!.label.confidentiality).toContainEqual(
-          "opaque-tag",
-        );
+        expect(rootEntry.label.confidentiality).toContainEqual("opaque-tag");
 
         // No plaintext DID survives anywhere in the persisted entries'
         // committed families.
         expect(JSON.stringify(entries)).not.toContain("did:key:alice");
+
+        // The source's own sub-path label is not at the slot; it is reached
+        // through the link, where the source stores it.
+        expect(JSON.stringify(entries)).not.toContain("remote-origin");
+        expect(
+          labelsThroughLink(
+            runtime,
+            { space: spaceB, id: targetId, path: ["field"] },
+            { space: spaceA, id: sourceId, path: ["secret"] },
+          ).confidentiality,
+        ).toContainEqual(caveatAtom);
       } finally {
         await runtime.dispose();
       }
@@ -349,11 +367,11 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
         );
         const entries = persistedEntriesFor(storageManager, spaceB, targetId);
         const linkEntries = entries.filter((e) => e.origin === "link");
-        expect(linkEntries.length).toBeGreaterThan(0);
-        const rootEntry = entryAt(linkEntries, ["field"]);
-        expect(rootEntry!.label.confidentiality).toContainEqual(userAtom);
-        const secretEntry = entryAt(linkEntries, ["field", "secret"]);
-        expect(secretEntry!.label.confidentiality).toContainEqual(caveatAtom);
+        expect(linkEntries.map((e) => e.path)).toEqual([["field"]]);
+        expect(linkEntries[0].label.confidentiality).toContainEqual(userAtom);
+        expect(linkEntries[0].label.confidentiality).toContainEqual(
+          caveatAtom,
+        );
         expect(containsCfcFieldCommitment(entries)).toBe(false);
       } finally {
         await runtime.dispose();
@@ -373,8 +391,8 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
         const after1 = persistedEntriesFor(storageManager, spaceB, targetId);
         expect(containsCfcFieldCommitment(after1)).toBe(true);
 
-        // Recompute: the same link-write input re-derives the same labels
-        // from the (plaintext) source metadata. The canonical equality is
+        // Recompute: the same link-write input derives the same label from
+        // the same (plaintext) carried view. The canonical equality is
         // computed POST-transform, so the recompute must not rewrite the
         // ["cfc"] envelope.
         const tx2 = runtime.edit();
@@ -396,11 +414,11 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
           cfcLabelView: {
             version: 1,
             entries: [{
+              path: [],
+              label: { confidentiality: carriedRoot as never },
+            }, {
               path: ["carriedOnly"],
               label: { confidentiality: [userAtom] },
-            }, {
-              path: ["stringOnly"],
-              label: { confidentiality: ["opaque-tag"] },
             }],
           },
         });
@@ -431,63 +449,18 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
         const sourceId = await seedSource(runtime, spaceA, "mixed-source");
         const targetName = "mixed-target";
         // tx1 (dial off, the pre-Stage-1 world): a cross-space link write
-        // persists VERBATIM foreign entries at ["legacyField"].
+        // whose reference carries the foreign reader persists it VERBATIM at
+        // ["legacyField"].
         const tx1 = runtime.edit();
         const target = runtime.getCell(spaceB, targetName, undefined, tx1);
         const targetId = target.getAsNormalizedFullLink().id;
-        tx1.markCfcRelevant("test");
-        tx1.writeValueOrThrow({
-          space: spaceB,
-          scope: "space",
-          id: targetId,
-          path: ["legacyField"],
-        }, linkRefFrom({ space: spaceA, id: sourceId, path: [] }));
-        tx1.recordCfcWritePolicyInput({
-          kind: "link-write",
-          target: {
-            space: spaceB,
-            scope: "space",
-            id: targetId,
-            path: ["legacyField"],
-          },
-          source: {
-            space: spaceA,
-            scope: "space",
-            id: sourceId,
-            path: [],
-          },
-        });
-        tx1.prepareCfc();
-        expect((await tx1.commit().settled).ok).toBeDefined();
+        await commitBareLinkWrite(tx1, sourceId, targetId, "legacyField");
 
         // tx2: RAISE the dial (raising below the pin is allowed) and add a
-        // second cross-space link write at ["field"].
+        // second such link write at ["field"].
         const tx2 = runtime.edit();
         tx2.setCfcLabelMetadataProtectionMode("enforce");
-        tx2.markCfcRelevant("test");
-        tx2.writeValueOrThrow({
-          space: spaceB,
-          scope: "space",
-          id: targetId,
-          path: ["field"],
-        }, linkRefFrom({ space: spaceA, id: sourceId, path: [] }));
-        tx2.recordCfcWritePolicyInput({
-          kind: "link-write",
-          target: {
-            space: spaceB,
-            scope: "space",
-            id: targetId,
-            path: ["field"],
-          },
-          source: {
-            space: spaceA,
-            scope: "space",
-            id: sourceId,
-            path: [],
-          },
-        });
-        tx2.prepareCfc();
-        expect((await tx2.commit().settled).ok).toBeDefined();
+        await commitBareLinkWrite(tx2, sourceId, targetId, "field");
 
         const entries = persistedEntriesFor(storageManager, spaceB, targetId);
         const linkEntries = entries.filter((e) => e.origin === "link");
@@ -744,44 +717,14 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
   it("keeps Space.id plaintext in a committed cross-space entry (§4.9.3)", async () => {
     const { storageManager, runtime } = makeRuntime("enforce");
     try {
-      // Source labeled with a Space clause plus a User clause.
-      const seed = runtime.edit();
-      const sourceId = parseLink(
-        runtime.getCell(spaceA, "space-atom-source", undefined, seed)
-          .getAsLink(),
-      ).id!;
-      writeSeedEnvelopeDoc(seed, spaceA);
-      seedStoredEnvelope(seed, {
-        space: spaceA,
-        scope: "space",
-        id: sourceId,
-        path: [],
-      }, {
-        value: { shared: "v" },
-        cfc: {
-          version: 1,
-          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-          labelMap: {
-            version: 1,
-            entries: [{
-              path: [],
-              label: {
-                confidentiality: [
-                  { type: CFC_ATOM_TYPE.Space, id: spaceA },
-                  userAtom,
-                ],
-              },
-            }],
-          },
-        },
-      });
-      expect((await seed.commit().settled).ok).toBeDefined();
-
+      const sourceId = await seedSource(runtime, spaceA, "space-atom-source");
+      // A reference carrying a Space clause beside the User clause.
       const { targetId } = await commitLinkWrite(
         runtime,
         spaceA,
         sourceId,
         "space-atom-target",
+        [{ type: CFC_ATOM_TYPE.Space, id: spaceA }, userAtom],
       );
       const entries = persistedEntriesFor(storageManager, spaceB, targetId);
       const rootEntry = entries.filter((e) => e.origin === "link").find((e) =>

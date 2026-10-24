@@ -144,9 +144,16 @@ export class ProblematicValue extends BaseFabricInstance {
     return Object.isFrozen(this) && subIsDeepFrozen(this.state);
   }
 
-  /** @inheritDoc Not yet implemented, so `deepClone()` throws. */
-  protected [DEEP_CLONE_CORE](_frozen: boolean): ProblematicValue {
-    throw new Error("Cannot yet handle deep cloning of `ProblematicValue`.");
+  /** @inheritDoc */
+  [DEEP_CLONE_CORE](
+    _frozen: boolean,
+    subClone: (value: FabricValue) => FabricValue,
+  ): ProblematicValue {
+    return new ProblematicValue(
+      this.wireTypeTag,
+      subClone(this.state),
+      this.error,
+    );
   }
 
   protected [SHALLOW_UNFROZEN_CLONE](): ProblematicValue {

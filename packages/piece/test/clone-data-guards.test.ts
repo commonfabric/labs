@@ -120,6 +120,7 @@ describe("clone data guards", () => {
       cellWith("of:mutable", SPACE_A, ["first"]),
       cellWith("of:mutable", SPACE_A, ["second"]),
       cellWith("data:immutable", SPACE_A),
+      cellWith("snapshot:immutable", SPACE_A),
     ]);
 
     expect(reads).toEqual([{

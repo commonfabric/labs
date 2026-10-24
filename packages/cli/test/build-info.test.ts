@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertMatch } from "@std/assert";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 import {
   gitShaForCliLibDir,
   relateShasIn,
@@ -187,6 +187,6 @@ Deno.test("resolveCliGitSha reports this checkout's HEAD for a source run", asyn
   const sha = await resolveCliGitSha();
   assert(sha !== null, "source run in a checkout should resolve a commit");
   assertMatch(sha, /^[0-9a-f]{40}$/);
-  const moduleDir = new URL("../lib", import.meta.url).pathname;
+  const moduleDir = fromFileUrl(new URL("../lib", import.meta.url));
   assertEquals(sha, await git(moduleDir, "rev-parse", "HEAD"));
 });

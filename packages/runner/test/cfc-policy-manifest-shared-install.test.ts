@@ -300,6 +300,18 @@ describe("cfc-policy-manifest-shared-install", () => {
         ...(readyToRetry === undefined ? {} : { readyToRetry }),
       }) as unknown as CommitError;
 
+    // A stale read naming the seq its read was at, as the engine's refusals
+    // do. The refusals `staleReadOf()` builds name none, so the manifest is
+    // the only thing that can make one of them recoverable.
+    const staleReadAtSeq = (id: string, seq: number) =>
+      ({
+        name: "ConflictError",
+        message: `stale confirmed read: ${id} at seq ${seq} conflicted ` +
+          `with seq ${seq + 1}`,
+        conflict: { space, the: "application/json", of: id, seq },
+        conflicts: [{ space, the: "application/json", of: id, seq }],
+      }) as unknown as CommitError;
+
     afterEach(() => {
       rtB.runner.accessForTestingOnly.deferredStartCommitter = undefined;
     });
@@ -327,13 +339,65 @@ describe("cfc-policy-manifest-shared-install", () => {
     it("reports a start refused over the piece's own documents without running it again", async () => {
       await setUpByFirstParticipant();
       const failures = observeStartFailures();
-      const attempts = refuseStarts(() => staleReadOf("of:not-a-manifest"));
+      const attempts = refuseStarts(() =>
+        staleReadAtSeq("of:not-a-manifest", 1)
+      );
 
       await runShared(rtB, "b-piece secret");
       await rtB.idle();
 
       expect(attempts.count).toBe(1);
       expect(failures).toHaveLength(1);
+    });
+
+    it("runs it again after a refusal claiming a document absent that the store holds", async () => {
+      const pieceA = await setUpByFirstParticipant();
+      const failures = observeStartFailures();
+      const attempts = refuseStarts((attempt) =>
+        attempt === 1 ? staleReadAtSeq("of:not-a-manifest", 0) : undefined
+      );
+
+      await runShared(rtB, "b-piece secret");
+      await rtB.idle();
+      expect(failures).toEqual([]);
+
+      await waitForCellValue<string>(
+        rtA,
+        pieceA.key("brief"),
+        (value) => value === "b-piece secret",
+        { stuckLabel: "the second participant's retried piece start" },
+      );
+      await rtB.idle();
+      expect(attempts.count).toBe(2);
+      expect(failures).toEqual([]);
+    });
+
+    it("reports a refusal claiming a document absent that its catch-up could not load, with the load's reason", async () => {
+      await setUpByFirstParticipant();
+      const failures = observeStartFailures();
+      const absent = "of:not-a-manifest";
+      const unreachable = new Error("the memory server is unreachable");
+      const provider = rtB.storageManager.open(space);
+      const sync = provider.sync.bind(provider);
+      using _syncs = stub(
+        provider,
+        "sync",
+        (id, selector, scope, instance) =>
+          id === absent
+            ? Promise.resolve({ error: unreachable })
+            : sync(id, selector, scope, instance),
+      );
+      const attempts = refuseStarts(() => staleReadAtSeq(absent, 0));
+
+      await runShared(rtB, "b-piece secret");
+      await rtB.idle();
+
+      expect(attempts.count).toBe(1);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({
+        message: expect.stringContaining(absent),
+        cause: unreachable,
+      });
     });
 
     it("reports a start still refused over the manifest once its retries are spent", async () => {
@@ -801,24 +865,25 @@ describe("cfc-policy-manifest-shared-install", () => {
       expect(rtV.runner.isRunning(piece)).toBe(false);
     });
 
-    it("reports a refusal over the piece's own documents beside the manifest without running it again", async () => {
-      // With server execution off, a stale read over the piece's own
-      // documents is terminal, and naming the manifest beside them does not
-      // change that.
+    it("runs it again while rounds remain after refusals over the piece's own documents beside the manifest", async () => {
+      // A stale read over a revision of the piece's own documents takes the
+      // rounds any stale read does, and naming the manifest beside them does
+      // not make it a manifest refusal, whose one retry the second refusal
+      // here would end.
 
       const installedId = await setUpByFirstParticipant();
       const ownId = rtV.getCell(space, "per-user-piece")
         .getAsNormalizedFullLink().id;
       using commits = instantiationVerdicts((attempt) =>
-        attempt === 1
+        attempt <= 2
           ? {
             name: "ConflictError",
-            message: `stale confirmed read: ${ownId} at seq 0 conflicted ` +
-              "with seq 1",
-            conflict: { space, the: "application/json", of: ownId },
+            message: `stale confirmed read: ${ownId} at seq 1 conflicted ` +
+              "with seq 2",
+            conflict: { space, the: "application/json", of: ownId, seq: 1 },
             conflicts: [
-              { space, the: "application/json", of: installedId },
-              { space, the: "application/json", of: ownId },
+              { space, the: "application/json", of: installedId, seq: 0 },
+              { space, the: "application/json", of: ownId, seq: 1 },
             ],
           } as unknown as CommitError
           : undefined
@@ -826,9 +891,10 @@ describe("cfc-policy-manifest-shared-install", () => {
 
       const { piece, failures } = await startAsVisitor();
 
-      expect(commits.verdicts).toHaveLength(1);
-      expect(failures).toHaveLength(1);
-      expect(rtV.runner.isRunning(piece)).toBe(false);
+      expect(commits.verdicts).toHaveLength(3);
+      expect(commits.verdicts[2]).toBeUndefined();
+      expect(failures).toEqual([]);
+      expect(rtV.runner.isRunning(piece)).toBe(true);
     });
 
     it("starts it again for the participant who set it up when the manifest cannot be loaded", async () => {

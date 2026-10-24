@@ -5,6 +5,8 @@
 import type { CommitRow, SpaceDb } from "./db.ts";
 import { hasSchedulerBasisTable } from "./db.ts";
 import { decodeStored } from "./decode.ts";
+import { decodeHollowedPayload } from "@commonfabric/memory/v2/compact";
+import { COMPACTION_SESSION_PREFIX } from "@commonfabric/memory/v2/engine";
 import { rowLimit } from "./model.ts";
 import { branchReadChain, owningLink } from "./reconstruct.ts";
 import { utf8Compare } from "@commonfabric/utils/utf8";
@@ -87,6 +89,14 @@ export interface CommitInfo {
   ops: number;
   reads: number;
   createdAt: string;
+  /** For a `cf space compact` run's own commit: the run's id. Its payload is
+   * the run's plan, not a client commit, so `ops` and `reads` are zero. */
+  compactionRun?: string;
+  /** The payload was hollowed by a compaction run (docs/plans/compact-space.md,
+   * I6): what remains is a marker naming the run and hashing what it held;
+   * `ops` and `reads` are zero because the commit's contents are in the
+   * archive the operator took, not here. */
+  hollowedBy?: string;
 }
 
 /** List commits, most recent first, optionally filtered by session prefix. */
@@ -107,15 +117,42 @@ export function listCommits(
   return rows.map((r) => {
     let ops = 0;
     let reads = 0;
+    let compactionRun: string | undefined;
+    let hollowedBy: string | undefined;
     try {
-      // `original` is a ClientCommit, stored either codec-encoded or plain JSON.
-      const parsed = decodeStored(r.original) as {
-        operations?: unknown[];
-        reads?: { confirmed?: unknown[]; pending?: unknown[] };
-      };
-      ops = Array.isArray(parsed.operations) ? parsed.operations.length : 0;
-      reads = (parsed.reads?.confirmed?.length ?? 0) +
-        (parsed.reads?.pending?.length ?? 0);
+      // `original` is a ClientCommit, stored either codec-encoded or plain
+      // JSON — unless compaction wrote it: a compaction run's own commit holds
+      // the run's plan, and a hollowed commit holds a marker.
+      const marker = decodeHollowedPayload(r.original);
+      if (marker !== undefined) {
+        hollowedBy = marker.runId;
+      } else {
+        const parsed = decodeStored(r.original) as {
+          operations?: unknown[];
+          reads?: { confirmed?: unknown[]; pending?: unknown[] };
+          compaction?: {
+            runId?: unknown;
+            report?: {
+              compactionCommit?: { seq?: unknown; sessionId?: unknown };
+            };
+          };
+        };
+        // A run's own commit: under the compaction session, and holding a
+        // plan that names this very row. The commit's class is not read,
+        // because this reader opens stores from before the column existed.
+        const named = parsed.compaction?.report?.compactionCommit;
+        if (
+          r.session_id.startsWith(COMPACTION_SESSION_PREFIX) &&
+          typeof parsed.compaction?.runId === "string" &&
+          named?.seq === r.seq && named?.sessionId === r.session_id &&
+          r.local_seq === 1
+        ) {
+          compactionRun = parsed.compaction.runId;
+        }
+        ops = Array.isArray(parsed.operations) ? parsed.operations.length : 0;
+        reads = (parsed.reads?.confirmed?.length ?? 0) +
+          (parsed.reads?.pending?.length ?? 0);
+      }
     } catch {
       // leave zeroed if payload is unparseable
     }
@@ -127,8 +164,21 @@ export function listCommits(
       ops,
       reads,
       createdAt: r.created_at,
+      ...(compactionRun === undefined ? {} : { compactionRun }),
+      ...(hollowedBy === undefined ? {} : { hollowedBy }),
     };
   });
+}
+
+/** The tail of a commit's listing line: what its payload holds. */
+export function describeCommitPayload(commit: CommitInfo): string {
+  if (commit.compactionRun !== undefined) {
+    return `compaction run ${commit.compactionRun}`;
+  }
+  if (commit.hollowedBy !== undefined) {
+    return `payload hollowed by compaction run ${commit.hollowedBy}`;
+  }
+  return `ops=${commit.ops}\treads=${commit.reads}`;
 }
 
 export interface WriteEvent {

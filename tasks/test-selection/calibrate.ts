@@ -12,17 +12,19 @@
  * The packer charges each of those: `setupCost` the first time a lane
  * opens a capability, and for each suite a lane holds, the suite's
  * `overhead` for each pass, its `unitOverhead` for each time a pass opens
- * a unit, and its `correction` times what the batch's tests take. What it
- * charges them from is this.
+ * a unit, and its `correction` times what the batch's tests and the hooks
+ * of their units take. What it charges them from is this.
  *
  * The inputs are the lane's own measurements of itself, which travel to
  * the store as ordinary records. A lane writes one per capability it
- * opened and five per batch: what the batch spent, what its tests took
- * between them, how many times its passes opened a unit, how many passes
- * it made, and what the packer charged the lane for it. None of the
- * batch's figures can be recovered from the records the batch produced,
- * because a reader cannot tell which of a report's records came from
- * which batch. A lane also writes three figures about its work as a
+ * opened and five per batch: what the batch spent, what its tests and
+ * their units' hooks took between them, how many times its passes opened
+ * a unit, how many passes it made, and what the packer charged the lane
+ * for it. It writes one more for each time a pass opened a unit whose
+ * hooks its report timed, which is what a unit's hooks are charged from.
+ * None of the batch's figures can be recovered from the records the batch
+ * produced, because a reader cannot tell which of a report's records came
+ * from which batch. A lane also writes three figures about its work as a
  * whole. Nothing is fitted from what a batch or a lane was charged, or
  * from a lane's work as a whole; they are read here only to be kept.
  *
@@ -41,6 +43,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { Calibration, SuiteFit } from "./manifest.ts";
 import {
   batchMeasurement,
+  hooksMeasurement,
   isLaneMeasurement,
   laneMeasurement,
   setupMeasurement,
@@ -50,7 +53,13 @@ import {
   MIN_CORRECTION_SAMPLES,
   MIN_CORRECTION_SPAN_SECONDS,
 } from "./policy.ts";
-import { percentile90 } from "./score.ts";
+import {
+  type DaySamples,
+  emptySamples,
+  mergeSamples,
+  percentile90,
+  sampledPercentile90,
+} from "./score.ts";
 
 /**
  * One thing a lane measured about itself, and the day it measured it:
@@ -103,9 +112,9 @@ export interface BatchObservation {
   measured: boolean;
 
   /**
-   * Seconds the tests of the units the batch ran took, summed over every
-   * execution of each. The suite's overhead and correction are not in it,
-   * because they are what is fitted from it.
+   * Seconds the tests of the units the batch ran took, and the hooks of
+   * those units, summed over every execution of each. The suite's overhead
+   * and correction are not in it, because they are what is fitted from it.
    */
   ran: number;
 
@@ -242,10 +251,10 @@ export function laneObservations(
  * every one of them passed.
  *
  * They are keyed by the run, the suite, and whether coverage was on,
- * because five lanes of one run may each run the same suite and adding
- * two lanes' figures would describe a batch neither of them ran. Not by
- * the measurement's name, which is what tells the five apart and would
- * therefore keep them apart.
+ * because several lanes of one run may each run the same suite and
+ * adding two lanes' figures would describe a batch neither of them ran.
+ * Not by the measurement's name, which is what tells the lanes apart and
+ * would therefore keep them apart.
  */
 export function observationsOf(
   runs: Iterable<{ run: string; records: Iterable<TestRecord> }>,
@@ -452,24 +461,24 @@ function squaredError(
 /**
  * What a suite costs a lane, fitted to what its batches spent: `overhead`
  * for each pass, `unitOverhead` for each time a pass opened a unit, and
- * `correction` for each second its tests took.
+ * `correction` for each second its tests and their units' hooks took.
  *
  * The correction is read far outside the range it was fitted over: a suite
  * whose every batch anybody has seen held six seconds of tests may be
  * charged thousands the first time a lane packs it whole. Inside a narrow
- * range what a batch spends apart from its tests dominates and the slope
- * is noise, so it is fitted only where at least `MIN_CORRECTION_SAMPLES`
- * batches disagree by `MIN_CORRECTION_SPAN_SECONDS` about what their tests
- * took. A fit that comes out at zero says a batch grows no dearer the more
- * of the suite it holds, which would let a lane pack the suite without
- * limit, and a manifest carrying a correction of zero is refused whole.
- * Either way the correction is one, which is the reading that needs no
- * evidence, and the other two are fitted to what the batches spent beyond
- * their tests.
+ * range what a batch spends apart from its tests and hooks dominates and
+ * the slope is noise, so it is fitted only where at least
+ * `MIN_CORRECTION_SAMPLES` batches disagree by `MIN_CORRECTION_SPAN_SECONDS`
+ * about what their tests and hooks took. A fit that comes out at zero says
+ * a batch grows no dearer the more of the suite it holds, which would let a
+ * lane pack the suite without limit, and a manifest carrying a correction
+ * of zero is refused whole. Either way the correction is one, which is the
+ * reading that needs no evidence, and the other two are fitted to what the
+ * batches spent beyond their tests and hooks.
  *
  * Batches that open one unit for each pass cannot say whether what they
- * spent beyond their tests was the pass's or the unit's, and the unit
- * carries it then: that errs high for a lane packing more units than
+ * spent beyond their tests and hooks was the pass's or the unit's, and the
+ * unit carries it then: that errs high for a lane packing more units than
  * those batches held, where the pass would err low.
  */
 export function fitSuite(batches: readonly BatchObservation[]): SuiteFit {
@@ -502,9 +511,18 @@ export function fitSuite(batches: readonly BatchObservation[]): SuiteFit {
   };
 }
 
-/** What a lane pays beyond its tests, read from what lanes have measured. */
+/**
+ * What a lane pays beyond its tests, read from what lanes have measured:
+ * `observations`, and `hooks`, what each unit's hooks took by the name of
+ * the lane measurement and then by day.
+ *
+ * A unit's hooks are charged at the ninetieth percentile of what they took
+ * in the window, the percentile a test's own cost is read at, since the
+ * packer counts them with the unit's tests.
+ */
 export function calibrate(
   observations: Pick<Observations, "setup" | "batches">,
+  hooks: Readonly<Record<string, Readonly<Record<string, DaySamples>>>> = {},
 ): Calibration {
   const setupCost: Record<string, number> = {};
   // The ninetieth percentile of the openings lanes have seen rather than
@@ -514,6 +532,20 @@ export function calibrate(
   for (const [capability, seconds] of observations.setup) {
     const sorted = [...seconds].sort((a, b) => a - b);
     setupCost[capability] = percentile90(sorted);
+  }
+  // Each unit's hooks, by whether coverage was on and then by suite.
+  const unitHooks = new Map<boolean, Map<string, Record<string, number>>>();
+  for (const [name, byDay] of Object.entries(hooks)) {
+    const named = hooksMeasurement(name);
+    if (named === undefined) continue;
+    const bySuite = unitHooks.get(named.measured) ??
+      new Map<string, Record<string, number>>();
+    unitHooks.set(named.measured, bySuite);
+    const units = bySuite.get(named.suite) ?? {};
+    bySuite.set(named.suite, units);
+    units[named.unit] = sampledPercentile90(
+      Object.values(byDay).reduce(mergeSamples, emptySamples()),
+    ) / 1000;
   }
   // Instrumenting a run costs it time, and how much is a property of the
   // suite, so a suite's batches run with coverage on are fitted apart
@@ -525,7 +557,13 @@ export function calibrate(
           observations.batches.filter((o) => o.measured === measured),
           (o) => o.suite,
         ),
-      ].map(([suite, batches]) => [suite, fitSuite(batches)]),
+      ].map(([suite, batches]) => {
+        const units = unitHooks.get(measured)?.get(suite);
+        return [
+          suite,
+          { ...fitSuite(batches), ...(units ? { unitHooks: units } : {}) },
+        ];
+      }),
     );
   return {
     setupCost,

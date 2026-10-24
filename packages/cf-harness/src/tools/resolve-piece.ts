@@ -29,7 +29,7 @@ export const resolvePieceToolDescriptor: HarnessToolDescriptor = {
   toolId: "resolve_piece",
   title: "Resolve Piece",
   description:
-    "Resolve a piece slug supplied by the user to a handle in this session's space. Call this before author delegation or a registry lookup when the user names a piece, including when answering a question in the same conversation. Accepts a bare slug or pattern:<space>/<slug>; this resolves an exact address, not a display name or fuzzy match. Pass the returned resultRef to the pattern-author child to read or revise the piece. A missing or refused address is a reason to ask for the exact slug or an attachment, not to author a name matcher. Returns no source or piece values.",
+    "Resolve an exact piece slug to a handle in this session's space; returns the handle as resultRef, and no source or piece values.",
   effectClass: "read",
   inputSchema: {
     type: "object",
@@ -101,15 +101,12 @@ export const resolvePieceTool: HarnessToolDefinition<
         "The Fabric session could not be opened to resolve the piece.",
       );
     }
-    const spaceName = session.pieces.getSpaceName();
-    if (address.spaceName !== undefined && spaceName === undefined) {
-      return error(
-        "unavailable",
-        "This session has no space name to check the qualified address against. Supply the piece's bare slug in this session's space.",
-      );
-    }
     try {
-      checkNamedPieceAddressSpace(address, spaceName);
+      checkNamedPieceAddressSpace(
+        address,
+        session.pieces.getSpace(),
+        session.pieces.getSpaceName(),
+      );
     } catch {
       return error(
         "foreign-space",

@@ -26,6 +26,7 @@
 import type { JSONSchema } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schema-closure";
+import { getLogger } from "@commonfabric/utils/logger";
 
 /** Thrown when a document's content does not hash to its claimed id. */
 export class SchemaDocumentHashMismatchError extends Error {
@@ -46,6 +47,15 @@ const documentsByHash = new Map<string, JSONSchema>();
 // proved is gone. Content addressing means such an entry could never hold a
 // WRONG value — this is about not outliving the epoch's availability.
 const clearListeners = new Set<() => void>();
+
+/** Listeners waiting for an incomplete schema closure to gain a document. */
+const registrationListeners = new Set<() => void>();
+
+/** Subscribes to new verified documents; the returned function unsubscribes. */
+export function onSchemaDocumentRegistered(listener: () => void): () => void {
+  registrationListeners.add(listener);
+  return () => registrationListeners.delete(listener);
+}
 
 /** Registers a callback for the registry-clear transition. */
 export function onSchemaRegistryClear(listener: () => void): void {
@@ -123,6 +133,16 @@ export function registerSchemaDocument(
   if (existing !== undefined) return existing;
   const interned = sah.schemaOrUndefined as JSONSchema;
   documentsByHash.set(taggedHash, interned);
+  for (const listener of registrationListeners) {
+    try {
+      listener();
+    } catch (error) {
+      getLogger("schema-registry").error("registration-listener", () => [
+        "Schema registration listener failed",
+        error,
+      ]);
+    }
+  }
   return interned;
 }
 

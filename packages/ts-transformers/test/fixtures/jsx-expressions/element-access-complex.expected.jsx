@@ -728,7 +728,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["positive", "non-positive"]
+            "enum": ["non-positive", "positive"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_15({ state: {
                 matrix: state.key("matrix"),
                 row: state.key("row"),

@@ -146,7 +146,10 @@ It:
 4. Wraps each emitted body in a module record keyed `cf:module/<identity>`
    ([`compileSourcesToRecords`][c7]) and security-classifies it
    ([`verifyCompiledModuleBody`][c8], called from the Engine) before it can be
-   loaded or cached.
+   loaded or cached. A record imports exactly the modules its body's
+   `require()` calls name. A compile scans the body for them; a cache hit takes
+   the list from the cached artifact when it carries one, as a compiled
+   document and a byte-cache entry do, and does not parse the body for it.
 
 5. Validates the assembled graph's shape and wiring
    ([`verifyModuleGraph`][c8]). Both verifications belong to the compile path:
@@ -270,7 +273,7 @@ order, which is exactly the bottom-up order the Merkle hash needs.
 
 **Import-edge completeness.** Every `import`, `import type`, `export … from`, and
 inline `import("./mod").Type` edge is collected
-([`collectImportSpecifiers`][c5]); there is no value/type filtering and no
+([`scanModuleDeclarations`][c5]); there is no value/type filtering and no
 dependence on emit elision. `export * from` barrel edges are counted as ordinary
 edges, so a barrel does not collapse distinct modules into one hash. Missing a
 type edge would silently treat a behavior-changing type edit as a no-op, which is
@@ -428,7 +431,7 @@ or inline `import("cf:…").Type` reference cannot remain mutable in deployed
 source. If it could, a later type change could alter generated schemas and
 executable behavior without changing the importing pattern's stored source. The
 current `rewriteFabricPins` visitor already rewrites import declarations, export
-declarations, and inline import-type nodes. [`collectImportSpecifiers`][c5]
+declarations, and inline import-type nodes. [`scanModuleDeclarations`][c5]
 already includes these edges in module identity. Automatic piece deployment still
 uses an ordinary local resolver before invoking the rewriter. It therefore
 rejects every fabric import or export declaration at that stage, including an
@@ -557,13 +560,22 @@ for its identity. Their link sets are different. A source document stores intern
 authored-import links, including links to authored declarations. It omits fabric
 edges so one program's source closure does not absorb another program.
 Synthetic retention links may keep other source roots alive, but they are
-excluded from the identity hash and executable graph traversal. Separately, an
-entry source document stores one identity-only link per member of its source
-package that no import reaches: [`SOURCE_ROOT_SPECIFIER`][c7]
-(`cf:source-root/`) for an attached source entry point such as a test, and
-[`DATA_FILE_SPECIFIER`][c7] (`cf:data-file/`) for an attached data file. Unlike
-a retention link, these participate in the entry module's identity, so changing
-the package changes the revision. Neither resolves a module record. A data
+excluded from the identity hash and executable graph traversal. Separately, a
+source document stores one identity-only link per member of its source package
+that no import reaches and that its module owns: [`SOURCE_ROOT_SPECIFIER`][c7]
+(`cf:source-root/`) for an attached source entry point such as a test, owned
+by the entry, and [`DATA_FILE_SPECIFIER`][c7] (`cf:data-file/`) for an attached
+data file, owned by the module whose `dataFile()` call names it. The entry owns
+a data file that no module's source names, such as one read by a computed path
+([`sourcePackageOwners`][c17] assigns the owners). Unlike a retention
+link, these participate in the owning module's identity, and through it in the
+identity of every module that reaches the owner, so changing the package
+changes the revision. A load entered at a module that reads a data file, by
+its own identity, as a sub-pattern referenced by `{ identity, symbol }` is
+loaded, therefore reaches the file. Whether that module is a program's entry
+or a child of it changes its identity only by what the entry alone owns: the
+program's source roots and the data files no module's source names. Neither
+link resolves a module record. A data
 document is hashed as a leaf over its own bytes and filename rather than through
 a parse of its contents, which is what lets a data file hold bytes that are not
 TypeScript. Both namespaces are reserved against authored imports. The compiled
@@ -950,6 +962,7 @@ index's restart-stable `action` column,
 [c14]: ../../packages/runner/src/compilation-cache/cell-cache.ts
 [c15]: ../../packages/runner/src/sandbox/runtime-module-policy.ts
 [c16]: ../../packages/runner/src/harness/authored-debug-source.ts
+[c17]: ../../packages/runner/src/harness/declared-data-files.ts
 
 - Compile and evaluate entry points: [`Engine.compileToRecordGraph`][c1],
   [`Engine.compileResolvedToRecordGraph`][c1],
@@ -961,10 +974,14 @@ index's restart-stable `action` column,
 - Module identity: [`computeModuleHashes`][c3] and [`resolveModuleImports`][c3],
   with [`findInternalTarget`][c3] deciding what counts as an internal edge, and
   the Engine-facing wrappers [`computeModuleIdentities`][c7] and
-  [`computeFabricModuleIdentities`][c7].
+  [`computeFabricModuleIdentities`][c7]. [`sourcePackageOwners`][c17] assigns
+  each source-package edge to the module that owns it.
 - Emit configuration: [`getCompilerOptions`][c4] / [`MODULE_KIND`][c4].
-- Import-graph discovery, including `export * from` and inline import types:
-  [`collectImportSpecifiers`][c5].
+- Import-graph discovery, including `export * from` and inline import types,
+  and the `dataFile()` reads that decide which module owns a data file's edge:
+  [`scanModuleDeclarations`][c5], one parse per module, shared across a
+  compile through [`scanModules`][c3]. [`collectImportSpecifiers`][c5] and
+  [`collectDataFileNames`][c5] each return one half of that scan.
 - Record assembly and the warm-load rebuild: [`compileSourcesToRecords`][c7],
   [`deriveModuleRecordFields`][c7], [`buildRecordsFromCompiled`][c7].
 - Loading: [`loadModuleGraph`][c6] / [`importModuleGraphNow`][c6] over

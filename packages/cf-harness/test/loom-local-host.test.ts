@@ -1245,7 +1245,9 @@ Deno.test("local Loom host classifies invalid, internal, and unavailable failure
     ]),
     1,
   );
-  assertEquals(unavailableRequests, 2, unavailableIo.stderr.join(""));
+  // "hello" is a respond task, so no opening research call precedes the
+  // run's one failed turn.
+  assertEquals(unavailableRequests, 1, unavailableIo.stderr.join(""));
   const unavailableFailure = JSON.parse(unavailableIo.stderr.join(""));
   assertEquals(unavailableFailure.error.code, "provider-unavailable");
   assertEquals(JSON.stringify(unavailableFailure).includes("secret"), false);

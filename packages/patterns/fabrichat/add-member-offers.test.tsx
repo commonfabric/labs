@@ -53,14 +53,7 @@ import {
   type SharedSpaceCatalogStorage,
 } from "../system/shared-space-catalog.ts";
 import { FabriChatManagerCore } from "./manager.tsx";
-import {
-  type ActivityCounters,
-  type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
-  type SentActivity,
-  type UsedTime,
-} from "./room-records.tsx";
+import { type MessagesValue } from "./room-records.tsx";
 import {
   type ChatRoomOutput,
   FabriChatRoomCore,
@@ -236,11 +229,6 @@ const ManagedRoom = pattern<ManagedRoomInput, ManagedRoomOutput>(
       myProfile: input.myProfile,
       about: { kind: "group" as const, title: "Team" },
       messages: input.messages,
-      reactionLists: input.reactionLists,
-      requests: input.requests,
-      usedTimes: input.usedTimes,
-      activity: input.activity,
-      counters: input.counters,
       roster: input.roster,
       addRequests: input.addRequests,
       self: input[SELF],
@@ -273,21 +261,11 @@ const shownOf = (root: unknown): string =>
 /** A room's records, which every participant's room over them shares. */
 interface Records {
   messages: Writable<MessagesValue>;
-  reactionLists: Writable<ReactionList[]>;
-  requests: Writable<RequestMemo[]>;
-  usedTimes: Writable<UsedTime[]>;
-  activity: Writable<SentActivity[]>;
-  counters: Writable<ActivityCounters[]>;
 }
 
 /** A room's records, every one empty. */
 const emptyRecords = (): Records => ({
   messages: Writable.of<MessagesValue>([] as MessagesValue),
-  reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
-  requests: Writable.of<RequestMemo[]>([]),
-  usedTimes: Writable.of<UsedTime[]>([]),
-  activity: Writable.of<SentActivity[]>([]),
-  counters: Writable.of<ActivityCounters[]>([]),
 });
 
 /** What every session receives from the setup. */
@@ -364,11 +342,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const room = ManagedRoom({
     myProfile: profile,
     messages: setup.room.messages,
-    reactionLists: setup.room.reactionLists,
-    requests: setup.room.requests,
-    usedTimes: setup.room.usedTimes,
-    activity: setup.room.activity,
-    counters: setup.room.counters,
     roster: setup.roster,
     addRequests: Writable.of<Record<string, AddMemberOutcome>>({}),
     manager: {
@@ -381,11 +354,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const unmanaged = ManagedRoom({
     myProfile: profile,
     messages: setup.room.messages,
-    reactionLists: setup.room.reactionLists,
-    requests: setup.room.requests,
-    usedTimes: setup.room.usedTimes,
-    activity: setup.room.activity,
-    counters: setup.room.counters,
     roster: setup.roster,
     addRequests: Writable.of<Record<string, AddMemberOutcome>>({}),
   });
@@ -698,11 +666,6 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     myProfile: profile,
     about: { kind: "group" as const },
     messages: setup.lobby.messages,
-    reactionLists: setup.lobby.reactionLists,
-    requests: setup.lobby.requests,
-    usedTimes: setup.lobby.usedTimes,
-    activity: setup.lobby.activity,
-    counters: setup.lobby.counters,
   } as RoomArg);
 
   return {

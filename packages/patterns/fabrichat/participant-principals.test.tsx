@@ -25,14 +25,7 @@ import {
   Writable,
 } from "commonfabric";
 import type { ParticipantRoster } from "../loom/participants.tsx";
-import {
-  type ActivityCounters,
-  type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
-  type SentActivity,
-  type UsedTime,
-} from "./room-records.tsx";
+import { type MessagesValue } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
 import {
   CHAT_SEND_ACTION,
@@ -92,11 +85,6 @@ const typed = (text: string) => ({ type: "click", target: { value: text } });
 /** The room's records, which every participant's room shares. */
 interface Records {
   messages: Writable<MessagesValue>;
-  reactionLists: Writable<ReactionList[]>;
-  requests: Writable<RequestMemo[]>;
-  usedTimes: Writable<UsedTime[]>;
-  activity: Writable<SentActivity[]>;
-  counters: Writable<ActivityCounters[]>;
   roster: Writable<ParticipantRoster>;
 }
 
@@ -111,11 +99,6 @@ interface Setup {
 export const setup = pattern(() => ({
   records: {
     messages: Writable.of<MessagesValue>([] as MessagesValue),
-    reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
-    requests: Writable.of<RequestMemo[]>([]),
-    usedTimes: Writable.of<UsedTime[]>([]),
-    activity: Writable.of<SentActivity[]>([]),
-    counters: Writable.of<ActivityCounters[]>([]),
     roster: Writable.of<ParticipantRoster>({}),
   },
   aliceDid: Writable.of<string>(""),
@@ -140,22 +123,12 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     myProfile: profile,
     about: { kind: "group" as const, title: "Team" },
     messages: setup.records.messages,
-    reactionLists: setup.records.reactionLists,
-    requests: setup.records.requests,
-    usedTimes: setup.records.usedTimes,
-    activity: setup.records.activity,
-    counters: setup.records.counters,
     roster: setup.records.roster,
   } as RoomArg);
   const otherRoom = FabriChatRoomCore({
     myProfile: otherProfile,
     about: { kind: "group" as const, title: "Team" },
     messages: setup.records.messages,
-    reactionLists: setup.records.reactionLists,
-    requests: setup.records.requests,
-    usedTimes: setup.records.usedTimes,
-    activity: setup.records.activity,
-    counters: setup.records.counters,
     roster: setup.records.roster,
   } as RoomArg);
   const action_join = action(() => room.addParticipant.send({ profile }));
@@ -193,11 +166,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     myProfile: profile,
     about: { kind: "group" as const, title: "Team" },
     messages: setup.records.messages,
-    reactionLists: setup.records.reactionLists,
-    requests: setup.records.requests,
-    usedTimes: setup.records.usedTimes,
-    activity: setup.records.activity,
-    counters: setup.records.counters,
     roster: setup.records.roster,
   } as RoomArg);
 

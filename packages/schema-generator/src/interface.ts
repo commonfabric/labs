@@ -62,15 +62,6 @@ export interface SchemaHint {
    * (`SchemaGenerationOptions.definesDocument`).
    */
   readonly definesDocument?: true;
-  /**
-   * Whether every cell the reading of the node reaches, outside the value of
-   * another cell, is opaque, whatever capability its wrapper writes; a stream
-   * or a SQLite handle keeps its brand. The contract overlay of a handler's
-   * event or state (`overlayContractCapabilities()`) marks the remainder past
-   * a recursion it cuts with it, since no use the callback makes reaches the
-   * cells there.
-   */
-  readonly cellsOpaque?: true;
 }
 
 export type SchemaHints = WeakMap<ts.Node, SchemaHint>;
@@ -216,6 +207,16 @@ export interface GenerationContext {
 
   // Optional context
 
+  /**
+   * The element types of the tuple whose items `items` is, the union of
+   * them the checker builds, in the order the tuple lists them: the order the
+   * union's members are emitted in (`sourceOrderOfMembers()`).
+   */
+  tupleItems?: {
+    readonly items: ts.Type;
+    readonly elements: readonly ts.Type[];
+  };
+
   /** Type node for additional context */
   typeNode?: ts.TypeNode;
 
@@ -277,12 +278,6 @@ export interface GenerationContext {
    * this reading reports.
    */
   documentWithinView?: boolean;
-
-  /**
-   * Whether the cells this reading reaches are opaque (`SchemaHint.cellsOpaque`).
-   * The named types it reads are stored apart from other readings'.
-   */
-  cellsOpaque?: boolean;
 
   /**
    * The root type node of a schema whose root policy's writer the caller

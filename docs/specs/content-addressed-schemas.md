@@ -239,7 +239,13 @@ keyword, the resource-scope keywords (`$id`, `$anchor`, `$dynamicAnchor`,
 `$recursiveRef`, whose scoping the rewrite cannot preserve), and an
 external
 ref whose document is not at hand — and a writer falls back to carrying
-such a schema inline, as today.
+such a schema inline, as today. A merged envelope never reaches the fallback
+on account of its definition map: the merge returns the document in
+canonical form, with one map at the root holding every definition the
+author named, at most one minted definition per meaning those do not carry,
+and nothing a merge minted that the document does not reach
+(`canonicalizeCfcSchemaDocument` in the runner's `cfc/schema-refs.ts`), so
+the hash an envelope is stamped with is of that form.
 
 An external ref is a `$ref` whose value is a `cid:` URI:
 
@@ -547,26 +553,26 @@ self-contained schema. Path narrowing, target queries, and derived Cell
 handles therefore do not require B to hold A's schema documents. A schema
 declared by a link inside B resolves in B when that next link is followed.
 
-A `data:` document is stored in no space: it is its own identifier, and
-nothing writes it. Nor does the identifier reach a space inside another
-value: a stored write and a stream send both dissolve a `data:` link into
-the value it carries, so no runtime receives one from another through
-storage (a link held in a `FabricInstance`'s state excepted, which neither
-walk reaches). A link inside one resolves its schema's `cid:` references in
-the space carried by the address that names the document, by the same rule
-and through the same gates as a link inside a stored document. Two kinds of
-`data:` document differ in what that space holds:
+An immutable document (`snapshot:` or portable `data:`) is stored in no
+space, and nothing writes it. A native snapshot retains its frozen value
+and relative-link origin; a portable identifier encodes its value. A link
+inside one keeps its schema in the form the value held it, and resolves
+the schema's `cid:` references through the same gates as a link inside a
+stored document. Where the closure is looked for depends on what minted
+the document:
 
 - A snapshot of a value read out of a stored document — an array element
-  read by value — is addressed in that document's space and keeps each
-  link's schema in the form the stored value held it. A reference among them
-  names a closure the write-side guarantee below put in that space, with the
-  write that stored the link.
+  read by value — is addressed in that document's space, and a reference
+  among its links' schemas resolves there: the write-side guarantee below
+  put the closure in that space, with the write that stored the link.
 - A document minted from a value no space has stored
-  (`Runtime.getImmutableCell()`) has no such write behind it, so it carries
-  each link's schema in the inline form, recomposed through the realm
-  registry when the document is minted. A reference the registry cannot
-  recompose stays a reference, and the gates decide the read.
+  (`Runtime.getImmutableCell()`) has no such write behind it, so no space
+  holds the closure a reference among its links' schemas names. The realm
+  registry does, since it minted the reference, and the traversal's loader
+  takes a document the registry holds from the registry for such a
+  document, without reading the space the document is addressed in. A
+  document the registry lacks is read from that space, as for a stored
+  document, and the gates decide the read.
 
 A schema document's value is space-free: content addressing makes the
 bytes identical wherever they are stored, so the realm-wide registry
@@ -580,13 +586,11 @@ documents available alongside their declarations:
   decomposed closure is written into the space that will hold the
   reference, in the same transaction as the reference itself. A
   transaction stamps the reference itself on an inline link schema it
-  writes into an ordinary document — a value copied out of a `data:`
-  document minted from unstored data carries its link schemas inline, and
-  would otherwise store and send every closure in full. Three kinds of
-  inline schema stay as written:
+  writes into an ordinary document, which would otherwise store and send
+  the closure in full. Three kinds of inline schema stay as written:
   a trivial one, one that decomposition refuses, and one that takes no more
   wire bytes than the reference that would replace it, a bare handle stamp
-  such as `{ asCell: ["stream"] }` among them; a `data:` document is never
+  such as `{ asCell: ["stream"] }` among them; an immutable document is never
   written, and a `cid:` document is not link-scanned. A
   transaction commits against one space's session, so the closure reaches
   whichever server handles that space by construction. An event append is

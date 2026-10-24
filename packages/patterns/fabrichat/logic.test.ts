@@ -1,118 +1,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import {
-  chooseRecordedTime,
-  isInMain,
-  isSingleEmoji,
-  mainView,
-  threadReplyCounts,
-  threadRootOf,
-  threadView,
-  type TimeBounds,
-  type ViewItem,
-  windowCount,
-  windowSlice,
-} from "./logic.ts";
-
-const BOUNDS: TimeBounds = {
-  maxAgeNsec: 600n,
-  maxLeadNsec: 10n,
-  tickNsec: 100n,
-};
-
-const NOTHING_USED = () => false;
+import { isInMain, isSingleEmoji, type ViewItem, viewPlaces } from "./logic.ts";
 
 describe("logic", () => {
-  describe("chooseRecordedTime()", () => {
-    it("records a proposal before the clock as proposed", () => {
-      expect(
-        chooseRecordedTime(
-          { proposed: 900n, clock: 1000n, isUsed: NOTHING_USED },
-          BOUNDS,
-        ),
-      ).toBe(900n);
-    });
-
-    it("records a proposal after the clock at the clock", () => {
-      expect(
-        chooseRecordedTime(
-          { proposed: 1005n, clock: 1000n, isUsed: NOTHING_USED },
-          BOUNDS,
-        ),
-      ).toBe(1000n);
-    });
-
-    it("records the clock when nothing is proposed", () => {
-      expect(
-        chooseRecordedTime({ clock: 1000n, isUsed: NOTHING_USED }, BOUNDS),
-      ).toBe(1000n);
-    });
-
-    it("returns `undefined` for a proposal older than the window", () => {
-      expect(
-        chooseRecordedTime(
-          { proposed: 399n, clock: 1000n, isUsed: NOTHING_USED },
-          BOUNDS,
-        ),
-      ).toBeUndefined();
-    });
-
-    it("returns `undefined` for a proposal further ahead than the lead", () => {
-      expect(
-        chooseRecordedTime(
-          { proposed: 1011n, clock: 1000n, isUsed: NOTHING_USED },
-          BOUNDS,
-        ),
-      ).toBeUndefined();
-    });
-
-    it("returns the smallest later unused time for a used one", () => {
-      const used = new Set([900n, 901n, 903n]);
-      expect(
-        chooseRecordedTime(
-          { proposed: 900n, clock: 1000n, isUsed: (t) => used.has(t) },
-          BOUNDS,
-        ),
-      ).toBe(902n);
-    });
-
-    it("raises a reply's time past its target's", () => {
-      expect(
-        chooseRecordedTime(
-          { proposed: 900n, clock: 1000n, after: 950n, isUsed: NOTHING_USED },
-          BOUNDS,
-        ),
-      ).toBe(951n);
-    });
-
-    it("raises a reply's time past a target recorded ahead of the clock", () => {
-      expect(
-        chooseRecordedTime(
-          { clock: 1000n, after: 1250n, isUsed: NOTHING_USED },
-          BOUNDS,
-        ),
-      ).toBe(1251n);
-    });
-
-    it("returns `undefined` when the clock's tick has no time left", () => {
-      expect(
-        chooseRecordedTime(
-          { proposed: 1098n, clock: 1000n, isUsed: (t) => t < 1100n },
-          { ...BOUNDS, maxLeadNsec: 200n },
-        ),
-      ).toBeUndefined();
-    });
-
-    it("bumps a time within the clock's tick", () => {
-      expect(
-        chooseRecordedTime(
-          { clock: 1000n, isUsed: (t) => t < 1099n },
-          BOUNDS,
-        ),
-      ).toBe(1099n);
-    });
-  });
-
   describe("isSingleEmoji()", () => {
     it("returns `true` for one emoji", () => {
       expect(isSingleEmoji("😺")).toBe(true);
@@ -159,29 +49,32 @@ describe("logic", () => {
       expect(isInMain(items[2])).toBe(false);
     });
 
-    it("lists the main conversation oldest first", () => {
-      expect(mainView(items).map((item) => item.key)).toEqual(["a", "c", "d"]);
-    });
-
-    it("lists a thread with its root, oldest first, flattening replies", () => {
-      expect(threadView(items, "a")?.map((item) => item.key)).toEqual([
-        "a",
-        "b",
-        "c",
-        "e",
-      ]);
-    });
-
-    it("returns `undefined` for a thread rooted at a message in a thread", () => {
-      expect(threadView(items, "b")).toBeUndefined();
-    });
-
-    it("returns `undefined` for a thread rooted at no message", () => {
-      expect(threadView(items, "z")).toBeUndefined();
-    });
-
     it("counts each thread's replies", () => {
-      expect([...threadReplyCounts(items)]).toEqual([["a", 3]]);
+      const places = viewPlaces(items);
+      expect(items.map((item) => [item.key, places[item.key].replies]))
+        .toEqual([["c", 0], ["a", 3], ["b", 0], ["d", 0], ["e", 0]]);
+    });
+
+    it("gives each thread's newest reply time, whatever the list's order", () => {
+      const places = viewPlaces(items);
+      expect(items.map((item) => [item.key, places[item.key].latestReplyAt]))
+        .toEqual([
+          ["c", undefined],
+          ["a", 50n],
+          ["b", undefined],
+          ["d", undefined],
+          ["e", undefined],
+        ]);
+    });
+
+    it("places each message in the main conversation, in a thread, or both", () => {
+      expect(viewPlaces(items)).toEqual({
+        a: { inMain: true, replies: 3, latestReplyAt: 50n },
+        b: { inMain: false, replies: 0, thread: "a" },
+        c: { inMain: true, replies: 0, thread: "a" },
+        d: { inMain: true, replies: 0 },
+        e: { inMain: false, replies: 0, thread: "a" },
+      });
     });
 
     it("finds the root of a very long reply chain", () => {
@@ -196,9 +89,9 @@ describe("logic", () => {
           }),
         ),
       ];
-      const byKey = new Map(chain.map((item) => [item.key, item]));
-      expect(threadRootOf(chain[20_000], byKey)).toBe("0");
-      expect(threadReplyCounts(chain).get("0")).toBe(20_000);
+      const places = viewPlaces(chain);
+      expect(places["20000"].thread).toBe("0");
+      expect(places["0"].replies).toBe(20_000);
     });
 
     it("stops at a reply chain that loops", () => {
@@ -206,93 +99,9 @@ describe("logic", () => {
         { key: "x", sentAt: 1n, replyTo: { key: "y", shownIn: "thread" } },
         { key: "y", sentAt: 2n, replyTo: { key: "x", shownIn: "thread" } },
       ];
-      const byKey = new Map(loop.map((item) => [item.key, item]));
-      expect(threadRootOf(loop[0], byKey)).toBeDefined();
-      expect(threadReplyCounts(loop).size).toBeGreaterThan(0);
-    });
-  });
-
-  describe("windowCount()", () => {
-    it("returns the count asked for within the limit", () => {
-      expect(windowCount(7, 100)).toBe(7);
-    });
-
-    it("returns the limit for a count beyond it", () => {
-      expect(windowCount(5000, 100)).toBe(100);
-    });
-
-    it("returns 0 for no count, a negative one, or zero", () => {
-      expect([undefined, -3, 0].map((count) => windowCount(count, 100)))
-        .toEqual([0, 0, 0]);
-    });
-
-    it("rounds a fractional count down", () => {
-      expect(windowCount(2.9, 100)).toBe(2);
-    });
-  });
-
-  describe("windowSlice()", () => {
-    const view: ViewItem[] = [10n, 20n, 30n, 40n, 50n].map((sentAt) => ({
-      key: String(sentAt),
-      sentAt,
-    }));
-
-    it("places a window at the newest end", () => {
-      expect(windowSlice(view, { before: "end" }, 2)).toEqual({
-        start: 3,
-        end: 5,
-        hasOlder: true,
-        hasNewer: false,
-      });
-    });
-
-    it("places a window before a time", () => {
-      expect(windowSlice(view, { before: 40n }, 2)).toEqual({
-        start: 1,
-        end: 3,
-        hasOlder: true,
-        hasNewer: true,
-      });
-    });
-
-    it("places a window at the earliest end", () => {
-      expect(windowSlice(view, { after: "start" }, 2)).toEqual({
-        start: 0,
-        end: 2,
-        hasOlder: false,
-        hasNewer: true,
-      });
-    });
-
-    it("places a window after a time", () => {
-      expect(windowSlice(view, { after: 30n }, 5)).toEqual({
-        start: 3,
-        end: 5,
-        hasOlder: true,
-        hasNewer: false,
-      });
-    });
-
-    it("centers a window around a message", () => {
-      expect(windowSlice(view, { around: 30n }, 3)).toEqual({
-        start: 1,
-        end: 4,
-        hasOlder: true,
-        hasNewer: true,
-      });
-    });
-
-    it("fills a window around a message from the other side", () => {
-      expect(windowSlice(view, { around: 50n }, 3)).toEqual({
-        start: 2,
-        end: 5,
-        hasOlder: true,
-        hasNewer: false,
-      });
-    });
-
-    it("returns `undefined` around a time naming no message", () => {
-      expect(windowSlice(view, { around: 35n }, 3)).toBeUndefined();
+      const places = viewPlaces(loop);
+      expect(places.x.thread).toBeDefined();
+      expect(places.x.replies + places.y.replies).toBeGreaterThan(0);
     });
   });
 });

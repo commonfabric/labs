@@ -28,7 +28,7 @@
 // snapshot across operators).
 
 import { Command, ValidationError } from "@cliffy/command";
-import { basename, dirname } from "@std/path";
+import { basename, dirname, toFileUrl } from "@std/path";
 import { configuredStorePath } from "@commonfabric/memory/v2/storage-path";
 import {
   CompactionRefused,
@@ -54,11 +54,8 @@ import {
 
 import { buildSpaceInviteCommand } from "./space-invites.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
-import {
-  buildCreateSpaceCommand,
-  buildRecreateRootCommand,
-  buildRetiredSetHomeCommand,
-} from "./piece.ts";
+import { shellQuote } from "../lib/shell-quote.ts";
+import { buildCreateSpaceCommand, buildRecreateRootCommand } from "./piece.ts";
 
 function out(json: boolean, data: unknown, render: () => void): void {
   if (json) console.log(JSON.stringify(data, null, 2));
@@ -431,12 +428,14 @@ export const space = new Command()
           // the network. The port offset separates it from a local production
           // server; only the host binding keeps it off the network entirely.
           `serve it (NOT the live store — note the host and port):\n` +
-          `  HOST=127.0.0.1 MEMORY_DIR="file://${targetDir}/" ` +
+          `  HOST=127.0.0.1 MEMORY_DIR=${
+            shellQuote(toFileUrl(`${targetDir}/`).href)
+          } ` +
           `./scripts/start-local-dev.sh --port-offset 10\n\n` +
           `then, per attempt (stop the server before resetting — a reset ` +
           `cannot reach a process that already holds the store open):\n` +
-          `  cf space verify ${targetDir}\n` +
-          `  cf space reset  ${targetDir}`,
+          `  cf space verify ${shellQuote(targetDir)}\n` +
+          `  cf space reset  ${shellQuote(targetDir)}`,
       );
     });
   })
@@ -791,6 +790,4 @@ export const space = new Command()
     "recreate-root",
     buildRecreateRootCommand("space recreate-root"),
   )
-  /* space set-home — retired; answers with what replaced it, hidden */
-  .command("set-home", buildRetiredSetHomeCommand("space set-home").hidden())
   .command("invite", buildSpaceInviteCommand());

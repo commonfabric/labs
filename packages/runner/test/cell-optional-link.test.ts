@@ -106,9 +106,17 @@ describe("Cell with Optional Link", () => {
         );
       });
 
-      it("reserves only $generated, not other $-prefixed keys", () => {
-        // Every builder-minted cause carries `$generated`, so a cause without
-        // it can never collide with one — other sigil-looking keys stay legal.
+      it("rejects a top-level $instance key in record causes", () => {
+        const cell = new CellImpl(runtime, tx, { path: [], space }, false);
+        expect(() => cell.for({ $instance: "child" })).toThrow(
+          'top-level key "$instance" is reserved',
+        );
+      });
+
+      it("reserves only $generated and $instance, not other $-prefixed keys", () => {
+        // Every builder-minted cause carries `$generated` or `$instance`, so a
+        // cause carrying neither can never collide with one — other
+        // sigil-looking keys stay legal.
         const cell = new CellImpl(runtime, tx, { path: [], space }, false);
         expect(cell.for({ $kind: "stream" })).toBe(cell);
         const cell2 = new CellImpl(runtime, tx, { path: [], space }, false);
@@ -119,6 +127,8 @@ describe("Cell with Optional Link", () => {
         const cell = new CellImpl(runtime, tx, { path: [], space }, false);
         // Nested keys can never collide with the flat generated causes
         expect(cell.for({ outer: { $generated: 0 } })).toBe(cell);
+        const cell2 = new CellImpl(runtime, tx, { path: [], space }, false);
+        expect(cell2.for({ outer: { $instance: "child" } })).toBe(cell2);
       });
 
       it("leaves non-record causes untouched", () => {

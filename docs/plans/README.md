@@ -28,6 +28,13 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
   subtrees, graph-aware policy queries, and a reader-first stored-format migration
   to bound the cost of staged reference diamonds.
+- [Independent reference labels](cfc-independent-reference-labels.md) moves a
+  link write to the specified contract (§8.2, §8.12.8): the slot persists the
+  creating attempt's own label and nothing copied from the target, a label
+  envelope beside a mergeable append describes the committed list, and a
+  specs ruling retires the `LinkReference` atom, after which the runtime
+  stopped minting and reading it. Legacy entries stay as conservative
+  restrictions; no migration runs.
 - [Release gates without an integrity union](cfc-release-gate-integrity.md)
   keeps one consumed value's evidence from releasing another value's clause:
   the write, sink and display gates run value-intrinsic rules at each location
@@ -129,10 +136,6 @@ a record: archive it to `docs/history/plans/` following the procedure in
   [`../features/vouched-ingest-channel-mint.md`](../features/vouched-ingest-channel-mint.md).
 - [Integration-test video demos](integration-test-video-demos.md) tracks
   optional CI adoption and further fixture hardening.
-- [Lazy cell materialization](lazy-cell-materialization.md) sequences a
-  schema-observing lazy view over a cell, a transaction mode that hands one back
-  from every read, and the runner disposition for a reader that touches data the
-  schema no longer describes.
 - [Stream markers out of stored data](stream-markers-out-of-stored-data.md)
   moves stream-ness out of the stored `{ "$stream": true }` value and into the
   link schema and the module wrapper, and triggers the cold-start repairs on a
@@ -142,7 +145,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the pre-sync repeats or does not need: a child start re-planning the
   subtree its parent named, every plan's inputs cell re-inlining its
   schemas, a cross-space pass that materializes every plan to find a link,
-  and a planning loop that never yields to read the answers it asked for.
+  a planning loop that never yields to read the answers it asked for, and a
+  node bound once for the pre-sync and again for its instantiation.
 - [Pre-syncing from node plans](presync-from-node-plans.md) makes one
   derivation per pattern node serve both instantiation and the pre-sync, so a
   resume and a fresh start name exactly what each lift, handler, builtin, and
@@ -159,6 +163,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the loop on purpose. The
   backoff Topic 911 waits for, and the first of Topic 913's three guardrails.
   Always on, in every runtime.
+- [Durable history of new real test failures and a bounded
+  aggregate](durable-new-real-test-failure-history.md) keeps every new real
+  test failure the test-selection publisher has credited a test with through
+  a bootstrap, a rename, and an outage, and stops the publisher's aggregate
+  growing with the age of the store. It is built, and waits for the checks
+  its first run after landing answers.
 - [Memory `apply-op`](memory-apply-op.md) sequences the editor-neutral
   collaborative-field substrate, the first CodeMirror codec and editor
   integration, and the checkpoints and review gates required before a future
@@ -245,8 +255,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   [shaped reads and verb results](shaped-reads-and-verb-results.md) — the shared
   read layer, how a shape says "an address here, a value there", and what
   calling a verb adds — and at
-  [CLI surface shape](cli-surface-shape.md) for the command surface and an
-  additive path to it. Start here rather than at either part.
+  [CLI surface shape](../history/plans/cli-surface-shape.md) for the command surface, an executed
+  plan now archived. Start here rather than at either part.
 - [References as arguments](references-as-arguments.md) proposes lifting
   address resolution out of the LLM dialog builtin, which already does it, and
   into the boundary every external caller crosses. An LLM and the CLI can

@@ -3,6 +3,7 @@
 // down would trade a cosmetic problem for an outage.
 
 import { assert, assertEquals } from "@std/assert";
+import { toFileUrl } from "@std/path";
 import env from "@/env.ts";
 import {
   announceCloneIfServed,
@@ -36,7 +37,7 @@ async function withStore(
 
 Deno.test("a served clone is announced with its provenance", async () => {
   await withStore((dir) => {
-    const banner = cloneBanner({ memoryDir: `file://${dir}/` })!;
+    const banner = cloneBanner({ memoryDir: toFileUrl(`${dir}/`).href })!;
     assert(banner !== null, "a marked store must produce a banner");
     assert(banner.includes("NOT PRODUCTION"));
     // The provenance from the marker is what makes the warning actionable:
@@ -54,7 +55,7 @@ Deno.test("announcing a clone emits the banner exactly once", async () => {
   await withStore((dir) => {
     const lines: string[] = [];
     announceCloneIfServed(
-      { memoryDir: `file://${dir}/` },
+      { memoryDir: toFileUrl(`${dir}/`).href },
       (m) => lines.push(m),
     );
     assertEquals(lines.length, 1);
@@ -65,11 +66,11 @@ Deno.test("announcing a clone emits the banner exactly once", async () => {
 
 Deno.test("an ordinary store says nothing", async () => {
   await withStore((dir) => {
-    assertEquals(cloneBanner({ memoryDir: `file://${dir}/` }), null);
+    assertEquals(cloneBanner({ memoryDir: toFileUrl(`${dir}/`).href }), null);
 
     const lines: string[] = [];
     announceCloneIfServed(
-      { memoryDir: `file://${dir}/` },
+      { memoryDir: toFileUrl(`${dir}/`).href },
       (m) => lines.push(m),
     );
     assertEquals(lines, [], "no banner, no output");
@@ -92,7 +93,7 @@ Deno.test("DB_PATH wins over MEMORY_DIR, as it does in the engine", async () => 
       // the banner must follow DB_PATH or it would report the wrong store.
       assertEquals(
         storeRootPath({
-          memoryDir: `file://${plain}/`,
+          memoryDir: toFileUrl(`${plain}/`).href,
           dbPath: `${marked}/s.sqlite`,
         }),
         marked,
@@ -126,6 +127,6 @@ Deno.test("an unreadable marker does not take the server down", async () => {
   // silence rather than propagate.
   await withStore(async (dir) => {
     await Deno.mkdir(`${dir}/.cf-clone`);
-    assertEquals(cloneBanner({ memoryDir: `file://${dir}/` }), null);
+    assertEquals(cloneBanner({ memoryDir: toFileUrl(`${dir}/`).href }), null);
   });
 });

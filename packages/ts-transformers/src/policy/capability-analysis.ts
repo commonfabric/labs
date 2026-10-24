@@ -139,6 +139,7 @@ interface ObservedCapabilityUsage {
   readonly escapedPaths: readonly (readonly string[])[];
   readonly passthrough: boolean;
   readonly wildcard: boolean;
+  readonly wildcardPaths: readonly (readonly string[])[];
   readonly hasUnverifiedCellUse: boolean;
   readonly identityOnly: boolean;
   readonly identityPaths: readonly (readonly string[])[];
@@ -2011,6 +2012,7 @@ function normalizeObservedCapabilityUsage(
     escapedPaths,
     passthrough: state.passthrough,
     wildcard: state.wildcard,
+    wildcardPaths: wildcardPrefixes,
     hasUnverifiedCellUse: state.hasUnverifiedCellUse,
     identityOnly: identityPaths.some((path) => path.length === 0) &&
       !state.hasNonIdentityUse &&
@@ -2390,6 +2392,13 @@ export function analyzeFunctionCapabilities(
     // Arguments a callee's own summary charged, so the identifier handler
     // does not also treat them as values that left the analysis.
     const summaryHandledArgumentUses = new WeakSet<ts.Expression>();
+    // Arguments a known identity call recorded as compared, each as the
+    // expression its source was resolved from. The call is visited before
+    // its arguments, so the visits below ask this set whether an argument is
+    // compared rather than following its parent pointer to the call: a stage
+    // that rebuilds the call can leave a reused argument's parent at a call
+    // that is no longer where the argument sits.
+    const identityArgumentUses = new WeakSet<ts.Expression>();
     const unreadableCellArguments: UnreadableCellArgument[] = [];
 
     // Whether a call writes its argument into a local collection — a `push`,
@@ -2510,14 +2519,6 @@ export function analyzeFunctionCapabilities(
             !isCellWrite(destination.call) &&
             !isArrayIsArrayCall(destination.call, checker);
       }
-    };
-
-    // Whether `usage` is an argument that a known identity call only compares.
-    const isIdentityOnlyArgument = (usage: ts.Expression): boolean => {
-      const parent = usage.parent;
-      return !!parent && ts.isCallExpression(parent) &&
-        parent.arguments.includes(usage) &&
-        isKnownIdentityArgumentCall(parent, checker);
     };
 
     const getIdentifierName = (
@@ -3709,7 +3710,7 @@ export function analyzeFunctionCapabilities(
             const resolvedSource = materializeSourceRef(source);
             const usage = outermostTransparentWrapper(node);
             const parent = usage.parent;
-            const identityOnlyArgumentUse = isIdentityOnlyArgument(usage);
+            const identityOnlyArgumentUse = identityArgumentUses.has(node);
             // A value below the root that leaves the analysis whole is read
             // in full wherever it lands, so it is charged as a full-shape
             // read rather than a plain one: a plain read at a path keeps the
@@ -3902,9 +3903,11 @@ export function analyzeFunctionCapabilities(
             !signatureCapabilityArgumentUses.has(
               outermostTransparentWrapper(node),
             ) &&
-            // A member a known identity call only compares is an identity use,
-            // recorded where the call is visited; a read here would end it.
-            !isIdentityOnlyArgument(outermostTransparentWrapper(node))
+            // A member a known identity call recorded as compared is an
+            // identity use; a read here would end it. A member the call did
+            // not record is read, so whatever the call failed to resolve
+            // stays in the schema rather than being shrunk out of it.
+            !identityArgumentUses.has(node)
           ) {
             const ref = resolveSourceRef(node);
             if (ref) {
@@ -4065,6 +4068,16 @@ export function analyzeFunctionCapabilities(
             // so the caller uses nothing there for identity alone either.
             for (const escapedPath of paramSummary.escapedPaths ?? []) {
               recordEscape(source.root, [...source.path, ...escapedPath]);
+            }
+            // Where the callee read through a key that can name any member,
+            // the caller's value is reached below that prefix by an access
+            // neither names: its identity markings there are erased, as the
+            // callee's are, and the prefix reaches the caller's summary.
+            for (const wildcardPath of paramSummary.wildcardPaths ?? []) {
+              const path = [...source.path, ...wildcardPath];
+              if (!isSelfReference(source.root, path)) {
+                ensureState(source.root).wildcardPaths.add(encodePath(path));
+              }
             }
             for (const writePath of paramSummary.writePaths) {
               trackWrite(source.root, [...source.path, ...writePath]);
@@ -4341,8 +4354,8 @@ export function analyzeFunctionCapabilities(
           // An `assert` body's operand recording wraps each argument, and
           // which source an argument comes from, and whether it is cell-like,
           // are questions about the value the recording hands back. The
-          // member-access visit charges no read to a member argument and
-          // leaves its identity use to be recorded here.
+          // visits of the arguments themselves, which come after this one,
+          // treat an argument recorded here as compared rather than read.
           for (const argument of node.arguments) {
             const comparedArgument = unwrapAssertCapture(argument);
             const source = resolveSourceRef(comparedArgument);
@@ -4350,6 +4363,7 @@ export function analyzeFunctionCapabilities(
               markIdentityUseRef(source, comparedArgument, {
                 comparable: identityEqualsCall,
               });
+              identityArgumentUses.add(comparedArgument);
             }
           }
         }

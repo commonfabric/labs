@@ -47,7 +47,6 @@ export default pattern(() => {
     users: noProfileUsers,
     host: noProfileHost,
     profileName: "",
-    profileAvatar: "",
   });
 
   // Lane 2 — two DIFFERENT people who share a display name. Under name-keyed
@@ -67,7 +66,6 @@ export default pattern(() => {
     host,
     profile: alexProfile,
     profileName: alexName,
-    profileAvatar: "alex.png",
   });
 
   // Lane 3 — identity resolves LATE: the transient where one profile wish has
@@ -82,7 +80,6 @@ export default pattern(() => {
     host: lateHost,
     profile: lateProfile,
     profileName: lateName,
-    profileAvatar: "",
   });
   // Lane 4 — the OTHER transient: the display name has resolved but the
   // profile DOCUMENT has not been pulled yet (a reference into the viewer's
@@ -99,14 +96,12 @@ export default pattern(() => {
     host: docLateHost,
     profile: docLateProfile,
     profileName: "Doc",
-    profileAvatar: "",
   });
   const otherAlexCard = ParticipantIdentityCard({
     users,
     host,
     profile: otherAlexProfile,
     profileName: "Alex",
-    profileAvatar: "",
   });
 
   // === Actions ===
@@ -225,7 +220,8 @@ export default pattern(() => {
     const roster = users.get() ?? [];
     return roster.length === 1 &&
       roster[0]?.name === "Alex" &&
-      roster[0]?.avatar === "alex.png" &&
+      // The roster shows the live profile, so no avatar is copied into it.
+      roster[0]?.avatar === undefined &&
       equals(roster[0]?.profile, alexProfile) &&
       alexCard.isJoined === true &&
       alexCard.isAdmin === true &&

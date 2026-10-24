@@ -42,11 +42,11 @@ export class CFCheckbox extends BaseElement {
       line-height: 1.5;
 
       /* Default color values if not provided */
-      --background: #ffffff;
-      --foreground: #0f172a;
-      --primary: #0f172a;
-      --primary-foreground: #f8fafc;
-      --border: #e2e8f0;
+      --background: var(--cf-theme-color-surface, #ffffff);
+      --foreground: var(--cf-theme-color-text, #0f172a);
+      --primary: var(--cf-theme-color-primary, #0f172a);
+      --primary-foreground: var(--cf-theme-color-primary-foreground, #f8fafc);
+      --border: var(--cf-theme-color-border, #e2e8f0);
       --ring: #94a3b8;
     }
 

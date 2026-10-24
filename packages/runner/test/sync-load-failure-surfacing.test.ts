@@ -7,13 +7,18 @@ import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import { entityIdFrom } from "../src/create-ref.ts";
 import { dataUriFromValueWithResolvedLinks } from "../src/data-uri.ts";
 import { Runtime } from "../src/runtime.ts";
+import { entityKey } from "../src/scheduler/keys.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
-import type { MemorySpace } from "../src/storage/interface.ts";
+import {
+  type MemorySpace,
+  ReplicaLoadFailureError,
+} from "../src/storage/interface.ts";
 import {
   type Options,
   type SessionFactory,
   StorageManager,
 } from "../src/storage/v2.ts";
+import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 
 // The silent-collapse pin for sync-layer failures.
 //
@@ -201,6 +206,46 @@ describe("sync load failure surfacing", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  it("logs nothing for a load the manager's close cuts short, and still fails its waiters", async () => {
+    // A write kicks a load of its document that nothing awaits, and neither
+    // the commit nor the runtime going idle waits for it to land, so a close
+    // right after both meets it in flight. Its failure is the close's own
+    // doing, not a read that went wrong.
+
+    const storageManager = EmulatedStorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    const space = signer.did();
+    const tx = runtime.edit();
+    runtime.getCell<number>(space, "cut-short", { type: "number" }, tx).set(1);
+    await tx.commit().settled;
+    await runtime.idle();
+
+    const inFlight = storageManager.pendingLoadAddresses();
+    expect(inFlight).toHaveLength(1);
+    const settled = storageManager.loadsSettled(
+      inFlight.map((address) =>
+        entityKey(address, storageManager.scopeKeyIdentity())
+      ),
+    ).then(() => undefined, (error: unknown) => error);
+    const before = surfacedErrorCount();
+
+    await runtime.dispose();
+    await storageManager.close();
+
+    expect(surfacedErrorCount()).toBe(before);
+    const failure = await settled;
+    expect(failure).toBeInstanceOf(ReplicaLoadFailureError);
+    expect((failure as ReplicaLoadFailureError).failure.failureClass).toBe(
+      "connection",
+    );
+    expect((failure as ReplicaLoadFailureError).message).toBe(
+      "memory client closed",
+    );
   });
 
   it("logs distinct failures for distinct spaces", async () => {

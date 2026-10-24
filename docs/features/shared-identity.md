@@ -44,7 +44,8 @@ deno run -A packages/cli/mod.ts id did "$CF_IDENTITY"
 Then import the same key in the browser:
 
 1. Open `http://localhost:8000`.
-2. On the login screen, choose `Login` or `Register`.
+2. On the login screen, choose `Login` or `Register`. A browser that has signed
+   in before offers `Register New Key` in place of both.
 3. Choose `Import CLI Key`.
 4. Select `.cf/shared-dev.key`.
 
@@ -99,10 +100,6 @@ on 2026-08-28 it was `expected Uint8Array of length 32, got length=16`, in the
 browser console and identically from `cf id from-mnemonic`. What holds
 regardless of the wording is the shape: a phrase that works in one works in
 the other, and a 12-word phrase works in neither.
-
-> Use `deno run -A packages/cli/mod.ts`, not `deno task cf`, when redirecting to
-> a key file: the `deno task` wrapper prints colored preamble to stdout that
-> would corrupt the key.
 
 ## Existing CLI Key To Browser
 
@@ -163,9 +160,18 @@ Always compare DIDs before testing scoped behavior:
 deno run -A packages/cli/mod.ts id did "$CF_IDENTITY"
 ```
 
-In the browser, shell startup logs the active user DID under the
-`shell.identity` logger. If those DIDs differ, `PerUser` fields, home-space
+In the browser, evaluate `globalThis.app.state().identity?.did()` in the page's
+console. It returns the DID the shell is signed in as, and `undefined` while
+the login screen is showing. If those DIDs differ, `PerUser` fields, home-space
 settings, favorites, and session-scoped state are expected to differ too.
+
+The console log does not carry the DID. The shell's `lib-shell.identity` logger
+writes `[Identity] User DID: did:key:...` when the runtime is created, and it
+is constructed disabled. Enabling it with
+`commonfabric.logger["lib-shell.identity"].disabled = false` shows the line
+only for a sign-in that follows in the same page load: a page that restores a
+stored identity creates its runtime during startup, before the console can
+reach the logger.
 
 ## Agent Browser Workflow
 
@@ -178,16 +184,13 @@ agent-browser --session cf-shared snapshot -i
 # Click Login, then Import CLI Key.
 agent-browser --session cf-shared upload @<choose-file-ref> "$CF_IDENTITY"
 agent-browser --session cf-shared click @<import-key-ref>
-agent-browser --session cf-shared console
+agent-browser --session cf-shared wait --fn "globalThis.app.state().identity"
+agent-browser --session cf-shared eval "globalThis.app.state().identity?.did()"
 ```
 
-Check the console for:
-
-```text
-[Identity] User DID: did:key:...
-```
-
-That DID must match:
+The import is asynchronous: `wait --fn` returns once the page is signed in, and
+`eval` then prints that identity's DID. On a page still showing the login
+screen, `eval` prints `null`. That DID must match:
 
 ```bash
 deno run -A packages/cli/mod.ts id did "$CF_IDENTITY"
@@ -195,7 +198,7 @@ deno run -A packages/cli/mod.ts id did "$CF_IDENTITY"
 
 Use distinct `agent-browser --session` names when comparing identities. Do not
 infer the active identity from the session name, browser URL, or the key you
-intended to upload; verify the `shell.identity` log every time. Reusing a browser
+intended to upload; evaluate the expression every time. Reusing a browser
 session can also reuse stored credentials, so a stale session can silently test
 the wrong user.
 

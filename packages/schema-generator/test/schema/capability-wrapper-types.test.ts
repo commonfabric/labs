@@ -215,6 +215,75 @@ describe("Schema: Capability wrapper types", () => {
     });
   });
 
+  describe("array item hints over a union holding an empty-array default", () => {
+    /** The schema of `X.items`, hinted to hold no item schema. */
+    async function hinted(itemsType: string): Promise<Record<string, any>> {
+      const code = `
+      interface X {
+        items: ${itemsType};
+      }
+    `;
+      const { checker, sourceFile } = await createTestProgram(code);
+      const symbol = checker.getSymbolsInScope(
+        sourceFile,
+        ts.SymbolFlags.Interface,
+      ).find((candidate) => candidate.name === "X");
+      if (!symbol) throw new Error("Interface X not found");
+      const schemaHints = new WeakMap<ts.Node, { items?: unknown }>();
+      schemaHints.set(findInterfaceMemberTypeNode(sourceFile, "X", "items"), {
+        items: false,
+      });
+      const result = asObjectSchema(
+        new SchemaGenerator().generateSchema(
+          checker.getDeclaredTypeOfSymbol(symbol),
+          checker,
+          undefined,
+          undefined,
+          schemaHints,
+        ),
+      );
+      return result.properties?.items as Record<string, any>;
+    }
+
+    it("reads the element's wrapper from the union's one array member", async () => {
+      for (
+        const itemsType of [
+          "Writable<ComparableCell<{ name: string }>[] | Default<[]>>",
+          "Writable<Array<ComparableCell<{ name: string }>> | Default<[]>>",
+          // The `never[]` arm an expanded empty-array default leaves holds no
+          // element, and is skipped.
+          "Writable<never[] | ComparableCell<{ name: string }>[] | Default<[]>>",
+        ]
+      ) {
+        expect((await hinted(itemsType)).items).toEqual({
+          type: "unknown",
+          asCell: ["comparable"],
+        });
+      }
+    });
+
+    it("gives the element no wrapper where the union holds more than one array member", async () => {
+      expect(
+        (await hinted(
+          "Writable<ComparableCell<{ name: string }>[] | ReadonlyCell<number>[] | Default<[]>>",
+        )).items,
+      ).toEqual({ type: "unknown" });
+    });
+
+    it("gives no wrapper where the type holds no array", async () => {
+      for (
+        const itemsType of [
+          "Writable<string | Default<[]>>",
+          "Writable<string>",
+        ]
+      ) {
+        expect(JSON.stringify(await hinted(itemsType))).not.toContain(
+          "comparable",
+        );
+      }
+    });
+  });
+
   it("uses semantic wrapper kind when a non-synthetic type node disagrees", async () => {
     const code = `
       interface X {
@@ -465,143 +534,5 @@ describe("Schema: Capability wrapper types", () => {
         asCell: ["readonly"],
       });
     });
-  });
-
-  describe("a member whose reading marks its cells opaque", () => {
-    // The contract overlay marks so the remainder past a recursion it cuts,
-    // whose cells no use reaches (`SchemaHint.cellsOpaque`).
-
-    it("narrows every cell the member reaches to opaque, keeping a stream's brand and the cells inside a cell's value", async () => {
-      const code = `
-        interface Inner {
-          a: Writable<number>;
-          r: ReadonlyCell<string>;
-          s: Stream<number>;
-          nested: Writable<{ d: Writable<number> }>;
-          list: Writable<number>[];
-          cells: Writable<Writable<number>[]>;
-          mixed: Writable<Writable<number>[] | { d: Writable<number> }>;
-        }
-        interface X {
-          hinted: Inner;
-          plain: Inner;
-        }
-      `;
-      const { checker, sourceFile } = await createTestProgram(code);
-      const symbol = checker.getSymbolsInScope(
-        sourceFile,
-        ts.SymbolFlags.Interface,
-      ).find((candidate) => candidate.name === "X");
-      if (!symbol) throw new Error("Interface X not found");
-      const type = checker.getDeclaredTypeOfSymbol(symbol);
-      const schemaHints = new WeakMap<
-        ts.Node,
-        { cellsOpaque?: true; items?: unknown }
-      >();
-      schemaHints.set(findInterfaceMemberTypeNode(sourceFile, "X", "hinted"), {
-        cellsOpaque: true,
-      });
-      // An identity-only read of a cell's array leaves its items unread; the
-      // cells it holds are inside the cell's value, as is every other cell
-      // that value reaches.
-      for (const member of ["cells", "mixed"]) {
-        schemaHints.set(
-          findInterfaceMemberTypeNode(sourceFile, "Inner", member),
-          { items: false },
-        );
-      }
-
-      const result = asObjectSchema(
-        new SchemaGenerator().generateSchema(
-          type,
-          checker,
-          undefined,
-          undefined,
-          schemaHints,
-        ),
-      );
-      const definitions = (result.$defs ?? {}) as Record<
-        string,
-        Record<string, any>
-      >;
-      const resolve = (schema: Record<string, any>) =>
-        typeof schema.$ref === "string"
-          ? definitions[schema.$ref.split("/").pop()!]!
-          : schema;
-      const properties = result.properties as Record<string, any>;
-      const hinted = resolve(properties.hinted).properties;
-      const plain = resolve(properties.plain).properties;
-
-      expect(hinted.a.asCell).toEqual(["opaque"]);
-      expect(hinted.r.asCell).toEqual(["opaque"]);
-      expect(hinted.s.asCell).toEqual(["stream"]);
-      expect(hinted.nested.asCell).toEqual(["opaque"]);
-      expect(hinted.nested.properties.d.asCell).toEqual(["cell"]);
-      expect(hinted.list.items.asCell).toEqual(["opaque"]);
-      expect(hinted.cells.asCell).toEqual(["opaque"]);
-      expect(hinted.cells.items.asCell).toEqual(["cell"]);
-      expect(hinted.mixed.asCell).toEqual(["opaque"]);
-      expect(
-        (hinted.mixed.anyOf as Record<string, any>[]).map((member) =>
-          member.items?.asCell ?? member.properties?.d.asCell
-        ),
-      ).toEqual([["cell"], ["cell"]]);
-      expect(plain.a.asCell).toEqual(["cell"]);
-      expect(plain.r.asCell).toEqual(["readonly"]);
-    });
-
-    for (
-      const [shape, code, member] of [
-        [
-          "a recursive type a cell inside the member holds",
-          `interface Inner { c: Writable<number>; self: Writable<Inner> }
-           interface X { hinted: Inner }`,
-          ["X", "hinted"],
-        ],
-        [
-          "the ordinary type the member refers back to",
-          `interface X { c: Writable<number>; hinted: X }`,
-          ["X", "hinted"],
-        ],
-      ] as const
-    ) {
-      it(`builds the definition of ${shape}, apart from the member's own`, async () => {
-        // A reading whose cells are opaque is not the ordinary reading of the
-        // same type, so neither is taken for the other's cycle.
-
-        const { checker, sourceFile } = await createTestProgram(code);
-        const symbol = checker.getSymbolsInScope(
-          sourceFile,
-          ts.SymbolFlags.Interface,
-        ).find((candidate) => candidate.name === "X");
-        if (!symbol) throw new Error("Interface X not found");
-        const schemaHints = new WeakMap<ts.Node, { cellsOpaque?: true }>();
-        schemaHints.set(
-          findInterfaceMemberTypeNode(sourceFile, member[0], member[1]),
-          { cellsOpaque: true },
-        );
-
-        const result = asObjectSchema(
-          new SchemaGenerator().generateSchema(
-            checker.getDeclaredTypeOfSymbol(symbol),
-            checker,
-            undefined,
-            undefined,
-            schemaHints,
-          ),
-        );
-        const text = JSON.stringify(result);
-        const references = [...text.matchAll(/"#\/\$defs\/([^"]+)"/g)].map((
-          match,
-        ) => match[1]!);
-        const definitions = Object.keys(
-          (result.$defs ?? {}) as Record<string, unknown>,
-        );
-
-        expect(references.length).toBeGreaterThan(0);
-        expect(references.filter((name) => !definitions.includes(name)))
-          .toEqual([]);
-      });
-    }
   });
 });

@@ -83,6 +83,34 @@ describe("traverse-recorder", () => {
       expect(only.traverseCells).toBe(true);
     });
 
+    it("records `inlineArrayItemsInPlace` for a context that sets it", () => {
+      const recorder = new TraverseCaptureRecorder();
+      recorder.recordInvocation(
+        { address: address("of:doc", ["a"]) },
+        selector(["a"]),
+        undefined,
+        { traverseCells: true, inlineArrayItemsInPlace: true },
+        undefined,
+      );
+
+      const [only] = recorder.toFixture("name", "source").invocations;
+      expect(only.inlineArrayItemsInPlace).toBe(true);
+    });
+
+    it("leaves `inlineArrayItemsInPlace` out for a context that does not set it", () => {
+      const recorder = new TraverseCaptureRecorder();
+      recorder.recordInvocation(
+        { address: address("of:doc", ["a"]) },
+        selector(["a"]),
+        undefined,
+        { traverseCells: true, inlineArrayItemsInPlace: false },
+        undefined,
+      );
+
+      const [only] = recorder.toFixture("name", "source").invocations;
+      expect("inlineArrayItemsInPlace" in only).toBe(false);
+    });
+
     it("copies the address path rather than aliasing the caller's", () => {
       const recorder = new TraverseCaptureRecorder();
       const path = ["a"];

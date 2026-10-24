@@ -10,6 +10,7 @@ import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
 import { recordReferencedArgumentFields } from "../../src/cfc/reference-initialization.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { labelsReached } from "../support/reached-labels.ts";
 import {
   seedReferenceGraphLeaf,
   stageReferenceGraph,
@@ -27,7 +28,6 @@ describe("staged-reference-derivation", () => {
       storageManager: StorageManager.emulate({ as: signer }),
     });
     await seedReferenceGraphLeaf(runtime, space);
-    runtime.resetCfcStats();
   });
 
   afterEach(async () => {
@@ -35,7 +35,10 @@ describe("staged-reference-derivation", () => {
   });
 
   for (const order of ["bottom-up", "top-down"] as const) {
-    it(`preserves every diamond path with bounded derivations in ${order} order`, async () => {
+    it(`reaches the leaf through every diamond path and stores none of its labels in ${order} order`, async () => {
+      // The holder persists its own label alone. Every path through the
+      // diamond reads the leaf where it is, so the labels reached are the
+      // leaf's own and the holder stores no entry beneath its slot.
       const depth = 7;
       const { tx, holder } = stageReferenceGraph(
         runtime,
@@ -46,35 +49,24 @@ describe("staged-reference-derivation", () => {
       );
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
-      const stats = runtime.getCfcStats();
-      expect(stats.stagedReferenceCacheHits).toBeGreaterThan(0);
-      expect(stats.stagedReferenceDerivations).toBeLessThan(
-        3 * (depth + 1) ** 2,
-      );
-      const inspect = runtime.edit();
-      const entries =
-        readStoredCfcMetadata(inspect, holder.getAsNormalizedFullLink())!
-          .labelMap.entries;
-      inspect.abort();
-      for (let bits = 0; bits < 2 ** depth; bits++) {
+      const entries = readStoredCfcMetadata(
+        runtime.readTx(),
+        holder.getAsNormalizedFullLink(),
+      )!.labelMap.entries;
+      expect(entries.map((entry) => entry.path)).toEqual([[]]);
+      for (const bits of [0, 2 ** depth - 1, 0b1010101, 0b0101010]) {
         const path = [
           "argument",
           ...Array.from({ length: depth }, (_, i) => `p${(bits >> i) & 1}`),
         ];
-        const labels = entries.filter((entry) =>
-          entry.path.join("/") === path.join("/")
-        )
-          .map((entry) => entry.label);
-        expect(labels.flatMap((label) => label.confidentiality ?? []))
-          .toContain("secret");
-        expect(labels.flatMap((label) => label.integrity ?? [])).toContain(
-          "leaf-proof",
+        const reached = labelsReached(
+          runtime,
+          holder.getAsNormalizedFullLink(),
+          path,
         );
+        expect(reached.confidentiality).toContain("secret");
+        expect(reached.integrity).toContain("leaf-proof");
       }
-      expect(
-        entries.filter((entry) => entry.path.length === 1)
-          .flatMap((entry) => entry.label.confidentiality ?? []),
-      ).not.toContain("secret");
     });
 
     for (const slotDeclaration of [false, true, "confidentiality"] as const) {
@@ -158,45 +150,55 @@ describe("staged-reference-derivation", () => {
         for (
           const stage of order === "bottom-up" ? stages : stages.toReversed()
         ) stage();
+        // The floor on the holder's nested slot is credited through the
+        // projected reference. The holder stores nothing beneath its slot;
+        // the node stores the reference's own restriction, which is the
+        // confidentiality the wrapper declares for the slot it projects, and
+        // none of the leaf's labels; the leaf's labels are reached by reading
+        // through either field.
         expect((await tx.commit().settled).error).toBeUndefined();
-        const entries = readStoredCfcMetadata(
+        const holderEntries = readStoredCfcMetadata(
           runtime.readTx(),
           holder.getAsNormalizedFullLink(),
         )!.labelMap.entries;
+        expect(holderEntries.map((entry) => entry.path)).toEqual([[]]);
+        const nodeEntries = readStoredCfcMetadata(
+          runtime.readTx(),
+          node.getAsNormalizedFullLink(),
+        )!.labelMap.entries;
         for (const field of ["first", "second"]) {
-          const label = entries.find((entry) =>
-            entry.path.join("/") === `argument/${field}`
-          )?.label;
-          expect(label?.confidentiality).toContain("secret");
-          expect(label?.integrity).toContain("leaf-proof");
-          expect(label?.integrity).toContain("wrapper-proof");
-          expect(label?.integrity).not.toContain("slot-proof");
+          const reached = labelsReached(
+            runtime,
+            holder.getAsNormalizedFullLink(),
+            ["argument", field],
+          );
+          expect(reached.confidentiality).toContain("secret");
+          expect(reached.integrity).toContain("leaf-proof");
+          const slot = nodeEntries.filter((entry) =>
+            entry.path.join("/") === field
+          );
+          expect(slot.flatMap((entry) => entry.label.integrity ?? []))
+            .not.toContain("slot-proof");
+          expect(slot.flatMap((entry) => entry.label.integrity ?? []))
+            .not.toContain("leaf-proof");
+          expect(slot.flatMap((entry) => entry.label.confidentiality ?? []))
+            .not.toContain("secret");
           if (slotDeclaration === "confidentiality") {
-            expect(label?.confidentiality).toContain("wrapper-secret");
-            expect(label?.confidentiality).toContain("slot-secret");
+            const confidentiality = slot.flatMap((entry) =>
+              entry.label.confidentiality ?? []
+            );
+            expect(confidentiality).toContain("wrapper-secret");
+            expect(confidentiality).toContain("slot-secret");
+          } else {
+            expect(slot).toEqual([]);
           }
         }
       });
     }
-
-    it(`keeps ordinary chains outside the shared-result cache in ${order} order`, async () => {
-      const { tx, holder } = stageReferenceGraph(runtime, space, 7, 1, order);
-      runtime.prepareTxForCommit(tx);
-      expect((await tx.commit().settled).error).toBeUndefined();
-      expect(runtime.getCfcStats().stagedReferenceCacheHits).toBe(0);
-      const inspect = runtime.edit();
-      const entries =
-        readStoredCfcMetadata(inspect, holder.getAsNormalizedFullLink())!
-          .labelMap.entries;
-      inspect.abort();
-      expect(
-        entries.find((entry) => entry.path.length === 8)?.label.confidentiality,
-      )
-        .toContain("secret");
-    });
   }
 
   it("preserves object back-references beside shared acyclic sources", async () => {
+    runtime.resetCfcStats();
     const { tx } = stageReferenceGraph(runtime, space, 4, 2, "top-down");
     const cyclic = runtime.getCell(space, "cycle", {
       type: "object",
@@ -214,7 +216,11 @@ describe("staged-reference-derivation", () => {
     );
   });
 
-  it("refuses an unsupported carried reader below a shared source", async () => {
+  it("drops a carried reader below the root of a reference to a shared source", async () => {
+    // Only the root of a handle's carried view is the reference's own label.
+    // A reader placeholder below it is not persisted and binds nothing; the
+    // receiver stores no entry, and a read through the reference reaches
+    // the leaf's labels where they are.
     const { tx, nodes } = stageReferenceGraph(
       runtime,
       space,
@@ -249,10 +255,20 @@ describe("staged-reference-derivation", () => {
       "argument",
     ]);
     runtime.prepareTxForCommit(tx);
-    expect((await tx.commit().settled).error?.message).toContain(
-      "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+    expect((await tx.commit().settled).error).toBeUndefined();
+    expect(
+      readStoredCfcMetadata(
+        runtime.readTx(),
+        receiver.getAsNormalizedFullLink(),
+      )?.labelMap.entries ?? [],
+    ).toEqual([]);
+    const reached = labelsReached(
+      runtime,
+      receiver.getAsNormalizedFullLink(),
+      ["argument", "p0", "p0", "p0", "p0"],
     );
-    expect(runtime.getCfcStats().stagedReferenceCacheHits).toBeGreaterThan(0);
+    expect(reached.confidentiality).toEqual(["secret"]);
+    expect(reached.integrity).toContain("leaf-proof");
   });
 
   for (const array of [false, true]) {
@@ -299,75 +315,37 @@ describe("staged-reference-derivation", () => {
       ]);
 
       expect((await tx.commit().settled).error).toBeUndefined();
-      const label = readStoredCfcMetadata(
-        runtime.readTx(),
+      // The wildcard declaration belongs to the wrapper. The holder stores
+      // nothing at its slot, and reading through it reaches the leaf.
+      expect(
+        readStoredCfcMetadata(
+          runtime.readTx(),
+          holder.getAsNormalizedFullLink(),
+        )!.labelMap.entries.map((entry) => entry.path),
+      ).toEqual([[]]);
+      const reached = labelsReached(
+        runtime,
         holder.getAsNormalizedFullLink(),
-      )!
-        .labelMap.entries.find((entry) => entry.path.join("/") === "item")
-        ?.label;
-      expect(label?.confidentiality).toContain("secret");
-      expect(label?.integrity).toContain("leaf-proof");
-      expect(label?.integrity).toContain("wrapper-proof");
-      expect(label?.integrity).not.toContain("slot-proof");
+        ["item"],
+      );
+      expect(reached.confidentiality).toContain("secret");
+      expect(reached.integrity).toContain("leaf-proof");
     });
   }
 
-  it("refreshes shared derivations after source metadata is persisted in the same pass", async () => {
-    const flowRuntime = new Runtime({
-      apiUrl: new URL("https://example.com"),
-      storageManager: StorageManager.emulate({ as: signer }),
-      cfcEnforcementMode: "enforce-explicit",
-      cfcFlowLabels: "persist",
-    });
-    try {
-      await seedReferenceGraphLeaf(flowRuntime, space);
-      const tx = flowRuntime.edit();
-      const value = flowRuntime.getCell(
-        space,
-        "reference-graph-leaf",
-        undefined,
-        tx,
-      )
-        .key("value").get();
-      const schema = {
-        type: "object",
-        ifc: { integrity: ["object-proof"] },
-      } as const;
-      const source = flowRuntime.getCell(space, "flow-source", schema, tx);
-      const middle = flowRuntime.getCell(space, "flow-middle", schema, tx);
-      const holder = flowRuntime.getCell(space, "flow-holder", schema, tx);
-      holder.set({ first: middle, second: middle });
-      recordReferencedArgumentFields(tx, holder.getAsNormalizedFullLink(), [
-        "first",
-        "second",
-      ]);
-      source.set({ copy: value });
-      middle.set({ source });
-      recordReferencedArgumentFields(tx, middle.getAsNormalizedFullLink(), [
-        "source",
-      ]);
-
-      // Preparing the holder derives the middle's link before the source has
-      // its flow label. Preparing the middle sees the source's persisted label.
-      expect((await tx.commit().settled).error).toBeUndefined();
-      const entries = readStoredCfcMetadata(
-        flowRuntime.readTx(),
-        middle.getAsNormalizedFullLink(),
-      )!
-        .labelMap.entries;
-      const linked = entries.find((entry) =>
-        entry.origin === "link" && entry.path.join("/") === "source"
-      );
-      expect(linked?.label.confidentiality).toContain("secret");
-    } finally {
-      await flowRuntime.dispose();
-    }
-  });
-
-  it("recomputes a shared graph after its source label changes", async () => {
-    const initial = stageReferenceGraph(runtime, space, 4, 2, "bottom-up");
-    runtime.prepareTxForCommit(initial.tx);
-    expect((await initial.tx.commit().settled).error).toBeUndefined();
+  it("reaches a source's changed label through a graph staged before the change", async () => {
+    // Nothing in the graph holds a copy of the leaf's label, so a read
+    // through a graph staged before the leaf's label changed reaches the
+    // label the leaf holds now.
+    const { tx, holder } = stageReferenceGraph(
+      runtime,
+      space,
+      4,
+      2,
+      "bottom-up",
+    );
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
 
     const update = runtime.edit();
     runtime.getCell(space, "reference-graph-leaf", {
@@ -377,25 +355,18 @@ describe("staged-reference-derivation", () => {
     runtime.prepareTxForCommit(update);
     expect((await update.commit().settled).error).toBeUndefined();
 
-    const { tx, holder } = stageReferenceGraph(
-      runtime,
-      space,
-      4,
-      2,
-      "bottom-up",
-      "updated-graph",
-    );
-    runtime.prepareTxForCommit(tx);
-    expect((await tx.commit().settled).error).toBeUndefined();
-    const inspect = runtime.edit();
-    const entries =
-      readStoredCfcMetadata(inspect, holder.getAsNormalizedFullLink())!
-        .labelMap.entries;
-    inspect.abort();
-    const leaves = entries.filter((entry) => entry.path.length === 5);
-    expect(leaves).toHaveLength(16);
-    for (const entry of leaves) {
-      expect(entry.label.confidentiality).toContain("second-secret");
+    expect(
+      readStoredCfcMetadata(runtime.readTx(), holder.getAsNormalizedFullLink())!
+        .labelMap.entries.map((entry) => entry.path),
+    ).toEqual([[]]);
+    for (const path of [["p0", "p0", "p0", "p0"], ["p1", "p0", "p1", "p0"]]) {
+      const reached = labelsReached(
+        runtime,
+        holder.getAsNormalizedFullLink(),
+        ["argument", ...path],
+      );
+      expect(reached.confidentiality).toContain("second-secret");
+      expect(reached.integrity).toContain("leaf-proof");
     }
   });
 });

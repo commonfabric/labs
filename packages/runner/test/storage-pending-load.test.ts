@@ -1,3 +1,5 @@
+import { deepFreeze, type FabricValue } from "@commonfabric/data-model";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import type { NormalizedLink } from "../src/link-types.ts";
@@ -23,6 +25,45 @@ describe("storage pending-load generations", () => {
 
   afterEach(async () => {
     await disposeSchedulerTestRuntime(env);
+  });
+
+  it("visits a shared binary graph once per schema and origin context", async () => {
+    const storage = env.runtime.storageManager as StorageManager;
+    const originalOpen = storage.open.bind(storage);
+    const synced: string[] = [];
+    storage.open = (openSpace: MemorySpace) => {
+      const provider = originalOpen(openSpace);
+      return new Proxy(provider, {
+        get(target, property, receiver) {
+          if (property === "sync") {
+            return (id: string) => {
+              synced.push(id);
+              return Promise.resolve({ ok: {} });
+            };
+          }
+          const value = Reflect.get(target, property, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    };
+    let value: FabricValue = linkRefFrom({
+      id: "of:shared-target",
+      space,
+      path: [],
+    });
+    for (let i = 0; i < 18; i++) {
+      value = deepFreeze({ left: value, right: value });
+    }
+    const promises: Promise<unknown>[] = [];
+    storage.accessForTestingOnly.collectLinkedCellSyncs(
+      value,
+      { id: "of:origin", space, path: [] },
+      undefined,
+      promises,
+      new Set(),
+    );
+    await Promise.all(promises);
+    expect(synced).toEqual(["of:shared-target"]);
   });
 
   it("rejects event attention resolution when the replica lacks the capability", async () => {

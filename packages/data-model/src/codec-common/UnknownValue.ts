@@ -92,9 +92,15 @@ export class UnknownValue extends BaseFabricInstance {
     return Object.isFrozen(this) && subIsDeepFrozen(this.state);
   }
 
-  /** @inheritDoc Not yet implemented, so `deepClone()` throws. */
-  protected [DEEP_CLONE_CORE](_frozen: boolean): UnknownValue {
-    throw new Error("Cannot yet handle deep cloning of `UnknownValue`.");
+  /** @inheritDoc */
+  [DEEP_CLONE_CORE](
+    _frozen: boolean,
+    subClone: (value: FabricValue) => FabricValue,
+  ): UnknownValue {
+    return new UnknownValue(
+      this.wireTypeTag,
+      subClone(this.state),
+    );
   }
 
   protected [SHALLOW_UNFROZEN_CLONE](): UnknownValue {

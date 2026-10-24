@@ -16,7 +16,6 @@ import {
   isCellLikeTypeNode,
   isSqliteTypeNode,
   isStreamTypeNode,
-  overlayContractCapabilities,
   preservedWrapperFor,
   printTypeNode,
   wrapTypeNodeWithCapability,
@@ -231,283 +230,109 @@ function createParamSummary(
   };
 }
 
-describe("overlayContractCapabilities()", () => {
-  it("returns a reference to an alias whose type holds no cell as written", () => {
-    const { sourceFile, checker } = createProgram(`
-      type Profile = { name: string };
-      type Event = { x: Profile };
-    `);
-    const alias = findTypeAlias(sourceFile, "Event");
+describe("applyShrinkAndWrap()", () => {
+  describe("a member named by the empty string", () => {
+    // A path through the member `""` narrows the shape and the cell it reaches
+    // as a path through any other name does, and is held to the type as any
+    // other path is.
 
-    const result = overlayContractCapabilities(
-      alias.type,
-      checker.getTypeAtLocation(alias.type),
-      createParamSummary({
-        capability: "readonly",
-        readPaths: [["x", "name"]],
-      }),
-      checker,
-      ts.factory,
-      sourceFile,
-    );
-
-    expect(result).toBe(alias.type);
-  });
-
-  /**
-   * The event schema of the one handler, with `event` for its event type, in
-   * a module declaring `declaration`, whose callback is `callback`; and the
-   * diagnostics compiling it reports, type-checked first where `typeCheck`
-   * is set.
-   */
-  async function eventSchema(
-    declaration: string,
-    event: string,
-    callback: string,
-    typeCheck = true,
-  ): Promise<{
-    event: Record<string, unknown>;
-    reported: { type: string; severity: string }[];
-  }> {
-    const diagnostics: TransformationDiagnostic[] = [];
-    const files = await transformFiles({
-      "/main.tsx": `/// <cts-enable />
-import { handler, pattern, Writable } from "commonfabric";
-${declaration}
-const h = handler<${event}, { c: Writable<number> }>(${callback});
-export default pattern<{ c: Writable<number> }>(({ c }) => ({ h: h({ c }) }));`,
-    }, {
-      types: COMMONFABRIC_TYPES,
-      typeCheck,
-      pipelineDiagnostics: diagnostics,
-    });
-    const [schema] = callSchemas(parseModule(files["/main.tsx"]!), "handler");
-    return {
-      event: schema!,
-      reported: diagnostics.map(({ type, severity }) => ({ type, severity })),
-    };
-  }
-
-  /** Every `asCell` entry list in `schema`, in reading order. */
-  function capabilitiesOf(schema: unknown): unknown[] {
-    if (Array.isArray(schema)) return schema.flatMap(capabilitiesOf);
-    if (typeof schema !== "object" || schema === null) return [];
-    const { asCell, ...rest } = schema as Record<string, unknown>;
-    return [
-      ...(asCell === undefined ? [] : [asCell]),
-      ...Object.values(rest).flatMap(capabilitiesOf),
-    ];
-  }
-
-  it("reports nothing unread for an event holding arrays of objects nested nine deep", async () => {
-    // Compiled with no type check first, as `cf` deploys a pattern unless
-    // asked to check it, the checker instantiates the arrays as the reading
-    // meets them, each after the one enclosing it, and they nest deeper than
-    // a recursion is cut at. An array no alias writes is not counted: only a
-    // declaration, or an alias's own tuple or array, recurses without end.
-
-    const keys = ["r", "s", "t", "u", "w", "x", "y", "z", "q"];
-    const deep = `${keys.map((key) => `{ ${key}: `).join("")}string${
-      " }[]".repeat(keys.length)
-    }`;
-    const { event, reported } = await eventSchema(
-      `type Ev = { c: Writable<number>; d: { r: ${deep} } };`,
-      "Ev",
-      "(e, { c }) => { c.set(e.c.get()); }",
-      false,
-    );
-
-    expect(event.type).toBe("object");
-    expect(reported).toEqual([]);
-  });
-
-  it("overlays the capability the callback earns on a cell a generic event alias holds under arrays of objects nested nine deep", async () => {
-    // Compiled with no type check first, the nested arrays are each
-    // instantiated after the one enclosing it, but the search for a cell does
-    // not count an array no alias writes, so it finds the cell nine arrays
-    // in, and the reference expands to overlay it.
-
-    const deep = `${"{ a: ".repeat(9)}Writable<number>${" }[]".repeat(9)}`;
-    const { event } = await eventSchema(
-      `type Box<T> = { v: T; d: ${deep} };`,
-      "Box<string>",
-      "(e, { c }) => { c.set(e.v.length); }",
-      false,
-    );
-    let level = (event.properties as Record<string, Record<string, unknown>>)
-      .d!;
-    for (let depth = 0; depth < 9; depth++) {
-      const items = level.items as Record<string, unknown>;
-      level = (items.properties as Record<string, Record<string, unknown>>).a!;
+    /**
+     * The input schema of the one `lift()` in a module holding `source`, and
+     * the types of the diagnostics compiling it reports.
+     */
+    async function liftInput(
+      source: string,
+    ): Promise<{ schema: unknown; reported: string[] }> {
+      const diagnostics: TransformationDiagnostic[] = [];
+      const files = await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { Default, equals, lift, pattern, Writable } from "commonfabric";
+${source}
+export default pattern<{ v: any }>(({ v }) => ({ m: l(v) }));`,
+      }, { types: COMMONFABRIC_TYPES, pipelineDiagnostics: diagnostics });
+      return {
+        schema: callSchemas(parseModule(files["/main.tsx"]!), "lift")[0],
+        reported: diagnostics.map(({ type }) => type),
+      };
     }
 
-    expect(level.asCell).toEqual(["opaque"]);
-  });
-
-  describe("an event alias that instantiates itself without end", () => {
-    // Each `Nest<T[]>` is a new type, so neither the search for a cell nor
-    // the expansion of a reference meets one it has read, and both end where
-    // `cutsExpansion()` cuts the recursion. Every cell past the cut is
-    // opaque.
-
+    const onlyEmpty = (value: Record<string, unknown>) => ({
+      type: "object",
+      properties: { "": value },
+      required: [""],
+    });
     for (
-      const [shape, declaration, event] of [
+      const [shape, source, expected] of [
         [
           "an object",
-          "type Nest<T> = { v: T; inner?: Nest<T[]> };",
-          "Nest<string>",
+          'const l = lift((r: { "": string; other: number }) => r[""].length);',
+          onlyEmpty({ type: "string" }),
         ],
-        ["a tuple", "type Tup<T> = [T, Tup<T[]>?];", "Tup<string>"],
+        [
+          "a nested object",
+          'const l = lift((r: { inner: { "": string; other: number } }) => r.inner[""].length);',
+          {
+            type: "object",
+            properties: { inner: onlyEmpty({ type: "string" }) },
+            required: ["inner"],
+          },
+        ],
+        [
+          "an array's element",
+          'const l = lift((r: { "": string; other: number }[]) => r[0]![""].length);',
+          { type: "array", items: onlyEmpty({ type: "string" }) },
+        ],
+        [
+          "an object, keeping its default",
+          'const l = lift((r: { "": Default<string, "x">; other: number }) => r[""].length);',
+          onlyEmpty({ type: "string", default: "x" }),
+        ],
       ] as const
     ) {
-      it(`reports what an event alias of ${shape} holding no cell leaves unread past the cut`, async () => {
-        const { event: schema, reported } = await eventSchema(
-          declaration,
-          event,
-          "(e, { c }) => { c.set(e ? 1 : 0); }",
-        );
+      it(`keeps only the member a read through it names in ${shape}`, async () => {
+        const { schema, reported } = await liftInput(source);
 
-        expect(schema).toBeDefined();
-        expect(reported.length).toBeGreaterThan(0);
-        for (const diagnostic of reported) {
-          expect(diagnostic).toEqual({
-            type: "schema-type:unread",
-            severity: "warning",
-          });
-        }
+        expect(schema).toEqual(expected);
+        expect(reported).toEqual([]);
       });
     }
 
-    it("gives a cell the event holds the capability the callback earns, and every other cell, past the cut too, opaque", async () => {
-      const { event, reported } = await eventSchema(
-        "type Nest<T> = { c: Writable<number>; v: T; children: Nest<T[]>[] };",
-        "Nest<string>",
-        "(e, { c }) => { c.set(e.c.get()); }",
-      );
-      const properties = event.properties as Record<
-        string,
-        Record<string, unknown>
-      >;
-      const child = (properties.children!.items as Record<string, unknown>)
-        .properties as Record<string, Record<string, unknown>>;
-
-      expect(properties.c!.asCell).toEqual(["readonly"]);
-      expect(child.c!.asCell).toEqual(["opaque"]);
-      expect(
-        capabilitiesOf(event).filter((capability) =>
-          JSON.stringify(capability) !== '["opaque"]'
-        ),
-      ).toEqual([["readonly"]]);
-      for (const diagnostic of reported) {
-        expect(diagnostic).toEqual({
-          type: "schema-type:unread",
-          severity: "warning",
-        });
-      }
-    });
-  });
-
-  describe("an event holding a finite chain of one declaration deeper than the cut", () => {
-    // Each level of these chains is a newer instantiation of one declaration,
-    // as in a recursion without end, so the overlay's cut takes them for one.
-    // Past the cut, every cell is opaque, the capability a cell no use reaches
-    // earns, as reading each chain to its end would give it.
-
-    /** `Chain<[1, …]>`, `length` ones long. */
-    const chainOf = (length: number) =>
-      `Chain<[${Array.from({ length }, () => "1").join(", ")}]>`;
-    const chain =
-      `type Chain<N extends unknown[]> = N extends [unknown, ...infer R]
-  ? { value: string; next: Chain<R> }
-  : { c: Writable<number> };`;
-
-    it("gives the cell at the end of a chain twelve long the `opaque` capability", async () => {
-      const { event, reported } = await eventSchema(
-        chain,
-        chainOf(12),
-        "(e, { c }) => { c.set(e ? 1 : 0); }",
+    it("gives the cell under it the capability its read earns", async () => {
+      const { schema } = await liftInput(
+        'const l = lift((r: { "": Writable<number>; other: Writable<number> }) => r[""].get());',
       );
 
-      expect(capabilitiesOf(event)).toEqual([["opaque"]]);
-      expect(reported).toEqual([]);
-    });
-
-    it("gives the cell at the end of a chain twelve long, read past the cut, the `readonly` capability the callback earns", async () => {
-      // A use that reaches past the cut carries the expansion along its path.
-
-      const { event } = await eventSchema(
-        chain,
-        chainOf(12),
-        `(e, { c }) => { c.set(e${".next".repeat(12)}.c.get()); }`,
-      );
-
-      expect(capabilitiesOf(event)).toEqual([["readonly"]]);
-    });
-
-    it("defines every type a recursive cell value past the cut refers to", async () => {
-      // Past the cut, `Inner` is read with its cells opaque, and the value of
-      // its `self` cell as written. Each reading refers to the definition of
-      // its own, so its recursion refers to one the schema holds.
-
-      const { event } = await eventSchema(
-        `interface Inner { c: Writable<number>; self: Writable<Inner> }
-type Chain<N extends unknown[]> = N extends [unknown, ...infer R]
-  ? { next: Chain<R> }
-  : { inner: Inner };`,
-        chainOf(12),
-        "(e, { c }) => { c.set(e ? 1 : 0); }",
-      );
-      const referenced = [
-        ...JSON.stringify(event).matchAll(/"#\/\$defs\/([^"]+)"/g),
-      ].map(([, name]) => name);
-
-      expect(new Set(referenced)).toEqual(new Set(["Inner:opaque", "Inner"]));
-      expect(Object.keys(event.$defs as object).sort()).toEqual(
-        ["Inner", "Inner:opaque"],
+      expect(schema).toEqual(
+        onlyEmpty({ type: "number", asCell: ["readonly"] }),
       );
     });
 
-    for (const deepFirst of [true, false]) {
-      it(
-        `gives \`opaque\` to the cells of a deep and a shallow chain, ${
-          deepFirst ? "the deep one" : "the shallow one"
-        } declared first`,
-        async () => {
-          // Cutting the deep chain leaves its search incomplete, which no
-          // reading of the shallow chain may take for a search that found no
-          // cell.
-
-          const members = [`deep: ${chainOf(12)};`, `shallow: ${chainOf(5)};`];
-          const { event } = await eventSchema(
-            `${chain}
-type Ev<T> = { v: T; ${
-              (deepFirst ? members : [...members].reverse()).join(" ")
-            } };`,
-            "Ev<string>",
-            "(e, { c }) => { c.set(e.v.length); }",
-          );
-
-          expect(capabilitiesOf(event)).toEqual([["opaque"], ["opaque"]]);
-        },
+    it("gives the cell under it the comparable capability where it is only compared", async () => {
+      const { schema } = await liftInput(
+        'const l = lift((r: { "": Writable<number>; other: Writable<number> }) => equals(r[""], r[""]));',
       );
+
+      expect(schema).toEqual(
+        onlyEmpty({ type: "unknown", asCell: ["comparable"] }),
+      );
+    });
+
+    for (
+      const [shape, parameter] of [
+        ["an object", "{ other: number }"],
+        ["an array", "number[]"],
+      ] as const
+    ) {
+      it(`reports a read through it that ${shape} does not hold`, async () => {
+        const { reported } = await liftInput(
+          `const l = lift((r: ${parameter}) => (r as any)[""].length);`,
+        );
+
+        expect(reported).toContain("schema:path-not-in-type");
+      });
     }
-
-    it("gives a cell read through a short chain `readonly`, and the cell at the end of a chain that grows to it past the cut `opaque`", async () => {
-      const { event } = await eventSchema(
-        `type Step<N extends unknown[]> = N["length"] extends 9
-  ? { c: Writable<number> }
-  : { deep: Step<[...N, 1]> };
-type Ev<T> = { near: Step<[1, 1, 1, 1, 1, 1, 1]>; far: Step<[]>; v: T };`,
-        "Ev<string>",
-        "(e, { c }) => { c.set(e.near.deep.deep.c.get()); }",
-      );
-
-      expect(capabilitiesOf(event)).toEqual([["readonly"], ["opaque"]]);
-    });
   });
-});
 
-describe("applyShrinkAndWrap()", () => {
   it("records a node printed for a value read whole as printed from its type", () => {
     // A synthetic base node sends the shrink to the value's type, and a value
     // read whole is that type's print.

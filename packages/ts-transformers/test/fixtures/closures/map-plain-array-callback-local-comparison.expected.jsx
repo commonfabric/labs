@@ -68,7 +68,7 @@ export default pattern((__cf_pattern_input) => {
                 } as const satisfies __cfHelpers.JSONSchema, {
                     type: "string"
                 } as const satisfies __cfHelpers.JSONSchema, {
-                    "enum": ["Today", "Other"]
+                    "enum": ["Other", "Today"]
                 } as const satisfies __cfHelpers.JSONSchema, isToday, "Today", "Other")}</div>;
             })}
       </div>)

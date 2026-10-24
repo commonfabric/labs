@@ -191,6 +191,47 @@ describe("SelectorTracker", () => {
     });
   });
 
+  describe("delete", () => {
+    const selector = {
+      path: [],
+      schema: { type: "object", properties: { n: { type: "number" } } },
+    } as const;
+    const address = (id: string): BaseMemoryAddress => ({
+      id: `of:${id}`,
+      type: "application/json",
+    });
+    const pending = Promise.resolve({ ok: {} } as Result<Unit, Error>);
+
+    it("keeps a selector another address still tracks", () => {
+      const tracker = new SelectorTracker(() =>
+        storageManager.scopeKeyIdentity()
+      );
+      tracker.add(address("a"), selector, pending);
+      tracker.add(address("b"), selector, pending);
+      tracker.delete(address("a"), selector);
+      expect(tracker.has(address("a"))).toBe(false);
+      expect([...tracker.get(address("b"))]).toEqual([selector]);
+      expect(tracker.getSupersetSelector(address("b"), selector)[0])
+        .toBeDefined();
+
+      tracker.delete(address("b"), selector);
+      expect(tracker.getAllSubscriptions()).toEqual([]);
+    });
+
+    it("changes nothing for an address and selector it does not track", () => {
+      const tracker = new SelectorTracker(() =>
+        storageManager.scopeKeyIdentity()
+      );
+      tracker.add(address("a"), selector, pending);
+      tracker.delete(address("b"), selector);
+      tracker.delete(address("a"), { path: ["n"], schema: false });
+      expect(tracker.getAllSubscriptions()).toEqual([{
+        address: address("a"),
+        selector,
+      }]);
+    });
+  });
+
   describe("getStandardSchema", () => {
     it("interns standardized structurally equal schemas", () => {
       const first = {

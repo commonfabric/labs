@@ -50,7 +50,7 @@ import {
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
 } from "@/fabric-bases";
-import { FabricError } from "@/fabric-instances";
+import { FabricError, FabricLink } from "@/fabric-instances";
 import {
   FabricBytes,
   FabricDurationDay,
@@ -98,7 +98,7 @@ class UnregisteredInstance extends BaseFabricInstance {
     throw new Error("not implemented");
   }
 
-  protected [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
+  [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
     throw new Error("not implemented");
   }
 
@@ -523,7 +523,7 @@ describe("JsonCodecEngine", () => {
         return new ProbeInstance();
       }
 
-      protected [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
+      [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
         return new ProbeInstance();
       }
     }
@@ -1465,6 +1465,54 @@ describe("JsonCodecEngine", () => {
         const result = roundTrip(obj) as Record<string, FabricValue[]>;
         expect(result["/outer"]![0]).toEqual({ "/inner": "val" });
       });
+
+      it("collapses a `/quote` held by a plain object between two `/`-keyed ones", () => {
+        const obj = { "/outer": { plain: { "/inner": "val" } } };
+
+        expect(toEncodedFormat(obj)).toEqual({
+          "/quote": { "/outer": { plain: { "/inner": "val" } } },
+        });
+        expect(roundTrip(obj)).toEqual(obj);
+      });
+
+      it("collapses every `/quote` beneath a literal `/`-keyed object, at any depth", () => {
+        // Four inner wraps, reached through an array, through a plain object,
+        // through another `/`-keyed object, and as a direct member.
+
+        const obj = {
+          "/a": [{ "/b": 1 }, { x: { "/c": [{ "/d": 2 }] } }],
+          y: { "/e": 3 },
+        };
+
+        expect(toEncodedFormat(obj)).toEqual({ "/quote": obj });
+        expect(roundTrip(obj)).toEqual(obj);
+      });
+
+      it("emits a `/quote` of its own for each `/`-keyed object with none enclosing it", () => {
+        const obj = { a: { "/b": 1 }, c: [{ "/d": { "/e": 2 } }] };
+
+        expect(toEncodedFormat(obj)).toEqual({
+          a: { "/quote": { "/b": 1 } },
+          c: [{ "/quote": { "/d": { "/e": 2 } } }],
+        });
+        expect(roundTrip(obj)).toEqual(obj);
+      });
+
+      it("emits `/quote` for a `/`-prefixed key behind keys that sort ahead of it", () => {
+        // The empty key and keys opening below `/` in UTF-8 order all come
+        // before a `/`-prefixed one.
+
+        const obj = { "": 0, "!": 1, "-": 2, "/k": 3, z: 4 };
+
+        expect(toEncodedFormat(obj)).toEqual({ "/quote": obj });
+        expect(roundTrip(obj)).toEqual(obj);
+      });
+
+      it("emits no escape for keys that sort ahead of `/` with no `/`-prefixed key among them", () => {
+        const obj = { "": 0, "!": 1, "-": 2, "0": 3 };
+
+        expect(toEncodedFormat(obj)).toEqual(obj);
+      });
     });
 
     describe("`/object` over a state that is not an object", () => {
@@ -1575,6 +1623,81 @@ describe("JsonCodecEngine", () => {
         const result = roundTrip(obj) as Record<string, FabricValue>;
         expect(result["/a"]).toBe("literal");
         expect(result["/b"]).toBeInstanceOf(FabricError);
+      });
+
+      it("keeps a `/quote` beneath an `/object` as a wrap of its own", () => {
+        const obj = {
+          "/literal": { plain: [{ "/inner": 1 }] },
+          "/typed": new FabricEpochDay(42n),
+        };
+
+        expect(toEncodedFormat(obj)).toEqual({
+          "/object": {
+            "/literal": { plain: [{ "/quote": { "/inner": 1 } }] },
+            "/typed": { "/EpochDay@1": expect.anything() },
+          },
+        });
+        expect(roundTrip(obj)).toEqual(obj);
+      });
+
+      it("emits `/object` at every level above a value that needs encoding", () => {
+        const obj = {
+          "/a": {
+            "/b": { "/c": new FabricEpochDay(42n) },
+            "/d": { "/e": 1 },
+          },
+        };
+
+        expect(toEncodedFormat(obj)).toEqual({
+          "/object": {
+            "/a": {
+              "/object": {
+                "/b": {
+                  "/object": { "/c": { "/EpochDay@1": expect.anything() } },
+                },
+                "/d": { "/quote": { "/e": 1 } },
+              },
+            },
+          },
+        });
+        expect(roundTrip(obj)).toEqual(obj);
+      });
+
+      it("emits `/object` for a `/`-keyed object over an array hole", () => {
+        // deno-lint-ignore no-sparse-arrays
+        const obj = { "/a": [1, , 3] };
+
+        expect(toEncodedFormat(obj)).toEqual({
+          "/object": { "/a": [1, { "/hole": 1 }, 3] },
+        });
+      });
+
+      it("emits `/quote` for a literal `/`-keyed object that follows an `/object`", () => {
+        // An object's escape depends only on what is under that object.
+
+        const obj = [
+          { "/a": new FabricEpochDay(42n) },
+          { "/b": { "/c": 1 } },
+        ];
+
+        expect(toEncodedFormat(obj)).toEqual([
+          { "/object": { "/a": { "/EpochDay@1": expect.anything() } } },
+          { "/quote": { "/b": { "/c": 1 } } },
+        ]);
+      });
+
+      it("emits `/object` over a tagged value whose state holds a `/quote`", () => {
+        const obj = {
+          "/a": new FabricLink({ "/x": { "/y": 1 } }),
+          "/z": [{ "/q": 2 }],
+        };
+
+        expect(toEncodedFormat(obj)).toEqual({
+          "/object": {
+            "/a": { "/Link@1": { "/quote": { "/x": { "/y": 1 } } } },
+            "/z": [{ "/quote": { "/q": 2 } }],
+          },
+        });
       });
     });
 

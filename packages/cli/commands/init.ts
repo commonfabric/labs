@@ -1,4 +1,5 @@
 import { dirname } from "@std/path/dirname";
+import { fromFileUrl } from "@std/path/from-file-url";
 import { join } from "@std/path/join";
 
 import { Command } from "@cliffy/command";
@@ -125,8 +126,7 @@ async function initWorkspace(cwd: string) {
     await Deno.mkdir(cfDocsPath, { recursive: true });
 
     // In compiled binary, docs are bundled and accessible relative to the binary location
-    const currentFilePath = import.meta.url;
-    const currentDir = dirname(new URL(currentFilePath).pathname);
+    const currentDir = dirname(fromFileUrl(import.meta.url));
     const docsCommonPath = join(currentDir, "..", "..", "..", "docs", "common");
 
     // Copy each documentation file dynamically

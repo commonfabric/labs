@@ -96,7 +96,7 @@ async function fixture(
   const cause = "served compile unit";
   const cancels: Array<() => void> = [];
   let outputs: Outputs;
-  const action = compileAndRun(
+  const { action } = compileAndRun(
     inputs,
     (tx, result) => {
       outputs = result;

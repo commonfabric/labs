@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 import { CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -89,14 +90,13 @@ const createRuntime = () => {
 };
 
 const compileHomePattern = async (runtime: Runtime) => {
-  const repoRoot = new URL("../../..", import.meta.url).pathname.replace(
+  const repoRoot = fromFileUrl(new URL("../../..", import.meta.url)).replace(
     /\/$/,
     "",
   );
-  const sourcePath = new URL(
-    "../../patterns/system/home.tsx",
-    import.meta.url,
-  ).pathname;
+  const sourcePath = fromFileUrl(
+    new URL("../../patterns/system/home.tsx", import.meta.url),
+  );
   const program = await resolveLocalProgram(
     (resolver) => runtime.harness.resolve(resolver),
     { main: sourcePath, root: repoRoot },
@@ -105,14 +105,13 @@ const compileHomePattern = async (runtime: Runtime) => {
 };
 
 const compileProfileHomePattern = async (runtime: Runtime) => {
-  const repoRoot = new URL("../../..", import.meta.url).pathname.replace(
+  const repoRoot = fromFileUrl(new URL("../../..", import.meta.url)).replace(
     /\/$/,
     "",
   );
-  const sourcePath = new URL(
-    "../../patterns/system/profile-home.tsx",
-    import.meta.url,
-  ).pathname;
+  const sourcePath = fromFileUrl(
+    new URL("../../patterns/system/profile-home.tsx", import.meta.url),
+  );
   const program = await resolveLocalProgram(
     (resolver) => runtime.harness.resolve(resolver),
     { main: sourcePath, root: repoRoot },

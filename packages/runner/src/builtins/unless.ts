@@ -1,9 +1,8 @@
 import { type Cell } from "../cell.ts";
-import type { RawNodeCause } from "../module.ts";
+import type { RawBuiltinResult, RawNodeCause } from "../module.ts";
 import { type Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import { forwardReferenceAction } from "./forward-reference.ts";
+import { forwardReference } from "./forward-reference.ts";
 
 /**
  * `unless(condition, fallback)`, the `||` of a pattern: forwards a reference
@@ -16,8 +15,8 @@ export function unless(
   cause: RawNodeCause,
   parentCell: Cell<any>,
   runtime: Runtime,
-): Action {
-  return forwardReferenceAction({
+): RawBuiltinResult {
+  return forwardReference({
     name: "unless",
     inputsCell,
     sendResult,

@@ -3,20 +3,26 @@
  * profile already advertises, vets it, and sends Home's `ensurePrivateInbox`
  * with the inbox to adopt, if any. Vetting reads the inbox's access list and
  * two of its members, in the inbox's own space, which a Home handler cannot
- * do; `docs/features/private-inbox.md` describes the whole arrangement.
+ * do. It is also the client that requests the inbox from Home, as a loom
+ * daemon does, and reads Home's answer; `docs/features/private-inbox.md`
+ * describes the whole arrangement.
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { debugStr } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity";
 import { hasConcreteOwner, isACL } from "@commonfabric/memory/acl";
 import {
   ACLManager,
+  type Cancel,
   type Cell,
   isCell,
   isStream,
   loadDocument,
+  type NormalizedFullLink,
   orderProfileCandidates,
   profileCellIsValid,
+  readDurable,
   type Runtime,
   sendEvent,
   transactionFailureMessage,
@@ -142,6 +148,176 @@ export async function ensurePrivateInboxOf(
     })
   );
   return found;
+}
+
+/**
+ * What {@link requestPrivateInboxOf} learned from Home: `ensured` once the
+ * profile the request named points at the inbox Home holds, which `inbox`
+ * links as the profile's pointer does; `unlisted` when that profile is not in
+ * Home's list; `unpointable` when it has no `setInbox`, so Home never points
+ * it; `not-held` when it points at an inbox Home does not hold, or Home holds
+ * none and creates none because another profile advertises one.
+ * `unavailable` is a Home without the stream, which is sent nothing, and
+ * `abandoned` a request whose caller stopped waiting before Home answered.
+ */
+export type PrivateInboxRequestOutcome =
+  | { status: "unavailable" }
+  | { status: "abandoned" }
+  | { status: "ensured"; inbox: Cell<unknown> }
+  | { status: "unlisted" }
+  | { status: "unpointable" }
+  | { status: "not-held" };
+
+/** How {@link requestPrivateInboxOf} reads Home's answer in its receipt. */
+const answerSchema = {
+  type: "object",
+  properties: { status: { type: "string" } },
+} as const satisfies JSONSchema;
+
+/**
+ * Sends `home`'s `requestPrivateInbox`, naming `profile`, and resolves with
+ * Home's answer once it is no longer `pending`, so that an `ensured` answer
+ * arrives only once `profile` points at the inbox Home holds. `home` is a Home
+ * result, and `profile` the profile the caller finds the owner by, the one
+ * `#profile` answers with. Home ensures its inbox as an event naming nothing
+ * has its `ensurePrivateInbox` do, so it creates one only when it holds none
+ * and no profile advertises one, and adopts none.
+ *
+ * Home answers in the handling's receipt, whose address the send's completion
+ * carries: a final answer, or a link to Home's answer for the profile, which
+ * changes as Home's holder and the profile's pointer do. This subscribes to
+ * the receipt, through the link, and settles on the first answer that is not
+ * `pending`; for `ensured`, it then reads the inbox from the profile's pointer,
+ * waiting for it to name one. It reads both past this runtime's own
+ * speculation, so under server execution it settles on what the server wrote,
+ * never on this runtime's preview of Home's answer. Returns `unavailable`,
+ * sending nothing, for a Home without the stream, and `abandoned` once
+ * `signal` aborts: sending nothing when it has aborted already, and otherwise
+ * at whatever point it is waiting, Home's handling of a request already sent
+ * going on regardless.
+ *
+ * @throws When the send fails, when Home's handling of it fails or writes no
+ *   receipt, or when Home answers with a status this host does not know.
+ */
+export async function requestPrivateInboxOf(
+  runtime: Runtime,
+  home: Cell<unknown>,
+  profile: Cell<unknown>,
+  signal?: AbortSignal,
+): Promise<PrivateInboxRequestOutcome> {
+  const request = home.key("requestPrivateInbox");
+  if (request.getRaw() === undefined) return { status: "unavailable" };
+  if (signal?.aborted) return { status: "abandoned" };
+  const handled = new Promise<NormalizedFullLink>((resolve, reject) =>
+    sendEvent(request, { from: profile }, (tx) => {
+      const status = tx.status();
+      if (status.status === "error") {
+        reject(new Error(transactionFailureMessage(status.error)));
+      } else if (tx.handlingReceiptLink === undefined) {
+        reject(new Error("Home's handling of the request wrote no receipt"));
+      } else resolve(tx.handlingReceiptLink);
+    })
+  );
+  const receipt = await untilAborted(handled, signal);
+  if (receipt === undefined) return { status: "abandoned" };
+  const status = await firstPicked(
+    runtime,
+    runtime.getCellFromLink(receipt, answerSchema),
+    (answer) =>
+      answer?.status === undefined || answer.status === "pending"
+        ? undefined
+        : answer.status,
+    signal,
+  );
+  switch (status) {
+    case undefined:
+      return { status: "abandoned" };
+    case "unlisted":
+    case "unpointable":
+    case "not-held":
+      return { status };
+    case "ensured": {
+      const inbox = await firstPicked(
+        runtime,
+        profile.key("inbox").asSchema(pointerSchema),
+        // The read's transaction closes once the read is done, so the cell
+        // handed back is detached from it.
+        (pointer) =>
+          isCell(pointer?.piece) ? pointer.piece.withTx() : undefined,
+        signal,
+      );
+      return inbox === undefined
+        ? { status: "abandoned" }
+        : { status: "ensured", inbox };
+    }
+    default:
+      throw new Error(debugStr`Home answered the request with $quote${status}`);
+  }
+}
+
+/**
+ * Helper for {@link requestPrivateInboxOf}, which resolves as `promise` does,
+ * or with `undefined` once `signal` aborts, whichever comes first.
+ */
+function untilAborted<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T | undefined> {
+  if (signal === undefined) return promise;
+  const { promise: aborted, resolve } = Promise.withResolvers<undefined>();
+  const abandon = () => resolve(undefined);
+  signal.addEventListener("abort", abandon);
+  return Promise.race([promise, aborted]).finally(() =>
+    signal.removeEventListener("abort", abandon)
+  );
+}
+
+/**
+ * Helper for {@link requestPrivateInboxOf}, which resolves with what `pick`
+ * makes of the first of `cell`'s durable values that `pick` makes anything of,
+ * or with `undefined` once `signal` aborts. A durable value is one read past
+ * this runtime's speculation overlay (`readDurable()`), so under server
+ * execution it is what the server wrote, never this runtime's own preview of
+ * it, which can mix values from different moments. It reads again on each
+ * change a subscription to `cell` delivers, and once the speculation layers
+ * over what it read have settled, since a change beneath a layer delivers
+ * nothing.
+ */
+function firstPicked<T, R>(
+  runtime: Runtime,
+  cell: Cell<T>,
+  pick: (value: Readonly<T>) => R | undefined,
+  signal?: AbortSignal,
+): Promise<R | undefined> {
+  const { promise, resolve } = Promise.withResolvers<R | undefined>();
+  // Where `sink()`'s cancel is kept: a callback can run before it returns.
+  const subscription: { cancel?: Cancel } = {};
+  let settled = false;
+  const settle = (picked: R | undefined) => {
+    if (settled) return;
+    settled = true;
+    signal?.removeEventListener("abort", abandon);
+    subscription.cancel?.();
+    resolve(picked);
+  };
+  const abandon = () => settle(undefined);
+  const check = () => {
+    if (settled) return;
+    const { value, speculationSettled } = readDurable(
+      runtime,
+      (tx) => pick(cell.withTx(tx).get()),
+    );
+    if (value !== undefined) settle(value);
+    else speculationSettled?.then(check);
+  };
+  if (signal?.aborted) {
+    abandon();
+    return promise;
+  }
+  signal?.addEventListener("abort", abandon);
+  subscription.cancel = cell.sink(check);
+  if (settled) subscription.cancel();
+  return promise;
 }
 
 /** The event {@link ensurePrivateInboxOf} sends Home for what it `found`. */

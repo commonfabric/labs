@@ -29,6 +29,7 @@ import {
   defaultBuildDependencies,
   embedArgs,
   installBuildSignalCleanup,
+  lockedCompileArgs,
   prepareWorkspace,
   requestedBinaries,
   revertWorkspace,
@@ -685,6 +686,32 @@ Deno.test("runBuildBinaries preserves the legacy CLI-only entry point", async ()
   }
 });
 
+Deno.test("runBuildBinaries uses the cache after dependency installation", async () => {
+  const root = await makeFakeRepo();
+  const original = Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED");
+  try {
+    const configs: BuildConfig[] = [];
+    const capture = (config: BuildConfig) => {
+      configs.push(config);
+      return Promise.resolve();
+    };
+
+    Deno.env.delete("CF_DENO_DEPENDENCIES_INSTALLED");
+    await runBuildBinaries(["toolshed"], { root, runBuild: capture });
+    Deno.env.set("CF_DENO_DEPENDENCIES_INSTALLED", "1");
+    await runBuildBinaries(["toolshed"], { root, runBuild: capture });
+
+    expect(configs.map((config) => config.cachedOnly)).toEqual([false, true]);
+  } finally {
+    if (original === undefined) {
+      Deno.env.delete("CF_DENO_DEPENDENCIES_INSTALLED");
+    } else {
+      Deno.env.set("CF_DENO_DEPENDENCIES_INSTALLED", original);
+    }
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test("BuildConfig selects named binaries and rejects conflicting options", async () => {
   const root = await makeFakeRepo();
   try {
@@ -698,6 +725,14 @@ Deno.test("BuildConfig selects named binaries and rejects conflicting options", 
     assertEquals(config.cliOnly, false);
     assertEquals(config.builds("toolshed"), true);
     assertEquals(config.builds("cf"), true);
+    expect(lockedCompileArgs(config)).not.toContain("--cached-only");
+
+    const cachedConfig = new BuildConfig({
+      root,
+      toolshedFlags: [],
+      cachedOnly: true,
+    });
+    expect(lockedCompileArgs(cachedConfig)).toContain("--cached-only");
 
     const duplicateCliConfig = new BuildConfig({
       root,

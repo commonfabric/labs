@@ -55,10 +55,22 @@ import {
   hostMountsToAdditionalMounts,
 } from "./host-mounts.ts";
 import { patternRefsContextMessage } from "./pattern-refs.ts";
-import { pieceTargetingContextMessages } from "./piece-targeting.ts";
+import {
+  HELD_PIECES_GUIDANCE,
+  MAY_HOLD_PIECES_GUIDANCE,
+  PIECE_TARGETING_GUIDANCE,
+  pieceTargetingContextMessages,
+} from "./piece-targeting.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
 import { WEAVER_COMMAND_GUIDANCE } from "./tools/weaver-action.ts";
 import type { CreateHarnessPromptLoopOptions } from "./prompt-loop.ts";
+import {
+  type PromptSection,
+  type RunShape,
+  sendsSection,
+} from "./prompt-sections.ts";
+import type { HarnessRunDepth } from "./contracts/run-depth.ts";
+import type { HarnessTaskShape } from "./task-classification.ts";
 import type {
   SandboxAdditionalMountConfig,
   SandboxRuntimeChoice,
@@ -66,6 +78,15 @@ import type {
 } from "./sandbox/types.ts";
 import { loadHarnessSkillContext } from "./skills/registry.ts";
 import { persistHarnessRunSkillRegistry } from "./skills/run-registry.ts";
+import {
+  AUTHOR_TOOL_GUIDANCE,
+  LOOM_COMMANDS_TOOL_GUIDANCE,
+  LOOM_RETRIEVAL_TOOL_GUIDANCE,
+  PIECES_TOOL_GUIDANCE,
+  RESEARCH_TOOL_GUIDANCE,
+  RESOLVE_PIECE_TOOL_GUIDANCE,
+  toolGuidanceContextMessages,
+} from "./tool-guidance.ts";
 import { wellKnownGrantsContextMessage } from "./well-known-grants.ts";
 
 /**
@@ -185,6 +206,12 @@ export interface HarnessSessionConfig {
   allowedSubagentProfiles: readonly HarnessSubagentProfile[];
   browserAccess?: HarnessBrowserAccessLease;
   reasoningEffort?: string;
+
+  /** How far the caller wants the run taken; `standard` when absent. */
+  depth?: HarnessRunDepth;
+
+  /** What the caller says about the task, in place of the classifier. */
+  taskShape?: HarnessTaskShape;
 
   /** Reasoning effort for the `research` tool's own model turns. */
   researchReasoningEffort?: string;
@@ -385,6 +412,8 @@ export const harnessSessionEngineOptions = (
     ...(config.reasoningEffort !== undefined
       ? { reasoningEffort: config.reasoningEffort }
       : {}),
+    ...(config.depth !== undefined ? { depth: config.depth } : {}),
+    ...(config.taskShape !== undefined ? { taskShape: config.taskShape } : {}),
     ...(config.researchReasoningEffort !== undefined
       ? { researchReasoningEffort: config.researchReasoningEffort }
       : {}),
@@ -421,8 +450,9 @@ export interface EstablishHarnessSessionContextOptions {
  * Brings up everything a run holds before its first model turn, and returns
  * the context messages announcing it: the skill registry and any preloaded
  * skills, the well-known grants of the session's space, host-supplied input
- * cells, the guidance for selecting a piece target, and, for a run whose host
- * opted in to `weaver_action`, the guidance for using the Weaver's commands.
+ * cells, the guidance for selecting a piece target, for a run whose host
+ * opted in to `weaver_action` the guidance for using the Weaver's commands,
+ * and the guidance for using the tools the session's backings carry.
  *
  * The three differ in how they fail, and deliberately. A missing skills root
  * simply yields no messages. Grants are best-effort: a session that will not
@@ -507,5 +537,53 @@ const establishContextMessages = async (
     messages.push(WEAVER_COMMAND_GUIDANCE);
   }
   messages.push(REVISION_VERIFICATION_GUIDANCE);
+  const toolGuidance = toolGuidanceContextMessages({
+    fabricSessionAvailable: engine.fabricSessionAvailable,
+    loomCommandsAvailable: engine.config.loomCommands !== undefined,
+    loomRetrievalAvailable: engine.config.loomRetrieval !== undefined,
+  });
+  for (const message of toolGuidance) {
+    messages.push(message);
+  }
   return messages;
 };
+
+/** The section each context message that some tasks go without belongs to. */
+const CONTEXT_MESSAGE_SECTIONS: ReadonlyMap<string, PromptSection> = new Map([
+  [REVISION_VERIFICATION_GUIDANCE, "revision-verification"],
+  [WEAVER_COMMAND_GUIDANCE, "weaver-commands"],
+  [AUTHOR_TOOL_GUIDANCE, "author-tools"],
+  [RESEARCH_TOOL_GUIDANCE, "research-tools"],
+  [PIECES_TOOL_GUIDANCE, "pieces-tools"],
+  [RESOLVE_PIECE_TOOL_GUIDANCE, "resolve-piece-tools"],
+  [LOOM_COMMANDS_TOOL_GUIDANCE, "loom-commands-tools"],
+  [LOOM_RETRIEVAL_TOOL_GUIDANCE, "loom-retrieval-tools"],
+]);
+
+/**
+ * Fits a run's context messages to its shape, as
+ * `PROMPT_SECTION_AUDIENCE` says. Piece targeting is replaced by the blocks
+ * that stand in for it (how to work on held pieces, or that the run may hold
+ * some) and kept beside them only where the task is sent it. A message that
+ * belongs to no section passes through, and a task that was never classified
+ * keeps every message as it is.
+ */
+export const orientContextMessages = (
+  messages: readonly string[],
+  shape: RunShape,
+): string[] =>
+  messages.flatMap((message) => {
+    if (message === PIECE_TARGETING_GUIDANCE) {
+      return [
+        ...(sendsSection("held-pieces", shape) ? [HELD_PIECES_GUIDANCE] : []),
+        ...(sendsSection("may-hold-pieces", shape)
+          ? [MAY_HOLD_PIECES_GUIDANCE]
+          : []),
+        ...(sendsSection("piece-targeting", shape) ? [message] : []),
+      ];
+    }
+    const section = CONTEXT_MESSAGE_SECTIONS.get(message);
+    return section === undefined || sendsSection(section, shape)
+      ? [message]
+      : [];
+  });

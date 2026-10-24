@@ -15,6 +15,7 @@ import type { DID } from "@commonfabric/identity";
 import { toValuePath } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/utils/logger";
 
+import { observeAuthorship } from "@/authorship.ts";
 import { CellHandle } from "@/cell-handle.ts";
 import { RuntimeConnection } from "@/client/connection.ts";
 import { EventEmitter } from "@/client/emitter.ts";
@@ -339,6 +340,189 @@ describe("connection", () => {
       later.subscribe(() => {}, { onRefused: () => {} });
 
       expect(later.lastRead()).toEqual({ refused: refusal });
+      await connection.dispose();
+    });
+  });
+
+  describe("label currency across handles of one cell", () => {
+    // Each case delivers the worker's updates through the realm encoding, as
+    // the refusal cases above do, so that a handle hears what a real
+    // transport hands over.
+
+    const ref: CellRef = {
+      id: "of:connection-label-currency-cell" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+    };
+    const label = (sender: string) => ({
+      version: 1 as const,
+      entries: [{
+        path: [],
+        label: { integrity: [{ kind: "authored-by", subject: sender }] },
+      }],
+    });
+    const runtimeOf = (connection: RuntimeConnection) =>
+      ({ [$conn]: () => connection }) as unknown as RuntimeClient;
+    const posted = (message: Record<string, FabricValue>) => {
+      const arrived = fabricFromRealmValue(
+        structuredClone(realmFromFabricValue({
+          type: NotificationType.CellUpdate,
+          cell: ref,
+          ...message,
+        })),
+      );
+      if (!isCellUpdateNotification(arrived)) {
+        throw new Error("The encoding did not carry a cell update.");
+      }
+      return arrived;
+    };
+    /** Subscribes label-aware, keeping each delivery's label and currency. */
+    const listen = (cell: CellHandle<string>) => {
+      const heard: Array<{ cfcLabel: unknown; current: boolean | undefined }> =
+        [];
+      const cancel = cell.subscribe((_value, cfcLabel, delivery) => {
+        heard.push({ cfcLabel, current: delivery?.cfcLabelCurrent });
+      }, { includeCfcLabel: true, onRefused: () => {} });
+      return { heard, cancel };
+    };
+
+    it("hands a handle that rejoins a cell another handle watches without labels its retained label as not current, with each value-only update", async () => {
+      // The handle heard a label, left, and came back to a subscription a
+      // value-only handle had opened in the meantime: the worker's label has
+      // moved on, and the connection delivers no labels on that subscription.
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const labeled = new CellHandle<string>(runtime, ref);
+      const first = listen(labeled);
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("alice") }),
+      );
+      expect(first.heard.at(-1)).toEqual({
+        cfcLabel: label("alice"),
+        current: true,
+      });
+      first.cancel();
+      const valueOnly = new CellHandle<string>(runtime, ref);
+      const valueOnlyCancel = valueOnly.subscribe(() => {}, {
+        onRefused: () => {},
+      });
+
+      const again = listen(labeled);
+      transport.emit("message", posted({ value: "revised by bob" }));
+
+      expect(again.heard).toEqual([
+        { cfcLabel: label("alice"), current: false },
+        { cfcLabel: label("alice"), current: false },
+      ]);
+      expect(labeled.get()).toBe("revised by bob");
+      again.cancel();
+      valueOnlyCancel();
+      await connection.dispose();
+    });
+
+    it("seeds a handle new to a cell with another handle's label, as current as it is there", async () => {
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const holder = new CellHandle<string>(runtime, ref);
+      const holding = listen(holder);
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("alice") }),
+      );
+
+      const seededCurrent = listen(new CellHandle<string>(runtime, ref));
+      transport.emit("message", posted({ value: "revised by bob" }));
+      const seededStale = listen(new CellHandle<string>(runtime, ref));
+
+      expect(seededCurrent.heard[0]).toEqual({
+        cfcLabel: label("alice"),
+        current: true,
+      });
+      expect(seededStale.heard[0]).toEqual({
+        cfcLabel: label("alice"),
+        current: false,
+      });
+      holding.cancel();
+      seededCurrent.cancel();
+      seededStale.cancel();
+      await connection.dispose();
+    });
+
+    it("seeds a handle from a value-only handle with the label a label-only update gave the cell, as current", async () => {
+      // A label-only update reaches every handle on the shared subscription;
+      // one whose subscriber never asked for labels keeps the new label all
+      // the same, so a handle seeded from it after the label-aware one left
+      // starts from the worker's label.
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const labeled = new CellHandle<string>(runtime, ref);
+      const valueOnly = new CellHandle<string>(runtime, ref);
+      const labeledListening = listen(labeled);
+      const valueOnlyCancel = valueOnly.subscribe(() => {}, {
+        onRefused: () => {},
+      });
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("alice") }),
+      );
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("bob") }),
+      );
+      labeledListening.cancel();
+
+      const seeded = listen(new CellHandle<string>(runtime, ref));
+
+      expect(seeded.heard).toEqual([{
+        cfcLabel: label("bob"),
+        current: true,
+      }]);
+      seeded.cancel();
+      valueOnlyCancel();
+      await connection.dispose();
+    });
+
+    it("reports a seeded handle's authorship from the label a label-only update gave the cell", async () => {
+      // The same handoff, read to the verdict: the badge on the seeded handle
+      // decides on Bob's label, the worker's, not on Alice's, which the cell
+      // carried first.
+      const transport = new FakeTransport();
+      const connection = await initializedConnection(transport);
+      const runtime = runtimeOf(connection);
+      const labeled = new CellHandle<string>(runtime, ref);
+      const valueOnly = new CellHandle<string>(runtime, ref);
+      const labeledListening = listen(labeled);
+      const valueOnlyCancel = valueOnly.subscribe(() => {}, {
+        onRefused: () => {},
+      });
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("alice") }),
+      );
+      transport.emit(
+        "message",
+        posted({ value: "by alice", cfcLabel: label("bob") }),
+      );
+      labeledListening.cancel();
+
+      const states: string[] = [];
+      const cancel = observeAuthorship(
+        new CellHandle<string>(runtime, ref),
+        "alice",
+        (observation) => states.push(observation.state),
+      );
+      // The observation reads through settled promises, so one zero-delay
+      // turn lets its reads finish, as the authorship tests settle theirs.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(states).toEqual(["unverified"]);
+      cancel();
+      valueOnlyCancel();
       await connection.dispose();
     });
   });

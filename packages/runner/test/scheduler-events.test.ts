@@ -21,9 +21,12 @@ import type {
   IExtendedStorageTransaction,
   SchedulerTestStorageManager,
 } from "./scheduler-test-utils.ts";
+import type { NormalizedFullLink } from "../src/link-types.ts";
 import type { RuntimeTelemetryMarker } from "../src/telemetry.ts";
 import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
 import {
+  addSchedulerEventHandler,
+  EventHandlerRegistry,
   isExplicitTransactionAbort,
   reportServedEventFailure,
 } from "../src/scheduler/events.ts";
@@ -324,6 +327,174 @@ describe("event handling", () => {
     expect(
       getLoggerCountsBreakdown().scheduler?.["event-handler-replaced"]?.warn,
     ).toBe(1);
+  });
+
+  describe("with handlers registered for other streams", () => {
+    // Twenty streams are registered under links that count every read of a
+    // member. A registration, a removal or a dispatch that searched the
+    // registered handlers for a stream would read each of those links.
+
+    const OTHER_STREAMS = 20;
+    let reads: number;
+
+    beforeEach(() => {
+      for (let index = 0; index < OTHER_STREAMS; index++) {
+        const link = runtime.getCell(
+          space,
+          `with handlers registered for other streams ${index}`,
+          undefined,
+          tx,
+        ).getAsNormalizedFullLink();
+        runtime.scheduler.addEventHandler(
+          () => {},
+          new Proxy(link, {
+            get(target, key, receiver) {
+              reads++;
+              return Reflect.get(target, key, receiver);
+            },
+          }),
+        );
+      }
+      reads = 0;
+    });
+
+    it("registers and removes a handler without reading the other streams' links", () => {
+      const link = runtime.getCell(
+        space,
+        "registers and removes a handler without reading",
+        undefined,
+        tx,
+      ).getAsNormalizedFullLink();
+      const cancel = runtime.scheduler.addEventHandler(() => {}, link);
+      cancel();
+
+      expect(reads).toBe(0);
+    });
+
+    it("dispatches an event without reading the other streams' links", async () => {
+      const link = runtime.getCell(
+        space,
+        "dispatches an event without reading",
+        undefined,
+        tx,
+      ).getAsNormalizedFullLink();
+      const events: unknown[] = [];
+      runtime.scheduler.addEventHandler((_tx, event) => {
+        events.push(event);
+      }, link);
+      runtime.scheduler.queueEvent(link, 7);
+      await waitForSignal(runtime.idle(), "the event did not settle");
+
+      expect(events).toEqual([7]);
+      expect(reads).toBe(0);
+    });
+  });
+
+  describe("EventHandlerRegistry", () => {
+    /** A link to the stream at `path` of the document `id`. */
+    function streamLink(id: string, path: string[] = []): NormalizedFullLink {
+      return { space, id: `of:${id}`, path, scope: "space" };
+    }
+
+    it("returns the handler registered under a link equal in address", () => {
+      const handler: EventHandler = () => {};
+      const registry = new EventHandlerRegistry([[
+        streamLink("doc", ["a", "b"]),
+        handler,
+      ]]);
+
+      expect(registry.get(streamLink("doc", ["a", "b"]))).toBe(handler);
+      expect(registry.size).toBe(1);
+    });
+
+    it("returns `undefined` for a stream that differs in one member of its address", () => {
+      const registry = new EventHandlerRegistry([[
+        streamLink("doc", ["a", "b"]),
+        () => {},
+      ]]);
+
+      expect(registry.get(streamLink("other", ["a", "b"]))).toBeUndefined();
+      expect(registry.get(streamLink("doc", ["a"]))).toBeUndefined();
+      expect(registry.get(streamLink("doc", ["a,b"]))).toBeUndefined();
+      expect(
+        registry.get({ ...streamLink("doc", ["a", "b"]), scope: "user" }),
+      ).toBeUndefined();
+      expect(
+        registry.get({
+          ...streamLink("doc", ["a", "b"]),
+          space: "did:key:event-handler-registry-other",
+        }),
+      ).toBeUndefined();
+    });
+
+    it("iterates its registrations oldest first, a replacement last", () => {
+      const [first, second, replacement]: EventHandler[] = [
+        () => {},
+        () => {},
+        () => {},
+      ];
+      const registry = new EventHandlerRegistry();
+      registry.set(streamLink("one"), first);
+      registry.set(streamLink("two"), second);
+      registry.set(streamLink("one"), replacement);
+
+      expect([...registry].map(([link, handler]) => [link.id, handler]))
+        .toEqual([["of:two", second], ["of:one", replacement]]);
+    });
+
+    it("holds nothing for a stream whose registration it deleted", () => {
+      const registry = new EventHandlerRegistry([[
+        streamLink("doc"),
+        () => {},
+      ]]);
+      registry.delete(streamLink("doc"));
+
+      expect(registry.get(streamLink("doc"))).toBeUndefined();
+      expect(registry.registration(streamLink("doc"))).toBeUndefined();
+      expect(registry.size).toBe(0);
+    });
+  });
+
+  describe("addSchedulerEventHandler()", () => {
+    it("leaves a later registration for the stream in place when an earlier one is cancelled", () => {
+      const eventHandlers = new EventHandlerRegistry();
+      const link = runtime.getCell(space, "leaves a later registration", {
+        type: "number",
+      }).getAsNormalizedFullLink();
+      const [earlier, later]: EventHandler[] = [() => {}, () => {}];
+      const cancelEarlier = addSchedulerEventHandler({ eventHandlers }, {
+        handler: earlier,
+        ref: link,
+      });
+      const cancelLater = addSchedulerEventHandler({ eventHandlers }, {
+        handler: later,
+        ref: { ...link },
+      });
+      cancelEarlier();
+
+      expect(eventHandlers.get(link)).toBe(later);
+      cancelLater();
+      expect(eventHandlers.get(link)).toBeUndefined();
+    });
+
+    it("leaves the same handler registered under another link object in place", () => {
+      const eventHandlers = new EventHandlerRegistry();
+      const link = runtime.getCell(space, "leaves the same handler", {
+        type: "number",
+      }).getAsNormalizedFullLink();
+      const handler: EventHandler = () => {};
+      const cancelFirst = addSchedulerEventHandler({ eventHandlers }, {
+        handler,
+        ref: link,
+      });
+      addSchedulerEventHandler({ eventHandlers }, {
+        handler,
+        ref: { ...link },
+      });
+      cancelFirst();
+
+      expect(eventHandlers.get(link)).toBe(handler);
+    });
   });
 
   it("should handle events with nested paths", async () => {

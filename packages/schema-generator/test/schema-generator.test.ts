@@ -835,6 +835,9 @@ type CalculatorRequest = {
       const stringOrUnknown = {
         anyOf: [{ type: "string" }, { type: "unknown" }],
       };
+      const unknownOrString = {
+        anyOf: [{ type: "unknown" }, { type: "string" }],
+      };
       expect(
         await schemaOf(
           alias(
@@ -858,7 +861,7 @@ type CalculatorRequest = {
         ),
       ).toEqual({
         type: "object",
-        properties: { x: stringOrUnknown },
+        properties: { x: unknownOrString },
         required: ["x"],
       });
       expect(
@@ -871,7 +874,7 @@ type CalculatorRequest = {
         ),
       ).toEqual({
         type: "object",
-        properties: { x: { type: "unknown" }, y: stringOrUnknown },
+        properties: { x: { type: "unknown" }, y: unknownOrString },
         required: ["y"],
       });
       expect(
@@ -2100,7 +2103,6 @@ type CalculatorRequest = {
         ),
       ).toEqual({
         anyOf: [
-          fooAndBar,
           {
             type: "object",
             properties: {
@@ -2110,6 +2112,7 @@ type CalculatorRequest = {
             },
             required: ["x", "y", "w"],
           },
+          fooAndBar,
         ],
       });
       expect(
@@ -2430,13 +2433,13 @@ type CalculatorRequest = {
         anyOf: [
           {
             type: "object",
-            properties: { x: { type: "unknown" }, y: { type: "string" } },
-            required: ["x", "y"],
+            properties: { z: { type: "number" } },
+            required: ["z"],
           },
           {
             type: "object",
-            properties: { z: { type: "number" } },
-            required: ["z"],
+            properties: { x: { type: "unknown" }, y: { type: "string" } },
+            required: ["x", "y"],
           },
         ],
       });
@@ -3785,6 +3788,39 @@ type CalculatorRequest = {
       expect(schema.required).toEqual(["0"]);
     });
 
+    it("preserves an empty-string property name", async () => {
+      const generator = new SchemaGenerator();
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const typeNode = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(
+          undefined,
+          ts.factory.createStringLiteral(""),
+          undefined,
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+        ),
+        ts.factory.createPropertySignature(
+          undefined,
+          ts.factory.createIdentifier("other"),
+          undefined,
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+        ),
+      ]);
+
+      const schema = generator.generateSchemaFromSyntheticTypeNode(
+        typeNode,
+        checker,
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { "": { type: "string" }, other: { type: "number" } },
+        required: ["", "other"],
+      });
+    });
+
     it("preserves explicit double-underscore property names", async () => {
       const generator = new SchemaGenerator();
       const { checker } = await getTypeFromCode(
@@ -4579,6 +4615,7 @@ interface HasImage {
           | null
           | undefined;
         count: number;
+        list: Confidential<string, readonly [PolicyOf<unknown>]>[];
       };
       interface Members {
         annotated: Confidential<string, readonly [PolicyOf<typeof rules>]>;
@@ -4590,13 +4627,21 @@ interface HasImage {
       }
     `;
 
-    /** `Root`'s member `name`, generated with `hint` on its node. */
+    /**
+     * `Root`'s member `name`, generated with `hint` on its node, or on the node
+     * `hinted` picks out of it. With `printed`, the member's node is read as a
+     * print of its type.
+     */
     const fieldSchema = async (
       hint: (
         members: Map<string, ts.PropertySignature>,
         checker: ts.TypeChecker,
       ) => object,
       name = "field",
+      { printed = false, hinted = (field: ts.TypeNode) => field }: {
+        printed?: boolean;
+        hinted?: (field: ts.TypeNode) => ts.TypeNode;
+      } = {},
     ) => {
       const { checker, sourceFile } = await createTestProgram(PROGRAM);
       let rootNode: ts.TypeLiteralNode | undefined;
@@ -4619,12 +4664,18 @@ interface HasImage {
         checker.getTypeFromTypeNode(rootNode!),
         checker,
         rootNode,
-        undefined,
-        new WeakMap([[field, hint(members, checker)]]),
+        printed
+          ? {
+            printedFrom: (node) =>
+              node === field ? checker.getTypeFromTypeNode(field) : undefined,
+          }
+          : undefined,
+        new WeakMap([[hinted(field), hint(members, checker)]]),
       ) as { properties: Record<string, Record<string, unknown>> };
       return schema.properties[name] as {
         ifc?: Record<string, unknown>;
         anyOf?: { ifc?: Record<string, unknown> }[];
+        items?: { ifc?: Record<string, unknown> };
       };
     };
 
@@ -4639,6 +4690,21 @@ interface HasImage {
       }));
 
       expect(schema.ifc?.confidentiality).toMatchObject([MODULE_POLICY]);
+    });
+
+    it("reads a printed array's element as the annotation its element node is spelled by", async () => {
+      // A print is read by its type, not as a node; its element node is
+      // reached from the print, and the hint recorded there spells the element.
+      const schema = await fieldSchema(
+        (members) => ({ spelledBy: members.get("annotated")!.type }),
+        "list",
+        {
+          printed: true,
+          hinted: (field) => (field as ts.ArrayTypeNode).elementType,
+        },
+      );
+
+      expect(schema.items?.ifc?.confidentiality).toMatchObject([MODULE_POLICY]);
     });
 
     it("applies the hints of a node read as its annotation", async () => {

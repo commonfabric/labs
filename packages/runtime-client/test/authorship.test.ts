@@ -153,6 +153,65 @@ const valueCell = (resolveTo: () => unknown) => {
   };
 };
 
+type DeliveryCallback = (
+  value: unknown,
+  cfcLabel?: unknown,
+  delivery?: { cfcLabelCurrent: boolean },
+) => void;
+
+/**
+ * A cell whose subscription hands each delivery a label and says whether it
+ * is the one the worker read with the value, as a `CellHandle` does, and
+ * which counts the reads of its label the worker is asked for. The worker's
+ * own answer is `worker`, which `deliver()` hands over as the label when it
+ * delivers as current, and which a delivery that is not current keeps from
+ * the subscriber, handing `stale` instead.
+ */
+const labelDeliveringCell = (
+  worker: unknown,
+  options: { current?: boolean; stale?: unknown } = {},
+) => {
+  let current = options.current ?? true;
+  let stale = options.stale;
+  let workerReads = 0;
+  const subscribers = new Set<DeliveryCallback>();
+  const handed = () => (current ? worker : stale);
+  return {
+    getCfcLabel: () => {
+      workerReads++;
+      return Promise.resolve(worker);
+    },
+    subscribe(callback: DeliveryCallback) {
+      subscribers.add(callback);
+      callback({ loaded: true }, handed(), { cfcLabelCurrent: current });
+      return () => {
+        subscribers.delete(callback);
+      };
+    },
+
+    /** How many times the worker has been asked for the label. */
+    workerReads: () => workerReads,
+
+    /**
+     * Delivers an update with `next` as the worker's label, as current, or
+     * as not current when `delivery.current` is false, handing `stale` in
+     * place of the worker's label; settles the reads it starts.
+     */
+    async deliver(
+      next: unknown,
+      delivery: { current?: boolean; stale?: unknown } = {},
+    ) {
+      worker = next;
+      current = delivery.current ?? true;
+      stale = delivery.stale;
+      for (const callback of [...subscribers]) {
+        callback({ loaded: true }, handed(), { cfcLabelCurrent: current });
+      }
+      await settle();
+    },
+  };
+};
+
 /**
  * Observes `value` and `author`, keeping every report the observation makes.
  */
@@ -397,6 +456,110 @@ describe("authorship", () => {
 
         expect(observation.states()).toEqual(["verified"]);
         expect(resolved.subscriberCount()).toBe(0);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("reads the value's label from the subscription's delivery, asking the worker for none", async () => {
+      const value = labelDeliveringCell(authoredByLabel("alice"));
+      const observation = observe(value, "alice");
+
+      try {
+        await settle();
+
+        expect(observation.states()).toEqual(["verified"]);
+        expect(value.workerReads()).toBe(0);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("reports again from the label a later delivery carries, asking the worker for none", async () => {
+      const value = labelDeliveringCell(authoredByLabel("alice"));
+      const observation = observe(value, "alice");
+
+      try {
+        await settle();
+        await value.deliver(authoredByLabel("bob"));
+
+        expect(observation.states()).toEqual(["verified", "unverified"]);
+        expect(value.workerReads()).toBe(0);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("takes a current delivery without a label as the value having none, asking the worker for none", async () => {
+      const value = labelDeliveringCell(undefined);
+      const observation = observe(value, "alice");
+
+      try {
+        await settle();
+
+        expect(observation.states()).toEqual(["unknown"]);
+        expect(value.workerReads()).toBe(0);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("asks the worker for the value's label when the delivery's label is not current, and reports the worker's answer", async () => {
+      // A handle re-sends the label it last received with a value the worker
+      // read a newer label for; the verdict is on the worker's label.
+      const value = labelDeliveringCell(authoredByLabel("bob"), {
+        current: false,
+        stale: authoredByLabel("alice"),
+      });
+      const observation = observe(value, "alice");
+
+      try {
+        await settle();
+
+        expect(observation.states()).toEqual(["unverified"]);
+        expect(value.workerReads()).toBe(1);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("asks the worker again when a later delivery's label is not current", async () => {
+      const value = labelDeliveringCell(authoredByLabel("alice"));
+      const observation = observe(value, "alice");
+
+      try {
+        await settle();
+        await value.deliver(authoredByLabel("bob"), {
+          current: false,
+          stale: authoredByLabel("alice"),
+        });
+
+        expect(observation.states()).toEqual(["verified", "unverified"]);
+        expect(value.workerReads()).toBe(1);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("reads the author's label from the subscription's delivery, asking the worker for none", async () => {
+      const author = labelDeliveringCell(representsLabel("did:key:alice"));
+      const observation = observe(
+        {
+          getCfcLabel: () => Promise.resolve(authoredByLabel("did:key:alice")),
+        },
+        author,
+        { authorName: "Alice" },
+      );
+
+      try {
+        await settle();
+
+        expect(observation.states()).toEqual(["verified"]);
+        expect(observation.authorClaim).toEqual({
+          subject: "did:key:alice",
+          name: "Alice",
+        });
+        expect(author.workerReads()).toBe(0);
       } finally {
         observation.cancel();
       }
@@ -803,11 +966,55 @@ describe("authorship", () => {
 
     it("does not verify on the claim's own id when the profile's label names two principals", async () => {
       // Without the label's principal, the observation would read an author
-      // id from the claim's value, which here names the sender.
+      // id from the claim's value, which here names the sender. The profile
+      // holds no written name, so every field's claim counts.
       const observation = observe(
         {
           getCfcLabel: () =>
             Promise.resolve(authoredByLabel("did:example:mallory")),
+        },
+        {
+          get: () => ({ id: "did:example:mallory" }),
+          getCfcLabel: () =>
+            Promise.resolve({
+              version: 1 as const,
+              entries: [
+                ...authoredByLabel("did:example:mallory").entries,
+                {
+                  path: ["name"],
+                  label: {
+                    integrity: [{
+                      kind: "represents-principal",
+                      subject: "did:example:alice",
+                    }],
+                  },
+                },
+                {
+                  path: ["avatar"],
+                  label: {
+                    integrity: [{
+                      kind: "represents-principal",
+                      subject: "did:example:bob",
+                    }],
+                  },
+                },
+              ],
+            }),
+        },
+      );
+      await settle();
+
+      expect(observation.authorClaim).toBeUndefined();
+      expect(observation.state).toBe("unknown");
+    });
+
+    it("verifies the owner a written name names, though another field also names someone else", async () => {
+      // A written name is its owner's own claim about whose the profile is,
+      // so only its claim counts; the sender is the one it names.
+      const observation = observe(
+        {
+          getCfcLabel: () =>
+            Promise.resolve(authoredByLabel("did:example:alice")),
         },
         {
           get: () => ({ id: "did:example:mallory", name: "Alice" }),
@@ -840,8 +1047,59 @@ describe("authorship", () => {
       );
       await settle();
 
-      expect(observation.authorClaim).toBeUndefined();
-      expect(observation.state).toBe("unknown");
+      expect(observation.authorClaim).toEqual({
+        subject: "did:example:alice",
+        name: "Alice",
+      });
+      expect(observation.state).toBe("verified");
+    });
+
+    it("verifies the owner a written name names when the profile holds its name as a handle", async () => {
+      // A written name is its owner's own claim about whose the profile is,
+      // so only its claim counts; the sender is the one it names.
+      const observation = observe(
+        {
+          getCfcLabel: () =>
+            Promise.resolve(authoredByLabel("did:example:alice")),
+        },
+        {
+          get: () => ({
+            id: "did:example:mallory",
+            name: { get: () => "Alice" },
+          }),
+          getCfcLabel: () =>
+            Promise.resolve({
+              version: 1 as const,
+              entries: [
+                ...authoredByLabel("did:example:mallory").entries,
+                {
+                  path: ["name"],
+                  label: {
+                    integrity: [{
+                      kind: "represents-principal",
+                      subject: "did:example:alice",
+                    }],
+                  },
+                },
+                {
+                  path: ["avatar"],
+                  label: {
+                    integrity: [{
+                      kind: "represents-principal",
+                      subject: "did:example:bob",
+                    }],
+                  },
+                },
+              ],
+            }),
+        },
+      );
+      await settle();
+
+      expect(observation.authorClaim).toMatchObject({
+        subject: "did:example:alice",
+      });
+      expect(observation.state).toBe("verified");
     });
 
     it("fails closed when a bound author claim cell changes away from the integrity subject", async () => {

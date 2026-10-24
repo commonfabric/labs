@@ -1,0 +1,133 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>memory compression stream harness</title>
+<style>
+body {
+  font: 13px/1.4 ui-monospace, monospace;
+  margin: 16px;
+}
+label {
+  display: block;
+  margin: 4px 0;
+}
+#log {
+  white-space: pre-wrap;
+  margin-top: 12px;
+}
+</style>
+<h1>memory compression stream harness</h1>
+<form id="form">
+  <label>mode <select name="mode" id="mode"></select></label>
+  <label>thread
+    <select name="thread">
+      <option value="worker">worker</option>
+      <option value="main">main</option>
+    </select>
+  </label>
+  <label>iterations <input name="iterations" value="2000" size="8" /></label>
+  <label>payload bytes <input name="payloadBytes" value="102400" size="8" /></label>
+  <label>pressure MB after loop <input name="pressureMegabytes" value="0" size="8" /></label>
+  <label>slow body chunks <input name="slowChunks" value="4" size="8" /></label>
+  <label>slow body gap ms <input name="slowDelayMs" value="5" size="8" /></label>
+  <label>slow body close delay ms <input name="slowCloseDelayMs" value="0" size="8" /></label>
+  <button type="submit">run</button>
+</form>
+<div id="log"></div>
+<script type="module">
+import { HARNESS_MODES, runHarness } from "./harness.js";
+
+const form = document.getElementById("form");
+const log = document.getElementById("log");
+const select = document.getElementById("mode");
+for (const mode of HARNESS_MODES) {
+  const option = document.createElement("option");
+  option.value = option.textContent = mode;
+  select.append(option);
+}
+
+const params = new URLSearchParams(location.search);
+for (const [name, value] of params) {
+  if (form.elements[name]) form.elements[name].value = value;
+}
+
+const echoUrl = `${
+  location.protocol === "https:" ? "wss" : "ws"
+}://${location.host}/echo`;
+let worker = null;
+let running = false;
+
+function append(line) {
+  log.textContent += `${line}\n`;
+  void fetch("/log", { method: "POST", body: line }).catch(() => {});
+}
+
+async function run(event) {
+  event?.preventDefault();
+  if (running) {
+    append("ignored: a run is still active");
+    return;
+  }
+  running = true;
+  const data = new FormData(form);
+  const request = {
+    mode: data.get("mode"),
+    iterations: Number(data.get("iterations")),
+    payloadBytes: Number(data.get("payloadBytes")),
+    pressureMegabytes: Number(data.get("pressureMegabytes")),
+    echoUrl,
+    bytesUrl: `${location.origin}/bytes?count=${data.get("payloadBytes")}`,
+    slowUrl: `${location.origin}/slow?chunks=${data.get("slowChunks")}` +
+      `&delayMs=${data.get("slowDelayMs")}` +
+      `&closeDelayMs=${data.get("slowCloseDelayMs")}`,
+  };
+  const thread = data.get("thread");
+  append(`start ${JSON.stringify({ ...request, thread })}`);
+  const report = (report) => {
+    if (report.type === "progress") return;
+    running = false;
+    append(`${report.type} ${JSON.stringify(report)}`);
+  };
+  if (thread === "main") {
+    await runHarness(request, report).catch((error) =>
+      report({ type: "error", message: String(error) })
+    );
+    return;
+  }
+  worker ??= new Worker("./harness.js", { type: "module" });
+  worker.onmessage = (event) => report(event.data);
+  worker.onerror = (event) => report({ type: "error", message: event.message });
+  worker.postMessage(request);
+}
+
+form.addEventListener("submit", run);
+if (params.get("autostart") === "1") run();
+
+function connectControl() {
+  const control = new WebSocket(
+    `${
+      location.protocol === "https:" ? "wss" : "ws"
+    }://${location.host}/control`,
+  );
+  control.onopen = () => append("control connected");
+  control.onclose = (event) => {
+    append(`control closed ${event.code}`);
+    setTimeout(connectControl, 1000);
+  };
+  control.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    if (message.command === "reload") {
+      location.reload();
+      return;
+    }
+    if (message.command !== undefined) {
+      append(`ignored: unknown command ${JSON.stringify(message.command)}`);
+      return;
+    }
+    for (const [name, value] of Object.entries(message)) {
+      if (form.elements[name]) form.elements[name].value = String(value);
+    }
+    run();
+  };
+}
+connectControl();
+</script>

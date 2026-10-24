@@ -187,7 +187,7 @@ export async function encodeCompressedMemoryMessage(
   }
 
   const compressed = await collectReadable(
-    new Response(source).body!.pipeThrough(new CompressionStream("gzip")),
+    byteSource(source).pipeThrough(new CompressionStream("gzip")),
     MAX_GZIP_MEMORY_MESSAGE_BYTES,
   );
   const encoded = new Uint8Array(
@@ -211,7 +211,7 @@ export async function decodeCompressedMemoryMessage(
 
   const envelope = await parseCompressionEnvelope(frame);
   const expanded = await collectReadable(
-    new Response(envelope.compressed).body!.pipeThrough(
+    byteSource(envelope.compressed).pipeThrough(
       new DecompressionStream("gzip"),
     ),
     envelope.uncompressedBytes,
@@ -237,6 +237,26 @@ export function isMemoryMessageFrame(
 ): frame is MemoryMessageFrame {
   return typeof frame === "string" || frame instanceof ArrayBuffer ||
     frame instanceof Uint8Array || frame instanceof Blob;
+}
+
+/**
+ * A stream that yields `bytes` as its only chunk, from a JavaScript-defined
+ * source. It stands in for `new Response(bytes).body`, which is not used here:
+ * WebKit (Safari 26.6, WebKit 7624) builds a buffer-backed `Response` body as
+ * a byte stream whose first pull is issued during construction and is never
+ * settled, and a byte stream with a pending pull stays reachable for the life
+ * of its realm. A JavaScript source has no such pull, so the stream is garbage
+ * once collected.
+ */
+function byteSource(
+  bytes: Uint8Array<ArrayBuffer>,
+): ReadableStream<Uint8Array<ArrayBuffer>> {
+  return new ReadableStream<Uint8Array<ArrayBuffer>>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
 }
 
 /** Collects `readable`, refusing output beyond `maximumBytes`. */

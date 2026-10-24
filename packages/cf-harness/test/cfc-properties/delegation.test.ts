@@ -184,8 +184,8 @@ const runDelegationEpisode = async (
         assistantToolCall("call-child", "bash", {
           command: options.reachForWithheld
             // A child that reaches past what it was handed.
-            ? `cf get ${bound.token} ${withheld.token}`
-            : `cf get ${bound.token}`,
+            ? `cf cell get ${bound.token} ${withheld.token}`
+            : `cf cell get ${bound.token}`,
         }),
         assistantText("Child done."),
         assistantToolCall("call-finish", "finish_task", {
@@ -203,7 +203,7 @@ const runDelegationEpisode = async (
     expect(result.taskOutcome?.outcome).toBe("gave-up");
 
     const dispatched = sandbox.shellRequests.find((request) =>
-      request.command.includes("cf get ")
+      request.command.includes("cf cell get ")
     );
     expect(dispatched).toBeDefined();
 
@@ -249,7 +249,7 @@ describe("cfc property: delegation", () => {
 
       expect(episode.childCommand).toContain(episode.boundRef);
       expect(episode.childCommand).not.toContain(
-        `cf get ${episode.boundToken}`,
+        `cf cell get ${episode.boundToken}`,
       );
     });
 

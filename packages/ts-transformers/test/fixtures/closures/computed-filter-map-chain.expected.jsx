@@ -41,7 +41,7 @@ const __cfLift_1 = __cfHelpers.lift<{
                                 type: "string"
                             },
                             preference: {
-                                "enum": ["liked", "disliked"]
+                                "enum": ["disliked", "liked"]
                             }
                         },
                         required: ["ingredient", "preference"]

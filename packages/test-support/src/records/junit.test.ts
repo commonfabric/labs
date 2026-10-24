@@ -6,6 +6,7 @@ import {
   isRelativeSourcePath,
   JUnitParseError,
   parseJUnit,
+  readJUnit,
   recordedCases,
 } from "./junit.ts";
 
@@ -78,6 +79,39 @@ const OWN_FAILURE_SAMPLE = `<?xml version="1.0" encoding="UTF-8"?>
     </testsuite>
     <testsuite name="ext:cli/40_test.js" tests="1" disabled="0" errors="0" failures="0">
         <testcase name="torn down &gt; passes" classname="ext:cli/40_test.js" time="0.000" line="239" col="28">
+        </testcase>
+    </testsuite>
+</testsuites>`;
+
+// Two files of bdd tests whose hooks take time: the outermost describe of
+// each holds what its hooks took on top of its leaves, and a nested
+// describe's own case holds its leaves again. The second file's tests
+// were all skipped, and a bare Deno.test sits beside them.
+const HOOKS_SAMPLE = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="deno test" tests="8" failures="0" errors="0" time="20.000">
+    <testsuite name="./test/oven.test.ts" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="oven" classname="./test/oven.test.ts" time="12.500" line="3" col="1">
+        </testcase>
+    </testsuite>
+    <testsuite name="./test/icing.test.ts" tests="2" disabled="0" errors="0" failures="0">
+        <testcase name="icing" classname="./test/icing.test.ts" time="0.001" line="3" col="1">
+        </testcase>
+        <testcase name="bare icing case" classname="./test/icing.test.ts" time="4.000" line="9" col="6">
+        </testcase>
+    </testsuite>
+    <testsuite name="ext:cli/40_test.js" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="oven &gt; preheat" classname="ext:cli/40_test.js" time="3.000" line="239" col="28">
+        </testcase>
+    </testsuite>
+    <testsuite name="https://jsr.io/@std/testing/1.0.19/_test_suite.ts" tests="4" disabled="1" errors="0" failures="0">
+        <testcase name="oven &gt; bakes" classname="https://jsr.io/@std/testing/1.0.19/_test_suite.ts" time="2.000" line="172" col="39">
+        </testcase>
+        <testcase name="oven &gt; preheat &gt; warms" classname="https://jsr.io/@std/testing/1.0.19/_test_suite.ts" time="1.500" line="172" col="39">
+        </testcase>
+        <testcase name="oven &gt; preheat &gt; holds" classname="https://jsr.io/@std/testing/1.0.19/_test_suite.ts" time="1.000" line="172" col="39">
+        </testcase>
+        <testcase name="icing &gt; sets" classname="https://jsr.io/@std/testing/1.0.19/_test_suite.ts" time="0.000" line="402" col="15">
+            <skipped/>
         </testcase>
     </testsuite>
 </testsuites>`;
@@ -471,6 +505,101 @@ describe("junit", () => {
           durationMs: 2250,
         },
       ]);
+    });
+  });
+  describe("readJUnit()", () => {
+    const options = {
+      kind: "integration",
+      scope: "bakery",
+      filePrefix: "packages/bakery",
+    };
+
+    it("returns the records ingestJUnit() returns", () => {
+      expect(readJUnit(HOOKS_SAMPLE, options).records).toEqual(
+        ingestJUnit(HOOKS_SAMPLE, options),
+      );
+    });
+
+    it("gives each outermost describe the time it took beyond its leaves", () => {
+      expect(
+        readJUnit(HOOKS_SAMPLE, options).hooks.filter((record) =>
+          record.test.n === "oven"
+        ),
+      ).toEqual([{
+        line: "record",
+        test: { k: "integration", s: "bakery", n: "oven" },
+        outcome: "pass",
+        durationMs: 8000,
+        file: "packages/bakery/test/oven.test.ts",
+      }]);
+    });
+
+    it("leaves out of the hooks what a recorded describe already holds", () => {
+      // Recorded, `oven` holds the 7.5 seconds it took outside `bakes` and
+      // `preheat`, so all that is left is the half second `preheat` took
+      // outside its own leaves. Every second the describe took is then in
+      // exactly one of the two.
+      const read = readJUnit(HOOKS_SAMPLE, {
+        ...options,
+        known: (test) => test.n === "oven",
+      });
+      expect(
+        read.records.find((record) => record.test.n === "oven")?.durationMs,
+      )
+        .toBe(7500);
+      expect(read.hooks.find((record) => record.test.n === "oven")?.durationMs)
+        .toBe(500);
+    });
+
+    it("gives a describe whose tests were all ignored what its hooks took", () => {
+      // Its `beforeAll` and `afterAll` run whether or not a test does, so
+      // what they take is part of what opening the unit costs.
+      const icing = readJUnit(HOOKS_SAMPLE, options).hooks.find((record) =>
+        record.test.n === "icing"
+      );
+      expect(icing?.durationMs).toBe(1);
+      expect(icing?.file).toBe("packages/bakery/test/icing.test.ts");
+    });
+
+    it("gives nothing for a test that is not a describe", () => {
+      expect(
+        readJUnit(HOOKS_SAMPLE, options).hooks.map((record) => record.test.n),
+      ).not.toContain("bare icing case");
+    });
+
+    it("gives nothing for a describe whose file is not known", () => {
+      expect(
+        readJUnit(HOOKS_SAMPLE, { kind: "integration", scope: "bakery" })
+          .hooks,
+      ).toEqual([]);
+    });
+
+    it("gives nothing for a name two outermost describes share", () => {
+      const twice = HOOKS_SAMPLE.replace(
+        "</testsuites>",
+        `    <testsuite name="./test/oven-again.test.ts" tests="1">
+        <testcase name="oven" classname="./test/oven-again.test.ts" time="9.000">
+        </testcase>
+    </testsuite>
+</testsuites>`,
+      );
+      // The preload's map names a file for the name, so only the sharing
+      // is left to keep the two apart.
+      expect(
+        readJUnit(twice, {
+          ...options,
+          fileByName: new Map([["oven", "packages/bakery/test/oven.test.ts"]]),
+        }).hooks.filter((record) => record.test.n === "oven"),
+      ).toEqual([]);
+    });
+
+    it("gives no describe less than nothing", () => {
+      expect(
+        readJUnit(DENO_SAMPLE, options).hooks.map((record) => ({
+          n: record.test.n,
+          durationMs: record.durationMs,
+        })),
+      ).toEqual([{ n: "glaze", durationMs: 0 }]);
     });
   });
 });

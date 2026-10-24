@@ -101,7 +101,7 @@ read before picking one up; this table is the roll-up.
 | 19 | A gate that fails when a new slot has no decision | mechanism | done |
 
 **What can be picked up today.** Items 4 and 6. Step 10 of
-[CLI surface shape](cli-surface-shape.md) has landed, so the position each of
+[CLI surface shape](../history/plans/cli-surface-shape.md) has landed, so the position each of
 them fills is settled and neither is waiting on anything. Items 8 and 11 hold
 decisions; item 5's `wish` half is declined, because resolving a wish writes.
 
@@ -220,7 +220,7 @@ third command becoming `stopEarly()` needs no edit in the completion layer.
 
 The position belongs to the callable: the verb opens its section, and a `cf`
 flag written there is refused with the section it belongs to named — see
-[Naming the target](cli-surface-shape.md#naming-the-target). So declining to
+[Naming the target](../history/plans/cli-surface-shape.md#naming-the-target). So declining to
 offer one there is correct. It leaves the position offering nothing until item
 4 fills it, which is what a position whose vocabulary the command cannot yet
 name should offer.
@@ -338,7 +338,7 @@ The same flags on a call shape the verb's result, whose vocabulary is the verb's
 `outputSchema` — carried by the same listing item 4 reads.
 
 This one is not really a completion item, because the surface settles most of
-it. [Naming the target](cli-surface-shape.md#naming-the-target) puts a
+it. [Naming the target](../history/plans/cli-surface-shape.md#naming-the-target) puts a
 projection past the `--` that closes the callable's section, and therefore
 always after the verb it shapes:
 
@@ -400,7 +400,7 @@ directory looking for a store, so completion offers spaces in a checkout that
 holds one and nothing in a worktree that does not — while both talk to the same
 server.
 
-[Naming the target](cli-surface-shape.md#naming-the-target) settles where the
+[Naming the target](../history/plans/cli-surface-shape.md#naming-the-target) settles where the
 *command* gets a space it was not given: `CF_SPACE`, with the flag overriding
 it. Two candidate sources follow from that and need no further decision — the
 ambient value itself, and the identity's home space, which is derivable from

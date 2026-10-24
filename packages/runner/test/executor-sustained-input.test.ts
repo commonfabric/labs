@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { maxOf } from "@commonfabric/utils/math";
 import { readWatermarkSeq } from "../src/executor/watermark.ts";
-import { awaitAdmitted } from "./support/serving-waits.ts";
+import { awaitAdmitted, awaitEach } from "./support/serving-waits.ts";
 import {
   openSustainedInputFixture,
   type SustainedInputFixture,
@@ -19,16 +19,63 @@ describe("SpaceServer", () => {
   });
 
   describe("watermark under sustained input", () => {
-    it("covers each input within five cycles of its admission while input keeps arriving", async () => {
-      // The deadline leaves room for the cascade's two stages several times
-      // over, so a settle can reach an idle probe between barriers even on a
-      // loaded machine; what keeps it from quiescing is that each stage
-      // outlasts the scheduler's yield slice. A loop that covers input only
-      // once it pauses covers the stream's first input about ten cycles
-      // after admitting it, so the bound leaves a loaded machine a cycle or
-      // two beyond the usual one to three.
+    it("advances the watermark over the stream's inputs on exhausted cycles while input keeps arriving", async () => {
+      // The deadline leaves an idle machine room for the cascade's two
+      // stages several times over, and each stage outlasts the scheduler's
+      // yield slice, so a settle finds the scheduler busy at its exit
+      // probes and ends at the deadline. How many cycles an input then
+      // waits for coverage is elapsed time counted in deadlines, which a
+      // slower machine stretches without limit, so this case bounds no such
+      // count; the next case does, by driving the deadline's clock itself.
+      // The stream runs until three exhausted cycles have each carried W
+      // over one of its inputs. A loop that covers input only once it
+      // pauses ends no such cycle, and leaves this wait to the stuck net,
+      // which fails the case.
 
       const opened = await openSustainedInputFixture({ flushDeadlineMs: 300 });
+      fixture = opened;
+      const { cycles, engine, host, server } = opened;
+      const stream = opened.stream();
+      const exhaustedCoverages = (): number =>
+        cycles.entries.filter((end, index) => {
+          const before = cycles.entries[index - 1];
+          return before !== undefined &&
+            end.exhaustedAdvances > before.exhaustedAdvances &&
+            stream.inputs.some((input) =>
+              before.watermark < input.seq && input.seq <= end.watermark
+            );
+        }).length;
+      await awaitEach(cycles, () => exhaustedCoverages() >= 3);
+      await stream.stop();
+      const last = stream.inputs[stream.inputs.length - 1].seq;
+      await awaitAdmitted(server, () => readWatermarkSeq(engine) >= last);
+
+      const covered = host.stats().settle.series.filter((row) =>
+        stream.inputs.some((input) => input.seq === row.seq)
+      );
+      expect(covered.length).toBe(stream.inputs.length);
+    });
+
+    it("covers each input within two cycles of its admission when every frame barrier completes after the flush deadline", async () => {
+      // The fixture drives the deadline's clock and moves it past the
+      // deadline as each barrier's frames land, so every settle the stream
+      // feeds ends exhausted at its first barrier, with that barrier
+      // complete, on a machine of any speed. A client writes the inputs, so
+      // each one re-arms the argument's terminal root. The cycle after an
+      // input's admission drains it, applies its frames at that barrier,
+      // and starts the root's retry there. The cycle after that awaits the
+      // retry, finds the scheduler idle, and proves the head that barrier
+      // applied, whatever later input has re-armed the root by then. With
+      // the clock driven, those two cycles are steps of the loop and not a
+      // measure of elapsed time. A loop that leaves the retry for a barrier
+      // ahead of the deadline, or that proves nothing while a re-armed root
+      // is pending, covers the stream's first input only once the stream
+      // stops.
+
+      const opened = await openSustainedInputFixture({
+        flushDeadlineMs: 600_000,
+        lateBarriers: true,
+      });
       fixture = opened;
       const { cycles, engine, host, server } = opened;
       const stream = opened.stream();
@@ -41,12 +88,9 @@ describe("SpaceServer", () => {
       const covered = stats.settle.series.filter((row) =>
         stream.inputs.some((input) => input.seq === row.seq)
       );
-      // The stream kept settles from quiescing, or this case asserts
-      // nothing about an exhausted cycle.
-      expect(stats.wavesBudgetExhausted).toBeGreaterThan(0);
       expect(covered.length).toBe(stream.inputs.length);
       expect(maxOf(covered.map((row) => row.cycles)))
-        .toBeLessThanOrEqual(5);
+        .toBeLessThanOrEqual(2);
       expect(stats.exhaustedAdvances).toBeGreaterThan(0);
     });
 

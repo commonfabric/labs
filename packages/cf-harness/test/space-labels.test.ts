@@ -134,6 +134,13 @@ const SLOTTED = entity("slotted");
 const VIA = entity("via");
 
 /**
+ * A document linking at `row` to {@link UNLABELLED}. A result links each of
+ * its rows by a bare reference, and a row nothing labels leaves no entry at
+ * the link or beneath it, so the link itself is all that says one is there.
+ */
+const BARE = entity("bare");
+
+/**
  * A version-2 envelope whose one entry holds its label by reference to
  * {@link LABEL_DOCUMENT}, a content-addressed label document the store holds.
  */
@@ -420,6 +427,7 @@ const documents: Record<string, unknown> = {
     },
   },
   [VIA]: { value: { via: link(LINKER) } },
+  [BARE]: { value: { row: link(UNLABELLED) } },
   [COMMITTED]: {
     value: { attachment: "…" },
     cfc: {
@@ -479,6 +487,7 @@ const PLAIN = new Set([
   ACCOUNTS,
   SLOTTED,
   VIA,
+  BARE,
 ]);
 
 /**
@@ -713,6 +722,7 @@ describe("space-labels", () => {
       expect(reader.read({ id: NEVER_WRITTEN, scope: "space" })).toEqual({
         entries: [],
         linked: [],
+        linkPaths: [],
         unread: "no-document",
       });
     });
@@ -1004,6 +1014,38 @@ describe("space-labels", () => {
       expect(read.truncation).toBe(undefined);
     });
 
+    it("returns the path of a link to a cell the space holds no label for, and no entry under it", () => {
+      const read = didReader.read({ id: BARE, scope: "space" });
+      expect(read.linkPaths).toEqual([["row"]]);
+      expect(read.entries).toEqual([]);
+      expect(read.unreadPaths).toBe(undefined);
+    });
+
+    it("returns the path of every link of a document, the ones it could not follow included", () => {
+      const read = didReader.read({ id: LINKER, scope: "space" });
+      expect(read.linkPaths).toEqual([["mine"], ["ours"], ["theirs"]]);
+    });
+
+    it("returns the path of a link two links out under the path that reached it", () => {
+      const read = didReader.read({ id: CHAIN_TOP, scope: "space" });
+      expect(read.linkPaths).toEqual([["next"], ["next", "next"]]);
+    });
+
+    it("returns each link of a loop once", () => {
+      const read = didReader.read({ id: LOOP_ONE, scope: "space" });
+      expect(read.linkPaths).toEqual([["peer"], ["peer", "peer"]]);
+    });
+
+    it("returns no path for a link elsewhere in the document a link addresses part of", () => {
+      const read = didReader.read({ id: SLOTTED, scope: "space" });
+      expect(read.linkPaths).toEqual([["slot"], ["leaf"]]);
+    });
+
+    it("returns an empty list of link paths for a document holding no link", () => {
+      const read = didReader.read({ id: DECLARED, scope: "space" });
+      expect(read.linkPaths).toEqual([]);
+    });
+
     it("returns the path of a link further out than the read follows links as unread", async () => {
       await withGraphBoundedReader({ maxHops: 1, maxDocuments: 64 }, (b) => {
         const read = b.read({ id: CHAIN_TOP, scope: "space" });
@@ -1203,6 +1245,32 @@ describe("space-labels", () => {
       ]);
       expect(snapshot.cells[0].entries.map((entry) => entry.confidentiality))
         .toEqual([[{ type: "foreign-secret", name: "foreign-secret" }]]);
+    });
+
+    it("records the path of every link a cell holds, followed or not", async () => {
+      const snapshot = await readAgainstDid([`/${LINKER}`]);
+      expect(snapshot.cells[0].linkPaths).toEqual([
+        ["mine"],
+        ["ours"],
+        ["theirs"],
+      ]);
+    });
+
+    it("records the path of a link to a cell the space holds no label for", async () => {
+      const snapshot = await readAgainstDid([`/${BARE}`]);
+      expect(snapshot.cells[0].linkPaths).toEqual([["row"]]);
+      expect(snapshot.cells[0].entries).toEqual([]);
+    });
+
+    it("records an empty list of link paths for a cell holding no link", async () => {
+      const snapshot = await readAgainstDid([`/${DECLARED}`]);
+      expect(snapshot.cells[0].linkPaths).toEqual([]);
+    });
+
+    it("records no list of link paths for a cell that went unread", async () => {
+      const snapshot = await readAgainstDid([`/${NEVER_WRITTEN}`, `/${BARE}`]);
+      expect(snapshot.cells[0].unreadReason).toBe("no-document");
+      expect(snapshot.cells[0].linkPaths).toBe(undefined);
     });
 
     it("records the path of a link the walk could not follow", async () => {

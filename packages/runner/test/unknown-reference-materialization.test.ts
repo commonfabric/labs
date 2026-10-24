@@ -23,7 +23,8 @@ import {
   cellOfOpaqueReference,
   isOpaqueReference,
 } from "../src/back-to-cell.ts";
-import { areLinksSame, parseLink } from "../src/link-utils.ts";
+import { parseLink } from "../src/link-utils.ts";
+import { areLinksSame } from "../src/link-equality.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 

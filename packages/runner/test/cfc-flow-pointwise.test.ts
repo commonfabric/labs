@@ -587,10 +587,13 @@ describe("CFC flow labels: pointwise structure (phase B)", () => {
     await runtime.idle();
 
     const containerId = resolvedContainerId(result.key("kept"));
-    // The kept element's own entry carries alice-secret, so the structure
-    // label below is read from a container that holds a label map.
+    // The kept element's own document carries alice-secret, where a reader
+    // that dereferences the kept slot reaches it; the slot stores nothing of
+    // it (CFC §8.2, §8.12.8), so the structure label below is what the
+    // container says on its own.
     expect(
-      entriesOf(containerId).flatMap((e) => e.label.confidentiality ?? []),
+      entriesOf(el0.getAsNormalizedFullLink().id)
+        .flatMap((e) => e.label.confidentiality ?? []),
     ).toContainEqual("alice-secret");
     const sc = structureConfidentiality(containerId);
     expect(sc).not.toContainEqual("alice-secret");

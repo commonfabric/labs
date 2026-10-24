@@ -200,6 +200,7 @@ describe("Topics retraction controls", () => {
       (topics: Array<{ title?: string } | undefined> | undefined) =>
         Array.isArray(topics) && topics.length === 1 &&
         topics[0]?.title === TOPIC_TITLE,
+      { stuckLabel: "the board's one filed topic" },
     );
     const resolved = await board.result.getCell();
     await resolved.pull();
@@ -213,13 +214,13 @@ describe("Topics retraction controls", () => {
     // Seeded, then barriered on every record being PRESENT — not on any of
     // them being at a particular index.
     //
-    // An index barrier is what a first version used, and under server
-    // execution it can wait forever: a `set()` resolves before the served
-    // consequence arrives, so the appends can commit in an order the predicate
-    // never sees, and `waitForCellValue` has no safety net to end that wait.
-    // It hung a CI shard for 26 minutes. Nothing below depends on the filed
-    // order now — the rows are read from the page in the order the page shows
-    // them — so presence is the whole requirement.
+    // An index barrier can wait forever under server execution: a `set()`
+    // resolves before the served consequence arrives, so the appends can
+    // commit in an order the predicate never sees. Nothing below depends on
+    // the filed order — the rows are read from the page in the order the page
+    // shows them — so presence is the whole requirement. Each wait here
+    // carries a stuck-condition net, because the test process holds a live
+    // connection open and so never goes quiet on a wait that cannot end.
     for (const body of [ALPHA, BRAVO, CHARLIE]) {
       await topic.result.set({ body, agentName: AGENT }, ["addComment"]);
     }
@@ -235,6 +236,7 @@ describe("Topics retraction controls", () => {
         [ALPHA, BRAVO, CHARLIE].every((body) =>
           (stored ?? []).some((c) => c.body === body)
         ),
+      { stuckLabel: "the three seeded comments" },
     );
     await waitForCellValue(
       cc.runtime,
@@ -243,6 +245,7 @@ describe("Topics retraction controls", () => {
         [LINK_ONE, LINK_TWO].every((url) =>
           (stored ?? []).some((l) => l.url === url)
         ),
+      { stuckLabel: "the two seeded links" },
     );
 
     // Every write reaches the server before a browser asks for the piece; one
@@ -301,6 +304,7 @@ describe("Topics retraction controls", () => {
       cc.runtime,
       topicResult.key("comments"),
       (comments) => stamped(comments ?? []).length === 1,
+      { stuckLabel: "the first retracted comment" },
     );
     assertEquals(stamped(afterFirst).map((c) => c.body), [firstTarget]);
     // The viewer's Profile, not the agent that filed the comment.
@@ -319,6 +323,7 @@ describe("Topics retraction controls", () => {
       cc.runtime,
       topicResult.key("comments"),
       (comments) => stamped(comments ?? []).length === 2,
+      { stuckLabel: "the second retracted comment" },
     );
     assertEquals(
       stamped(afterSecond).map((c) => c.body).toSorted(),
@@ -339,6 +344,7 @@ describe("Topics retraction controls", () => {
       cc.runtime,
       topicResult.key("links"),
       (links) => stamped(links ?? []).length === 1,
+      { stuckLabel: "the retracted link" },
     );
     assertEquals(stamped(afterLink).map((l) => l.url), [linkTarget]);
     assertEquals(live(afterLink).length, linkTotal - 1);

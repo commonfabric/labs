@@ -98,6 +98,24 @@ async function clickHeader(page: Page, selector: string) {
   });
 }
 
+/**
+ * Open the header's menu at mobile width and wait for the panel to finish
+ * revealing itself. The reveal is a `clip-path` transition, and a click on a
+ * row the clip still hides lands on the backdrop behind the panel, which
+ * closes the menu. Within moments of a resize the header turns transitions
+ * off, so the panel then has no animation to wait for.
+ */
+async function openMobileMenu(page: Page) {
+  await clickHeader(page, ".nav-picker");
+  await page.evaluate(async () => {
+    const panel = pieceMenuFixture.header.shadowRoot!
+      .querySelector(".menu-panel")!;
+    await Promise.all(
+      panel.getAnimations().map((animation) => animation.finished),
+    );
+  });
+}
+
 /** Wait for the piece list to display a loaded name or loading status. */
 async function waitForListText(page: Page, text: string) {
   await waitForCondition(page, (probe, expected) => {
@@ -126,7 +144,7 @@ describe("header piece list", () => {
       expect(await page.evaluate(() => pieceMenuFixture.registryReads)).toBe(0);
       if (surface === "mobile") {
         await page.setViewportSize({ width: 390, height: 844 });
-        await clickHeader(page, ".nav-picker");
+        await openMobileMenu(page);
         expect(await page.evaluate(() => pieceMenuFixture.registryReads)).toBe(
           0,
         );

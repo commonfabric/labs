@@ -25,22 +25,53 @@ import { expect } from "@std/expect";
 import {
   cloneForMutation,
   CloneForMutationError,
+  cloneIfNecessary,
   cloneWithoutValueAtPath,
   cloneWithValueAtPath,
   deepFreeze,
+  type FabricInstance,
   type FabricValue,
   isDeepFrozen,
   isFabricContainerValue,
   missingContainerIsArray,
   tracePath,
 } from "@";
-import { FabricError } from "@/fabric-instances";
+import { FabricError, FabricLink } from "@/fabric-instances";
 import { FabricHash } from "@/fabric-primitives";
+
+import { ProblematicValue, UnknownValue } from "@/codec-common";
 
 // deno-lint-ignore no-explicit-any
 const obj = (v: unknown) => v as any;
 
 describe("value-clone", () => {
+  it("tracks cycles across instance clone boundaries without mutating inputs", () => {
+    for (
+      const make of [
+        (state: Record<string, FabricValue>) =>
+          new UnknownValue("Cycle@1", state),
+        (state: Record<string, FabricValue>) =>
+          new ProblematicValue("Cycle@1", state, "invalid"),
+        (state: Record<string, FabricValue>) =>
+          new FabricLink({ nested: state }),
+        (state: Record<string, FabricValue>) => {
+          const error = FabricError.fromNativeError(new Error("cycle"));
+          error.cause = state;
+          return error;
+        },
+      ]
+    ) {
+      const state: Record<string, FabricValue> = {};
+      const value: FabricInstance = make(state);
+      state.self = value;
+      for (const frozen of [true, false]) {
+        expect(() => value.deepClone(frozen)).toThrow(/circular/i);
+        expect(() => cloneIfNecessary(value, { frozen })).toThrow(/circular/i);
+        expect(Object.isFrozen(state)).toBe(false);
+      }
+    }
+  });
+
   describe("cloneWithValueAtPath()", () => {
     it("copies only the mutated spine; off-spine subtrees are shared", () => {
       const root = deepFreeze({

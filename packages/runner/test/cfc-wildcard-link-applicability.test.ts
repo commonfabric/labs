@@ -197,6 +197,25 @@ describe("CFC wildcard policy applicability on links below the policy's path", (
     expect(wildcardPolicyMatchesValue(tx, target, schema, 3)).toBe(true);
     expect(wildcardPolicyMatchesValue(tx, target, schema, "3")).toBe(false);
   });
+
+  it("applies an `integer` or `number` condition to a `bigint`", () => {
+    // A `bigint` is an integer, and `integer` is a subtype of `number`.
+    const integer = { type: "integer" } as const satisfies JSONSchema;
+    const number = { type: "number" } as const satisfies JSONSchema;
+    const string = { type: "string" } as const satisfies JSONSchema;
+    expect(wildcardPolicyMatchesValue(tx, target, integer, 3n)).toBe(true);
+    expect(wildcardPolicyMatchesValue(tx, target, number, 3n)).toBe(true);
+    expect(wildcardPolicyMatchesValue(tx, target, string, 3n)).toBe(false);
+  });
+
+  it("applies a whole-number `const` or `enum` condition to the `bigint` of that value", () => {
+    const three = { const: 3 } as const satisfies JSONSchema;
+    const small = { enum: [1, 2, 3] } as const satisfies JSONSchema;
+    expect(wildcardPolicyMatchesValue(tx, target, three, 3n)).toBe(true);
+    expect(wildcardPolicyMatchesValue(tx, target, three, 4n)).toBe(false);
+    expect(wildcardPolicyMatchesValue(tx, target, small, 2n)).toBe(true);
+    expect(wildcardPolicyMatchesValue(tx, target, small, 5n)).toBe(false);
+  });
 });
 
 describe("CFC wildcard policy value conditions on `FabricPrimitive` types", () => {

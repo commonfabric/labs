@@ -1,6 +1,7 @@
 /**
- * What `newPiece()` reports when the space it is pointed at cannot take a
- * piece: one that does not exist, and one whose root cannot be ensured.
+ * How `newPiece()` ensures the root of the space it is pointed at, and what it
+ * reports when that space cannot take a piece: one that does not exist, and
+ * one whose root cannot be ensured.
  */
 
 import { expect } from "@std/expect";
@@ -62,6 +63,32 @@ describe("newPiece()", () => {
     );
   }
 
+  it("ensures the space root with `reconcile: false`, so the root's origin is not followed", async () => {
+    const space = await runtime.createSpace();
+    const pieces = new PiecesController(
+      createSession({ identity: signer, spaceDid: space }),
+      runtime,
+    );
+    const ensures: unknown[][] = [];
+    const recording = new Proxy(pieces, {
+      get(target, property) {
+        if (property === "ensureDefaultPattern") {
+          return (...args: unknown[]) => {
+            ensures.push(args);
+            return Promise.reject(new Error("stopped before creation"));
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    await createIn(recording).then(() => undefined, (e) => e);
+
+    expect(ensures).toEqual([[{ reconcile: false }]]);
+    expect(programReads).toBe(0);
+  });
+
   it("reports a space name that reaches no space, naming the command that creates one", async () => {
     const space = await legacySpaceDid(SPACE_NAME);
     const pieces = new PiecesController(
@@ -107,6 +134,7 @@ describe("newPiece()", () => {
       "Could not initialize the space's default pattern: " +
         "root pattern unreadable",
     );
+    expect(error.message).toContain(cliCommand(["piece", "ls"]));
     expect(error.message).toContain(cliCommand(["space", "recreate-root"]));
     expect(error.message).not.toContain(cliCommand(["space", "create"]));
     expect(error.cause).toBe(failure);

@@ -24,6 +24,11 @@ const DECLARATIONS = `
   };
   function save() {}
   type Policy = WriteAuthorizedBy<string, typeof save>;
+  interface Holder<T> { readonly value: T }
+  interface HoldingCell<T> extends BrandedCell<T, "cell"> { readonly value: T }
+  interface HoldingStream<T> extends BrandedCell<T, "stream"> {
+    readonly event: T;
+  }
   interface Node { next: Node | null; value: string }
   type Expanding<T> = { value: T; next?: Expanding<T[]> };
   interface ExpandingNode<T> { value: T; next?: ExpandingNode<T[]> }
@@ -184,6 +189,24 @@ describe("writer-policy", () => {
 
       expect(holdsWriterPolicy(types.stamped, checker)).toBe(true);
       expect(holdsWriterPolicy(types.labelled, checker)).toBe(false);
+    });
+
+    it("returns `false` for a policy only the type a cell or a stream links to holds, and `true` for one a plain holder or a carrier around the link holds", async () => {
+      // A cell or a stream holds a link, and a policy inside the type it links
+      // to is the linked document's. A carrier around the link is a policy on
+      // the link itself.
+      const { checker, types } = await typesOf({
+        cellLink: "{ link: HoldingCell<Policy> }",
+        streamLink: "{ link: HoldingStream<{ value: Policy }> }",
+        plainHolder: "{ box: Holder<Policy> }",
+        carrierAroundLink:
+          "{ link: WriteAuthorizedBy<HoldingCell<string>, typeof save> }",
+      });
+
+      expect(holdsWriterPolicy(types.cellLink, checker)).toBe(false);
+      expect(holdsWriterPolicy(types.streamLink, checker)).toBe(false);
+      expect(holdsWriterPolicy(types.plainHolder, checker)).toBe(true);
+      expect(holdsWriterPolicy(types.carrierAroundLink, checker)).toBe(true);
     });
 
     it("returns `false` for labels alone, a function's result, and a recursive type holding no policy", async () => {

@@ -536,6 +536,86 @@ export default pattern(() => {
   assertEquals(holderSchemas, [holderSchema, holderSchema]);
 });
 
+Deno.test("assert compares a member read off `.get()` as a computed does", async () => {
+  const root = await transformed(
+    `import { assert, computed, equals, pattern, Writable } from "commonfabric";
+
+interface Item {
+  name: string;
+}
+
+interface Holder {
+  reason: string;
+  inbox: Writable<Item>;
+  unused: number;
+}
+
+export default pattern(() => {
+  const holder = new Writable<Holder>({} as Holder);
+  const other = new Writable<Item>({ name: "x" });
+  const asserted = assert(() =>
+    holder.get().reason === "no" && equals(holder.get().inbox, other)
+  );
+  const computedCheck = computed(() =>
+    holder.get().reason === "no" && equals(holder.get().inbox, other)
+  );
+  return { asserted, computedCheck };
+});`,
+  );
+
+  const holderSchema = {
+    type: "object",
+    properties: {
+      reason: { type: "string" },
+      inbox: { type: "unknown", asCell: ["comparable"] },
+    },
+    required: ["reason", "inbox"],
+    asCell: ["readonly"],
+  };
+
+  // The `.get()` chain is rebuilt for the lift, so the member the recording
+  // wraps has the recording for its parent, not `equals`. The member is still
+  // an argument the call compared, so it is not read where it stands: a read
+  // would end the identity use and hand the lift all of `Item`, writable.
+  const holderSchemas = liftInputSchemas(root).map((schema) =>
+    (schema as { properties: { holder: unknown } }).properties.holder
+  );
+  assertEquals(holderSchemas, [holderSchema, holderSchema]);
+});
+
+Deno.test("assert compares the cells it captures as a computed does", async () => {
+  const root = await transformed(
+    `import { assert, computed, equals, pattern, Writable } from "commonfabric";
+
+interface Item {
+  name: string;
+}
+
+export default pattern(() => {
+  const first = new Writable<Item>({ name: "x" });
+  const second = new Writable<Item>({ name: "y" });
+  const asserted = assert(() => equals(first, second));
+  const computedCheck = computed(() => equals(first, second));
+  return { asserted, computedCheck };
+});`,
+  );
+
+  const inputSchema = {
+    type: "object",
+    properties: {
+      first: { type: "unknown", asCell: ["comparable"] },
+      second: { type: "unknown", asCell: ["comparable"] },
+    },
+    required: ["first", "second"],
+  };
+
+  // Each capture is recorded, so its parent is the recording rather than
+  // `equals`. Taken for a value handed to an unknown callee, it would be read
+  // in full, and the lift would subscribe to all of each `Item` it only
+  // compares.
+  assertEquals(liftInputSchemas(root), [inputSchema, inputSchema]);
+});
+
 Deno.test("assert leaves an operator it does not record alone", async () => {
   const root = await transformed(patternSource(`
   const check = assert(() => (a.get(), b.get() === 2));

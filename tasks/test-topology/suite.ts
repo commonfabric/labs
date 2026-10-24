@@ -215,12 +215,12 @@ export interface Suite {
    * running.
    *
    * It is absent too where what a unit covers is a large part of the
-   * repository, since a declaration for such a unit comes to most
-   * changes and places it in most lanes by declaration rather than by
-   * what it has caught. Such a unit reaches a lane on what it is worth,
-   * or because nothing has a record of it. The type check is the exception:
-   * a change reaches every type-check group importing what it touches,
-   * however many that is, since no `deno test` checks types.
+   * repository, since a declaration for such a unit comes to most changes and
+   * places it in most lanes by declaration rather than by its new real test
+   * failures. Such a unit reaches a lane on what it is worth, or because
+   * nothing has a record of it. The type check is the exception: a change
+   * reaches every type-check group importing what it touches, however many that
+   * is, since no `deno test` checks types.
    */
   unitsForChange?(changed: ReadonlySet<string>): readonly Unit[];
 
@@ -232,14 +232,36 @@ export interface Suite {
    */
   measured?: readonly MeasuredSet[];
 
+  /**
+   * What each unit judges, for a suite whose units are verdicts over other
+   * suites' units rather than anything a lane runs. Choosing such a unit
+   * runs every unit it judges, whole, and something outside the lanes
+   * reaches the verdict from what they produced and records it under the
+   * unit's identity. Absent for every suite a lane runs.
+   */
+  judges?: ReadonlyMap<Unit, Judged>;
+
   /** Whether a record belongs to one of this suite's units, or to it. */
   locate(record: LocatableRecord): Location | undefined;
 
-  /** The commands that run exactly these units, and their reports. */
+  /**
+   * The commands that run exactly these units, and their reports. Each
+   * unit goes to one command, so that what a command recorded is the
+   * whole of what was recorded of the units it ran.
+   */
   command(
     units: readonly UnitRequest[],
     context: CommandContext,
   ): Promise<Invocation[]>;
+}
+
+/** The units of another suite one verdict is reached over, and its name. */
+export interface Judged {
+  suite: string;
+  units: readonly Unit[];
+
+  /** The identity the verdict is recorded under. */
+  identity: TestIdentity;
 }
 
 /**
@@ -281,10 +303,11 @@ export interface MeasuredSet {
   member: string;
 
   /**
-   * The paths a change reaches this set by. Reaching it makes every unit
-   * below mandatory, which is the same declaration vocabulary that
-   * reaches a unit no diff can name, so one mechanism answers "what did
-   * this change touch" wherever the question comes up.
+   * The paths a change reaches this set by. Reaching it lets a plan choose
+   * the set's coverage gate, which runs every unit below. It is the same
+   * declaration vocabulary that reaches a unit no diff can name, so one
+   * mechanism answers "what did this change touch" wherever the question
+   * comes up.
    */
   reachedBy: ReachedBy;
 

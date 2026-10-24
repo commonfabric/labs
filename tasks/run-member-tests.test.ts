@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 import { afterEach, describe, it } from "@std/testing/bdd";
 
 import {
@@ -44,7 +45,7 @@ async function run(
       "run",
       "--allow-read",
       `--allow-run=${deno}`,
-      new URL("./run-member-tests.ts", import.meta.url).pathname,
+      fromFileUrl(new URL("./run-member-tests.ts", import.meta.url)),
       ...args,
     ],
     cwd: dir,

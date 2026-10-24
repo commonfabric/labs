@@ -29,6 +29,7 @@ async function followResultCellChain(
   rootCell: Cell<any>,
   tx: IExtendedStorageTransaction,
   observedDocIds: string[],
+  observedDocs: OwningRootAddress[],
   signal?: AbortSignal,
 ): Promise<Cell<any> | undefined> {
   let currentCell = rootCell;
@@ -46,6 +47,7 @@ async function followResultCellChain(
     visited.push(link);
     const currentId = link.id;
     if (!observedDocIds.includes(currentId)) observedDocIds.push(currentId);
+    observedDocs.push({ space: link.space, id: link.id, scope: link.scope });
 
     await currentCell.sync();
     signal?.throwIfAborted();
@@ -122,6 +124,10 @@ export type EnsurePieceVerdict = {
   /** Every doc id the traversal read (the demanded root plus chain
    * links): the demand cycle's commit-triggered re-arm watches these. */
   observedDocIds: string[];
+
+  /** Every doc the traversal read, as `observedDocIds` names them but with
+   * the space and scope that tell same-ID docs apart. */
+  observedDocs: OwningRootAddress[];
 };
 
 /** Options of {@link ensurePieceRunningVerdict}. */
@@ -158,6 +164,7 @@ export async function ensurePieceRunningVerdict(
   options?: EnsurePieceOptions,
 ): Promise<EnsurePieceVerdict> {
   const observedDocIds: string[] = [];
+  const observedDocs: OwningRootAddress[] = [];
   const signal = options?.signal;
   try {
     signal?.throwIfAborted();
@@ -181,11 +188,17 @@ export async function ensurePieceRunningVerdict(
         rootCell,
         tx,
         observedDocIds,
+        observedDocs,
         signal,
       );
       signal?.throwIfAborted();
       if (resultCell === undefined) {
-        return { started: false, reason: "chain-cycle", observedDocIds };
+        return {
+          started: false,
+          reason: "chain-cycle",
+          observedDocIds,
+          observedDocs,
+        };
       }
       const { space, id: rootId, scope } = resultCell
         .getAsNormalizedFullLink();
@@ -205,6 +218,7 @@ export async function ensurePieceRunningVerdict(
           reason: "no-pattern-meta",
           root,
           observedDocIds,
+          observedDocs,
         };
       }
 
@@ -230,6 +244,7 @@ export async function ensurePieceRunningVerdict(
           reason: "pattern-unloadable",
           root,
           observedDocIds,
+          observedDocs,
         };
       }
 
@@ -256,6 +271,7 @@ export async function ensurePieceRunningVerdict(
           runtime.runner.pieceGraphIsInstalled(resultCell),
         root,
         observedDocIds,
+        observedDocs,
       };
     } catch (error) {
       if (signal?.aborted) {
@@ -274,7 +290,7 @@ export async function ensurePieceRunningVerdict(
   } catch (error) {
     if (options?.propagateErrors === true) throw error;
     logger.error("ensure-piece", "Error ensuring piece is running:", error);
-    return { started: false, observedDocIds };
+    return { started: false, observedDocIds, observedDocs };
   }
 }
 

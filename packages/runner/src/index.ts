@@ -7,7 +7,14 @@ export { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-r
 export { lookupSchemaDocument } from "./schema-registry.ts";
 export { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
 export { FOREIGN_HOST_LIMIT, Runtime } from "./runtime.ts";
-export { type ConfirmedRead, readConfirmed } from "./confirmed-read.ts";
+export type { RuntimeSizes } from "./runtime-sizes.ts";
+export { hasInlineCellScheme } from "./immutable-cell.ts";
+export {
+  type ConfirmedRead,
+  type DurableRead,
+  readConfirmed,
+  readDurable,
+} from "./confirmed-read.ts";
 export { handlingCommittedBy } from "./handling-commit.ts";
 export { ensureSESLockdown } from "./sandbox/ses-runtime.ts";
 export {
@@ -133,6 +140,8 @@ export {
   cellTx,
   convertCellsToLinks,
   encodeSqliteParams,
+  EventDeliveryError,
+  type EventDeliveryFailure,
   exportCell,
   hostValueOf,
   isCell,
@@ -192,7 +201,6 @@ export {
   resolveLinkTracingDereferences,
 } from "./link-resolution.ts";
 export {
-  areLinksSame,
   getDerivedInternalCellLink,
   getMetaLink,
   isCellLink as isLink,
@@ -204,6 +212,7 @@ export {
   parseLLMFriendlyLink,
   sanitizeSchemaForLinks,
 } from "./link-utils.ts";
+export { areLinksSame } from "./link-equality.ts";
 export * from "./pattern-manager.ts";
 export {
   createSpaceRootIfAbsent,
@@ -235,6 +244,7 @@ export {
   type PieceOriginKind as PieceOriginClassification,
 } from "./piece-origin-kind.ts";
 export {
+  isEarlierRelease,
   type ReconcileOutcome,
   SourceReconciler,
 } from "./source-reconciler.ts";
@@ -250,14 +260,18 @@ export {
   getPieceSourceSnapshot,
   inSpaceRootCause,
   isStoredArgumentSchemaRefusal,
+  keepLaterConfirmation,
+  knownPieceReleasedAt,
   mergeSchemaDefaults,
   patternIdentityKey,
   type PatternSetupCommitReceipt,
   PatternSetupPostCommitError,
+  PIECE_RELEASE_OVERTAKEN,
   PIECE_SOURCE_MOVED,
   type PieceReconciliation,
   type PieceReconciliationOutcome,
   type PieceReconciliationReason,
+  pieceSourceMovedPast,
   type PieceSourceRevision,
   type PieceSourceRevisionOperation,
   type PieceSourceSnapshot,
@@ -276,6 +290,12 @@ export {
   setPieceReconciliation,
   STORED_ARGUMENT_SCHEMA_REFUSAL,
 } from "./runner.ts";
+export {
+  type RefusedArgumentSlot,
+  type RefusedArgumentSlots,
+  refusedArgumentSlotsCause,
+  refusedArgumentSlotsCell,
+} from "./refused-argument-slots.ts";
 
 // Builder functionality (migrated from @commonfabric/builder package)
 export { createBuilder, type CreateBuilderOptions } from "./builder/factory.ts";
@@ -342,7 +362,10 @@ export {
   WebhookConfigSchema,
 } from "./builder/types.ts";
 export { createNodeFactory } from "./builder/module.ts";
-export { attestedPrincipalsAt } from "./builder/principal-of.ts";
+export {
+  attestedPrincipalsAt,
+  profileNameWrittenAt,
+} from "./builder/principal-of.ts";
 export { reactive as cell } from "./builder/reactive.ts";
 export {
   CFC_ATOM_TYPE,
@@ -437,6 +460,7 @@ export {
 export { schemaPathSelection } from "./schema-path.ts";
 export {
   acceptsOpaqueCellOrUnresolvedLink,
+  materializeStoredValueForValidation,
   overlayUnreadableLinkPlaceholders,
   storedArgumentValidationIssue,
 } from "./stored-argument-validation.ts";

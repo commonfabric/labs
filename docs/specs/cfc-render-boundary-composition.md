@@ -52,17 +52,18 @@ each slot holding a link the read followed, which a dereference retains
   is decided on that document's label as well as the table's. A view a child
   reaches through a link, as a pattern's output does through `[UI]`, is part
   of the child's read, so a refused view renders as the placeholder.
-- A property whose value is read through a link, or is an object, is read by a
-  sink of its own and decided on that read. A property the ceiling refuses is
-  not set, and is removed if it was. That covers a cell passed as a property
-  (`<span title={cell}>`) and, in a view read from a cell, as a pattern's view
-  is, a property that links to one and an object or `style` property holding
-  such a link. A literal property is decided with the props object it sits in:
-  it is set directly while the ceiling admits that object's own label, and
-  read by a sink of its own, like the others, while it does not, as when the
-  view or its props are linked from a document of their own. An object written
-  inline in a view built outside a cell sends a cell it holds as a link, not as
-  the cell's value.
+- A property whose value is read through a link, or is an object the view's
+  schema does not state, is read by a sink of its own and decided on that
+  read. A property the ceiling refuses is not set, and is removed if it was.
+  That covers a cell passed as a property (`<span title={cell}>`) and, in a
+  view read from a cell, as a pattern's view is, a property that links to one
+  and an object or `style` property holding such a link. A literal property,
+  a `style` object holding no link among them, is decided with the props
+  object it sits in: it is set directly while the ceiling admits that object's
+  own label, and read by a sink of its own, like the others, while it does
+  not, as when the view or its props are linked from a document of their own.
+  An object written inline in a view built outside a cell sends a cell it
+  holds as a link, not as the cell's value.
 - A `$` binding is made only while the ceiling admits the worker's read of
   the bound cell, under the cell's schema; a nested render root is decided on
   the reads its component makes instead, as the nested-render paragraphs
@@ -99,7 +100,9 @@ Regression guards: `test/worker-reconciler-cfc-prop-ceiling.test.ts`.
 
 `cf-render` shows what its `cell` binding names only through renders of its
 own, each mounted from the cell's reference under the root ceiling, the way the
-shell mounts a piece opened by its address. What reaches the page through it
+shell mounts a piece opened by its address. A render that displays the piece
+opens it the way navigating to it does (`getPiece` with `runIt`); running it
+adds values to render and changes no gate. What reaches the page through it
 passes the same confidentiality gates as opening the piece, the blocked
 placeholder included, with the exceptions listed below. Such a binding is a
 nested render root. The component read contract

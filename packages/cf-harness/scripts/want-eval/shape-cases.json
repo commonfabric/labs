@@ -1,0 +1,50 @@
+{
+  "variants": {
+    "default": {},
+    "deep": {
+      "depth": "deep"
+    }
+  },
+  "cases": [
+    {
+      "id": "thanks",
+      "text": "thanks!",
+      "expect": "A brief acknowledgement; no tools."
+    },
+    {
+      "id": "capital",
+      "text": "What is the capital of Australia?",
+      "expect": "Canberra, answered from knowledge; no research."
+    },
+    {
+      "id": "calendar-tomorrow",
+      "text": "What's on my calendar tomorrow?",
+      "expect": "Tomorrow's events from the person's calendar, or a plain statement of which calendars could not be read."
+    },
+    {
+      "id": "dentist-absence",
+      "text": "Has anyone emailed me about a dentist appointment in the last month?",
+      "expect": "An answer that names the sources it searched; absence reported only for the scope actually checked."
+    },
+    {
+      "id": "deno-release",
+      "text": "What is the latest stable release of Deno?",
+      "expect": "A version number fetched from the web, with where it came from."
+    },
+    {
+      "id": "heat-pump",
+      "text": "Research the trade-offs between a heat pump and a gas boiler for a small two-bedroom house, and recommend one.",
+      "expect": "A considered comparison with a recommendation, landed as material rather than a one-line tile; sources where it used the web."
+    },
+    {
+      "id": "fabric-reactivity",
+      "text": "How does a Common Fabric pattern react when a cell it reads changes?",
+      "expect": "An accurate explanation grounded in Common Fabric docs or source."
+    },
+    {
+      "id": "plan-week",
+      "text": "Help me plan my week.",
+      "expect": "A plan grounded in the person's calendar and commitments, or the reading taken and what it rests on."
+    }
+  ]
+}

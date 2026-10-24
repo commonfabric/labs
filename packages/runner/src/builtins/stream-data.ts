@@ -7,8 +7,9 @@ import { createFrozenRequestSnapshot } from "../cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import { effectTargetKey } from "../executor/effect-completion.ts";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
-import { ownedCell } from "./runtime-owned-store.ts";
+import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 import { setResultCell } from "../result-utils.ts";
+import { type RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -35,7 +36,14 @@ export function streamData(
   cause: Cell<any>[],
   parentCell: Cell<any>,
   runtime: Runtime, // Runtime will be injected by the registration function
-): Action {
+): RawBuiltinResult {
+  // The stores this node keeps, each keyed by its cause alone, so the
+  // action declares them when it is set up.
+  const stores = {
+    pending: { streamData: { pending: cause } },
+    result: { streamData: { result: cause } },
+    error: { streamData: { error: cause } },
+  };
   const status = { run: 0, controller: undefined } as {
     run: number;
     controller: AbortController | undefined;
@@ -49,7 +57,7 @@ export function streamData(
   let error: Cell<any | undefined>;
   let cellScope: CellScope | undefined;
 
-  return (tx: IExtendedStorageTransaction) => {
+  const action: Action = (tx: IExtendedStorageTransaction) => {
     // Deferred under server-execution v2: disabled while the flag is on, with
     // nothing half-working — no cells are minted and no request starts
     // (docs/specs/server-side-execution/builtins.md §5).
@@ -72,7 +80,7 @@ export function streamData(
         runtime,
         tx,
         parentCell,
-        { streamData: { pending: cause } },
+        stores.pending,
         undefined,
         outputScope,
       );
@@ -82,9 +90,7 @@ export function streamData(
         runtime,
         tx,
         parentCell,
-        {
-          streamData: { result: cause },
-        },
+        stores.result,
         undefined,
         outputScope,
       );
@@ -93,9 +99,7 @@ export function streamData(
         runtime,
         tx,
         parentCell,
-        {
-          streamData: { error: cause },
-        },
+        stores.error,
         undefined,
         outputScope,
       );
@@ -283,6 +287,10 @@ export function streamData(
         },
       },
     );
+  };
+  return {
+    action,
+    storeWrites: ownedStoreLinks(runtime, parentCell, Object.values(stores)),
   };
 }
 

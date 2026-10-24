@@ -31,6 +31,7 @@ function stubRuntime(log: string[], name: string) {
       ensured.resolve();
       return Promise.resolve({});
     },
+    joinVisitedRoom: () => Promise.resolve(undefined),
   };
   const rt = {
     signal: new AbortController().signal,

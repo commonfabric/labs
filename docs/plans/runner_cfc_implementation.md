@@ -40,8 +40,8 @@ Use a disciplined per-slice workflow while executing this plan:
 
 ## Goal
 
-Move from schema-guided IFC propagation to a runner/storage boundary that
-enforces CFC at commit time.
+Move from schema-guided information flow control (IFC) propagation to a
+runner/storage boundary that enforces CFC at commit time.
 
 At the end of this work:
 

@@ -3,7 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { internSchema } from "@commonfabric/data-model-schema";
 
-import type { JSONSchema } from "../../src/builder/types.ts";
+import type { JSONSchema, JSONSchemaObj } from "../../src/builder/types.ts";
 import { droppedStoredClaim } from "../../src/cfc/claim-preservation.ts";
 import { mergeCfcSchemaEnvelopes } from "../../src/cfc/schema-merge.ts";
 import {
@@ -68,6 +68,65 @@ describe("droppedStoredClaim()", () => {
       "the merged schema drops the stored uiContract at /node/child/pin",
     );
     expect(droppedStoredClaim(stored, stored)).toBeUndefined();
+  });
+
+  it("returns `undefined` for a merge whose candidate unrolls a stored recursive definition less deeply", () => {
+    // A message links the message it replies to, so its definition names
+    // itself. The stored envelope writes two levels out before it refers to
+    // the definition; the writer's schema refers to it at once, under a
+    // stamp of its own. Where the two references meet again, the merge
+    // keeps the stored stamp beneath, as it does above.
+
+    const stamped = (moduleIdentity: string) => ({
+      writePolicyAnyOf: [{
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: {
+            file: "/room.tsx",
+            path: ["react"],
+            moduleIdentity,
+          },
+        },
+        uiContract: CONTRACT,
+      }],
+    });
+    const message = (replyTo: JSONSchema): JSONSchemaObj => ({
+      type: "object",
+      properties: {
+        body: { type: "string" },
+        reactions: {
+          type: "array",
+          items: { $ref: "#/$defs/Reaction" },
+          asCell: ["cell"],
+        },
+        replyTo,
+      },
+    });
+    const reply = (message: JSONSchemaObj): JSONSchemaObj => ({
+      type: "object",
+      properties: { message: { ...message, asCell: ["cell"] } },
+    });
+    const definitions = (
+      moduleIdentity: string,
+    ): Record<string, JSONSchemaObj> => ({
+      Message: message({ $ref: "#/$defs/Reply" }),
+      Reply: reply({ $ref: "#/$defs/Message" }),
+      Reaction: {
+        type: "object",
+        properties: { emoji: { type: "string" } },
+        ifc: stamped(moduleIdentity),
+      },
+    });
+    const stored: JSONSchema = {
+      ...message(reply(message({ $ref: "#/$defs/Reply" }))),
+      $defs: definitions("m1"),
+    };
+    const candidate: JSONSchema = {
+      ...message({ $ref: "#/$defs/Reply" }),
+      $defs: definitions("m2"),
+    };
+    expect(
+      droppedStoredClaim(stored, mergeCfcSchemaEnvelopes(stored, candidate)),
+    ).toBeUndefined();
   });
 
   it("returns a claim held in one arm of a stored `anyOf` the merged arms do not keep", () => {

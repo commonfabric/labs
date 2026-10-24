@@ -78,8 +78,13 @@ Private declarations behind local or external schema references merge at their
 value paths. Reusing one definition at two fields does not combine their stored
 creators. Unchanged IFC policy and reference structure retain recursive
 references through public value-shape changes, including optional fields inside
-private objects. Changed recursive policy graphs that require expansion are
-refused; unrelated recursive schemas remain supported.
+private objects. A level one side writes out and the other names resolves at
+that level. Where the two name a recursive definition differently, the merge
+names a merged definition of the two, which holds the stored write claims at
+every level, so a writer whose schema reaches the recursion sooner than the
+stored envelope does is not refused for it. Changed recursive confidentiality
+graphs that require expansion are refused; unrelated recursive schemas remain
+supported.
 Held references derive their labels from the source's creator binding during
 commit, including when the source is created in that transaction. A later writer
 holding the reference does not replace the source's bound principal.

@@ -7,16 +7,17 @@
  * anything — which would leave a broken compile to be found on `main`,
  * after the change that broke it has merged. These suites keep it a
  * pull-request signal by making the build a test like any other: it has
- * an identity, it accumulates a record of what it has caught, and the
- * packer can choose it.
+ * an identity, it accumulates a record of its new real test failures,
+ * and the packer can choose it.
  *
  * Nothing forces one to run. A binary the store has never seen is
  * unknown and therefore mandatory, so each is built once; after that it
- * sits at the value floor until it catches something. When a compile
- * does break, `main` catches it, and a `main` catch is weighted half
- * again for being exactly the escape this system exists to stop — one of
- * them lifts a build from the floor to several times it, which is enough
- * to be chosen against a corpus where almost nothing has ever failed.
+ * sits at the value floor until it has a new real test failure. When a
+ * compile does break, `main` catches it, and a new real test failure on
+ * `main` is weighted half again for being exactly the escape this system
+ * exists to stop — one of them lifts a build from the floor to several
+ * times it, which is enough to be chosen against a corpus where almost
+ * nothing has ever failed.
  * That feedback loop is the mechanism. A hand-maintained map from
  * changed paths to binaries would be the kind of transcribed table this
  * design exists to delete, and it would go stale the first time an

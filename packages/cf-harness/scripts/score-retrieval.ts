@@ -19,6 +19,7 @@
  * time someone publishes.
  */
 
+import { fromFileUrl } from "@std/path";
 import {
   PatternIndexClient,
   type PatternIndexListedPattern,
@@ -157,7 +158,9 @@ export const main = async (
   const setPath = flag(
     args,
     "queries",
-    new URL("./pattern-index-retrieval-queries.json", import.meta.url).pathname,
+    fromFileUrl(
+      new URL("./pattern-index-retrieval-queries.json", import.meta.url),
+    ),
   );
   const outPath = flag(args, "out", "");
   const minHitAt5Text = flag(args, "min-hit-at-5", "0");

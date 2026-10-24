@@ -306,6 +306,44 @@ describe("test-records-gather", () => {
         await Deno.remove(dir, { recursive: true });
       }
     });
+
+    it("returns what each outermost describe's hooks took, in the declared variant", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "test-records-gather-" });
+      try {
+        await Deno.writeTextFile(
+          join(dir, "results.xml"),
+          `<testsuites>
+  <testsuite name="./oven.test.ts">
+    <testcase name="oven" classname="./oven.test.ts" time="5.000"/>
+  </testsuite>
+  <testsuite name="ext:cli/40_test.js">
+    <testcase name="oven &gt; bakes" classname="ext:cli/40_test.js" time="1.500"/>
+  </testsuite>
+</testsuites>`,
+        );
+        const { records, hooks } = await collectRecords({
+          junit: [{
+            kind: "integration",
+            scope: "bakery",
+            prefix: "packages/bakery",
+            glob: join(dir, "*.xml"),
+          }],
+          variant: "wood-fired",
+        });
+        expect(records.map((record) => record.test.n)).toEqual([
+          "oven > bakes",
+        ]);
+        expect(hooks).toEqual([{
+          line: "record",
+          test: { k: "integration", s: "bakery", n: "oven", v: "wood-fired" },
+          outcome: "pass",
+          durationMs: 3500,
+          file: "packages/bakery/oven.test.ts",
+        }]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
   });
 
   describe("the command line continuous integration runs", () => {

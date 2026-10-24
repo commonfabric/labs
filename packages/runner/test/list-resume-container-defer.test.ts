@@ -1,7 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
 import { Identity } from "@commonfabric/identity";
 import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
@@ -22,6 +21,7 @@ import {
   newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
+import { hasInlineCellScheme } from "../src/immutable-cell.ts";
 
 // Container-defer guard for the list builtins (filter / flatMap / map).
 //
@@ -916,7 +916,7 @@ describe("list builtin resume container defer", () => {
       // the server stores.
       for (const id of elementLinkIds) {
         expect(id).not.toBe(created.containerId);
-        if (hasDataUriScheme(id)) continue;
+        if (hasInlineCellScheme(id)) continue;
         expect(
           [...persisted.values()].some((entry) => entry.id === id),
         ).toBe(true);

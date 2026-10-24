@@ -17,8 +17,13 @@
 import type { JSONSchema } from "@commonfabric/api";
 import { type DID, Identity } from "@commonfabric/identity";
 import { createTestSpace } from "@commonfabric/integration/test-space";
+import {
+  streamEntriesDocId,
+  type StreamEventsDocValue,
+} from "@commonfabric/memory/v2";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import type { Immutable } from "@commonfabric/utils/types";
 import { join } from "@std/path";
 import {
   initializePiecesController,
@@ -247,6 +252,69 @@ export async function topicAt(
     board.pieces(),
     topics.key(index).resolveAsCell(),
   );
+}
+
+/** What a topic stores of the references its `mention` verb records. */
+export interface TopicMentionState {
+  /** The topic's `mentioned` list, raw: one link per referenced piece. */
+  mentioned: unknown;
+
+  /**
+   * The durable entries of the topic's `mention` stream under server
+   * execution, each with whether the server has applied it (`consequenced`)
+   * or ended it another way (`status`, `error`). Absent where the stream holds
+   * no entries.
+   */
+  mentionEvents: Immutable<StreamEventsDocValue["entries"]>;
+}
+
+/**
+ * Read what the topic `pieceId` in `spaceDid` stores of its mentions, through a
+ * runtime of its own rather than any page's. A topic whose references never
+ * render either never had the `mention` applied, which its stream entry shows,
+ * or had it applied and lost it on the way to the page, which `mentioned`
+ * shows.
+ */
+export async function readTopicMentionState(options: {
+  apiUrl: URL;
+  identity: Identity;
+  spaceDid: DID;
+  pieceId: string;
+}): Promise<TopicMentionState> {
+  const cc = await initializePiecesController({
+    space: options.spaceDid,
+    apiUrl: options.apiUrl,
+    identity: options.identity,
+  });
+  try {
+    const topic = await cc.get(options.pieceId);
+    const result = await topic.result.getCell();
+    // The result holds links rather than values: the list and the stream are
+    // the topic's own cells, which those links resolve to.
+    const mentionedLink = result.key("mentioned");
+    const mentionLink = result.key("mention");
+    await Promise.all([mentionedLink.pull(), mentionLink.pull()]);
+    const mentioned = mentionedLink.resolveAsCell();
+    await mentioned.sync();
+    // The stream's entries live in a sidecar doc addressed by the stream's
+    // cell.
+    const stream = mentionLink.resolveAsCell().getAsNormalizedFullLink();
+    const entries = cc.runtime.getCellFromEntityId<StreamEventsDocValue>(
+      options.spaceDid,
+      streamEntriesDocId({
+        id: stream.id,
+        path: stream.path,
+        ...(stream.scope === undefined ? {} : { scope: stream.scope }),
+      }),
+    );
+    await entries.sync();
+    return {
+      mentioned: mentioned.getRaw(),
+      mentionEvents: entries.getRaw()?.entries,
+    };
+  } finally {
+    await cc.dispose();
+  }
 }
 
 /**

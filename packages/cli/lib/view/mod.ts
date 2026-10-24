@@ -6,8 +6,8 @@
  * representation and exits, mirroring how `less`/`bat` behave when their
  * output is redirected.
  * Filename-free compiler output keeps the transformed TypeScript default.
- * Other source uses filename and shebang metadata unless an explicit language
- * selects another language.
+ * Other source uses filename, shebang, and signature metadata unless an
+ * explicit language selects another language.
  */
 
 import { renderLineColored } from "./highlight.ts";

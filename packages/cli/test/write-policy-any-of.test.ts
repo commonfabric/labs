@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
-import { cf } from "./utils.ts";
+import { argv, cf } from "./utils.ts";
 
 describe("write-policy-any-of", () => {
   // The fixture's steps admit each named writer through its own reviewed
@@ -16,7 +16,7 @@ describe("write-policy-any-of", () => {
       import.meta.dirname!,
       "fixtures/write-policy-any-of/two-writers.test.tsx",
     );
-    const { code, stdout } = await cf(`test "${fixture}"`);
+    const { code, stdout } = await cf(argv`test ${fixture}`);
     expect(code).toBe(0);
     expect(stdout.join("\n")).toMatch(/^7 passed, 0 failed \(/m);
   });

@@ -105,6 +105,22 @@ export function ownedCell<T = any>(
 }
 
 /**
+ * The documents the stores this node keeps under each of `causes` live in,
+ * named without minting them, for a builtin to declare at setup as
+ * {@link RawBuiltinResult.storeWrites}. Each is the document {@link ownedCell}
+ * mints from the same cause, at whatever instance scope it later addresses.
+ */
+export function ownedStoreLinks(
+  runtime: Runtime,
+  owner: Cell<any>,
+  causes: readonly unknown[],
+): NormalizedFullLink[] {
+  return causes.map((cause) =>
+    runtime.getCell(owner.space, cause).getAsNormalizedFullLink()
+  );
+}
+
+/**
  * Enroll `store` as a store the runtime owns for `owner`'s piece, so a
  * transaction that neither minted it nor re-marked it still finds it, until
  * that piece's nodes are cancelled. Pairs with {@link

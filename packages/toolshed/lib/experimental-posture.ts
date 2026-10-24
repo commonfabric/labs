@@ -8,17 +8,16 @@
  * Held here rather than read off the Runtime at request time because the meta
  * route is part of the app and the Runtime is constructed by the process that
  * serves it: reaching for the instance would make the route import the
- * server's entry point. The startup path publishes what the Runtime ACTUALLY
- * resolved, so what a client reads is the effective posture — built-in
- * defaults and preset resolution included — never a second reading of the
- * environment that could disagree with the first.
+ * server's entry point. The startup path publishes resolved runtime defaults
+ * and the deployment's client policies. The webhook runtime keeps its own
+ * session storage synchronized while clients can opt into local storage.
  *
  * Two halves, because a serving process runs two kinds of runtime: the
  * generic one this toolshed constructs for webhook pattern execution, whose
- * resolved flags are the base, and the per-space SERVING runtimes the
- * executor host builds under server-execution, which force a posture of their
- * own on top. The base alone would tell a client the deployment runs flags it
- * does not.
+ * resolved defaults and deployment client flags are the base, and the
+ * per-space SERVING runtimes the executor host builds under server execution,
+ * which force a posture of their own on top. The base alone would tell a
+ * client the deployment runs flags it does not.
  *
  * Module state, and one process serves one deployment; the tests that publish
  * a posture reset it, because nothing else would.
@@ -53,7 +52,8 @@ function booleanFlags(
 }
 
 /**
- * Record a constructed Runtime's resolved flags. Flags the runtime left
+ * Record the resolved deployment flags, including client policies the webhook
+ * runtime overrides for its own storage. Flags the runtime left
  * unresolved are omitted rather than published as `false`: a client reads an
  * absent flag as "this server said nothing", and keeps its own default.
  *
@@ -72,7 +72,7 @@ export function publishExperimentalPosture(
  * serving runtimes are the ones doing the deployment's work, and they run a
  * posture the generic webhook runtime does not: a client told only the base
  * would adopt a value this deployment is not using. Every other flag reaches
- * both runtimes from the same environment, so the base carries it.
+ * the base from the deployment environment, including client-only policies.
  *
  * Pass `null` when the serving loop is not running, which is also the state
  * before it starts and after it stops.
