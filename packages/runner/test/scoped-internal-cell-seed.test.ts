@@ -5,6 +5,7 @@
  */
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
@@ -424,6 +425,223 @@ describe("scoped-internal-cell-seed", () => {
     }
   });
 
+  it("seeds a piece's session defaults in one transaction, each under the owning piece's label", async () => {
+    // A fresh session owes the piece every one of its session-scoped
+    // defaults. They are seeded together: one bookkeeping transaction per
+    // piece instance, one commit on the server, and every seed carries the
+    // label the piece's root read brings in — the same label each would have
+    // carried from a transaction of its own, since no seed reads another.
+    const first = openRuntime(owner);
+    const compiled = await first.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+          import { pattern, Writable } from "commonfabric";
+          export default pattern<Record<string, never>>(() => ({
+            tab: Writable.perSession.of<string>("overview"),
+            filter: Writable.perSession.of<string>(""),
+            sort: Writable.perSession.of<string>("newest"),
+          }));`,
+      }],
+    }, { space });
+    const original = first.getCell(space, "three session defaults");
+    await first.runSynced(original, compiled, {});
+    await first.idle();
+    const committedPersonalSpace = {
+      type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+      owner: commitCfcFieldValue(space),
+    };
+    const protect = first.edit();
+    setCfcImplementationIdentity(protect, {
+      kind: "builtin",
+      builtinId: "scoped-seed-owner-policy",
+    });
+    applyCfcPolicyToExistingValue(
+      original.withTx(protect).asSchema({
+        ifc: { confidentiality: [committedPersonalSpace] },
+      }),
+    );
+    expect((await protect.commit().settled).error).toBeUndefined();
+    // The control: the same default seeded alone, from a transaction of its
+    // own, under the same policy. Its label is what each batched seed must
+    // carry — no more (a seed tainted by its transaction-mates) and no less.
+    const controlCompiled = await first.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+          import { pattern, Writable } from "commonfabric";
+          export default pattern<Record<string, never>>(() => ({
+            tab: Writable.perSession.of<string>("overview"),
+          }));`,
+      }],
+    }, { space });
+    const controlOriginal = first.getCell(space, "one session default");
+    await first.runSynced(controlOriginal, controlCompiled, {});
+    await first.idle();
+    const protectControl = first.edit();
+    setCfcImplementationIdentity(protectControl, {
+      kind: "builtin",
+      builtinId: "scoped-seed-owner-policy",
+    });
+    applyCfcPolicyToExistingValue(
+      controlOriginal.withTx(protectControl).asSchema({
+        ifc: { confidentiality: [committedPersonalSpace] },
+      }),
+    );
+    expect((await protectControl.commit().settled).error).toBeUndefined();
+    await first.storageManager.synced();
+
+    const second = openRuntime(owner);
+    const secondManager = opened[opened.length - 1].manager;
+    const stamps: string[] = [];
+    const stamp = second.stampServerRun.bind(second);
+    const stamping = stub(second, "stampServerRun", (tx, info) => {
+      if (info.actionId.startsWith("scoped-default/")) {
+        stamps.push(info.actionId.slice("scoped-default/".length));
+      }
+      stamp(tx, info);
+    });
+    try {
+      const piece = second.getCell(space, "three session defaults");
+      await piece.sync();
+      expect(await second.runner.start(piece)).toBe(true);
+      await second.idle();
+      await secondManager.synced();
+    } finally {
+      stamping.restore();
+    }
+    const piece = second.getCell(space, "three session defaults");
+    const cells = (["tab", "filter", "sort"] as const).map((key) =>
+      piece.key(key).resolveAsCell()
+    );
+    expect(cells.map((cell) => cell.getRawUntyped())).toEqual([
+      "overview",
+      "",
+      "newest",
+    ]);
+    for (const cell of cells) {
+      expect(cell.getMetaRaw("result")).toEqual(
+        original.key("tab").resolveAsCell().getMetaRaw("result"),
+      );
+    }
+    // One bookkeeping run named all three seeds ...
+    expect(stamps).toHaveLength(1);
+    expect(stamps[0].split(",").toSorted()).toEqual(
+      cells.map((cell) => cell.getAsNormalizedFullLink().id).toSorted(),
+    );
+    // ... and the server saw one commit from the second session.
+    const writer = server.commitRates().spaces
+      .find((entry) => entry.space === space)?.writers
+      .find((entry) => entry.session === secondManager.id);
+    expect(writer?.tenMinutes.accepted).toBe(1);
+    // The control seeds alone in this session, in its own transaction.
+    const controlPiece = second.getCell(space, "one session default");
+    await controlPiece.sync();
+    expect(await second.runner.start(controlPiece)).toBe(true);
+    await second.idle();
+    const controlCell = controlPiece.key("tab").resolveAsCell();
+    expect(controlCell.getRawUntyped()).toBe("overview");
+    // Each seed carries the piece's committed personal-space label, and
+    // exactly the label the control's lone seed carries.
+    const inspect = second.edit();
+    try {
+      const control = readStoredCfcMetadata(
+        inspect,
+        controlCell.getAsNormalizedFullLink(),
+      )?.labelMap.entries;
+      expect(control).toBeDefined();
+      const stamped = cells.map((cell) =>
+        readStoredCfcMetadata(inspect, cell.getAsNormalizedFullLink())
+          ?.labelMap.entries
+      );
+      for (const entries of stamped) {
+        expect(entries).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            path: [],
+            origin: "derived",
+            observes: "value",
+            label: expect.objectContaining({
+              confidentiality: expect.arrayContaining([committedPersonalSpace]),
+            }),
+          }),
+        ]));
+      }
+      expect(stamped[0]).toEqual(control);
+      expect(stamped[1]).toEqual(control);
+      expect(stamped[2]).toEqual(control);
+    } finally {
+      inspect.abort("batched seed label assertions complete");
+    }
+  });
+  it("seeds an absent default beside a present labeled sibling without taking its label", async () => {
+    // Seeds share their piece's transaction, so a sibling that is already
+    // present is only probed, never written. The probe must not join the
+    // flow: a label the sibling's value carries belongs to that value, and a
+    // constant default seeded beside it derives nothing from it.
+    const first = openRuntime(owner);
+    const compiled = await first.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+          import { pattern, Writable } from "commonfabric";
+          export default pattern<Record<string, never>>(() => ({
+            kept: Writable.perUser.of<string>("kept"),
+            reseeded: Writable.perUser.of<string>("fresh"),
+          }));`,
+      }],
+    }, { space });
+    const original = first.getCell(space, "present sibling");
+    await first.runSynced(original, compiled, {});
+    await first.idle();
+    // The sibling's value takes a label of its own, and the other cell is
+    // emptied so that the next session owes its default again.
+    const siblingLabel = {
+      type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+      owner: commitCfcFieldValue(visitor.did()),
+    };
+    const kept = original.key("kept").resolveAsCell();
+    const label = first.edit();
+    setCfcImplementationIdentity(label, {
+      kind: "builtin",
+      builtinId: "scoped-seed-owner-policy",
+    });
+    applyCfcPolicyToExistingValue(
+      kept.withTx(label).asSchema({
+        ifc: { confidentiality: [siblingLabel] },
+      }),
+    );
+    expect((await label.commit().settled).error).toBeUndefined();
+    const empty = first.edit();
+    original.key("reseeded").resolveAsCell().withTx(empty).setRawUntyped(
+      undefined,
+    );
+    expect((await empty.commit().settled).error).toBeUndefined();
+    await first.storageManager.synced();
+
+    const second = openRuntime(owner);
+    const piece = second.getCell(space, "present sibling");
+    await piece.sync();
+    expect(await second.runner.start(piece)).toBe(true);
+    await second.idle();
+    const reseeded = piece.key("reseeded").resolveAsCell();
+    expect(reseeded.getRawUntyped()).toBe("fresh");
+    expect(piece.key("kept").resolveAsCell().getRawUntyped()).toBe("kept");
+    const inspect = second.edit();
+    try {
+      const entries = readStoredCfcMetadata(
+        inspect,
+        reseeded.getAsNormalizedFullLink(),
+      )?.labelMap.entries ?? [];
+      expect(JSON.stringify(entries)).not.toContain(
+        JSON.stringify(siblingLabel),
+      );
+    } finally {
+      inspect.abort("present sibling label assertions complete");
+    }
+  });
   it("initializes defaults in the run when dependency loading rejects", async () => {
     await load("user", owner);
     const second = openRuntime(visitor);

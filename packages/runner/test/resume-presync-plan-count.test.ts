@@ -869,8 +869,13 @@ describe("resume-presync-plan-count", () => {
       (runtime) => {
         const stamp = runtime.stampServerRun.bind(runtime);
         return stub(runtime, "stampServerRun", (tx, info) => {
+          // One bookkeeping run per piece instance names every cell it
+          // seeds, comma-joined.
           if (info.actionId.startsWith("scoped-default/")) {
-            seeded.push(info.actionId.slice("scoped-default/".length));
+            for (
+              const id of info.actionId.slice("scoped-default/".length)
+                .split(",")
+            ) seeded.push(id);
           }
           stamp(tx, info);
         });

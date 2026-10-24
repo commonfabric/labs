@@ -9699,9 +9699,15 @@ export class Runner {
 
   /**
    * Loads a run's dependencies and fills absent actor instances of defaults
-   * that an accepted setup already declared. Each seed has a transaction of
-   * its own: binding the piece's other values must not label a constant
-   * default with their confidentiality, nor can one private seed label another.
+   * that an accepted setup already declared. The seeds of one piece instance
+   * share a transaction, and instances keep separate ones: binding the
+   * piece's other values must not label a constant default with their
+   * confidentiality, nor can one piece's seed label another piece's. Within an
+   * instance every seed derives from the same reads (the pointer, the
+   * manifest, the root read once), and no seed reads another seed's value,
+   * so one transaction per instance labels each seed as its own would — and
+   * costs one commit per piece start instead of one per defaulted cell,
+   * which on a fresh session is every session-scoped cell the piece owns.
    * Returns whether every eligible default was verified or seeded; a stale
    * declaration must not stand in for completed preparation in the run cache.
    */
@@ -9743,8 +9749,15 @@ export class Runner {
     }
     const readOnlySpaces = new Map<MemorySpace, boolean>();
     for (const instance of instances) {
+      const resultLink = instance.resultCell.getAsNormalizedFullLink();
+      // The defaults this instance owes: one transaction seeds them all
+      // (see the method comment for why one per instance).
+      const owed: {
+        descriptor: NonNullable<Pattern["derivedInternalCells"]>[number];
+        derivedLink: NormalizedFullLink;
+        schemaDefault: JSONValue;
+      }[] = [];
       for (const descriptor of instance.pattern.derivedInternalCells ?? []) {
-        const resultLink = instance.resultCell.getAsNormalizedFullLink();
         const derivedLink = getDerivedInternalCellLink(
           instance.resultCell,
           descriptor,
@@ -9781,53 +9794,59 @@ export class Runner {
             continue;
           }
         }
-        const outcome = await this.#runtime.editWithRetry((tx) => {
-          if (!isCurrent()) {
-            defaultsPrepared = false;
-            return;
+        owed.push({ descriptor, derivedLink, schemaDefault });
+      }
+      if (owed.length === 0) continue;
+      const owedIds = owed.map(({ derivedLink }) => derivedLink.id);
+      const outcome = await this.#runtime.editWithRetry((tx) => {
+        if (!isCurrent()) {
+          defaultsPrepared = false;
+          return;
+        }
+        if (identity !== undefined) {
+          tx.tx.scopeKeyIdentity = identity;
+          if (identity.principal !== undefined) {
+            setCfcTrustSnapshot(
+              tx,
+              this.#runtime.trustSnapshotForPrincipal(identity.principal),
+            );
           }
-          if (identity !== undefined) {
-            tx.tx.scopeKeyIdentity = identity;
-            if (identity.principal !== undefined) {
-              setCfcTrustSnapshot(
-                tx,
-                this.#runtime.trustSnapshotForPrincipal(identity.principal),
-              );
-            }
-          }
-          this.#runtime.stampServerRun(tx, {
-            actionId: `scoped-default/${derivedLink.id}`,
-            kind: "bookkeeping",
-            ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
-          });
-          markDurableReadTx(tx);
-          const owner = this.#runtime.getCellFromLink(
-            resultLink,
-            undefined,
-            tx,
-          );
-          const current = getPatternIdentityRef(owner) ??
-            this.#sessionPatternPointer(owner);
-          const expected = this.#runtime.patternManager.getArtifactEntryRef(
-            instance.pattern,
-          );
-          // A fresh runtime has no pointer for a keyless piece. Its exact
-          // accepted manifest still vouches for this descriptor's default;
-          // a keyed piece needs its durable pointer as well.
-          if (
-            (current === undefined && expected !== undefined &&
-              !PatternManager.isKeylessPatternIdentity(expected.identity)) ||
-            (current !== undefined && (expected === undefined ||
-              patternIdentityKey(current) !== patternIdentityKey(expected)))
-          ) {
-            defaultsPrepared = false;
-            return;
-          }
-          const manifest = convertibleJsFromFabricValue(
-            owner.getMetaRaw("internal", {
-              meta: ignoreReadForScheduling,
-            }),
-          );
+        }
+        this.#runtime.stampServerRun(tx, {
+          actionId: `scoped-default/${owedIds.join(",")}`,
+          kind: "bookkeeping",
+          ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
+        });
+        markDurableReadTx(tx);
+        const owner = this.#runtime.getCellFromLink(
+          resultLink,
+          undefined,
+          tx,
+        );
+        const current = getPatternIdentityRef(owner) ??
+          this.#sessionPatternPointer(owner);
+        const expected = this.#runtime.patternManager.getArtifactEntryRef(
+          instance.pattern,
+        );
+        // A fresh runtime has no pointer for a keyless piece. Its exact
+        // accepted manifest still vouches for this descriptor's default;
+        // a keyed piece needs its durable pointer as well.
+        if (
+          (current === undefined && expected !== undefined &&
+            !PatternManager.isKeylessPatternIdentity(expected.identity)) ||
+          (current !== undefined && (expected === undefined ||
+            patternIdentityKey(current) !== patternIdentityKey(expected)))
+        ) {
+          defaultsPrepared = false;
+          return;
+        }
+        const manifest = convertibleJsFromFabricValue(
+          owner.getMetaRaw("internal", {
+            meta: ignoreReadForScheduling,
+          }),
+        );
+        let rootRead = false;
+        for (const { descriptor, derivedLink, schemaDefault } of owed) {
           const derived = getDerivedInternalCell(owner, descriptor, tx);
           const expectedLink = derived.getAsWriteRedirectLink({
             base: owner,
@@ -9844,23 +9863,34 @@ export class Runner {
             )
           ) {
             defaultsPrepared = false;
-            return;
+            continue;
           }
+          // A presence probe, not a read of the value: a sibling already
+          // present is skipped, and its value's label must not join the
+          // flow this transaction stamps on the seeds it does write — a
+          // constant default derives nothing from a value it was seeded
+          // beside. Kept out of scheduling and out of CFC taint, as the
+          // write-elision probe in pattern-binding.ts is.
           if (
-            derived.getRawUntyped({ meta: ignoreReadForScheduling }) !==
-              undefined
-          ) return;
+            derived.getRawUntyped({
+              meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+            }) !== undefined
+          ) continue;
           // A default belongs to its owning piece, so it carries the label on
           // the piece's root. The pattern pointer and the manifest read above
           // are members of the piece's document, and reading a member
           // consumes no label, so this read is what brings the root label
-          // into the seed. It is `nonRecursive`, which consumes the root
+          // into the seeds. It is `nonRecursive`, which consumes the root
           // entry alone: the labels on the piece's fields belong to other
-          // values, and a constant default does not derive from them.
-          tx.readValueOrThrow({ ...resultLink, path: [] }, {
-            nonRecursive: true,
-            meta: ignoreReadForScheduling,
-          });
+          // values, and a constant default does not derive from them. Once
+          // per transaction: every seed in it derives from the same root.
+          if (!rootRead) {
+            tx.readValueOrThrow({ ...resultLink, path: [] }, {
+              nonRecursive: true,
+              meta: ignoreReadForScheduling,
+            });
+            rootRead = true;
+          }
           // The graph has not enrolled its stores yet. This seed carries the
           // same ownership claim as setup through the ordinary writer-fit gate.
           recordRuntimeOwnedStore(tx, owner, derivedLink);
@@ -9873,12 +9903,14 @@ export class Runner {
             target: { ...derivedLink, path: [] },
             value,
           }, runtimeWritePolicyAuthorization);
-        });
-        if (outcome.error) {
-          throw new Error(
-            `Could not initialize scoped default ${derivedLink.id}: ${outcome.error.message}`,
-          );
         }
+      });
+      if (outcome.error) {
+        throw new Error(
+          `Could not initialize scoped defaults ${
+            owedIds.join(", ")
+          }: ${outcome.error.message}`,
+        );
       }
     }
     return defaultsPrepared;
