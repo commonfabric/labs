@@ -575,6 +575,73 @@ describe("scoped-internal-cell-seed", () => {
       inspect.abort("batched seed label assertions complete");
     }
   });
+  it("seeds an absent default beside a present labeled sibling without taking its label", async () => {
+    // Seeds share their piece's transaction, so a sibling that is already
+    // present is only probed, never written. The probe must not join the
+    // flow: a label the sibling's value carries belongs to that value, and a
+    // constant default seeded beside it derives nothing from it.
+    const first = openRuntime(owner);
+    const compiled = await first.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `/// <cts-enable />
+          import { pattern, Writable } from "commonfabric";
+          export default pattern<Record<string, never>>(() => ({
+            kept: Writable.perUser.of<string>("kept"),
+            reseeded: Writable.perUser.of<string>("fresh"),
+          }));`,
+      }],
+    }, { space });
+    const original = first.getCell(space, "present sibling");
+    await first.runSynced(original, compiled, {});
+    await first.idle();
+    // The sibling's value takes a label of its own, and the other cell is
+    // emptied so that the next session owes its default again.
+    const siblingLabel = {
+      type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+      owner: commitCfcFieldValue(visitor.did()),
+    };
+    const kept = original.key("kept").resolveAsCell();
+    const label = first.edit();
+    setCfcImplementationIdentity(label, {
+      kind: "builtin",
+      builtinId: "scoped-seed-owner-policy",
+    });
+    applyCfcPolicyToExistingValue(
+      kept.withTx(label).asSchema({
+        ifc: { confidentiality: [siblingLabel] },
+      }),
+    );
+    expect((await label.commit().settled).error).toBeUndefined();
+    const empty = first.edit();
+    original.key("reseeded").resolveAsCell().withTx(empty).setRawUntyped(
+      undefined,
+    );
+    expect((await empty.commit().settled).error).toBeUndefined();
+    await first.storageManager.synced();
+
+    const second = openRuntime(owner);
+    const piece = second.getCell(space, "present sibling");
+    await piece.sync();
+    expect(await second.runner.start(piece)).toBe(true);
+    await second.idle();
+    const reseeded = piece.key("reseeded").resolveAsCell();
+    expect(reseeded.getRawUntyped()).toBe("fresh");
+    expect(piece.key("kept").resolveAsCell().getRawUntyped()).toBe("kept");
+    const inspect = second.edit();
+    try {
+      const entries = readStoredCfcMetadata(
+        inspect,
+        reseeded.getAsNormalizedFullLink(),
+      )?.labelMap.entries ?? [];
+      expect(JSON.stringify(entries)).not.toContain(
+        JSON.stringify(siblingLabel),
+      );
+    } finally {
+      inspect.abort("present sibling label assertions complete");
+    }
+  });
   it("initializes defaults in the run when dependency loading rejects", async () => {
     await load("user", owner);
     const second = openRuntime(visitor);
