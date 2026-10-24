@@ -270,5 +270,47 @@ describe("cause-assignment", () => {
         ).map(({ description, from, to }) => [description.slice(-5), from, to]),
       ).toEqual([["Other", 1, 0], ["Child", 0, 1]]);
     });
+
+    describe("with a cell added or removed among cells of its description", () => {
+      // TODO(danfuzz): These pin the pairing by order as it stands, not as it
+      // should be. Each later cell of the description is paired with a
+      // neighbor's number, so the moves returned are not the cells' own.
+      // Invert each to the moves the cells make once how two builds' cells are
+      // to be matched is settled; `renumberedCells()` carries the matching
+      // `TODO`.
+
+      it("returns a later cell of the description under a neighbor's number, where a cell of another description sits between", () => {
+        // Function cells `a` and `b` sit around a child, and a function cell
+        // is added ahead of them: `a` moves 0 to 1, the child 1 to 2, and `b`
+        // 2 to 3.
+        expect(
+          renumberedCells(
+            cells([{ lift: true }, { child: CHILD }, { lift: true }]),
+            cells([{ lift: true }, { lift: true }, { child: CHILD }, {
+              lift: true,
+            }]),
+          ).map(({ description, from, to }) => [description, from, to]),
+        ).toEqual([
+          ["cell, computed, written by function", 2, 1],
+          ["cell, computed, written by sub-pattern child-identi#Child", 1, 2],
+        ]);
+      });
+
+      it("returns a later cell of the description under a neighbor's number when one ahead of it is removed", () => {
+        // Function cells `a`, `b` and `c` sit around a child after `b`, and
+        // `a` is removed: `b` moves 1 to 0, the child 2 to 1, and `c` 3 to 2.
+        expect(
+          renumberedCells(
+            cells([{ lift: true }, { lift: true }, { child: CHILD }, {
+              lift: true,
+            }]),
+            cells([{ lift: true }, { child: CHILD }, { lift: true }]),
+          ).map(({ description, from, to }) => [description, from, to]),
+        ).toEqual([
+          ["cell, computed, written by sub-pattern child-identi#Child", 2, 1],
+          ["cell, computed, written by function", 1, 2],
+        ]);
+      });
+    });
   });
 });

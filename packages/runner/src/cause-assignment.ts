@@ -17,8 +17,9 @@
  * it, a sub-pattern child named by its child's pattern identity. Its schema is
  * left out, since the schema generator reshapes schemas without moving any
  * cell. Cells of one level with the same description are paired across two
- * builds by their order, so a cell added or removed among them, or two of
- * them trading places, reads as no move, even where the cells after it shift.
+ * builds by their order, so a cell added or removed among them moves the
+ * pairing of each one after it, and two of them trading places reads as no
+ * move. `renumberedCells()` says what that pairing reports.
  */
 
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
@@ -191,17 +192,28 @@ export function numberedCells(
 }
 
 /**
- * The cells of `after` whose number differs from the one `before` gives them,
- * for one pattern level built from one source by two compilers. A cell is
- * matched across the two by its description and its ordinal among the cells
- * of its level that share the description. A cell only one side has is not a
- * move, and neither is the shift it causes among the cells after it that
- * share its description.
+ * The cells of `after` whose number differs from that of the cell of
+ * `before` they are paired with, for one pattern level built from one source
+ * by two compilers. The k-th cell of a description in `after` is paired with
+ * the k-th cell of that description in `before`, and a cell with no partner
+ * at its ordinal is left out.
+ *
+ * So where a cell is added or removed among cells of one description, each
+ * one after it is paired with a neighbor's number. That shift goes unreported
+ * where the two numbers agree, and where they differ, as when a cell of
+ * another description sits between, it is reported with the neighbor's
+ * number as `from`. Two cells of one description trading places are not
+ * reported.
  */
 export function renumberedCells(
   before: readonly NumberedCell[],
   after: readonly NumberedCell[],
 ): RenumberedCell[] {
+  // TODO(danfuzz): Report a cell added or removed among cells of its
+  // description, and the shift it causes with each cell's own numbers, rather
+  // than pairing each cell after it with a neighbor's number, once how two
+  // builds' cells are to be matched is settled. `cause-assignment.test.ts`
+  // pins the pairing as it stands.
   const numbersBefore = new Map<string, number[]>();
   for (const cell of before) {
     numbersBefore.set(cell.description, [
