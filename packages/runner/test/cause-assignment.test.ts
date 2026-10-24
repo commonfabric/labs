@@ -372,6 +372,26 @@ describe("cause-assignment", () => {
       ]);
     });
 
+    it("returns a description of children whose count differs, where every number the earlier build gives them holds", () => {
+      // A child is added after two children of its pattern: the pairing by
+      // order keeps both at their numbers, and the count alone shows the
+      // change.
+      const before = cells([{ child: CHILD }, { child: CHILD }]);
+      const after = cells([{ child: CHILD }, { child: CHILD }, {
+        child: CHILD,
+      }]);
+
+      expect(renumberedCells(before, after)).toEqual([]);
+      expect(ambiguousDescriptions(before, after)).toEqual([
+        {
+          description:
+            "cell, computed, written by sub-pattern child-identi#Child",
+          before: [0, 1],
+          after: [0, 1, 2],
+        },
+      ]);
+    });
+
     it("returns a description of cells that are not computed whose count differs", () => {
       expect(
         ambiguousDescriptions(
