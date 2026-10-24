@@ -16,9 +16,19 @@ import { SOURCE_COMPILE_CACHE_RUNTIME_VERSION } from "./compile-cache-version.ts
  * that version as a content hash of the compiler inputs, so it moves
  * automatically instead of being bumped by hand.
  *
+ * This is the version of a source run, which cannot afford to compile anything
+ * at startup. A built artifact names its compiler by what it emits instead:
+ * `compile-cache-output-version.deno.ts` hashes the compiler's output for a
+ * fixed corpus, and a build bakes that version into the binary, the worker
+ * bundle's define, or loom's vendored copy of `compile-cache-version.ts`, so
+ * that a compiler change emitting the same bytes for the corpus keeps the
+ * compiled documents of every construct the corpus exercises valid across
+ * it. A construct the corpus lacks is that version's blind spot; the corpus
+ * is wide for that reason, and `COMPILE_CACHE_EPOCH` is the hand-turned move
+ * for a change the corpus cannot see.
+ *
  * Deno-only: it walks and reads the source tree. Deno source runs call this
- * module through `getCompileCacheRuntimeVersion()`. Binary builds use it to
- * write a fingerprint literal before `deno compile`.
+ * module through `getCompileCacheRuntimeVersion()`.
  */
 
 /**
@@ -93,7 +103,7 @@ export const VERSION_NAMESPACE = "cf/esm-compile";
 const FINGERPRINT_TAG = "cf/compile-fingerprint/v1";
 
 /** Length of the base64url fingerprint kept in the key (96 bits). */
-const FINGERPRINT_LENGTH = 16;
+export const FINGERPRINT_LENGTH = 16;
 
 interface FingerprintFile {
   /** Path relative to the repo root, with forward slashes. */
@@ -148,13 +158,18 @@ export async function computeCompilerFingerprint(
   return digest.slice(0, FINGERPRINT_LENGTH);
 }
 
+/** The `cf/esm-compile/<fingerprint>` version string for a fingerprint. */
+export function versionOfFingerprint(fingerprint: string): string {
+  return `${VERSION_NAMESPACE}/${fingerprint}`;
+}
+
 /** The full `cf/esm-compile/<fingerprint>` version string for `repoRoot`. */
 export async function computeCompilerVersion(
   repoRoot: string,
   inputs: readonly string[] = COMPILE_FINGERPRINT_INPUTS,
 ): Promise<string> {
   const fingerprint = await computeCompilerFingerprint(repoRoot, inputs);
-  return `${VERSION_NAMESPACE}/${fingerprint}`;
+  return versionOfFingerprint(fingerprint);
 }
 
 /** The compiler-input version for the repository containing this module. */

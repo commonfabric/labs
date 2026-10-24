@@ -1,0 +1,235 @@
+import {
+  computed,
+  equals,
+  lift,
+  NAME,
+  pattern,
+  UI,
+  type VNode,
+  Writable,
+} from "commonfabric";
+
+/**
+ * Type for pieces used in the mentionable/backlinks system.
+ *
+ * Note: While `mentioned` and `backlinks` are typed as required for structural
+ * compatibility, at runtime most pieces don't actually have these fields.
+ * Only patterns like notes and calendar events define them. The computeIndex
+ * function safely handles pieces that lack these fields.
+ */
+export type MentionablePiece = {
+  [NAME]?: string;
+  isHidden?: boolean;
+  isMentionable?: boolean;
+  mentioned?: MentionablePiece[];
+  backlinks?: MentionablePiece[];
+  mentionable?: MentionablePiece[] | { get?: () => MentionablePiece[] };
+};
+
+export type MentionableCell = Writable<MentionablePiece>;
+
+export type WritableBacklinks = {
+  mentioned?: MentionableCell[];
+  backlinks?: Writable<MentionableCell[]>;
+};
+
+type Input = {
+  pieceRegistry: MentionableCell[];
+};
+
+export type Output = {
+  mentionable: MentionableCell[];
+};
+
+const computeIndex = lift<
+  { pieceRegistry: MentionableCell[] | undefined },
+  void
+>(({ pieceRegistry }) => {
+  const cs = pieceRegistry ?? [];
+
+  // Reset backlinks for pieces that support it.
+  // Many pieces don't have backlinks,
+  // so we safely skip them with optional chaining.
+  // Also skip undefined/null entries that may exist in the array.
+  for (const c of cs) {
+    if (!c) continue;
+    const value = c.get();
+    if (!value || !("backlinks" in value)) continue;
+    c.key("backlinks").set([]);
+  }
+
+  // Populate backlinks from mentioned references.
+  // Again, use optional chaining since not all pieces support backlinks.
+  for (const c of cs) {
+    if (!c) continue;
+    const mentions = c.key("mentioned").get() ?? [];
+    for (let i = 0; i < mentions.length; i++) {
+      const m = c.key("mentioned").key(i);
+      const target = m?.get();
+      if (!target || !("backlinks" in target)) continue;
+      m.key("backlinks").push(c);
+    }
+  }
+});
+
+/**
+ * BacklinksIndex scans registered pieces for backlinks. It also exposes a
+ * mentionable list containing registered pieces and their recursively exported
+ * mentionables for consumers like editors.
+ *
+ * Behavior:
+ * - Backlinks are computed by scanning each piece's `mentioned` list and
+ *   mapping mention target -> list of source pieces.
+ * - Mentionable list is a union of:
+ *   - entries in `pieceRegistry` whose values exist and do not set
+ *     `isMentionable` to false
+ *   - items those entries recursively export through a `mentionable` property,
+ *     up to five levels deep
+ *
+ * The backlinks map is keyed by a piece's `content` value (falling back to
+ * its `[NAME]`). This mirrors how existing note patterns identify notes when
+ * computing backlinks locally.
+ */
+const MAX_MENTIONABLE_DEPTH = 5;
+
+const computeMentionable = lift<
+  { pieceRegistry: MentionableCell[] },
+  MentionableCell[]
+>(({ pieceRegistry: pieceList }) => {
+  const cs = pieceList ?? [];
+  const out: MentionableCell[] = [];
+
+  function isVisited(piece: MentionableCell): boolean {
+    return out.some((other) => equals(piece, other));
+  }
+
+  function collect(piece: MentionableCell, depth: number) {
+    if (!piece) return;
+    const value = piece.get();
+    if (!value || value.isMentionable === false) return;
+    if (isVisited(piece)) return;
+    out.push(piece);
+
+    if (depth >= MAX_MENTIONABLE_DEPTH) return;
+
+    const mentionable = piece.key("mentionable");
+    const items = mentionable.get() ?? [];
+    if (Array.isArray(items)) {
+      for (let i = 0; i < items.length; i++) {
+        collect(mentionable.key(i), depth + 1);
+      }
+    }
+  }
+
+  for (const c of cs) {
+    collect(c, 0);
+  }
+
+  return out;
+});
+
+type Entry = {
+  piece: MentionableCell;
+  name: string;
+  backlinks: MentionableCell[];
+};
+
+/** Sub-pattern to render a single entry row with its backlinks. */
+const EntryRow = pattern<Entry, { [UI]: VNode }>(({ piece, backlinks }) => {
+  return {
+    [UI]: (
+      <cf-card>
+        <cf-vstack gap="1">
+          <cf-render variant="chip" $cell={piece} />
+          <cf-hstack gap="2" style={{ paddingLeft: "8px", flexWrap: "wrap" }}>
+            {backlinks.map((link) => (
+              <cf-cell-link
+                $cell={link}
+                style={{
+                  fontSize: "12px",
+                  color: "var(--cf-theme-color-text-secondary)",
+                }}
+              />
+            ))}
+          </cf-hstack>
+        </cf-vstack>
+      </cf-card>
+    ),
+  };
+});
+
+const BacklinksIndex = pattern<Input, Output>(({ pieceRegistry }) => {
+  const registeredPieceCells: MentionableCell[] = pieceRegistry;
+
+  computeIndex({ pieceRegistry: registeredPieceCells });
+
+  // Compute the mentionable list from the registry reactively.
+  const mentionable: MentionableCell[] = computeMentionable({
+    pieceRegistry: registeredPieceCells,
+  });
+
+  const query = new Writable("");
+
+  // Build resolved entries with backlinks materialized as plain arrays
+  const entries = computed(() => {
+    const items = Array.isArray(mentionable) ? mentionable : [];
+    const result: Entry[] = [];
+    for (const piece of items) {
+      if (!piece) continue;
+      const value = piece.get();
+      const name = (value?.[NAME] ?? "").toString();
+      const backlinks = piece.key("backlinks");
+      const bl = backlinks.get() ?? [];
+      result.push({
+        piece,
+        name,
+        backlinks: Array.isArray(bl) ? bl.map((_, i) => backlinks.key(i)) : [],
+      });
+    }
+    return result;
+  });
+
+  // Filter by name
+  const filtered = computed(() => {
+    const q = query.get().toLowerCase().trim();
+    if (!q) return entries;
+    return entries.filter((e) => e.name.toLowerCase().includes(q));
+  });
+
+  const totalCount = computed(() => entries.length);
+  const filteredCount = computed(() => filtered.length);
+
+  return {
+    [NAME]: "BacklinksIndex",
+    [UI]: (
+      <cf-screen>
+        <cf-toolbar slot="header" sticky>
+          <h2 style={{ margin: 0, fontSize: "18px" }}>Mentions</h2>
+        </cf-toolbar>
+
+        <cf-vstack gap="4" padding="6">
+          <cf-input $value={query} placeholder="Filter by name..." />
+          <span
+            style={{
+              fontSize: "13px",
+              color: "var(--cf-theme-color-text-secondary)",
+            }}
+          >
+            {filteredCount} of {totalCount} pieces
+          </span>
+
+          {filtered.map((entry) => (
+            <EntryRow
+              piece={entry.piece}
+              name={entry.name}
+              backlinks={entry.backlinks}
+            />
+          ))}
+        </cf-vstack>
+      </cf-screen>
+    ),
+    mentionable,
+  };
+});
+
+export default BacklinksIndex;

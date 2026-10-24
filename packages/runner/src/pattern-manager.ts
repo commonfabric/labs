@@ -23,6 +23,10 @@ import { readStoredCfcMetadata } from "./cfc/metadata.ts";
 import type { CfcMetadata } from "./cfc/types.ts";
 import { ColdLoadNegativeMemo } from "./cold-load-negative-memo.ts";
 import {
+  isPatternCoverageCacheRuntimeVersion,
+  moduleByteCacheRuntimeVersion,
+} from "./compilation-cache/cache-variants.ts";
+import {
   buildSourceDocs,
   type ClosureLoadTally,
   COMPILED_INTEGRITY_ATOM,
@@ -133,13 +137,6 @@ const MAX_PARKED_FAILED_REPLICATIONS = 64;
 // bundle is ~10 modules), and entries are cheap (a reference to an already-live
 // namespace).
 const MAX_EVALUATED_MODULE_CACHE_SIZE = 1000;
-const PATTERN_COVERAGE_CACHE_VARIANT = "pattern-coverage";
-
-/**
- * The compiled-code cache variant of a compile that names `const`-bound
- * sub-pattern instances (`namesInstances()`).
- */
-const INSTANCE_NAMES_CACHE_VARIANT = "instance-names";
 
 /**
  * The compiler's hoist namespace. `builder-call-hoisting` mints
@@ -214,26 +211,6 @@ function throwableStorageError(error: CommitError): Error {
     name: error.name,
     cause: error,
   });
-}
-
-function moduleByteCacheRuntimeVersion(
-  runtimeVersion: string | undefined,
-  options: { patternCoverage: boolean; instanceNames: boolean },
-): string | undefined {
-  if (runtimeVersion === undefined) return undefined;
-  // A compile that names instances emits different bytes for the same source,
-  // so it keeps a variant of its own. It goes ahead of the coverage suffix,
-  // which `isPatternCoverageCacheRuntimeVersion()` reads at the end.
-  const named = options.instanceNames
-    ? `${runtimeVersion}/${INSTANCE_NAMES_CACHE_VARIANT}`
-    : runtimeVersion;
-  return options.patternCoverage
-    ? `${named}/${PATTERN_COVERAGE_CACHE_VARIANT}`
-    : named;
-}
-
-function isPatternCoverageCacheRuntimeVersion(runtimeVersion: string): boolean {
-  return runtimeVersion.endsWith(`/${PATTERN_COVERAGE_CACHE_VARIANT}`);
 }
 
 /**

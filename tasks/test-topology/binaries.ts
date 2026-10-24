@@ -97,7 +97,10 @@ function binarySuite(
               request.unit,
             ],
             cwd: context.root,
-            ...(options.env === undefined ? {} : { env: options.env }),
+            // A lane's binary is a test fixture, not a shipped artifact: it
+            // takes the compiler-input fingerprint rather than the corpus
+            // compile a shipped build pays for.
+            env: { CF_COMPILE_CACHE_VERSION: "inputs", ...options.env },
           })),
       );
     },

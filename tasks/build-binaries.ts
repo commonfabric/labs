@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-run
+#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-run --allow-ffi --allow-net=127.0.0.1
 import { exists, existsSync, walkSync } from "@std/fs";
 import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
@@ -20,6 +20,15 @@ export interface BuildConfigInitializer {
 
   /** Whether builds use only dependencies already in Deno's cache. */
   cachedOnly?: boolean;
+
+  /**
+   * The compile-cache version to bake, computed for the repository root. The
+   * default is the compiler-input fingerprint, which costs nothing;
+   * `runBuildBinaries` hands a shipped build the output-based version
+   * instead (`compile-cache-output-version.deno.ts`), which compiles the
+   * corpus.
+   */
+  compileCacheVersion?: (root: string) => Promise<string>;
 }
 
 export const BINARY_NAMES = ["toolshed", "cf"] as const;
@@ -74,6 +83,24 @@ export const BUILD_HOST_VARIABLES = [
   "CF_DENO_DEPENDENCIES_INSTALLED",
 ] as const;
 
+/**
+ * The compile-cache version a shipped build bakes: a hash of what the
+ * compiler emits for the corpus (`compile-cache-output-version.deno.ts`).
+ * Loaded when a build asks for it: the corpus compile brings the whole
+ * runtime with it, and this module is imported by the test topology and by a
+ * build that takes the compiler-input fingerprint, neither of which loads a
+ * runtime.
+ */
+export async function computeShippedCompileCacheVersion(
+  root: string,
+): Promise<string> {
+  // deno-lint-ignore cf-imports/no-inline-module-import -- the corpus compile brings the whole runtime with it, which the test topology and an inputs-only build never load
+  const { computeCompilerOutputVersion } = await import(
+    "../packages/runner/src/compilation-cache/compile-cache-output-version.deno.ts"
+  );
+  return await computeCompilerOutputVersion(root);
+}
+
 export function requestedBinaries(args: readonly string[]): BinaryName[] {
   if (args.length === 0) return [...BINARY_NAMES];
   if (args.length === 1 && args[0] === "--cli-only") return ["cf"];
@@ -101,8 +128,12 @@ export class BuildConfig {
   /** Whether builds use only dependencies already in Deno's cache. */
   readonly cachedOnly: boolean;
 
+  /** See {@link BuildConfigInitializer.compileCacheVersion}. */
+  readonly compileCacheVersion: (root: string) => Promise<string>;
+
   #manifestOriginal: string;
   #compileCacheVersionOriginal: string;
+  #bakedCompileCacheVersion: string | undefined;
 
   constructor(options: BuildConfigInitializer) {
     this.root = options.root;
@@ -118,6 +149,8 @@ export class BuildConfig {
       : requestedBinaries(options.binaries ?? []);
     this.cliOnly = this.binaries.length === 1 && this.binaries[0] === "cf";
     this.cachedOnly = options.cachedOnly ?? false;
+    this.compileCacheVersion = options.compileCacheVersion ??
+      computeCompilerVersion;
     this.#manifestOriginal = Deno.readTextFileSync(
       this.workspaceManifestPath(),
     );
@@ -145,6 +178,15 @@ export class BuildConfig {
 
   compileCacheVersionOriginal() {
     return this.#compileCacheVersionOriginal;
+  }
+
+  /** The version `prepareWorkspace()` baked, once it has. */
+  bakedCompileCacheVersion(): string | undefined {
+    return this.#bakedCompileCacheVersion;
+  }
+
+  recordBakedCompileCacheVersion(version: string): void {
+    this.#bakedCompileCacheVersion = version;
   }
 
   workspaceManifestPath() {
@@ -397,7 +439,14 @@ async function buildShell(config: BuildConfig): Promise<void> {
       // The shell's configuration reads what it bakes in from the
       // environment this build inherited: the same `COMMIT_SHA` and
       // `EXPERIMENTAL_SERVER_EXECUTION` that `prepareWorkspace()` writes into
-      // the markers, each unset where the caller left it unset.
+      // the markers, each unset where the caller left it unset. The
+      // compile-cache version is the one exception: the binary and its shell
+      // name one compiler, so the shell takes the version this build baked.
+      ...(config.bakedCompileCacheVersion() === undefined ? {} : {
+        env: {
+          CF_COMPILE_CACHE_RUNTIME_VERSION: config.bakedCompileCacheVersion()!,
+        },
+      }),
       stdout: "inherit",
       stderr: "inherit",
     }).output();
@@ -571,10 +620,12 @@ export async function prepareWorkspace(
     );
   }
 
-  // Write the current compile-cache version before compiling binaries. The value
-  // is computed before `deno.jsonc` changes so it reflects the committed
-  // compiler options.
-  const compileCacheVersion = await computeCompilerVersion(config.root);
+  // Write the compile-cache version before compiling binaries. The value is
+  // computed before `deno.jsonc` changes so it reflects the committed compiler
+  // options, and kept for the shell build, which bakes the same value rather
+  // than computing one of its own.
+  const compileCacheVersion = await config.compileCacheVersion(config.root);
+  config.recordBakedCompileCacheVersion(compileCacheVersion);
   await Deno.writeTextFile(
     config.compileCacheVersionPath(),
     renderVersionModule(compileCacheVersion),
@@ -711,6 +762,12 @@ export async function runBuildBinaries(
     ],
     binaries: requestedBinaries(args),
     cachedOnly: Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED") === "1",
+    // A build from here ships, so it names its compiler by what it emits.
+    // `CF_COMPILE_CACHE_VERSION=inputs` takes the compiler-input fingerprint
+    // instead, for a binary that is a test fixture rather than a release.
+    compileCacheVersion: Deno.env.get("CF_COMPILE_CACHE_VERSION") === "inputs"
+      ? computeCompilerVersion
+      : computeShippedCompileCacheVersion,
   });
 
   await (options.runBuild ?? runBuildWithSignalCleanup)(config);

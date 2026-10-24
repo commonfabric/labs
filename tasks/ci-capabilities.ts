@@ -221,7 +221,13 @@ export function cachedBinaries(
 ): Record<CachedBinaryName, CachedBinary> {
   const toolshed = (role: ServerExecutionCiRole): CachedBinary => ({
     build: "toolshed",
-    bakes: serverExecutionDefine(role, defaultEnabled),
+    bakes: {
+      ...serverExecutionDefine(role, defaultEnabled),
+      // A lane's binary is a test fixture, not a release: it takes the
+      // compiler-input fingerprint as its compile-cache version rather than
+      // the corpus compile a shipped build pays for.
+      CF_COMPILE_CACHE_VERSION: "inputs",
+    },
   });
   return {
     "toolshed-baked-default": toolshed("default"),
