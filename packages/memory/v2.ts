@@ -2126,11 +2126,13 @@ export type WatchSetRequest = {
   holdings?: SessionHolding[];
 
   /**
-   * On every part of a watch set staged in parts (`watchSetPartsV1`), the
-   * number of parts before this one: the server refuses a part that does not
-   * follow the parts it holds, and with it the rest of the set
-   * (04-protocol.md section 4.3.5).
+   * On every part of a watch set staged in parts (`watchSetPartsV1`): the
+   * set's name, which every part of it carries, and the number of parts
+   * before this one. The server refuses a part that does not follow the parts
+   * of its set it holds, and with it the rest of the set (04-protocol.md
+   * section 4.3.5).
    */
+  stage?: string;
   part?: number;
 
   /**

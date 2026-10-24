@@ -934,23 +934,29 @@ that advertised `syncPartsV1`. A split divides the sync's lists (`upserts`,
 `removes`, `crossings`, `operationFields` and `viewPlans`), never an entry of
 one, and the concatenation of each list over the parts, in order, is the list
 the sync carried. Every part repeats the sync's other fields, and every part
-but the last carries `more: true`.
+but the last carries `more: true`. A receiver requires the parts to repeat those
+fields alike, so a list added to `SessionSync` can be divided only behind a
+capability of its own.
 
 The first part goes where the whole sync would have gone, as `response.ok.sync`
 or `session/effect.effect`; each later part is a `session/effect` for the same
 space and session. The server sends a sync's parts one after another, with no
-other message for that session between them, though messages for other
-sessions may come between them. Each part is a message of its own: it carries
-its own schema and label tables, and each bound on a message applies to each
-part. An entry larger than those bounds goes alone, in a part of its own.
+other message for that session between them. Messages for other sessions may
+come between them on the way to the client, and so may a router's own answer
+to another request of the session (a refusal), which carries no sync. Each
+part is a message of its own: it carries its own schema and label tables, and
+each bound on a message applies to each part. An entry larger than those
+bounds goes alone, in a part of its own.
 
 The client holds the parts and handles their concatenation, once the last
 arrives, as the sync it would have received whole: a response completes only
-then. Another message for the session before the last part, a part whose
-repeated fields differ from the first's, and a `more` other than `true` are
-protocol violations, which discard the connection, as a frame the client cannot
-decode does. A connection that closes before the last part arrives loses the
-parts with it, as it loses any frame in flight.
+then. It handles a message for the session that carries no sync as it arrives,
+and takes the next sync for the session as the next part. A sync for the
+session other than an effect before the last part, a part whose repeated fields
+differ from the first's, and a `more` other than `true` are protocol
+violations, which discard the connection, as a frame the client cannot decode
+does. A connection that closes before the last part arrives loses the parts
+with it, as it loses any frame in flight.
 
 The routed host splits a sync whose encoding exceeds 1 MiB or the routed frame
 cap ([`routed-mode-a.md`](routed-mode-a.md)); a direct server sends every sync
@@ -1413,9 +1419,10 @@ interface WatchSetRequest {
   // The client's declared holdings (section 4.1.2): when present, the
   // response's `sync` is the difference between the new union and these.
   holdings?: SessionHolding[];
-  // On every part of a set staged in parts: the number of parts before this
-  // one, and on every part but the last, `more` (servers advertising
-  // `watchSetPartsV1`; see below).
+  // On every part of a set staged in parts: the set's name, the number of
+  // parts before this one, and on every part but the last, `more` (servers
+  // advertising `watchSetPartsV1`; see below).
+  stage?: string;
   part?: number;
   more?: true;
 }
@@ -1447,24 +1454,28 @@ Semantics:
 
 A client may stage a set too large for one message in parts, to a server that
 advertises `watchSetPartsV1`. Each part is a `session.watch.set` with a request
-ID of its own, a `part` counting the parts before it, and a share of the set's
+ID of its own, the set's name in `stage` (an identifier every part of the set
+carries), a `part` counting the parts before it, and a share of the set's
 `watches`, `holdings` and `views`; every part but the last carries `more: true`.
 The server holds a part that more parts follow and answers it with
 `{ staged: true }`, changing nothing the session holds, and the last part
 replaces the watch set with the concatenation of every part's lists, as the one
-set they divide would: its response carries the sync. A list a part does not
-name is one it adds nothing to, and the set names `holdings` or `views` when a
-part does.
+set they divide would: its response carries the sync. A part may leave out a
+list it has no entries for; the set names `holdings` or `views` when any part
+does. The joined set is checked as one set: a view named in two parts is
+refused as one named twice in one set is.
 
 A part numbered 0 starts a staged set, ending any set the session staged
 before. The server refuses, as a `ProtocolError`, a later part that does not
-follow the parts it holds, and with it the set: the parts after it are refused
-too, as none follows a part the server holds, so a set staged in parts is
-applied whole or not at all. Any other watch mutation of the session while it
-stages a set is refused the same way, and ends the set. A set without `part` is
-whole and ends any set staged before it. The staged set belongs to the
-connection, and ends with it, and when the session closes, is revoked or opens
-again. A server holds at most 64 parts of one set.
+follow the parts of its set the server holds, and with it the set: the parts
+after it are refused too, as none follows the parts held, so a set staged in
+parts is applied whole or not at all. A set without `part` is whole, and it and
+any other watch mutation of the session end a set the session was staging, and
+are applied as ever; a router or a routed host can have refused the set's last
+part itself, leaving the server parts no part follows. A staged set also ends
+when its connection closes, and when the session closes, is revoked or is
+opened again. A server holds at most 64 parts of one set, of at most 64 Mi
+characters together, before the last part.
 
 A client sends a set's parts back to back on one connection, before any later
 watch mutation of the session, and takes the first refusal among their answers

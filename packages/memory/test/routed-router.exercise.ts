@@ -2601,16 +2601,17 @@ finally:
           "a sync past the frame's value cap arrives through the router in parts and is applied whole",
         );
 
-        // Sixty watches of 500 roots each name more values than one frame
-        // carries. The set is staged in parts, and the toolshed applies the
-        // watches of every part.
+        // Sixty watches of 600 roots each, about 180,000 values, name more
+        // than one frame carries, so the set is staged in parts. Each watch
+        // reaches one document, the first 48 a document each, so a toolshed
+        // that applied less than the whole set would leave some out.
         const watches: WatchSpec[] = Array.from({ length: 60 }, (_, w) => ({
           id: `in-staged-parts-${w}`,
           kind: "graph" as const,
           query: {
             roots: Array.from(
-              { length: 500 },
-              (_, r) => root(ids[(w * 500 + r) % ids.length]),
+              { length: 600 },
+              () => root(ids[w % ids.length]),
             ),
           },
         }));

@@ -156,8 +156,9 @@ export type Transport = {
 
   /**
    * Bounds on one message this transport carries to a direct server, when
-   * tighter than the server's own; a watch set past them is staged in parts.
-   * A routed connection's bounds come from the router's `hello.ok`.
+   * tighter than the server's own, as a test's transport sets them; a watch
+   * set past them is staged in parts. A routed connection's bounds come from
+   * the router's `hello.ok`.
    */
   readonly messageLimits?: PartLimits;
 
@@ -968,7 +969,10 @@ export class Client {
    * its error. A request made while the connection is down waits for the
    * reconnect, unless `options.whileConnected` is set, in which case it
    * throws a `ConnectionError`: a request a session's restore makes would
-   * otherwise wait for the reconnect that is running that restore.
+   * otherwise wait for the reconnect that is running that restore. One made
+   * with `options.epoch` throws a `ConnectionError` unless it goes on that
+   * connection, whose negotiation `options.encoded`, `message` encoded for
+   * it, then belongs to.
    *
    * The request settles once its send has too, which a transport may report
    * only after the server has handled the request, and so after the frames
@@ -980,6 +984,7 @@ export class Client {
     options: {
       whileConnected?: boolean;
       epoch?: number;
+      encoded?: string;
       onResponse?: (response: ResponseMessage<Result>) => void;
     } = {},
   ): Promise<Result> {
@@ -1005,12 +1010,9 @@ export class Client {
       );
     }
     const requestId = message.requestId as string;
-    // Retained requests stay inline so replay uses the next connection's
-    // negotiation. Compact only the value handed to the transport encoder.
-    const prepared = this.#commitLabelTable
-      ? compressClientMessageLabels(message)
-      : message;
-    const encoded = encodeMemoryBoundary(prepared);
+    const encoded = options.encoded !== undefined && options.epoch === epoch
+      ? options.encoded
+      : this.#encodeRequest(message);
     const pending: PendingRequest = Promise.withResolvers<unknown>();
     const { onResponse } = options;
     if (onResponse !== undefined) {
@@ -1025,7 +1027,7 @@ export class Client {
     // observes the rejection.
     pending.promise.catch(() => {});
     this.#pending.set(requestId, pending);
-    if (typeof message.space === "string") {
+    if (this.#syncParts && typeof message.space === "string") {
       const descriptor = message.session;
       const sessionId = typeof message.sessionId === "string"
         ? message.sessionId
@@ -1105,16 +1107,24 @@ export class Client {
     if (!this.#connected && options.whileConnected !== true) {
       await this.#ensureConnected();
     }
-    const limits = this.#requestLimits;
-    const parts = this.#connected && limits !== undefined &&
-        this.#serverFlags?.watchSetPartsV1 === true &&
-        !payloadFits(encodeMemoryBoundary(message), limits)
-      ? splitWatchSetRequest(message, limits)
-      : [message];
-    if (parts.length === 1) {
+    if (!this.#connected) {
       return await this.request<WatchSetResult>(message, options);
     }
     const epoch = this.#connectionEpoch;
+    const encoded = this.#encodeRequest(message);
+    const limits = this.#requestLimits;
+    const parts = limits !== undefined &&
+        this.#serverFlags?.watchSetPartsV1 === true &&
+        !payloadFits(encoded, limits)
+      ? splitWatchSetRequest(message, limits)
+      : [message];
+    if (parts.length === 1) {
+      return await this.request<WatchSetResult>(message, {
+        ...options,
+        epoch,
+        encoded,
+      });
+    }
     const answers = parts.map((part) =>
       this.request<WatchSetResult>(part, { ...options, epoch })
     );
@@ -1123,6 +1133,17 @@ export class Client {
     const refused = results.find((result) => result.status === "rejected");
     if (refused !== undefined) throw refused.reason;
     return (results.at(-1) as PromiseFulfilledResult<WatchSetResult>).value;
+  }
+
+  /**
+   * Helper for the requests, which encodes `message` for this connection.
+   * Retained requests stay inline so replay uses the next connection's
+   * negotiation; only the value handed to the transport encoder is compacted.
+   */
+  #encodeRequest(message: FabricPlainObject): string {
+    return encodeMemoryBoundary(
+      this.#commitLabelTable ? compressClientMessageLabels(message) : message,
+    );
   }
 
   /**
@@ -1135,13 +1156,12 @@ export class Client {
    * cut are sent a second time and none is skipped. A direct server takes
    * the whole list.
    *
-   * The cut has two costs beyond that second delivery. The server removes
-   * only documents the list names, so a document that was cut and has
-   * since left the session's watch set gets no remove: the replica keeps
-   * the value it last had for it until the document is watched again. And
-   * the documents cut all come back in the one response, which must fit
-   * the toolshed's 4 MiB bound on what it queues to a data socket; a
-   * response past it closes the socket.
+   * The cut has a cost beyond that second delivery. The server removes only
+   * documents the list names, so a document that was cut and has since left
+   * the session's watch set gets no remove: the replica keeps the value it
+   * last had for it until the document is watched again. The documents cut
+   * come back in the response's sync, in parts when it is too large for one
+   * message (`syncPartsV1`).
    *
    * @internal For `SpaceSession`.
    */
@@ -2067,15 +2087,23 @@ export class Client {
         );
       }
       // The parts of a split sync are held until the last arrives, and the
-      // sync is then handled as the one they divide.
-      if (this.#syncParts) {
+      // sync is then handled as the one they divide. A message that carries
+      // no sync passes whatever the assembler holds, and so does a whole
+      // sync while it holds none.
+      const sync = serverMessageSync(message);
+      if (!this.#syncParts) {
+        if (sync?.more !== undefined) {
+          throw protocolError("Unnegotiated `syncPartsV1` sync part");
+        }
+      } else if (
+        sync !== undefined &&
+        (sync.more !== undefined || this.#syncPartAssembler.pending)
+      ) {
         message = this.#syncPartAssembler.accept(
           message as ServerMessage,
           this.#messageSession(message),
         );
         if (message === undefined) return;
-      } else if (serverMessageSync(message)?.more !== undefined) {
-        throw protocolError("Unnegotiated `syncPartsV1` sync part");
       }
     } catch (cause) {
       const error = new Error("Unable to parse memory server message", {

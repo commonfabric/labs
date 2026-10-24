@@ -6,7 +6,7 @@
  * sync they divide. The first part takes the whole sync's place, as
  * `response.ok.sync` or `session/effect.effect`; each later part is a
  * `session/effect` for the same session. A server sends a sync's parts one
- * after another, with nothing else for that session between them.
+ * after another, with no other message for that session between them.
  *
  * A client splits a `session.watch.set` too large for one message
  * (`watchSetPartsV1`, section 4.3.5): the server holds each part and applies
@@ -18,6 +18,7 @@
  * goes alone.
  */
 
+import { membersWritten } from "@commonfabric/data-model/codec-json";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 import type {
@@ -46,8 +47,10 @@ export type SyncPartSession = {
 /**
  * The list fields a split divides, each a list whose concatenation over the
  * parts is the list the whole message carried, and those of them every part
- * carries. Every other field is repeated on every part, so a list field added
- * to the message belongs here, or a split repeats it on every part.
+ * carries. Every other field is repeated on every part, and a receiver
+ * requires the parts to repeat it alike, so a list field added to the message
+ * can be divided only behind a new capability: a peer that knows only these
+ * lists would refuse parts whose new list differs.
  */
 type ListShape = {
   readonly fields: readonly string[];
@@ -89,40 +92,60 @@ export function serverMessageSync(
 }
 
 /**
- * Whether `payload`, an encoded message, fits `limits`. Text of at most twice
- * the value bound plus one characters cannot hold more values than the bound,
- * since every value but the first takes a character and a separator, so only
- * longer text is counted.
+ * Whether `payload`, an encoded message, fits `limits`. A character takes at
+ * most three UTF-8 bytes, so text of at most a third of the byte bound fits
+ * it unmeasured. JSON text of `n` characters holds at most `(n + 1) / 2`
+ * values, as every value takes a character and every value but the first a
+ * separator besides, so a payload of at most `2 * values + 1` characters, the
+ * wire tag's five among them, holds fewer values than the bound, and only
+ * longer text is scanned.
  */
 export function payloadFits(payload: string, limits: PartLimits): boolean {
   if (payload.length > limits.bytes) return false;
-  if (utf8Length(payload) > limits.bytes) return false;
+  if (
+    payload.length * 3 > limits.bytes && utf8Length(payload) > limits.bytes
+  ) {
+    return false;
+  }
   if (limits.values === null || payload.length <= 2 * limits.values + 1) {
     return true;
   }
-  return jsonValueCount(payload.slice(WIRE_TAG.length)) <= limits.values;
+  return membersWritten(payload.slice(WIRE_TAG.length), limits.values - 1) <
+    limits.values;
 }
 
 /**
- * Divides the sync `message` carries into parts whose messages fit `limits`,
- * measured before any table compaction: the first in `message`'s envelope,
- * the rest as effects for `session`. Returns `[message]` when the sync has
- * fewer than two entries or fits.
+ * Divides the sync `message` carries into parts whose messages fit `limits`:
+ * the first in `message`'s envelope, the rest as effects for `session`.
+ * `prepared` is `message` as the connection's table encodings leave it, whose
+ * entries are measured when they correspond one for one to `message`'s, so
+ * that a part is cut by what it takes on the wire; a part's own tables can
+ * still take it past the bounds, which the caller checks. Returns `[message]`
+ * when the sync has fewer than two entries or the entries fit one part.
  */
 export function splitSyncMessage(
   message: ServerMessage,
   session: SyncPartSession,
   limits: PartLimits,
+  prepared: ServerMessage = message,
 ): ServerMessage[] {
   const sync = serverMessageSync(message);
   if (sync === undefined) return [message];
   const entries = entriesOf(sync, SYNC_LISTS);
   if (entries.length < 2) return [message];
+  const compacted = serverMessageSync(prepared);
+  const measured = compacted === undefined
+    ? entries
+    : entriesOf(compacted, SYNC_LISTS);
+  const sizes = (measured.length === entries.length &&
+      measured.every((item, index) => item.field === entries[index].field)
+    ? measured
+    : entries).map((item) => measure(item.entry));
   // Every part is charged the larger of the two envelopes a part can take.
   const empty = partOf(sync, SYNC_LISTS, [], true, true) as SessionSync;
   const first = measure(inEnvelope(message, empty, session, true));
   const later = measure(inEnvelope(message, empty, session, false));
-  const groups = pack(entries, {
+  const groups = pack(entries, sizes, {
     bytes: Math.max(first.bytes, later.bytes),
     values: Math.max(first.values, later.values),
   }, limits);
@@ -190,9 +213,13 @@ export function halveSyncPart(
 /**
  * Collects the parts of the syncs split across a connection's messages, by
  * session, and hands back each sync whole once its last part arrives. A
- * message for a session whose sync is incomplete that is not its next part,
- * a part whose fields differ from the first part's, and a `more` other than
- * `true` are protocol violations, which throw.
+ * message for a session whose sync is incomplete that carries no sync is
+ * handed back as it is: a router answers some of a session's requests
+ * itself, and its answer can come between the parts. The next message for
+ * the session that carries a sync must be the sync's next part. A sync for a
+ * session whose sync is incomplete that is not an effect, a part whose fields
+ * differ from the first part's, a `more` other than `true`, and a first part
+ * whose session is not known are protocol violations, which throw.
  */
 export class SyncPartAssembler {
   #open = new Map<string, {
@@ -216,20 +243,21 @@ export class SyncPartAssembler {
     session: SyncPartSession | undefined,
   ): ServerMessage | undefined {
     const sync = serverMessageSync(message);
+    if (sync === undefined) return message;
     // A part names its session, a response's through its request.
     if (session === undefined) {
-      requireParts(sync?.more === undefined);
+      requireParts(sync.more === undefined);
       return message;
     }
     const key = `${session.space} ${session.sessionId}`;
     const open = this.#open.get(key);
     if (open === undefined) {
-      if (sync?.more === undefined) return message;
+      if (sync.more === undefined) return message;
       requireParts(sync.more === true);
       this.#open.set(key, { first: message, parts: [sync] });
       return undefined;
     }
-    requireParts(message.type === "session/effect" && sync !== undefined);
+    requireParts(message.type === "session/effect");
     requireParts(sameFields(open.parts[0], sync, SYNC_LISTS));
     open.parts.push(sync);
     if (sync.more === true) return undefined;
@@ -251,9 +279,10 @@ export class SyncPartAssembler {
 
 /**
  * Divides a watch set into staged parts whose messages fit `limits`, each
- * numbered by the parts before it and with a request ID of its own made from
+ * naming the set by `message`'s request ID (`stage`) and numbered by the
+ * parts before it (`part`), with a request ID of its own made from
  * `message`'s; the last keeps `message`'s. Returns `[message]` when the set
- * has fewer than two entries or fits.
+ * has fewer than two entries or its entries fit one part.
  */
 export function splitWatchSetRequest(
   message: WatchSetRequest,
@@ -265,9 +294,11 @@ export function splitWatchSetRequest(
   const empty = partOf(message, WATCH_SET_LISTS, [], true, true);
   const groups = pack(
     entries,
+    entries.map((item) => measure(item.entry)),
     measure({
       ...empty,
       requestId: partId(entries.length),
+      stage: message.requestId,
       part: entries.length,
     }),
     limits,
@@ -278,31 +309,48 @@ export function splitWatchSetRequest(
     return {
       ...partOf(message, WATCH_SET_LISTS, group, !last, index === 0),
       requestId: last ? message.requestId : partId(index),
+      stage: message.requestId,
       part: index,
     } as WatchSetRequest;
   });
 }
 
 /**
- * The watch set held once `part` follows the parts `staged` joins: their
- * lists concatenated, without `part` or `more`.
+ * Appends a staged part's lists to the set `staged` holds, in place; `staged`
+ * is the server's own copy, which the first part makes with
+ * `stagedWatchSet()`.
  */
-export function joinWatchSetParts(
-  staged: WatchSetRequest | undefined,
+export function appendWatchSetPart(
+  staged: WatchSetRequest,
   part: WatchSetRequest,
-): WatchSetRequest {
-  const joined = joinLists(
-    staged === undefined ? [part] : [staged, part],
-    WATCH_SET_LISTS,
-  );
-  joined.requestId = part.requestId;
-  delete joined.part;
-  return joined as WatchSetRequest;
+): void {
+  for (const { field, entry } of entriesOf(part, WATCH_SET_LISTS)) {
+    const held = staged as unknown as Record<string, unknown[]>;
+    (held[field] ??= []).push(entry);
+  }
+  // A list a part names empty is still named.
+  for (const field of WATCH_SET_LISTS.fields) {
+    const held = staged as unknown as Record<string, unknown[]>;
+    if (Array.isArray((part as Record<string, unknown>)[field])) {
+      held[field] ??= [];
+    }
+  }
 }
 
-/** The number of entries a watch set's lists hold. */
-export function watchSetEntries(message: WatchSetRequest): number {
-  return entriesOf(message, WATCH_SET_LISTS).length;
+/**
+ * The server's own copy of a staged set's first part, with lists of its own
+ * for later parts to append to, and without `stage`, `part` or `more`.
+ */
+export function stagedWatchSet(part: WatchSetRequest): WatchSetRequest {
+  const staged: Record<string, unknown> = { ...part };
+  delete staged.stage;
+  delete staged.part;
+  delete staged.more;
+  for (const field of WATCH_SET_LISTS.fields) {
+    const list = staged[field];
+    if (Array.isArray(list)) staged[field] = [...list];
+  }
+  return staged as WatchSetRequest;
 }
 
 /** Helper for the splits, which lists a message's entries in order. */
@@ -319,11 +367,12 @@ function entriesOf(record: object, shape: ListShape): Entry[] {
 
 /**
  * Helper for the splits, which packs entries in order into groups whose
- * messages fit `limits`, `base` being an empty part's size; each entry is
- * charged the comma before it.
+ * messages fit `limits`, given each entry's size and `base`, an empty part's
+ * size; each entry is charged the comma before it.
  */
 function pack(
   entries: readonly Entry[],
+  sizes: readonly Size[],
   base: Size,
   limits: PartLimits,
 ): Entry[][] {
@@ -331,8 +380,8 @@ function pack(
   let current: Entry[] = [];
   let bytes = base.bytes;
   let values = base.values;
-  for (const item of entries) {
-    const size = measure(item.entry);
+  entries.forEach((item, index) => {
+    const size = sizes[index];
     const fits = bytes + size.bytes + 1 <= limits.bytes &&
       (limits.values === null || values + size.values <= limits.values);
     if (!fits && current.length > 0) {
@@ -344,7 +393,7 @@ function pack(
     current.push(item);
     bytes += size.bytes + 1;
     values += size.values;
-  }
+  });
   groups.push(current);
   return groups;
 }
@@ -377,7 +426,7 @@ function partOf(
   return part;
 }
 
-/** Helper for the joins, which concatenates the parts' lists. */
+/** Helper for the assembler, which concatenates the parts' lists. */
 function joinLists(
   parts: readonly object[],
   shape: ListShape,
@@ -435,7 +484,7 @@ function sameFields(first: object, part: object, shape: ListShape): boolean {
 
 function requireParts(condition: boolean): asserts condition {
   if (!condition) {
-    const error = new Error("Invalid multi-part session sync");
+    const error = new Error("Invalid session sync part");
     error.name = "ProtocolError";
     throw error;
   }
@@ -444,25 +493,7 @@ function requireParts(condition: boolean): asserts condition {
 /** Helper for the splits: the encoded size of one value, as a message holds it. */
 function measure(value: unknown): Size {
   const json = encodeMemoryBoundary(value as never).slice(WIRE_TAG.length);
-  return { bytes: utf8Length(json), values: jsonValueCount(json) };
-}
-
-/** The number of values in JSON text, counted as the router counts them. */
-function jsonValueCount(json: string): number {
-  let count = 0;
-  const stack: unknown[] = [JSON.parse(json)];
-  while (stack.length > 0) {
-    const value = stack.pop();
-    count++;
-    if (Array.isArray(value)) {
-      for (const item of value) stack.push(item);
-    } else if (value !== null && typeof value === "object") {
-      for (const key in value) {
-        stack.push((value as Record<string, unknown>)[key]);
-      }
-    }
-  }
-  return count;
+  return { bytes: utf8Length(json), values: membersWritten(json) + 1 };
 }
 
 function utf8Length(text: string): number {

@@ -471,14 +471,17 @@ closes the socket with an `output-limit` verdict classified `single-message`
 
 The toolshed splits a sync whose encoding exceeds 1 MiB (`ROUTED_PART_BYTES`)
 or `limits.frameSlots` into parts, for a client that advertised `syncPartsV1`
-([04-protocol.md](04-protocol.md) section 4.2.3), and sends them back to back;
-the router forwards each as a message of its own, so other toolsheds' messages
-for the connection go out between them. The bound neither refuses nor counts
-the parts of one split sync per session at a time, as it admits one message of
-up to 8 MiB alone, whatever the session's other output; each part is still at
-most 8 MiB. The parts of a session's next split sync, sent while those are
-retained, are bounded like other output, as is every message that is not a
-part, so a reader that falls behind is still closed.
+([04-protocol.md](04-protocol.md) section 4.2.3), and sends them back to back
+on its socket; the router forwards each as a message of its own, so other
+toolsheds' messages for the connection go out between them. The
+`outputBytesPerSocket` bound neither refuses nor counts parts. The parts a data
+socket retains, of however many split syncs, are bounded together by eight
+times it, 32 MiB at the default, and none when it is `null`; a part past that
+is refused as `sync-parts`, and each part is still at most 8 MiB. The server
+builds and encodes a whole sync before its first part goes, so a sync whose
+parts exceed that bound cannot be delivered, and a socket retains a split
+sync's parts as it would have retained the sync. Every message that is not a
+part is bounded as before, so a reader that falls behind is still closed.
 
 Toolshed output passes records to the socket,
 in order, while the record bytes awaiting write callbacks are below a 256 KiB
@@ -728,10 +731,12 @@ for a session the toolshed revoked, or a principal it released, after the
 router forwarded it is denied for good, as is a watch mutation, a set or an
 add, that would leave a session with more than `watchesPerSession` watch IDs
 or `viewsPerSession` views (`frame-limit`), when the respective quota is enabled.
-A part of a set staged in parts is checked as the set the parts so far make,
-and its holdings against `holdingsPerSession` as well, since the frame bound on
-holdings bounds each part alone; a part that more parts follow changes no usage
-until the last part applies the set.
+A part of a set staged in parts is checked as the set the parts of its set so
+far make, and its holdings against `holdingsPerSession` as well, since the
+frame bound on holdings bounds each part alone; a part that more parts follow
+changes no usage until the last part applies the set. The router holds a
+session's requests behind its unanswered watch mutation, so a set of `n` parts
+takes `n` round trips to the toolshed.
 Each is logged in the toolshed's own journal, never the router's, as a
 `routed-memory-verdict` with verdict `request-refused` and reason
 `session-limit`, `watch-limit`, `holdings-limit`, `frame-limit`,
@@ -761,13 +766,15 @@ failed send, before socket accounting can change during close:
   `bufferedAmount`. Control sockets use `bufferedAmount` alone. Socket writable
   bytes can include framing.
 - `limitBytes`: the bound that refused the send: 8 MiB for a message too large
-  to send alone, else `limits.outputBytesPerSocket` (default 4 MiB) on their
-  sum; equality is admitted.
+  to send alone, the bound on parts for a part of a split sync, else
+  `limits.outputBytesPerSocket` (default 4 MiB) on their sum; equality is
+  admitted.
 - `endpoint`: `data` or `control`. A control-link failure carries its snapshot
   into each context it closes, unless that context already has a socket failure.
-- `classification`: `single-message` when `frameBytes` exceeds 8 MiB, otherwise
-  `queued-output` (the message would fit alone but not behind the output the
-  socket holds).
+- `classification`: `single-message` when `frameBytes` exceeds 8 MiB,
+  `sync-parts` for a part of a split sync that would take the parts the socket
+  retains past their bound, otherwise `queued-output` (the message would fit
+  alone but not behind the output the socket holds).
 - `messageType`: the structured Memory message kind when available at the
   sender; omitted for binary control records and data greetings.
 - `diagnostics`: for structured data output, separate socket and retained-body
