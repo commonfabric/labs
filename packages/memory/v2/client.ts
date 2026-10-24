@@ -3591,10 +3591,9 @@ export class SpaceSession {
     const background = [...this.#background];
     this.#background.clear();
     await Promise.allSettled(background);
-    for (const pending of this.#outstandingCommits.values()) {
-      pending.pending.reject(new Error("memory session closed"));
-    }
-    this.#outstandingCommits.clear();
+    // A commit whose send failed after its acceptance arrived is outstanding
+    // still, and settles with its verdict.
+    this.#settleOutstandingCommits(new Error("memory session closed"));
     this.#replaceWatchSpecs([]);
     this.#viewInterests = [];
     this.#viewCapabilityLostObservers.clear();
@@ -3641,18 +3640,11 @@ export class SpaceSession {
     this.#endWatchRequests(error);
     this.#readyOnConnection = false;
     this.#client.forgetSession(this);
-    for (const pending of this.#outstandingCommits.values()) {
-      // A commit whose acceptance has arrived settles with it: a session the
-      // commit's own ACL write revokes is told so right after the verdict,
-      // and that can reach it before the commit's send settles.
-      if (pending.applied !== undefined) {
-        pending.pending.resolve(pending.applied);
-      } else {
-        pending.pending.reject(error);
-      }
-    }
+    // An accepted commit settles with its verdict: a session the commit's own
+    // ACL write revokes is told so right after the verdict, which can reach it
+    // before the commit's send settles.
+    this.#settleOutstandingCommits(error);
     this.#rejectCaughtUpLocalSeqWaiters(error);
-    this.#outstandingCommits.clear();
     this.#replaceWatchSpecs([]);
     this.#viewInterests = [];
     this.#viewCapabilityLostObservers.clear();
@@ -3668,6 +3660,21 @@ export class SpaceSession {
         console.error("session-termination subscriber threw:", cause);
       }
     }
+  }
+
+  /**
+   * Settles and forgets every outstanding commit: one whose acceptance has
+   * arrived with its verdict, the rest by rejecting them with `error`.
+   */
+  #settleOutstandingCommits(error: Error): void {
+    for (const pending of this.#outstandingCommits.values()) {
+      if (pending.applied !== undefined) {
+        pending.pending.resolve(pending.applied);
+      } else {
+        pending.pending.reject(error);
+      }
+    }
+    this.#outstandingCommits.clear();
   }
 
   /** Terminates the session when its client cannot restore the connection. */
