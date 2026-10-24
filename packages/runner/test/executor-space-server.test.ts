@@ -1339,6 +1339,10 @@ describe("stage G SpaceServer recovery seams", () => {
       undefined,
     );
     const rootId = rootCell.getAsNormalizedFullLink().id;
+    // The serving runtime's execution nodes that belong to the piece `id`.
+    const viewNodesOf = (id: string) =>
+      runtime.scheduler.viewExecutionNodes(space, runtime.scopeKeyIdentity)
+        .filter((node) => node.piece?.id === id);
     const originalWatched = server.demandForSpace.bind(server);
     (server as { demandForSpace: unknown }).demandForSpace = () =>
       sessionDemandOf(demandRowsFor([{ id: rootId }]));
@@ -1349,6 +1353,9 @@ describe("stage G SpaceServer recovery seams", () => {
       });
       expect(stats.structureLoadFailures).toBe(0);
       expect(runtime.runner.isRunning(rootCell)).toBe(false);
+      // A view plan lists only the pieces the serving runtime's execution
+      // nodes belong to, so a client starts no view of a refused piece.
+      expect(viewNodesOf(rootId)).toEqual([]);
 
       // Parked: the waves that further input drives attempt nothing for it.
       for (let i = 0; i < 3; i++) {
@@ -1366,6 +1373,7 @@ describe("stage G SpaceServer recovery seams", () => {
         writes: [{ id: rootId, scopeKey: "space" }],
       });
       await awaitEach(cycles, () => runtime.runner.isRunning(rootCell));
+      expect(viewNodesOf(rootId).length).toBeGreaterThan(0);
       expect(stats.structureLoadRefused).toBe(1);
       expect(stats.structureLoadRearmed).toBe(1);
       expect(stats.structureLoadFailures).toBe(0);
