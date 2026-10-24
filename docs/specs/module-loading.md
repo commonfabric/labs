@@ -284,22 +284,25 @@ The executable runtime fingerprint comes from one authoritative provider,
 `getExecutableRuntimeFingerprint()`. Its version-1 value is a domain-separated
 hash with the tag `cf/executable-runtime-fingerprint/v1`. The hash includes:
 
-- the value returned by [`getCompileCacheRuntimeVersion()`][c14];
+- the compiler-input fingerprint (`computeCompilerFingerprint()` in
+  `compiler-fingerprint.deno.ts`);
 - [`schedulerRuntimeFingerprint()`][c12];
 - an automatically generated catalog hash of the implementations and export
   surfaces of every pattern-facing runtime module; and
 - an automatically generated catalog hash of the sandbox and execution-policy
   inputs that can change pattern behavior.
 
-The existing compile-cache runtime version intentionally hashes a broad set of
-compiler, transformer, schema, harness, sandbox, API, compiler-option, and
-dependency inputs. Version 1 uses that value as a mandatory input even though it
-can over-invalidate executable identities. A later design may split
-representation-only cache inputs from executable semantics. Such a split may
-roll `runtimeVersion` alone only for an input proven unable to affect compiled
-behavior. A compiler, transformer, generated-schema, runtime-module, sandbox,
-execution-policy, or scheduler-semantics change must roll the executable runtime
-fingerprint.
+The compiler-input fingerprint intentionally hashes a broad set of compiler,
+transformer, schema, harness, sandbox, API, compiler-option, and dependency
+inputs. Version 1 uses that value as a mandatory input even though it can
+over-invalidate executable identities. It is deliberately not the compile-cache
+`runtimeVersion` a built artifact carries, which
+[`getCompileCacheRuntimeVersion()`][c14] resolves: that version is a hash of
+what the compiler emits for a fixed corpus, so it stays put across a compiler
+change that compiles the corpus to the same documents, and a cache keyed by it survives such a
+change while the executable fingerprint still rolls. A compiler, transformer,
+generated-schema, runtime-module, sandbox, execution-policy, or
+scheduler-semantics change must roll the executable runtime fingerprint.
 
 The provider and its input catalogs are required production work. Once the
 provider is enabled, inability to calculate its value fails closed. The empty
@@ -512,12 +515,22 @@ linked data:
    check, so no separate label is needed.
 2. **Compiled set — `compileCache:<runtimeVersion>/<identity>`.** Compiled and
    verified JS, keyed by `(runtimeVersion, identity)` ([`compiledDocKey`][c14]).
-   Under the version-1 executable-fingerprint rule, the existing broad
-   compiler-input fingerprint rolls both `runtimeVersion` and
-   `runtimeFingerprint`. That creates a new executable identity for an affected
-   module and writes a new source set. A future representation-only cache change
-   may roll `runtimeVersion` alone only after the fingerprint inputs distinguish
-   it from executable semantics.
+   `runtimeVersion` is the compile-cache version
+   [`getCompileCacheRuntimeVersion()`][c14] resolves. A built artifact — a
+   binary, the worker bundle, loom's vendored copy of the runtime — carries a
+   version that is a hash of what its compiler emits for a fixed corpus (each
+   compiled document's body, stored fields and import edges), under every
+   persisted cache variant, computed by the build and baked in
+   (`compile-cache-output-version.deno.ts`); a Deno source run takes the
+   compiler-input fingerprint instead. A compiler change that compiles the
+   corpus to the same documents keeps a built artifact's `runtimeVersion`, and with it
+   the compiled documents of every construct the corpus exercises; one that
+   moves a byte, or an epoch bump, moves it, and the compiled set misses and
+   recompiles from the source set. A construct the corpus lacks is the
+   version's blind spot, which the corpus's breadth and the epoch answer. Under the version-1
+   executable-fingerprint rule the compiler-input fingerprint rolls
+   `runtimeFingerprint` either way, which creates a new executable identity for
+   an affected module and writes a new source set.
 
 A source or compiled document is written whole, and only when the stored
 document differs. Its `imports` elements are stored inline in the document,
@@ -941,10 +954,11 @@ index's restart-stable `action` column,
   integrity label is treated as a miss and recompiled from the self-verifying
   source document; only integrity-valid documents are reused without
   re-verification.
-- A future representation-only compile-cache `runtimeVersion` bump with an
-  unchanged runtime fingerprint misses the compiled set and recompiles while
-  the source set (`pattern:<identity>`) persists. Version 1 treats the current
-  broad compiler-input version as executable and therefore rolls both values.
+- A compile-cache `runtimeVersion` move misses the compiled set and recompiles
+  while the source set (`pattern:<identity>`) persists; a compiler change that
+  emits the same corpus bytes keeps a built artifact's `runtimeVersion`, and
+  the compiled set serves warm loads across it. Version 1 rolls the executable
+  runtime fingerprint on the compiler-input fingerprint either way.
 - A `runtimeFingerprint` bump gives an affected entry module a new executable
   identity and writes a new source set. The prior source set remains retained
   for history. Tests compare the runtime-neutral digest to classify this as a

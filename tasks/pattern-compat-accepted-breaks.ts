@@ -1123,6 +1123,11 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // schema allows other keys, so typing this one narrows it, and a
     // manager's request outcomes carry the policy through the rooms they
     // link.
+    //
+    // These baselines also report the scope the manager's `people` declares,
+    // which `fabrichat-view-scopes-per-user-break.md` records, in the result
+    // role. The entry names both paths, and the last baseline, recorded with
+    // that scope, reports the policy alone.
     pattern: "fabrichat/manager.tsx",
     baselines: [
       "20261011T221322Z-ESDR30hfSt52JJjG",
@@ -1138,8 +1143,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261016T232233Z-pyVPXvcNYTbzFVqa",
       "20261018T181023Z-H3M1K82AIA1y33AS",
       "20261022T220213Z-LlstD45te1meAfuA",
+      "20261024T002137Z-_xficjXREAbKWap9",
     ],
-    paths: ["argument.requests.*"],
+    paths: ["argument.requests.*", "result.$VIEWS.chats.people"],
     reason:
       "a room's policy states `maxAttachments`, an optional number, where its schema took any value; no stored policy holds the key",
     record: "docs/history/fabrichat-max-attachments-break.md",
@@ -1234,6 +1240,11 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // code. The recorded outcomes left extra fields open and typed `code` as
     // `space-own-chat` alone, so a stored outcome admitted either of any
     // type; the candidate types them.
+    //
+    // The proof now blames the scope the manager's `people` declares, which
+    // `fabrichat-view-scopes-per-user-break.md` records, in place of
+    // `requests` in the result role: it reports one issue per role. The
+    // entry names both paths.
     pattern: "fabrichat/manager.tsx",
     baselines: [
       "20261011T170652Z-2XdZAneyCTt2Teex",
@@ -1241,6 +1252,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "argument.requests.*",
       "result.$VIEWS.chats.requests.*",
+      "result.$VIEWS.chats.people",
     ],
     reason:
       "a manager's request outcome now types `delivery`, and a refused one the `shared-inbox` code, which the recorded outcomes left open; no stored request outcome holds either",
@@ -1279,7 +1291,10 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The same ruling, against the home baselines recorded with the scope
     // the manager's views declare, and with the action that replaces a
-    // refused private inbox.
+    // refused private inbox. The proof now blames the scope the manager's
+    // `people` declares, which `fabrichat-view-scopes-per-user-break.md`
+    // records under the ruling its own entry carries, in place of `requests`:
+    // it reports one issue per role. The entry names both paths.
     pattern: "system/home.tsx",
     baselines: [
       "20261011T170655Z-AJPqLNiOact-MHN0",
@@ -1287,6 +1302,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     ],
     paths: [
       "result.chatManager.$VIEWS.chats.requests.*",
+      "result.chatManager.$VIEWS.chats.people",
     ],
     reason:
       "home's chat manager's request outcomes now type `delivery`, and a refused one the `shared-inbox` code, which the recorded outcomes left open; a home rolled forward still delivers them",
@@ -1488,5 +1504,99 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     reason:
       "a pick carries `title`, `author` and `why` inline and `basedOn` in place of `book`",
     record: "docs/history/book-recommendations-picks-break.md",
+  },
+  {
+    // The manager's views derived under the reader's access (`rooms`,
+    // `people`) are declared per user where they were declared per session.
+    // The proof reads that as a changed scope, and reports one issue per
+    // role, so each baseline names the field it blames. The baselines that
+    // also report the room policy's `maxAttachments` are in that break's
+    // entry, which names both paths.
+    pattern: "fabrichat/manager.tsx",
+    baselines: [
+      "20261024T000755Z-abyOKppwBZufFk_m",
+    ],
+    paths: ["result.$VIEWS.chats.people"],
+    reason:
+      "the manager's views derived under the reader's access are stored per user rather than per session, in documents of their own; a manager rolled forward lists its rooms",
+    record: "docs/history/fabrichat-view-scopes-per-user-break.md",
+  },
+  {
+    // The room's `participantEntries` and `participantPrincipals` are
+    // declared per user where they were declared per session.
+    pattern: "fabrichat/room.tsx",
+    baselines: [
+      "20261016T053638Z-KQKz6B5ir-i_b2SS",
+      "20261016T153436Z-pRy5c_bxbuVZdFhZ",
+      "20261016T163240Z-VzSSk0EfxY0KC9hS",
+      "20261016T164542Z-Og9yZmA1u5WeXwCN",
+      "20261016T165510Z-vsc_lFnf0kuiGOzM",
+      "20261016T171911Z-UsM9ehwli7eo6Otm",
+      "20261016T174740Z-dgRxrNv4zwPax9H2",
+      "20261016T183810Z-M-epGFTqdJCXqpdY",
+      "20261016T184531Z-gbZC3T21TeTxRvo-",
+      "20261016T193302Z-sc2O1lFUsZPJ_mQb",
+      "20261016T230431Z-g8_CPlpZxyagr5NX",
+      "20261016T232234Z-thh7FfVQXJz1jvma",
+      "20261016T234919Z-CoEadoaDhwXNTNly",
+      "20261018T030554Z-M6esswMg1IIMlLJ1",
+      "20261018T072351Z--tm-zMdGue1lcFC9",
+      "20261018T181024Z-8qQmq6MV1Ik7_eO5",
+      "20261019T231845Z-Vj5dqYA2toFthDOE",
+      "20261022T220214Z-LuSDquW0A2n4QZ8w",
+      "20261023T213239Z-wQjScvFleK2bL80b",
+      "20261024T000756Z-dKtPP_2-Aa_KMMvf",
+      "20261024T003401Z-xURqZ9DluSiRDXhB",
+      "20261024T014452Z-fKwRjY5cCkMEpatS",
+      "20261024T022151Z-IsyaJEIMyiypxAgF",
+      "20261024T022626Z-fQTNhQDagiuXxPOO",
+      "20261024T145618Z-Gv5sfeYUA8vf1ZMN",
+    ],
+    paths: ["result.$VIEWS.room.participantEntries"],
+    reason:
+      "the room's participant entries and principals are stored per user rather than per session, in documents of their own; a room rolled forward lists them",
+    record: "docs/history/fabrichat-view-scopes-per-user-break.md",
+  },
+  {
+    // Home types its `chatManager` as the manager's output, so the manager's
+    // per-user `people` reaches home's contract too. Home is a required
+    // pattern, so it carries the ruling that lets it name one.
+    pattern: "system/home.tsx",
+    baselines: [
+      "20261011T232406Z-H8GLTyEEvgcBxdB1",
+      "20261012T052420Z-12t_tpKxi8VbviJa",
+      "20261012T173537Z-qa-uVwDf1s3biqH0",
+      "20261013T181949Z-GBuQOV7gSSM47_32",
+      "20261014T011647Z-MFMywpgMEY_E99SW",
+      "20261014T030848Z-JisMyyIiJIrCf4Gb",
+      "20261014T040623Z-Dv8vGrR_RU4o_od4",
+      "20261014T114259Z-bqtp-2EzUZZiWqbT",
+      "20261014T162033Z-LIoQs5Jl8gnJGhKC",
+      "20261015T201353Z-oCK_qi6_rPitM38o",
+      "20261015T211701Z-H-GPmz8jSVGzuo_8",
+      "20261016T130414Z-85KSXDBnUvxPHW1X",
+      "20261016T131539Z-pViYLhxUrHjY4Ns0",
+      "20261016T150229Z-pLkLhdLf5j1OaZ12",
+      "20261016T163241Z-dI5NsGutavMFOaTh",
+      "20261016T232237Z-1-QwrXrbROaZhlyk",
+      "20261016T235217Z-vOAvtNyhZ8DRhyJx",
+      "20261018T005038Z-gFqm7i0HKcxGUI-b",
+      "20261018T181025Z-DNDWDmf6635D93ez",
+      "20261019T231846Z-a4jCOmx9encoFZ6S",
+      "20261022T203735Z-VmCROm_UqDxFqhqv",
+      "20261022T220216Z-drGbEASF5X5lV4en",
+      "20261023T225638Z-ul8itnlMjhVPl5G4",
+      "20261024T000758Z-cjuKEPPeYWQzIxGW",
+    ],
+    paths: ["result.chatManager.$VIEWS.chats.people"],
+    reason:
+      "home's chat manager's views derived under the reader's access are stored per user rather than per session; a home rolled forward lists its chats",
+    record: "docs/history/fabrichat-view-scopes-per-user-break.md",
+    requiredPatternOverride: {
+      rulingBy: "Dan",
+      on: "2026-10-23",
+      reason:
+        "choosing per-user scopes for FabriChat's derived views, with binding renames giving them documents of their own so a home rolled forward keeps listing its chats, and accepting the warnings an update logs once per view as it opens each piece",
+    },
   },
 ];
