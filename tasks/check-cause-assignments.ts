@@ -54,10 +54,12 @@ export const COMPILER_PATHS: readonly string[] = [
 ];
 
 /**
- * This gate's own modules, the moves it forgives and the patterns it excuses
- * from compiling, a change to any of which can change its verdict.
+ * This gate's own modules, the runner module that describes and matches each
+ * level's cells, the moves it forgives and the patterns it excuses from
+ * compiling, a change to any of which can change its verdict.
  */
 export const GATE_PATHS: readonly string[] = [
+  "packages/runner/src/cause-assignment.ts",
   "tasks/cause-assignments-accepted-moves.ts",
   "tasks/cause-assignments-dump.ts",
   "tasks/cause-assignments-lib.ts",

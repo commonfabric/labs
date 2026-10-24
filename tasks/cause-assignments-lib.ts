@@ -1,44 +1,30 @@
 /**
- * The cause assignment of a compiled pattern, and the comparison of two of
- * them, for `check-cause-assignments.ts`.
+ * The cause assignment of a compiled pattern and of every pattern it reaches,
+ * and the comparison of two of them, for `check-cause-assignments.ts`.
  *
- * The pattern builder numbers each anonymous internal cell of a pattern
- * `{ $generated: N }`, in the order its walk reaches them, and the runtime
- * mints the cell's entity id from that number. A compiler change that adds
- * or removes an anonymous cell ahead of another therefore moves the other to
- * a new number, under a source that did not change, and a deployed piece then
- * reads each moved cell's state from the document a different cell wrote.
- * `docs/specs/computed-cell-identity.md` describes the numbering.
- *
- * A cell is described here only by what the compiler cannot change for an
- * unchanged source: whether it is a stream, its entity kind, and what writes
- * it, a sub-pattern child named by its child's pattern identity. Its schema is
- * left out, since the schema generator reshapes schemas without moving any
- * cell. Two cells of one pattern level with the same description are told
- * apart by their order, which a change elsewhere in the walk does not
- * disturb.
+ * Each pattern level's cells are numbered, described and matched across two
+ * builds by `packages/runner/src/cause-assignment.ts`, which says what a
+ * cell's description holds and why. This file adds the walk from the entry
+ * pattern to every level, a key naming each level that holds when numbers
+ * move, and a digest naming one build.
  */
 
 import { encodeHex } from "@std/encoding/hex";
 import { sha256 } from "@commonfabric/content-hash";
-import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-
-/** One numbered cell of a pattern level. */
-export interface NumberedCell {
-  /** Its `$generated` number: its own, or a named instance's legacy one. */
-  number: number;
-
-  /** What it is, in words that hold across compilers for one source. */
-  description: string;
-
-  /**
-   * Whether it holds state that recomputing it does not restore: a
-   * sub-pattern child, whose state is the child piece under its id, or a
-   * cell that is not computed.
-   */
-  holdsState: boolean;
-}
+// By path rather than through `@commonfabric/runner`: the gate runs
+// `cause-assignments-dump.ts` against a checkout of the base revision, under
+// that checkout's configuration, where a package specifier would reach the
+// base's copy of `cause-assignment.ts`, or nothing in a base older than it.
+// One description of a cell, this tree's, has to apply to both builds.
+import {
+  type EntryRefOf,
+  type NumberedCell,
+  numberedCells,
+  type RenumberedCell,
+  renumberedCells,
+  writerDescription,
+} from "../packages/runner/src/cause-assignment.ts";
 
 /**
  * One pattern a pattern reaches, the entry pattern included, and its
@@ -74,19 +60,10 @@ export interface PatternAssignmentError {
 }
 
 /** A cell whose number differs between two builds of one source. */
-export interface MovedCell {
+export interface MovedCell extends RenumberedCell {
   pattern: string;
   level: string;
-  description: string;
-  holdsState: boolean;
-  from: number;
-  to: number;
 }
-
-/** The pattern identity of a builder artifact, where one is known. */
-export type EntryRefOf = (
-  artifact: object,
-) => { identity: string; symbol: string } | undefined;
 
 type Unknown = Readonly<Record<string, unknown>>;
 
@@ -101,34 +78,6 @@ const isReadable = (value: unknown): value is Unknown =>
 const isPatternLike = (value: unknown): value is Unknown =>
   isReadable(value) && Array.isArray(value.nodes) &&
   "argumentSchema" in value && "result" in value;
-
-/**
- * Helper for `assignmentLevels()`, which returns the `$generated` number of
- * `cause`, or `undefined` for a cause that carries none.
- */
-function generatedNumber(cause: unknown): number | undefined {
-  return isObjectNotArray(cause) && typeof cause.$generated === "number"
-    ? cause.$generated
-    : undefined;
-}
-
-/**
- * Helper for `assignmentLevels()`, which adds to `out` the key of each
- * partial cause an alias anywhere in `value` names.
- */
-function aliasedCauses(
-  value: unknown,
-  out: Set<string>,
-  seen: Set<unknown> = new Set(),
-): void {
-  if (!isObjectOrArray(value) || seen.has(value)) return;
-  seen.add(value);
-  const alias = isObjectNotArray(value) ? value.$alias : undefined;
-  if (isObjectNotArray(alias) && alias.partialCause !== undefined) {
-    out.add(causeKey(alias.partialCause));
-  }
-  for (const child of Object.values(value)) aliasedCauses(child, out, seen);
-}
 
 /**
  * Helper for `assignmentLevels()`, which adds to `out` each pattern in
@@ -148,35 +97,6 @@ function nestedPatterns(
   for (const child of Object.values(value)) nestedPatterns(child, out, seen);
 }
 
-/** A key for a partial cause, the same for two equal causes. */
-function causeKey(cause: unknown): string {
-  return hashStringOf(cause as FabricValue);
-}
-
-/**
- * Helper for `assignmentLevels()`, which names the writer `module` in words
- * that hold across compilers.
- */
-function writerName(module: Unknown, entryRefOf: EntryRefOf): string {
-  switch (module.type) {
-    case "ref":
-      return `builtin ${String(module.implementation)}`;
-    case "javascript":
-      return module.wrapper === undefined
-        ? "function"
-        : `function (${String(module.wrapper)})`;
-    case "pattern": {
-      const child = module.implementation;
-      const ref = isReadable(child) ? entryRefOf(child) : undefined;
-      return ref === undefined
-        ? "sub-pattern"
-        : `sub-pattern ${ref.identity.slice(0, 12)}#${ref.symbol}`;
-    }
-    default:
-      return String(module.type);
-  }
-}
-
 /**
  * The numbered cells of `entry` and of every pattern it reaches, through a
  * sub-pattern node or a builtin's pattern input, each pattern once.
@@ -190,20 +110,10 @@ export function assignmentLevels(
   const visit = (pattern: Unknown, key: string) => {
     if (visited.has(pattern)) return;
     visited.add(pattern);
-    const writersByCause = new Map<string, string[]>();
     const children: [string, Unknown][] = [];
     const writerOrdinals = new Map<string, number>();
     for (const node of pattern.nodes as unknown[]) {
       if (!isObjectNotArray(node) || !isObjectNotArray(node.module)) continue;
-      const writer = writerName(node.module, entryRefOf);
-      const written = new Set<string>();
-      aliasedCauses(node.outputs, written);
-      for (const cause of written) {
-        writersByCause.set(cause, [
-          ...(writersByCause.get(cause) ?? []),
-          writer,
-        ]);
-      }
       const nested: Unknown[] = [];
       nestedPatterns(
         node.module.type === "pattern"
@@ -212,40 +122,14 @@ export function assignmentLevels(
         nested,
       );
       if (nested.length === 0) continue;
+      const writer = writerDescription(node.module, entryRefOf);
       const ordinal = writerOrdinals.get(writer) ?? 0;
       writerOrdinals.set(writer, ordinal + 1);
       nested.forEach((child, index) =>
         children.push([`${key}/${writer}[${ordinal}]#${index}`, child])
       );
     }
-    const cells: NumberedCell[] = [];
-    for (
-      const descriptor of (pattern.derivedInternalCells ?? []) as unknown[]
-    ) {
-      if (!isObjectNotArray(descriptor)) continue;
-      const own = generatedNumber(descriptor.partialCause);
-      const number = own ?? generatedNumber(descriptor.legacyPartialCause);
-      if (number === undefined) continue;
-      const stream = isObjectNotArray(descriptor.partialCause) &&
-        descriptor.partialCause.$kind === "stream";
-      const computed = descriptor.kind === "computed";
-      const writers = (writersByCause.get(causeKey(descriptor.partialCause)) ??
-        []).sort();
-      const child = writers.some((writer) => writer.startsWith("sub-pattern"));
-      cells.push({
-        number,
-        description: [
-          stream ? "stream" : "cell",
-          computed ? "computed" : "not computed",
-          writers.length === 0
-            ? "no writer"
-            : `written by ${writers.join(", ")}`,
-        ].join(", "),
-        holdsState: !stream && (!computed || child),
-      });
-    }
-    cells.sort((a, b) => a.number - b.number);
-    levels.push({ key, cells });
+    levels.push({ key, cells: numberedCells(pattern, entryRefOf) });
     for (const [childKey, child] of children) visit(child, childKey);
   };
   if (isPatternLike(entry)) visit(entry, "");
@@ -254,9 +138,9 @@ export function assignmentLevels(
 
 /**
  * The cells of `head` whose number differs from the one `base` gives them,
- * for one pattern built from one source by two compilers. A cell is matched
- * across the two by its description and its ordinal among the cells of its
- * level that share the description. A cell only one side has is not a move.
+ * for one pattern built from one source by two compilers, each level matched
+ * to the level of `base` under the same key. A level only one side has moves
+ * nothing.
  */
 export function movedCells(
   base: PatternAssignment,
@@ -267,27 +151,8 @@ export function movedCells(
   for (const level of head.levels) {
     const before = baseLevels.get(level.key);
     if (before === undefined) continue;
-    const numbersBefore = new Map<string, number[]>();
-    for (const cell of before.cells) {
-      numbersBefore.set(cell.description, [
-        ...(numbersBefore.get(cell.description) ?? []),
-        cell.number,
-      ]);
-    }
-    const ordinals = new Map<string, number>();
-    for (const cell of level.cells) {
-      const ordinal = ordinals.get(cell.description) ?? 0;
-      ordinals.set(cell.description, ordinal + 1);
-      const from = numbersBefore.get(cell.description)?.[ordinal];
-      if (from === undefined || from === cell.number) continue;
-      moved.push({
-        pattern: head.pattern,
-        level: level.key,
-        description: cell.description,
-        holdsState: cell.holdsState,
-        from,
-        to: cell.number,
-      });
+    for (const cell of renumberedCells(before.cells, level.cells)) {
+      moved.push({ pattern: head.pattern, level: level.key, ...cell });
     }
   }
   return moved;
