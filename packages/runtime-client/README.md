@@ -27,7 +27,13 @@ holding nothing for a document it has not loaded as well, so the connection
 delivers none, and a pull, which waits for the loads its read starts, is how a
 subscriber that was given a value learns that the cell now holds nothing. A
 `sync()` waits for no loads, and one that finds nothing leaves a value the
-handle holds in place, telling no subscriber.
+handle holds in place, telling no subscriber. A handle that hears of a dropped
+update no longer counts the label it holds as the worker's current read. If any
+of its subscribers asked for labels, every subscriber of the handle is called
+again with what it holds, told that its label is not current (`CellDelivery`).
+The worker's next update with a label makes it current again, and those
+subscribers are told so even when the update brings back the value and label the
+handle held.
 
 A subscription's read that finds the value and label the worker last sent for it
 sends nothing: a change elsewhere in what the read depends on, which runs the
@@ -86,6 +92,12 @@ label as read, and the author claim. `onState` is not called until both labels
 have loaded, so a verdict never passes through `unknown` on its way to
 `verified`, and is called again after each later read of either label.
 `observeAuthorship()` returns a function that ends the observation.
+
+Each label is read from the subscription's update when the update says its label
+is the worker's current read (`CellDelivery`), and from the worker otherwise. An
+update holding nothing, which the connection drops, leaves the label a handle
+holds behind the worker's; the handle says so, to its own subscribers and to a
+handle seeded from it, and the observation then asks the worker.
 
 A label counts as loaded once a read of it has finished with nothing left to
 wait for. When the cell a handle resolves to reads as having no label, the
