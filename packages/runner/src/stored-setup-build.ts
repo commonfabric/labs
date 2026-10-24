@@ -88,8 +88,13 @@ export type StoredSetupBuildComparison =
   | { kind: "same" }
   /** Cells moved, none of them holding state: re-staging puts the piece right. */
   | { kind: "renumbered"; moved: RenumberedCell[] }
-  /** A cell holding state moved: re-staging would record one cell's state as another's. */
-  | { kind: "held"; moved: RenumberedCell[] };
+  /**
+   * Re-staging would record one cell's state as another's: a cell holding
+   * state moved (`moved`), or the projection changed over cells holding
+   * state that share a description (`ambiguous`), which could have traded
+   * numbers without the pairing seeing it.
+   */
+  | { kind: "held"; moved: RenumberedCell[]; ambiguous: string[] };
 
 /** The fields of a built pattern the record reads. */
 export interface StampedPattern extends PatternLevel {
@@ -194,8 +199,11 @@ export function readStoredSetupBuild(
  * cells holding state decide: each the stored record lists is paired with
  * the current build's cell of its description, in order among those of that
  * description (`renumberedCells()`), and one whose number differs is a move
- * that re-staging cannot put right. With no such move, re-staging restores
- * every cell that moved.
+ * that re-staging cannot put right. Two cells of one description trading
+ * numbers is a move that pairing cannot see, and the projection map is what
+ * shows it; so where the projection changed and cells holding state share a
+ * description, the trade is taken to be among them. With no such move,
+ * re-staging restores every cell that moved.
  */
 export function compareStoredSetupBuild(
   stored: StoredSetupBuild,
@@ -214,7 +222,16 @@ export function compareStoredSetupBuild(
   }));
   const after = cells.filter((cell) => cell.holdsState);
   const moved = renumberedCells(before, after);
-  return moved.length === 0
+  const ambiguous = stored.projection === current.projection ? [] : [
+    ...new Set(
+      stored.state.map(([, description]) => description).filter((
+        description,
+        index,
+        descriptions,
+      ) => descriptions.indexOf(description) !== index),
+    ),
+  ];
+  return moved.length === 0 && ambiguous.length === 0
     ? { kind: "renumbered", moved }
-    : { kind: "held", moved };
+    : { kind: "held", moved, ambiguous };
 }

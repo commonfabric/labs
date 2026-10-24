@@ -1167,8 +1167,22 @@ interface StoredSetupVerdict {
   moved: RenumberedCell[];
 
   /**
+   * The descriptions shared by cells holding state over which the projection
+   * changed, where the verdict is a hold: a trade among them is what the
+   * pairing cannot see.
+   */
+  ambiguous: string[];
+
+  /**
+   * Whether a record of the pattern's identity decided the verdict. One
+   * stamped for it proves a setup of this version ran over the document.
+   */
+  recorded: boolean;
+
+  /**
    * Whether the stored manifest lacks a derived internal cell of the build:
-   * the sign that no setup for this version ran over the document.
+   * with no record of the version, the sign that no setup for it ran over
+   * the document.
    */
   lacks: boolean;
 }
@@ -5290,36 +5304,43 @@ export class Runner {
       }),
     );
     if (stamped === undefined || !samePatternRef(stamped.pattern, ref)) {
-      if (manifestAgrees) return { owed: "nothing", moved: [], lacks };
+      const unrecorded = { moved: [], ambiguous: [], recorded: false, lacks };
+      if (manifestAgrees) return { owed: "nothing", ...unrecorded };
       return {
         owed: cells.some((cell) => cell.holdsState) ? "hold" : "repair",
-        moved: [],
-        lacks,
+        ...unrecorded,
       };
     }
     const comparison = compareStoredSetupBuild(stamped, record, cells);
+    const recorded = { ambiguous: [], recorded: true, lacks };
     switch (comparison.kind) {
       case "same":
         return {
           owed: manifestAgrees ? "nothing" : "repair",
           moved: [],
-          lacks,
+          ...recorded,
         };
       case "renumbered":
-        return { owed: "repair", moved: comparison.moved, lacks };
+        return { owed: "repair", moved: comparison.moved, ...recorded };
       case "held":
-        return { owed: "hold", moved: comparison.moved, lacks };
+        return {
+          ...recorded,
+          owed: "hold",
+          moved: comparison.moved,
+          ambiguous: comparison.ambiguous,
+        };
     }
   }
 
   /**
    * What a plain start of `resultCell` owes its stored setup, for `pattern`
    * pinned as `ref`: the verdict of `#storedSetupVerdict()`, except that a
-   * manifest lacking one of this version's cells under a completion marker
-   * naming another version, or none, is a repair whatever the cells holding
-   * state: that is a version whose setup never ran over the document, which
-   * the repair materializes, and the positional-child guard in setup is what
-   * judges its children.
+   * manifest lacking one of this version's cells, under a completion marker
+   * naming another version, or none, and with no record of this version, is
+   * a repair whatever the cells holding state: that is a version whose setup
+   * never ran over the document, which the repair materializes, and the
+   * positional-child guard in setup is what judges its children. A record of
+   * this version proves its setup ran, so a hold that record decided stands.
    */
   #startOwes(
     resultCell: Cell<unknown>,
@@ -5328,7 +5349,7 @@ export class Runner {
   ): StoredSetupVerdict {
     const verdict = this.#storedSetupVerdict(resultCell, pattern, ref);
     if (
-      verdict.owed === "hold" && verdict.lacks &&
+      verdict.owed === "hold" && !verdict.recorded && verdict.lacks &&
       storedSetupMarker(
           resultCell,
           ref,
@@ -6827,12 +6848,18 @@ export class Runner {
           `${ref.identity}#${ref.symbol}, and its stored setup is left as ` +
           "it is, since re-staging would read a cell holding state as " +
           "another cell's: " +
-          (owed.moved.length === 0
+          (owed.moved.length === 0 && owed.ambiguous.length === 0
             ? "the piece carries no record of the build that set it up, " +
               "and the build has cells holding state"
-            : owed.moved.map((cell) =>
-              `${cell.description} moved from ${cell.from} to ${cell.to}`
-            ).join("; ")),
+            : [
+              ...owed.moved.map((cell) =>
+                `${cell.description} moved from ${cell.from} to ${cell.to}`
+              ),
+              ...owed.ambiguous.map((description) =>
+                `the projection changed over cells of one description, ` +
+                `${description}, which may have traded numbers`
+              ),
+            ].join("; ")),
         ]);
       }
       if (owed?.owed === "repair" && ref !== undefined) {

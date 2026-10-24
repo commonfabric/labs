@@ -87,6 +87,30 @@ const STATEFUL: RuntimeProgram = {
   }],
 };
 
+// The two derived cells, and two writables inside the view tree of one
+// description: positional cells holding state that only their numbers tell
+// apart.
+const STATEFUL_PAIR: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern, UI, Writable } from 'commonfabric';",
+      "export default pattern<{ input: Writable<number> }>(({ input }) => ({",
+      "  [UI]: (",
+      "    <div>",
+      "      {computed(() => input.get() * 2)}",
+      "      {computed(() => input.get() * 3)}",
+      "      <span>{new Writable('first')}</span>",
+      "      <span>{new Writable('second')}</span>",
+      "    </div>",
+      "  ),",
+      "}));",
+      "",
+    ].join("\n"),
+  }],
+};
+
 const INPUT = 5;
 const SLOT_VALUES = [INPUT * 2, INPUT * 3];
 
@@ -445,6 +469,72 @@ describe("stored-setup-build-repair", () => {
     // move the state.
     const { cell, pattern, ref } = await setUpAndStop("held", STATEFUL);
     await storeAsBuild(cell, pattern, ref, (n) => n + 1);
+    const stored = storedSetupOf(cell);
+
+    expect(await rt.start(cell)).toBe(true);
+    await cell.pull();
+    await settled();
+
+    expect(rt.runner.isRunning(cell)).toBe(true);
+    expect(storedSetupOf(cell)).toEqual(stored);
+  });
+
+  it("holds a piece whose cells holding state of one description another build mapped the other way", async () => {
+    // Two writables of one description trading numbers keep every cell at a
+    // number of its description, so the pairing reports no move; only the
+    // projection map differs. Re-staging would link each writable's slot to
+    // the other's state, so the start holds on the shared description.
+    const { cell, pattern, ref } = await setUpAndStop("traded", STATEFUL_PAIR);
+    const [first, second] = positionalDescriptors(pattern).filter((
+      descriptor,
+    ) => descriptor.kind !== "computed").map((descriptor) =>
+      descriptor.partialCause.$generated
+    );
+    await storeAsBuild(
+      cell,
+      pattern,
+      ref,
+      (n) => n === first ? second : n === second ? first : n,
+    );
+    const stored = storedSetupOf(cell);
+    expect(stampOf(cell)?.cells).toBe(
+      storedSetupBuildOf(pattern, ref, entryRefOf).cells,
+    );
+
+    expect(await rt.start(cell)).toBe(true);
+    await cell.pull();
+    await settled();
+
+    expect(rt.runner.isRunning(cell)).toBe(true);
+    expect(storedSetupOf(cell)).toEqual(stored);
+  });
+
+  it("holds a piece whose record says a cell holding state moved, under a marker naming another version", async () => {
+    // A manifest lacking one of the version's cells under a marker naming
+    // another version is repaired whatever the cells holding state, where
+    // no record of the version exists: that is a version whose setup never
+    // ran. A record of the version proves its setup did run, so the hold it
+    // decided stands.
+    const { cell, pattern, ref } = await setUpAndStop(
+      "held-under-other-marker",
+      STATEFUL,
+    );
+    await storeAsBuild(cell, pattern, ref, (n) => n + 1);
+    const tx = rt.edit();
+    const manifest = convertibleJsFromFabricValue(
+      cell.withTx(tx).getMetaRaw("internal"),
+    ) as unknown[];
+    cell.withTx(tx).setMetaRaw(
+      "internal",
+      fabricFromConvertibleJsValue(manifest.slice(1)),
+      rawMetaWriteAuthorization,
+    );
+    cell.withTx(tx).setMetaRaw(
+      "patternSetupIdentity",
+      { identity: "another version", symbol: ref.symbol },
+      rawMetaWriteAuthorization,
+    );
+    expect((await tx.commit().settled).error).toBeUndefined();
     const stored = storedSetupOf(cell);
 
     expect(await rt.start(cell)).toBe(true);
