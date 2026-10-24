@@ -436,6 +436,9 @@ interface QueuedBody {
 
   /** Payload bytes whose data-record callbacks have run, not bytes passed to the socket. */
   writtenBytes: number;
+
+  /** The session whose split sync this body is a part of, when the bound exempts it. */
+  exempt?: string;
 }
 
 /** One record passed to the socket, until its write callback runs. */
@@ -460,6 +463,9 @@ export class RouterSender {
   #fail: (error: Error) => void;
   #limit: number | null;
   #bytes = 0;
+  /** Retained bytes of exempt bodies, by the session they belong to. */
+  #exempt = new Map<string, number>();
+  #exemptBytes = 0;
   #queue: QueuedBody[] = [];
   /** Queue prefix whose records have all been passed to the socket. */
   #dispatchedBodies = 0;
@@ -515,6 +521,16 @@ export class RouterSender {
   /** Logical bytes retained across the active body and waiting bodies. */
   get bufferedBytes(): number {
     return this.#bytes;
+  }
+
+  /** Retained bytes the queued-output bound counts: all but exempt bodies'. */
+  get boundedBytes(): number {
+    return this.#bytes - this.#exemptBytes;
+  }
+
+  /** Whether exempt bodies of `session` are retained. */
+  exemptRetained(session: string): boolean {
+    return this.#exempt.has(session);
   }
 
   /**
@@ -574,17 +590,26 @@ export class RouterSender {
     };
   }
 
-  /** Submits a body, refusing it before enqueueing if its budget is exhausted. */
-  send(route: Record<string, unknown>, payload: string | Uint8Array): void {
+  /**
+   * Submits a body, refusing it before enqueueing if its budget is exhausted.
+   * A body `exempt` names a session for is a part of that session's split
+   * sync, which the queued-output bound neither refuses nor counts.
+   */
+  send(
+    route: Record<string, unknown>,
+    payload: string | Uint8Array,
+    exempt?: string,
+  ): void {
     requireRouted(!this.#closed);
     const body = typeof payload === "string"
       ? encoder.encode(payload)
       : payload;
+    const bounded = this.boundedBytes;
     try {
       requireRouted(
         body.length <= ROUTED_RAW_LIMIT &&
-          (this.#bytes === 0 || this.#limit === null ||
-            this.#bytes + body.length <= this.#limit),
+          (exempt !== undefined || bounded === 0 || this.#limit === null ||
+            bounded + body.length <= this.#limit),
       );
       encodeRouterHeader({
         route,
@@ -600,6 +625,10 @@ export class RouterSender {
       throw error;
     }
     this.#bytes += body.length;
+    if (exempt !== undefined) {
+      this.#exemptBytes += body.length;
+      this.#exempt.set(exempt, (this.#exempt.get(exempt) ?? 0) + body.length);
+    }
     this.#admittedBodies++;
     this.#admittedBytes += body.length;
     const records = this.#records(route, body, typeof payload !== "string");
@@ -608,6 +637,7 @@ export class RouterSender {
       bytes: body.length,
       enqueuedAt: this.#now(),
       writtenBytes: 0,
+      ...(exempt === undefined ? {} : { exempt }),
     });
     this.#observe?.("enqueue");
     this.#pump();
@@ -621,6 +651,8 @@ export class RouterSender {
     this.#dispatchedBodies = 0;
     this.#credit = 0;
     this.#bytes = 0;
+    this.#exempt.clear();
+    this.#exemptBytes = 0;
     this.#pending = [];
     this.#pendingBytes = 0;
     this.#drained?.resolve(false);
@@ -684,6 +716,12 @@ export class RouterSender {
     this.#queue.splice(index, 1);
     this.#dispatchedBodies--;
     this.#bytes -= body.bytes;
+    if (body.exempt !== undefined) {
+      this.#exemptBytes -= body.bytes;
+      const left = this.#exempt.get(body.exempt)! - body.bytes;
+      if (left === 0) this.#exempt.delete(body.exempt);
+      else this.#exempt.set(body.exempt, left);
+    }
     this.#completedBodies++;
     this.#completedBytes += body.bytes;
     if (this.#queue.length === 0) {

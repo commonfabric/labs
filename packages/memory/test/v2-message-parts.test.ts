@@ -1,0 +1,858 @@
+// Messages in parts. A server splits a sync too large for its transport's
+// messages, and the client handles the parts as the one sync they divide
+// (`syncPartsV1`, 04-protocol.md section 4.2.3). A client stages a watch set
+// too large for one message in parts, and the server applies them as one set
+// (`watchSetPartsV1`, section 4.3.5).
+
+import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
+import { Server } from "../v2/server.ts";
+import {
+  connect,
+  connectionError,
+  loopback,
+  type Transport,
+} from "../v2/client.ts";
+import {
+  encodeMemoryBoundary,
+  type EntitySnapshot,
+  getMemoryProtocolFlags,
+  type HelloOkMessage,
+  MEMORY_PROTOCOL,
+  type ResponseMessage,
+  type ServerMessage,
+  type SessionEffectMessage,
+  type SessionOpenAuthMetadata,
+  type SessionSync,
+  type WatchSetRequest,
+} from "../v2.ts";
+import {
+  halveSyncPart,
+  joinWatchSetParts,
+  type PartLimits,
+  payloadFits,
+  serverMessageSync,
+  splitSyncMessage,
+  splitWatchSetRequest,
+  SyncPartAssembler,
+} from "../v2/message-parts.ts";
+import { countValues } from "./support/routed-slots.ts";
+import {
+  testSessionOpenAuthFactory,
+  testSessionOpenServerOptions,
+} from "./v2-auth-test-helpers.ts";
+
+const SESSION = { space: "did:key:z6Mk-sync-parts", sessionId: "session-1" };
+
+const upsert = (index: number, size = 200) => ({
+  branch: "",
+  id: `of:sync-part-${index}`,
+  seq: index + 1,
+  doc: { value: { index, text: "x".repeat(size) } },
+});
+
+const responseWith = (sync: SessionSync): ServerMessage => ({
+  type: "response",
+  requestId: "req:1",
+  ok: { serverSeq: 40, sync },
+} as ServerMessage);
+
+const syncOf = (count: number, extra: Partial<SessionSync> = {}) =>
+  ({
+    type: "sync",
+    fromSeq: 0,
+    toSeq: 40,
+    caughtUpLocalSeq: 3,
+    upserts: Array.from({ length: count }, (_, index) => upsert(index)),
+    removes: [{ branch: "", id: "of:sync-part-removed" }],
+    ...extra,
+  }) as SessionSync;
+
+/** Joins `parts` through an assembler, asserting it holds all but the last. */
+const join = (parts: ServerMessage[]): ServerMessage => {
+  const assembler = new SyncPartAssembler();
+  for (const part of parts.slice(0, -1)) {
+    assertEquals(assembler.accept(part, SESSION), undefined);
+    assert(assembler.pending);
+  }
+  const whole = assembler.accept(parts.at(-1)!, SESSION);
+  assertExists(whole);
+  assert(!assembler.pending);
+  return whole;
+};
+
+const valueCount = (message: ServerMessage): number =>
+  countValues(JSON.parse(encodeMemoryBoundary(message).slice("fvj1:".length)));
+
+Deno.test("a split sync's parts fit their bounds and join to the sync", () => {
+  const limits: PartLimits = { bytes: 2048, values: 60 };
+  const message = responseWith(syncOf(30));
+  const parts = splitSyncMessage(message, SESSION, limits);
+  assert(parts.length > 1);
+  for (const part of parts) {
+    assert(
+      new TextEncoder().encode(encodeMemoryBoundary(part)).length <=
+        limits.bytes,
+    );
+    assert(valueCount(part) <= limits.values!);
+  }
+  // The first part takes the response's place; the rest are effects for the
+  // session, and every part but the last says more follow.
+  assertEquals(parts[0].type, "response");
+  for (const part of parts.slice(1)) {
+    assertEquals(part.type, "session/effect");
+    assertEquals((part as SessionEffectMessage).space, SESSION.space);
+    assertEquals((part as SessionEffectMessage).sessionId, SESSION.sessionId);
+  }
+  assertEquals(
+    parts.map((part) => serverMessageSync(part)!.more),
+    [...parts.slice(1).map(() => true as const), undefined],
+  );
+  for (const part of parts) {
+    const sync = serverMessageSync(part)!;
+    assertEquals(
+      [sync.fromSeq, sync.toSeq, sync.caughtUpLocalSeq],
+      [0, 40, 3],
+    );
+  }
+  assertEquals(join(parts), message);
+});
+
+Deno.test("a split effect joins to the effect", () => {
+  const message: SessionEffectMessage = {
+    type: "session/effect",
+    ...SESSION,
+    effect: syncOf(12, { crossings: [] }),
+  };
+  const parts = splitSyncMessage(message, SESSION, {
+    bytes: 1500,
+    values: null,
+  });
+  assert(parts.length > 1);
+  assert(parts.every((part) => part.type === "session/effect"));
+  // An empty optional list stays on the first part, so the join keeps it.
+  assertEquals(serverMessageSync(parts[0])!.crossings, []);
+  assertEquals(join(parts), message);
+});
+
+Deno.test("an entry larger than a part goes alone, and a lone entry is not split", () => {
+  const sync = syncOf(3);
+  sync.upserts[1] = upsert(1, 5000);
+  const parts = splitSyncMessage(responseWith(sync), SESSION, {
+    bytes: 2048,
+    values: null,
+  });
+  // The large entry fills a part by itself; the small ones share theirs.
+  assertEquals(
+    parts.map((part) => {
+      const { upserts, removes } = serverMessageSync(part)!;
+      return [upserts.length, removes.length];
+    }),
+    [[1, 0], [1, 0], [1, 1]],
+  );
+  assertEquals(join(parts), responseWith(sync));
+
+  const lone = responseWith({ ...syncOf(1), removes: [] });
+  assertEquals(splitSyncMessage(lone, SESSION, { bytes: 10, values: 1 }), [
+    lone,
+  ]);
+  assertEquals(halveSyncPart(lone, SESSION), undefined);
+});
+
+Deno.test("a halved part keeps its place in the sequence", () => {
+  const parts = splitSyncMessage(responseWith(syncOf(8)), SESSION, {
+    bytes: 1500,
+    values: null,
+  });
+  const [first, second] = halveSyncPart(parts.at(-1)!, SESSION)!;
+  assertEquals(serverMessageSync(first)!.more, true);
+  assertEquals(serverMessageSync(second)!.more, undefined);
+  assertEquals(
+    join([...parts.slice(0, -1), first, second]),
+    responseWith(syncOf(8)),
+  );
+});
+
+Deno.test("the assembler passes other sessions' messages between a split sync's parts", () => {
+  const parts = splitSyncMessage(responseWith(syncOf(10)), SESSION, {
+    bytes: 1500,
+    values: null,
+  });
+  const other = { space: SESSION.space, sessionId: "session-2" };
+  const otherEffect: ServerMessage = {
+    type: "session/effect",
+    ...other,
+    effect: { ...syncOf(1), removes: [] },
+  };
+  const assembler = new SyncPartAssembler();
+  assertEquals(assembler.accept(parts[0], SESSION), undefined);
+  assertEquals(assembler.accept(otherEffect, other), otherEffect);
+  for (const part of parts.slice(1, -1)) {
+    assertEquals(assembler.accept(part, SESSION), undefined);
+  }
+  assertEquals(
+    assembler.accept(parts.at(-1)!, SESSION),
+    responseWith(syncOf(10)),
+  );
+});
+
+Deno.test("the assembler refuses a split sync's parts out of sequence", () => {
+  const parts = splitSyncMessage(responseWith(syncOf(10)), SESSION, {
+    bytes: 1500,
+    values: null,
+  });
+  const refuses = (messages: ServerMessage[]) => {
+    const assembler = new SyncPartAssembler();
+    assertThrows(
+      () => {
+        for (const message of messages) assembler.accept(message, SESSION);
+      },
+      Error,
+      "Invalid multi-part session sync",
+    );
+  };
+  // Another message for the session before the last part.
+  refuses([parts[0], {
+    type: "response",
+    requestId: "req:2",
+    ok: { serverSeq: 41 },
+  } as ServerMessage]);
+  refuses([parts[0], {
+    type: "presence/remove",
+    ...SESSION,
+    room: "room",
+    participantId: "someone",
+  } as ServerMessage]);
+  // A later part at another sequence than the first.
+  const moved = structuredClone(parts[1]) as SessionEffectMessage;
+  moved.effect.toSeq = 41;
+  refuses([parts[0], moved]);
+  // A first part whose session is not known.
+  assertThrows(
+    () => new SyncPartAssembler().accept(parts[0], undefined),
+    Error,
+    "Invalid multi-part session sync",
+  );
+  // `more` with a value other than `true`.
+  const odd = structuredClone(parts[0]) as ResponseMessage<
+    { sync: Record<string, unknown> }
+  >;
+  odd.ok!.sync.more = false;
+  refuses([odd as ServerMessage]);
+});
+
+Deno.test("payloadFits counts the values of text long enough to exceed the bound", () => {
+  const values = 100;
+  // Short text cannot hold more values than its characters allow.
+  assert(payloadFits(`fvj1:[${"0,".repeat(98)}0]`, { bytes: 1000, values }));
+  // Text past twice the bound is counted: 200 one-character values do not
+  // fit; one long string does.
+  assert(
+    !payloadFits(`fvj1:[${"0,".repeat(199)}0]`, { bytes: 1000, values }),
+  );
+  assert(payloadFits(`fvj1:["${"x".repeat(900)}"]`, { bytes: 1000, values }));
+  // Bytes are UTF-8 bytes.
+  assert(!payloadFits(`fvj1:"${"é".repeat(600)}"`, { bytes: 1000, values }));
+  assert(payloadFits(`fvj1:"${"é".repeat(400)}"`, { bytes: 1000, values }));
+});
+
+const HELLO = {
+  type: "hello",
+  protocol: MEMORY_PROTOCOL,
+  flags: getMemoryProtocolFlags(),
+} as const;
+
+const DOCS = 24;
+
+/**
+ * Writes `DOCS` documents through one connection and opens a watch over
+ * them all through another that splits syncs to `limits`, with `flags` in
+ * its hello. Returns what the watcher was sent after its open.
+ */
+const watchThroughParts = async (
+  storeName: string,
+  limits: PartLimits,
+  flags: Record<string, unknown> = HELLO.flags,
+): Promise<ServerMessage[]> => {
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL(`memory://${storeName}`),
+    subscriptionRefreshDelayMs: 0,
+  });
+  const writerMessages: ServerMessage[] = [];
+  const watcherMessages: ServerMessage[] = [];
+  const writer = server.connect((message) => writerMessages.push(message));
+  const watcher = server.connect(
+    (message) => watcherMessages.push(message),
+    limits,
+  );
+  const space = `did:key:z6Mk-${storeName}`;
+  const open = async (
+    connection: ReturnType<Server["connect"]>,
+    messages: ServerMessage[],
+    hello: Record<string, unknown>,
+  ): Promise<string> => {
+    await connection.receive(encodeMemoryBoundary({ ...HELLO, flags: hello }));
+    const ok = messages.shift() as HelloOkMessage;
+    assertEquals(ok.type, "hello.ok");
+    const sessionOpen = ok.sessionOpen as SessionOpenAuthMetadata;
+    await connection.receive(encodeMemoryBoundary({
+      type: "session.open",
+      requestId: "open",
+      space,
+      session: {},
+      invocation: {
+        aud: sessionOpen.audience,
+        challenge: sessionOpen.challenge.value,
+      },
+    }));
+    const opened = messages.shift() as ResponseMessage<{ sessionId: string }>;
+    assertEquals(opened.type, "response");
+    return opened.ok!.sessionId;
+  };
+  try {
+    const writerSession = await open(writer, writerMessages, HELLO.flags);
+    const watcherSession = await open(watcher, watcherMessages, flags);
+    await writer.receive(encodeMemoryBoundary({
+      type: "transact",
+      requestId: "write",
+      space,
+      sessionId: writerSession,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: Array.from({ length: DOCS }, (_, index) => ({
+          op: "set",
+          id: `of:sync-part-${index}`,
+          value: { value: { index, text: "y".repeat(300) } },
+        })),
+      },
+    }));
+    watcherMessages.length = 0;
+    await watcher.receive(encodeMemoryBoundary({
+      type: "session.watch.set",
+      requestId: "watch",
+      space,
+      sessionId: watcherSession,
+      watches: [{
+        id: "all",
+        kind: "graph",
+        query: {
+          roots: Array.from({ length: DOCS }, (_, index) => ({
+            id: `of:sync-part-${index}`,
+            selector: { path: [], schema: false },
+          })),
+        },
+      }],
+    }));
+    return [...watcherMessages];
+  } finally {
+    await server.close();
+  }
+};
+
+Deno.test("a server splits a watch set's sync for a client that takes a sync in parts", async () => {
+  const limits = { bytes: 2048, values: 400 };
+  const messages = await watchThroughParts("sync-parts-split", limits);
+  const response = messages.findIndex((message) =>
+    message.type === "response" &&
+    (message as ResponseMessage<unknown>).requestId === "watch"
+  );
+  assert(response !== -1);
+  const parts = messages.slice(response);
+  assert(parts.length > 1);
+  for (const part of parts) {
+    assert(
+      new TextEncoder().encode(encodeMemoryBoundary(part)).length <=
+        limits.bytes,
+    );
+  }
+  const sessionId = (parts[1] as SessionEffectMessage).sessionId;
+  const assembler = new SyncPartAssembler();
+  let whole: ServerMessage | undefined;
+  for (const part of parts) {
+    whole = assembler.accept(part, {
+      space: (parts[1] as SessionEffectMessage).space,
+      sessionId,
+    });
+  }
+  assertExists(whole);
+  const sync = serverMessageSync(whole)!;
+  assertEquals(sync.more, undefined);
+  assertEquals(
+    sync.upserts.map((entry) => entry.id).sort(),
+    Array.from({ length: DOCS }, (_, index) => `of:sync-part-${index}`)
+      .sort(),
+  );
+});
+
+Deno.test("a server sends a sync whole to a client that does not take one in parts", async () => {
+  const messages = await watchThroughParts(
+    "sync-parts-unnegotiated",
+    { bytes: 2048, values: 400 },
+    { ...HELLO.flags, syncPartsV1: false },
+  );
+  const response = messages.find((message) =>
+    message.type === "response" &&
+    (message as ResponseMessage<unknown>).requestId === "watch"
+  )!;
+  const sync = serverMessageSync(response)!;
+  assertEquals(sync.more, undefined);
+  assertEquals(sync.upserts.length, DOCS);
+});
+
+Deno.test("a client applies a watch set and a commit that arrive in parts", async () => {
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL("memory://sync-parts-client"),
+    subscriptionRefreshDelayMs: 0,
+  });
+  let parts = 0;
+  const inner = loopback(server, { syncParts: { bytes: 2048, values: 400 } });
+  const transport: Transport = {
+    ...inner,
+    send: (payload: string) => inner.send(payload),
+    close: () => inner.close(),
+    setReceiver(receiver: (payload: string) => void) {
+      inner.setReceiver((payload: string) => {
+        if (payload.includes('"more":true')) parts++;
+        receiver(payload);
+      });
+    },
+  };
+  const writerClient = await connect({ transport: loopback(server) });
+  const watcherClient = await connect({ transport });
+  const space = "did:key:z6Mk-sync-parts-client";
+  try {
+    const writer = await writerClient.mount(
+      space,
+      {},
+      testSessionOpenAuthFactory,
+    );
+    const watcher = await watcherClient.mount(
+      space,
+      {},
+      testSessionOpenAuthFactory,
+    );
+    const write = (localSeq: number, text: string) =>
+      writer.transact({
+        localSeq,
+        reads: { confirmed: [], pending: [] },
+        operations: Array.from({ length: DOCS }, (_, index) => ({
+          op: "set" as const,
+          id: `of:sync-part-${index}`,
+          value: { value: { index, text } },
+        })),
+      });
+    await write(1, "a".repeat(300));
+    const view = await watcher.watchSet([{
+      id: "all",
+      kind: "graph",
+      query: {
+        roots: Array.from({ length: DOCS }, (_, index) => ({
+          id: `of:sync-part-${index}`,
+          selector: { path: [], schema: false },
+        })),
+      },
+    }]);
+    assert(parts > 0);
+    assertEquals(view.entities.length, DOCS);
+
+    // A commit touching every document comes back as a split effect, which
+    // the view applies whole.
+    const before = parts;
+    const updates = view.subscribe();
+    const next = updates.next();
+    await write(2, "b".repeat(300));
+    const update = await next;
+    assert(parts > before);
+    assertEquals(update.done, false);
+    assertEquals(
+      update.value.entities.map((entity: EntitySnapshot) =>
+        (entity.document?.value as { text: string }).text
+      ),
+      Array.from({ length: DOCS }, () => "b".repeat(300)),
+    );
+  } finally {
+    await writerClient.close();
+    await watcherClient.close();
+    await server.close();
+  }
+});
+
+const watchSet = (count: number): WatchSetRequest => ({
+  type: "session.watch.set",
+  requestId: "set-1",
+  space: SESSION.space,
+  sessionId: SESSION.sessionId,
+  watches: Array.from({ length: count }, (_, index) => ({
+    id: `watch-${index}`,
+    kind: "graph" as const,
+    query: {
+      roots: [{
+        id: `of:sync-part-${index}`,
+        selector: { path: [], schema: false },
+      }],
+    },
+  })),
+  holdings: Array.from({ length: count }, (_, index) => ({
+    id: `of:sync-part-${index}`,
+    seq: index + 1,
+  })),
+  views: [],
+});
+
+Deno.test("a staged watch set's parts are numbered, fit their bounds and join to the set", () => {
+  const limits = { bytes: 1024, values: 80 };
+  const message = watchSet(20);
+  const parts = splitWatchSetRequest(message, limits);
+  assert(parts.length > 1);
+  for (const part of parts) {
+    assert(payloadFits(encodeMemoryBoundary(part), limits));
+    assertEquals(part.type, "session.watch.set");
+    assertEquals(part.sessionId, SESSION.sessionId);
+  }
+  assertEquals(parts.map((part) => part.part), parts.map((_, index) => index));
+  assertEquals(
+    parts.map((part) => part.more),
+    [...parts.slice(1).map(() => true as const), undefined],
+  );
+  // Every part has a request of its own; the last answers for the set.
+  assertEquals(new Set(parts.map((part) => part.requestId)).size, parts.length);
+  assertEquals(parts.at(-1)!.requestId, message.requestId);
+  // An empty list the set sent is still sent, on the first part.
+  assertEquals(parts[0].views, []);
+  let joined: WatchSetRequest | undefined;
+  for (const part of parts) joined = joinWatchSetParts(joined, part);
+  assertEquals(joined, message);
+});
+
+/**
+ * Opens a session through a raw connection and returns its sender and the
+ * messages it was sent, for driving staged watch sets frame by frame.
+ */
+const rawSession = async (storeName: string) => {
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL(`memory://${storeName}`),
+    subscriptionRefreshDelayMs: 0,
+  });
+  const messages: ServerMessage[] = [];
+  const connection = server.connect((message) => messages.push(message));
+  const space = `did:key:z6Mk-${storeName}`;
+  await connection.receive(encodeMemoryBoundary(HELLO));
+  const ok = messages.shift() as HelloOkMessage;
+  const sessionOpen = ok.sessionOpen as SessionOpenAuthMetadata;
+  await connection.receive(encodeMemoryBoundary({
+    type: "session.open",
+    requestId: "open",
+    space,
+    session: {},
+    invocation: {
+      aud: sessionOpen.audience,
+      challenge: sessionOpen.challenge.value,
+    },
+  }));
+  const opened = messages.shift() as ResponseMessage<{ sessionId: string }>;
+  const sessionId = opened.ok!.sessionId;
+  await connection.receive(encodeMemoryBoundary({
+    type: "transact",
+    requestId: "write",
+    space,
+    sessionId,
+    commit: {
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: Array.from({ length: DOCS }, (_, index) => ({
+        op: "set",
+        id: `of:sync-part-${index}`,
+        value: { value: { index } },
+      })),
+    },
+  }));
+  /** Sends `request` for the session and returns the answer to it. */
+  const send = async (request: Record<string, unknown>) => {
+    messages.length = 0;
+    await connection.receive(
+      encodeMemoryBoundary({ ...request, space, sessionId } as never),
+    );
+    return messages.find((message) =>
+      message.type === "response" &&
+      (message as ResponseMessage<unknown>).requestId === request.requestId
+    ) as ResponseMessage<Record<string, unknown>>;
+  };
+  const watch = (index: number) => ({
+    id: `watch-${index}`,
+    kind: "graph",
+    query: {
+      roots: [{
+        id: `of:sync-part-${index}`,
+        selector: { path: [], schema: false },
+      }],
+    },
+  });
+  return { server, send, watch };
+};
+
+Deno.test("a server holds a watch set's staged parts and applies them as one set", async () => {
+  const { server, send, watch } = await rawSession("staged-set-applied");
+  try {
+    for (let part = 0; part < 3; part++) {
+      const answer = await send({
+        type: "session.watch.set",
+        requestId: `part-${part}`,
+        watches: [watch(2 * part), watch(2 * part + 1)],
+        part,
+        more: true,
+      });
+      assertEquals(answer.ok, { staged: true });
+    }
+    const final = await send({
+      type: "session.watch.set",
+      requestId: "set",
+      watches: [watch(6)],
+      part: 3,
+    });
+    assertEquals(
+      (final.ok!.sync as SessionSync).upserts.map((entry) => entry.id).sort(),
+      Array.from({ length: 7 }, (_, index) => `of:sync-part-${index}`).sort(),
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+Deno.test("a server refuses a staged part that does not follow the parts it holds, and the rest of the set", async () => {
+  const { server, send, watch } = await rawSession("staged-set-gap");
+  try {
+    assertEquals(
+      (await send({
+        type: "session.watch.set",
+        requestId: "part-0",
+        watches: [watch(0)],
+        part: 0,
+        more: true,
+      })).ok,
+      { staged: true },
+    );
+    // Part 1 never arrives: part 2 is refused, and so is the last part,
+    // which would otherwise replace the watch set with part 0 and itself.
+    const gap = await send({
+      type: "session.watch.set",
+      requestId: "part-2",
+      watches: [watch(2)],
+      part: 2,
+      more: true,
+    });
+    assertEquals(gap.error?.name, "ProtocolError");
+    const last = await send({
+      type: "session.watch.set",
+      requestId: "set",
+      watches: [watch(3)],
+      part: 3,
+    });
+    assertEquals(last.error?.name, "ProtocolError");
+    // Another mutation between parts is refused, and ends the staged set.
+    await send({
+      type: "session.watch.set",
+      requestId: "again-0",
+      watches: [watch(0)],
+      part: 0,
+      more: true,
+    });
+    const add = await send({
+      type: "session.watch.add",
+      requestId: "add",
+      watches: [watch(4)],
+    });
+    assertEquals(add.error?.name, "ProtocolError");
+    const after = await send({
+      type: "session.watch.set",
+      requestId: "again-1",
+      watches: [watch(1)],
+      part: 1,
+    });
+    assertEquals(after.error?.name, "ProtocolError");
+    // A whole set applies as ever.
+    const whole = await send({
+      type: "session.watch.set",
+      requestId: "whole",
+      watches: [watch(5)],
+    });
+    assertEquals(
+      (whole.ok!.sync as SessionSync).upserts.map((entry) => entry.id),
+      ["of:sync-part-5"],
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+Deno.test("a client stages a watch set past its connection's bounds", async () => {
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL("memory://staged-set-client"),
+    subscriptionRefreshDelayMs: 0,
+  });
+  const staged: string[] = [];
+  const inner = loopback(server, {
+    messageLimits: { bytes: 2048, values: 400 },
+  });
+  const transport: Transport = {
+    ...inner,
+    send: (payload: string) => {
+      if (payload.includes('"more":true')) staged.push(payload);
+      return inner.send(payload);
+    },
+    close: () => inner.close(),
+    setReceiver: (receiver: (payload: string) => void) =>
+      inner.setReceiver(receiver),
+  };
+  const writerClient = await connect({ transport: loopback(server) });
+  const watcherClient = await connect({ transport });
+  const space = "did:key:z6Mk-staged-set-client";
+  try {
+    const writer = await writerClient.mount(
+      space,
+      {},
+      testSessionOpenAuthFactory,
+    );
+    await writer.transact({
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: Array.from({ length: DOCS }, (_, index) => ({
+        op: "set" as const,
+        id: `of:sync-part-${index}`,
+        value: { value: { index } },
+      })),
+    });
+    const watcher = await watcherClient.mount(
+      space,
+      {},
+      testSessionOpenAuthFactory,
+    );
+    const view = await watcher.watchSet(
+      Array.from({ length: DOCS }, (_, index) => ({
+        id: `watch-${index}`,
+        kind: "graph" as const,
+        query: {
+          roots: [{
+            id: `of:sync-part-${index}`,
+            selector: { path: [], schema: false },
+          }],
+        },
+      })),
+    );
+    assert(staged.length > 0);
+    assertEquals(view.entities.length, DOCS);
+  } finally {
+    await writerClient.close();
+    await watcherClient.close();
+    await server.close();
+  }
+});
+
+Deno.test("a client restores a watch set past its connection's bounds in staged parts, and the server applies all of it", async () => {
+  const server = (phase: string) =>
+    new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL(`memory://staged-set-restore-${phase}`),
+      subscriptionRefreshDelayMs: 0,
+    });
+  const before = server("before");
+  // A server that never held the session: the reconnect opens it again, and
+  // its restore sets the whole watch set.
+  const after = server("after");
+  let host = before;
+  let receiver = (_payload: string) => {};
+  let disconnected = (_error?: Error) => {};
+  let stagedParts = 0;
+  const reach = (next: Server): Transport => {
+    const connection = loopback(next);
+    connection.setReceiver((payload) => receiver(payload));
+    return connection;
+  };
+  let active: Transport | null = reach(before);
+  const transport: Transport = {
+    messageLimits: { bytes: 2048, values: 400 },
+    async send(payload) {
+      if (active === null) throw connectionError("connection refused");
+      if (payload.includes('"more":true')) stagedParts++;
+      await active.send(payload);
+    },
+    close: () => active?.close() ?? Promise.resolve(),
+    reset() {
+      if (active === null) return;
+      void active.close();
+      active = reach(host);
+    },
+    setReceiver(next) {
+      receiver = next;
+    },
+    setCloseReceiver(next) {
+      disconnected = next;
+    },
+  };
+  const space = "did:key:z6Mk-staged-set-restore";
+  const watcherClient = await connect({ transport });
+  const writerClient = await connect({ transport: loopback(after) });
+  try {
+    const watcher = await watcherClient.mount(
+      space,
+      {},
+      testSessionOpenAuthFactory,
+    );
+    await watcher.watchSet(
+      Array.from({ length: DOCS }, (_, index) => ({
+        id: `watch-${index}`,
+        kind: "graph" as const,
+        query: {
+          roots: [{
+            id: `of:sync-part-${index}`,
+            selector: { path: [], schema: false },
+          }],
+        },
+      })),
+    );
+    const stagedBefore = stagedParts;
+    assert(stagedBefore > 0);
+
+    const down = active;
+    active = null;
+    await down?.close();
+    disconnected(new Error("synthetic outage"));
+    host = after;
+    active = reach(after);
+    await watcherClient.restoreConnection();
+    assert(stagedParts > stagedBefore);
+
+    // The documents of the first watch and the last, in the first part and
+    // the last, both reach the restored session.
+    const updates = (await watcher.watchAddSync([])).view.subscribe();
+    const writer = await writerClient.mount(
+      space,
+      {},
+      testSessionOpenAuthFactory,
+    );
+    await writer.transact({
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [0, DOCS - 1].map((index) => ({
+        op: "set" as const,
+        id: `of:sync-part-${index}`,
+        value: { value: { index } },
+      })),
+    });
+    const next = await updates.next();
+    assertEquals(
+      (next.value?.entities ?? []).filter((entity: EntitySnapshot) =>
+        entity.seq > 0
+      ).map((entity: EntitySnapshot) => entity.id).sort(),
+      [`of:sync-part-0`, `of:sync-part-${DOCS - 1}`].sort(),
+    );
+  } finally {
+    await watcherClient.close();
+    await writerClient.close();
+    await before.close();
+    await after.close();
+  }
+});

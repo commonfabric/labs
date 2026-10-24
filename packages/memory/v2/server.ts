@@ -236,6 +236,15 @@ import {
   hasClientMessageLabelMetadata,
 } from "./commit-label-table.ts";
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
+import {
+  halveSyncPart,
+  joinWatchSetParts,
+  type PartLimits,
+  payloadFits,
+  serverMessageSync,
+  splitSyncMessage,
+  type SyncPartSession,
+} from "./message-parts.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 import {
   parseViewInterests,
@@ -859,7 +868,18 @@ const respondTypedError = <Result>(
 const sessionKey = (space: string, sessionId: string): string =>
   `${space}\0${sessionId}`;
 
-type Send = (message: ServerMessage) => void;
+/**
+ * Most parts one staged watch set may take. At the routed client's 1 MiB a
+ * part, it holds about 150,000 watches; the routed host's quotas bound a
+ * routed session's set well below that.
+ */
+const MAX_STAGED_WATCH_SET_PARTS = 64;
+
+/**
+ * A transport's sender. `payload`, when given, is `message` already encoded,
+ * which the transport sends instead of encoding it again.
+ */
+type Send = (message: ServerMessage, payload?: string) => void;
 
 type PublishTransactVerdict = (
   response: ResponseMessage<Engine.AppliedCommit>,
@@ -1168,6 +1188,22 @@ class Connection {
   #syncSchemaTable = false;
   #syncLabelTable = false;
   #commitLabelTable = false;
+
+  /**
+   * The bounds a sync is split to fit, when the transport bounds its
+   * messages and both peers advertised `syncPartsV1`.
+   */
+  #syncParts: PartLimits | undefined;
+
+  /**
+   * By session, the watch set it is sending in staged parts, and how many,
+   * until the part without `more` applies it. A connection's staged sets end
+   * with it, and a session's when it leaves the connection.
+   */
+  #stagedWatchSets = new Map<
+    string,
+    { request: WatchSetRequest; parts: number }
+  >();
   #stableExpressionResultIds = false;
   #admissionNotice = false;
   #elidedVerdicts = false;
@@ -1210,48 +1246,100 @@ class Connection {
 
   readonly #server: Server;
   readonly #sendRaw: Send;
+  readonly #syncPartLimits: PartLimits | undefined;
 
   constructor(
     readonly id: string,
     server: Server,
     sendRaw: Send,
     routedOwns?: (space: string) => boolean,
+    syncPartLimits?: PartLimits,
   ) {
     this.#server = server;
     this.#sendRaw = sendRaw;
     this.#routedOwns = routedOwns;
+    this.#syncPartLimits = syncPartLimits;
   }
 
-  #send(message: ServerMessage): void {
+  /**
+   * Sends `message`, splitting the sync it carries when the peer takes a sync
+   * in parts and its encoding exceeds the transport's bounds. A response's
+   * `session` names the session its later parts go to; an effect names its
+   * own, and a response without one is sent whole.
+   */
+  #send(message: ServerMessage, session?: SyncPartSession): void {
     if (message.type === "response") this.#answered.add(message.requestId);
     try {
-      let prepared = message;
-      if (this.#syncLabelTable) {
-        const labelStart = performance.now();
-        prepared = compressServerMessageLabels(prepared);
-        timing.time(labelStart, "memory", "response", "prepareLabels");
+      const limits = this.#syncParts;
+      const target = message.type === "session/effect"
+        ? { space: message.space, sessionId: message.sessionId }
+        : session;
+      if (
+        limits === undefined || target === undefined ||
+        serverMessageSync(message) === undefined
+      ) {
+        this.#transmit(this.#prepare(message));
+        return;
       }
-      if (this.#commitLabelTable) {
-        const commitLabelStart = performance.now();
-        prepared = compressServerMessageCommitLabels(prepared);
-        timing.time(
-          commitLabelStart,
-          "memory",
-          "response",
-          "prepareCommitLabels",
-        );
+      const prepared = this.#prepare(message);
+      const payload = encodeMemoryBoundary(prepared);
+      const parts = payloadFits(payload, limits)
+        ? [message]
+        : splitSyncMessage(message, target, limits);
+      if (parts.length === 1) {
+        this.#transmit(prepared, payload);
+        return;
       }
-      const schemaStart = performance.now();
-      if (this.#syncSchemaTable) {
-        prepared = compressServerMessageSchemas(prepared);
+      // A part measured within its bounds can exceed them once compacted, by
+      // the reference it leaves for a schema it carries once; it is halved
+      // until its halves fit, or a half is one entry.
+      const queue = parts.reverse();
+      while (queue.length > 0) {
+        const part = queue.pop()!;
+        const partPrepared = this.#prepare(part);
+        const partPayload = encodeMemoryBoundary(partPrepared);
+        const halves = payloadFits(partPayload, limits)
+          ? undefined
+          : halveSyncPart(part, target);
+        if (halves === undefined) this.#transmit(partPrepared, partPayload);
+        else queue.push(halves[1], halves[0]);
       }
-      timing.time(schemaStart, "memory", "response", "prepareSchemas");
-      const sendStart = performance.now();
-      this.#sendRaw(prepared);
-      timing.time(sendStart, "memory", "response", "sendRaw");
     } catch (cause) {
       throw new DeliveryError(cause);
     }
+  }
+
+  /** Helper for `#send()`, which applies the negotiated table encodings. */
+  #prepare(message: ServerMessage): ServerMessage {
+    let prepared = message;
+    if (this.#syncLabelTable) {
+      const labelStart = performance.now();
+      prepared = compressServerMessageLabels(prepared);
+      timing.time(labelStart, "memory", "response", "prepareLabels");
+    }
+    if (this.#commitLabelTable) {
+      const commitLabelStart = performance.now();
+      prepared = compressServerMessageCommitLabels(prepared);
+      timing.time(
+        commitLabelStart,
+        "memory",
+        "response",
+        "prepareCommitLabels",
+      );
+    }
+    const schemaStart = performance.now();
+    if (this.#syncSchemaTable) {
+      prepared = compressServerMessageSchemas(prepared);
+    }
+    timing.time(schemaStart, "memory", "response", "prepareSchemas");
+    return prepared;
+  }
+
+  /** Helper for `#send()`, which hands one prepared message to the transport. */
+  #transmit(prepared: ServerMessage, payload?: string): void {
+    const sendStart = performance.now();
+    this.#sendRaw(prepared, payload);
+    timing.time(sendStart, "memory", "response", "sendRaw");
   }
 
   /** Whether the peer declared the expression result identity contract. */
@@ -1280,6 +1368,7 @@ class Connection {
    */
   closeSession(space: string, sessionId: string): void {
     this.#sessions.delete(sessionKey(space, sessionId));
+    this.#stagedWatchSets.delete(sessionKey(space, sessionId));
     this.#server.endPresenceForSession(space, sessionId, this.id);
     this.#server.detachSession(space, sessionId, this.id);
   }
@@ -1317,7 +1406,7 @@ class Connection {
       });
       return;
     }
-    this.#send(response);
+    this.#send(response, { space, sessionId });
   }
 
   addSession(space: string, sessionId: string, principal?: string): void {
@@ -1343,6 +1432,7 @@ class Connection {
     reason: SessionRevokedMessage["reason"],
   ): void {
     const key = sessionKey(space, sessionId);
+    this.#stagedWatchSets.delete(key);
     if (!this.#sessions.delete(key) || this.#closed) {
       return;
     }
@@ -1822,6 +1912,43 @@ class Connection {
   }
 
   /**
+   * Refuses a watch mutation of a session with a watch set staged in parts,
+   * and drops the staged set: a session's watch mutations are applied in
+   * order, and the staged set is not complete. Returns whether it refused.
+   */
+  #refuseStagedWatchSet(
+    parsed: { requestId: string; space: string; sessionId: string },
+  ): boolean {
+    if (
+      !this.#stagedWatchSets.delete(sessionKey(parsed.space, parsed.sessionId))
+    ) {
+      return false;
+    }
+    this.#refuseWatchSetPart(
+      parsed,
+      "A watch set staged in parts is incomplete",
+    );
+    return true;
+  }
+
+  /** Helper for the watch mutations, which refuses one as a protocol error. */
+  #refuseWatchSetPart(
+    parsed: { requestId: string; space: string; sessionId: string },
+    message: string,
+  ): void {
+    this.#sendSessionResponse(
+      parsed.space,
+      parsed.sessionId,
+      parsed.requestId,
+      {
+        type: "response",
+        requestId: parsed.requestId,
+        error: toError("ProtocolError", message),
+      },
+    );
+  }
+
+  /**
    * Helper for the methods that issue a challenge, which records `challenge`
    * as one this connection holds, dropping the expired ones and, past the
    * limit, the oldest.
@@ -1932,6 +2059,10 @@ class Connection {
         serverFlags?.syncLabelTableV1 === true;
       this.#commitLabelTable = clientFlags?.commitLabelTableV1 === true &&
         serverFlags?.commitLabelTableV1 === true;
+      this.#syncParts = clientFlags?.syncPartsV1 === true &&
+          serverFlags?.syncPartsV1 === true
+        ? this.#syncPartLimits
+        : undefined;
       this.#ready = true;
       return;
     }
@@ -1988,7 +2119,22 @@ class Connection {
           return;
         }
         const response = await this.#server.openSession(parsed, this);
-        this.#send(response);
+        // An open of a session ends the watch set it was staging.
+        if (
+          isFabricPlainObject(response.ok) &&
+          typeof response.ok.sessionId === "string"
+        ) {
+          this.#stagedWatchSets.delete(
+            sessionKey(parsed.space, response.ok.sessionId),
+          );
+        }
+        this.#send(
+          response,
+          isFabricPlainObject(response.ok) &&
+            typeof response.ok.sessionId === "string"
+            ? { space: parsed.space, sessionId: response.ok.sessionId }
+            : undefined,
+        );
         return;
       }
       case "transact": {
@@ -2159,7 +2305,49 @@ class Connection {
           return;
         }
         {
-          const response = await this.#server.watchSet(parsed);
+          // A part numbered 0 starts a staged set, and any later part must
+          // follow the parts held; a set without a number is whole. Either
+          // way the set held so far ends here, kept only by a later part.
+          const key = sessionKey(parsed.space, parsed.sessionId);
+          const staged = parsed.part === undefined || parsed.part === 0
+            ? undefined
+            : this.#stagedWatchSets.get(key);
+          this.#stagedWatchSets.delete(key);
+          const parts = staged?.parts ?? 0;
+          if (parsed.part !== undefined && parsed.part !== parts) {
+            this.#refuseWatchSetPart(
+              parsed,
+              "A staged watch set part does not follow the parts held",
+            );
+            return;
+          }
+          if (parsed.more === true) {
+            if (parts >= MAX_STAGED_WATCH_SET_PARTS) {
+              this.#refuseWatchSetPart(
+                parsed,
+                `A staged watch set takes at most ${MAX_STAGED_WATCH_SET_PARTS} parts`,
+              );
+              return;
+            }
+            this.#stagedWatchSets.set(key, {
+              request: joinWatchSetParts(staged?.request, parsed),
+              parts: parts + 1,
+            });
+            this.#sendSessionResponse(
+              parsed.space,
+              parsed.sessionId,
+              parsed.requestId,
+              {
+                type: "response",
+                requestId: parsed.requestId,
+                ok: { staged: true },
+              },
+            );
+            return;
+          }
+          const response = await this.#server.watchSet(
+            joinWatchSetParts(staged?.request, parsed),
+          );
           this.#sendSessionResponse(
             parsed.space,
             parsed.sessionId,
@@ -2174,7 +2362,8 @@ class Connection {
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
-          )
+          ) ||
+          this.#refuseStagedWatchSet(parsed)
         ) {
           return;
         }
@@ -2194,7 +2383,8 @@ class Connection {
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
-          )
+          ) ||
+          this.#refuseStagedWatchSet(parsed)
         ) {
           return;
         }
@@ -3683,20 +3873,45 @@ export class Server {
     }
   }
 
-  connect(send: Send): Connection {
-    const connection = new Connection(crypto.randomUUID(), this, send);
+  /**
+   * Creates a connection whose messages `send` delivers. `syncParts` bounds
+   * the messages a sync is split into for a client that takes a sync in
+   * parts; without it, every sync goes whole.
+   */
+  connect(send: Send, syncParts?: PartLimits): Connection {
+    const connection = new Connection(
+      crypto.randomUUID(),
+      this,
+      send,
+      undefined,
+      syncParts,
+    );
     this.#connections.set(connection.id, connection);
     return connection;
   }
 
-  /** Creates one ticketed backend context with independent client authority. */
-  connectRouted(send: Send, owns: (space: string) => boolean): Connection {
+  /**
+   * Creates one ticketed backend context with independent client authority.
+   * `syncParts` bounds the messages a sync is split into for a client that
+   * takes a sync in parts.
+   */
+  connectRouted(
+    send: Send,
+    owns: (space: string) => boolean,
+    syncParts?: PartLimits,
+  ): Connection {
     if (this.#aclMode() !== "enforce" || this.options.ownsSpace === undefined) {
       throw authorizationError(
         "Routed memory requires enforced ACLs and ownership fencing",
       );
     }
-    const connection = new Connection(crypto.randomUUID(), this, send, owns);
+    const connection = new Connection(
+      crypto.randomUUID(),
+      this,
+      send,
+      owns,
+      syncParts,
+    );
     this.#connections.set(connection.id, connection);
     return connection;
   }
@@ -11292,6 +11507,15 @@ const parseDecodedClientMessage = (
     if (views === null) return null;
     const holdings = parseHoldings(parsed.holdings);
     if (holdings === null) return null;
+    // A staged part is numbered, and only a staged part says more follow.
+    if (
+      (parsed.part !== undefined &&
+        !(Number.isSafeInteger(parsed.part) && (parsed.part as number) >= 0)) ||
+      (parsed.more !== undefined &&
+        (parsed.more !== true || parsed.part === undefined))
+    ) {
+      return null;
+    }
     return {
       type: "session.watch.set",
       requestId: parsed.requestId,
@@ -11300,6 +11524,8 @@ const parseDecodedClientMessage = (
       watches: parsed.watches as WatchSpec[],
       ...(views === undefined ? {} : { views }),
       ...(holdings === undefined ? {} : { holdings }),
+      ...(parsed.part === undefined ? {} : { part: parsed.part as number }),
+      ...(parsed.more === true ? { more: true as const } : {}),
     };
   }
 

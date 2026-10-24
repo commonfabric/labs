@@ -32,6 +32,7 @@ import {
   parseRoutedJson,
   ROUTED_DEFAULT_SLOT_LIMIT,
   ROUTED_HOLDINGS_LIMIT,
+  ROUTED_PART_BYTES,
   ROUTED_QUEUE_LIMIT,
   ROUTED_RAW_LIMIT,
   routedDeclaredExpansion,
@@ -67,6 +68,7 @@ import {
   type RouterSenderSnapshot,
 } from "./router-protocol.ts";
 import type { Server } from "./server.ts";
+import { serverMessageSync } from "./message-parts.ts";
 
 type Backend = ReturnType<Server["connectRouted"]>;
 
@@ -320,6 +322,22 @@ type RoutedSession = {
   holdings?: number;
 
   /** View count, present only when a view or aggregate watch quota needs it. */
+  views?: number;
+
+  /**
+   * The watch set the session is staging in parts, as the Memory server
+   * holds it, while a watch, view or holdings quota needs its counts: the
+   * parts it took, its watch IDs when those are mirrored, and its holdings
+   * and views when a part named them.
+   */
+  staged?: RoutedStagedSet;
+};
+
+/** A session's watch set staged in parts; see `RoutedSession.staged`. */
+type RoutedStagedSet = {
+  parts: number;
+  watches?: Set<string>;
+  holdings?: number;
   views?: number;
 };
 
@@ -1977,6 +1995,8 @@ export class RoutedMemoryHost {
           watches?: Set<string>;
           holdings?: number;
           views?: number;
+          /** For a staged part, what the session stages once it is held. */
+          staged?: RoutedStagedSet;
           prior?: { principal: string; count: number; holdings: number };
         }>()
         : undefined;
@@ -2168,8 +2188,44 @@ export class RoutedMemoryHost {
     socket.addEventListener("error", () => {
       fail("data-socket-error");
     }, { once: true });
+    // The parts of a split sync go out back to back. The queued-output bound
+    // neither refuses nor counts the parts of one split sync per session at
+    // a time, as it admits one message of up to 8 MiB alone; the parts of a
+    // session's next split sync, sent while those are retained, are bounded
+    // like other output, so a reader that falls behind is still closed.
+    let splitting: { exempt?: string } | undefined;
+    const splitPart = (
+      message: ServerMessage | MemoryCompressionControlMessage,
+    ): string | undefined => {
+      const sync = serverMessageSync(message);
+      if (splitting !== undefined) {
+        requireRouted(message.type === "session/effect" && sync !== undefined);
+        const { exempt } = splitting;
+        if (sync.more !== true) splitting = undefined;
+        return exempt;
+      }
+      if (sync?.more !== true) return undefined;
+      let key: string | undefined;
+      if (message.type === "session/effect") {
+        key = `${message.space} ${message.sessionId}`;
+      } else if (message.type === "response") {
+        const route = dispatchRoutes.get(message.requestId);
+        const sessionId = isPlainObject(message.ok) &&
+            typeof message.ok.sessionId === "string"
+          ? message.ok.sessionId
+          : route?.sessionId;
+        if (typeof route?.space === "string" && typeof sessionId === "string") {
+          key = `${route.space} ${sessionId}`;
+        }
+      }
+      splitting = key === undefined || outgoing.exemptRetained(key)
+        ? {}
+        : { exempt: key };
+      return splitting.exempt;
+    };
     const send = (
       message: ServerMessage | MemoryCompressionControlMessage,
+      encoded?: string,
     ): void => {
       if (
         failed || socket.readyState !== WebSocket.OPEN ||
@@ -2220,13 +2276,19 @@ export class RoutedMemoryHost {
               undefined,
             );
           } else if (message.error !== undefined) {
+            // The server drops a staged set with any refused mutation.
+            mutation.session.staged = undefined;
             this.#setUsage(
               ticket!.link,
               ticket!.context,
               mutation.key,
               mutation.prior,
             );
+          } else if (mutation.staged !== undefined) {
+            // A staged part changes nothing the session holds yet.
+            mutation.session.staged = mutation.staged;
           } else {
+            mutation.session.staged = undefined;
             if (this.#trackWatchIds) {
               mutation.session.watches = mutation.watches;
             }
@@ -2293,7 +2355,7 @@ export class RoutedMemoryHost {
         sessions.delete(key);
         this.#setUsage(ticket!.link, ticket!.context, key, undefined);
       }
-      const payload = encodeMemoryBoundary(message);
+      const payload = encoded ?? encodeMemoryBoundary(message);
       const bytes = new TextEncoder().encode(payload);
       // A client that negotiated `messageCompressionV1` and
       // `routedCompressionV1` receives each message of 1 KiB or more that gzip
@@ -2311,11 +2373,12 @@ export class RoutedMemoryHost {
         )
         : payload;
       const size = typeof frame === "string" ? bytes.length : frame.length;
+      const exempt = splitPart(message);
       checkOutput(
         socket,
         size,
-        Math.max(socket.bufferedAmount, outgoing.bufferedBytes),
-        this.#limits.outputBytesPerSocket,
+        Math.max(socket.bufferedAmount, outgoing.boundedBytes),
+        exempt === undefined ? this.#limits.outputBytesPerSocket : null,
         rememberClose,
         "data",
         message.type,
@@ -2330,7 +2393,7 @@ export class RoutedMemoryHost {
       );
       enqueueSource = source;
       try {
-        outgoing.send(route, frame);
+        outgoing.send(route, frame, exempt);
       } finally {
         enqueueSource = undefined;
       }
@@ -2585,6 +2648,9 @@ export class RoutedMemoryHost {
               !context.closed && !selected.link.closed &&
               context.spaces.has(space) &&
               context.spaces.get(space) === this.#options.ownership(space),
+            // A sync is split for a client that takes one in parts into
+            // messages its frame cap admits.
+            { bytes: ROUTED_PART_BYTES, values: this.#limits.frameSlots },
           );
           context.backend = backend;
           if (prior !== undefined && prior !== socket) {
@@ -2787,12 +2853,27 @@ export class RoutedMemoryHost {
               ? body.watchIds
               : body.watches;
             requireRouted(Array.isArray(listed));
+            // A set staged in parts (`body.part`) is checked as the set its
+            // parts so far make, starting from the parts held when this one
+            // follows them; the server refuses one that does not. A part that
+            // says more follow is held and changes nothing the session holds.
+            const set = body.type === "session.watch.set";
+            requireRouted(
+              (body.part === undefined ||
+                (Number.isSafeInteger(body.part) &&
+                  (body.part as number) >= 0)) &&
+                (body.more === undefined ||
+                  (body.more === true && body.part !== undefined)),
+            );
+            const staging = set && body.more === true;
+            const base = set && typeof body.part === "number" &&
+                body.part > 0 && session.staged?.parts === body.part
+              ? session.staged
+              : undefined;
             // Mirrored only while a watch quota needs the IDs; see
             // `#trackWatchIds`.
             const watches = this.#trackWatchIds
-              ? body.type === "session.watch.set"
-                ? new Set<string>()
-                : new Set(session.watches)
+              ? set ? new Set<string>(base?.watches) : new Set(session.watches)
               : undefined;
             for (const watch of listed) {
               const id = body.type === "session.watch.remove"
@@ -2809,13 +2890,25 @@ export class RoutedMemoryHost {
             // on either change nothing the session holds, and counting them
             // would put the session's usage below what the server keeps for
             // it. On every request they must still be lists.
-            const named = (field: unknown, held: number): number => {
-              if (field === undefined) return held;
-              const length = routedListLength(field);
-              return body.type === "session.watch.set" ? length : held;
+            const named = (
+              field: unknown,
+              held: number,
+              staged: number | undefined,
+            ): number => {
+              const length = field === undefined
+                ? undefined
+                : routedListLength(field);
+              if (!set || (length === undefined && staged === undefined)) {
+                return held;
+              }
+              return (staged ?? 0) + (length ?? 0);
             };
-            const holdings = named(body.holdings, session.holdings ?? 0);
-            const views = named(body.views, session.views ?? 0);
+            const holdings = named(
+              body.holdings,
+              session.holdings ?? 0,
+              base?.holdings,
+            );
+            const views = named(body.views, session.views ?? 0, base?.views);
             // Bounds on what one session holds, refused for good: the watch
             // IDs by `limits.watchesPerSession`, the views by
             // `limits.viewsPerSession`.
@@ -2823,13 +2916,17 @@ export class RoutedMemoryHost {
             // whether it fits depends on the IDs the session already holds,
             // so it is answered and the socket stays open, as the router
             // answers it; a `session.watch.set` that names more IDs than a
-            // session may hold is answered the same way.
+            // session may hold is answered the same way. A set staged in parts
+            // names its holdings over several frames, which the frame bound on
+            // holdings does not bound, so its holdings are bounded here too.
             if (
               exceedsLimit(
                 watches?.size ?? 0,
                 this.#limits.watchesPerSession,
               ) ||
-              exceedsLimit(views, this.#limits.viewsPerSession)
+              exceedsLimit(views, this.#limits.viewsPerSession) ||
+              (body.part !== undefined &&
+                exceedsLimit(holdings, this.#limits.holdingsPerSession))
             ) {
               throw new RoutedRequestRefusal("frame-limit");
             }
@@ -2840,9 +2937,25 @@ export class RoutedMemoryHost {
               ...(this.#trackWatchIds ? { watches } : {}),
               ...(this.#trackHoldings ? { holdings } : {}),
               ...(this.#trackViews ? { views } : {}),
+              ...(staging
+                ? {
+                  staged: {
+                    parts: (body.part as number) + 1,
+                    ...(watches === undefined ? {} : { watches }),
+                    ...(body.holdings === undefined &&
+                        base?.holdings === undefined
+                      ? {}
+                      : { holdings }),
+                    ...(body.views === undefined && base?.views === undefined
+                      ? {}
+                      : { views }),
+                  },
+                }
+                : {}),
               prior: ticket.context.usage.get(key),
             });
-            if (countWatches || countHoldings) {
+            // A held part leaves the session's usage as it is.
+            if (!staging && (countWatches || countHoldings)) {
               this.#setUsage(ticket.link, ticket.context, key, {
                 principal: session.principal,
                 count: countWatches ? (watches?.size ?? 0) + views : 0,
