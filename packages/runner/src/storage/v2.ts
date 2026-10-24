@@ -1591,6 +1591,7 @@ export class StorageManager implements IStorageManager {
   #spaceSessionErrorObservers = new Set<
     (space: MemorySpace, error: Error) => void
   >();
+  #connectionRestoredObservers = new Set<() => void>();
   #subscription = SubscriptionManager.create();
   #crossSpacePromises = new Set<Promise<void>>();
 
@@ -1857,6 +1858,15 @@ export class StorageManager implements IStorageManager {
           error,
         ])
       );
+    });
+    sessionFactory.subscribeReconnected?.(() => {
+      for (const observer of [...this.#connectionRestoredObservers]) {
+        try {
+          observer();
+        } catch (cause) {
+          console.error("connection-restored subscriber threw:", cause);
+        }
+      }
     });
   }
 
@@ -2773,6 +2783,12 @@ export class StorageManager implements IStorageManager {
   ): Cancel {
     this.#spaceSessionErrorObservers.add(observer);
     return () => this.#spaceSessionErrorObservers.delete(observer);
+  }
+
+  /** @inheritDoc */
+  subscribeConnectionRestored(observer: () => void): Cancel {
+    this.#connectionRestoredObservers.add(observer);
+    return () => this.#connectionRestoredObservers.delete(observer);
   }
 
   trackPendingCommit(

@@ -114,6 +114,7 @@ import {
   type HarnessPromptLoopResult,
 } from "./prompt-loop.ts";
 import { DELEGATION_GUIDANCE, orientationGuidance } from "./orientation.ts";
+import { strategyGuidance } from "./strategy.ts";
 import {
   classifiedShape,
   type RunShape,
@@ -596,14 +597,14 @@ Options:
   --workspace <path>            Workspace host path (defaults to current directory)
   --cwd <path>                  Initial working directory inside the workspace
   --focus-root <path>           Narrow exploration to a workspace subpath when possible
-  --allow-tool <tool>           Restrict available tools (repeatable: bash | read_file | view_image | web_fetch | read_skill_resource | run_skill_script | edit_file | write_file | delegate_task | describe_handle | finish_task | submit_result | run_pattern | assign_slug | resolve_piece | call_verb | read_value | search_patterns | record_feedback | search_skills | acquire_skill | research | loom_compose | loom_inspect | loom_authoring_context | loom_search | loom_page_discover | loom_page_inspect | loom_page_read | loom_people | loom_calendar_list | loom_context | loom_profile | list_commands | run_command);
+  --allow-tool <tool>           Restrict available tools (repeatable: bash | read_file | view_image | web_fetch | read_skill_resource | run_skill_script | edit_file | write_file | delegate_task | describe_handle | finish_task | submit_result | run_pattern | assign_slug | resolve_piece | call_verb | read_value | search_patterns | record_feedback | search_skills | acquire_skill | research | loom_compose | loom_inspect | loom_authoring_context | loom_search | loom_page_discover | loom_page_inspect | loom_page_read | loom_people | loom_calendar_list | loom_context | loom_profile | list_commands | run_command | run_read_command);
                                 run_pattern, assign_slug, resolve_piece, call_verb, read_value, and acquire_skill additionally require the three --fabric-* session flags,
                                 search_patterns and record_feedback require --pattern-index-url,
                                 search_skills and acquire_skill require --skills-registry-url,
                                 research requires a documentation corpus or pattern index (query_docs is a deprecated input alias),
                                 loom_compose, loom_inspect, and loom_authoring_context require --loom-authoring-config (or CF_HARNESS_LOOM_AUTHORING_CONFIG),
                                 the eight read-only loom_* tools require --loom-retrieval-config (or CF_HARNESS_LOOM_RETRIEVAL_CONFIG),
-                                and list_commands and run_command require --loom-commands-config (or CF_HARNESS_LOOM_COMMANDS_CONFIG)
+                                and list_commands, run_command, and run_read_command require --loom-commands-config (or CF_HARNESS_LOOM_COMMANDS_CONFIG)
   --allow-skill-scripts         Run skill scripts in the sandbox, for every skill this run holds,
                                 registry and acquired alike. Off unless named.
   --allow-skill-script <spec>   Allow one exact skill script (repeatable: skill:scripts/path,
@@ -691,7 +692,7 @@ Options:
   --loom-authoring-config <path> Absolute host-owned JSON file backing the Loom authoring tools
   --loom-retrieval-config <path> Absolute host-owned JSON file backing the read-only Loom tools
   --loom-commands-config <path> Absolute host-owned JSON file naming the command broker
-                                behind list_commands and run_command
+                                behind list_commands and the command execution tools
   --fabric-api-url <url>        Deployed Fabric API URL for the fabric-session tools (run_pattern, assign_slug, resolve_piece, call_verb, read_value)
   --fabric-identity <path>      PKCS#8 identity keyfile for the fabric session
   --fabric-space <space>        Target space (name or did:key) for the fabric-session tools;
@@ -817,6 +818,7 @@ const CLI_PARENT_TOOL_IDS = [
   "loom_profile",
   "list_commands",
   "run_command",
+  "run_read_command",
   "run_pattern",
   "assign_slug",
   "resolve_piece",
@@ -2543,6 +2545,7 @@ export const buildCfHarnessBaseSystemPrompt = (
       ? "Use finish_task to ask the user for the input or choice that would unblock the task, or to give a concrete reason you cannot proceed."
       : "Act on reasonable defaults rather than asking. When the task truly cannot be done, finish with a result that says why. Where other guidance says to ask the user, say in your result what you need instead.",
     orientationGuidance({ patternIndex, shape }),
+    ...strategyGuidance(shape),
     codeWork
       ? `Treat repository files and tool results as evidence. Separate observed facts from assumptions, keep work scoped to the assigned goal${
         verifies

@@ -83,8 +83,10 @@ holding the link: what the runtime stamped there when the link was written,
 such as `represents-principal` for whoever wrote a field typed
 `RepresentsCurrentUser`. That is a different fact from what the linked
 document's label says. A panel's `addedByProfile` in the Loom root links the
-profile its adder acted under, and any participant may link any profile, so
-the profile's label names its owner while the field's names who acted.
+profile its adder acted under: the profile's label names its owner, and the
+field's names who acted. The root admits only a profile whose owner is the one
+acting, but the two labels remain separate facts, and a reader that needs who
+acted reads the field's.
 
 `principalOf(target, kind, { label: "written" })` and the same call of
 `principalsOf()` read the field's label, where the default, `"resolved"`,

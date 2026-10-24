@@ -222,8 +222,8 @@ const DEFAULT_DAYS = 2;
 /** Days a bootstrap reads, when no window was asked for. */
 const BOOTSTRAP_DAYS = 60;
 
-/** Objects read and folded before the next batch is fetched. */
-const CHUNK = 200;
+/** Raw objects read before the next batch is fetched. */
+export const CHUNK = 200;
 
 /**
  * Rollup shards read and spooled before the next batch is fetched.
@@ -381,49 +381,6 @@ export function inputChoice(
   if (known.settled) return "settled";
   if (known.foldedRaw || !known.rollup) return "raw";
   return "rollup";
-}
-
-/**
- * The workflow run a continuous-integration object came from, and the
- * object itself for anything else.
- */
-export function workflowRunOf(objectName: string): string {
-  return objectName.match(/\/run-(\d+)-[^/]*$/)?.[1] ?? objectName;
-}
-
-/**
- * Splits objects listed in order into chunks of `size`, except that a
- * chunk goes on until the workflow run its last object came from ends.
- * What one run saw is then folded in one batch, and judged as a whole.
- */
-export function* chunksByRun(
-  names: readonly string[],
-  size: number,
-): Generator<string[]> {
-  for (let at = 0, end = 0; at < names.length; at = end) {
-    end = Math.min(at + size, names.length);
-    while (
-      end < names.length &&
-      workflowRunOf(names[end]!) === workflowRunOf(names[end - 1]!)
-    ) {
-      end++;
-    }
-    yield names.slice(at, end);
-  }
-}
-
-/**
- * Orders submission objects the way the fold needs them: by the day they
- * were recorded, then by name. Sorting by name alone would put every
- * local object after every continuous-integration one, because their
- * areas sort that way, and the fold's backward-looking rules would then
- * judge a workstation's failure against a state from days later. Within
- * one day the order between the two areas is arbitrary, which is as fine
- * a grain as the per-day counters have anyway.
- */
-export function byDayThenName(left: string, right: string): number {
-  const day = partitionOf(left).localeCompare(partitionOf(right));
-  return day !== 0 ? day : left.localeCompare(right);
 }
 
 /** One state object a run could not read, and what stopped it. */
@@ -893,6 +850,29 @@ export async function publish(
     }
   }
 
+  /**
+   * Reads a day's raw objects a chunk at a time, consuming each before
+   * fetching the next. A day holds thousands of objects, each holding
+   * hundreds of executions, and holding them all would be bounded by the
+   * number of runs rather than by the number of tests.
+   */
+  async function* readRaw(names: readonly string[]) {
+    for (let at = 0; at < names.length; at += CHUNK) {
+      const reports = await mapConcurrent(
+        names.slice(at, at + CHUNK),
+        concurrency,
+        // A read that fails is not an object with no records, so it is
+        // not swallowed: the same partial-history argument as the
+        // listing.
+        (objectName) => store.read(objectName),
+      );
+      for (const report of reports) {
+        noteReport(report);
+        yield report;
+      }
+    }
+  }
+
   // The window is folded one day at a time, oldest first, whichever way each
   // day is read. The rules that decide whether a failure is a new real test
   // failure look a day or two either side of it, and back at what the default
@@ -975,24 +955,11 @@ export async function publish(
     }
     const fresh = [...new Set(names)]
       .filter((name) => !fold.knows(name))
-      .sort(byDayThenName);
-    // Read and fold in chunks rather than all at once. A day holds
-    // thousands of objects, each holding hundreds of executions, and
-    // holding them all would be bounded by the number of runs rather
-    // than by the number of tests.
+      .sort();
+    // Folded as one batch, which the fold replays in time order as it does
+    // a rollup's day, since the names sort by area before time.
     try {
-      for (const chunk of chunksByRun(fresh, CHUNK)) {
-        const reports = await mapConcurrent(
-          chunk,
-          options.concurrency,
-          // A read that fails is not an object with no records, so it is
-          // not swallowed: the same partial-history argument as the
-          // listing.
-          (objectName) => store.read(objectName),
-        );
-        for (const report of reports) noteReport(report);
-        fold.add(reports);
-      }
+      await fold.addUnordered(readRaw(fresh));
     } catch (error) {
       console.warn(`test selection: reading a submission failed: ${error}`);
       console.warn(PARTIAL_WINDOW);

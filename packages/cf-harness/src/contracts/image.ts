@@ -24,3 +24,9 @@ export interface HarnessImageAttachment {
    */
   snapshotPath?: string;
 }
+
+/** Image bytes supplied by a host, with no authority to read a host path. */
+export interface HarnessInlineImageAttachment {
+  mediaType: HarnessImageMediaType;
+  base64: string;
+}

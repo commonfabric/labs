@@ -1,11 +1,15 @@
 /**
- * The two tools through which a run reaches the commands its host admits:
+ * The tools through which a run reaches the commands its host admits:
  * `list_commands` shows them as signatures, and `run_command` runs one or a
- * batch of them, as the agent. The host's broker decides both — what is
- * listed and what runs — and stamps the actor and run on every command it
- * forwards (`loom-commands.ts`). Both read the run's catalog, held for the
- * run, and `run_command` refuses a name the catalog does not show before
- * anything is sent; the host checks the args of every call it is sent.
+ * batch of them, as the agent. `run_read_command` runs them the same way
+ * under read authority, but only a command the host declares `effect: read`
+ * and the broker grants read-only, which it checks in a fresh listing before
+ * sending and the broker checks again when it executes. The host's broker
+ * decides what is listed and what runs, and stamps the actor and run on
+ * every command it forwards (`loom-commands.ts`). The tools read the run's
+ * catalog, held for the run, and a command tool refuses a name the catalog
+ * does not show before anything is sent; the host checks the args of every
+ * call it is sent.
  *
  * A command's answer is Loom data, so it is measured the way the retrieval
  * tools measure a row: one row, labeled by its own `ifc` or else by the query
@@ -111,8 +115,9 @@ export type ListCommandsErrorCode =
 
 /**
  * One command as `list_commands` shows it: its signature line, which carries
- * its parameters, output names, effect, and target, and its title. A command
- * named in `detail` also carries its full argument schema.
+ * its parameters, output names, effect, and target, its title, and the
+ * broker's read-only grant where it issues one. A command named in `detail`
+ * also carries its full argument schema.
  */
 export interface LoomCommandListing {
   name: string;
@@ -121,6 +126,9 @@ export interface LoomCommandListing {
   signature: string;
   title?: string;
   description?: string;
+
+  /** The broker grants `run_read_command` execution of this command. */
+  readOnlyGranted?: true;
 
   /** The full argument schema; only for a command named in `detail`. */
   inputSchema?: LoomCommandEntry["inputSchema"];
@@ -153,7 +161,7 @@ export type ListCommandsOutput =
     message: string;
   };
 
-/** One call `run_command` takes, alone or as an element of `calls`. */
+/** One call a command tool takes, alone or as an element of `calls`. */
 export interface RunCommandCall {
   command: string;
   args: Record<string, unknown>;
@@ -166,7 +174,7 @@ export interface RunCommandBatchInput {
   calls: RunCommandCall[];
 }
 
-/** What `run_command` takes: one call, or a batch of them. */
+/** What a command tool takes: one call, or a batch of them. */
 export type RunCommandInput = RunCommandCall | RunCommandBatchInput;
 
 /**
@@ -203,7 +211,8 @@ export interface LoomCommandOutcome {
 export type RunCommandFailureCode =
   | ListCommandsErrorCode
   | "invalid_input"
-  | "batch_too_large";
+  | "batch_too_large"
+  | "not_granted";
 
 /** What became of one call. */
 export type RunCommandCallOutput =
@@ -268,7 +277,7 @@ export interface RunCommandBatchOutput {
   cfc: { version: 1; observedLabel?: IFCLabel };
 }
 
-/** What `run_command` returns: a call's result, or a batch's. */
+/** What a command tool returns: a call's result, or a batch's. */
 export type RunCommandOutput = RunCommandCallOutput | RunCommandBatchOutput;
 
 /** A call the command layer answered. */
@@ -279,7 +288,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   isObjectNotArray(value);
 
 /**
- * Helper for both tools, which reads the run's catalog source: the one the
+ * Helper for the command tools, which reads the run's catalog source: the one the
  * engine holds for the run, or, for a context without one, a source of its
  * own that reads the host for this call alone.
  */
@@ -296,8 +305,8 @@ const catalogSourceOf = (
 
 /**
  * Helper for `list_commands`, which shows one entry as a listing: its
- * signature and title always, its description unless compacted, and its
- * schema only when `whole`.
+ * signature, title, and read-only grant always, its description unless
+ * compacted, and its schema only when `whole`.
  */
 const listingOf = (
   entry: LoomCommandEntry,
@@ -309,6 +318,7 @@ const listingOf = (
   ...(entry.description !== undefined
     ? { description: entry.description }
     : {}),
+  ...(entry.readOnlyGranted === true ? { readOnlyGranted: true } : {}),
   ...(whole ? { inputSchema: entry.inputSchema } : {}),
 });
 
@@ -327,6 +337,7 @@ export const listCommandsTool: HarnessToolDefinition<
     toolId: "list_commands",
     title: "List Commands",
     effectClass: "read",
+    hostGrantedRead: true,
     description:
       `List the commands this run's host lets it run on the person's data, each as a signature line \`name(param: type, optional?: type = default) -> {output fields}  [effect, target]\` with its title; name commands in detail for their full description and JSON schema.`,
     inputSchema: {
@@ -390,7 +401,7 @@ export const listCommandsTool: HarnessToolDefinition<
   },
 };
 
-/** Helper for `run_command`, which reads the summary out of an answer. */
+/** Helper for command results, which reads the summary out of an answer. */
 const outcomeOf = (body: JSONObject, bodyBytes: number): LoomCommandOutcome => {
   // Each field is cut to an identifier's length, and `completed` to a few
   // dozen ids, so the summary stays a small fraction of the output bound the
@@ -423,7 +434,7 @@ const outcomeOf = (body: JSONObject, bodyBytes: number): LoomCommandOutcome => {
   };
 };
 
-/** Helper for `run_command`, which says a call was not sent and why. */
+/** Helper for command tools, which says a call was not sent and why. */
 const notSent = (
   outputId: ToolOutputId,
   code: RunCommandFailureCode,
@@ -436,19 +447,23 @@ const notSent = (
   landed: "no",
 });
 
+/** The command tools: one with write authority, one with read authority. */
+type CommandToolId = "run_command" | "run_read_command";
+
 /** What a malformed call is told. */
-const INVALID_CALL_REASON =
-  "run_command requires a command name list_commands showed, an args object, an optional loomId like loom-0123456789abcdef, and an optional nonnegative integer expectedVersion.";
+const invalidCallReason = (toolId: CommandToolId): string =>
+  `${toolId} requires a command name list_commands showed, an args object, an optional loomId like loom-0123456789abcdef, and an optional nonnegative integer expectedVersion.`;
 
 /**
- * Helper for `run_command`, which reads one call's shape: the invocation it
+ * Helper for command tools, which reads one call's shape: the invocation it
  * asks for, or why it cannot be sent. What it asks for is not yet checked
  * against the catalog.
  */
 const readCall = (
+  toolId: CommandToolId,
   call: RunCommandCall,
 ): { invocation: LoomCommandInvocation } | { reason: string } => {
-  if (!isObjectNotArray(call)) return { reason: INVALID_CALL_REASON };
+  if (!isObjectNotArray(call)) return { reason: invalidCallReason(toolId) };
   const { command, loomId, expectedVersion } = call;
   const args: unknown = call.args;
   if (
@@ -462,7 +477,7 @@ const readCall = (
     (expectedVersion !== undefined &&
       (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0))
   ) {
-    return { reason: INVALID_CALL_REASON };
+    return { reason: invalidCallReason(toolId) };
   }
   if (harnessCommandJsonBytes(args) > HARNESS_COMMAND_ARGS_MAX_BYTES) {
     return {
@@ -476,6 +491,7 @@ const readCall = (
       args,
       ...(loomId !== undefined ? { loomId } : {}),
       ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+      ...(toolId === "run_read_command" ? { readOnly: true } : {}),
     },
   };
 };
@@ -488,15 +504,18 @@ interface SendableCall {
 }
 
 /**
- * Helper for `run_command`, which checks one call against the run's catalog:
- * a call to send, or the result that says why nothing was sent.
+ * Helper for command tools, which checks one call against the run's catalog:
+ * a call to send, or the result that says why nothing was sent. A read-only
+ * call is sent only for a command the catalog shows with `effect: read` and
+ * the broker's read-only grant.
  */
 const checkCall = (
+  toolId: CommandToolId,
   outputId: ToolOutputId,
   call: RunCommandCall,
   catalog: LoomCommandCatalog,
 ): SendableCall | RunCommandCallOutput => {
-  const read = readCall(call);
+  const read = readCall(toolId, call);
   if ("reason" in read) return notSent(outputId, "invalid_input", read.reason);
   const { invocation } = read;
   const { command } = invocation;
@@ -513,6 +532,19 @@ const checkCall = (
       hint: unknownCommandHint(command),
     };
   }
+  if (
+    invocation.readOnly === true &&
+    (entry.effect !== "read" || entry.readOnlyGranted !== true)
+  ) {
+    return {
+      ...notSent(
+        outputId,
+        "not_granted",
+        "The host has not granted read-only execution of this command with `effect: read`.",
+      ),
+      hint: notGrantedHint(command),
+    };
+  }
   return { outputId, invocation, entry };
 };
 
@@ -524,7 +556,7 @@ interface AnsweredCall {
 }
 
 /**
- * Helper for `run_command`, which sends one checked call and reads what came
+ * Helper for command tools, which sends one checked call and reads what came
  * back: an answer to measure, or why it was lost. A cancelled turn sends
  * nothing.
  */
@@ -590,12 +622,14 @@ const sendCall = async (
 };
 
 /**
- * Helper for `run_command`, which measures an answer against the run's
+ * Helper for command tools, which measures an answer against the run's
  * ceiling and the output bound, `reserved` being the size of everything the
- * output carries beside this answer's entry.
+ * output carries beside this answer's entry; `toolId` is the referent's
+ * source.
  */
 const measureAnswer = async (
   context: HarnessToolContext,
+  toolId: CommandToolId,
   answered: AnsweredCall,
   reserved: number,
 ): Promise<ExecutedCallOutput> => {
@@ -607,7 +641,7 @@ const measureAnswer = async (
     reserved,
     mint === undefined ? undefined : (referent) =>
       mint({
-        source: "run_command",
+        source: toolId,
         value: referent.value,
         label: referent.label,
         labelSource: "command",
@@ -627,7 +661,7 @@ const measureAnswer = async (
   };
 };
 
-/** Helper for `run_command`, which tells an answered call from a result. */
+/** Helper for command tools, which tells an answered call from a result. */
 const isAnswered = (
   value: AnsweredCall | RunCommandCallOutput,
 ): value is AnsweredCall => "skeleton" in value;
@@ -664,20 +698,32 @@ const CALL_PROPERTIES = {
   expectedVersion: { type: "integer", minimum: 0 },
 } as const;
 
-/** Runs commands the host lets this run run, as the agent. */
-export const runCommandTool: HarnessToolDefinition<
-  RunCommandInput,
-  RunCommandOutput
-> = {
+/**
+ * Helper for the command tools, which defines one with the authority its
+ * calls demand: `run_command` may change something, and `run_read_command`
+ * sends only reads the host has granted read-only.
+ */
+const commandTool = (
+  toolId: CommandToolId,
+): HarnessToolDefinition<RunCommandInput, RunCommandOutput> => ({
   descriptor: {
-    toolId: "run_command",
-    title: "Run Command",
-    // Unknown until the host declares each command's effect, so every call
-    // — a batch as a whole included — is authorized as one that may change
-    // something.
-    effectClass: "write",
+    toolId,
+    title: toolId === "run_read_command" ? "Run Read Command" : "Run Command",
+    // `run_command`'s effect is unknown until the host declares each
+    // command's, so every call — a batch as a whole included — is authorized
+    // as one that may change something. `run_read_command` sends only a
+    // command the host declares a read and the broker grants read-only, and
+    // the broker rechecks both when it executes.
+    effectClass: toolId === "run_read_command" ? "read" : "write",
+    ...(toolId === "run_read_command"
+      ? { hostGrantedRead: true as const }
+      : {}),
     description:
-      `Run commands list_commands showed, as the agent: one call as {command, args, loomId?, expectedVersion?}, or up to ${RUN_COMMAND_BATCH_LIMIT} independent calls as {calls: [...]}. Each executed call returns its outcome (ok, code, mayHaveLanded, completed) and its answer, admitted with a handle or withheld under this run's confidentiality ceiling; an unlisted name returns unknown_command and sends nothing.`,
+      `Run commands list_commands showed, as the agent: one call as {command, args, loomId?, expectedVersion?}, or up to ${RUN_COMMAND_BATCH_LIMIT} independent calls as {calls: [...]}. ${
+        toolId === "run_read_command"
+          ? "Each command requires effect read and readOnlyGranted true in the host's fresh listing; the broker rechecks both when executing. "
+          : ""
+      }Each executed call returns its outcome (ok, code, mayHaveLanded, completed) and its answer, admitted with a handle or withheld under this run's confidentiality ceiling; an unlisted name returns unknown_command and sends nothing.`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -699,7 +745,7 @@ export const runCommandTool: HarnessToolDefinition<
     tags: ["loom", "command"],
   },
   async invoke(context, input) {
-    const outputId = context.nextOutputId("run_command");
+    const outputId = context.nextOutputId(toolId);
     const config = context.loomCommands;
     const source = catalogSourceOf(context);
     if (config === undefined || source === undefined) {
@@ -710,7 +756,7 @@ export const runCommandTool: HarnessToolDefinition<
       );
     }
     if (!isObjectNotArray(input)) {
-      return notSent(outputId, "invalid_input", INVALID_CALL_REASON);
+      return notSent(outputId, "invalid_input", invalidCallReason(toolId));
     }
     if ("calls" in input) {
       const { calls } = input;
@@ -718,62 +764,72 @@ export const runCommandTool: HarnessToolDefinition<
         return notSent(
           outputId,
           "invalid_input",
-          "run_command takes either one call's fields or a nonempty calls list, not both.",
+          `${toolId} takes either one call's fields or a nonempty calls list, not both.`,
         );
       }
       if (calls.length > RUN_COMMAND_BATCH_LIMIT) {
         return notSent(
           outputId,
           "batch_too_large",
-          `A batch carries at most ${RUN_COMMAND_BATCH_LIMIT} calls; send the rest in another run_command.`,
+          `A batch carries at most ${RUN_COMMAND_BATCH_LIMIT} calls; send the rest in another ${toolId}.`,
         );
       }
-      const listed = await readCatalog(context, source, outputId);
+      const listed = await readCatalog(context, toolId, source, outputId);
       if (!("catalog" in listed)) return listed;
       // Ids are minted in the calls' order, before any call is sent, so a
       // batch's results carry them in order whatever order the calls end in.
       const numbered = calls.map((call) => ({
         call,
-        outputId: context.nextOutputId("run_command"),
+        outputId: context.nextOutputId(toolId),
       }));
       const sent = await mapWithFanIn(numbered, RUN_COMMAND_FAN_IN, (
         { call, outputId: callOutputId },
       ) => {
-        const checked = checkCall(callOutputId, call, listed.catalog);
+        const checked = checkCall(toolId, callOutputId, call, listed.catalog);
         return "invocation" in checked
           ? sendCall(context, config, checked)
           : Promise.resolve(checked);
       });
-      return await measureBatch(context, outputId, sent);
+      return await measureBatch(context, toolId, outputId, sent);
     }
     // A malformed lone call is refused before the catalog is read.
-    const read = readCall(input);
+    const read = readCall(toolId, input);
     if ("reason" in read) {
       return notSent(outputId, "invalid_input", read.reason);
     }
-    const listed = await readCatalog(context, source, outputId);
+    const listed = await readCatalog(context, toolId, source, outputId);
     if (!("catalog" in listed)) return listed;
-    const checked = checkCall(outputId, input, listed.catalog);
+    const checked = checkCall(toolId, outputId, input, listed.catalog);
     if (!("invocation" in checked)) return checked;
     const sent = await sendCall(context, config, checked);
     if (!isAnswered(sent)) return sent;
     return await measureAnswer(
       context,
+      toolId,
       sent,
       JSON.stringify(sent.skeleton).length + LABEL_JOIN_ALLOWANCE,
     );
   },
-};
+});
+
+/** Runs commands the host lets this run run, as the agent, as writes. */
+export const runCommandTool = commandTool("run_command");
+
+/** Runs host-declared reads the broker grants read-only, as the agent. */
+export const runReadCommandTool = commandTool("run_read_command");
 
 /**
- * Helper for `run_command`, which reads the run's catalog, or says why no
+ * Helper for command tools, which reads the run's catalog, or says why no
  * call was sent. What the run can call is what it can see: a call naming a
  * command the catalog leaves out is refused before it reaches the host,
  * whatever the broker admits. The catalog is held for the run, and the
  * broker refuses a command the host has withdrawn since it was read.
+ * `run_read_command` reads it afresh, so the read-only grant it checks is
+ * the host's current one.
  */
 const readCatalog = async (
   context: HarnessToolContext,
+  toolId: CommandToolId,
   source: LoomCommandCatalogSource,
   outputId: ToolOutputId,
 ): Promise<{ catalog: LoomCommandCatalog } | RunCommandCallOutput> => {
@@ -784,7 +840,9 @@ const readCatalog = async (
       "The turn was cancelled before the command.",
     );
   }
-  const listed = await source.current();
+  const listed = toolId === "run_read_command"
+    ? await source.refresh()
+    : await source.current();
   return listed.status === "ok"
     ? { catalog: listed.catalog }
     : notSent(outputId, listed.code, listed.message);
@@ -830,7 +888,7 @@ const skeletonForms = (
 };
 
 /**
- * Helper for `run_command`, which measures a batch's answers in the calls'
+ * Helper for command tools, which measures a batch's answers in the calls'
  * order against one output bound for the whole batch, so a batch shows the
  * model no more than one call may. Each executed call's summary takes, in
  * the calls' order, the largest of its forms whose serialized size fits
@@ -841,6 +899,7 @@ const skeletonForms = (
  */
 const measureBatch = async (
   context: HarnessToolContext,
+  toolId: CommandToolId,
   outputId: ToolOutputId,
   sent: readonly (AnsweredCall | RunCommandCallOutput)[],
 ): Promise<RunCommandBatchOutput> => {
@@ -876,7 +935,7 @@ const measureBatch = async (
       results.push(call);
       continue;
     }
-    const measured = await measureAnswer(context, call, reserved);
+    const measured = await measureAnswer(context, toolId, call, reserved);
     reserved += JSON.stringify({ entry: measured.entry }).length;
     results.push(measured);
   }
@@ -896,8 +955,12 @@ const measureBatch = async (
   };
 };
 
-/** The two command tools, in registration order. */
-export const LOOM_COMMAND_TOOLS = [listCommandsTool, runCommandTool] as const;
+/** The command tools, in registration order. */
+export const LOOM_COMMAND_TOOLS = [
+  listCommandsTool,
+  runCommandTool,
+  runReadCommandTool,
+] as const;
 
 /**
  * The model-context observation a command's answer contributes: its label
@@ -935,7 +998,7 @@ const withoutLabel = (result: unknown): unknown => {
 };
 
 /**
- * What the model is shown of a `run_command` output, and the JSON pointers
+ * What the model is shown of a command tool's output, and the JSON pointers
  * of what stays on the artifact alone: every label (`cfc`), the batch's and
  * each result's, and the entry of each answer that was cut to a bound.
  */

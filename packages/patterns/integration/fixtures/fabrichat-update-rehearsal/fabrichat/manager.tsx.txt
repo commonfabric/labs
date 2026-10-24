@@ -1655,7 +1655,11 @@ export interface FabriChatManagerOutput {
   /** The outcome of each request, by the `requestId` its caller chose. */
   requests: Record<string, ChatRequestOutcome>;
 
-  /** Notices this user's requests have produced that no one has delivered. */
+  /**
+   * Notices this user's requests have produced that no one has delivered,
+   * other than those whose room's roster lists a profile attesting their
+   * recipient.
+   */
   outgoingNotices: ChatManagerNotice[];
 
   /**
@@ -1997,8 +2001,16 @@ export const FabriChatManagerCore = pattern<
     const peopleDisplay = computed((): ChatDisplay =>
       shownPeople.length === 0 ? "none" : "block"
     );
-    const noticeList = computed(
-      () => [...((outgoingNotices.get() ?? []) as ChatManagerNotice[])],
+    // A notice whose room's roster lists a profile attesting its recipient
+    // has nothing left to tell them: they are in the room. Per session, as
+    // `newestFirst` is: the roster is read under the reader's access, and a
+    // profile attests no one to a reader its space refuses.
+    const noticeList = computed((): PerSession<ChatManagerNotice[]> =>
+      ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((notice) =>
+        !(notice.room.key("roster").get() ?? []).some((member) =>
+          principalOf(member, "represents-principal") === notice.recipient
+        )
+      )
     );
     const cannotStart = computed(() => myProfile?.get() === undefined);
     // The principal this user's profile attests, which someone starting a

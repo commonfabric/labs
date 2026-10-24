@@ -16,6 +16,7 @@ import {
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { findNumericLabelField } from "./label-metadata-table.ts";
 import { mapLinkSchemas } from "./schema-table-links.ts";
 import {
   applySqliteCommitWrite,
@@ -5820,6 +5821,40 @@ const applyCommitTransaction = (
       requiredLabelDocs.add(ref.slice("cid:".length));
     }
   };
+  // A number at a whole-field label or path of the CFC label map is a
+  // transport dictionary reference in a negotiated envelope and nothing
+  // anywhere else: no dictionary is stored with a document, so a stored
+  // number can never be resolved, and the sync sender cannot compress an
+  // envelope carrying one without changing its meaning. Request parsing
+  // sees the number a set or a value-bearing patch carries, but a `move`
+  // or an `increment` can produce one from application data, so the
+  // post-patch document is checked here for every form alike. A document
+  // stored before this check may already hold such a number: a write that
+  // leaves its label map exactly as stored (an unchanged set, a value edit,
+  // a metadata patch beside the map) is admitted, so the document stays
+  // writable, and `stored` is read only when a number is found.
+  const labelMapOf = (document: unknown): unknown => {
+    const cfc = (document as { cfc?: unknown } | null | undefined)?.cfc;
+    return (cfc as { labelMap?: unknown } | null | undefined)?.labelMap;
+  };
+  const requireInlineLabelMetadata = (
+    id: string,
+    document: unknown,
+    stored: () => unknown,
+  ): void => {
+    const field = findNumericLabelField(document);
+    if (field === undefined) return;
+    const labelMap = labelMapOf(document);
+    const storedMap = labelMapOf(stored());
+    if (
+      storedMap === undefined ||
+      !valueEqual(labelMap as FabricValue, storedMap as FabricValue)
+    ) {
+      throw new ProtocolError(
+        `memory v2 commit writes document ${id} with a numeric CFC label-map ${field}, which only a transport dictionary could resolve`,
+      );
+    }
+  };
   // A document's reserved `schema` metadata member is a schema position
   // in the link spelling — a self-contained inline schema, or a single
   // `{ "$ref": "cid:…" }` root — and its refs are collected exactly as a
@@ -5892,6 +5927,24 @@ const applyCommitTransaction = (
     }
   }
   const stagedMetadataDocs = new Map<string, unknown>();
+  // The document an operation applies to: what an earlier operation of this
+  // commit staged for it, or else what is stored.
+  const priorDocument = (
+    opIndex: number,
+    operation: { id: string; scope?: unknown },
+    docKey = opDocKey(opIndex, operation),
+  ): unknown => {
+    return stagedMetadataDocs.has(docKey)
+      ? stagedMetadataDocs.get(docKey)
+      : readState(engine, {
+        id: operation.id,
+        branch,
+        scope: operation.scope as Parameters<typeof readState>[1]["scope"],
+        principal: scanPrincipal,
+        sessionId: scanSession,
+        scopeKey: scopeKeyByOpIndex.get(opIndex),
+      })?.document ?? undefined;
+  };
   for (const [opIndex, operation] of commit.operations.entries()) {
     if (operation.op === "sqlite") continue;
     if (operation.op === "patch") {
@@ -5903,18 +5956,7 @@ const applyCommitTransaction = (
       if (metadataPatchDocKeys.size > 0) {
         const docKey = opDocKey(opIndex, operation);
         if (metadataPatchDocKeys.has(docKey)) {
-          const base = stagedMetadataDocs.has(docKey)
-            ? stagedMetadataDocs.get(docKey)
-            : readState(engine, {
-              id: operation.id,
-              branch,
-              scope: operation.scope as Parameters<
-                typeof readState
-              >[1]["scope"],
-              principal: scanPrincipal,
-              sessionId: scanSession,
-              scopeKey: scopeKeyByOpIndex.get(opIndex),
-            })?.document ?? undefined;
+          const base = priorDocument(opIndex, operation, docKey);
           try {
             const patched = applyPatchToDocument(
               base as Parameters<typeof applyPatchToDocument>[0] | undefined,
@@ -5922,6 +5964,7 @@ const applyCommitTransaction = (
             );
             stagedMetadataDocs.set(docKey, patched);
             if (patchTouchesMetadata(operation.patches)) {
+              requireInlineLabelMetadata(operation.id, patched, () => base);
               collectCfcEnvelopeRef((patched as { cfc?: unknown }).cfc);
               collectSchemaMetaRefs(operation.id, patched);
             }
@@ -5933,6 +5976,11 @@ const applyCommitTransaction = (
     }
     if (!operation.id.startsWith("cid:")) {
       if (operation.op === "set") {
+        requireInlineLabelMetadata(
+          operation.id,
+          operation.value,
+          () => priorDocument(opIndex, operation),
+        );
         collectLinkSchemaRefs(operation.value);
         collectCfcEnvelopeRef(
           (operation.value as { cfc?: unknown } | null)?.cfc,
@@ -6005,6 +6053,11 @@ const applyCommitTransaction = (
     // `cid:` document alike (see collectSchemaMetaRefs): the identity
     // check above covers `.value` and nothing beside it.
     if (installsVerifiedContent) {
+      requireInlineLabelMetadata(
+        operation.id,
+        operation.value,
+        () => readState(engine, { id: operation.id, branch })?.document,
+      );
       collectSchemaMetaRefs(operation.id, operation.value);
     }
     const earlierSet = cidSetsInCommit?.get(operation.id);

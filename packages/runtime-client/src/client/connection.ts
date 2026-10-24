@@ -9,6 +9,7 @@ import {
   CommandRequest,
   CommandResponse,
   Commands,
+  ConnectionRestoredNotification,
   ConsoleMessage,
   ErrorNotification,
   EventIntentOutcomeNotification,
@@ -17,6 +18,7 @@ import {
   IPCClientNotification,
   IPCRemoteMessage,
   isCellUpdateNotification,
+  isConnectionRestoredNotification,
   isConsoleNotification,
   isErrorNotification,
   isEventIntentOutcomeNotification,
@@ -28,6 +30,7 @@ import {
   isPendingWritesNotification,
   isPresenceUpdateNotification,
   isSpaceAccessLostNotification,
+  isSpaceAccessRestoredNotification,
   isTelemetryNotification,
   isVDomBatchNotification,
   NavigateRequestNotification,
@@ -40,6 +43,7 @@ import {
   type RuntimeSecurityContext,
   SerializedDomEvent,
   SpaceAccessLostNotification,
+  SpaceAccessRestoredNotification,
   TelemetryNotification,
   VDomBatchNotification,
   VDomMountResponse,
@@ -133,6 +137,8 @@ export type RuntimeConnectionEvents = {
   navigaterequest: [NavigateRequestNotification];
   error: [ErrorNotification];
   spaceaccesslost: [SpaceAccessLostNotification];
+  spaceaccessrestored: [SpaceAccessRestoredNotification];
+  connectionrestored: [ConnectionRestoredNotification];
   telemetry: [TelemetryNotification];
   vdombatch: [VDomBatchNotification];
   pendingwriteschange: [PendingWritesNotification];
@@ -617,6 +623,10 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         this.emit("eventintentoutcome", message);
       } else if (isSpaceAccessLostNotification(message)) {
         this.emit("spaceaccesslost", message);
+      } else if (isSpaceAccessRestoredNotification(message)) {
+        this.emit("spaceaccessrestored", message);
+      } else if (isConnectionRestoredNotification(message)) {
+        this.emit("connectionrestored", message);
       } else if (isVDomBatchNotification(message)) {
         this.emit("vdombatch", message);
       } else if (isPendingWritesNotification(message)) {

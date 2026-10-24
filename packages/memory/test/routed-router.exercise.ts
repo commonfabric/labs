@@ -1,6 +1,12 @@
 /** Disposable Linux acceptance against a compiled Rust router and real SQLite toolsheds. */
+import {
+  deepFreeze,
+  fabricFromConvertibleJsValue,
+  taggedHashStringOf,
+} from "@commonfabric/data-model";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
+import { isPlainObject } from "@commonfabric/utils/types";
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { fromFileUrl, toFileUrl } from "@std/path";
@@ -17,10 +23,15 @@ import {
 import { aclDocId } from "../acl.ts";
 import type { MemorySpace } from "../interface.ts";
 import {
+  type ClientCommit,
+  type ClientMessage,
+  encodeMemoryBoundary,
   getMemoryProtocolFlags,
   type SessionReport,
   toDocumentPath,
+  type WatchSpec,
 } from "../v2.ts";
+import { compressClientMessageLabels } from "../v2/commit-label-table.ts";
 import { BASE58_ALPHABET } from "../v2/routed-directory.ts";
 import { decodeRoutedFrame } from "../v2/routed-parser.ts";
 import {
@@ -28,7 +39,15 @@ import {
   routedBase64,
   routedStatementPayload,
 } from "../v2/routed-wire.ts";
+import {
+  decodeRouterHeader,
+  decodeRouterRecord,
+  RouterAssembler,
+  routerRecords,
+  routerRoute,
+} from "../v2/router-protocol.ts";
 import { resolveSpaceStoreUrl } from "../v2/storage-path.ts";
+import { countValues } from "./support/routed-slots.ts";
 
 // Mode A runs at the deployment's cell representation, which the toolsheds
 // and every client share. The exercise runs at the production setting, legacy,
@@ -315,10 +334,16 @@ class Toolshed {
   child?: Deno.ChildProcess;
   #writer?: WritableStreamDefaultWriter<Uint8Array>;
   #lines: string[] = [];
-  #wake?: () => void;
+  #changed = Promise.withResolvers<void>();
+  #failure?: Error;
+  #output?: Promise<void>;
   constructor(readonly index: number) {}
-  /** `modern` overrides the deployment's cell representation, to misconfigure it. */
-  async start(modern = modernCellRep) {
+  /** Starts a fixture with the requested wire mode, capabilities and slot cap. */
+  async start(
+    modern = modernCellRep,
+    omitSyncLabelTableV1 = false,
+    frameSlots?: number | null,
+  ) {
     const i = this.index;
     const config = `${root}/toolshed-${i}.json`;
     Deno.writeTextFileSync(
@@ -334,11 +359,15 @@ class Toolshed {
         space: spaces[i],
         principals: [i === 0 ? alice.did() : bob.did()],
         modernCellRep: modern,
+        omitSyncLabelTableV1,
+        omitCommitLabelTableV1: omitSyncLabelTableV1,
+        ...(frameSlots === undefined ? {} : { frameSlots }),
       }),
     );
     this.child = new Deno.Command(Deno.execPath(), {
       args: [
         "run",
+        "--frozen",
         `--config=${
           fromFileUrl(new URL("../../../deno.jsonc", import.meta.url))
         }`,
@@ -352,33 +381,44 @@ class Toolshed {
     }).spawn();
     this.#writer = this.child.stdin.getWriter();
     this.#lines = [];
-    void (async () => {
-      let held = "";
-      for await (
-        const chunk of this.child!.stdout.pipeThrough(new TextDecoderStream())
-      ) {
-        held += chunk;
-        let newline: number;
-        while ((newline = held.indexOf("\n")) >= 0) {
-          this.#lines.push(held.slice(0, newline));
-          held = held.slice(newline + 1);
-          this.#wake?.();
+    this.#failure = undefined;
+    this.#output = (async () => {
+      try {
+        let held = "";
+        for await (
+          const chunk of this.child!.stdout.pipeThrough(new TextDecoderStream())
+        ) {
+          held += chunk;
+          let newline: number;
+          while ((newline = held.indexOf("\n")) >= 0) {
+            this.#lines.push(held.slice(0, newline));
+            held = held.slice(newline + 1);
+            this.#notify();
+          }
         }
+        this.#failure = new Error(`toolshed ${i} output closed`);
+      } catch (error) {
+        this.#failure = error instanceof Error
+          ? error
+          : new Error(String(error));
+      } finally {
+        this.#notify();
       }
     })();
     await this.#line((line) => line.includes('"ready":true'));
   }
+  #notify() {
+    const changed = this.#changed;
+    this.#changed = Promise.withResolvers<void>();
+    changed.resolve();
+  }
   async #line(match: (line: string) => boolean) {
-    const end = Date.now() + 30000;
-    while (Date.now() < end) {
+    for (;;) {
       const i = this.#lines.findIndex(match);
       if (i >= 0) return this.#lines.splice(0, i + 1).pop()!;
-      await new Promise<void>((resolve) => {
-        this.#wake = resolve;
-        setTimeout(resolve, 100);
-      });
+      if (this.#failure !== undefined) throw this.#failure;
+      await this.#changed.promise;
     }
-    throw new Error(`toolshed ${this.index} did not answer`);
   }
   async command(command: Record<string, unknown>) {
     await this.#writer!.write(
@@ -397,6 +437,7 @@ class Toolshed {
       this.child.kill("SIGKILL");
     } catch { /* Already stopped. */ }
     await this.child.status;
+    await this.#output;
     this.child = undefined;
   }
 }
@@ -407,6 +448,110 @@ function pass(name: string) {
   gates.push(name);
   console.log(JSON.stringify({ gate: name, passed: true }));
 }
+
+/** Compares canonical values without constructing an unbounded text diff. */
+function expectCanonicalEqual(
+  actual: unknown,
+  expected: unknown,
+  label: string,
+  actualEvidence = actual,
+  expectedEvidence = expected,
+) {
+  const actualValue = fabricFromConvertibleJsValue(actual);
+  const expectedValue = fabricFromConvertibleJsValue(expected);
+  const actualText = encodeMemoryBoundary(actualValue);
+  const expectedText = encodeMemoryBoundary(expectedValue);
+  const actualHash = taggedHashStringOf(actualValue);
+  const expectedHash = taggedHashStringOf(expectedValue);
+  if (actualHash === expectedHash && actualText === expectedText) return;
+
+  /** Returns a bounded description of one decoded JSON value. */
+  const summary = (value: unknown): unknown => {
+    if (Array.isArray(value)) return { type: "array", length: value.length };
+    if (isPlainObject(value)) {
+      const keys = Object.keys(value);
+      return { type: "object", keyCount: keys.length, keys: keys.slice(0, 12) };
+    }
+    return typeof value === "string" && value.length > 160
+      ? { type: "string", length: value.length, prefix: value.slice(0, 160) }
+      : value;
+  };
+
+  /** Locates the first unequal JSON field while retaining array order. */
+  const firstDifference = (
+    actual: unknown,
+    expected: unknown,
+    path: string[] = [],
+  ): unknown => {
+    if (Object.is(actual, expected)) return undefined;
+    if (Array.isArray(actual) && Array.isArray(expected)) {
+      if (actual.length === expected.length) {
+        for (let i = 0; i < actual.length; i++) {
+          const difference = firstDifference(actual[i], expected[i], [
+            ...path,
+            String(i),
+          ]);
+          if (difference !== undefined) return difference;
+        }
+        return undefined;
+      }
+    } else if (isPlainObject(actual) && isPlainObject(expected)) {
+      for (
+        const key of new Set([...Object.keys(actual), ...Object.keys(expected)])
+      ) {
+        const actualPresent = Object.hasOwn(actual, key);
+        const expectedPresent = Object.hasOwn(expected, key);
+        if (actualPresent !== expectedPresent) {
+          return {
+            path: [...path, key],
+            actualPresent,
+            expectedPresent,
+            actual: summary(actual[key]),
+            expected: summary(expected[key]),
+          };
+        }
+        const difference = firstDifference(actual[key], expected[key], [
+          ...path,
+          key,
+        ]);
+        if (difference !== undefined) return difference;
+      }
+      return undefined;
+    }
+    return { path, actual: summary(actual), expected: summary(expected) };
+  };
+
+  // This separate directory survives the exercise's fixture cleanup.
+  const evidence = Deno.makeTempDirSync({
+    prefix: "routed-router-difference-",
+  });
+  Deno.writeTextFileSync(
+    `${evidence}/actual.fvj1`,
+    encodeMemoryBoundary(fabricFromConvertibleJsValue(actualEvidence)),
+  );
+  Deno.writeTextFileSync(
+    `${evidence}/expected.fvj1`,
+    encodeMemoryBoundary(fabricFromConvertibleJsValue(expectedEvidence)),
+  );
+  const diagnostics = {
+    label,
+    evidence,
+    actualHash,
+    expectedHash,
+    actualCodeUnits: actualText.length,
+    expectedCodeUnits: expectedText.length,
+    firstDifference: firstDifference(
+      JSON.parse(actualText.slice(5)),
+      JSON.parse(expectedText.slice(5)),
+    ),
+  };
+  Deno.writeTextFileSync(
+    `${evidence}/summary.json`,
+    JSON.stringify(diagnostics, null, 2),
+  );
+  throw new Error(JSON.stringify(diagnostics));
+}
+
 /**
  * Waits for a router role to create `path`. A role that never does, as the
  * link agent does not while it can open no toolshed link, fails the exercise
@@ -609,7 +754,7 @@ class Client {
     changed.resolve();
   }
   async start(
-    flags = {
+    flags: Partial<ReturnType<typeof getMemoryProtocolFlags>> = {
       ...getMemoryProtocolFlags(),
       connectionAuth: true,
       routedAuthV1: true,
@@ -959,16 +1104,13 @@ try {
     // keeps the public listener idle throughout automatic recovery.
     assertEquals(clients.length, 0);
     assertEquals(workerStats().length, 0);
-    const idleListener = rolePid("listener");
-    const idleSpawner = rolePid("spawner");
-    await command([
+    const idleRecovery = await command([
       "python3",
       "-c",
       String.raw`
-import json, os, select, signal, subprocess, sys
+import json, os, pathlib, select, signal, subprocess, sys
 
 unit = "memory-router-listener.service"
-listener, spawner = map(int, sys.argv[1:])
 
 def state():
     output = subprocess.check_output([
@@ -977,12 +1119,24 @@ def state():
     ], text=True)
     return dict(line.split("=", 1) for line in output.splitlines())
 
+def processes(state):
+    listener = int(state["MainPID"])
+    assert listener > 0, state
+    # Type=notify follows the fork, but the child's command line can still
+    # name the listener until exec. The kernel's parent-child relation already
+    # identifies the supervised process, including that pre-exec interval.
+    children = pathlib.Path(
+        f"/proc/{listener}/task/{listener}/children"
+    ).read_text().split()
+    assert len(children) == 1, (state, children)
+    return listener, int(children[0])
+
 before = state()
 assert before["Type"] == "notify", before
 assert before["ActiveState"] == "active", before
 assert before["SubState"] == "running", before
-assert int(before["MainPID"]) == listener, before
 assert before["InvocationID"], before
+listener, spawner = processes(before)
 
 # A cursor replays every event after this point even if the restart happens
 # before journalctl attaches. Sync includes the completed initial start.
@@ -1048,6 +1202,13 @@ try:
     assert int(after["MainPID"]) > 0, after
     assert after["MainPID"] != before["MainPID"], (before, after)
     assert after["InvocationID"] == event["INVOCATION_ID"], (event, after)
+    next_listener, next_spawner = processes(after)
+    assert next_listener != listener and next_spawner != spawner
+    print(json.dumps({"idleSpawnerRecovery": {
+        "before": {"listener": listener, "spawner": spawner},
+        "after": {"listener": next_listener, "spawner": next_spawner},
+        "exit": exit_event, "restart": restart_event, "ready": event,
+    }}))
 except BaseException:
     print(json.dumps({"before": before, "after": after, "events": events}),
           file=sys.stderr)
@@ -1057,11 +1218,8 @@ finally:
     journal.wait()
     journal.stdout.close()
 `,
-      String(idleListener),
-      String(idleSpawner),
     ]);
-    assert(rolePid("listener") !== idleListener);
-    assert(rolePid("spawner") !== idleSpawner);
+    console.log(idleRecovery.trim());
     assertEquals(workerStats().length, 0);
     pass(
       "an idle spawner exit automatically restarts the listener without client traffic",
@@ -1820,8 +1978,7 @@ finally:
           protocol: "memory",
           flags: {
             ...getMemoryProtocolFlags(),
-            stableExpressionResultIds: false,
-            connectionAuth: true,
+            connectionAuth: false,
             routedAuthV1: true,
           },
         })
@@ -2091,6 +2248,7 @@ finally:
     connectionAuth: true,
     routedAuthV1: true,
     messageCompressionV1: true,
+    routedCompressionV1: true,
   });
   assertEquals(
     (compressing.hello.flags as Record<string, unknown>).messageCompressionV1,
@@ -2137,8 +2295,55 @@ finally:
       },
     }],
   });
-  await until(() => compressing.binaryFrames > 0);
-  pass("a client that negotiated compression receives compressed frames");
+  await compressing.take((message) =>
+    message.type === "session/effect" &&
+    message.sessionId === compressedSession
+  );
+  // The toolshed compressed its large bodies; the router forwarded the
+  // envelopes opaquely and the client expanded them.
+  assert(compressing.binaryFrames > 0);
+  assertEquals(
+    (await compressing.request({ type: "memory.compression", enabled: true }))
+      .enabled,
+    true,
+  );
+  // A client that predates `routedCompressionV1` gets the same effect as text.
+  const older = new Client("127.0.0.54");
+  clients.push(older);
+  await older.start({
+    ...getMemoryProtocolFlags(),
+    connectionAuth: true,
+    routedAuthV1: true,
+    messageCompressionV1: true,
+  });
+  await older.authenticate(alice, 120, true);
+  const olderSession = ((await older.request({
+    type: "session.open",
+    space: spaces[0],
+    principal: alice.did(),
+    session: {},
+  })).ok as { sessionId: string }).sessionId;
+  // The watch result carries the large document. (The compressing client's
+  // later effect follows from its own commit; this client made none.)
+  const olderWatch = await older.request({
+    type: "session.watch.set",
+    space: spaces[0],
+    sessionId: olderSession,
+    watches: [{
+      id: "large",
+      kind: "graph",
+      query: {
+        roots: [{ id: "of:compressed", selector: { path: [], schema: false } }],
+      },
+    }],
+  });
+  assert(JSON.stringify(olderWatch).includes("routed compression entry 399"));
+  assertEquals(older.binaryFrames, 0);
+  older.close();
+  await older.closed.promise;
+  pass(
+    "a client that negotiated routedCompressionV1 receives large bodies as the toolshed's compression envelope, forwarded opaquely, with a truthful acknowledgement; one that predates it receives text",
+  );
   // The toolshed answers each of these, so the ID was in flight and retired.
   for (let i = 0; i < 2; i++) {
     const reply = await compressing.requestWithId("reused", {
@@ -2680,10 +2885,1405 @@ finally:
     "a DID with no store is opened or created only by its own key, and nobody else opens it before genesis",
   );
 
+  {
+    const legacy = await new Client("127.0.0.47").start();
+    clients.push(legacy);
+    try {
+      expect(legacy.hello.routerTransport).toBe(1);
+      expect(legacy.hello.routerUploadWindow).toBe(262_144);
+      expect(legacy.hello.routerFrameSlots).toBe(ROUTED_FRAME_SLOTS);
+      legacy.ws.send('fvj1:{"type":"router.transport","version":1}');
+      await legacy.authenticate(alice, 300, true);
+      const opened = await legacy.request({
+        type: "session.open",
+        space: spaces[0],
+        principal: alice.did(),
+        session: {},
+      });
+      expect(opened).toHaveProperty("ok.sessionId");
+      const request = {
+        type: "graph.query",
+        requestId: "uncredited-records",
+        space: spaces[0],
+        sessionId: (opened.ok as { sessionId: string }).sessionId,
+        query: { roots: [] },
+      };
+      for (
+        const record of routerRecords(
+          routerRoute(request),
+          `fvj1:${JSON.stringify(request)}`,
+        )
+      ) legacy.ws.send(record);
+      expect(await legacy.take((m) => m.requestId === request.requestId))
+        .toHaveProperty("ok");
+      // This connection-level barrier follows acceptance of the end record,
+      // including any credit that acceptance would have queued.
+      expect(await legacy.request({ type: "connection.challenge" }))
+        .toHaveProperty("ok");
+      expect(legacy.binaryFrames).toBe(0);
+      expect(legacy.ws.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      legacy.close();
+      await legacy.closed.promise;
+    }
+    pass("router upload credits require explicit selection opt-in");
+
+    const window = 262_144;
+    const threeMiB = 3 * 1024 * 1024;
+    const fourMiB = 4 * 1024 * 1024;
+    // Repetition across small documents exercises both metadata tables
+    // without repeating paths within a stored label map.
+    const labelRoots = Array.from({ length: 8 }, (_, index) => ({
+      id: `of:routed-label-${index}`,
+      selector: { path: [], schema: false as const },
+    }));
+    const schemaHash = taggedHashStringOf(true);
+    const labelWatch: WatchSpec = {
+      id: "routed-labels",
+      kind: "graph",
+      query: { roots: labelRoots },
+    };
+
+    /** Builds stored metadata and application lookalikes for exact readback. */
+    const labeledDocument = (marker: number, version: number) => ({
+      value: {
+        marker,
+        version,
+        labelTable: [7],
+        labelPathTable: [["ordinary-data"]],
+        cfc: { labelMap: { entries: [{ path: 0, label: 0 }] } },
+      },
+      cfc: {
+        version: 1,
+        schemaHash,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["marker"],
+            label: {
+              confidentiality: ["routed-label-secret"],
+              integrity: [],
+            },
+          }, {
+            path: ["version"],
+            label: {
+              confidentiality: [],
+              integrity: ["routed-label-origin"],
+            },
+          }],
+        },
+      },
+    });
+
+    /** Checks wire refs independently, or exact SDK/legacy inline metadata. */
+    const checkLabels = (
+      sync: unknown,
+      compact: boolean,
+      version: number,
+    ) => {
+      assert(isPlainObject(sync) && Array.isArray(sync.upserts));
+      if (compact) {
+        expect(sync.labelTable).toHaveLength(2);
+        expect(sync.labelPathTable).toHaveLength(2);
+      } else {
+        expect(Object.hasOwn(sync, "labelTable")).toBe(false);
+        expect(Object.hasOwn(sync, "labelPathTable")).toBe(false);
+      }
+      for (const [index, root] of labelRoots.entries()) {
+        const upsert = sync.upserts.find((entry: unknown) =>
+          isPlainObject(entry) && entry.id === root.id
+        );
+        assert(isPlainObject(upsert) && isPlainObject(upsert.doc));
+        const expected = labeledDocument(index, version);
+        if (!compact) {
+          expect(upsert.doc).toEqual(expected);
+          continue;
+        }
+        const cfc = upsert.doc.cfc;
+        assert(isPlainObject(cfc) && isPlainObject(cfc.labelMap));
+        const entries = cfc.labelMap.entries;
+        assert(Array.isArray(entries));
+        expect(entries).toHaveLength(expected.cfc.labelMap.entries.length);
+        const { labelTable, labelPathTable } = sync;
+        assert(Array.isArray(labelTable));
+        assert(Array.isArray(labelPathTable));
+        const expandedEntries = entries.map((entry: unknown) => {
+          assert(isPlainObject(entry));
+          assert(typeof entry.label === "number");
+          assert(typeof entry.path === "number");
+          return {
+            ...entry,
+            label: labelTable[entry.label],
+            path: labelPathTable[entry.path],
+          };
+        });
+        expect({
+          ...upsert.doc,
+          cfc: {
+            ...cfc,
+            labelMap: { ...cfc.labelMap, entries: expandedEntries },
+          },
+        }).toEqual(expected);
+      }
+    };
+
+    /**
+     * Expands one public frame a client receives: text, or a toolshed body in
+     * the routed compression envelope. A binary frame that is not the envelope
+     * is a router credit, and gives `undefined`.
+     */
+    const publicFrame = (
+      bytes: unknown,
+      binary: boolean,
+      frameSlots: number | null = ROUTED_FRAME_SLOTS,
+    ) => {
+      if (!binary) {
+        return decodeRoutedFrame(String(bytes), false, frameSlots);
+      }
+      assert(bytes instanceof ArrayBuffer);
+      const frame = new Uint8Array(bytes);
+      if (new TextDecoder().decode(frame.subarray(0, 5)) !== "mcmp\x02") {
+        return undefined;
+      }
+      return decodeRoutedFrame(frame, true, frameSlots);
+    };
+
+    /** Observes complete public requests using the transport's record assembler. */
+    const observeRequests = (
+      connection: ReturnType<typeof socketFactory>,
+      observe: (message: Record<string, unknown>, bytes: number) => void,
+      frameSlots: number | null = ROUTED_FRAME_SLOTS,
+    ) => {
+      const assembler = new RouterAssembler();
+      return {
+        socket: connection.socket,
+        send(frame: string | Uint8Array): void {
+          const payload = typeof frame === "string"
+            ? frame
+            : assembler.receive(frame)?.payload;
+          if (payload !== undefined) {
+            // A compressed upload is measured by its expanded payload, the
+            // size the request bounds and the label tables are about.
+            const decoded = decodeRoutedFrame(payload, true, frameSlots);
+            observe(
+              decoded.body,
+              new TextEncoder().encode(decoded.payload).length,
+            );
+          }
+          connection.send(frame);
+        },
+      };
+    };
+
+    const traces: {
+      socket: WebSocket;
+      selected: boolean;
+      sentBytes: number;
+      creditedBytes: number;
+      grants: number;
+      completed: number;
+      transactionReplies: number;
+      headers: ReturnType<typeof decodeRouterHeader>[];
+      syncMessages: Record<string, unknown>[];
+    }[] = [];
+
+    /** Observes actual public writes without giving `send()` a drain promise. */
+    const creditSocket = (address: URL) => {
+      const connection = socketFactory(address, "127.0.0.48");
+      const headers: ReturnType<typeof decodeRouterHeader>[] = [];
+      const syncMessages: Record<string, unknown>[] = [];
+      const trace = {
+        socket: connection.socket,
+        selected: false,
+        sentBytes: 0,
+        creditedBytes: 0,
+        grants: 0,
+        completed: 0,
+        transactionReplies: 0,
+        headers,
+        syncMessages,
+      };
+      traces.push(trace);
+      connection.socket.on("message", (bytes, binary) => {
+        const envelope = binary && bytes instanceof ArrayBuffer &&
+          bytes.byteLength >= 5 &&
+          new TextDecoder().decode(new Uint8Array(bytes, 0, 5)) === "mcmp\x02";
+        if (binary && !envelope) {
+          // Besides toolshed bodies in the compression envelope, a credited
+          // connection's binary frames are router-owned grants.
+          expect(trace.selected).toBe(true);
+          assert(bytes instanceof ArrayBuffer);
+          expect(bytes.byteLength).toBe(8);
+          expect(new Uint8Array(bytes, 0, 4)).toEqual(
+            new Uint8Array([0x6d, 0x72, 0x63, 0x01]),
+          );
+          const grant = new DataView(bytes).getUint32(4, false);
+          expect(grant).toBeGreaterThan(0);
+          expect(grant).toBeLessThanOrEqual(
+            trace.sentBytes - trace.creditedBytes,
+          );
+          trace.creditedBytes += grant;
+          trace.grants++;
+          return;
+        }
+        const message = decodeRoutedFrame(
+          envelope ? new Uint8Array(bytes as ArrayBuffer) : bytes.toString(),
+          true,
+          ROUTED_FRAME_SLOTS,
+        ).body;
+        expect(message.type).not.toBe("router.credit");
+        if (
+          message.type === "session/effect" ||
+          (message.type === "response" && isPlainObject(message.ok) &&
+            isPlainObject(message.ok.sync))
+        ) syncMessages.push(message);
+        if (message.type === "hello.ok") {
+          expect(message.routerTransport).toBe(1);
+          expect(message.routerUploadWindow).toBe(window);
+          expect(message.flags).toHaveProperty("syncLabelTableV1", true);
+        } else if (
+          message.type === "response" &&
+          trace.headers.some((header) =>
+            header.route.type === "transact" &&
+            header.route.requestId === message.requestId
+          )
+        ) {
+          expect(message).toHaveProperty("ok");
+          trace.transactionReplies++;
+        }
+      });
+      return {
+        socket: connection.socket,
+        send: (frame: string | Uint8Array): void => {
+          if (typeof frame === "string") {
+            expect(trace.selected).toBe(false);
+            const message = decodeRoutedFrame(frame, false, ROUTED_FRAME_SLOTS)
+              .body;
+            if (message.type === "router.transport") {
+              expect(message).toEqual({
+                type: "router.transport",
+                version: 1,
+                uploadCredits: true,
+              });
+              trace.selected = true;
+            } else {
+              expect(message.type).toBe("hello");
+              expect(message.flags).toHaveProperty("syncLabelTableV1", true);
+            }
+          } else {
+            expect(trace.selected).toBe(true);
+            const record = decodeRouterRecord(frame);
+            if (record.kind === 0) {
+              trace.headers.push(decodeRouterHeader(frame));
+            } else if (record.kind === 2) {
+              trace.completed++;
+            }
+            trace.sentBytes += frame.byteLength;
+            const outstanding = trace.sentBytes - trace.creditedBytes;
+            expect(outstanding).toBeLessThanOrEqual(window);
+          }
+          connection.send(frame);
+        },
+      };
+    };
+
+    const uploading = await MemoryClient.connect({
+      transport: new WebSocketTransport(
+        new URL("wss://localhost:8443/api/storage/memory"),
+        true,
+        () => {},
+        creditSocket,
+      ),
+    });
+    try {
+      const session = await uploading.mount(spaces[0], {}, {
+        did: alice.did(),
+        authorizeConnection: (context) =>
+          createSignedConnectionAuth(alice, context),
+        authorizeSessionOpen: () => {
+          throw new Error("Expected routed connection authorization");
+        },
+      });
+      const trace = traces[0];
+      const roots = Array.from({ length: 16 }, (_, i) => ({
+        id: `of:upload-credit-watch-${i}-${"x".repeat(224)}`,
+        selector: { path: [], schema: false as const },
+      }));
+      const payloads = Array.from({ length: 12 }, (_, i) => ({
+        id: `of:credit-upload-${i}`,
+        value: `${i}:${"u".repeat(384 * 1024)}`,
+      }));
+      const beforeUpload = {
+        bytes: trace.creditedBytes,
+        grants: trace.grants,
+      };
+      // Submit the whole burst without waiting between commits. Each body
+      // fits both peers' hard queues; native `send()` still needs credits
+      // to bound accumulated output across the queued logical messages.
+      await Promise.all(
+        payloads.map(({ id, value }, i) =>
+          session.transact({
+            localSeq: i + 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              { op: "set", id, value: { value } },
+              ...(i === 0
+                ? roots.map(({ id }, marker) => ({
+                  op: "set" as const,
+                  id,
+                  value: { value: { marker } },
+                }))
+                : []),
+            ],
+          })
+        ),
+      );
+      const uploads = trace.headers.filter((header) =>
+        header.route.type === "transact"
+      );
+      expect(uploads).toHaveLength(payloads.length);
+      expect(trace.transactionReplies).toBe(payloads.length);
+      expect(uploads.reduce((sum, header) => sum + header.bytes, 0))
+        .toBeGreaterThan(fourMiB);
+      for (const upload of uploads) {
+        expect(upload.bytes).toBeLessThan(512 * 1024);
+      }
+      expect(trace.creditedBytes - beforeUpload.bytes)
+        .toBeGreaterThan(fourMiB);
+      expect(trace.grants - beforeUpload.grants).toBeGreaterThan(1);
+      // Sequential reads keep response output below the hard queue limit.
+      for (const { id, value } of payloads) {
+        const result = await session.queryGraph({
+          roots: [{
+            id,
+            selector: { path: [], schema: false },
+          }],
+        });
+        expect(result.entities).toHaveLength(1);
+        expect(result.entities[0].document?.value).toBe(value);
+      }
+      expect(traces).toHaveLength(1);
+      expect(trace.socket.readyState).toBe(WebSocket.OPEN);
+      pass(
+        "native-like SDK send completes and reads back over 4 MiB of queued uploads in sub-512 KiB bodies with all quotas enabled",
+      );
+
+      // Independent watch IDs share sixteen real documents. Their complete
+      // set spans more than twelve credit windows while staying below the
+      // hard 4 MiB assembly queue, with a small deduplicated response.
+      const watches: WatchSpec[] = Array.from({ length: 768 }, (_, i) => ({
+        id: `credit-watch-${i}`,
+        kind: "graph",
+        query: { roots },
+      }));
+      const beforeWatch = {
+        bytes: trace.creditedBytes,
+        grants: trace.grants,
+      };
+      const view = await session.watchSet(watches);
+      const control = trace.headers.find((header) =>
+        header.route.type === "session.watch.set"
+      );
+      expect(control?.bytes).toBeGreaterThan(threeMiB);
+      expect(control?.bytes).toBeLessThan(fourMiB);
+      expect(trace.creditedBytes - beforeWatch.bytes)
+        .toBeGreaterThan(threeMiB);
+      expect(trace.grants - beforeWatch.grants).toBeGreaterThan(12);
+      expect(view.entities.map((entity) => entity.id).toSorted())
+        .toEqual(roots.map(({ id }) => id).toSorted());
+      for (const [marker, root] of roots.entries()) {
+        expect(
+          view.entities.find((entity) => entity.id === root.id)
+            ?.document?.value,
+        ).toEqual({ marker });
+      }
+      await session.queryGraph({ roots: [] });
+      expect(traces).toHaveLength(1);
+      expect(trace.socket.readyState).toBe(WebSocket.OPEN);
+      expect(trace.completed).toBe(trace.headers.length);
+      pass(
+        "native-like SDK send completes a 3-to-4 MiB watch control across more than twelve credit windows within all quotas",
+      );
+
+      const disconnected = new Promise<void>((resolve) =>
+        trace.socket.once("close", () => resolve())
+      );
+      trace.socket.terminate();
+      await disconnected;
+      await session.queryGraph({ roots: [] });
+      expect(traces).toHaveLength(2);
+      const restored = traces[1];
+      const restoredControl = restored.headers.find((header) =>
+        header.route.type === "session.watch.set"
+      );
+      expect(restoredControl?.bytes).toBeGreaterThan(threeMiB);
+      expect(restoredControl?.bytes).toBeLessThan(fourMiB);
+      expect(restored.creditedBytes).toBeGreaterThan(threeMiB);
+      expect(restored.grants).toBeGreaterThan(12);
+      expect(restored.socket.readyState).toBe(WebSocket.OPEN);
+      // A separate session's `set` reaches the restored watch; the server
+      // suppresses a writer's own `set` echo.
+      const wireCommits: { message: Record<string, unknown>; bytes: number }[] =
+        [];
+      const wireAcknowledgements: {
+        message: Record<string, unknown>;
+        bytes: number;
+      }[] = [];
+      const writerSockets: WebSocket[] = [];
+      const writing = await MemoryClient.connect({
+        transport: new WebSocketTransport(
+          new URL("wss://localhost:8443/api/storage/memory"),
+          true,
+          () => {},
+          (address) => {
+            const connection = socketFactory(address, "127.0.0.49");
+            writerSockets.push(connection.socket);
+            connection.socket.on("message", (bytes, binary) => {
+              const frame = publicFrame(bytes, binary);
+              if (frame === undefined) return;
+              const { payload } = frame;
+              const message = frame.body;
+              if (
+                message.type === "response" && isPlainObject(message.ok) &&
+                Array.isArray(message.ok.revisions)
+              ) {
+                wireAcknowledgements.push({
+                  message,
+                  bytes: new TextEncoder().encode(payload).length,
+                });
+              }
+            });
+            return observeRequests(
+              connection,
+              (message, bytes) => {
+                if (message.type === "transact") {
+                  wireCommits.push({ message, bytes });
+                }
+              },
+            );
+          },
+        ),
+      });
+      try {
+        const writer = await writing.mount(spaces[0], {}, {
+          did: alice.did(),
+          authorizeConnection: (context) =>
+            createSignedConnectionAuth(alice, context),
+          authorizeSessionOpen: () => {
+            throw new Error("Expected routed connection authorization");
+          },
+        });
+        expect(writer.sessionId).not.toBe(session.sessionId);
+        const expectedSeq = writer.serverSeq + 1;
+        const updates = view.subscribe();
+        try {
+          const applied = await writer.transact({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: roots[15].id,
+              value: { value: { marker: "restored" } },
+            }],
+          });
+          expect(applied.seq).toBe(expectedSeq);
+          expect(applied.replayed).toBeUndefined();
+          for (;;) {
+            const update = await updates.next();
+            assert(!update.done, "Restored watch ended before the later write");
+            if (update.value.serverSeq < applied.seq) continue;
+            const entity = update.value.entities.find((entity) =>
+              entity.id === roots[15].id
+            );
+            expect(entity?.seq).toBe(applied.seq);
+            expect(entity?.document).toEqual({ value: { marker: "restored" } });
+            break;
+          }
+        } finally {
+          await updates.return?.();
+        }
+
+        await writer.transact({
+          localSeq: 2,
+          reads: { confirmed: [], pending: [] },
+          operations: [
+            { op: "set", id: `cid:${schemaHash}`, value: { value: true } },
+            ...labelRoots.map(({ id }, index) => ({
+              op: "set" as const,
+              id,
+              value: labeledDocument(index, 1),
+            })),
+          ],
+        });
+        expect(uploading.serverFlags?.syncLabelTableV1).toBe(true);
+        const labeled = await session.watchAddSync([labelWatch]);
+        expect(labeled.view).toBe(view);
+        const labelRequest = restored.headers.findLast((header) =>
+          header.route.type === "session.watch.add"
+        );
+        assert(labelRequest);
+        const response = restored.syncMessages.find((message) =>
+          message.type === "response" &&
+          message.requestId === labelRequest.route.requestId
+        );
+        assert(response && isPlainObject(response.ok));
+        checkLabels(response.ok.sync, true, 1);
+        checkLabels(labeled.sync, false, 1);
+        for (const [index, root] of labelRoots.entries()) {
+          expect(
+            labeled.view.entities.find((entry) => entry.id === root.id)
+              ?.document,
+          ).toEqual(labeledDocument(index, 1));
+        }
+        const labelUpdates = labeled.view.subscribeSync();
+        try {
+          const applied = await writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: labelRoots.map(({ id }, index) => ({
+              op: "set",
+              id,
+              value: labeledDocument(index, 2),
+            })),
+          });
+          for (;;) {
+            const update = await labelUpdates.next();
+            assert(!update.done, "Labeled watch ended before the later write");
+            if (update.value.toSeq < applied.seq) continue;
+            checkLabels(update.value, false, 2);
+            break;
+          }
+          const pushed = restored.syncMessages.find((message) =>
+            message.type === "session/effect" &&
+            isPlainObject(message.effect) &&
+            message.effect.toSeq === applied.seq
+          );
+          assert(pushed);
+          checkLabels(pushed.effect, true, 2);
+          for (const [index, root] of labelRoots.entries()) {
+            expect(
+              labeled.view.entities.find((entry) => entry.id === root.id)
+                ?.document,
+            ).toEqual(labeledDocument(index, 2));
+          }
+        } finally {
+          await labelUpdates.return?.();
+        }
+
+        const documents = Array.from({ length: 30 }, (_, marker) => ({
+          id: `of:routed-commit-label-${marker}`,
+          document: {
+            value: {
+              ...labeledDocument(marker, 1).value,
+              items: Array.from({ length: 410 }, (_, index) => index),
+            },
+            cfc: {
+              version: 1,
+              schemaHash,
+              labelMap: {
+                version: 1,
+                entries: Array.from({ length: 410 }, (_, index) => ({
+                  path: ["items", String(index)],
+                  label: {
+                    confidentiality: [
+                      "routed-commit-project",
+                      "routed-commit-region",
+                      "routed-commit-secret",
+                      "routed-commit-team",
+                    ],
+                    integrity: ["routed-commit-provenance"],
+                  },
+                })),
+              },
+            },
+          },
+        }));
+        const commit: ClientCommit = deepFreeze({
+          localSeq: 4,
+          reads: { confirmed: [], pending: [] },
+          operations: documents.map(({ id, document }) => ({
+            op: "set",
+            id,
+            value: document,
+          })),
+        });
+        const originalCommit = encodeMemoryBoundary(commit);
+        const inline: ClientMessage = {
+          type: "transact",
+          space: spaces[0],
+          sessionId: writer.sessionId,
+          requestId: crypto.randomUUID(),
+          commit,
+        };
+        const inlinePayload = encodeMemoryBoundary(inline);
+        const inlineSlots = countValues(inline);
+        expect(inlineSlots).toBeGreaterThan(150_000);
+        expect(new TextEncoder().encode(inlinePayload).length)
+          .toBeLessThan(fourMiB);
+        expect(() => decodeRoutedFrame(inlinePayload, false, 150_000))
+          .toThrow();
+        const compact = compressClientMessageLabels(inline);
+        const compactPayload = encodeMemoryBoundary(compact);
+        expect(countValues(compact)).toBeLessThan(150_000);
+        expect(new TextEncoder().encode(compactPayload).length)
+          .toBeLessThan(fourMiB);
+        expect(decodeRoutedFrame(compactPayload, false, 150_000).body)
+          .toEqual(compact);
+        expect(writing.serverFlags).toHaveProperty("commitLabelTableV1", true);
+        const applied = await writer.transact(commit);
+        expect(applied.replayed).toBeUndefined();
+        expect(encodeMemoryBoundary(commit)).toBe(originalCommit);
+        expect(Object.isFrozen(documents[0].document.cfc.labelMap.entries))
+          .toBe(true);
+        const sent = wireCommits.at(-1);
+        assert(sent && isPlainObject(sent.message.commit));
+        expect(sent.message.commit.localSeq).toBe(commit.localSeq);
+        expect(sent.bytes).toBeLessThan(fourMiB);
+        const compactSlots = countValues(sent.message);
+        expect(compactSlots).toBeLessThan(150_000);
+        expect(sent.message.commit.labelTable).toHaveLength(1);
+        expect(sent.message.commit.labelPathTable).toHaveLength(410);
+        expect({ ...sent.message, requestId: inline.requestId }).toEqual(
+          compact,
+        );
+        const operations = sent.message.commit.operations;
+        assert(Array.isArray(operations));
+        expect(operations).toHaveLength(documents.length);
+        for (const operation of operations) {
+          assert(isPlainObject(operation));
+          expect(operation.op).toBe("set");
+          assert(isPlainObject(operation.value));
+          const metadata = operation.value.cfc;
+          assert(isPlainObject(metadata) && isPlainObject(metadata.labelMap));
+          assert(Array.isArray(metadata.labelMap.entries));
+          expect(metadata.labelMap.entries).toHaveLength(410);
+          for (const entry of metadata.labelMap.entries) {
+            assert(isPlainObject(entry));
+            expect(typeof entry.label).toBe("number");
+            expect(typeof entry.path).toBe("number");
+          }
+        }
+
+        /** Checks raw acknowledgement refs against the SDK's complete result. */
+        const checkAcknowledgement = (
+          result: typeof applied,
+          requestId: unknown,
+        ) => {
+          const replies = wireAcknowledgements.filter(({ message }) =>
+            message.requestId === requestId
+          );
+          expect(replies).toHaveLength(1);
+          const reply = replies[0];
+          const { ok } = reply.message;
+          assert(isPlainObject(ok));
+          expect(ok.labelTable).toHaveLength(1);
+          expect(ok.labelPathTable).toHaveLength(410);
+          const { labelTable, labelPathTable } = ok;
+          assert(Array.isArray(labelTable));
+          assert(Array.isArray(labelPathTable));
+          assert(Array.isArray(ok.revisions));
+          expect(ok.revisions).toHaveLength(documents.length);
+          expect(result.revisions).toHaveLength(documents.length);
+          expect(Object.hasOwn(result, "labelTable")).toBe(false);
+          expect(Object.hasOwn(result, "labelPathTable")).toBe(false);
+          for (const { id, document } of documents) {
+            expectCanonicalEqual(
+              result.revisions.find((revision) => revision.id === id)
+                ?.document,
+              document,
+              "expanded acknowledgement document",
+            );
+          }
+          const expandedRevisions = ok.revisions.map((revision: unknown) => {
+            assert(isPlainObject(revision) && isPlainObject(revision.document));
+            const { cfc } = revision.document;
+            assert(isPlainObject(cfc) && isPlainObject(cfc.labelMap));
+            assert(Array.isArray(cfc.labelMap.entries));
+            const entries = cfc.labelMap.entries.map((entry: unknown) => {
+              assert(isPlainObject(entry));
+              assert(typeof entry.label === "number");
+              assert(typeof entry.path === "number");
+              return {
+                ...entry,
+                label: labelTable[entry.label],
+                path: labelPathTable[entry.path],
+              };
+            });
+            return {
+              ...revision,
+              document: {
+                ...revision.document,
+                cfc: { ...cfc, labelMap: { ...cfc.labelMap, entries } },
+              },
+            };
+          });
+          expectCanonicalEqual(
+            expandedRevisions,
+            result.revisions,
+            "raw acknowledgement expansion matches SDK revisions",
+          );
+          expect(ok.seq).toBe(result.seq);
+          expect(ok.replayed).toBe(result.replayed);
+          const inlineReply = { ...reply.message, ok: result };
+          const inlinePayload = encodeMemoryBoundary(inlineReply);
+          const inlineSlots = countValues(inlineReply);
+          const compactSlots = countValues(reply.message);
+          expect(inlineSlots).toBeGreaterThan(150_000);
+          expect(() => decodeRoutedFrame(inlinePayload, false, 150_000))
+            .toThrow();
+          expect(compactSlots).toBeLessThan(150_000);
+          expect(reply.bytes).toBeLessThan(fourMiB);
+          return {
+            inlineSlots,
+            compactSlots,
+            inlineBytes: new TextEncoder().encode(inlinePayload).length,
+            compactBytes: reply.bytes,
+            replayed: result.replayed === true,
+          };
+        };
+        const acknowledgement = checkAcknowledgement(
+          applied,
+          sent.message.requestId,
+        );
+        expect(writerSockets).toHaveLength(1);
+        const writerDisconnected = new Promise<void>((resolve) =>
+          writerSockets[0].once("close", () => resolve())
+        );
+        writerSockets[0].terminate();
+        await writerDisconnected;
+        await writer.queryGraph({ roots: [] });
+        expect(writerSockets).toHaveLength(2);
+        expect(writing.serverFlags?.commitLabelTableV1).toBe(true);
+        const beforeReplay = wireCommits.length;
+        const replayed = await writer.transact(commit);
+        expect(replayed.replayed).toBe(true);
+        expect(replayed.seq).toBe(applied.seq);
+        expect(replayed.revisions).toHaveLength(applied.revisions.length);
+        // The protocol defaults an omitted scope to `space` (v2.ts's
+        // resolveScopeKey). Initial and stored replay revisions may differ
+        // only in whether that default is written explicitly.
+        const withExplicitScope = (revisions: typeof applied.revisions) =>
+          revisions.map((revision) => ({
+            ...revision,
+            scope: revision.scope === undefined ? "space" : revision.scope,
+          }));
+        expectCanonicalEqual(
+          withExplicitScope(replayed.revisions),
+          withExplicitScope(applied.revisions),
+          "replay preserves every revision field with explicit default scope",
+          replayed,
+          applied,
+        );
+        expect(wireCommits).toHaveLength(beforeReplay + 1);
+        const replayRequest = wireCommits[beforeReplay];
+        expect(replayRequest.message.requestId).not.toBe(
+          sent.message.requestId,
+        );
+        const replayAcknowledgement = checkAcknowledgement(
+          replayed,
+          replayRequest.message.requestId,
+        );
+        expect(writerSockets).toHaveLength(2);
+        expect(writerSockets[1].readyState).toBe(WebSocket.OPEN);
+        expect(encodeMemoryBoundary(commit)).toBe(originalCommit);
+        // Each read fits the response budget even with inline stored metadata.
+        for (const { id, document } of documents) {
+          const result = await session.queryGraph({
+            roots: [{ id, selector: { path: [], schema: false } }],
+          });
+          const stored = result.entities.find((entity) => entity.id === id);
+          expect(stored?.seq).toBe(applied.seq);
+          expectCanonicalEqual(
+            stored?.document,
+            document,
+            "stored commit document",
+          );
+        }
+        console.log(JSON.stringify({
+          publicCommitLabelTables: {
+            inlineSlots,
+            compactSlots,
+            inlineBytes: new TextEncoder().encode(inlinePayload).length,
+            compactBytes: sent.bytes,
+            documents: documents.length,
+            acknowledgement,
+            replayAcknowledgement,
+          },
+        }));
+        pass(
+          "negotiated commit tables carry thirty frozen sets exceeding 150000 inline values below the unchanged request bounds and preserve every stored document",
+        );
+
+        const {
+          syncLabelTableV1: _labelCapability,
+          commitLabelTableV1: _commitCapability,
+          ...oldFlags
+        } = getMemoryProtocolFlags();
+        for (const enabled of [undefined, false]) {
+          const oldPeer = new Client("127.0.0.50");
+          clients.push(oldPeer);
+          try {
+            await oldPeer.start({
+              ...oldFlags,
+              connectionAuth: true,
+              routedAuthV1: true,
+              ...(enabled === undefined ? {} : {
+                syncLabelTableV1: enabled,
+                commitLabelTableV1: enabled,
+              }),
+            });
+            expect(oldPeer.hello.flags).toHaveProperty(
+              "syncLabelTableV1",
+              true,
+            );
+            expect(oldPeer.hello.flags).toHaveProperty(
+              "commitLabelTableV1",
+              true,
+            );
+            await oldPeer.authenticate(alice, 300, true);
+            const opened = await oldPeer.request({
+              type: "session.open",
+              space: spaces[0],
+              principal: alice.did(),
+              session: {},
+            });
+            assert(isPlainObject(opened.ok));
+            const legacyId = `of:routed-inline-commit-${String(enabled)}`;
+            const legacyDocument = labeledDocument(0, 2);
+            expect(
+              await oldPeer.request({
+                type: "transact",
+                space: spaces[0],
+                sessionId: opened.ok.sessionId,
+                commit: {
+                  localSeq: 1,
+                  reads: { confirmed: [], pending: [] },
+                  operations: [{
+                    op: "set",
+                    id: legacyId,
+                    value: legacyDocument,
+                  }],
+                },
+              }),
+            ).toHaveProperty("ok.seq");
+            const legacyRead = await oldPeer.request({
+              type: "graph.query",
+              space: spaces[0],
+              sessionId: opened.ok.sessionId,
+              query: {
+                roots: [{
+                  id: legacyId,
+                  selector: { path: [], schema: false },
+                }],
+              },
+            });
+            assert(isPlainObject(legacyRead.ok));
+            assert(Array.isArray(legacyRead.ok.entities));
+            const legacyStored = legacyRead.ok.entities.find((
+              entity: unknown,
+            ) => isPlainObject(entity) && entity.id === legacyId);
+            assert(isPlainObject(legacyStored));
+            expect(legacyStored.document).toEqual(legacyDocument);
+            const result = await oldPeer.request({
+              type: "session.watch.set",
+              space: spaces[0],
+              sessionId: opened.ok.sessionId,
+              watches: [labelWatch],
+            });
+            assert(isPlainObject(result.ok));
+            checkLabels(result.ok.sync, false, 2);
+          } finally {
+            oldPeer.close();
+            await oldPeer.closed.promise;
+          }
+        }
+        pass(
+          "routed label and path tables compact watch replies and effects, expand exactly in the SDK, and stay inline for omitted or false capability",
+        );
+      } finally {
+        await writing.close();
+      }
+      expect(traces).toHaveLength(2);
+      expect(restored.socket.readyState).toBe(WebSocket.OPEN);
+      await session.close();
+      console.log(JSON.stringify({
+        publicUploadCredits: {
+          windowBytes: window,
+          transactionBodyBytes: uploads.map((header) => header.bytes),
+          transactionReplies: trace.transactionReplies,
+          watchBodyBytes: control?.bytes,
+          restoredWatchBodyBytes: restoredControl?.bytes,
+          connections: traces.map(({ sentBytes, creditedBytes, grants }) => ({
+            sentBytes,
+            creditedBytes,
+            grants,
+          })),
+        },
+      }));
+      pass(
+        "SDK reconnect selects fresh upload credits, restores a 3-to-4 MiB watch control within all quotas and receives a later watched write",
+      );
+    } finally {
+      await uploading.close();
+    }
+
+    // The router charges full logical bodies until their responses complete.
+    // Its in-flight budget must exceed the endpoint's input budget for a
+    // blocked backend to receive a capacity-waiting private header. Only this
+    // disposable scenario changes that quota; the endpoint stays at 4 MiB.
+    const activeConfigPath = systemd
+      ? "/etc/memory-router/config.json"
+      : configPath;
+    const priorConfigText = Deno.readTextFileSync(activeConfigPath);
+    const priorConfig = JSON.parse(priorConfigText);
+    assert(isPlainObject(priorConfig));
+    expect(priorConfig.max_in_flight_bytes_per_connection ?? fourMiB)
+      .toBe(fourMiB);
+    const pressureConfig = {
+      ...priorConfig,
+      max_in_flight_bytes_per_connection: 2 * fourMiB,
+    };
+    try {
+      Deno.writeTextFileSync(activeConfigPath, JSON.stringify(pressureConfig));
+      await restartRouter();
+      const activeConfig = JSON.parse(Deno.readTextFileSync(activeConfigPath));
+      assert(isPlainObject(activeConfig));
+      assert(
+        typeof activeConfig.max_in_flight_bytes_per_connection === "number",
+      );
+      expect(activeConfig).toEqual(pressureConfig);
+      expect(activeConfig.max_in_flight_bytes_per_connection).toBe(
+        8 * 1024 * 1024,
+      );
+      const firstTrace = traces.length;
+      const pressureClient = await MemoryClient.connect({
+        transport: new WebSocketTransport(
+          new URL("wss://localhost:8443/api/storage/memory"),
+          true,
+          () => {},
+          creditSocket,
+        ),
+      });
+      try {
+        const session = await pressureClient.mount(spaces[0], {}, {
+          did: alice.did(),
+          authorizeConnection: (context) =>
+            createSignedConnectionAuth(alice, context),
+          authorizeSessionOpen: () => {
+            throw new Error("Expected routed connection authorization");
+          },
+        });
+        const trace = traces[firstTrace];
+        const payloads = Array.from({ length: 12 }, (_, i) => ({
+          id: `of:admission-upload-${i}`,
+          value: `${i}:${"u".repeat(384 * 1024)}`,
+        }));
+        await toolsheds[0].command({ holdRequests: session.sessionId });
+        try {
+          const pendingUploads = Promise.all(
+            payloads.map(({ id, value }, i) =>
+              session.transact({
+                localSeq: i + 1,
+                reads: { confirmed: [], pending: [] },
+                operations: [{ op: "set", id, value: { value } }],
+              })
+            ),
+          );
+          // The fixture notification is independent of request completion.
+          // Observe early failures while retaining the promise awaited below.
+          void pendingUploads.catch(() => {});
+          const { requestAdmission: held } = await toolsheds[0].command({
+            waitRequestAdmission: true,
+          });
+          console.log(JSON.stringify({
+            privateRequestAdmissionHeld: {
+              routerInFlightLimitBytes:
+                activeConfig.max_in_flight_bytes_per_connection,
+              endpointInputLimitBytes: held.inputLimitBytes,
+              snapshot: held,
+            },
+          }));
+          expect(held.inputLimitBytes).toBe(fourMiB);
+          expect(held.blocked).toBe(true);
+          expect(held.released).toBe(false);
+          expect(held.closed).toBe(false);
+          // The router sent headers and bodies back to back while the
+          // toolshed's credit covered them; every assembled body is handed to
+          // the connection, which orders the held session's turns itself. The
+          // rest wait at the router, with the client's input, for credit the
+          // held turns have not returned.
+          expect(held.headers).toBe(held.completed);
+          expect(held.backendRequests).toBe(held.completed);
+          expect(held.backendRequests).toBeGreaterThan(1);
+          expect(held.headers).toBeLessThan(payloads.length);
+          expect(held.declaredBytes).toBeLessThanOrEqual(fourMiB);
+          expect(held.maxPendingBytes).toBeLessThanOrEqual(fourMiB);
+          expect(held.pendingBytesAtWait).toBe(held.declaredBytes);
+          expect(held.assemblingBytesAtWait).toBe(0);
+          expect(held.creditAtWait).toBe(fourMiB - held.declaredBytes);
+          expect(held.creditAtWait).toBeLessThan(held.lastRequestBytes);
+          expect(
+            trace.headers.filter((header) => header.route.type === "transact")
+              .length,
+          ).toBeGreaterThan(held.headers);
+          expect(trace.transactionReplies).toBe(0);
+          expect(traces).toHaveLength(firstTrace + 1);
+          expect(trace.socket.readyState).toBe(WebSocket.OPEN);
+          await toolsheds[0].command({ releaseRequests: true });
+          await pendingUploads;
+          const { requestAdmission: admitted } = await toolsheds[0].command({
+            requestAdmission: true,
+          });
+          expect(admitted.inputLimitBytes).toBe(fourMiB);
+          expect(admitted.released).toBe(true);
+          expect(admitted.closed).toBe(false);
+          expect(admitted.headers).toBe(payloads.length);
+          expect(admitted.completed).toBe(payloads.length);
+          expect(admitted.backendRequests).toBe(payloads.length);
+          expect(admitted.maxPendingBytes).toBeLessThanOrEqual(fourMiB);
+          expect(trace.transactionReplies).toBe(payloads.length);
+          const uploads = trace.headers.filter((header) =>
+            header.route.type === "transact"
+          );
+          expect(uploads).toHaveLength(payloads.length);
+          for (const upload of uploads) {
+            expect(upload.bytes).toBeLessThan(512 * 1024);
+          }
+          expect(admitted.declaredBytes).toBe(
+            uploads.reduce((total, header) => total + header.bytes, 0),
+          );
+          expect(admitted.declaredBytes).toBeLessThan(
+            activeConfig.max_in_flight_bytes_per_connection,
+          );
+          for (const { id, value } of payloads) {
+            const result = await session.queryGraph({
+              roots: [{ id, selector: { path: [], schema: false } }],
+            });
+            expect(result.entities).toHaveLength(1);
+            expect(result.entities[0].document?.value).toBe(value);
+          }
+          expect(traces).toHaveLength(firstTrace + 1);
+          expect(trace.socket.readyState).toBe(WebSocket.OPEN);
+          console.log(JSON.stringify({
+            privateRequestAdmission: {
+              routerInFlightLimitBytes:
+                activeConfig.max_in_flight_bytes_per_connection,
+              endpointInputLimitBytes: admitted.inputLimitBytes,
+              completed: admitted,
+            },
+          }));
+        } finally {
+          await toolsheds[0].command({ releaseRequests: true });
+          await toolsheds[0].command({ clearRequestAdmission: true });
+        }
+      } finally {
+        await pressureClient.close();
+      }
+    } finally {
+      Deno.writeTextFileSync(activeConfigPath, priorConfigText);
+      await restartRouter();
+      expect(Deno.readTextFileSync(activeConfigPath)).toBe(priorConfigText);
+    }
+    pass(
+      "private request credit with an 8 MiB router in-flight quota holds the burst at the router once the endpoint's 4 MiB input budget is spent, then commits and reads back the queued burst on the same socket and restores the router configuration",
+    );
+
+    /** Opens an SDK peer while retaining public requests and raw responses. */
+    const observedPeer = async (
+      source: string,
+      frameSlots: number | null = ROUTED_FRAME_SLOTS,
+    ) => {
+      const messages: Record<string, unknown>[] = [];
+      const hellos: Record<string, unknown>[] = [];
+      const requests: Record<string, unknown>[] = [];
+      const sockets: WebSocket[] = [];
+      const client = await MemoryClient.connect({
+        transport: new WebSocketTransport(
+          new URL("wss://localhost:8443/api/storage/memory"),
+          true,
+          () => {},
+          (address) => {
+            const connection = socketFactory(address, source);
+            sockets.push(connection.socket);
+            connection.socket.on("message", (bytes, binary) => {
+              const frame = publicFrame(bytes, binary, frameSlots);
+              if (frame !== undefined) messages.push(frame.body);
+            });
+            return observeRequests(connection, (message) => {
+              requests.push(message);
+              if (message.type === "hello") {
+                for (const flag of ["syncLabelTableV1", "commitLabelTableV1"]) {
+                  expect(message.flags).toHaveProperty(flag, true);
+                }
+                hellos.push(message);
+              }
+            }, frameSlots);
+          },
+        ),
+      });
+      return { client, messages, hellos, sockets, requests };
+    };
+
+    /** Checks a fresh session's wire encoding and the SDK's expanded watch. */
+    const readLabels = async (
+      reader: Awaited<ReturnType<typeof observedPeer>>,
+      index: number,
+      compact: boolean,
+      seed = false,
+    ) => {
+      const signer = signerFor(index);
+      const session = await reader.client.mount(spaces[index], {}, {
+        did: signer.did(),
+        authorizeConnection: (context) =>
+          createSignedConnectionAuth(signer, context),
+        authorizeSessionOpen: () => {
+          throw new Error("Expected routed connection authorization");
+        },
+      });
+      try {
+        expect(reader.client.serverFlags?.commitLabelTableV1).toBe(compact);
+        const commit: ClientCommit = {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [
+            ...(seed
+              ? [{
+                op: "set" as const,
+                id: `cid:${schemaHash}`,
+                value: { value: true },
+              }]
+              : []),
+            ...labelRoots.map(({ id }, marker) => ({
+              op: "set" as const,
+              id,
+              value: labeledDocument(marker, 2),
+            })),
+          ],
+        };
+        const beforeCommit = reader.requests.length;
+        await session.transact(commit);
+        const sent = reader.requests.slice(beforeCommit).filter((message) =>
+          message.type === "transact"
+        );
+        expect(sent).toHaveLength(1);
+        const message = sent[0];
+        assert(isPlainObject(message.commit));
+        if (compact) {
+          expect(message.commit.labelTable).toHaveLength(2);
+          expect(message.commit.labelPathTable).toHaveLength(2);
+          expect(message).toEqual(
+            compressClientMessageLabels({ ...message, commit }),
+          );
+        } else {
+          expect(Object.hasOwn(message.commit, "labelTable")).toBe(false);
+          expect(Object.hasOwn(message.commit, "labelPathTable")).toBe(false);
+          expect(message.commit).toEqual(commit);
+        }
+        const before = reader.messages.length;
+        const { view, sync } = await session.watchSetSync([labelWatch]);
+        const replies = reader.messages.slice(before).filter((message) =>
+          message.type === "response" && isPlainObject(message.ok) &&
+          isPlainObject(message.ok.sync)
+        );
+        expect(replies).toHaveLength(1);
+        assert(isPlainObject(replies[0].ok));
+        checkLabels(replies[0].ok.sync, compact, 2);
+        checkLabels(sync, false, 2);
+        for (const [marker, root] of labelRoots.entries()) {
+          expect(
+            view.entities.find((entity) => entity.id === root.id)?.document,
+          )
+            .toEqual(labeledDocument(marker, 2));
+        }
+      } finally {
+        await session.close();
+      }
+    };
+
+    // Each phase configures both endpoints and the real router. The SDK must
+    // learn its cap from the public hello; the observer only records the wire.
+    try {
+      for (const [index, frameSlots] of [175_000, null].entries()) {
+        Deno.writeTextFileSync(
+          activeConfigPath,
+          JSON.stringify({
+            ...priorConfig,
+            max_frame_slots: frameSlots,
+          }),
+        );
+        for (const shed of toolsheds) {
+          await shed.stop();
+          await shed.start(modernCellRep, false, frameSlots);
+        }
+        await restartRouter();
+        await Promise.all(
+          toolsheds.map((shed) => shed.command({ linked: true })),
+        );
+        const peer = await observedPeer(`127.0.0.${60 + index}`, frameSlots);
+        try {
+          expect(peer.messages.find((message) => message.type === "hello.ok"))
+            .toHaveProperty("routerFrameSlots", frameSlots);
+          const session = await peer.client.mount(spaces[0], {}, {
+            did: alice.did(),
+            authorizeConnection: (context) =>
+              createSignedConnectionAuth(alice, context),
+            authorizeSessionOpen: () => {
+              throw new Error("Expected routed connection authorization");
+            },
+          });
+          const id = `of:frame-slots-${index}`;
+          const document = {
+            value: Array.from({ length: 160_000 }, (_, value) => value),
+          };
+          const applied = await session.transact({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{ op: "set", id, value: document }],
+          });
+          expect(applied.revisions).toHaveLength(1);
+          expect(applied.revisions[0].id).toBe(id);
+          expectCanonicalEqual(
+            applied.revisions[0].document,
+            document,
+            "slot-cap commit acknowledgement",
+          );
+          const request = peer.requests.find((message) =>
+            message.type === "transact"
+          );
+          assert(request);
+          const acknowledgement = peer.messages.find((message) =>
+            message.type === "response" &&
+            message.requestId === request.requestId
+          );
+          assert(acknowledgement);
+          expect(acknowledgement.error).toBeUndefined();
+          expect(countValues(request)).toBeGreaterThan(ROUTED_FRAME_SLOTS);
+          expect(countValues(acknowledgement)).toBeGreaterThan(
+            ROUTED_FRAME_SLOTS,
+          );
+
+          const { view, sync } = await session.watchSetSync([{
+            id: "large-slot-watch",
+            kind: "graph",
+            query: { roots: [{ id, selector: { path: [], schema: false } }] },
+          }]);
+          expect(view.entities).toHaveLength(1);
+          expect(view.entities[0].id).toBe(id);
+          expectCanonicalEqual(
+            view.entities[0].document,
+            document,
+            "slot-cap watched document",
+          );
+          expect(sync.upserts).toHaveLength(1);
+          expectCanonicalEqual(
+            sync.upserts[0].doc,
+            document,
+            "slot-cap sync document",
+          );
+          const response = peer.messages.find((message) =>
+            message.type === "response" && isPlainObject(message.ok) &&
+            isPlainObject(message.ok.sync)
+          );
+          assert(response);
+          expect(countValues(response)).toBeGreaterThan(ROUTED_FRAME_SLOTS);
+          expect(peer.sockets).toHaveLength(1);
+          expect(peer.sockets[0].readyState).toBe(WebSocket.OPEN);
+          console.log(JSON.stringify({
+            routerFrameSlots: frameSlots,
+            requestSlots: countValues(request),
+            acknowledgementSlots: countValues(acknowledgement),
+            syncSlots: countValues(response),
+          }));
+          await session.close();
+          pass(
+            `the router advertises a ${frameSlots} slot cap and the SDK commits, acknowledges and syncs 160,000 values with exact content on one socket`,
+          );
+        } finally {
+          await peer.client.close();
+        }
+      }
+    } finally {
+      Deno.writeTextFileSync(activeConfigPath, priorConfigText);
+      for (const shed of toolsheds) {
+        await shed.stop();
+        await shed.start();
+      }
+      await restartRouter();
+    }
+    const defaultSlots = await new Client("127.0.0.62").start();
+    try {
+      expect(defaultSlots.hello.routerFrameSlots).toBe(ROUTED_FRAME_SLOTS);
+      expect(Deno.readTextFileSync(activeConfigPath)).toBe(priorConfigText);
+    } finally {
+      defaultSlots.close();
+      await defaultSlots.closed.promise;
+    }
+    pass(
+      "omitting the router slot cap restores its advertised 150,000 default",
+    );
+
+    await toolsheds[1].stop();
+    await toolsheds[1].start(modernCellRep, true);
+    await restartRouter();
+    await toolsheds[1].command({ linked: true });
+    const mixed = await observedPeer("127.0.0.51");
+    try {
+      expect(mixed.client.serverFlags?.syncLabelTableV1).toBe(false);
+      await readLabels(mixed, 0, false);
+      pass(
+        "a mixed-endpoint public snapshot disables label tables even on a supporting toolshed while retaining the client's original offer",
+      );
+
+      // The public connection never binds the omitted-capability endpoint
+      // before its upgrade, so that endpoint's restart cannot close it.
+      const socket = mixed.sockets[0];
+      await toolsheds[1].stop();
+      await toolsheds[1].start();
+      await toolsheds[1].command({ linked: true });
+      await readLabels(mixed, 0, false);
+      await readLabels(mixed, 1, false, true);
+      expect(mixed.client.serverFlags?.syncLabelTableV1).toBe(false);
+      expect(mixed.hellos).toHaveLength(1);
+      expect(mixed.messages.filter((message) => message.type === "hello.ok"))
+        .toHaveLength(1);
+      expect(mixed.sockets).toEqual([socket]);
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+
+      const fresh = await observedPeer("127.0.0.52");
+      try {
+        expect(fresh.client.serverFlags?.syncLabelTableV1).toBe(false);
+        await readLabels(fresh, 1, false);
+        expect(fresh.hellos).toHaveLength(1);
+        expect(fresh.sockets).toHaveLength(1);
+      } finally {
+        await fresh.client.close();
+      }
+    } finally {
+      await mixed.client.close();
+    }
+
+    // The router's startup snapshot governs new public connections too.
+    // Both readers are closed before a restart takes the upgraded snapshot.
+    await restartRouter();
+    const upgraded = await observedPeer("127.0.0.53");
+    try {
+      expect(upgraded.client.serverFlags?.syncLabelTableV1).toBe(true);
+      await readLabels(upgraded, 1, true);
+      expect(upgraded.hellos).toHaveLength(1);
+      expect(upgraded.sockets).toHaveLength(1);
+    } finally {
+      await upgraded.client.close();
+    }
+    pass(
+      "an endpoint upgrade keeps existing and new public connections inline until a router restart negotiates compact label and path tables",
+    );
+  }
+
   // Mode A runs at the deployment's cell representation. The router answers
   // every hello with the deployment's flags, which the SDK refuses
-  // permanently. A client that ignores them and opens a space anyway is
-  // refused by the toolshed's handshake, and the router closes its socket.
+  // permanently. A client that ignores them and opens a space anyway has that
+  // open answered with a final denial, before any directory or agent work,
+  // and the router then closes its socket (`incompatible-flags`).
   setModernCellRepConfig(!modernCellRep);
   try {
     const refused = await MemoryClient.connect({
@@ -2722,7 +4322,13 @@ finally:
     principal: alice.did(),
     session: {},
   }).then((reply) => JSON.stringify(reply), (error: Error) => error);
-  assert(otherOpen instanceof Error, String(otherOpen));
+  // The denial is answered when the router gets to it before the close;
+  // either way no session opens.
+  assert(
+    otherOpen instanceof Error ||
+      (JSON.parse(otherOpen) as { error?: unknown }).error !== undefined,
+    String(otherOpen),
+  );
   await Promise.race([
     otherRep.closed.promise,
     pause(6000).then(() => {
@@ -2800,13 +4406,30 @@ finally:
     modernCellRep,
   );
   await representation.authenticate(bob, 60, true);
+  await representation.authenticate(alice, 60);
+  const healthy = await representation.request({
+    type: "session.open",
+    space: spaces[0],
+    principal: alice.did(),
+    session: {},
+  });
+  expect(healthy).toHaveProperty("ok.sessionId");
   const misconfigured = await representation.request({
     type: "session.open",
     space: spaces[1],
     principal: bob.did(),
     session: {},
   });
-  assert(misconfigured.ok === undefined, JSON.stringify(misconfigured));
+  expect(misconfigured).toHaveProperty("error");
+  expect(representation.ws.readyState).toBe(WebSocket.OPEN);
+  expect(
+    await representation.request({
+      type: "session.watch.set",
+      space: spaces[0],
+      sessionId: (healthy.ok as { sessionId: string }).sessionId,
+      watches: [],
+    }),
+  ).toHaveProperty("ok");
   representation.close();
   await toolsheds[1].stop();
   await toolsheds[1].start();
