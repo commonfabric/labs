@@ -512,6 +512,17 @@ export type ServingLoopStats = {
     handlerNotRunDeferrals: number;
 
     /**
+     * Events requeued at a wave commit because a recorded read of the handler
+     * run was stale: a commit the serving replica had not taken wrote what
+     * the run read (serving-loop.md §3d). Counted per event, the later
+     * entries of the stream requeued behind one included. Each re-drains
+     * once the replica has taken the staling commit, so a count that climbs
+     * on one stream names a document written faster than the loop replays
+     * the handler reading it.
+     */
+    staleReadRequeues: number;
+
+    /**
      * Drain deferrals that spent none of the deferral budget because an entry
      * that arrived earlier in the same space was still pending (events.md
      * §5): the deferred event may address a piece that the earlier one's
@@ -743,6 +754,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     lt1LateSealsRefused: 0,
     orphanDeliveriesRefused: 0,
     handlerNotRunDeferrals: 0,
+    staleReadRequeues: 0,
     arrivalHeldDeferrals: 0,
     loadParkDeferrals: 0,
     loadParkFailures: 0,

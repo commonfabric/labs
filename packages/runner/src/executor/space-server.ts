@@ -1244,6 +1244,17 @@ export class SpaceServer implements TransactionSealDestination {
    * EVENT_PREQUEUE_STUCK_AFTER. */
   #preQueueDeferralStreaks = new Map<string, number>();
 
+  /** Per event requeued at a wave commit for a stale recorded read: the doc
+   * instances the serving replica must have taken, each at the seq of the
+   * newest commit that staled a read of it, and the identity their scopes
+   * resolve against — serving-loop.md §3d's catch-up gate, which the drain
+   * holds the event's re-drain behind. Set from the wave outcome, and
+   * cleared when the gate passes or the event's consequence commits. */
+  readonly #requeueCatchUp = new Map<string, {
+    scopeKeyIdentity?: ScopeKeyIdentity;
+    docs: Array<{ id: string; scope?: CellScope; seq: number }>;
+  }>();
+
   /**
    * Earliest entry whose unavailable replica view stopped the last event scan.
    * It limits watermark coverage until a fresh scan can dispatch that entry.
@@ -1665,6 +1676,7 @@ export class SpaceServer implements TransactionSealDestination {
     // The pre-queue streaks reset with it: a stale streak from a prior
     // tenure must not resume an obsolete count on a later re-block.
     this.#preQueueDeferralStreaks.clear();
+    this.#requeueCatchUp.clear();
     const pendingEventDocs = Engine.selectPendingStreamEventDocs(engine);
     for (const doc of pendingEventDocs) {
       for (const entry of doc.entries) {
@@ -4191,6 +4203,73 @@ export class SpaceServer implements TransactionSealDestination {
           }
           this.#preQueueDeferralStreaks.delete(entry.eventId);
         }
+        // The catch-up gate (serving-loop.md §3d): an event requeued for a
+        // stale read waits for the replica to take the commit that staled
+        // it, since a replay against the replica as it stands would read
+        // the same state and conflict the same way. The wait is a BARRIER
+        // like the view check's: everything behind this entry waits with it.
+        const catchUp = this.#requeueCatchUp.get(entry.eventId);
+        if (catchUp !== undefined) {
+          const provider = runtime.storageManager.open(space);
+          const taken = (target: { id: string; scope?: CellScope }): number =>
+            provider.replica.confirmedDocumentSeq(
+              target.id as URI,
+              target.scope,
+              catchUp.scopeKeyIdentity,
+            );
+          const lagging = (): { id: string; seq: number } | undefined =>
+            catchUp.docs.find((target) => taken(target) < target.seq);
+          if (lagging() !== undefined) {
+            // The staling commit is admitted, so its frame is published or
+            // queued: publish the space's queued frames and take them, as
+            // the view check above does. A doc the replica has taken nothing
+            // of arrives by no frame — the handler wrote it without reading
+            // it, so its read stood at seq 0 — and is loaded instead, as the
+            // replay's own read would load it.
+            try {
+              await this.#options.server.flushSessions([space]);
+              if (!this.#active || this.#runtime !== runtime) return undefined;
+              await provider.pullToServerHead?.();
+            } catch (error) {
+              if (!this.#active || this.#runtime !== runtime) return undefined;
+              logger.warn("event-catch-up-sync-failed", () => [
+                `Could not bring event ${entry.eventId}'s replica up to the ` +
+                "commit that staled its read",
+                error,
+              ]);
+            }
+            if (!this.#active || this.#runtime !== runtime) return undefined;
+            for (const target of catchUp.docs) {
+              if (taken(target) !== 0) continue;
+              await runtime.storageManager.syncCell(
+                runtime.getCellFromLink({
+                  space,
+                  id: target.id as never,
+                  scope: (target.scope ?? "space") as never,
+                  path: [],
+                }),
+                catchUp.scopeKeyIdentity === undefined
+                  ? undefined
+                  : { scopeKeyIdentity: catchUp.scopeKeyIdentity },
+              );
+              if (!this.#active || this.#runtime !== runtime) return undefined;
+            }
+          }
+          const behind = lagging();
+          if (behind !== undefined) {
+            this.#eventVisibilityFloor = entry.seq ?? 1;
+            this.#notePreQueueDeferral(
+              `catch-up\0${entry.eventId}`,
+              () =>
+                `event ${entry.eventId} (replica behind seq ${behind.seq} ` +
+                `on ${behind.id})`,
+            );
+            this.#armDeferredRescan();
+            break;
+          }
+          this.#requeueCatchUp.delete(entry.eventId);
+          this.#preQueueDeferralStreaks.delete(`catch-up\0${entry.eventId}`);
+        }
         const streamEntry = {
           sidecarId: doc.id,
           index,
@@ -6640,9 +6719,27 @@ export class SpaceServer implements TransactionSealDestination {
     // is still pending.
     for (const eventId of outcome.committedEventIds) {
       this.#drainInFlight.delete(eventId);
+      this.#requeueCatchUp.delete(eventId);
     }
     for (const eventId of outcome.requeuedEventIds) {
       this.#drainInFlight.delete(eventId);
+    }
+    // The catch-up gate (serving-loop.md §3d): an event sealing several
+    // contributions can name a doc more than once, and the newest seq is
+    // the one its re-drain waits for.
+    for (const { eventId, scopeKeyIdentity, docs } of outcome.requeueCatchUp) {
+      const gate = this.#requeueCatchUp.get(eventId) ?? {
+        ...(scopeKeyIdentity === undefined ? {} : { scopeKeyIdentity }),
+        docs: [],
+      };
+      for (const doc of docs) {
+        const held = gate.docs.find((candidate) =>
+          candidate.id === doc.id && candidate.scope === doc.scope
+        );
+        if (held === undefined) gate.docs.push({ ...doc });
+        else if (held.seq < doc.seq) held.seq = doc.seq;
+      }
+      this.#requeueCatchUp.set(eventId, gate);
     }
     // A row-label refusal is raised by the store transaction itself, after
     // the handler transaction has sealed into this wave. The accumulator
@@ -6686,6 +6783,7 @@ export class SpaceServer implements TransactionSealDestination {
     }
     stats.supersededWrites += outcome.supersededWrites;
     stats.events.orphanDeliveriesRefused += outcome.orphanDeliveriesRefused;
+    stats.events.staleReadRequeues += outcome.staleReadRequeues;
     // Phase 3: a REQUEUED event's consequence contribution was rolled
     // back whole — its entry stays unconsequenced and durable, so the
     // next wave's scan re-finds and re-runs it (serving-loop.md §3d's
@@ -6954,6 +7052,7 @@ export class SpaceServer implements TransactionSealDestination {
     }
     // The drain's in-flight copies die with the scheduler queue below.
     this.#drainInFlight.clear();
+    this.#requeueCatchUp.clear();
     this.#eventVisibilityFloor = undefined;
     this.#barrierHead = undefined;
     for (const timer of this.#deliveryFailureWakeTimers.values()) {

@@ -330,6 +330,23 @@ describe("stage D seal-into-wave", () => {
     return cycle;
   };
 
+  /**
+   * Has the serving replica take the store's state of each of `cells`'
+   * documents, commits applied straight to the engine included: the server
+   * publishes the space's queued frames, the replica takes them, and a
+   * document the replica holds nothing of, which no frame reaches, is loaded.
+   * The serving loop does the same before it replays a requeued event whose
+   * read a commit staled (§3d's catch-up gate); this fixture has no loop, so
+   * a case does it where the loop would have.
+   */
+  const takeFromStore = async (
+    ...cells: { sync(): Promise<unknown> }[]
+  ): Promise<void> => {
+    await server.flushSessions([space]);
+    await storageManager.open(space).pullToServerHead?.();
+    for (const cell of cells) await cell.sync();
+  };
+
   beforeEach(async () => {
     server = newSharedServer();
     storageManager = EmulatedStorageManager.connectTo(server, {
@@ -1618,6 +1635,10 @@ describe("stage D seal-into-wave", () => {
     expect(outcome1.seq).toBeUndefined();
 
     // The later wave retries the event against fresh state: exactly once.
+    // The serving loop re-drains a requeued event once its replica has taken
+    // the rival's commit (§3d's catch-up gate); this fixture has no loop, so
+    // it pulls the doc itself before the replay reads it.
+    await takeFromStore(y);
     const wave2 = newWave({ lease });
     runtime.installSealDestination(wave2);
     await handlerRun(wave2);
@@ -1767,7 +1788,11 @@ describe("stage D seal-into-wave", () => {
     expect(storedAfter1?.entries ?? []).toEqual([]);
 
     // The later wave retries the WHOLE event: consequence + intent land
-    // exactly once, converging against the rival's value.
+    // exactly once, converging against the rival's value. The serving loop
+    // re-drains a requeued event once its replica has taken the rival's
+    // commit (§3d's catch-up gate); this fixture has no loop, so it pulls
+    // the doc itself before the replay reads it.
+    await takeFromStore(y);
     const wave2 = newWave({ lease });
     runtime.installSealDestination(wave2);
     await runEvent();
@@ -1778,13 +1803,12 @@ describe("stage D seal-into-wave", () => {
     expect(outcome2.aborted).toBeUndefined();
     expect(outcome2.committedEventIds).toEqual(["e-nav"]);
     expect(outcome2.requeuedEventIds).toEqual([]);
-    // The re-run's consequence landed exactly once (the fixture's
-    // replica never saw the rival's engine-direct write, so the re-run
-    // read base 0 — the point is single delivery, not arithmetic).
+    // The re-run's consequence landed exactly once, over the rival's value
+    // the replay read.
     const yDoc = Engine.read(engine, { id: yLink.id })?.value as
       | { value?: number }
       | undefined;
-    expect(yDoc?.value).toBe(1);
+    expect(yDoc?.value).toBe(1001);
     const storedAfter2 = Engine.readState(engine, {
       id: SERVER_EXECUTION_EFFECTS_DOC_ID,
       scopeKey: actorKey,
@@ -1933,10 +1957,15 @@ describe("stage D seal-into-wave", () => {
   describe("an event consequence a later write overwrites", () => {
     // The session that fired an event writes over the event's speculative
     // echo — a user typing into the edit form a click just opened — and the
-    // event's authoritative consequence then lands after that write, whether
-    // the handler ran late or the write arrived mid-wave. The handler here
-    // seeds `draft`, which the user overwrites, and sets `editing`, which
-    // nobody touches.
+    // event's authoritative consequence then lands after that write. A
+    // handler whose run read `draft` before that write reached the serving
+    // replica is requeued first (§3d's stale-read check), and its replay
+    // finds the write below the wave's basis, where the supersession rule
+    // meets it. The handler here seeds `draft`, which the user overwrites,
+    // and sets `editing`, which nobody touches. The serving loop re-drains
+    // a requeued event once its replica has taken the staling commit; this
+    // fixture has no loop, so a case pulls `draft` itself where the loop
+    // would have waited.
 
     type Draft = { name: string; bio: string };
 
@@ -2014,6 +2043,7 @@ describe("stage D seal-into-wave", () => {
       const lease = liveLease();
       const docs = await seedDocs();
       overwriteDraft(docs, firing.session, "/value", typed);
+      await takeFromStore(docs.draft);
 
       const wave = newWave({ lease });
       await sealConsequence(wave, docs);
@@ -2030,7 +2060,7 @@ describe("stage D seal-into-wave", () => {
       expect(outcome.requeuedEventIds).toEqual([]);
     });
 
-    it("drops the consequence's write to a doc the firing session overwrote mid-wave, rather than requeueing the event", async () => {
+    it("requeues the consequence when the firing session overwrote a doc it read mid-wave, and drops that write when the replay lands", async () => {
       const lease = liveLease();
       const docs = await seedDocs();
 
@@ -2040,16 +2070,32 @@ describe("stage D seal-into-wave", () => {
       const outcome = await wave.commitWave(newSink());
       await wave.settled();
 
+      expect(outcome.requeuedEventIds).toEqual(["e-edit"]);
+      expect(outcome.committedEventIds).toEqual([]);
+      expect(stored(docs.draft)).toEqual({ value: typed });
+      expect(stored(docs.editing)).toEqual({ value: false });
+
+      await takeFromStore(docs.draft);
+      const replay = newWave({ lease });
+      await sealConsequence(replay, docs);
+      const replayed = await replay.commitWave(newSink());
+      await replay.settled();
+
       expect(stored(docs.draft)).toEqual({ value: typed });
       expect(stored(docs.editing)).toEqual({ value: true });
-      expect(outcome.committedEventIds).toEqual(["e-edit"]);
-      expect(outcome.requeuedEventIds).toEqual([]);
+      expect(replayed.dispositions[0]).toEqual({
+        kind: "partially-dropped",
+        droppedOps: 1,
+      });
+      expect(replayed.committedEventIds).toEqual(["e-edit"]);
+      expect(replayed.requeuedEventIds).toEqual([]);
     });
 
     it("commits the consequence over a doc another session overwrote after the event", async () => {
       const lease = liveLease();
       const docs = await seedDocs();
       overwriteDraft(docs, "sess-other", "/value", typed);
+      await takeFromStore(docs.draft);
 
       const wave = newWave({ lease });
       await sealConsequence(wave, docs);
@@ -2067,6 +2113,7 @@ describe("stage D seal-into-wave", () => {
       const lease = liveLease();
       const docs = await seedDocs();
       overwriteDraft(docs, firing.session, "/value/name", "Grace");
+      await takeFromStore(docs.draft);
 
       const wave = newWave({ lease });
       await sealConsequence(wave, docs);
@@ -2084,7 +2131,7 @@ describe("stage D seal-into-wave", () => {
       expect(outcome.committedEventIds).toEqual(["e-edit"]);
     });
 
-    it("rebases the patches the firing session did not overwrite when its write lands mid-wave, rather than requeueing the event", async () => {
+    it("requeues the consequence when the firing session overwrote one of its paths mid-wave, and drops only that patch when the replay lands", async () => {
       const lease = liveLease();
       const docs = await seedDocs();
 
@@ -2094,12 +2141,26 @@ describe("stage D seal-into-wave", () => {
       const outcome = await wave.commitWave(newSink());
       await wave.settled();
 
+      expect(outcome.requeuedEventIds).toEqual(["e-edit"]);
+      expect(stored(docs.draft)).toEqual({ value: { name: "Grace", bio: "" } });
+      expect(stored(docs.editing)).toEqual({ value: false });
+
+      await takeFromStore(docs.draft);
+      const replay = newWave({ lease });
+      await sealConsequence(replay, docs);
+      const replayed = await replay.commitWave(newSink());
+      await replay.settled();
+
       expect(stored(docs.draft)).toEqual({
         value: { name: "Grace", bio: "Countess" },
       });
       expect(stored(docs.editing)).toEqual({ value: true });
-      expect(outcome.committedEventIds).toEqual(["e-edit"]);
-      expect(outcome.requeuedEventIds).toEqual([]);
+      expect(replayed.dispositions[0]).toEqual({
+        kind: "partially-dropped",
+        droppedOps: 1,
+      });
+      expect(replayed.committedEventIds).toEqual(["e-edit"]);
+      expect(replayed.requeuedEventIds).toEqual([]);
     });
 
     it("drops the consequence's writes to both paths of a value the firing session moved", async () => {
@@ -2118,6 +2179,7 @@ describe("stage D seal-into-wave", () => {
           }],
         },
       });
+      await takeFromStore(docs.draft);
 
       const wave = newWave({ lease });
       await sealConsequence(wave, docs);

@@ -49,6 +49,7 @@ import {
   applyCommit,
   applyWaveCommit,
   DerivedAclDocumentWriteError,
+  findHandlerStaleReadSeq,
   hasIntrusionSince,
   readState,
   RowLabelCommitError,
@@ -58,6 +59,7 @@ import {
   serverSeq,
   WaveCommitConflictError,
   WavePreconditionError,
+  WaveStaleReadError,
 } from "@commonfabric/memory/v2/engine";
 import type { CellScope } from "@commonfabric/api";
 import type { Operation } from "@commonfabric/memory/v2";
@@ -69,6 +71,7 @@ import type { MemorySpace, Result } from "../storage/interface.ts";
 import type {
   WaveCommitRejection,
   WaveCommitSink,
+  WaveReadQuery,
   WaveSpaceCommit,
 } from "./wave.ts";
 
@@ -90,6 +93,15 @@ export function waveCommitFailureResult(
         name: "WaveCommitRejected",
         message: error.message,
         failedPreconditions: error.failedPreconditions,
+      },
+    };
+  }
+  if (error instanceof WaveStaleReadError) {
+    return {
+      error: {
+        name: "WaveCommitRejected",
+        message: error.message,
+        staleReads: error.staleReads,
       },
     };
   }
@@ -259,6 +271,21 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       sinceSeq,
       ...(holder === undefined ? {} : { holder }),
     }));
+  }
+
+  /** @inheritDoc */
+  staleReads(
+    space: MemorySpace,
+    reads: ReadonlyArray<WaveReadQuery>,
+    holder: string | undefined,
+  ): Promise<ReadonlyArray<{ read: WaveReadQuery; seq: number }>> {
+    const engine = this.#engineFor(space);
+    const stale: Array<{ read: WaveReadQuery; seq: number }> = [];
+    for (const read of reads) {
+      const seq = findHandlerStaleReadSeq(engine, read, holder);
+      if (seq !== null) stale.push({ read, seq });
+    }
+    return Promise.resolve(stale);
   }
 
   /** @inheritDoc */
@@ -505,6 +532,20 @@ export class EngineWaveCommitSink implements WaveCommitSink {
           waveBasis: {
             basisSeq: batch.basisSeq,
             rebasedHeads: batch.rebasedHeads,
+            ...(batch.handlerReads === undefined ? {} : {
+              handlerReads: batch.handlerReads.map((entry) => ({
+                contribution: entry.contribution,
+                reads: entry.reads.map((read) => ({
+                  id: read.id,
+                  scopeKey: read.scopeKey,
+                  path: read.path,
+                  seq: read.seq,
+                  ...(read.nonRecursive === undefined
+                    ? {}
+                    : { nonRecursive: read.nonRecursive }),
+                })),
+              })),
+            }),
           },
           basisInstances: batch.basisInstances.map((instance) => ({
             action: instance.action,
