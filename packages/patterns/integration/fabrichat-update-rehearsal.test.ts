@@ -440,7 +440,7 @@ describe("FabriChat update rehearsal", () => {
       trusted(
         {
           body: "In the thread",
-          replyTo: { message: first, shownIn: "thread" },
+          replyTo: { thread: first, shownIn: "thread" },
         },
         "ChatSendSurface",
         "ChatSend",
