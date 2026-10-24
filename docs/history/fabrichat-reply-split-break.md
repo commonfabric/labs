@@ -26,26 +26,38 @@ its own, `threadInfo`, which a send that starts a thread and a retitle write.
 
 ## What the gate reports
 
-Against twenty-seven of the room's recorded baselines, from
-`20261016T053638Z-KQKz6B5ir-i_b2SS` through
-`20261024T171044Z-nGvvC4U9_mwy0apw`, the pattern-update proof reports
-`result.$VIEWS.room.deleteMessage.message.replyTo.message: existing result
-field was removed`. Every message the room's views hand on is typed by its
-record, so a stored reply's `message` is gone from each of them; the proof
-reports one issue per role, and names `deleteMessage`'s event first. The older
-baselines report the breaks already recorded against them
-(`fabrichat-pushed-messages-break.md`), ahead of this one. The argument's
-messages narrow no stored value: a stored reply's `message` is a key the new
-schema doesn't declare, and its schemas set no `additionalProperties`.
+The pattern-update proof reports every issue it finds against a baseline,
+each blaming one path. Against all ninety-eight of the room's baselines
+recorded before this change, it reports a stored reply's `message` as removed:
+`replyTo.message: existing result field was removed` at up to thirty paths a
+baseline, thirty-one in all, one for each place the room's views and outputs
+hand on a message typed by its record: each stream's event and its `message`,
+`messages.latest.messages[]`, `messages.threads[].root` and
+`messageRights[].message`, both at the room's top level and under
+`$VIEWS.room`. That one removal also takes away the deeper paths under
+`replyTo.message` that the older baselines' entries named, such as
+`replyTo.message.reactions` and `replyTo.message.editedAt`, which no baseline
+blames now. The argument's messages narrow no stored value: a stored reply's
+`message` is a key the new schema doesn't declare, and its schemas set no
+`additionalProperties`.
 
-Twenty-five of those also report the scope the room's `participantEntries`
-declares, which `fabrichat-view-scopes-per-user-break.md` records, and so does
-the baseline recorded with this change before that scope reached it. The proof
-reports one issue per role, so the room's entries for the two breaks are one
-per group of baselines, each naming the paths its group blames: both, for the
-twenty-five that report both; the reply split alone, for the two recorded
-with the scope; and the scope alone, for the one recorded with the split.
-They take the place of that break's own entry for the room.
+Each pair of the room and a baseline is forgiven by one entry, so the paths
+this change blames are named in the entry that already names the pair. The
+four entries `fabrichat-pushed-messages-break.md` records, for the room's
+oldest seventy-one baselines, each gain the paths their baselines blame, from
+twenty-six to thirty, and lose the deeper paths none of them blames now, from
+one hundred and four to one hundred and twenty; their reasons say these paths
+are recorded here.
+
+Twenty-five of the newer baselines also report the scope the room's
+`participantEntries` and `participantPrincipals` declare, which
+`fabrichat-view-scopes-per-user-break.md` records, and so does the baseline
+recorded with this change before that scope reached it. The room's entries for
+the two breaks are one per group of baselines, each naming exactly the paths
+its group blames: both breaks', for the twenty-five that report both; the reply
+split's alone, for the two recorded with the scope; and the scope's alone, for
+the one recorded with the split. They take the place of that break's own entry
+for the room.
 
 `threadInfo` is a new argument field with a default, so it breaks nothing.
 Its records' write policy names `commitSend`, `commitThreadSend` and
@@ -82,5 +94,5 @@ counted and hidden, and that "details about old rooms don't matter. we will
 abandon them eventually." Breaking old rooms is acceptable as long as it is
 neither silent nor a spiral of work, so no compatibility reading of `message`
 is kept. The entry in `tasks/pattern-compat-accepted-breaks.ts` forgives the
-removed field against those baselines, and the contract recorded
+removed field against the room's baselines, and the contract recorded
 with this change is gated as usual from then on.

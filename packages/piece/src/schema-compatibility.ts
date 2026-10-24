@@ -86,12 +86,46 @@ interface CompatibilityContext {
    * must not read as a contract break.
    */
   verbEvent?: boolean;
+
+  /**
+   * Whether the proof goes on past the first issue it finds, to report every
+   * one, as {@link schemaSubsetIssues} describes. Unset, it stops at the first.
+   */
+  everyIssue?: boolean;
 }
 
 export interface SchemaSubsetOptions {
   sourceRoot?: JSONSchema;
   targetRoot?: JSONSchema;
 }
+
+/** One issue that stops a schema compatibility proof. */
+export interface SchemaIncompatibility {
+  /**
+   * The schema path the issue is at: the role or label the proof started
+   * from, then `.<property>`, `[]`, and `.*` as it descends. `undefined` for
+   * an issue that is not at a path, such as a schema invalid on its own terms.
+   */
+  readonly path: string | undefined;
+
+  /** What is wrong there. */
+  readonly reason: string;
+}
+
+/** Returns `issue` as one line, `<path>: <reason>`. */
+export function formatSchemaIncompatibility(
+  issue: SchemaIncompatibility,
+): string {
+  return issue.path === undefined
+    ? issue.reason
+    : `${issue.path}: ${issue.reason}`;
+}
+
+/** Helper for the subset proof, which states an issue found at `path`. */
+const issueAt = (path: string, reason: string): SchemaIncompatibility => ({
+  path,
+  reason,
+});
 
 type ActivePairsByRoot = WeakMap<
   object,
@@ -577,6 +611,11 @@ const comparableIfc = (ifc: unknown): unknown => {
  * Reject a piece update unless its argument and result schemas preserve the
  * contracts of the currently running pattern.
  *
+ * The refusal lists every issue the comparison finds, one `- <path>: <reason>`
+ * line each, in both roles: each field of an object is judged on its own, and
+ * a node failing at its own level is reported once and not descended
+ * ({@link schemaSubsetIssues}).
+ *
  * Arguments are contravariant and results are covariant. An object is open
  * when its `additionalProperties` admits any value: absent, `true`, `{}`, or
  * `{ type: "unknown" }`, the last being what an index signature over `unknown`
@@ -667,6 +706,30 @@ export function assertPatternSchemasBackwardCompatible(
   previous: Pattern,
   candidate: Pattern,
 ): void {
+  const issues = patternSchemaIncompatibilities(previous, candidate);
+  if (issues.length > 0) {
+    throw new Error(
+      `${PATTERN_SCHEMAS_INCOMPATIBLE}:\n${
+        issues.map((issue) => `- ${formatSchemaIncompatibility(issue)}`)
+          .join("\n")
+      }`,
+    );
+  }
+}
+
+/**
+ * The issues {@link assertPatternSchemasBackwardCompatible} refuses an update
+ * for, as data rather than as the lines of its message, so that a caller
+ * matching an issue to a schema path need not parse one back out of text a
+ * property name can hold anything in. Empty when the update is compatible.
+ *
+ * A schema that is invalid on its own terms is the whole answer when there is
+ * one: such an issue names no path, and the subset proof is not attempted.
+ */
+export function patternSchemaIncompatibilities(
+  previous: Pattern,
+  candidate: Pattern,
+): SchemaIncompatibility[] {
   // Both sides are validated as stored. A previous schema that fails here —
   // one whose `#/$defs/<name>` refs only a `$defs` below the root could
   // satisfy, for instance — refuses every replacement, and the override is
@@ -674,7 +737,7 @@ export function assertPatternSchemasBackwardCompatible(
   // knowing that.
   const previousArgumentSchema = previous.argumentSchema;
   const previousResultSchema = previous.resultSchema;
-  const issues: string[] = [];
+  const issues: SchemaIncompatibility[] = [];
   for (
     const [label, schema] of [
       ["previous argument", previousArgumentSchema],
@@ -685,18 +748,15 @@ export function assertPatternSchemasBackwardCompatible(
   ) {
     const issue = validateSchemaDefinition(schema);
     if (issue !== undefined) {
-      issues.push(`${label} has an invalid schema: ${issue}`);
+      issues.push({
+        path: undefined,
+        reason: `${label} has an invalid schema: ${issue}`,
+      });
     }
   }
-  if (issues.length > 0) {
-    throw new Error(
-      `${PATTERN_SCHEMAS_INCOMPATIBLE}:\n${
-        issues.map((issue) => `- ${issue}`).join("\n")
-      }`,
-    );
-  }
+  if (issues.length > 0) return issues;
 
-  const argumentIssue = schemaSubsetIssue(
+  const argumentIssues = schemaSubsetIssues(
     previousArgumentSchema,
     candidate.argumentSchema,
     "argument",
@@ -710,11 +770,12 @@ export function assertPatternSchemasBackwardCompatible(
       allowEvolutionDefaults: true,
       allowTargetDefaults: false,
       defaultComparison: "evolution",
+      everyIssue: true,
     },
   );
-  if (argumentIssue) issues.push(argumentIssue);
+  for (const issue of argumentIssues) issues.push(issue);
 
-  const resultIssue = schemaSubsetIssue(
+  const resultIssues = schemaSubsetIssues(
     candidate.resultSchema,
     previousResultSchema,
     "result",
@@ -728,17 +789,12 @@ export function assertPatternSchemasBackwardCompatible(
       allowEvolutionDefaults: true,
       allowTargetDefaults: false,
       defaultComparison: "evolution",
+      everyIssue: true,
     },
   );
-  if (resultIssue) issues.push(resultIssue);
+  for (const issue of resultIssues) issues.push(issue);
 
-  if (issues.length > 0) {
-    throw new Error(
-      `${PATTERN_SCHEMAS_INCOMPATIBLE}:\n${
-        issues.map((issue) => `- ${issue}`).join("\n")
-      }`,
-    );
-  }
+  return issues;
 }
 
 /**
@@ -797,7 +853,11 @@ export function assertSchemaSubset(
     defaultComparison: "target",
   });
   if (issue !== undefined) {
-    throw new Error(`${label} schema is not compatible: ${issue}`);
+    throw new Error(
+      `${label} schema is not compatible: ${
+        formatSchemaIncompatibility(issue)
+      }`,
+    );
   }
 }
 
@@ -830,19 +890,51 @@ export function schemasHaveSameContract(
     });
 }
 
+/**
+ * The first issue {@link schemaSubsetIssues} finds, or `undefined` when the
+ * proof succeeds. For a caller that needs only whether the proof holds.
+ */
 function schemaSubsetIssue(
+  source: JSONSchema,
+  target: JSONSchema,
+  path: string,
+  context: CompatibilityContext,
+): SchemaIncompatibility | undefined {
+  return schemaSubsetIssues(
+    source,
+    target,
+    path,
+    context.everyIssue ? { ...context, everyIssue: false } : context,
+  )[0];
+}
+
+/**
+ * Helper for {@link assertPatternSchemasBackwardCompatible} and
+ * {@link schemaSubsetIssue}, which proves that every value `sourceInput`
+ * describes is accepted by `targetInput`, and returns the issues that stop the
+ * proof, each as `<path>: <reason>`. Empty means the proof holds.
+ *
+ * Under `context.everyIssue` the issues are every one found, in the order the
+ * proof finds them: each field of an object is proved on its own, and each that
+ * fails contributes what its own proof found. A node that fails at its own
+ * level — a changed type, extension, or constraint, or a union alternative the
+ * candidate no longer accepts — contributes one issue and is not descended.
+ * Otherwise the proof stops at the first issue, which is the first of the ones
+ * `everyIssue` would return.
+ */
+function schemaSubsetIssues(
   sourceInput: JSONSchema,
   targetInput: JSONSchema,
   path: string,
   context: CompatibilityContext,
-): string | undefined {
+): SchemaIncompatibility[] {
   const sourceResolution = resolveSchema(sourceInput, context.sourceRoot);
   const targetResolution = resolveSchema(targetInput, context.targetRoot);
   if (
     sourceResolution.schema === undefined ||
     targetResolution.schema === undefined
   ) {
-    return `${path}: cannot resolve a local schema reference`;
+    return [issueAt(path, `cannot resolve a local schema reference`)];
   }
   const source = sourceResolution.schema;
   const target = targetResolution.schema;
@@ -863,7 +955,12 @@ function schemaSubsetIssue(
     context.defaultComparison === "target" &&
     schemaHasUnsafeMaterializedDefault(target, context.targetRoot)
   ) {
-    return `${path}: defaults changed below a constraint that is not stable under default insertion`;
+    return [
+      issueAt(
+        path,
+        `defaults changed below a constraint that is not stable under default insertion`,
+      ),
+    ];
   }
   // A target default changes the materialized value before validation. That is
   // a sound link proof only while every ancestor is stable under recursive
@@ -885,24 +982,31 @@ function schemaSubsetIssue(
     context.defaultComparison === "evolution" &&
     !schemaDefaultsResolveEqually(source, target, context)
   ) {
-    return `${path}: defaults changed below a constraint that is not stable under default insertion`;
+    return [
+      issueAt(
+        path,
+        `defaults changed below a constraint that is not stable under default insertion`,
+      ),
+    ];
   }
-  if (schemasResolveEqually(source, target, context)) return undefined;
+  if (schemasResolveEqually(source, target, context)) return [];
 
-  if (source === false || target === true) return undefined;
+  if (source === false || target === true) return [];
   if (target === false) {
-    return `${path}: the candidate schema rejects values accepted previously`;
+    return [
+      issueAt(path, `the candidate schema rejects values accepted previously`),
+    ];
   }
   if (source === true) {
     // The object proof recognizes unconstrained targets such as `{}` and
     // `type: "unknown"` while checking any constraints beside them.
-    return schemaSubsetIssue(UNCONSTRAINED_SCHEMA, target, path, {
+    return schemaSubsetIssues(UNCONSTRAINED_SCHEMA, target, path, {
       ...context,
       allowEvolutionPolicy: false,
     });
   }
 
-  if (pairIsActive(source, target, context)) return undefined;
+  if (pairIsActive(source, target, context)) return [];
   markPairActive(source, target, context);
   try {
     // Semantic extensions describe the whole node and are compared here
@@ -920,7 +1024,7 @@ function schemaSubsetIssue(
     // applies to an `ifc` nested below a composite keyword.
     for (const key of SEMANTIC_EXTENSION_KEYS) {
       if (!keywordValuesEqual(key, source[key], target[key])) {
-        return `${path}: ${key} changed`;
+        return [issueAt(path, `${key} changed`)];
       }
     }
 
@@ -939,10 +1043,15 @@ function schemaSubsetIssue(
             context,
           )
         ) {
-          return `${path}: a schema alternative accepted previously is not accepted by the candidate`;
+          return [
+            issueAt(
+              path,
+              `a schema alternative accepted previously is not accepted by the candidate`,
+            ),
+          ];
         }
       }
-      return undefined;
+      return [];
     }
 
     // A brand-marked structural emission (the pre-vocabulary generator's
@@ -962,13 +1071,13 @@ function schemaSubsetIssue(
     // `dangerouslyAllowIncompatibleSchema`.
 
     const literalIssue = literalSubsetIssue(source, target, path);
-    if (literalIssue) return literalIssue;
+    if (literalIssue) return [literalIssue];
 
     const typeIssue = typeSubsetIssue(source, target, path);
-    if (typeIssue) return typeIssue;
+    if (typeIssue) return [typeIssue];
 
     const constraintIssue = scalarConstraintSubsetIssue(source, target, path);
-    if (constraintIssue) return constraintIssue;
+    if (constraintIssue) return [constraintIssue];
 
     for (const key of COMPLEX_CONSTRAINT_KEYS) {
       const applicableTypes = COMPLEX_CONSTRAINT_TYPES[key];
@@ -995,30 +1104,36 @@ function schemaSubsetIssue(
           context,
         )
       ) {
-        return `${path}: ${key} changed in a way compatibility checking cannot prove safe`;
+        return [
+          issueAt(
+            path,
+            `${key} changed in a way compatibility checking cannot prove safe`,
+          ),
+        ];
       }
     }
 
     const primitiveIssue = fabricPrimitiveRequiredIssue(source, target, path);
-    if (primitiveIssue) return primitiveIssue;
+    if (primitiveIssue) return [primitiveIssue];
 
     if (
       schemaMayProduceType(source, ["object"]) &&
       (declaresObjectShape(source) || declaresObjectShape(target))
     ) {
-      const objectIssue = objectSubsetIssue(source, target, path, context);
-      if (objectIssue) return objectIssue;
+      const objectIssues = objectSubsetIssues(source, target, path, context);
+      if (objectIssues.length > 0) return objectIssues;
     }
 
     if (
       schemaMayProduceType(source, ["array"]) &&
       (declaresArrayShape(source) || declaresArrayShape(target))
     ) {
-      const arrayIssue = arraySubsetIssue(source, target, path, context);
-      if (arrayIssue) return arrayIssue;
+      const arrayIssues = arraySubsetIssues(source, target, path, context);
+      if (arrayIssues.length > 0) return arrayIssues;
     }
 
-    return unknownKeywordIssue(source, target, path, context);
+    const keywordIssue = unknownKeywordIssue(source, target, path, context);
+    return keywordIssue === undefined ? [] : [keywordIssue];
   } finally {
     unmarkPairActive(source, target, context);
   }
@@ -1147,12 +1262,31 @@ function additionalPropertiesOf(schema: SchemaObject): JSONSchema {
   return unconstrained ? true : additional;
 }
 
-function objectSubsetIssue(
+/**
+ * Helper for {@link schemaSubsetIssues}, which proves an object's named fields,
+ * its pattern properties, and its additional properties.
+ */
+function objectSubsetIssues(
   source: SchemaObject,
   target: SchemaObject,
   path: string,
   context: CompatibilityContext,
-): string | undefined {
+): SchemaIncompatibility[] {
+  const issues: SchemaIncompatibility[] = [];
+  // A field whose proof fails here is judged no further, so a field that is
+  // gone is not also reported for what it no longer holds.
+  const failed = new Set<string>();
+  // Records what the proof found at `property`, and returns whether the proof
+  // stops here.
+  const report = (
+    property: string,
+    found: readonly SchemaIncompatibility[],
+  ): boolean => {
+    if (found.length === 0) return false;
+    failed.add(property);
+    for (const issue of found) issues.push(issue);
+    return !context.everyIssue;
+  };
   const sourceProperties = source.properties ?? {};
   const targetProperties = target.properties ?? {};
   const previousProperties = context.role === "argument"
@@ -1179,7 +1313,11 @@ function objectSubsetIssue(
   if (context.defaultComparison === "evolution" && context.role === "result") {
     for (const property of Object.keys(previousProperties)) {
       if (Object.hasOwn(candidateProperties, property)) continue;
-      return `${path}.${property}: existing result field was removed`;
+      if (
+        report(property, [
+          issueAt(`${path}.${property}`, `existing result field was removed`),
+        ])
+      ) return issues;
     }
   }
 
@@ -1193,7 +1331,7 @@ function objectSubsetIssue(
   if (context.role === "argument") {
     let admittedPrimitiveTypes: FabricPrimitiveSchemaType[] | undefined;
     for (const property of targetRequired) {
-      if (sourceRequired.has(property)) continue;
+      if (sourceRequired.has(property) || failed.has(property)) continue;
       if (
         !(context.allowTargetDefaults || allowEvolutionDefaults) ||
         !schemaProvidesValidDefault(
@@ -1201,7 +1339,15 @@ function objectSubsetIssue(
           context.targetRoot,
         )
       ) {
-        return `${path}.${property}: newly required argument field has no default`;
+        if (
+          report(property, [
+            issueAt(
+              `${path}.${property}`,
+              `newly required argument field has no default`,
+            ),
+          ])
+        ) return issues;
+        continue;
       }
       // Link materialization inserts the default into a record, but a
       // `FabricPrimitive` is frozen, so one the source admits without the
@@ -1214,25 +1360,35 @@ function objectSubsetIssue(
         !fabricPrimitiveHasRequiredKey(type, property)
       );
       if (unfilled !== undefined) {
-        return `${path}.${property}: newly required field is not a member of \`${unfilled}\`, which takes no default`;
+        if (
+          report(property, [
+            issueAt(
+              `${path}.${property}`,
+              `newly required field is not a member of \`${unfilled}\`, which takes no default`,
+            ),
+          ])
+        ) return issues;
       }
     }
 
     const previousAdditional = additionalPropertiesOf(source);
     for (const property of Object.keys(candidateProperties)) {
+      if (failed.has(property)) continue;
       const matchedPatterns = matchingPatternPropertySchemas(
         previousPatternProperties,
         property,
       );
       for (const patternSchema of matchedPatterns) {
-        const issue = schemaSubsetIssue(
+        const patternIssues = schemaSubsetIssues(
           patternSchema,
           targetProperties[property],
           `${path}.${property}`,
           context,
         );
-        if (issue) return issue;
+        if (report(property, patternIssues)) return issues;
+        if (failed.has(property)) break;
       }
+      if (failed.has(property)) continue;
       // Open objects remain evolvable by adding optional/defaulted fields, and
       // an index signature over `unknown` leaves an object open. An index
       // signature over any narrower type is different: it promised that every
@@ -1246,13 +1402,17 @@ function objectSubsetIssue(
       ) {
         continue;
       }
-      const issue = schemaSubsetIssue(
-        previousAdditional,
-        targetProperties[property],
-        `${path}.${property}`,
-        context,
-      );
-      if (issue) return issue;
+      if (
+        report(
+          property,
+          schemaSubsetIssues(
+            previousAdditional,
+            targetProperties[property],
+            `${path}.${property}`,
+            context,
+          ),
+        )
+      ) return issues;
     }
   } else {
     // Not below a verb node, where the same reasoning runs the other way. A
@@ -1264,9 +1424,15 @@ function objectSubsetIssue(
     // where it is declared.
     if (!context.verbEvent) {
       for (const property of targetRequired) {
-        if (!sourceRequired.has(property)) {
-          return `${path}.${property}: result field is no longer required`;
-        }
+        if (sourceRequired.has(property) || failed.has(property)) continue;
+        if (
+          report(property, [
+            issueAt(
+              `${path}.${property}`,
+              `result field is no longer required`,
+            ),
+          ])
+        ) return issues;
       }
     }
     // The candidate pattern produces its result. A newly required field does
@@ -1288,6 +1454,7 @@ function objectSubsetIssue(
     // apply their own default-stability checks.
     if (context.verbEvent) {
       for (const property of sourceRequired) {
+        if (failed.has(property)) continue;
         if (
           !targetRequired.has(property) &&
           !schemaProvidesValidDefault(
@@ -1295,26 +1462,36 @@ function objectSubsetIssue(
             context.sourceRoot,
           )
         ) {
-          return `${path}.${property}: newly required verb event field has no default`;
+          if (
+            report(property, [
+              issueAt(
+                `${path}.${property}`,
+                `newly required verb event field has no default`,
+              ),
+            ])
+          ) return issues;
         }
       }
     }
 
     const previousAdditional = additionalPropertiesOf(target);
     for (const property of Object.keys(candidateProperties)) {
+      if (failed.has(property)) continue;
       const matchedPatterns = matchingPatternPropertySchemas(
         previousPatternProperties,
         property,
       );
       for (const patternSchema of matchedPatterns) {
-        const issue = schemaSubsetIssue(
+        const patternIssues = schemaSubsetIssues(
           sourceProperties[property],
           patternSchema,
           `${path}.${property}`,
           context,
         );
-        if (issue) return issue;
+        if (report(property, patternIssues)) return issues;
+        if (failed.has(property)) break;
       }
+      if (failed.has(property)) continue;
       if (
         Object.hasOwn(previousProperties, property) ||
         matchedPatterns.length > 0 ||
@@ -1322,20 +1499,25 @@ function objectSubsetIssue(
       ) {
         continue;
       }
-      if (previousAdditional === false) {
-        return `${path}.${property}: new result field is rejected by the previous additionalProperties contract`;
-      }
-      const issue = schemaSubsetIssue(
-        sourceProperties[property],
-        previousAdditional,
-        `${path}.${property}`,
-        context,
-      );
-      if (issue) return issue;
+      const additionalIssues = previousAdditional === false
+        ? [
+          issueAt(
+            `${path}.${property}`,
+            `new result field is rejected by the previous additionalProperties contract`,
+          ),
+        ]
+        : schemaSubsetIssues(
+          sourceProperties[property],
+          previousAdditional,
+          `${path}.${property}`,
+          context,
+        );
+      if (report(property, additionalIssues)) return issues;
     }
   }
 
   for (const property of Object.keys(previousProperties)) {
+    if (failed.has(property)) continue;
     const propertyPath = `${path}.${property}`;
     const sourceDirect = sourceProperties[property];
     const sourceContracts = [
@@ -1348,14 +1530,14 @@ function objectSubsetIssue(
     // proves the target constraint, but a failed proof should still report the
     // useful leaf-level reason from the named property.
     if (Object.hasOwn(targetProperties, property)) {
-      const directIssue = schemaSubsetIssue(
+      const directIssues = schemaSubsetIssues(
         sourceDirect,
         targetProperties[property],
         propertyPath,
         context,
       );
       if (
-        directIssue !== undefined &&
+        directIssues.length > 0 &&
         !sourceContracts.slice(1).some((sourceContract) =>
           schemaSubsetIssue(
             sourceContract,
@@ -1363,10 +1545,10 @@ function objectSubsetIssue(
             propertyPath,
             { ...context, allowEvolutionPolicy: false },
           ) === undefined
-        )
-      ) {
-        return directIssue;
-      }
+        ) &&
+        report(property, directIssues)
+      ) return issues;
+      if (failed.has(property)) continue;
     }
 
     const targetPatternContracts = matchingPatternPropertySchemas(
@@ -1374,14 +1556,14 @@ function objectSubsetIssue(
       property,
     );
     for (const targetContract of targetPatternContracts) {
-      const directIssue = schemaSubsetIssue(
+      const directIssues = schemaSubsetIssues(
         sourceDirect,
         targetContract,
         propertyPath,
         { ...context, allowEvolutionPolicy: false },
       );
       if (
-        directIssue !== undefined &&
+        directIssues.length > 0 &&
         !sourceContracts.slice(1).some((sourceContract) =>
           schemaSubsetIssue(
             sourceContract,
@@ -1389,11 +1571,12 @@ function objectSubsetIssue(
             propertyPath,
             { ...context, allowEvolutionPolicy: false },
           ) === undefined
-        )
-      ) {
-        return directIssue;
-      }
+        ) &&
+        report(property, directIssues)
+      ) return issues;
+      if (failed.has(property)) break;
     }
+    if (failed.has(property)) continue;
 
     if (
       !Object.hasOwn(targetProperties, property) &&
@@ -1401,23 +1584,34 @@ function objectSubsetIssue(
     ) {
       const targetAdditional = additionalPropertiesOf(target);
       if (targetAdditional === true) continue;
-      if (targetAdditional === false) {
-        return `${path}.${property}: source field is rejected by the target object`;
-      }
-      const directIssue = schemaSubsetIssue(
-        sourceDirect,
-        targetAdditional,
-        propertyPath,
-        { ...context, allowEvolutionPolicy: false },
-      );
       // A matching source pattern would have an exact-equal matching target
       // pattern (proved above), so this no-target-pattern branch cannot borrow
       // a source-pattern conjunct as an additionalProperties proof.
-      if (directIssue !== undefined) return directIssue;
+      const directIssues = targetAdditional === false
+        ? [
+          issueAt(
+            `${path}.${property}`,
+            `source field is rejected by the target object`,
+          ),
+        ]
+        : schemaSubsetIssues(
+          sourceDirect,
+          targetAdditional,
+          propertyPath,
+          { ...context, allowEvolutionPolicy: false },
+        );
+      if (report(property, directIssues)) return issues;
     }
   }
 
-  return additionalPropertiesSubsetIssue(source, target, path, context);
+  const additionalIssues = additionalPropertiesSubsetIssues(
+    source,
+    target,
+    path,
+    context,
+  );
+  for (const issue of additionalIssues) issues.push(issue);
+  return issues;
 }
 
 /**
@@ -1439,7 +1633,7 @@ function fabricPrimitiveRequiredIssue(
   source: SchemaObject,
   target: SchemaObject,
   path: string,
-): string | undefined {
+): SchemaIncompatibility | undefined {
   const targetTypes = typeof target.type === "string"
     ? [target.type]
     : target.type;
@@ -1452,7 +1646,10 @@ function fabricPrimitiveRequiredIssue(
     if (!isFabricPrimitiveSchemaType(type)) continue;
     for (const key of target.required) {
       if (fabricPrimitiveHasRequiredKey(type, key)) continue;
-      return `${path}.${key}: required field is not a member of \`${type}\``;
+      return issueAt(
+        `${path}.${key}`,
+        `required field is not a member of \`${type}\``,
+      );
     }
   }
   return undefined;
@@ -1525,12 +1722,12 @@ function declaresVerbStream(schema: JSONSchema): boolean {
   return Array.isArray(asCell) && asCell.includes("stream");
 }
 
-function additionalPropertiesSubsetIssue(
+function additionalPropertiesSubsetIssues(
   source: SchemaObject,
   target: SchemaObject,
   path: string,
   context: CompatibilityContext,
-): string | undefined {
+): SchemaIncompatibility[] {
   const sourceAdditional = additionalPropertiesOf(source);
   const targetAdditional = additionalPropertiesOf(target);
   // Verb events: a boolean↔boolean additionalProperties transition is free
@@ -1542,16 +1739,26 @@ function additionalPropertiesSubsetIssue(
     typeof sourceAdditional === "boolean" &&
     typeof targetAdditional === "boolean"
   ) {
-    return undefined;
+    return [];
   }
-  if (sourceAdditional === false || targetAdditional === true) return undefined;
+  if (sourceAdditional === false || targetAdditional === true) return [];
   if (sourceAdditional === true && targetAdditional === false) {
-    return `${path}: additional properties accepted previously would now be rejected`;
+    return [
+      issueAt(
+        path,
+        `additional properties accepted previously would now be rejected`,
+      ),
+    ];
   }
   if (targetAdditional === false) {
-    return `${path}: additional properties accepted previously would now be rejected`;
+    return [
+      issueAt(
+        path,
+        `additional properties accepted previously would now be rejected`,
+      ),
+    ];
   }
-  return schemaSubsetIssue(
+  return schemaSubsetIssues(
     sourceAdditional,
     targetAdditional,
     `${path}.*`,
@@ -1559,15 +1766,15 @@ function additionalPropertiesSubsetIssue(
   );
 }
 
-function arraySubsetIssue(
+function arraySubsetIssues(
   source: SchemaObject,
   target: SchemaObject,
   path: string,
   context: CompatibilityContext,
-): string | undefined {
+): SchemaIncompatibility[] {
   const sourceItems = source.items ?? true;
   const targetItems = target.items ?? true;
-  return schemaSubsetIssue(sourceItems, targetItems, `${path}[]`, context);
+  return schemaSubsetIssues(sourceItems, targetItems, `${path}[]`, context);
 }
 
 /**
@@ -1578,7 +1785,7 @@ function literalSubsetIssue(
   source: SchemaObject,
   target: SchemaObject,
   path: string,
-): string | undefined {
+): SchemaIncompatibility | undefined {
   let sourceValues = allowedLiteralValues(source);
   if (sourceValues === undefined) {
     if (source.type === "boolean") sourceValues = [false, true];
@@ -1587,7 +1794,7 @@ function literalSubsetIssue(
   const targetValues = allowedLiteralValues(target);
   if (!targetValues) return undefined;
   if (!sourceValues) {
-    return `${path}: enum/const became more restrictive`;
+    return issueAt(path, `enum/const became more restrictive`);
   }
   if (
     sourceValues.some((sourceValue) =>
@@ -1596,7 +1803,7 @@ function literalSubsetIssue(
       )
     )
   ) {
-    return `${path}: enum/const no longer accepts every previous value`;
+    return issueAt(path, `enum/const no longer accepts every previous value`);
   }
   return undefined;
 }
@@ -1631,14 +1838,14 @@ function typeSubsetIssue(
   source: SchemaObject,
   target: SchemaObject,
   path: string,
-): string | undefined {
+): SchemaIncompatibility | undefined {
   const sourceTypes = schemaTypes(source);
   const targetTypes = schemaTypes(target);
   if (targetTypes === undefined || targetTypes.includes("unknown")) {
     return undefined;
   }
   if (sourceTypes === undefined || sourceTypes.includes("unknown")) {
-    return `${path}: the candidate no longer accepts every previous type`;
+    return issueAt(path, `the candidate no longer accepts every previous type`);
   }
   const rejected = sourceTypes.find((sourceType) =>
     !targetTypes.some((targetType) =>
@@ -1651,14 +1858,14 @@ function typeSubsetIssue(
   );
   return rejected === undefined
     ? undefined
-    : `${path}: type ${rejected} is not accepted by the candidate schema`;
+    : issueAt(path, `type ${rejected} is not accepted by the candidate schema`);
 }
 
 function scalarConstraintSubsetIssue(
   source: SchemaObject,
   target: SchemaObject,
   path: string,
-): string | undefined {
+): SchemaIncompatibility | undefined {
   if (schemaMayProduceType(source, ["number", "integer"])) {
     const sourceLower = effectiveNumericBound(source, "lower");
     const targetLower = effectiveNumericBound(target, "lower");
@@ -1668,7 +1875,7 @@ function scalarConstraintSubsetIssue(
         targetLower.value === sourceLower.value && targetLower.exclusive &&
           !sourceLower.exclusive)
     ) {
-      return `${path}: numeric lower bound became more restrictive`;
+      return issueAt(path, `numeric lower bound became more restrictive`);
     }
 
     const sourceUpper = effectiveNumericBound(source, "upper");
@@ -1679,7 +1886,7 @@ function scalarConstraintSubsetIssue(
         targetUpper.value === sourceUpper.value && targetUpper.exclusive &&
           !sourceUpper.exclusive)
     ) {
-      return `${path}: numeric upper bound became more restrictive`;
+      return issueAt(path, `numeric upper bound became more restrictive`);
     }
   }
 
@@ -1696,7 +1903,7 @@ function scalarConstraintSubsetIssue(
       targetValue !== undefined &&
       (sourceValue === undefined || sourceValue < targetValue)
     ) {
-      return `${path}: ${key} became more restrictive`;
+      return issueAt(path, `${key} became more restrictive`);
     }
   }
 
@@ -1713,7 +1920,7 @@ function scalarConstraintSubsetIssue(
       targetValue !== undefined &&
       (sourceValue === undefined || sourceValue > targetValue)
     ) {
-      return `${path}: ${key} became more restrictive`;
+      return issueAt(path, `${key} became more restrictive`);
     }
   }
 
@@ -1721,19 +1928,25 @@ function scalarConstraintSubsetIssue(
     schemaMayProduceType(source, ["array"]) && target.uniqueItems === true &&
     source.uniqueItems !== true
   ) {
-    return `${path}: uniqueItems became more restrictive`;
+    return issueAt(path, `uniqueItems became more restrictive`);
   }
   if (
     schemaMayProduceType(source, ["string"]) &&
     target.pattern !== undefined && source.pattern !== target.pattern
   ) {
-    return `${path}: pattern changed in a way compatibility checking cannot prove safe`;
+    return issueAt(
+      path,
+      `pattern changed in a way compatibility checking cannot prove safe`,
+    );
   }
   if (
     schemaMayProduceType(source, ["string"]) && target.format !== undefined &&
     source.format !== target.format
   ) {
-    return `${path}: format changed in a way compatibility checking cannot prove safe`;
+    return issueAt(
+      path,
+      `format changed in a way compatibility checking cannot prove safe`,
+    );
   }
   if (
     schemaMayProduceType(source, ["number", "integer"]) &&
@@ -1743,7 +1956,7 @@ function scalarConstraintSubsetIssue(
       source.multipleOf === undefined ||
       source.multipleOf % target.multipleOf !== 0
     ) {
-      return `${path}: multipleOf became more restrictive`;
+      return issueAt(path, `multipleOf became more restrictive`);
     }
   }
   return undefined;
@@ -2064,7 +2277,7 @@ function schemaConjunctionSubsetIssue(
   target: readonly JSONSchema[],
   path: string,
   context: CompatibilityContext,
-): string | undefined {
+): SchemaIncompatibility | undefined {
   const sourceContract = soleConstrainingConjunct(source);
   const targetContract = soleConstrainingConjunct(target);
   if (sourceContract !== undefined && targetContract !== undefined) {
@@ -2081,7 +2294,10 @@ function schemaConjunctionSubsetIssue(
       ) === undefined
     );
     if (!implied) {
-      return `${path}: a schema alternative accepted previously is not accepted by the candidate`;
+      return issueAt(
+        path,
+        `a schema alternative accepted previously is not accepted by the candidate`,
+      );
     }
   }
   return undefined;
@@ -2504,7 +2720,7 @@ function unknownKeywordIssue(
   target: SchemaObject,
   path: string,
   context: CompatibilityContext,
-): string | undefined {
+): SchemaIncompatibility | undefined {
   const handled = new Set([
     ...ANNOTATION_KEYS,
     ...COMPLEX_CONSTRAINT_KEYS,
@@ -2558,7 +2774,10 @@ function unknownKeywordIssue(
       )
       : keywordValuesEqual(key, sourceRecord[key], targetRecord[key]);
     if (!equal) {
-      return `${path}: ${key} changed in a way compatibility checking cannot prove safe`;
+      return issueAt(
+        path,
+        `${key} changed in a way compatibility checking cannot prove safe`,
+      );
     }
   }
   return undefined;
