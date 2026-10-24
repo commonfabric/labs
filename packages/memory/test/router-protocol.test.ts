@@ -541,6 +541,34 @@ describe("router-protocol", () => {
     expect(() => sender.send(route, "x")).toThrow();
   });
 
+  it("neither refuses nor counts a split sync's exempt parts, and releases them as they complete", () => {
+    const { sender, callbacks, errors } = heldSender(100);
+    // Three exempt parts of session "a" pass a bound smaller than they are
+    // together, and are not counted against it.
+    for (let i = 0; i < 3; i++) sender.send(route, "x".repeat(80), "a");
+    expect(sender.bufferedBytes).toBe(240);
+    expect(sender.boundedBytes).toBe(0);
+    expect(sender.exemptRetained("a")).toBe(true);
+    expect(sender.exemptRetained("b")).toBe(false);
+    // Other output is bounded on its own: alone it may take the bound, and
+    // behind itself it may not pass it.
+    sender.send(route, "y".repeat(80));
+    expect(sender.boundedBytes).toBe(80);
+    expect(() => sender.send(route, "y".repeat(30))).toThrow();
+    expect(errors).toHaveLength(1);
+    expect(callbacks.length).toBeGreaterThan(0);
+    expect(sender.exemptRetained("a")).toBe(false);
+  });
+
+  it("forgets a session's exempt parts once their bodies complete", () => {
+    const { sender, ack, callbacks } = heldSender(100);
+    sender.send(route, "x".repeat(80), "a");
+    sender.send(route, "x".repeat(80), "a");
+    while (callbacks.length > 0) ack();
+    expect(sender.bufferedBytes).toBe(0);
+    expect(sender.exemptRetained("a")).toBe(false);
+  });
+
   it("distinguishes retained bodies from successful record writes and measures their ages", () => {
     let now = 10;
     const { sender, writes, callbacks, inFlight } = heldSender(
