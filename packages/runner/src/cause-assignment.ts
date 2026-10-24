@@ -263,14 +263,13 @@ export function renumberedCells(
  * The descriptions of cells holding state, or with `holdingState` false of
  * cells holding none, in one pattern level built from one source by two
  * compilers, for which the pairing by order that `renumberedCells()` makes
- * cannot say which cell went where. Such a
- * description is either one whose count of cells differs between `before`
- * and `after`, since the pairing then leaves a cell out and pairs the ones
- * after it with a neighbor's number, or one of two or more cells whose
- * numbers changed, since a shift and a trade among them look alike. Each list
- * is in number order, as `numberedCells()` returns it. A trade among cells of
- * one description that leaves every number as it was is not found here: the
- * descriptions cannot show it.
+ * cannot say which cell went where. Such a description is either one whose
+ * count of cells differs between `before` and `after`, since the pairing then
+ * leaves a cell out and pairs the ones after it with a neighbor's number, or
+ * one of two or more cells whose numbers changed, since a shift and a trade
+ * among them look alike. Each list is in number order, as `numberedCells()`
+ * returns it. A trade among cells of one description that leaves every number
+ * as it was is not found here: the descriptions cannot show it.
  */
 export function ambiguousDescriptions(
   before: readonly NumberedCell[],
