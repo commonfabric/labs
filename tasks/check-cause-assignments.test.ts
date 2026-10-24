@@ -41,6 +41,11 @@ const dump = (...assignments: PatternAssignment[]) => ({
   errors: [],
 });
 
+const NOTHING_UNEVALUABLE = {
+  base: new Set<string>(),
+  head: new Set<string>(),
+};
+
 const NUMBERED = build("room.tsx", "s", [LIFT, CHILD]);
 const RENUMBERED = build("room.tsx", "s", [CHILD]);
 
@@ -51,6 +56,7 @@ describe("check-cause-assignments", () => {
         dump(NUMBERED),
         dump(RENUMBERED),
         [],
+        NOTHING_UNEVALUABLE,
       );
 
       expect(comparison.compared).toBe(1);
@@ -69,6 +75,7 @@ describe("check-cause-assignments", () => {
         dump(NUMBERED),
         dump(build("room.tsx", "s", [LIFT, CHILD])),
         [],
+        NOTHING_UNEVALUABLE,
       );
 
       expect(comparison).toEqual({
@@ -85,6 +92,7 @@ describe("check-cause-assignments", () => {
         dump(NUMBERED),
         dump(build("room.tsx", "edited", [CHILD])),
         [],
+        NOTHING_UNEVALUABLE,
       );
 
       expect(comparison.compared).toBe(0);
@@ -103,6 +111,7 @@ describe("check-cause-assignments", () => {
         dump(NUMBERED),
         dump(RENUMBERED),
         [entry],
+        NOTHING_UNEVALUABLE,
       );
 
       expect(comparison.failing).toEqual([]);
@@ -122,6 +131,7 @@ describe("check-cause-assignments", () => {
         dump(NUMBERED),
         dump(RENUMBERED),
         [entry],
+        NOTHING_UNEVALUABLE,
       );
 
       expect(comparison.failing.map(({ pattern }) => pattern)).toEqual([
@@ -141,7 +151,7 @@ describe("check-cause-assignments", () => {
           errors: [{ pattern: "b.tsx", error: "head broke" }],
         },
         [],
-        new Set(),
+        NOTHING_UNEVALUABLE,
       );
 
       expect(comparison.compileErrors).toEqual([
@@ -153,7 +163,7 @@ describe("check-cause-assignments", () => {
       );
     });
 
-    it("returns no compile error for a pattern listed as unevaluable", () => {
+    it("returns no compile error for a pattern its side lists as unevaluable", () => {
       const comparison = compareDumps(
         dump(),
         {
@@ -161,10 +171,40 @@ describe("check-cause-assignments", () => {
           errors: [{ pattern: "listed.tsx", error: "never evaluates" }],
         },
         [],
-        new Set(["listed.tsx"]),
+        { base: new Set(), head: new Set(["listed.tsx"]) },
       );
 
       expect(comparison.compileErrors).toEqual([]);
+    });
+
+    it("returns no compile error for a base failure the base lists, where the change makes the pattern evaluate and takes it off the list", () => {
+      const comparison = compareDumps(
+        {
+          assignments: [],
+          errors: [{ pattern: "room.tsx", error: "never evaluates" }],
+        },
+        dump(NUMBERED),
+        [],
+        { base: new Set(["room.tsx"]), head: new Set() },
+      );
+
+      expect(comparison.compileErrors).toEqual([]);
+    });
+
+    it("returns a compile error for a head failure that only the base lists", () => {
+      const comparison = compareDumps(
+        dump(NUMBERED),
+        {
+          assignments: [],
+          errors: [{ pattern: "room.tsx", error: "broke" }],
+        },
+        [],
+        { base: new Set(["room.tsx"]), head: new Set() },
+      );
+
+      expect(comparison.compileErrors).toEqual([
+        { side: "head", pattern: "room.tsx", error: "broke" },
+      ]);
     });
   });
 
@@ -208,6 +248,7 @@ describe("check-cause-assignments", () => {
         dump(NUMBERED),
         dump(RENUMBERED),
         [],
+        NOTHING_UNEVALUABLE,
       );
       const text = describeFailures(comparison);
 

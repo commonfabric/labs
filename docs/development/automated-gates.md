@@ -156,8 +156,9 @@ Each of these gates fails CI on its own, and none of them run as part of
   change's, without type checking, and compares the builds of each pattern
   whose source files match, telling a cell apart from its neighbors by what
   writes it rather than by its schema, which the schema generator reshapes
-  without moving anything. A pattern either side fails to compile fails the
-  gate, unless `tasks/pattern-compat-unevaluable.ts` lists it. The gate
+  without moving anything. A pattern that fails to compile on either side
+  fails the gate, unless that side's own `tasks/pattern-compat-unevaluable.ts`
+  lists it. The gate
   compiles only for a change touching `packages/js-compiler/`,
   `packages/runner/src/builder/`, `packages/runner/src/builtins/`,
   `packages/runner/src/harness/`, `packages/schema-generator/src/` or

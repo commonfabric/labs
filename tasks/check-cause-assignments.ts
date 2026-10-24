@@ -86,22 +86,31 @@ export interface Comparison {
   compared: number;
 
   /**
-   * The patterns either side failed to compile, less those
+   * The patterns either side failed to compile, less those that side's own
    * `UNEVALUABLE_PATTERNS` lists. Such a pattern is in neither side's
    * builds, so it would otherwise pass unseen.
    */
   compileErrors: { side: "base" | "head"; pattern: string; error: string }[];
 }
 
+/** The patterns each side lists as unevaluable, and so excuses. */
+export interface Unevaluable {
+  base: ReadonlySet<string>;
+  head: ReadonlySet<string>;
+}
+
 /**
  * Compares the build of each pattern `head` holds with the build of it in
- * `base`, where the two were built from the same source files.
+ * `base`, where the two were built from the same source files. Each side's
+ * compile errors are excused by that side's own list of unevaluable
+ * patterns, so that a change which makes a listed pattern evaluate, and so
+ * takes it off the list, is not failed for the base's error on it.
  */
 export function compareDumps(
   base: DumpOutput,
   head: DumpOutput,
   accepted: readonly AcceptedMove[],
-  unevaluable: ReadonlySet<string> = UNEVALUABLE_PATTERNS,
+  unevaluable: Unevaluable,
 ): Comparison {
   const before = new Map(
     base.assignments.map((assignment) => [assignment.pattern, assignment]),
@@ -112,9 +121,13 @@ export function compareDumps(
     unused: [],
     compared: 0,
     compileErrors: [
-      ...base.errors.map((error) => ({ side: "base" as const, ...error })),
-      ...head.errors.map((error) => ({ side: "head" as const, ...error })),
-    ].filter((error) => !unevaluable.has(error.pattern)),
+      ...base.errors
+        .filter((error) => !unevaluable.base.has(error.pattern))
+        .map((error) => ({ side: "base" as const, ...error })),
+      ...head.errors
+        .filter((error) => !unevaluable.head.has(error.pattern))
+        .map((error) => ({ side: "head" as const, ...error })),
+    ],
   };
   const used = new Set<AcceptedMove>();
   for (const after of head.assignments) {
@@ -212,6 +225,24 @@ export function describeFailures(comparison: Comparison): string {
       "builds above.",
   );
   return lines.join("\n");
+}
+
+/**
+ * The patterns the checkout at `root` lists as unevaluable, which is none
+ * where it holds no such list.
+ */
+async function unevaluableIn(root: string): Promise<ReadonlySet<string>> {
+  const list = join(root, "tasks/pattern-compat-unevaluable.ts");
+  try {
+    await Deno.stat(list);
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return new Set();
+    throw error;
+  }
+  const { UNEVALUABLE_PATTERNS: listed } = await import(
+    new URL(`file://${list}`).href
+  );
+  return listed;
 }
 
 async function git(...args: string[]): Promise<string> {
@@ -341,7 +372,10 @@ async function main() {
       dumpTree(baseTree, inBase, shards, scratch, "base"),
       dumpTree(head, files, shards, scratch, "head"),
     ]);
-    const comparison = compareDumps(baseDump, headDump, ACCEPTED_MOVES);
+    const comparison = compareDumps(baseDump, headDump, ACCEPTED_MOVES, {
+      base: await unevaluableIn(baseTree),
+      head: UNEVALUABLE_PATTERNS,
+    });
     console.log(
       `check-cause-assignments: compared ${comparison.compared} patterns ` +
         `built from the same source by ${mergeBase.slice(0, 10)} and this ` +
