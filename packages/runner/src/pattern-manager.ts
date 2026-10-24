@@ -583,6 +583,14 @@ export class PatternManager {
    */
   readonly #retainedCompiles = new Map<string, RetainedCompile>();
 
+  /**
+   * Write-backs in flight through `#issueCacheRepair()`, by
+   * `(space, entryIdentity)`. The loads served from memory while one runs
+   * issue none of their own, so a write-back that fails counts once against
+   * the session's attempts for the space, however many loads awaited it.
+   */
+  readonly #inProgressCacheRepairs = new Map<string, Promise<void>>();
+
   /** Compilations in progress, keyed by program content and compilation context. */
   readonly #inProgressCompilations = new Map<string, ProgramCompilation>();
 
@@ -958,8 +966,9 @@ export class PatternManager {
   //
 
   /**
-   * The in-flight and cached compilation tables, the module-cache bound, the
-   * compile-cache writer a test may supply, and the four closure steps that
+   * The in-flight and cached compilation tables, the retained compiles, the
+   * module-cache bound, the compile-cache writer a test may supply, and the
+   * four closure steps that
    * a test drives directly; a replication driven here runs under a fresh
    * ticket, as one issued by the manager does.
    */
@@ -975,6 +984,7 @@ export class PatternManager {
     maxEvaluatedModuleCacheSize: number;
     readonly modulesByIdentity: Map<string, { exports: Exports }>;
     readonly persistedCompileCacheClosures: Map<string, string>;
+    readonly retainedCompiles: Map<string, RetainedCompile>;
     hasStoredCompileCacheClosure(
       space: MemorySpace,
       modules: readonly CacheableModule[],
@@ -1019,6 +1029,7 @@ export class PatternManager {
       },
       modulesByIdentity: this.#modulesByIdentity,
       persistedCompileCacheClosures: this.#persistedCompileCacheClosures,
+      retainedCompiles: this.#retainedCompiles,
       hasStoredCompileCacheClosure: (
         space,
         modules,
@@ -1385,10 +1396,10 @@ export class PatternManager {
 
   /**
    * Whether `space` is owed a repair of `entryIdentity`'s closure: a
-   * write-back there failed fewer times than the session retries
-   * (`MAX_COMPILE_CACHE_WRITE_BACK_FAILURES`), or a preview compiled there and
-   * persisted nothing — which an ordinary load repairs and a preview, under
-   * `options`, does not.
+   * write-back there failed, or a preview compiled there and persisted
+   * nothing — which an ordinary load repairs and a preview, under `options`,
+   * does not. Neither is owed once the space refused the write
+   * `MAX_COMPILE_CACHE_WRITE_BACK_FAILURES` times this session.
    */
   #owedRepair(
     space: MemorySpace,
@@ -1396,8 +1407,8 @@ export class PatternManager {
     options: { repairCache?: boolean },
   ): boolean {
     const failures = this.#writeBackFailures(space, entryIdentity);
-    return (failures > 0 &&
-      failures < MAX_COMPILE_CACHE_WRITE_BACK_FAILURES) ||
+    if (failures >= MAX_COMPILE_CACHE_WRITE_BACK_FAILURES) return false;
+    return failures > 0 ||
       (options.repairCache !== false &&
         this.#unpersistedPatternRecoveries.has(
           compileCacheRecoveryKey(space, entryIdentity),
@@ -1446,9 +1457,11 @@ export class PatternManager {
   /**
    * Helper for the cold path and the loads served from memory, which writes
    * `compile` back into `space` fire-and-forget, tracked in
-   * `#compileCacheWrites`. A write-back that lands clears the repair the
-   * space was owed; one that fails counts against the session's attempts for
-   * the space and keeps the compile retained for the next load's attempt.
+   * `#compileCacheWrites`, unless a write-back for the space and entry is in
+   * flight already (`#inProgressCacheRepairs`). A write-back that lands
+   * clears the repair the space was owed; one that fails counts once against
+   * the session's attempts for the space and keeps the compile retained for
+   * the next load's attempt.
    */
   #issueCacheRepair(
     space: MemorySpace,
@@ -1457,6 +1470,7 @@ export class PatternManager {
     compile: RetainedCompile,
   ): void {
     const recoveryKey = compileCacheRecoveryKey(space, entryIdentity);
+    if (this.#inProgressCacheRepairs.has(recoveryKey)) return;
     const repair = this.#persistCompileCacheTracked(
       space,
       compile.modules,
@@ -1478,8 +1492,14 @@ export class PatternManager {
         String(error),
       ]);
     });
+    this.#inProgressCacheRepairs.set(recoveryKey, repair);
     this.#compileCacheWrites.add(repair);
-    repair.finally(() => this.#compileCacheWrites.delete(repair));
+    repair.finally(() => {
+      this.#compileCacheWrites.delete(repair);
+      if (this.#inProgressCacheRepairs.get(recoveryKey) === repair) {
+        this.#inProgressCacheRepairs.delete(recoveryKey);
+      }
+    });
   }
 
   /**
@@ -3061,6 +3081,18 @@ export class PatternManager {
           // A preview persists nothing; the ordinary load that follows in
           // this space writes this compile back.
           this.#recordDeferredCacheRepair(space, modules, true);
+          this.#retainCompile(entryIdentity, {
+            modules,
+            moduleDelegations,
+            cacheOpts,
+          });
+        } else if (
+          this.#writeBackFailures(space, entryIdentity) >=
+            MAX_COMPILE_CACHE_WRITE_BACK_FAILURES
+        ) {
+          // A space that refused the write as often as the session tries is
+          // written into no more; the compile is held for the spaces that
+          // can take it.
           this.#retainCompile(entryIdentity, {
             modules,
             moduleDelegations,

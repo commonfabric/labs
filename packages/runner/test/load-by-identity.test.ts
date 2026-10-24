@@ -1364,6 +1364,84 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       }
     });
 
+    it("counts a refused write-back once, however many loads awaited it", async () => {
+      // Loads served from memory while a write-back into their space is in
+      // flight issue none of their own, so the one refusal they all awaited
+      // uses one of the session's attempts, and two attempts remain.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, [spaceB]);
+      const manager = runtime.patternManager.accessForTestingOnly;
+      const compiles = countColdCompiles();
+      let writes = 0;
+      manager.compileCacheWriter = () => {
+        writes++;
+        return Promise.reject(new Error("the space refuses the write"));
+      };
+      try {
+        const loaded = await load(entryIdentity, spaceB);
+        await flushed();
+        expect(writes).toBe(1);
+
+        const concurrent = await Promise.all([
+          load(entryIdentity, spaceB),
+          load(entryIdentity, spaceB),
+          load(entryIdentity, spaceB),
+        ]);
+        await flushed();
+        for (const pattern of concurrent) expect(pattern).toBe(loaded);
+        expect(writes).toBe(2);
+
+        expect(await load(entryIdentity, spaceB)).toBe(loaded);
+        await flushed();
+        expect(writes).toBe(3);
+        expect(await load(entryIdentity, spaceB)).toBe(loaded);
+        await flushed();
+        expect(writes).toBe(3);
+        expect(compiles()).toBe(1);
+      } finally {
+        manager.compileCacheWriter = undefined;
+      }
+    });
+
+    it("neither recompiles nor writes into an exhausted space once its retained compile is evicted", async () => {
+      // A preview compiled in `spaceB`, and the three ordinary loads after it
+      // had their write-backs refused. The preview's mark alone no longer
+      // makes the space owed a repair, so a load there with the retained
+      // compile gone is served from memory, with no cold compile and no
+      // fourth write.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, [spaceB]);
+      const manager = runtime.patternManager.accessForTestingOnly;
+      const compiles = countColdCompiles();
+      let writes = 0;
+      manager.compileCacheWriter = () => {
+        writes++;
+        return Promise.reject(new Error("the space refuses the write"));
+      };
+      try {
+        const previewed = await load(entryIdentity, spaceB, {
+          repairCache: false,
+        });
+        await flushed();
+        for (let attempt = 0; attempt < 3; attempt++) {
+          expect(await load(entryIdentity, spaceB)).toBe(previewed);
+          await flushed();
+        }
+        expect(writes).toBe(3);
+        expect(compiles()).toBe(1);
+
+        manager.retainedCompiles.clear();
+        expect(await load(entryIdentity, spaceB)).toBe(previewed);
+        await flushed();
+        expect(writes).toBe(3);
+        expect(compiles()).toBe(1);
+      } finally {
+        manager.compileCacheWriter = undefined;
+      }
+    });
+
     it("copies once into a space, however many loads it serves there", async () => {
       const { entryIdentity, loaded } = await coldLoadedInSpace();
       const { compileCacheWrites } =
