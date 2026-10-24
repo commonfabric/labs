@@ -30,13 +30,27 @@ import type {
 } from "../v2.ts";
 import { encodeMemoryBoundary } from "../v2.ts";
 
-/** The bounds one part's message is cut to fit. */
+/** The bounds a message is split to fit, and its parts cut to. */
 export type PartLimits = {
   /** Most UTF-8 bytes of a part's encoded message. */
   readonly bytes: number;
-  /** Most JSON values in a part's encoded message; `null` counts none. */
+  /** Most JSON values in a message, whole or a part; `null` counts none. */
   readonly values: number | null;
+  /**
+   * Most UTF-8 bytes of a message sent whole, when more than a part's: one
+   * that fits these and the value bound is not split. Splitting costs the
+   * sender more than sending whole, so a transport splits only what its
+   * receiver could not take whole.
+   */
+  readonly whole?: number;
 };
+
+/** The bounds a message is sent whole within. */
+export function wholeLimits(limits: PartLimits): PartLimits {
+  return limits.whole === undefined
+    ? limits
+    : { bytes: limits.whole, values: limits.values };
+}
 
 /** The space and session a split sync's later parts are pushed to. */
 export type SyncPartSession = {

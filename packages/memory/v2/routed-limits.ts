@@ -19,11 +19,19 @@ export const ROUTED_HOLDINGS_LIMIT = 8192;
 export const ROUTED_DEFAULT_SLOT_LIMIT = 150_000;
 
 /**
+ * Maximum queued bytes on one ticketed data socket, and the most one routed
+ * request may take: the router's `QUEUE_LIMIT`.
+ */
+export const ROUTED_QUEUE_LIMIT = 4 * 1024 * 1024;
+
+/**
  * Most encoded bytes of one part of a message split for a routed peer: a sync
  * the toolshed splits for a client that takes one in parts (`syncPartsV1`),
- * and a watch set the SDK stages in parts (`watchSetPartsV1`). Well under the
- * 4 MiB a request and the 8 MiB a response may take, so that the router can
- * send other toolsheds' messages to the client between one sync's parts. A
- * toolshed sends a sync's parts back to back on its socket.
+ * and a watch set the SDK stages in parts (`watchSetPartsV1`). A message is
+ * split only when it could not go whole, past the 8 MiB a response or the
+ * 4 MiB a request may take, or past the frame cap; a part is well under
+ * those, so that the router can send other toolsheds' messages to the client
+ * between one sync's parts. A toolshed sends a sync's parts back to back on
+ * its socket.
  */
 export const ROUTED_PART_BYTES = 1024 * 1024;

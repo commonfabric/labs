@@ -245,6 +245,7 @@ import {
   splitSyncMessage,
   stagedWatchSet,
   type SyncPartSession,
+  wholeLimits,
 } from "./message-parts.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 import {
@@ -1294,7 +1295,7 @@ class Connection {
       const prepared = this.#prepare(message);
       const encodeStart = performance.now();
       const payload = encodeMemoryBoundary(prepared);
-      const fits = payloadFits(payload, limits);
+      const fits = payloadFits(payload, wholeLimits(limits));
       timing.time(encodeStart, "memory", "response", "encode");
       if (fits) {
         this.#transmit(prepared, payload);

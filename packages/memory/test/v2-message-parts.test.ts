@@ -513,6 +513,31 @@ const watchedThrough = async (
   }
 };
 
+Deno.test("a server sends a sync whole within the bounds of a whole message, and splits only one past them", async () => {
+  const values = Array.from({ length: 24 }, (_, n) => ({
+    n,
+    text: "w".repeat(300),
+  }));
+  // About 8 KB: whole within 64 KiB, though over a part's 2 KiB.
+  const whole = await watchedThrough(
+    "sync-parts-whole",
+    { bytes: 2048, values: null, whole: 64 * 1024 },
+    values,
+  );
+  assertEquals(whole.length, 1);
+  assertEquals(serverMessageSync(whole[0])!.upserts.length, 24);
+  // Past 4 KiB, it is split into parts of 2 KiB.
+  const parts = await watchedThrough(
+    "sync-parts-past-whole",
+    { bytes: 2048, values: null, whole: 4096 },
+    values,
+  );
+  assert(parts.length > 2);
+  for (const part of parts) {
+    assert(encodeMemoryBoundary(part).length <= 2048);
+  }
+});
+
 Deno.test("a server cuts a sync's parts by what its entries take once compacted", async () => {
   // Forty documents link with one large schema. Inline, each document is
   // about 2 KB and the sync about 80 KB; compacted, each is about 200 bytes

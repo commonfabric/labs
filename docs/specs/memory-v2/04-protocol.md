@@ -958,9 +958,10 @@ violations, which discard the connection, as a frame the client cannot decode
 does. A connection that closes before the last part arrives loses the parts
 with it, as it loses any frame in flight.
 
-The routed host splits a sync whose encoding exceeds 1 MiB or the routed frame
-cap ([`routed-mode-a.md`](routed-mode-a.md)); a direct server sends every sync
-whole.
+The routed host splits a sync that one message could not carry, past the 8 MiB
+a message may take or the routed frame cap, into parts of at most 1 MiB
+([`routed-mode-a.md`](routed-mode-a.md)): splitting costs the server more than
+sending whole. A direct server sends every sync whole.
 
 #### Negotiated schema-table encoding
 
