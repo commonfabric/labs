@@ -365,8 +365,9 @@ export function moduleDelegationsFromDocs(
  *
  * A built artifact carries a version that is a hash of what its compiler
  * emits for a fixed corpus (`compile-cache-output-version.deno.ts`), baked in
- * at build time: a compiler change that emits the same bytes keeps the tag,
- * and one that moves a byte, or an epoch bump, moves it. A Deno source run
+ * at build time: a compiler change that compiles the corpus to the same
+ * documents keeps the tag, and one that changes any of them (a body, a stored
+ * field, an import edge), or an epoch bump, moves it. A Deno source run
  * resolves the checked-in source marker to a hash of the compiler inputs
  * (`compiler-fingerprint.deno.ts`) instead, which moves on any edit to them.
  * Runtimes without repository file access skip the compiled cache until a

@@ -299,7 +299,7 @@ over-invalidate executable identities. It is deliberately not the compile-cache
 `runtimeVersion` a built artifact carries, which
 [`getCompileCacheRuntimeVersion()`][c14] resolves: that version is a hash of
 what the compiler emits for a fixed corpus, so it stays put across a compiler
-change that emits the same bytes, and a cache keyed by it survives such a
+change that compiles the corpus to the same documents, and a cache keyed by it survives such a
 change while the executable fingerprint still rolls. A compiler, transformer,
 generated-schema, runtime-module, sandbox, execution-policy, or
 scheduler-semantics change must roll the executable runtime fingerprint.
@@ -518,11 +518,12 @@ linked data:
    `runtimeVersion` is the compile-cache version
    [`getCompileCacheRuntimeVersion()`][c14] resolves. A built artifact — a
    binary, the worker bundle, loom's vendored copy of the runtime — carries a
-   version that is a hash of the bytes its compiler emits for a fixed corpus,
-   under every persisted cache variant, computed by the build and baked in
+   version that is a hash of what its compiler emits for a fixed corpus (each
+   compiled document's body, stored fields and import edges), under every
+   persisted cache variant, computed by the build and baked in
    (`compile-cache-output-version.deno.ts`); a Deno source run takes the
-   compiler-input fingerprint instead. A compiler change that emits the same
-   bytes for the corpus keeps a built artifact's `runtimeVersion`, and with it
+   compiler-input fingerprint instead. A compiler change that compiles the
+   corpus to the same documents keeps a built artifact's `runtimeVersion`, and with it
    the compiled documents of every construct the corpus exercises; one that
    moves a byte, or an epoch bump, moves it, and the compiled set misses and
    recompiles from the source set. A construct the corpus lacks is the

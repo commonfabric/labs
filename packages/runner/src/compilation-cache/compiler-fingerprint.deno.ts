@@ -21,8 +21,8 @@ import { SOURCE_COMPILE_CACHE_RUNTIME_VERSION } from "./compile-cache-version.ts
  * `compile-cache-output-version.deno.ts` hashes the compiler's output for a
  * fixed corpus, and a build bakes that version into the binary, the worker
  * bundle's define, or loom's vendored copy of `compile-cache-version.ts`, so
- * that a compiler change emitting the same bytes for the corpus keeps the
- * compiled documents of every construct the corpus exercises valid across
+ * that a compiler change that compiles the corpus to the same output keeps
+ * the compiled documents of every construct the corpus exercises valid across
  * it. A construct the corpus lacks is that version's blind spot; the corpus
  * is wide for that reason, and `COMPILE_CACHE_EPOCH` is the hand-turned move
  * for a change the corpus cannot see.

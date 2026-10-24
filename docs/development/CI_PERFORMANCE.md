@@ -277,7 +277,8 @@ compiler now running emitted, and an entry from any other compiler is one the
 lanes never ask for. (A shipped build's own version axis,
 `compileCache:cf/esm-compile/<version>/<identity>`, is coarser on purpose: it
 is a hash of what the compiler emits for a fixed corpus, baked in at build time,
-so it stays put across compiler changes that emit the same bytes. The lanes'
+so it stays put across compiler changes that compile the corpus to the same
+documents. The lanes'
 test binaries take the input fingerprint instead, which costs no corpus
 compile; `CF_COMPILE_CACHE_VERSION` in `tasks/build-binaries.ts` is the
 switch.) The prefix lets

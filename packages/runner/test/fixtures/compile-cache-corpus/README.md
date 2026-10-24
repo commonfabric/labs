@@ -3,14 +3,15 @@
 A frozen copy of pattern sources, each entry with its import closure, that a
 build compiles to compute the durable compile cache's version
 (`packages/runner/src/compilation-cache/compile-cache-output-version.deno.ts`).
-The version is a hash of the bytes the compiler emits for these files under
-every persisted cache variant (plain, instance-naming, coverage-instrumented,
-and both), so a compiler change that emits the same bytes in every mode keeps
-the compiled documents of every construct these files exercise valid, in every
-space, and one that moves any byte recompiles them all once. A construct these
-files do not exercise is the version's blind spot, which is why the corpus is
-wide and why `COMPILE_CACHE_EPOCH` exists. `tasks/build-binaries.ts` bakes the
-version into a binary, the shell's production bundle defines it, and
+The version is a hash of what the compiler emits for these files under every
+persisted cache variant (plain, instance-naming, coverage-instrumented, and
+both): each compiled document's body, stored fields and import edges. A compiler
+change that compiles them to the same documents in every mode keeps the compiled
+documents of every construct these files exercise valid, in every space, and one
+that changes any of them recompiles them all once. A construct these files do
+not exercise is the version's blind spot, which is why the corpus is wide and
+why `COMPILE_CACHE_EPOCH` exists. `tasks/build-binaries.ts` bakes the version
+into a binary, the shell's production bundle defines it, and
 `deno task compile-cache-version --bake` writes it into a tree that runs from
 source but ships as it stands, as loom's vendored copy does.
 

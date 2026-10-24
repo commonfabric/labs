@@ -25,9 +25,10 @@ import {
  * version (`compileCache:<version>/<identity>`), and a version move
  * recompiles every pattern in every space on every machine the next time it
  * loads. A version named by the compiler's output rather than its source
- * moves only when the emitted bytes do: a change to the compiler that emits
- * the same bytes for the corpus keeps the compiled documents of every
- * construct the corpus exercises valid across it, in every space. A construct
+ * moves only when that output does: a change to the compiler that compiles
+ * the corpus to the same documents, body, stored fields and import edges
+ * alike, keeps the compiled documents of every construct the corpus
+ * exercises valid across it, in every space. A construct
  * the corpus lacks is the version's blind spot, which is what the corpus's
  * breadth and {@link COMPILE_CACHE_EPOCH} are for. A build computes this
  * version for the tree it builds from and bakes it
@@ -44,7 +45,7 @@ import {
 
 /**
  * The corpus: a frozen copy of pattern sources, repository-relative. The
- * version names the bytes the compiler emits for these, so what is here
+ * version names what the compiler emits for these, so what is here
  * decides which compiler changes the cache survives. A construct the corpus
  * lacks is one the version cannot see a change to; the corpus is wide for
  * that reason, and an edit to it, including refreshing a file from
@@ -85,11 +86,12 @@ export const CORPUS_ENTRIES: readonly string[] = [
 /**
  * A number folded into the version beside the corpus output.
  *
- * The version moves on its own when the corpus's emitted bytes move. Bump this
- * for a change the corpus cannot see but stored compiled documents cannot
+ * The version moves on its own when the corpus's compiled output moves. Bump
+ * this for a change the corpus cannot see but stored compiled documents cannot
  * survive: a contract between emitted code and the runtime modules it calls
  * into, say, changed on both sides at once so that the corpus still compiles
- * to the same bytes while bytes compiled earlier no longer run. The bump moves
+ * to the same output while documents compiled earlier no longer run. The bump
+ * moves
  * the version of every later build, and every compiled document recompiles
  * once.
  */
@@ -169,8 +171,10 @@ export function compiledOutputOf(module: CacheableModule): CompiledOutput {
 /**
  * The output fingerprint of the corpus compiled under each variant: a hash
  * over every variant's every module's emitted body, import edges and stored
- * artifact fields, in a fixed order, folded with `epoch`. Same bytes in every
- * mode, same fingerprint, whatever compiled them.
+ * artifact fields, in a fixed order, folded with `epoch`. It covers the whole
+ * stored output rather than the body alone, since a document whose edges or
+ * stored fields changed is read differently whatever its body. The same
+ * output in every mode, the same fingerprint, whatever compiled it.
  */
 export function outputFingerprintOf(
   variants: readonly CompiledVariant[],
