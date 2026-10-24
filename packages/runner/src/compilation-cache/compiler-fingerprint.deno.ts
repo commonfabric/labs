@@ -19,16 +19,19 @@ import { SOURCE_COMPILE_CACHE_RUNTIME_VERSION } from "./compile-cache-version.ts
  * This is the version of a source run, which cannot afford to compile anything
  * at startup. A built artifact names its compiler by what it emits instead:
  * `compile-cache-output-version.deno.ts` hashes the compiler's output for a
- * fixed corpus, and a build bakes that version into the binary, the worker
- * bundle's define, or loom's vendored copy of `compile-cache-version.ts`, so
+ * fixed corpus, and a build bakes that version into the binary or the worker
+ * bundle's define, while a source checkout can record it as a memo that its
+ * source runs take while the memo matches the tree
+ * (`compile-cache-output-memo.deno.ts`), so
  * that a compiler change that compiles the corpus to the same output keeps
  * the compiled documents of every construct the corpus exercises valid across
  * it. A construct the corpus lacks is that version's blind spot; the corpus
  * is wide for that reason, and `COMPILE_CACHE_EPOCH` is the hand-turned move
  * for a change the corpus cannot see.
  *
- * Deno-only: it walks and reads the source tree. Deno source runs call this
- * module through `getCompileCacheRuntimeVersion()`.
+ * Deno-only: it walks and reads the source tree. Deno source runs reach this
+ * module from `getCompileCacheRuntimeVersion()`, through
+ * `compile-cache-output-memo.deno.ts`.
  */
 
 /**

@@ -18,6 +18,7 @@ import {
   resolveBakedCompileCacheRuntimeVersionForTesting,
   SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
 } from "../src/compilation-cache/cell-cache.ts";
+import { computeCurrentSourceCompileCacheVersion } from "../src/compilation-cache/compile-cache-output-memo.deno.ts";
 
 const versionModulePath = fromFileUrl(
   new URL("../src/compilation-cache/compile-cache-version.ts", import.meta.url),
@@ -137,15 +138,20 @@ describe("compile-cache version axis", () => {
     expect(COMPILE_CACHE_RUNTIME_VERSION).toBe(`${VERSION_NAMESPACE}/source`);
   });
 
-  it("from-source runtime version resolves to the real compiler-input fingerprint", async () => {
+  it("from-source runtime version resolves to the version a source run of this tree computes", async () => {
+    // A checkout that records an output-version memo for itself resolves to
+    // the memo's version, so the runtime's answer is held to what a source run
+    // of this tree computes; with no memo, that is the compiler-input version.
     const version = await computeCompilerVersion(
       repoRoot,
       COMPILE_FINGERPRINT_INPUTS,
     );
-    expect(await getCompileCacheRuntimeVersion()).toBe(version);
     expect(await computeCurrentCompilerVersion()).toBe(version);
     expect(version.startsWith(`${VERSION_NAMESPACE}/`)).toBe(true);
     expect(version).not.toBe(SOURCE_COMPILE_CACHE_RUNTIME_VERSION);
+    expect(await getCompileCacheRuntimeVersion()).toBe(
+      await computeCurrentSourceCompileCacheVersion(),
+    );
   });
 
   it("skips the compiled cache when source fingerprint files cannot be read", async () => {

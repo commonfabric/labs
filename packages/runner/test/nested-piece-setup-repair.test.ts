@@ -182,19 +182,24 @@ describe("nested-piece-setup-repair", () => {
     }
   });
 
-  it("repairs nothing when the setup marker already names the pattern", async () => {
-    // The marker is the one piece of evidence that this version's setup ran,
-    // so a start trusts it and writes no setup of its own.
+  it("heals a nested piece whose manifest lacks a cell though the setup marker names the pattern", async () => {
+    // The marker names an identity, and the manifest says which cells a
+    // setup materialized. One identity's source can build differently, so
+    // a manifest that disagrees with the build is repaired whatever the
+    // marker says; the marker decides only whether the argument is re-staged,
+    // and the repair leaves the argument alone either way.
     const rt = newRuntime();
     try {
-      const { cell } = await nestedPieceSetUpForV1(rt, "v3");
+      const { cell, v3Ref } = await nestedPieceSetUpForV1(rt, "v3");
       const manifest = manifestOf(cell);
 
       expect(await rt.start(cell)).toBe(true);
       await cell.pull();
+      expect(await bumpAndCount(cell)).toBe(1);
       await rt.storageManager.synced();
 
-      expect(manifestOf(cell)).toEqual(manifest);
+      expect(manifestOf(cell)).not.toEqual(manifest);
+      expect(setupMarkerOf(cell)?.identity).toBe(v3Ref.identity);
     } finally {
       await rt.dispose();
     }

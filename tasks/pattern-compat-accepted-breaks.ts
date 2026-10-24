@@ -22,20 +22,22 @@
  * the break ships is a new baseline that no entry names, so the very next
  * change to that pattern is gated again, against the shape the break left
  * behind. The path bound keeps it from becoming one within a single change: the
- * compatibility proof reports every issue it found against a baseline as ONE
- * finding, so forgiving by pair alone would suppress an unintended break that
- * happened to land beside the accepted one — and `--update` would then record
- * that broken contract as the new baseline.
+ * compatibility proof reports every issue it finds against a baseline, each
+ * blaming one path, so forgiving by pair alone would suppress an unintended
+ * break that happened to land beside the accepted one — and `--update` would
+ * then record that broken contract as the new baseline.
  *
  * Paths are written exactly as the proof names them (`result.crossrefs`,
- * `argument.topics[]`). One limitation is worth knowing: the proof reports at
- * most one issue per role, so where an accepted path is the reported issue for
- * its role, a second problem in that same role can be hidden behind it. Keep
- * accepted paths as few as the removal actually needs.
+ * `argument.topics[]`), and an entry names exactly the paths its pairs blame.
+ * A named path that none of them blames would forgive a later break at that
+ * path against those baselines, including the one recorded just before the
+ * break, which is where an unintended second break in the same change is
+ * judged.
  *
  * The list can only shrink. A listed pair that no longer produces a finding —
  * because the pattern grew the surface back, or the baseline is gone — fails
- * the run, so an exemption cannot outlive the break it was granted for.
+ * the run, and so does a named path that none of the entry's pairs blames, so
+ * an exemption cannot outlive the break it was granted for.
  */
 export interface AcceptedContractBreak {
   /** Pattern key: the path relative to `packages/patterns`. */
@@ -46,7 +48,8 @@ export interface AcceptedContractBreak {
 
   /**
    * Schema paths this break may blame, spelled as the compatibility proof
-   * spells them. A finding blaming anything else stands.
+   * spells them. A finding blaming anything else stands, and a path none of
+   * the entry's pairs blames fails the run.
    */
   paths: readonly string[];
 
@@ -153,14 +156,19 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/agent-run-invalid-result-error-code-break.md",
   },
   {
-    // The same ruling seen from the profile itself: the proof names the
-    // first of the two fields that left.
+    // The same ruling seen from the profile itself: both fields that left,
+    // in the pointer it publishes and in the event `setInbox` takes.
     pattern: "system/profile-home.tsx",
     baselines: [
       "20260915T064957Z-mE7S34E5xl20_PZs",
       "20260917T235321Z--A47I2nujs7eKua6",
     ],
-    paths: ["result.inbox.host"],
+    paths: [
+      "result.inbox.host",
+      "result.inbox.space",
+      "result.setInbox.host",
+      "result.setInbox.space",
+    ],
     reason:
       "the share inbox pointer's `space` and `host` fields left, replaced by a link to the inbox piece under `piece`, which the recorded object requires them beside",
     record: "docs/history/profile-inbox-piece-break.md",
@@ -179,7 +187,17 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260918T002421Z-RB590FUNua-vIXOh",
       "20260918T072634Z-NeP8mB1oe_0bWKFV",
     ],
-    paths: ["result.defaultProfile"],
+    paths: [
+      "result.defaultProfile",
+      "result.mru[].inbox.host",
+      "result.mru[].inbox.space",
+      "result.mru[].setInbox.host",
+      "result.mru[].setInbox.space",
+      "result.profiles[].inbox.host",
+      "result.profiles[].inbox.space",
+      "result.profiles[].setInbox.host",
+      "result.profiles[].setInbox.space",
+    ],
     reason:
       "the share inbox pointer's `space` and `host` fields left, replaced by a link to the inbox piece under `piece`, which the recorded object requires them beside",
     record: "docs/history/profile-inbox-piece-break.md",
@@ -197,8 +215,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // resolved union had taken the propertyless plain arm for a marker-less
     // brand, so no baseline carries the `default: {}` the declarations always
     // meant. A piece holding one of them unset reads `{}` where it read
-    // `undefined`. The proof reports one issue per role, so it names only
-    // `adminRegistry`; the other four paths are found by peeling.
+    // `undefined`.
     pattern: "cfc-group-chat-demo/main.tsx",
     baselines: [
       "20260729T022742Z-piF14M8QDh5pSPw1",
@@ -286,22 +303,72 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260819T172917Z-ocrU646RD4YKITBc",
     ],
     paths: [
-      "argument.topics[]",
       "result.mentionable[].mention",
-      "result.crossrefs",
       "result.crossrefs[].fid",
       "result.crossrefs[].commentCount",
       "result.index[].fid",
-      "argument.topics[].createdBy",
       "result.index[].createdBy",
       "result.mentionable[].addComment",
       // The unsigned caller retires: `agentName` is required on every verb, and the display-name mirrors that path filled go with it.
       "result.myName",
+      "result.crossrefs[].topic",
+      "result.mentionable[].crossrefs",
+      "result.mentionable[].links",
+      "result.topics[].addComment",
+      "result.topics[].crossrefs",
+      "result.topics[].links",
+      "result.topics[].createdBy",
+      "result.index[].topic",
+      "result.crossrefs[].title",
+      "result.topics[].mention",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.setMyName",
+      "result.addTopic.agentName",
+      "result.crossrefs[].referencedBy",
+      "result.crossrefs[].refsOut",
+      "result.mentionable[].addLink",
+      "result.mentionable[].body",
+      "result.mentionable[].bodyUpdatedAt",
+      "result.mentionable[].bodyUpdatedBy",
+      "result.mentionable[].commentCount",
+      "result.mentionable[].comments",
+      "result.mentionable[].createdAt",
+      "result.mentionable[].createdBy",
+      "result.mentionable[].createdByName",
+      "result.mentionable[].lastActivityAt",
+      "result.mentionable[].setBody",
+      "result.topics[].addLink",
+      "result.topics[].bodyUpdatedAt",
+      "result.topics[].bodyUpdatedBy",
+      "result.topics[].comments",
+      "result.topics[].createdByName",
+      "result.topics[].setBody",
+      "result.index[].referencedBy",
+      "result.index[].refsOut",
+      "result.index[].commentCount",
+      "result.index[].lastActivityAt",
+      "result.crossrefs[].createdAt",
+      "result.crossrefs[].createdBy",
+      "result.crossrefs[].lastActivityAt",
+      "result.crossrefs[].referencedByLinks",
+      "result.crossrefs[].refsOutLinks",
+      "result.mentionable[].mentioned",
+      "result.mentionable[].mentions",
+      "result.mentionable[].referencedBy",
+      "result.mentionable[].references",
+      "result.mentionable[].unmention",
+      "result.topics[].mentioned",
+      "result.topics[].referencedBy",
+      "result.topics[].references",
+      "result.topics[].unmention",
     ],
     reason:
       "Two accepted breaks on one pattern: the reference-graph rebuild on cell " +
       "identity (docs/history/topics-crossref-identity-break.md), and the " +
-      "demand narrowing recorded below.",
+      "demand narrowing recorded below." +
+      " The further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md.",
     record: "docs/history/topics-demand-narrowing-break.md",
   },
   {
@@ -310,8 +377,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // the gate's Map keeps one path set and drops the other — and no
     // baseline here appears above. Keeping the pairs disjoint is what keeps
     // the bound tight: forgiving this path on the older baselines too would
-    // let the proof's one-issue-per-role limit hide an unintended break
-    // behind pairs this break never produced a finding against.
+    // forgive a later break at it against pairs this break never produced a
+    // finding against.
     pattern: "topics/main.tsx",
     baselines: [
       "20260826T221814Z-pt-HCeVbN-iyz9VX",
@@ -323,13 +390,22 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // because every field a row carries by value ships to every reader
       // of the universe.
       "result.mentionable[].body",
+      "result.mentionable[].mentions",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.mentionable[].commentCount",
+      "result.mentionable[].createdAt",
+      "result.mentionable[].createdBy",
+      "result.mentionable[].lastActivityAt",
     ],
     reason:
       "The board's mention universe became a derived index of two-string " +
       "rows holding each topic as an unread reference, so the published " +
       "`mentionable` stopped carrying a topic's own surface. Wired to the " +
       "raw topics list it multiplied every topic's resume into every " +
-      "sibling topic under document-granular delivery.",
+      "sibling topic under document-granular delivery." +
+      " The further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md.",
     record: "docs/history/topics-mentionable-index-break.md",
   },
   {
@@ -367,14 +443,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     ],
     paths: [
       "argument.boardCrossrefs",
-      "argument.boardCrossrefs[].referencedBy",
-      "argument.mentionable[]",
-      "result.mention",
       "result.crossrefs",
-      "argument.bodyUpdatedBy.kind",
       "result.addLink.kind",
       // The unsigned caller retires: a comment always carries a structured author now, so the mirror beside it goes.
-      "argument.comments[]",
       "result.createdByName",
       // The mention universe's readable-cell narrowing, the break the entry
       // below records: these baselines carry it as well, and the argument
@@ -382,13 +453,29 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // closed enum widening to `string` is a type widening the proof
       // admits).
       "argument.mentionable",
+      "result.createdBy",
+      "result.referencedBy[].createdBy",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.addComment.agentName",
+      "result.addLink.agentName",
+      "result.bodyUpdatedBy",
+      "result.comments[].authorName",
+      "result.comments[].author.kind",
+      "result.linkKindDraft",
+      "result.links[].addedBy.kind",
+      "result.links[].kind",
+      "result.setBody.agentName",
+      "result.titleUpdatedBy",
     ],
     reason:
       "Three accepted breaks on one pattern: the reference-graph rebuild on " +
       "cell identity (docs/history/topics-crossref-identity-break.md), the " +
       "demand narrowing recorded below, and the mention universe's readable-" +
       "cell narrowing, which these baselines carry as well " +
-      "(docs/history/topics-mentionable-readonly-break.md).",
+      "(docs/history/topics-mentionable-readonly-break.md)." +
+      " The further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md.",
     record: "docs/history/topics-demand-narrowing-break.md",
   },
   {
@@ -413,6 +500,10 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "argument.adminRegistry.admins",
       "result.adminRegistry.admins",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.togglePersonAdmin.name",
     ],
     reason:
       "The admin roster's integrity floor was unsatisfiable, so no write to " +
@@ -420,7 +511,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "declaration changes the `ifc` at that path, which no shape of the " +
       "pattern avoids. A piece holding a roster keeps its stored roles; what " +
       "it loses is the ability to be updated in place to the corrected " +
-      "contract.",
+      "contract." +
+      " The further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md.",
     record: "docs/history/parking-admin-floor-contract-break.md",
   },
   {
@@ -460,13 +552,26 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // vintage replay still preserves the stored visit rows.
     pattern: "lunch-poll/main.tsx",
     baselines: ["20260729T022742Z-5bjUubcOZ-gpvz7F"],
-    paths: ["argument.visits[].loggedBy", "result.adminName"],
+    paths: [
+      "argument.visits[].loggedBy",
+      "result.adminName",
+      "result.joinAs.name",
+      "result.todaysVotes[].voterName",
+      "result.votes[].voterName",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.participantProfiles",
+      "result.recentVisits[].loggedBy",
+      "result.recentVisits[].votes[].voterLink",
+    ],
     reason: "Lunch-poll identity moved from display names to profile cells. " +
       "The published `adminName` result cannot survive the removal of " +
       "name-keyed identity; `argument.visits[].loggedBy` identifies the " +
       "legacy roster link that became an optional profile link. The vintage " +
       "replay preserves those rows, but the root argument contract cannot " +
-      "be updated in place.",
+      "be updated in place." +
+      " The further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md.",
     record: "docs/history/lunch-poll-identity-break.md",
   },
   {
@@ -476,10 +581,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // now derived from profile-cell comparison.
     pattern: "lunch-poll/participant-identity-card.tsx",
     baselines: ["20260729T022742Z-KMaq_J9475tWtRxW"],
-    paths: ["result.me"],
+    paths: [
+      "result.me",
+      "result.joinAs.name",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.profileName",
+    ],
     reason: "Lunch-poll identity moved from display names to profile cells. " +
       "The card's published `me` result treated the viewer's display name as " +
-      "identity, so it goes with the model it keyed.",
+      "identity, so it goes with the model it keyed." +
+      " The further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md.",
     record: "docs/history/lunch-poll-identity-break.md",
   },
   {
@@ -513,6 +626,11 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "argument.adminRegistry.admins[].subject",
       "result.adminRegistry.admins[].subject.personName",
+      "result.togglePersonAdmin.name",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.togglePersonAdmin.newName",
     ],
     reason:
       "A role's subject moved from a person's name to their profile cell, so " +
@@ -520,7 +638,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "role of the old shape names nobody the pattern can resolve, and the " +
       "piece holding it keeps running its own source; a space starting over " +
       "on the new contract recovers through the same open-roster bootstrap " +
-      "that lets a fresh space have an admin at all.",
+      "that lets a fresh space have an admin at all." +
+      " The further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md.",
     record: "docs/history/parking-admin-profile-subject-break.md",
   },
   {
@@ -533,12 +652,11 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260904T001531Z-WRSzkgeFJQmQt1ZM",
       "20260904T022635Z-OsLnrwxWR4PfC0gG",
     ],
-    // The one ruling seen from the two roles a contract has: the published
-    // row lost the reference the derived row document carried, and the demand
-    // gained the defaulted `shortName` a row reads its name from.
+    // The ruling seen from the published row, which lost the reference the
+    // derived row document carried.
     paths: [
-      "argument.items[]",
       "result.index[].member",
+      "result.index[].name",
     ],
     reason:
       "An index row IS the member, so the derived row document's `member` " +
@@ -602,6 +720,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "argument.items[].shortName",
       "result.index[].shortName",
+      "result.items[].shortName",
     ],
     reason:
       "The exemplar exists to prove a contract before it is grafted onto " +
@@ -891,9 +1010,17 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260920T232507Z-_ewvPy8qDJYL47km",
       "20260922T052256Z--2Q9ESzxSenSTer9",
     ],
-    paths: ["argument.panels[]"],
+    paths: [
+      "argument.panels[]",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "argument.presentation.focusedPanel",
+      "argument.presentation.stagedPanels[]",
+    ],
     reason:
-      "a Loom panel's new optional addedBy reads as a narrowed union branch under baselines that never had the property",
+      "a Loom panel's new optional addedBy reads as a narrowed union branch under baselines that never had the property" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/loom-panel-added-by-break.md",
   },
   {
@@ -904,9 +1031,32 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // `argument.panels[]` for `addedByProfile`, which this entry also covers.
     pattern: "loom/main.tsx",
     baselines: ["20260923T232217Z-9unt7nppL26FihSK"],
-    paths: ["argument.panels[]", "result.addPanel.before"],
+    paths: [
+      "argument.panels[]",
+      "result.addPanel.before",
+      "result.addPanel.panel",
+      "result.addPiece.addedBy",
+      "result.duplicatePanel.addedBy",
+      "result.duplicatePanel.before",
+      "result.duplicatePanel.panel",
+      "result.movePanel.before",
+      "result.movePanel.panel",
+      "result.panels[]",
+      "result.removePanel.panel",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "argument.presentation.focusedPanel",
+      "argument.presentation.stagedPanels[]",
+      "result.presentation.focusedPanel",
+      "result.presentation.stagedPanels[]",
+      "result.setPresentation.focusedPanel",
+      "result.setPresentation.stagedPanels[]",
+      "result.viewerState.selectedPanel",
+    ],
     reason:
-      "a Loom panel's addedBy becomes the runtime-attested adder, written only by admitPanel, which reads as a narrowed union branch in the panels and in addPanel's event",
+      "a Loom panel's addedBy becomes the runtime-attested adder, written only by admitPanel, which reads as a narrowed union branch in the panels and in addPanel's event" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/loom-panel-attested-adder-break.md",
   },
   {
@@ -915,9 +1065,35 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // event of the three streams that add a panel.
     pattern: "loom/main.tsx",
     baselines: ["20260924T085224Z-oEtBQ4AVdy1fMTAB"],
-    paths: ["argument.panels[]", "result.addPanel.addedBy"],
+    paths: [
+      "argument.panels[]",
+      "result.addPanel.addedBy",
+      "result.addPanel.before",
+      "result.addPanel.panel",
+      "result.addPiece.addedBy",
+      "result.addPiece.before",
+      "result.addPiece.panel",
+      "result.duplicatePanel.addedBy",
+      "result.duplicatePanel.before",
+      "result.duplicatePanel.panel",
+      "result.movePanel.before",
+      "result.movePanel.panel",
+      "result.panels[]",
+      "result.removePanel.panel",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "argument.presentation.focusedPanel",
+      "argument.presentation.stagedPanels[]",
+      "result.presentation.focusedPanel",
+      "result.presentation.stagedPanels[]",
+      "result.setPresentation.focusedPanel",
+      "result.setPresentation.stagedPanels[]",
+      "result.viewerState.selectedPanel",
+    ],
     reason:
-      "a Loom panel's addedBy becomes the runtime-attested adder, written only by admitPanel, and an admission event no longer names one",
+      "a Loom panel's addedBy becomes the runtime-attested adder, written only by admitPanel, and an admission event no longer names one" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/loom-panel-attested-adder-break.md",
   },
   {
@@ -926,9 +1102,16 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // which the proof reads as a changed label on the briefs.
     pattern: "cfc-exchange-rules/witnessed-chain.tsx",
     baselines: ["20260926T005010Z-wTSqH_JN5Vg6LFNp"],
-    paths: ["argument.briefs[]"],
+    paths: [
+      "argument.briefs[]",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "argument.committed",
+    ],
     reason:
-      "the witnessed-chain demo's release rule pins the submit step beneath commit, which changes the declared policy's digest",
+      "the witnessed-chain demo's release rule pins the submit step beneath commit, which changes the declared policy's digest" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/witnessed-chain-two-level-break.md",
   },
   {
@@ -1035,9 +1218,14 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "argument.requests.*",
       "result.$VIEWS.chats.rooms",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.rooms",
     ],
     reason:
-      "a manager's room link now types the room's `messages`, which the recorded link left open; every stored room link is to a room output whose `messages` the new type admits",
+      "a manager's room link now types the room's `messages`, which the recorded link left open; every stored room link is to a room output whose `messages` the new type admits" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-room-link-messages-break.md",
   },
   {
@@ -1061,9 +1249,14 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "argument.requests.*",
       "result.$VIEWS.chats.rooms",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.rooms",
     ],
     reason:
-      "a manager's index entry now types `revision`, and a refused outcome `code`, which the recorded outcomes left open; no stored request outcome holds either",
+      "a manager's index entry now types `revision`, and a refused outcome `code`, which the recorded outcomes left open; no stored request outcome holds either" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-index-revision-break.md",
   },
   {
@@ -1075,10 +1268,10 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     //
     // These baselines also report the scope the manager's `rooms` now
     // declares, which `fabrichat-view-scopes-break.md` records, so the
-    // entry names that path beside its own. They now report the `delivery`
-    // a request outcome gained, under the manager's views, where the proof
-    // reported `rooms`: it reports one issue per role. The entry names that
-    // path too, which `fabrichat-add-member-offer-break.md` records.
+    // entry names that path beside its own. They also report the `delivery`
+    // a request outcome gained, under the manager's views, and the entry
+    // names that path too, which `fabrichat-add-member-offer-break.md`
+    // records.
     pattern: "fabrichat/manager.tsx",
     baselines: [
       "20261008T225324Z-Oj3DbCTq-94tEYN3",
@@ -1090,9 +1283,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "argument.requests.*",
       "result.$VIEWS.chats.rooms",
       "result.$VIEWS.chats.requests.*",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.requests.*",
+      "result.rooms",
     ],
     reason:
-      "a manager's room link now types the room's `roster`, which the recorded link left open; every stored room link is to a room output with no `roster` or with a list of profile links, which the new type admits",
+      "a manager's room link now types the room's `roster`, which the recorded link left open; every stored room link is to a room output with no `roster` or with a list of profile links, which the new type admits" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-room-link-roster-break.md",
   },
   {
@@ -1113,9 +1312,17 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.chats.rooms",
       "result.$VIEWS.chats.people",
       "argument.requests.*",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.$VIEWS.chats.requests.*",
+      "result.people",
+      "result.requests.*",
+      "result.rooms",
     ],
     reason:
-      "a manager's rooms and people declare the per-session scope they are derived in; nothing is stored at either path for a reader to refuse",
+      "a manager's rooms and people declare the per-session scope they are derived in; nothing is stored at either path for a reader to refuse" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-view-scopes-break.md",
   },
   {
@@ -1145,9 +1352,19 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261022T220213Z-LlstD45te1meAfuA",
       "20261024T002137Z-_xficjXREAbKWap9",
     ],
-    paths: ["argument.requests.*", "result.$VIEWS.chats.people"],
+    paths: [
+      "argument.requests.*",
+      "result.$VIEWS.chats.people",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.$VIEWS.chats.rooms",
+      "result.people",
+      "result.rooms",
+    ],
     reason:
-      "a room's policy states `maxAttachments`, an optional number, where its schema took any value; no stored policy holds the key",
+      "a room's policy states `maxAttachments`, an optional number, where its schema took any value; no stored policy holds the key" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-max-attachments-break.md",
   },
   {
@@ -1176,9 +1393,14 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     ],
     paths: [
       "result.chatManager.$VIEWS.chats.rooms",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.chatManager.rooms",
     ],
     reason:
-      "home's chat manager's rooms declare the per-session scope they are derived in; a home rolled forward still delivers them, and nothing is stored at that path for a reader to refuse",
+      "home's chat manager's rooms declare the per-session scope they are derived in; a home rolled forward still delivers them, and nothing is stored at that path for a reader to refuse" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-view-scopes-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1197,9 +1419,17 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "result.chatManager.$VIEWS.chats.rooms",
       "result.chatManager.$VIEWS.chats.people",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.chatManager.$VIEWS.chats.requests.*",
+      "result.chatManager.people",
+      "result.chatManager.requests.*",
+      "result.chatManager.rooms",
     ],
     reason:
-      "home's chat manager's rooms and people declare the per-session scope they are derived in; a home rolled forward still delivers them, and nothing is stored at either path for a reader to refuse",
+      "home's chat manager's rooms and people declare the per-session scope they are derived in; a home rolled forward still delivers them, and nothing is stored at either path for a reader to refuse" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-view-scopes-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1209,10 +1439,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     },
   },
   {
-    // Two baselines of the default-profile slot break, whose proof now blames
+    // Two baselines of the default-profile slot break, whose proof blames
     // the scope the manager's `rooms` declares under home's `chatManager`
-    // where it blamed `result.defaultProfile`: the proof reports one issue per
-    // role. The entry names both paths. `home-default-profile-slot-break.md`
+    // beside `result.defaultProfile`. The entry names both paths. `home-default-profile-slot-break.md`
     // records the first, with the ruling its own entry carries, and this
     // record the second.
     pattern: "system/home.tsx",
@@ -1223,9 +1452,14 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "result.defaultProfile",
       "result.chatManager.$VIEWS.chats.rooms",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.chatManager.rooms",
     ],
     reason:
-      "home's chat manager's rooms declare the per-session scope they are derived in, and its default profile moved under a slot cell as the slot break records; a home rolled forward still delivers both",
+      "home's chat manager's rooms declare the per-session scope they are derived in, and its default profile moved under a slot cell as the slot break records; a home rolled forward still delivers both" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-view-scopes-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1241,10 +1475,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // `space-own-chat` alone, so a stored outcome admitted either of any
     // type; the candidate types them.
     //
-    // The proof now blames the scope the manager's `people` declares, which
-    // `fabrichat-view-scopes-per-user-break.md` records, in place of
-    // `requests` in the result role: it reports one issue per role. The
-    // entry names both paths.
+    // The proof also blames the scope the manager's `people` declares, which
+    // `fabrichat-view-scopes-per-user-break.md` records. The entry names both
+    // paths.
     pattern: "fabrichat/manager.tsx",
     baselines: [
       "20261011T170652Z-2XdZAneyCTt2Teex",
@@ -1253,9 +1486,17 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "argument.requests.*",
       "result.$VIEWS.chats.requests.*",
       "result.$VIEWS.chats.people",
+      "result.requests.*",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.$VIEWS.chats.rooms",
+      "result.people",
+      "result.rooms",
     ],
     reason:
-      "a manager's request outcome now types `delivery`, and a refused one the `shared-inbox` code, which the recorded outcomes left open; no stored request outcome holds either",
+      "a manager's request outcome now types `delivery`, and a refused one the `shared-inbox` code, which the recorded outcomes left open; no stored request outcome holds either" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-add-member-offer-break.md",
   },
   {
@@ -1263,9 +1504,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // and the refusal code a manager's request outcome gained reach home's
     // contract too. These baselines also report the scope the manager's
     // `rooms` declares, which `fabrichat-view-scopes-break.md` records under
-    // the same ruling it carries there, and the proof now blames `requests`
-    // in its place: it reports one issue per role. The entry names both
-    // paths. Home is a required pattern, so it carries the ruling that lets
+    // the same ruling it carries there, and the proof blames `requests`
+    // beside it. The entry names both paths. Home is a required pattern, so it carries the ruling that lets
     // it name one.
     pattern: "system/home.tsx",
     baselines: [
@@ -1277,9 +1517,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "result.chatManager.$VIEWS.chats.rooms",
       "result.chatManager.$VIEWS.chats.requests.*",
+      "result.chatManager.requests.*",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.chatManager.rooms",
     ],
     reason:
-      "home's chat manager's request outcomes now type `delivery`, and a refused one the `shared-inbox` code, and its rooms declare the per-session scope they are derived in; a home rolled forward still delivers both",
+      "home's chat manager's request outcomes now type `delivery`, and a refused one the `shared-inbox` code, and its rooms declare the per-session scope they are derived in; a home rolled forward still delivers both" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-add-member-offer-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1291,10 +1537,10 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The same ruling, against the home baselines recorded with the scope
     // the manager's views declare, and with the action that replaces a
-    // refused private inbox. The proof now blames the scope the manager's
+    // refused private inbox. The proof also blames the scope the manager's
     // `people` declares, which `fabrichat-view-scopes-per-user-break.md`
-    // records under the ruling its own entry carries, in place of `requests`:
-    // it reports one issue per role. The entry names both paths.
+    // records under the ruling its own entry carries. The entry names both
+    // paths.
     pattern: "system/home.tsx",
     baselines: [
       "20261011T170655Z-AJPqLNiOact-MHN0",
@@ -1303,9 +1549,17 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "result.chatManager.$VIEWS.chats.requests.*",
       "result.chatManager.$VIEWS.chats.people",
+      "result.chatManager.requests.*",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.chatManager.$VIEWS.chats.rooms",
+      "result.chatManager.people",
+      "result.chatManager.rooms",
     ],
     reason:
-      "home's chat manager's request outcomes now type `delivery`, and a refused one the `shared-inbox` code, which the recorded outcomes left open; a home rolled forward still delivers them",
+      "home's chat manager's request outcomes now type `delivery`, and a refused one the `shared-inbox` code, which the recorded outcomes left open; a home rolled forward still delivers them" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-add-member-offer-break.md",
     requiredPatternOverride: {
       rulingBy: "Dan",
@@ -1320,9 +1574,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // its edit, delete, and obliterate handlers; the stored shape, keyed
     // records under a policy naming the old handlers, is left behind. Every
     // recorded room baseline reads that as a changed `ifc` on the messages'
-    // elements, and each also reports a result the room no longer offers:
-    // its activity log, or its per-user record of act outcomes. The proof
-    // reports one issue per role, so each baseline names one of the two.
+    // elements, and each also reports the results the room no longer offers:
+    // its activity log, its per-user record of act outcomes, or its message
+    // windows, as each baseline offered them.
     //
     // These four, the oldest, report `argument.about` as well, the start
     // reviewed break `fabrichat-start-reviewed-break.md` records; the entry
@@ -1335,9 +1589,182 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261005T182129Z-3RSVlUS0NdLuz2VP",
       "20261005T224806Z-OeD1Mc2I_LQ_d8L_",
     ],
-    paths: ["argument.about", "result.recentActivity"],
+    paths: [
+      "argument.about",
+      "result.recentActivity",
+      "argument.messages[]",
+      "result.$VIEWS.room.recentActivity",
+      "result.$VIEWS.room.deleteMessage.message.reactions[]",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.deleteReaction.message.reactions[]",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.editMessage.message.reactions[]",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.editMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.editMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.messages.closeWindow",
+      "result.$VIEWS.room.messages.windows",
+      "result.$VIEWS.room.messages.latest.messages[].reactions[]",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.reactions",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.replyTo.message",
+      "result.$VIEWS.room.obliterateMessage.message.reactions[]",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendMessage.message.reactions[]",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.sendMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendReaction.message.reactions[]",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.reactions",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendReaction.replyTo.message.reactions",
+      "result.$VIEWS.room.sendReaction.replyTo.message.replyTo.message",
+      "result.deleteMessage.message.reactions[]",
+      "result.deleteMessage.message.replyTo.message.reactions",
+      "result.deleteMessage.message.replyTo.message.replyTo.message",
+      "result.deleteMessage.replyTo.message.reactions",
+      "result.deleteMessage.replyTo.message.replyTo.message",
+      "result.deleteReaction.message.reactions[]",
+      "result.deleteReaction.message.replyTo.message.reactions",
+      "result.deleteReaction.message.replyTo.message.replyTo.message",
+      "result.deleteReaction.replyTo.message.reactions",
+      "result.deleteReaction.replyTo.message.replyTo.message",
+      "result.editMessage.message.reactions[]",
+      "result.editMessage.message.replyTo.message.reactions",
+      "result.editMessage.message.replyTo.message.replyTo.message",
+      "result.editMessage.replyTo.message.reactions",
+      "result.editMessage.replyTo.message.replyTo.message",
+      "result.messages.closeWindow",
+      "result.messages.windows",
+      "result.messages.latest.messages[].reactions[]",
+      "result.messages.latest.messages[].replyTo.message.reactions",
+      "result.messages.latest.messages[].replyTo.message.replyTo.message",
+      "result.obliterateMessage.message.reactions[]",
+      "result.obliterateMessage.message.replyTo.message.reactions",
+      "result.obliterateMessage.message.replyTo.message.replyTo.message",
+      "result.obliterateMessage.replyTo.message.reactions",
+      "result.obliterateMessage.replyTo.message.replyTo.message",
+      "result.sendMessage.message.reactions[]",
+      "result.sendMessage.message.replyTo.message.reactions",
+      "result.sendMessage.message.replyTo.message.replyTo.message",
+      "result.sendMessage.replyTo.message.reactions",
+      "result.sendMessage.replyTo.message.replyTo.message",
+      "result.sendReaction.message.reactions[]",
+      "result.sendReaction.message.replyTo.message.reactions",
+      "result.sendReaction.message.replyTo.message.replyTo.message",
+      "result.sendReaction.replyTo.message.reactions",
+      "result.sendReaction.replyTo.message.replyTo.message",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.recentActivityExpiredThrough",
+      "result.$VIEWS.room.recentActivityExpiredThrough",
+      "result.$VIEWS.room.deleteMessage.requestId",
+      "result.$VIEWS.room.deleteMessage.version",
+      "result.$VIEWS.room.deleteMessage.message.earlierVersions",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.deleteReaction.requestId",
+      "result.$VIEWS.room.deleteReaction.version",
+      "result.$VIEWS.room.deleteReaction.message.earlierVersions",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.editedAt",
+      "result.$VIEWS.room.editMessage.requestId",
+      "result.$VIEWS.room.editMessage.version",
+      "result.$VIEWS.room.editMessage.message.earlierVersions",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.editMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.editMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.messages.openWindow",
+      "result.$VIEWS.room.messages.latest.messages[].earlierVersions",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.earlierVersions",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.editedAt",
+      "result.$VIEWS.room.obliterateMessage.requestId",
+      "result.$VIEWS.room.obliterateMessage.version",
+      "result.$VIEWS.room.obliterateMessage.message.earlierVersions",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendMessage.requestId",
+      "result.$VIEWS.room.sendMessage.version",
+      "result.$VIEWS.room.sendMessage.message.earlierVersions",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendReaction.requestId",
+      "result.$VIEWS.room.sendReaction.version",
+      "result.$VIEWS.room.sendReaction.message.earlierVersions",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendReaction.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendReaction.replyTo.message.editedAt",
+      "result.deleteMessage.requestId",
+      "result.deleteMessage.version",
+      "result.deleteMessage.message.earlierVersions",
+      "result.deleteMessage.message.replyTo.message.earlierVersions",
+      "result.deleteMessage.message.replyTo.message.editedAt",
+      "result.deleteMessage.replyTo.message.earlierVersions",
+      "result.deleteMessage.replyTo.message.editedAt",
+      "result.deleteReaction.requestId",
+      "result.deleteReaction.version",
+      "result.deleteReaction.message.earlierVersions",
+      "result.deleteReaction.message.replyTo.message.earlierVersions",
+      "result.deleteReaction.message.replyTo.message.editedAt",
+      "result.deleteReaction.replyTo.message.earlierVersions",
+      "result.deleteReaction.replyTo.message.editedAt",
+      "result.editMessage.requestId",
+      "result.editMessage.version",
+      "result.editMessage.message.earlierVersions",
+      "result.editMessage.message.replyTo.message.earlierVersions",
+      "result.editMessage.message.replyTo.message.editedAt",
+      "result.editMessage.replyTo.message.earlierVersions",
+      "result.editMessage.replyTo.message.editedAt",
+      "result.messages.openWindow",
+      "result.messages.latest.messages[].earlierVersions",
+      "result.messages.latest.messages[].replyTo.message.earlierVersions",
+      "result.messages.latest.messages[].replyTo.message.editedAt",
+      "result.obliterateMessage.requestId",
+      "result.obliterateMessage.version",
+      "result.obliterateMessage.message.earlierVersions",
+      "result.obliterateMessage.message.replyTo.message.earlierVersions",
+      "result.obliterateMessage.message.replyTo.message.editedAt",
+      "result.obliterateMessage.replyTo.message.earlierVersions",
+      "result.obliterateMessage.replyTo.message.editedAt",
+      "result.sendMessage.requestId",
+      "result.sendMessage.version",
+      "result.sendMessage.message.earlierVersions",
+      "result.sendMessage.message.replyTo.message.earlierVersions",
+      "result.sendMessage.message.replyTo.message.editedAt",
+      "result.sendMessage.replyTo.message.earlierVersions",
+      "result.sendMessage.replyTo.message.editedAt",
+      "result.sendReaction.requestId",
+      "result.sendReaction.version",
+      "result.sendReaction.message.earlierVersions",
+      "result.sendReaction.message.replyTo.message.earlierVersions",
+      "result.sendReaction.message.replyTo.message.editedAt",
+      "result.sendReaction.replyTo.message.earlierVersions",
+      "result.sendReaction.replyTo.message.editedAt",
+    ],
     reason:
-      "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind",
+      "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -1376,14 +1803,190 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261013T181948Z-ESqKYLsNLOgxeFAL",
       "20261013T223149Z-1UouAjk3LgOrndVt",
     ],
-    paths: ["argument.messages[]", "result.recentActivity"],
+    paths: [
+      "argument.messages[]",
+      "result.recentActivity",
+      "result.$VIEWS.room.recentActivity",
+      "result.$VIEWS.room.deleteMessage.message.reactions[]",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.deleteReaction.message.reactions[]",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.editMessage.message.reactions[]",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.editMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.editMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.messages.closeWindow",
+      "result.$VIEWS.room.messages.windows",
+      "result.$VIEWS.room.messages.latest.messages[].reactions[]",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.reactions",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.replyTo.message",
+      "result.$VIEWS.room.obliterateMessage.message.reactions[]",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendMessage.message.reactions[]",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.sendMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendReaction.message.reactions[]",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.reactions",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendReaction.replyTo.message.reactions",
+      "result.$VIEWS.room.sendReaction.replyTo.message.replyTo.message",
+      "result.deleteMessage.message.reactions[]",
+      "result.deleteMessage.message.replyTo.message.reactions",
+      "result.deleteMessage.message.replyTo.message.replyTo.message",
+      "result.deleteMessage.replyTo.message.reactions",
+      "result.deleteMessage.replyTo.message.replyTo.message",
+      "result.deleteReaction.message.reactions[]",
+      "result.deleteReaction.message.replyTo.message.reactions",
+      "result.deleteReaction.message.replyTo.message.replyTo.message",
+      "result.deleteReaction.replyTo.message.reactions",
+      "result.deleteReaction.replyTo.message.replyTo.message",
+      "result.editMessage.message.reactions[]",
+      "result.editMessage.message.replyTo.message.reactions",
+      "result.editMessage.message.replyTo.message.replyTo.message",
+      "result.editMessage.replyTo.message.reactions",
+      "result.editMessage.replyTo.message.replyTo.message",
+      "result.messages.closeWindow",
+      "result.messages.windows",
+      "result.messages.latest.messages[].reactions[]",
+      "result.messages.latest.messages[].replyTo.message.reactions",
+      "result.messages.latest.messages[].replyTo.message.replyTo.message",
+      "result.obliterateMessage.message.reactions[]",
+      "result.obliterateMessage.message.replyTo.message.reactions",
+      "result.obliterateMessage.message.replyTo.message.replyTo.message",
+      "result.obliterateMessage.replyTo.message.reactions",
+      "result.obliterateMessage.replyTo.message.replyTo.message",
+      "result.sendMessage.message.reactions[]",
+      "result.sendMessage.message.replyTo.message.reactions",
+      "result.sendMessage.message.replyTo.message.replyTo.message",
+      "result.sendMessage.replyTo.message.reactions",
+      "result.sendMessage.replyTo.message.replyTo.message",
+      "result.sendReaction.message.reactions[]",
+      "result.sendReaction.message.replyTo.message.reactions",
+      "result.sendReaction.message.replyTo.message.replyTo.message",
+      "result.sendReaction.replyTo.message.reactions",
+      "result.sendReaction.replyTo.message.replyTo.message",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.recentActivityExpiredThrough",
+      "result.$VIEWS.room.recentActivityExpiredThrough",
+      "result.$VIEWS.room.deleteMessage.requestId",
+      "result.$VIEWS.room.deleteMessage.version",
+      "result.$VIEWS.room.deleteMessage.message.earlierVersions",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.deleteReaction.requestId",
+      "result.$VIEWS.room.deleteReaction.version",
+      "result.$VIEWS.room.deleteReaction.message.earlierVersions",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.editedAt",
+      "result.$VIEWS.room.editMessage.requestId",
+      "result.$VIEWS.room.editMessage.version",
+      "result.$VIEWS.room.editMessage.message.earlierVersions",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.editMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.editMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.messages.openWindow",
+      "result.$VIEWS.room.messages.latest.messages[].earlierVersions",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.earlierVersions",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.editedAt",
+      "result.$VIEWS.room.obliterateMessage.requestId",
+      "result.$VIEWS.room.obliterateMessage.version",
+      "result.$VIEWS.room.obliterateMessage.message.earlierVersions",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendMessage.requestId",
+      "result.$VIEWS.room.sendMessage.version",
+      "result.$VIEWS.room.sendMessage.message.earlierVersions",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendReaction.requestId",
+      "result.$VIEWS.room.sendReaction.version",
+      "result.$VIEWS.room.sendReaction.message.earlierVersions",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendReaction.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendReaction.replyTo.message.editedAt",
+      "result.deleteMessage.requestId",
+      "result.deleteMessage.version",
+      "result.deleteMessage.message.earlierVersions",
+      "result.deleteMessage.message.replyTo.message.earlierVersions",
+      "result.deleteMessage.message.replyTo.message.editedAt",
+      "result.deleteMessage.replyTo.message.earlierVersions",
+      "result.deleteMessage.replyTo.message.editedAt",
+      "result.deleteReaction.requestId",
+      "result.deleteReaction.version",
+      "result.deleteReaction.message.earlierVersions",
+      "result.deleteReaction.message.replyTo.message.earlierVersions",
+      "result.deleteReaction.message.replyTo.message.editedAt",
+      "result.deleteReaction.replyTo.message.earlierVersions",
+      "result.deleteReaction.replyTo.message.editedAt",
+      "result.editMessage.requestId",
+      "result.editMessage.version",
+      "result.editMessage.message.earlierVersions",
+      "result.editMessage.message.replyTo.message.earlierVersions",
+      "result.editMessage.message.replyTo.message.editedAt",
+      "result.editMessage.replyTo.message.earlierVersions",
+      "result.editMessage.replyTo.message.editedAt",
+      "result.messages.openWindow",
+      "result.messages.latest.messages[].earlierVersions",
+      "result.messages.latest.messages[].replyTo.message.earlierVersions",
+      "result.messages.latest.messages[].replyTo.message.editedAt",
+      "result.obliterateMessage.requestId",
+      "result.obliterateMessage.version",
+      "result.obliterateMessage.message.earlierVersions",
+      "result.obliterateMessage.message.replyTo.message.earlierVersions",
+      "result.obliterateMessage.message.replyTo.message.editedAt",
+      "result.obliterateMessage.replyTo.message.earlierVersions",
+      "result.obliterateMessage.replyTo.message.editedAt",
+      "result.sendMessage.requestId",
+      "result.sendMessage.version",
+      "result.sendMessage.message.earlierVersions",
+      "result.sendMessage.message.replyTo.message.earlierVersions",
+      "result.sendMessage.message.replyTo.message.editedAt",
+      "result.sendMessage.replyTo.message.earlierVersions",
+      "result.sendMessage.replyTo.message.editedAt",
+      "result.sendReaction.requestId",
+      "result.sendReaction.version",
+      "result.sendReaction.message.earlierVersions",
+      "result.sendReaction.message.replyTo.message.earlierVersions",
+      "result.sendReaction.message.replyTo.message.editedAt",
+      "result.sendReaction.replyTo.message.earlierVersions",
+      "result.sendReaction.replyTo.message.editedAt",
+      "result.$VIEWS.room.participantPrincipals",
+      "result.participantPrincipals",
+      "result.$VIEWS.room.participantEntries",
+      "result.participantEntries",
+    ],
     reason:
-      "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind",
+      "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
     // The same break, against the baselines that offered the per-user act
-    // outcomes, which the proof reports ahead of the activity log.
+    // outcomes.
     pattern: "fabrichat/room.tsx",
     baselines: [
       "20261014T012736Z-lylYV6qdLO9BesnG",
@@ -1394,15 +1997,204 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261014T130013Z-uRhft5bPPY03WmU6",
       "20261014T142812Z-p_fHr5eLl9Kdq7am",
     ],
-    paths: ["argument.messages[]", "result.messageRequests"],
+    paths: [
+      "argument.messages[]",
+      "result.messageRequests",
+      "result.recentActivity",
+      "result.$VIEWS.room.messageRequests",
+      "result.$VIEWS.room.recentActivity",
+      "result.$VIEWS.room.deleteMessage.message.reactions[]",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.deleteReaction.message.reactions[]",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.editMessage.message.reactions[]",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.editMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.editMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.messages.closeWindow",
+      "result.$VIEWS.room.messages.windows",
+      "result.$VIEWS.room.messages.latest.messages[].reactions[]",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.reactions",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.replyTo.message",
+      "result.$VIEWS.room.obliterateMessage.message.reactions[]",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendMessage.message.reactions[]",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.sendMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendReaction.message.reactions[]",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.reactions",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendReaction.replyTo.message.reactions",
+      "result.$VIEWS.room.sendReaction.replyTo.message.replyTo.message",
+      "result.deleteMessage.message.reactions[]",
+      "result.deleteMessage.message.replyTo.message.reactions",
+      "result.deleteMessage.message.replyTo.message.replyTo.message",
+      "result.deleteMessage.replyTo.message.reactions",
+      "result.deleteMessage.replyTo.message.replyTo.message",
+      "result.deleteReaction.message.reactions[]",
+      "result.deleteReaction.message.replyTo.message.reactions",
+      "result.deleteReaction.message.replyTo.message.replyTo.message",
+      "result.deleteReaction.replyTo.message.reactions",
+      "result.deleteReaction.replyTo.message.replyTo.message",
+      "result.editMessage.message.reactions[]",
+      "result.editMessage.message.replyTo.message.reactions",
+      "result.editMessage.message.replyTo.message.replyTo.message",
+      "result.editMessage.replyTo.message.reactions",
+      "result.editMessage.replyTo.message.replyTo.message",
+      "result.messages.closeWindow",
+      "result.messages.windows",
+      "result.messages.latest.messages[].reactions[]",
+      "result.messages.latest.messages[].replyTo.message.reactions",
+      "result.messages.latest.messages[].replyTo.message.replyTo.message",
+      "result.obliterateMessage.message.reactions[]",
+      "result.obliterateMessage.message.replyTo.message.reactions",
+      "result.obliterateMessage.message.replyTo.message.replyTo.message",
+      "result.obliterateMessage.replyTo.message.reactions",
+      "result.obliterateMessage.replyTo.message.replyTo.message",
+      "result.sendMessage.message.reactions[]",
+      "result.sendMessage.message.replyTo.message.reactions",
+      "result.sendMessage.message.replyTo.message.replyTo.message",
+      "result.sendMessage.replyTo.message.reactions",
+      "result.sendMessage.replyTo.message.replyTo.message",
+      "result.sendReaction.message.reactions[]",
+      "result.sendReaction.message.replyTo.message.reactions",
+      "result.sendReaction.message.replyTo.message.replyTo.message",
+      "result.sendReaction.replyTo.message.reactions",
+      "result.sendReaction.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.messages.threads[].root.reactions[]",
+      "result.$VIEWS.room.messages.threads[].root.replyTo.message.reactions",
+      "result.$VIEWS.room.messages.threads[].root.replyTo.message.replyTo.message",
+      "result.messages.threads[].root.reactions[]",
+      "result.messages.threads[].root.replyTo.message.reactions",
+      "result.messages.threads[].root.replyTo.message.replyTo.message",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.recentActivityExpiredThrough",
+      "result.$VIEWS.room.recentActivityExpiredThrough",
+      "result.$VIEWS.room.deleteMessage.requestId",
+      "result.$VIEWS.room.deleteMessage.version",
+      "result.$VIEWS.room.deleteMessage.message.earlierVersions",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.deleteReaction.requestId",
+      "result.$VIEWS.room.deleteReaction.version",
+      "result.$VIEWS.room.deleteReaction.message.earlierVersions",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.editedAt",
+      "result.$VIEWS.room.editMessage.requestId",
+      "result.$VIEWS.room.editMessage.version",
+      "result.$VIEWS.room.editMessage.message.earlierVersions",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.editMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.editMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.messages.openWindow",
+      "result.$VIEWS.room.messages.latest.messages[].earlierVersions",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.earlierVersions",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.editedAt",
+      "result.$VIEWS.room.obliterateMessage.requestId",
+      "result.$VIEWS.room.obliterateMessage.version",
+      "result.$VIEWS.room.obliterateMessage.message.earlierVersions",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.participantEntries",
+      "result.$VIEWS.room.participantPrincipals",
+      "result.$VIEWS.room.sendMessage.requestId",
+      "result.$VIEWS.room.sendMessage.version",
+      "result.$VIEWS.room.sendMessage.message.earlierVersions",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendReaction.requestId",
+      "result.$VIEWS.room.sendReaction.version",
+      "result.$VIEWS.room.sendReaction.message.earlierVersions",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendReaction.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendReaction.replyTo.message.editedAt",
+      "result.deleteMessage.requestId",
+      "result.deleteMessage.version",
+      "result.deleteMessage.message.earlierVersions",
+      "result.deleteMessage.message.replyTo.message.earlierVersions",
+      "result.deleteMessage.message.replyTo.message.editedAt",
+      "result.deleteMessage.replyTo.message.earlierVersions",
+      "result.deleteMessage.replyTo.message.editedAt",
+      "result.deleteReaction.requestId",
+      "result.deleteReaction.version",
+      "result.deleteReaction.message.earlierVersions",
+      "result.deleteReaction.message.replyTo.message.earlierVersions",
+      "result.deleteReaction.message.replyTo.message.editedAt",
+      "result.deleteReaction.replyTo.message.earlierVersions",
+      "result.deleteReaction.replyTo.message.editedAt",
+      "result.editMessage.requestId",
+      "result.editMessage.version",
+      "result.editMessage.message.earlierVersions",
+      "result.editMessage.message.replyTo.message.earlierVersions",
+      "result.editMessage.message.replyTo.message.editedAt",
+      "result.editMessage.replyTo.message.earlierVersions",
+      "result.editMessage.replyTo.message.editedAt",
+      "result.messages.openWindow",
+      "result.messages.latest.messages[].earlierVersions",
+      "result.messages.latest.messages[].replyTo.message.earlierVersions",
+      "result.messages.latest.messages[].replyTo.message.editedAt",
+      "result.obliterateMessage.requestId",
+      "result.obliterateMessage.version",
+      "result.obliterateMessage.message.earlierVersions",
+      "result.obliterateMessage.message.replyTo.message.earlierVersions",
+      "result.obliterateMessage.message.replyTo.message.editedAt",
+      "result.obliterateMessage.replyTo.message.earlierVersions",
+      "result.obliterateMessage.replyTo.message.editedAt",
+      "result.participantEntries",
+      "result.participantPrincipals",
+      "result.sendMessage.requestId",
+      "result.sendMessage.version",
+      "result.sendMessage.message.earlierVersions",
+      "result.sendMessage.message.replyTo.message.earlierVersions",
+      "result.sendMessage.message.replyTo.message.editedAt",
+      "result.sendMessage.replyTo.message.earlierVersions",
+      "result.sendMessage.replyTo.message.editedAt",
+      "result.sendReaction.requestId",
+      "result.sendReaction.version",
+      "result.sendReaction.message.earlierVersions",
+      "result.sendReaction.message.replyTo.message.earlierVersions",
+      "result.sendReaction.message.replyTo.message.editedAt",
+      "result.sendReaction.replyTo.message.earlierVersions",
+      "result.sendReaction.replyTo.message.editedAt",
+      "result.$VIEWS.room.messages.threads[].root.earlierVersions",
+      "result.$VIEWS.room.messages.threads[].root.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.messages.threads[].root.replyTo.message.editedAt",
+      "result.messages.threads[].root.earlierVersions",
+      "result.messages.threads[].root.replyTo.message.earlierVersions",
+      "result.messages.threads[].root.replyTo.message.editedAt",
+    ],
     reason:
-      "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its per-user act outcomes are gone; rooms holding the keyed records are left behind",
+      "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its per-user act outcomes are gone; rooms holding the keyed records are left behind" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
     // The same break, against the baselines that offered `closeWindow` at the
-    // room's top level, which the proof reports ahead of the per-user act
-    // outcomes they offered too; the room offers no windows.
+    // room's top level; the room offers no windows.
     pattern: "fabrichat/room.tsx",
     baselines: [
       "20261014T140128Z-95MKWhVw3ffYhuDn",
@@ -1435,9 +2227,215 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261016T145511Z-URDigmceiHUQTgYw",
       "20261016T151336Z-qyuKzPzUZ0f_x9H1",
     ],
-    paths: ["argument.messages[]", "result.closeWindow"],
+    paths: [
+      "argument.messages[]",
+      "result.closeWindow",
+      "result.messageRequests",
+      "result.recentActivity",
+      "result.$VIEWS.room.closeWindow",
+      "result.$VIEWS.room.messageRequests",
+      "result.$VIEWS.room.recentActivity",
+      "result.$VIEWS.room.deleteMessage.message.reactions[]",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.deleteReaction.message.reactions[]",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.reactions",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.editMessage.message.reactions[]",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.editMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.editMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.messages.closeWindow",
+      "result.$VIEWS.room.messages.windows",
+      "result.$VIEWS.room.messages.latest.messages[].reactions[]",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.reactions",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.replyTo.message",
+      "result.$VIEWS.room.messages.threads[].root.reactions[]",
+      "result.$VIEWS.room.messages.threads[].root.replyTo.message.reactions",
+      "result.$VIEWS.room.messages.threads[].root.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.obliterateMessage.message.reactions[]",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendMessage.message.reactions[]",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.reactions",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendMessage.replyTo.message.reactions",
+      "result.$VIEWS.room.sendMessage.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendReaction.message.reactions[]",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.reactions",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.sendReaction.replyTo.message.reactions",
+      "result.$VIEWS.room.sendReaction.replyTo.message.replyTo.message",
+      "result.deleteMessage.message.reactions[]",
+      "result.deleteMessage.message.replyTo.message.reactions",
+      "result.deleteMessage.message.replyTo.message.replyTo.message",
+      "result.deleteMessage.replyTo.message.reactions",
+      "result.deleteMessage.replyTo.message.replyTo.message",
+      "result.deleteReaction.message.reactions[]",
+      "result.deleteReaction.message.replyTo.message.reactions",
+      "result.deleteReaction.message.replyTo.message.replyTo.message",
+      "result.deleteReaction.replyTo.message.reactions",
+      "result.deleteReaction.replyTo.message.replyTo.message",
+      "result.editMessage.message.reactions[]",
+      "result.editMessage.message.replyTo.message.reactions",
+      "result.editMessage.message.replyTo.message.replyTo.message",
+      "result.editMessage.replyTo.message.reactions",
+      "result.editMessage.replyTo.message.replyTo.message",
+      "result.messages.closeWindow",
+      "result.messages.windows",
+      "result.messages.latest.messages[].reactions[]",
+      "result.messages.latest.messages[].replyTo.message.reactions",
+      "result.messages.latest.messages[].replyTo.message.replyTo.message",
+      "result.messages.threads[].root.reactions[]",
+      "result.messages.threads[].root.replyTo.message.reactions",
+      "result.messages.threads[].root.replyTo.message.replyTo.message",
+      "result.obliterateMessage.message.reactions[]",
+      "result.obliterateMessage.message.replyTo.message.reactions",
+      "result.obliterateMessage.message.replyTo.message.replyTo.message",
+      "result.obliterateMessage.replyTo.message.reactions",
+      "result.obliterateMessage.replyTo.message.replyTo.message",
+      "result.sendMessage.message.reactions[]",
+      "result.sendMessage.message.replyTo.message.reactions",
+      "result.sendMessage.message.replyTo.message.replyTo.message",
+      "result.sendMessage.replyTo.message.reactions",
+      "result.sendMessage.replyTo.message.replyTo.message",
+      "result.sendReaction.message.reactions[]",
+      "result.sendReaction.message.replyTo.message.reactions",
+      "result.sendReaction.message.replyTo.message.replyTo.message",
+      "result.sendReaction.replyTo.message.reactions",
+      "result.sendReaction.replyTo.message.replyTo.message",
+      "result.$VIEWS.room.messageRights[].message.reactions[]",
+      "result.$VIEWS.room.messageRights[].message.replyTo.message.reactions",
+      "result.$VIEWS.room.messageRights[].message.replyTo.message.replyTo.message",
+      "result.messageRights[].message.reactions[]",
+      "result.messageRights[].message.replyTo.message.reactions",
+      "result.messageRights[].message.replyTo.message.replyTo.message",
+      // The paths from here on are recorded in
+      // `docs/history/pattern-compat-every-issue-paths.md`, which names the
+      // recorded change each one comes from.
+      "result.openWindow",
+      "result.recentActivityExpiredThrough",
+      "result.$VIEWS.room.openWindow",
+      "result.$VIEWS.room.recentActivityExpiredThrough",
+      "result.$VIEWS.room.deleteMessage.requestId",
+      "result.$VIEWS.room.deleteMessage.version",
+      "result.$VIEWS.room.deleteMessage.message.earlierVersions",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.deleteReaction.requestId",
+      "result.$VIEWS.room.deleteReaction.version",
+      "result.$VIEWS.room.deleteReaction.message.earlierVersions",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteReaction.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.deleteReaction.replyTo.message.editedAt",
+      "result.$VIEWS.room.editMessage.requestId",
+      "result.$VIEWS.room.editMessage.version",
+      "result.$VIEWS.room.editMessage.message.earlierVersions",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.editMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.editMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.editMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.messages.openWindow",
+      "result.$VIEWS.room.messages.latest.messages[].earlierVersions",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.earlierVersions",
+      "result.$VIEWS.room.messages.latest.messages[].replyTo.message.editedAt",
+      "result.$VIEWS.room.messages.threads[].root.earlierVersions",
+      "result.$VIEWS.room.messages.threads[].root.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.messages.threads[].root.replyTo.message.editedAt",
+      "result.$VIEWS.room.obliterateMessage.requestId",
+      "result.$VIEWS.room.obliterateMessage.version",
+      "result.$VIEWS.room.obliterateMessage.message.earlierVersions",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.obliterateMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.obliterateMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.participantEntries",
+      "result.$VIEWS.room.participantPrincipals",
+      "result.$VIEWS.room.sendMessage.requestId",
+      "result.$VIEWS.room.sendMessage.version",
+      "result.$VIEWS.room.sendMessage.message.earlierVersions",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendMessage.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendMessage.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendMessage.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendReaction.requestId",
+      "result.$VIEWS.room.sendReaction.version",
+      "result.$VIEWS.room.sendReaction.message.earlierVersions",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendReaction.message.replyTo.message.editedAt",
+      "result.$VIEWS.room.sendReaction.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.sendReaction.replyTo.message.editedAt",
+      "result.deleteMessage.requestId",
+      "result.deleteMessage.version",
+      "result.deleteMessage.message.earlierVersions",
+      "result.deleteMessage.message.replyTo.message.earlierVersions",
+      "result.deleteMessage.message.replyTo.message.editedAt",
+      "result.deleteMessage.replyTo.message.earlierVersions",
+      "result.deleteMessage.replyTo.message.editedAt",
+      "result.deleteReaction.requestId",
+      "result.deleteReaction.version",
+      "result.deleteReaction.message.earlierVersions",
+      "result.deleteReaction.message.replyTo.message.earlierVersions",
+      "result.deleteReaction.message.replyTo.message.editedAt",
+      "result.deleteReaction.replyTo.message.earlierVersions",
+      "result.deleteReaction.replyTo.message.editedAt",
+      "result.editMessage.requestId",
+      "result.editMessage.version",
+      "result.editMessage.message.earlierVersions",
+      "result.editMessage.message.replyTo.message.earlierVersions",
+      "result.editMessage.message.replyTo.message.editedAt",
+      "result.editMessage.replyTo.message.earlierVersions",
+      "result.editMessage.replyTo.message.editedAt",
+      "result.messages.openWindow",
+      "result.messages.latest.messages[].earlierVersions",
+      "result.messages.latest.messages[].replyTo.message.earlierVersions",
+      "result.messages.latest.messages[].replyTo.message.editedAt",
+      "result.messages.threads[].root.earlierVersions",
+      "result.messages.threads[].root.replyTo.message.earlierVersions",
+      "result.messages.threads[].root.replyTo.message.editedAt",
+      "result.obliterateMessage.requestId",
+      "result.obliterateMessage.version",
+      "result.obliterateMessage.message.earlierVersions",
+      "result.obliterateMessage.message.replyTo.message.earlierVersions",
+      "result.obliterateMessage.message.replyTo.message.editedAt",
+      "result.obliterateMessage.replyTo.message.earlierVersions",
+      "result.obliterateMessage.replyTo.message.editedAt",
+      "result.participantEntries",
+      "result.participantPrincipals",
+      "result.sendMessage.requestId",
+      "result.sendMessage.version",
+      "result.sendMessage.message.earlierVersions",
+      "result.sendMessage.message.replyTo.message.earlierVersions",
+      "result.sendMessage.message.replyTo.message.editedAt",
+      "result.sendMessage.replyTo.message.earlierVersions",
+      "result.sendMessage.replyTo.message.editedAt",
+      "result.sendReaction.requestId",
+      "result.sendReaction.version",
+      "result.sendReaction.message.earlierVersions",
+      "result.sendReaction.message.replyTo.message.earlierVersions",
+      "result.sendReaction.message.replyTo.message.editedAt",
+      "result.sendReaction.replyTo.message.earlierVersions",
+      "result.sendReaction.replyTo.message.editedAt",
+      "result.$VIEWS.room.messageRights[].message.earlierVersions",
+      "result.$VIEWS.room.messageRights[].message.replyTo.message.earlierVersions",
+      "result.$VIEWS.room.messageRights[].message.replyTo.message.editedAt",
+      "result.messageRights[].message.earlierVersions",
+      "result.messageRights[].message.replyTo.message.earlierVersions",
+      "result.messageRights[].message.replyTo.message.editedAt",
+    ],
     reason:
-      "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its message windows are gone; rooms holding the keyed records are left behind",
+      "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its message windows are gone; rooms holding the keyed records are left behind" +
+      "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -1448,7 +2446,12 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261002T164437Z-YHxasJyb9fC8x4pe",
       "20261013T211911Z-zT2_vHqj25wS-uwm",
     ],
-    paths: ["result.$VIEWS.chat.recentActivity"],
+    paths: [
+      "result.$VIEWS.chat.recentActivity",
+      "result.$VIEWS.chat.messages.windows",
+      "result.room.recentActivity",
+      "result.room.messages.windows",
+    ],
     reason:
       "the room keeps no activity log, so the placement's data face no longer carries one",
     record: "docs/history/fabrichat-pushed-messages-break.md",
@@ -1461,7 +2464,14 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261002T164437Z-2PzF8f6WgNbffWBh",
       "20261013T211911Z-ucRdNCI0HJOQ7XAv",
     ],
-    paths: ["result.$VIEWS.chat.recentActivity"],
+    paths: [
+      "result.$VIEWS.chat.recentActivity",
+      "result.$VIEWS.chat.messages.windows",
+      "result.placement.$VIEWS.chat.recentActivity",
+      "result.placement.$VIEWS.chat.messages.windows",
+      "result.placement.room.recentActivity",
+      "result.placement.room.messages.windows",
+    ],
     reason:
       "the room keeps no activity log, so the data face the adapter re-exports no longer carries one",
     record: "docs/history/fabrichat-pushed-messages-break.md",
@@ -1500,6 +2510,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "argument.state.result.picks[].title",
       "result.state.result.picks[].book",
+      "argument.state.result.picks[].author",
     ],
     reason:
       "a pick carries `title`, `author` and `why` inline and `basedOn` in place of `book`",
@@ -1508,15 +2519,19 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The manager's views derived under the reader's access (`rooms`,
     // `people`) are declared per user where they were declared per session.
-    // The proof reads that as a changed scope, and reports one issue per
-    // role, so each baseline names the field it blames. The baselines that
+    // The proof reads that as a changed scope at each. The baselines that
     // also report the room policy's `maxAttachments` are in that break's
     // entry, which names both paths.
     pattern: "fabrichat/manager.tsx",
     baselines: [
       "20261024T000755Z-abyOKppwBZufFk_m",
     ],
-    paths: ["result.$VIEWS.chats.people"],
+    paths: [
+      "result.$VIEWS.chats.people",
+      "result.$VIEWS.chats.rooms",
+      "result.people",
+      "result.rooms",
+    ],
     reason:
       "the manager's views derived under the reader's access are stored per user rather than per session, in documents of their own; a manager rolled forward lists its rooms",
     record: "docs/history/fabrichat-view-scopes-per-user-break.md",
@@ -1552,7 +2567,12 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261024T022626Z-fQTNhQDagiuXxPOO",
       "20261024T145618Z-Gv5sfeYUA8vf1ZMN",
     ],
-    paths: ["result.$VIEWS.room.participantEntries"],
+    paths: [
+      "result.$VIEWS.room.participantEntries",
+      "result.$VIEWS.room.participantPrincipals",
+      "result.participantEntries",
+      "result.participantPrincipals",
+    ],
     reason:
       "the room's participant entries and principals are stored per user rather than per session, in documents of their own; a room rolled forward lists them",
     record: "docs/history/fabrichat-view-scopes-per-user-break.md",
@@ -1588,7 +2608,12 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261023T225638Z-ul8itnlMjhVPl5G4",
       "20261024T000758Z-cjuKEPPeYWQzIxGW",
     ],
-    paths: ["result.chatManager.$VIEWS.chats.people"],
+    paths: [
+      "result.chatManager.$VIEWS.chats.people",
+      "result.chatManager.$VIEWS.chats.rooms",
+      "result.chatManager.people",
+      "result.chatManager.rooms",
+    ],
     reason:
       "home's chat manager's views derived under the reader's access are stored per user rather than per session; a home rolled forward lists its chats",
     record: "docs/history/fabrichat-view-scopes-per-user-break.md",
