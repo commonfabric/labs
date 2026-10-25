@@ -73,6 +73,16 @@ the reader's item schema; and a renderer reading a link slot by its own
 schema reads the target's UI whatever narrower view the link was written
 from.
 
+A keyed cell's reader schema is its parent's narrowed to the key
+(`Cell.key()`). Where the parent refuses the key — a property declared
+`false`, `items: false`, an undeclared key beside
+`additionalProperties: false`, any key below a false schema or below a
+scalar — the keyed cell carries `false` and selects nothing, the same as one
+whose parent declares the child `{ "not": true }`. It is not left agnostic,
+which would read the raw value and adopt the stored schema at a link. The one
+refused key that reads with no schema is `length` under a schema admitting an
+array or a string, which the store reads as a value.
+
 What the entry crossing compares against is the reader's own schema. An
 agnostic reader whose read passes through one link to reach a slot
 holding another adopts the second link's schema, which describes the

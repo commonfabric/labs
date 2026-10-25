@@ -434,6 +434,55 @@ const missingParentIsArray = (schema: JSONSchema | undefined): boolean =>
   cfcSchemaGivesNoShape(schema) || schemaDeclaresArray(schema);
 
 /**
+ * Whether `schema` admits an array or a string, the two values whose `length`
+ * the store reads as a value rather than holding as a child. A schema
+ * declaring no type admits both, and a `false` schema, however it is written,
+ * admits neither. A union admits them where an arm does, a conjunction where
+ * every part does, and an `enum` or `const` beside no `type` where a member is
+ * one. A reference resolves against the document it sits in.
+ */
+const schemaAdmitsLength = (schema: JSONSchema): boolean => {
+  const visiting = new Set<JSONSchema>();
+  const admits = (schema: JSONSchema): boolean => {
+    if (typeof schema === "boolean") return schema;
+    const resolved = ContextualFlowControl.resolveSchemaRefsOrThrow(schema);
+    if (typeof resolved === "boolean") return resolved;
+    // A reference cycle reaches the schema again before deciding anything.
+    if (
+      ContextualFlowControl.isFalseSchema(resolved) || visiting.has(resolved)
+    ) return false;
+    visiting.add(resolved);
+    try {
+      const admitsPart = (part: JSONSchema) =>
+        admits(cfcSchemaWithInheritedDefs(part, resolved.$defs));
+      if (resolved.allOf !== undefined && !resolved.allOf.every(admitsPart)) {
+        return false;
+      }
+      const arms = [...(resolved.anyOf ?? []), ...(resolved.oneOf ?? [])];
+      if (arms.length > 0 && !arms.some(admitsPart)) return false;
+      if (resolved.type === undefined) {
+        const members = Array.isArray(resolved.enum)
+          ? resolved.enum
+          : "const" in resolved
+          ? [resolved.const]
+          : undefined;
+        return members === undefined ||
+          members.some((member) =>
+            typeof member === "string" || Array.isArray(member)
+          );
+      }
+      const types = Array.isArray(resolved.type)
+        ? resolved.type
+        : [resolved.type];
+      return types.includes("array") || types.includes("string");
+    } finally {
+      visiting.delete(resolved);
+    }
+  };
+  return admits(schema);
+};
+
+/**
  * The schema write-policy input for a write landing at an item of an array:
  * the array itself, with the item's schema as its `items`. A candidate
  * envelope spells each segment of an input's path as a named property, and
@@ -3530,12 +3579,21 @@ export class CellImpl<T extends FabricValue>
     if (keys.length > 0) recordCap(currentLink.path.length, currentLink.schema);
 
     for (const key of keys) {
-      // Get child schema if we have one
-      childSchema = currentLink.schema
-        ? ContextualFlowControl.getSchemaAtPath(currentLink.schema, [
-          key.toString(),
-        ])
-        : undefined;
+      // A position the parent schema refuses keeps `false`, so the child reads
+      // nothing, the same as under `{ not: true }`. A child with no schema
+      // would read the raw value instead, and adopt the schema of a link
+      // stored there. `length` on an array or a string is the exception: the
+      // store reads it as a value, so it reads with no schema.
+      // `getSchemaAtPath()` returns `undefined` for a schema only where
+      // narrowing refuses the position.
+      const parentSchema = currentLink.schema;
+      const segment = key.toString();
+      childSchema = parentSchema === undefined
+        ? undefined
+        : ContextualFlowControl.getSchemaAtPath(parentSchema, [segment]) ??
+          (segment === "length" && schemaAdmitsLength(parentSchema)
+            ? undefined
+            : false);
 
       // Create a child link with an extended path. schemaAtPath retains the
       // reachable $defs closure needed for later key() calls while dropping

@@ -163,7 +163,7 @@ describe("recursive handle union", () => {
 
         expect(actual.path).toEqual(["node", "foo"]);
         expect(actual.schema).toEqual(expected.schema);
-        expect(actual.schema).toBeUndefined();
+        expect(actual.schema).toBe(false);
       });
 
       it("narrows a union of a local definition and a stored recursive handle", () => {

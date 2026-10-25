@@ -227,7 +227,7 @@ describe("Reactive Schema Support", () => {
       });
     });
 
-    it("should return undefined schema for properties that aren't allowed by the schema", () => {
+    it("returns a `false` schema for a property the schema does not allow", () => {
       // Set a schema with nested objects
       const schema = {
         type: "object",
@@ -255,9 +255,9 @@ describe("Reactive Schema Support", () => {
       // Access nested property that's not part of the schema
       const nicknameRef = ref.key("nickname");
 
-      // Check schema is undefined for this field that isn't in the schema
+      // The schema refuses the field, so the keyed cell selects nothing.
       const exported = exportCell(nicknameRef);
-      expect(exported.schema).toBeUndefined();
+      expect(exported.schema).toBe(false);
     });
   });
 
