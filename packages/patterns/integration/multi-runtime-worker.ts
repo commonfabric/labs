@@ -1368,45 +1368,6 @@ const handlers: Record<
     return {};
   },
 
-  // Wait until this runtime has NO outstanding event intents: every event it
-  // fired has reached a terminal consequence (consequenced, errored, dropped,
-  // or refused) AND that consequence has arrived back here — speculation.md
-  // §4 step 2's retirement, whose outstanding set the overlay maintains
-  // (`Runtime.speculationOverlay.pendingIntentCount`). Under the served (ON)
-  // topology this is the client-observable "the server has drained my sends"
-  // signal the harness settle uses in place of the in-process server's
-  // `idle()` (see MultiRuntimeHarness.settle). Resolves `{ pending: 0 }` on
-  // quiescence, or with the still-outstanding count once `timeoutMs`
-  // elapses — the caller's settle round proceeds and the test's own assert
-  // speaks, so a wedged consequence degrades loudly instead of hanging the
-  // harness. The OFF arm has no overlay and resolves immediately.
-  async eventQuiescence({ timeoutMs }) {
-    const overlay = controller().runtime.speculationOverlay;
-    if (overlay === undefined || overlay.pendingIntentCount === 0) {
-      return { pending: 0 };
-    }
-    const budget = typeof timeoutMs === "number" ? timeoutMs : 10_000;
-    // Event-driven with a budget: the overlay resolves the quiescence
-    // waiter from the same untrack step that retires the last intent
-    // (consequence pushes arrive on the WebSocket; nothing here needs
-    // nudging), raced against the budget timer. A waiter whose race the
-    // timer wins stays parked until the set empties or the overlay
-    // closes — a spent resolver, not a leak (growth is bounded by the
-    // caller's settle rounds and every parked waiter flushes together).
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const budgetElapsed = new Promise<"budget">((resolve) => {
-      timer = setTimeout(() => resolve("budget"), budget);
-    });
-    const raced = await Promise.race([
-      overlay.waitForIntentQuiescence().then(() => "quiescent" as const),
-      budgetElapsed,
-    ]);
-    clearTimeout(timer);
-    return {
-      pending: raced === "quiescent" ? 0 : overlay.pendingIntentCount,
-    };
-  },
-
   // Wait — with no budget of its own — until every event this runtime
   // fired has reached a terminal consequence (consequenced, errored,
   // dropped, or refused) that has ARRIVED back here: the overlay's
