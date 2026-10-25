@@ -681,6 +681,30 @@ describe("link-resolution", () => {
         ).toEqual({ type: ["number", "null"], default: null });
       });
 
+      it("adds no default from a carried schema that selects nothing", () => {
+        expect(
+          resolveAcross(
+            "carried-false-default",
+            { type: "number" },
+            { not: true, default: 7 },
+          ),
+        ).toEqual({ type: "number" });
+      });
+
+      it("adds no default from a carried reference to a schema that selects nothing", () => {
+        expect(
+          resolveAcross(
+            "carried-referenced-false-default",
+            { type: "number" },
+            {
+              $defs: { Nothing: { not: true } },
+              $ref: "#/$defs/Nothing",
+              default: 7,
+            },
+          ),
+        ).toEqual({ type: "number" });
+      });
+
       it("keeps the default an adopted schema declares over the carried one", () => {
         expect(
           resolveAcross(

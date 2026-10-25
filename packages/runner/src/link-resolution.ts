@@ -94,11 +94,17 @@ const resolveDeclaration = (
       : false
     : schema;
 
-/** The top-level `default` a resolved `schema` declares, if any. */
+/**
+ * The top-level `default` a resolved `schema` declares, if any. A schema that
+ * selects nothing declares none: no default stands in where nothing is
+ * selected.
+ */
 const declaredDefault = (
   schema: JSONSchema | undefined,
 ): JSONSchemaObj["default"] =>
-  isObjectOrArray(schema) ? schema.default : undefined;
+  isObjectOrArray(schema) && !ContextualFlowControl.isFalseSchema(schema)
+    ? schema.default
+    : undefined;
 
 /** `schema` with `value` as its top-level `default`. */
 const withDefault = (
@@ -933,9 +939,10 @@ export function resolveLinkTracingDereferences(
       // the stored schema's where it declares one, and the carried schema's
       // otherwise. A top-level `default` constrains nothing, and narrowing
       // can reduce a stored schema to one, so a stored schema that keeps the
-      // carried one traveling can still supply the default. A false schema
-      // on either side takes none: it selects nothing, so no default stands
-      // in.
+      // carried one traveling can still supply the default. No default
+      // crosses to or from a false schema: one that selects nothing neither
+      // supplies a default nor takes one. A stored schema that replaces a
+      // false carried one brings its own, as any adopted schema does.
       const storedDefault = declaredDefault(declaration);
       if (
         link.schema !== undefined &&
