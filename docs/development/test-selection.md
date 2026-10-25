@@ -703,8 +703,9 @@ that somebody who has just fixed something can refresh without waiting.
 Each run reads the newest aggregate it can, fetches only the objects whose
 runs are not already folded into it, folds them, ages the counters, scores
 everything, and creates one manifest object and one aggregate object. It
-reads and folds two hundred objects at a time, so what it holds is bounded
-by the number of tests rather than by the number of runs.
+reads two hundred objects at a time and folds each day as one batch,
+spooled to a temporary file, so what it holds in memory is bounded by the
+number of tests rather than by the number of runs.
 
 A manifest holds every identity in the aggregate that the topology can
 place, rather than the identities that ran inside the window the run
@@ -718,6 +719,24 @@ entries, so the tests that had gone longest without running would be the
 ones it could no longer reach. An aggregate written before those files
 were carried holds none, and each identity rejoins the manifest as its
 records name a file again.
+
+Only the default branch says which tests exist and where each one lives.
+The identities the aggregate holds, and the file each one's records named,
+come from `main`'s records alone. A workstation or a pull request may be
+running a tree that adds, renames, or moves tests, so its records are
+evidence about identities `main` recorded before them and about nothing
+else. They count toward those identities' runs, failures, flakes, and new
+real test failures, and a pull request's lanes toward their costs. For any
+other identity they are kept by no state, and count only toward their own
+run's crowd, which is a fact about the run rather than about the test. A
+test a change adds enters the aggregate once `main` records it, which is
+once the change lands, and a move that lands replaces the old file the
+same way. `foldObservations` holds every batch to this, and since each day
+is one batch replayed in time order, an off-`main` record counts when
+`main` recorded the identity before it. A record that reaches the store
+late is folded by a later run, so whether it counts depends on what that
+run's aggregate already holds: one folded after `main`'s record counts,
+and one folded before a late `main` record arrives does not.
 
 An identity's cost window holds, for each day, how many of its passing
 executions fell in each duration bucket, and its cost is the ninetieth
@@ -887,9 +906,10 @@ name, so shard order does not describe when the runs happened. Same-commit
 disagreement and environmental failures also require evidence from the
 whole day before any failure is classified.
 
-A busy day is about six million observations, so the temporary file for
-one runs to a gigabyte or two. One day is live at a time, and its file is
-removed before the next day is read.
+A day read the long way is spooled the same way, a chunk of its raw
+objects at a time. A busy day is about six million observations, so the
+temporary file for one runs to a gigabyte or two. One day is live at a
+time, and its file is removed before the next day is read.
 
 Keeping those observations in memory rather than in a file would fit
 today. Folding the largest day so far peaks a little over a gigabyte with
@@ -922,10 +942,10 @@ list is carried in every state object written from then on.
 The window is folded one day at a time, oldest first, whichever way each day is
 read. The rules that decide whether a failure is a new real test failure look a
 day or two either side of it, and back at what the default branch last said, so
-a day folded after a later one would be judged against what happened after it. A
-day read from its rollup is folded in one batch with that day's local
-submissions, which the fold replays in time order. A day read the long way is
-folded in chunks of whole workflow runs, its local submissions among them.
+a day folded after a later one would be judged against what happened after it.
+Either way, a day is folded in one batch with that day's local submissions,
+which the fold spools and replays in time order. A day read the long way is
+read two hundred objects at a time.
 
 What the fallback rests on is that the shards that did read reached the
 batch and nothing else. Replaying the spooled observations is a read of
@@ -1672,8 +1692,8 @@ the end. The lane reads what the tree holds from the name maps the registration
 preload leaves in the spool. An identity a unit's processes did not register,
 nor any test inside it, is absent where everything the map holds that encloses
 it is a `describe`, known as one by a leaf the map holds inside it. Such an
-identity is one the manifest carries from a rename or from a branch, and the
-lane's job summary lists it apart from the identities that withdraw an excusal.
+identity is one the manifest carries for a test the tree no longer holds,
+such as one renamed since the manifest, and the lane's job summary lists it apart from the identities that withdraw an excusal.
 A registered test records the steps its body names as it runs, which no map
 holds, so an identity beneath a registered test shows nothing; so does one
 beneath a `describe` the map holds no leaf inside, and any identity of a unit

@@ -65,13 +65,22 @@ repository decides to ship is declared instead, in
   An entry is bounded twice. It forgives specific `(pattern, baseline)` pairs,
   so the contract recorded once the break ships is a baseline no entry names
   and the next change to that pattern is gated again. Within a pair it forgives
-  only the schema paths it names: one finding carries every issue the proof
-  found against that baseline, so accepting by pair alone would suppress an
-  unintended break landing beside the decided one — and `--update` would then
-  record that contract. A finding blaming any unnamed path stands, and so does
-  one whose paths cannot be parsed. What the proof reports is at most one issue
-  per role, so a second problem in a role whose issue is an accepted path can
-  still hide behind it; name as few paths as the removal needs.
+  only the schema paths it names. The proof reports every issue it finds
+  against a baseline, in both roles, each as a finding blaming one path: each
+  field of an object is judged on its own, and a node that fails at its own
+  level — a changed type, `asCell`, `ifc`, or `scope`, or a union alternative
+  the candidate no longer accepts — is reported once and not descended. So an
+  issue at an unnamed path stands beside the forgiven ones, and so does one
+  whose path cannot be parsed; accepting by pair alone would suppress an
+  unintended break landing beside the decided one, and `--update` would then
+  record that contract.
+
+  An entry names exactly the paths its pairs blame. A named path that none of
+  the entry's pairs blames fails the run, the way a pair that needs no
+  forgiving does: kept, it would silently forgive a later break at that path
+  against the listed baselines, including the one recorded just before the
+  break, which is where an unintended second break in the same change is
+  judged.
 
   An entry also names its decision record under `docs/history/` (`record`),
   and may not name a required pattern — the home and default-app roots update
@@ -79,14 +88,15 @@ repository decides to ship is declared instead, in
   are enforced whenever either gate runs
   (`tasks/pattern-break-registry-guards.ts`).
 
-  The run prints every pair it forgave, and fails on one that no longer needs
-  forgiving, so the list can only shrink. That audit is asked per pattern rather
-  than of the whole list, because CI divides the patterns among its lanes, each
-  lane passing the ones it runs with `--only` — the run that examined a pattern
-  is the one that can judge its entries, and the runs between them cover all of
-  them. A run given every pattern passes no `--only`. An entry whose pattern
-  file does not exist keeps that pattern among the ones the gate is given, and
-  the run given the pattern fails on the entry.
+  The run prints every pair it forgave, with how many issues, and fails on a
+  pair or a named path that no longer needs forgiving, so the list can only
+  shrink. That audit is asked per pattern rather than of the whole list, because
+  CI divides the patterns among its lanes, each lane passing the ones it runs
+  with `--only` — the run that examined a pattern is the one that can judge its
+  entries, and the runs between them cover all of them. A run given every
+  pattern passes no `--only`. An entry whose pattern file does not exist keeps
+  that pattern among the ones the gate is given, and the run given the pattern
+  fails on the entry.
 
   Reaching for any of this is a decision to strand data on running pieces; a
   break that also strands state needs the Tier 2 entry below.

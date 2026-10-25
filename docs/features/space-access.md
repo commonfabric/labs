@@ -207,6 +207,12 @@ was before the retry. The placeholder's `data-space-access-retries` attribute
 counts the space's settled retries, which is what a test waits on to know that
 a retry has been decided.
 
+An admission also crosses the worker boundary as `spaceaccessrestored`, naming
+the space, whoever asked for the retry that decided it. The shell drops the
+loads of that space it remembered as failed, a piece's or the space root's, and
+runs again each one a view is showing, so a refused space's home or piece
+appears once access is granted, without a reload.
+
 ## Changing the level
 
 `spaceAccess(target)` only reads. A handler changes a principal's entry with

@@ -1,4 +1,3 @@
-import type { FabricValue } from "@commonfabric/data-model";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -16,7 +15,7 @@ import * as MemoryServer from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/utils/logger";
 
 import type * as Routes from "./memory.routes.ts";
-import { formatMemWriteTrace, type MemWriteOp } from "./memwrite-trace.ts";
+import { formatMemWriteTrace } from "./memwrite-trace.ts";
 import type { AppRouteHandler } from "@/lib/types.ts";
 import { createSpan } from "@/middlewares/opentelemetry.ts";
 import { memoryServer } from "@/routes/storage/memory.ts";
@@ -287,7 +286,7 @@ export const attachMemorySocketPipeline = (
   }
 
   // Gated diagnostic write trace (off by default). `CF_DEBUG_MEMORY_WRITES=1`
-  // logs one `[memwrite]` line per committed op, tagged with this connection's
+  // logs one `[memwrite]` line per received op, tagged with this connection's
   // `c=<n>` so a write storm can be attributed to specific clients;
   // `CF_DEBUG_MEMORY_WRITE_VALUES=1` additionally dumps raw values (avoid on
   // real data — see memwrite-trace.ts).
@@ -298,12 +297,15 @@ export const attachMemorySocketPipeline = (
   const logMemWrites = (payload: string): void => {
     if (!debugMemWrites) return;
     try {
-      const parsed = MemoryServer.parseClientMessage(payload) as unknown as {
-        commit?: { operations?: Array<Record<string, FabricValue>> };
-      };
-      for (const op of parsed?.commit?.operations ?? []) {
+      // Observation only: receive() owns capability admission. Expand metadata
+      // here so compact and inline requests produce the same diagnostic.
+      const parsed = MemoryServer.parseClientMessage(payload, {
+        commitLabelTableV1: true,
+      });
+      if (parsed?.type !== "transact") return;
+      for (const op of parsed.commit.operations) {
         console.error(
-          formatMemWriteTrace(op as MemWriteOp, memConnId, debugMemWriteValues),
+          formatMemWriteTrace(op, memConnId, debugMemWriteValues),
         );
       }
     } catch {

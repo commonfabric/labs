@@ -81,6 +81,170 @@ after any mutation already sent, and the waiting mutations follow it in call
 order. A removal takes effect in the watch set restoration re-establishes from
 the moment its turn comes.
 
+## Routed transport and quotas
+
+The private listener speaks independently versioned router protocol v1, with
+authenticated negotiation and bounded header/chunk/completion records. It
+assembles forwarded application bodies at the endpoint, validates their routing
+headers against decoded content, and sends responses through a callback-driven
+bounded queue. The router forwards private responses without parsing their
+application bodies. The
+[Mode A specification](../../docs/specs/memory-v2/routed-mode-a.md#private-transport-version-and-streaming-records)
+defines framing, public streaming negotiation and compatibility. Public upload
+credits bound browser sends by router-accepted record bytes. The router
+assembles admission controls before validating them; ordinary application bodies
+continue to forward incrementally.
+
+Private peers require signed-link `routerEncodingNegotiation: true` and
+`routerRequestCredit: true`. The router's signed binary `rpc1` appends one byte
+`0x01` after the nonce; the host requires that exact byte and end-of-record
+before registering the control link. `rpo1` remains four bytes. A data
+`router.hello` carries original client `memoryFlags` and separate
+`negotiatedMemoryFlags`, selected from the client and the router's frozen
+startup public offer. The router-signed `rdb1` binds both canonical hashes,
+original first, selected second. The host validates the exact binding before
+consuming the ticket or replacing a backend, uses the selection for its backend
+hello, and echoes it with explicit support in `router.ready`. Support checks
+alone do not authorize a different selection. Private peers require coordinated
+deployment; endpoint upgrades cannot enable unadvertised encodings until the
+router restarts. Public streaming and credit framing are unchanged.
+
+Private request headers carry consecutive per-socket `requestOrdinal` values
+starting at `1`, without wrapping past `2^53 - 1`. Admission is by credit: once
+the data socket is ready the host grants its whole 4 MiB pending-input budget as
+an 8-byte binary `mri\x02` record, the router sends a header only within the
+credit it holds and the body immediately after it, and the host returns each
+request's declared bytes when its turn ends. This covers streamed requests,
+buffered controls and legacy uploads. Both private `router.hello` and
+`router.ready` require `routerRequestCredit: true`; that flag is excluded from
+public and effective Memory descriptors. Public upload and private response
+headers must not carry request ordinals.
+
+The credit counts bodies as sent. The host refuses a header past the credit the
+router has received or past its budget, so a router that ignores its credit
+closes its socket; it expands a compressed body only while the expanded bodies
+being decoded or waiting for their turns fit the same budget, and closes the
+socket on a body whose declared expansion alone exceeds it. One sender counter
+lets credit interleave between response records, coalesced, without releasing
+logical output-body counts. The router consumes credit before response assembly
+and public ownership checks; a blocked public downstream may delay credit
+without unbounded read-ahead. Malformed credit or out-of-order records close the
+connection, and cancellation releases each owned reservation exactly once.
+Request credit is independent of public `mrc\x01` credits.
+
+The label tables save little on documents written since labs #8767, #8788 and
+#8790 changed how link labels are carried: measured on 2026-10-23, they changed
+under 1% of the Memory messages in a Topics run and in a lunch-poll run and
+saved at most 0.1% of those messages' gzipped bytes. Documents written by the
+builds of 2026-10-01 to 10-15 keep heavy labels until rewritten, and there the
+tables reduce a space's label-bearing syncs from 17.6 MB to 3.8 MB and keep the
+largest of them under the routed default of 150,000 values per frame (see the
+protocol spec's label-table section). The tables change neither stored documents
+nor CFC decisions.
+
+Peers supporting `syncLabelTableV1` negotiate lossless interning of CFC
+label-map metadata in sync responses and effects. A sync's `labelTable` stores
+distinct labels and `labelPathTable` stores distinct paths; integer references
+replace these fields only in document CFC label-map entries. The client expands
+schemas, then restores complete metadata before replica integration. Application
+values keep their representation. Peers without the capability exchange inline
+labels. This transport representation preserves CFC decisions and lets repeated
+metadata fit the same frame and parser bounds.
+
+`commitLabelTableV1` independently negotiates CFC metadata tables under
+`transact.commit` and transaction acknowledgments' `response.ok`. The client
+compacts only the outgoing copy before transport validation; retained commits
+stay inline and replay is encoded using the replacement connection's
+capabilities. The server expands labels and paths after bounded wire decoding
+and before commit-shape, CFC and store validation. Malformed or unnegotiated
+metadata tables and references are refused before application. Routed structural
+checks see the compact payload and forward it unchanged to the endpoint. The
+server compacts acknowledgment revision documents at the connection's send
+boundary, including replay results, and the client expands them before resolving
+the commit. Each message has its own 16 MiB referenced-metadata expansion
+budget. The
+[commit encoding contract](../../docs/specs/memory-v2/04-protocol.md#negotiated-commit-metadata-encoding)
+defines the positions and expansion budget.
+
+The toolshed bounds request-driven output with a high mark and a low mark on
+retained logical output. It decodes and dispatches the next request, or produces
+a host refusal, while retained output is below the high mark: half of
+`limits.outputBytesPerSocket` when set, else half the 8 MiB message ceiling. At
+the high mark reads pause at body boundaries and dispatch waits; both resume
+once retained output falls below the low mark, a quarter of the bound, as
+completion-record write callbacks release bodies. Records are passed to the
+socket while the bytes awaiting write callbacks are below a 256 KiB send window
+(`ROUTER_SEND_WINDOW_BYTES`), so a response drains without an event-loop turn
+per record. An admitted partial body finishes with its input reservation held.
+Already buffered receiver events remain subject to the hard input queue bound.
+Closing the connection cancels the wait. Output past the bound is refused as
+`queued-output` as before, so a slow reader is back-pressured first and refused
+only by a message that would take retained output past the bound. Unsolicited
+effects, presence, and revocations retain bounded-close behavior on output
+exhaustion.
+
+The private Mode A host accepts partial `RoutedHostLimits` overrides. Omitted
+fields retain defaults, `null` disables an individual quota, and a positive safe
+integer sets a custom bound. This includes session, watch, holdings, principal,
+proof, request, space, context, ticket and socket quotas. `spacesPerContext`
+defaults to 1,200 distinct spaces over a context's lifetime;
+`sessionsPerContext` independently bounds simultaneous sessions.
+`viewsPerSession` defaults to 64 and `holdingsPerSession` to 8,192. `frameSlots`
+defaults to 150,000 JSON values; `null` disables value counting. The router
+advertises the matching deployment value in `hello.ok.routerFrameSlots`, which
+clients apply to sends and receives until the connection changes. An omitted
+hello field retains the 150,000 default. Disabling quotas retains byte and depth
+bounds, unambiguous JSON validation, authorization, ownership fencing and replay
+checks. The
+[Mode A specification](../../docs/specs/memory-v2/routed-mode-a.md#toolshed-deployment-inputs)
+describes deployment configuration and validation.
+
+The host's `context-closed` audit retains the first socket failure. An
+`output-limit` close includes `outputLimit` with `frameBytes`, `bufferedBytes`,
+`limitBytes`, `endpoint` (`data` or `control`), and `classification`
+(`single-message` or `queued-output`), sampled before close. `messageType` is
+included when the sender has a structured Memory message. The output bound
+(`limits.outputBytesPerSocket`, default 4 MiB, `null` disables it) applies to
+the larger of retained logical output and outstanding socket bytes, plus the
+attempted payload, when the socket already holds output; a message sent to a
+socket holding nothing is admitted up to 8 MiB, and no message over 8 MiB is
+sent, whatever the quotas. `single-message` means over 8 MiB. The audit carries
+no payload or error text.
+
+Structured data refusals also carry `outputLimit.diagnostics`: separate
+`socketBytes` and `sender.retainedBytes`, queued-body counts, lifetime logical
+and record admission/completion counters, active-body written progress, the
+records in flight (passed to the socket, callbacks not yet run) with the oldest
+one's kind, and monotonic queue/callback ages. A written prefix remains retained
+until the body's final record completes. These callbacks measure local socket
+writes, not peer receipt. `attemptedSource` identifies the response's
+originating request kind and routing identifiers when it matches the serialized
+dispatch; unsolicited pushes carry their own routing identifiers. Unmatched
+responses are explicitly unattributed. Identifiers are truncated to 256
+characters; message kinds to 64.
+
+`history` retains sixteen enqueue/high-water/callback/recovery observations. At
+2 MiB retained output, one Node `setImmediate` marker records an event-loop
+opportunity. It is canceled at recovery to 1 MiB or on close. The high-water
+episode is a fixed diagnostic marker, independent of the dispatch high and low
+marks. `eventLoop` reports whether the marker ran and its delay, or is null
+outside a high-water episode. Recording introduces no waits or admission
+changes. Only the failure audit emits these observations; a low socket counter
+alone cannot distinguish an outstanding blocked write from a callback that has
+not had an opportunity to run.
+
+Failure-only `messageSizes` measures result fields and sync
+documents/schema-table entries using the canonical Memory encoder. It keeps
+eight largest measured entries per category, recording paths, document IDs and
+standalone encoded byte sizes (including each encoding's format prefix), never
+values. These sizes are not additive wire contributions. The scan inspects at
+most `min(frameSlots ?? 256, 256)` entries and stops after two raw-message
+limits of measured bytes; the final encode can cost one additional frame. Frames
+above the 8 MiB raw-message limit are skipped. `truncated` marks incomplete
+scans, so a largest entry is largest among those inspected. `unavailable`
+preserves the original refusal when independent encoding fails. Queued bodies
+have source attribution only; size breakdowns describe the refused message.
+
 ## Layout
 
 - `v2.ts` — the protocol vocabulary: documents, operations, commits, queries,

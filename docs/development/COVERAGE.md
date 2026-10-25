@@ -940,12 +940,12 @@ changed, so a trend that took a cold run's figure beside a warm one's would show
 a drop the next warm run takes back.
 
 The pattern-integration process owns one shared cache in
-`packages/patterns/integration/pieces-controller.ts`. Its controller helper and
-the capability-gate controller both inject that cache into every runtime they
-create. A custom runtime in this suite must do the same. Setting
-`CF_COMPILE_CACHE_FILE` only tells the test-support cache where to persist its
-bytes; a runtime uses those bytes only when it receives the cache through its
-`moduleByteCache` option.
+`packages/patterns/integration/pieces-controller.ts`. Its controller helper, the
+capability-gate controller, and the serving loop the multi-runtime harness hosts
+all inject that cache into every runtime they create. A custom runtime in this
+suite must do the same. Setting `CF_COMPILE_CACHE_FILE` only tells the
+test-support cache where to persist its bytes; a runtime uses those bytes only
+when it receives the cache through its `moduleByteCache` option.
 
 Each lane records the state of the compile byte cache it restores
 (`COMPILE_CACHE_FILE` in `tasks/ci-capabilities.ts`) itself. A lane whose

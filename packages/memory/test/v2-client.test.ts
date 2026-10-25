@@ -1,4 +1,5 @@
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { defer } from "@commonfabric/utils/defer";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -3240,7 +3241,9 @@ Deno.test("memory v2 client replays retained commits in localSeq order after rec
     const [applied1, applied2] = await Promise.all([first, second]);
 
     assertEquals(transport.connectionCount, 2);
-    assertEquals(transport.transactLocalSeqs, [1, 2, 1, 2]);
+    // The first send drops the connection before the second request resumes
+    // from readiness. Both retained commits reach the replacement in order.
+    expect(transport.transactLocalSeqs).toEqual([1, 1, 2]);
     assertEquals(applied1.seq, 1);
     assertEquals(applied2.seq, 2);
   } finally {

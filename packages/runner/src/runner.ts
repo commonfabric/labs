@@ -24,7 +24,20 @@ import {
   usesLocalReads,
   validateLocalReadBasis,
 } from "./storage/local-read-policy.ts";
+import {
+  type AmbiguousDescription,
+  type NumberedCell,
+  numberedCells,
+  type RenumberedCell,
+} from "./cause-assignment.ts";
 import { keepRefusedArgumentSlots } from "./refused-argument-slots.ts";
+import {
+  compareStoredSetupBuild,
+  describeHold,
+  readStoredSetupBuild,
+  type StoredSetupBuild,
+  storedSetupBuildOf,
+} from "./stored-setup-build.ts";
 import { STORED_ARGUMENT_SCHEMA_REFUSAL } from "./stored-argument-refusal.ts";
 import {
   storedArgumentSlotIssues,
@@ -222,6 +235,7 @@ import {
 import {
   isCfcEnforcementRejection,
   isConflictRejection,
+  isPermanentAuthorizationRefusal,
   isStaleReadConflict,
   isStorageTransactionInconsistent,
 } from "./storage/rejection.ts";
@@ -282,7 +296,12 @@ import {
   setRunnableName,
 } from "./runner-utils.ts";
 import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
-import { narrowestScope, normalizeCellScope, scopeRank } from "./scope.ts";
+import {
+  isCellScope,
+  narrowestScope,
+  normalizeCellScope,
+  scopeRank,
+} from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
@@ -1123,6 +1142,86 @@ function isPositionalPartialCause(partialCause: unknown): boolean {
   return isObjectNotArray(partialCause) &&
     typeof partialCause.$generated === "number" &&
     Object.keys(partialCause).length === 1;
+}
+
+/**
+ * The description of a build a runtime has described, by pattern object and
+ * by the identity it was described for: the record setup stamps as
+ * `patternSetupBuild`, and the positional cells it was built from. A built
+ * pattern is immutable, so each is computed once.
+ */
+const describedBuilds = new WeakMap<
+  Pattern,
+  Map<string, { record: StoredSetupBuild; cells: NumberedCell[] }>
+>();
+
+/**
+ * What a start owes the setup stored on a piece, held against the build it
+ * loaded (`Runner.#storedSetupVerdict`): nothing, where they agree; a
+ * repair, where re-staging the internal cells and result projection puts
+ * them in agreement; or a hold, where re-staging would read a cell holding
+ * state as another cell's, so the stored setup is left as it is.
+ */
+interface StoredSetupVerdict {
+  owed: "nothing" | "repair" | "hold";
+
+  /** The cells holding state that moved, where the verdict is a hold. */
+  moved: RenumberedCell[];
+
+  /**
+   * The descriptions of cells holding state the pairing by order could not
+   * match across the two builds, where the verdict is a hold.
+   */
+  ambiguous: AmbiguousDescription[];
+
+  /**
+   * Whether a record of the pattern's identity decided the verdict. One
+   * stamped for it proves a setup of this version ran over the document.
+   */
+  recorded: boolean;
+
+  /**
+   * Whether the stored manifest lacks a derived internal cell of the build:
+   * with no record of the version, the sign that no setup for it ran over
+   * the document.
+   */
+  lacks: boolean;
+}
+
+/**
+ * The children a parent's `instanceChildren` meta records, by instance name:
+ * for each, the child that named instance runs in place of the one at its own
+ * spot. The meta is a list of `{ name, child }` entries rather than a record
+ * keyed by name, since an instance may take any name a `const` can, among
+ * them names a stored record may not use as a key, such as `constructor` and
+ * `__proto__`. An entry that is malformed, or that repeats a name an earlier
+ * entry gave, is skipped.
+ */
+function readInstanceChildren(
+  parent: Cell<any>,
+): Map<string, NormalizedFullLink> {
+  const raw = convertibleJsFromFabricValue(
+    parent.getMetaRaw("instanceChildren", { meta: ignoreReadForScheduling }),
+  );
+  const children = new Map<string, NormalizedFullLink>();
+  if (!Array.isArray(raw)) return children;
+  for (const entry of raw) {
+    if (!isObjectNotArray(entry) || typeof entry.name !== "string") continue;
+    const child = entry.child;
+    if (
+      children.has(entry.name) || !isObjectNotArray(child) ||
+      typeof child.space !== "string" || typeof child.id !== "string"
+    ) {
+      continue;
+    }
+    children.set(entry.name, {
+      space: child.space as MemorySpace,
+      id: child.id as URI,
+      path: [],
+      scope: isCellScope(child.scope) ? child.scope : "space",
+    });
+  }
+  return children;
 }
 
 /**
@@ -4556,6 +4655,18 @@ export class Runner {
           symbol: durableEntryRef.symbol,
         }, rawMetaWriteAuthorization);
       }
+      // The build whose internal cells and result projection were staged just
+      // now, described as a start holds it against the build it loads
+      // (`#storedSetupVerdict`). Stamped whether or not the completion marker
+      // is: the marker is about the argument, which a repair leaves alone,
+      // and this is about what every setup writes.
+      resultCell.withTx(tx).setMetaRaw(
+        "patternSetupBuild",
+        fabricFromConvertibleJsValue(
+          this.#describedBuild(pattern, durableEntryRef).record,
+        ),
+        rawMetaWriteAuthorization,
+      );
       // The durable stamps staged above supersede a keyless session pointer
       // — WHEN they commit. They are transaction state, so the pointer
       // removal rides the same commit: dropping it at staging would leave a
@@ -5110,25 +5221,145 @@ export class Runner {
   }
 
   /**
-   * Whether the internal-cell manifest stored on `resultCell` names every
-   * derived internal cell of `pattern`. `false` says no setup for this pattern
-   * ran over this document, which is what the cold-start repair in
-   * `#startCore()` turns on.
+   * The description of `pattern`'s build for the identity `ref`: the record
+   * setup stamps as `patternSetupBuild`, and the positional cells it
+   * describes. A sub-pattern child is described by its own pattern's
+   * identity, which this runtime's pattern manager knows.
    */
-  #storedManifestCovers(resultCell: Cell<unknown>, pattern: Pattern): boolean {
+  #describedBuild(
+    pattern: Pattern,
+    ref: { identity: string; symbol: string },
+  ): { record: StoredSetupBuild; cells: NumberedCell[] } {
+    let byRef = describedBuilds.get(pattern);
+    if (byRef === undefined) {
+      byRef = new Map();
+      describedBuilds.set(pattern, byRef);
+    }
+    const key = patternIdentityKey(ref);
+    let described = byRef.get(key);
+    if (described === undefined) {
+      const entryRefOf = (artifact: object) =>
+        this.#runtime.patternManager.getArtifactEntryRef(artifact);
+      described = {
+        record: storedSetupBuildOf(pattern, ref, entryRefOf),
+        cells: numberedCells(pattern, entryRefOf),
+      };
+      byRef.set(key, described);
+    }
+    return described;
+  }
+
+  /**
+   * What a start owes the setup stored on `resultCell`, holding it against
+   * `pattern` as this runtime builds it for the identity `ref`. A repair,
+   * the start repair in `#startCore()`, re-stages the pattern's internal
+   * cells and result projection.
+   *
+   * Why a stored setup can disagree with the build: a derived internal cell
+   * is named by its partial cause, and an anonymous cause is a position in
+   * the build. The result projection stores one link per slot, to the cell
+   * the build that set the piece up numbered for that slot. A build that
+   * numbers the slot differently writes the slot's value to another cell,
+   * and the stored projection reads that cell as another slot.
+   *
+   * Three things decide it. The internal-cell manifest has to name every
+   * derived internal cell of `pattern`, by partial cause and kind, and no
+   * cell `pattern` lacks: a cell the build no longer has is one an earlier
+   * build of the same pattern had. The record setup stamped, where it
+   * stamped one for this identity, has to describe this build
+   * (`compareStoredSetupBuild`); where it describes another, the cells
+   * holding state decide between a repair and a hold, since re-staging
+   * restores a derived cell and misplaces a stateful one. A document with no
+   * record of this identity is judged by its manifest alone, and where that
+   * disagrees, by whether the build has any cell holding state at all: with
+   * none, re-staging can misplace nothing.
+   */
+  #storedSetupVerdict(
+    resultCell: Cell<unknown>,
+    pattern: Pattern,
+    ref: { identity: string; symbol: string },
+  ): StoredSetupVerdict {
     const descriptors = pattern.derivedInternalCells ?? [];
-    if (descriptors.length === 0) return true;
     const stored = convertibleJsFromFabricValue(
       resultCell.getMetaRaw("internal", { meta: ignoreReadForScheduling }),
     );
-    if (!Array.isArray(stored)) return false;
-    const manifest = stored as InternalCellDescriptor[];
-    return descriptors.every((descriptor) =>
-      manifest.some((entry) =>
-        deepEqual(entry.partialCause, descriptor.partialCause) &&
-        entry.kind === descriptor.kind
-      )
+    const manifest = Array.isArray(stored)
+      ? stored as InternalCellDescriptor[]
+      : [];
+    const sameCell = (
+      a: { partialCause: JSONValue; kind?: EntityKind },
+      b: { partialCause: JSONValue; kind?: EntityKind },
+    ): boolean =>
+      deepEqual(a.partialCause, b.partialCause) && a.kind === b.kind;
+    const lacks = !descriptors.every((descriptor) =>
+      manifest.some((entry) => sameCell(entry, descriptor))
     );
+    const manifestAgrees = !lacks &&
+      manifest.every((entry) =>
+        descriptors.some((descriptor) => sameCell(descriptor, entry))
+      );
+    const { record, cells } = this.#describedBuild(pattern, ref);
+    const stamped = readStoredSetupBuild(
+      resultCell.getMetaRaw("patternSetupBuild", {
+        meta: ignoreReadForScheduling,
+      }),
+    );
+    if (stamped === undefined || !samePatternRef(stamped.pattern, ref)) {
+      const unrecorded = { moved: [], ambiguous: [], recorded: false, lacks };
+      if (manifestAgrees) return { owed: "nothing", ...unrecorded };
+      return {
+        owed: cells.some((cell) => cell.hasState) ? "hold" : "repair",
+        ...unrecorded,
+      };
+    }
+    const comparison = compareStoredSetupBuild(stamped, record, cells);
+    const recorded = { ambiguous: [], recorded: true, lacks };
+    switch (comparison.kind) {
+      case "same":
+        return {
+          owed: manifestAgrees ? "nothing" : "repair",
+          moved: [],
+          ...recorded,
+        };
+      case "renumbered":
+        return { owed: "repair", moved: comparison.moved, ...recorded };
+      case "held":
+        return {
+          ...recorded,
+          owed: "hold",
+          moved: comparison.moved,
+          ambiguous: comparison.ambiguous,
+        };
+    }
+  }
+
+  /**
+   * What a plain start of `resultCell` owes its stored setup, for `pattern`
+   * pinned as `ref`: the verdict of `#storedSetupVerdict()`, except that a
+   * manifest lacking one of this version's cells, under a completion marker
+   * naming another version, or none, and with no record of this version, is
+   * a repair whatever the cells holding state: that is a version whose setup
+   * never ran over the document, which the repair materializes, and the
+   * positional-child guard in setup is what judges its children. A record of
+   * this version proves its setup ran, so a hold that record decided stands.
+   */
+  #startOwes(
+    resultCell: Cell<unknown>,
+    pattern: Pattern,
+    ref: { identity: string; symbol: string },
+  ): StoredSetupVerdict {
+    const verdict = this.#storedSetupVerdict(resultCell, pattern, ref);
+    if (
+      verdict.owed === "hold" && !verdict.recorded && verdict.lacks &&
+      storedSetupMarker(
+          resultCell,
+          ref,
+          this.#sessionPatternPointer(resultCell),
+        ) !== "matches"
+    ) {
+      return { ...verdict, owed: "repair" };
+    }
+    return verdict;
   }
 
   /** Convert a module to pattern format */
@@ -5307,10 +5538,12 @@ export class Runner {
         recordSelection(tx, undefined);
         return;
       }
-      const live = this.#runtime.patternManager.artifactFromIdentitySync(
-        selected.identity,
-        selected.symbol,
-      ) as Pattern | undefined;
+      const live = this.#runtime.patternManager
+        .artifactFromIdentitySyncInSpace(
+          selected.identity,
+          selected.symbol,
+          resultCell.space,
+        ) as Pattern | undefined;
       if (live === undefined) {
         return this.#runtime.patternManager.loadPatternByIdentity(
           selected.identity,
@@ -5530,6 +5763,7 @@ export class Runner {
     // already has.
     let setupRepair: {
       pattern: Pattern;
+      ref: { identity: string; symbol: string };
       stage: (tx: IExtendedStorageTransaction) => void;
     } | undefined;
     // The work the pattern watcher has in flight following a move of the
@@ -5560,7 +5794,8 @@ export class Runner {
       // for it, so its seal and any refusal of it are attributed to the repair
       // rather than to an ordinary instantiation.
       const repair = shouldCommit && setupRepair?.pattern === pattern &&
-          !this.#storedManifestCovers(resultCell, pattern)
+          this.#startOwes(resultCell, pattern, setupRepair.ref).owed ===
+            "repair"
         ? setupRepair
         : undefined;
       const startActionId = `${
@@ -5746,10 +5981,20 @@ export class Runner {
           // document no earlier round loaded. The rounds of both kinds come
           // from one budget, `PIECE_RUN_START_MAX_RETRIES`, the bound
           // `Runtime.editWithRetry()` and a named piece's run start also put
-          // on a basis that keeps moving.
+          // on a basis that keeps moving. A start repair the principal may
+          // not commit, a READ member's start of a piece another build set
+          // up, takes one retry with no repair staged: the piece then runs
+          // for them over the stored setup, as it does for anyone the start
+          // owes no repair, and the next start by a writer repairs it.
           const recoverInstantiation = async (
             error: unknown,
-            refusal: "absence" | "basis" | "dropped" | "manifest" | "terminal",
+            refusal:
+              | "absence"
+              | "basis"
+              | "dropped"
+              | "manifest"
+              | "repair"
+              | "terminal",
             absent: readonly string[] = [],
           ): PieceInstantiationSettlement => {
             if (!exactNodesAreCurrent()) {
@@ -5763,8 +6008,11 @@ export class Runner {
               ]);
               return;
             }
+            // A refused repair is recoverable whatever round the commit was
+            // on: its retry drops the repair, after which no commit of this
+            // start carries one, so it can be taken once and no more.
             const recoverable = refusal !== "terminal" &&
-              (retry === undefined ||
+              (retry === undefined || refusal === "repair" ||
                 (refusal === "basis" && retry.roundsLeft > 0) ||
                 (refusal === "absence" && retry.roundsLeft > 0 &&
                   absent.some((key) => !retry.loaded.has(key))));
@@ -5799,10 +6047,14 @@ export class Runner {
                 : refusal === "dropped"
                 ? "had its contribution dropped from the serving wave; " +
                   "re-instantiating once from the rolled-back view"
+                : refusal === "repair"
+                ? "carried a setup repair this principal may not commit; " +
+                  "instantiating once more with no repair staged"
                 : "lost its basis to a concurrent write; re-instantiating " +
                   "from the caught-up view"),
               error,
             ]);
+            if (refusal === "repair") setupRepair = undefined;
 
             // The graph reads its own pending setup and internal-cell writes
             // while it is installed. A stale-read refusal or a later wave
@@ -5891,7 +6143,8 @@ export class Runner {
               return await instantiatePattern(
                 pattern,
                 undefined,
-                refusal === "manifest" || refusal === "dropped"
+                refusal === "manifest" || refusal === "dropped" ||
+                  refusal === "repair"
                   ? { roundsLeft: 0, loaded: new Set() }
                   : {
                     roundsLeft: (retry?.roundsLeft ??
@@ -5943,6 +6196,19 @@ export class Runner {
                   isStorageTransactionInconsistent(error)
                 ) {
                   return await recoverInstantiation(error, "basis");
+                }
+                // A repair refused for want of authority is the repair's
+                // failure, not the start's: the plain instantiation the
+                // principal is entitled to is what the retry commits.
+                if (
+                  repair !== undefined &&
+                  isPermanentAuthorizationRefusal(
+                    error as Parameters<
+                      typeof isPermanentAuthorizationRefusal
+                    >[0],
+                  )
+                ) {
+                  return await recoverInstantiation(error, "repair");
                 }
                 const failure = this.#reportPieceStartCommitFailure(
                   instantiateActionId,
@@ -6198,10 +6464,12 @@ export class Runner {
         newKey: string,
       ): void => {
         // In-memory fast path: the module is usually live this session.
-        const live = this.#runtime.patternManager.artifactFromIdentitySync(
-          newRef.identity,
-          newRef.symbol,
-        ) as Pattern | undefined;
+        const live = this.#runtime.patternManager
+          .artifactFromIdentitySyncInSpace(
+            newRef.identity,
+            newRef.symbol,
+            resultCell.space,
+          ) as Pattern | undefined;
         if (live) {
           // A pointer moved here, by this runtime or by a transition it
           // took part in, has what the incoming pattern reads in place
@@ -6548,17 +6816,25 @@ export class Runner {
     // is repaired as a nested piece is, a profile that is its space's root
     // among them.
     //
-    // The trigger is that stored state and nothing else: a setup-completion
-    // marker that does not name this version, and a manifest missing one of
-    // this pattern's derived internal cells. A marker naming another version
-    // and no marker at all both qualify: a doc set up before the marker
-    // existed carries none, and drifts the same way. Only a marker naming
-    // this version says its setup ran. A keyless piece keeps that marker
-    // session-side (`#sessionPatternPointers`, the never-durable contract),
-    // so it reads as matching and is not repaired here; the precondition
-    // below re-reads a durable identity it never had. The repair moves no
-    // durable identity pointer; it replays the pattern the pointer already
-    // names
+    // The trigger is that stored state and nothing else: the stored setup
+    // disagrees with the pattern as this runtime builds it (`#startOwes`) —
+    // a manifest missing one of the pattern's derived internal cells, a
+    // manifest naming a cell the build no longer has, or a stamped record
+    // describing another build. The setup-completion marker does not decide
+    // it. The marker names an identity, and one identity's source builds
+    // differently under different compilers, so a marker that matches can
+    // stand over a projection whose links name the cells of another build.
+    // A disagreement re-staging cannot put right, a cell holding state that
+    // another build numbered differently, is a hold: the start writes no
+    // setup, so the stored setup, its record and the moves the log reports
+    // stay as evidence. The piece still instantiates below, at the loaded
+    // build's numbers, so a moved cell reads, and anything the running piece
+    // writes lands in, its neighbor's document, as it does with no record at
+    // all; a start that refuses is what would stop that. A
+    // keyless piece is not repaired here: its identity never reaches durable
+    // state, and the precondition below re-reads a durable identity it never
+    // had. The repair moves no durable identity pointer; it replays the
+    // pattern the pointer already names
     // (samePattern=true: materializes the missing internal cells but leaves
     // the existing argument — the piece's data — untouched; no roll-forward,
     // no user-data rewrite). It stages into the instantiation's own
@@ -6574,24 +6850,29 @@ export class Runner {
       ref: { identity: string; symbol: string } | undefined,
       useTx?: IExtendedStorageTransaction,
     ) => {
-      if (
-        useTx === undefined &&
-        ref !== undefined &&
-        storedSetupMarker(
-            resultCell,
-            ref,
-            this.#sessionPatternPointer(resultCell),
-          ) !== "matches" &&
-        !this.#storedManifestCovers(resultCell, pattern)
-      ) {
+      const owed = useTx === undefined && ref !== undefined &&
+          !PatternManager.isKeylessPatternIdentity(ref.identity)
+        ? this.#startOwes(resultCell, pattern, ref)
+        : undefined;
+      if (owed?.owed === "hold" && ref !== undefined) {
+        logger.warn("piece-start-repair-held", () => [
+          `piece ${resultCell.sourceURI} was set up by another build of ` +
+          `${ref.identity}#${ref.symbol}, and its stored setup is left as ` +
+          "it is, since re-staging would read a cell holding state as " +
+          `another cell's: ${describeHold(owed.moved, owed.ambiguous)}`,
+        ]);
+      }
+      if (owed?.owed === "repair" && ref !== undefined) {
         setupRepair = {
           pattern,
+          ref,
           stage: (repairTx) => {
             // A retry re-stages what a refused commit rolled back; once a
-            // commit has landed the manifest covers the pattern and there is
-            // nothing left to stage.
+            // commit has landed the stored setup agrees with the pattern and
+            // there is nothing left to stage.
             if (
-              this.#storedManifestCovers(resultCell.withTx(repairTx), pattern)
+              this.#startOwes(resultCell.withTx(repairTx), pattern, ref)
+                .owed !== "repair"
             ) {
               return;
             }
@@ -6635,7 +6916,8 @@ export class Runner {
                 // re-validated here, so the marker keeps saying so: the next
                 // setup for this identity still re-stages and validates it.
                 // The repair does not come back for that, because the
-                // manifest it writes now covers the pattern.
+                // stored setup it writes now agrees with the build, the
+                // manifest and the build digest both.
                 leaveCompletionMarker: true,
               },
               undefined,
@@ -6710,9 +6992,10 @@ export class Runner {
 
     // Sync lookup by identity (the module is live this session).
     const initialResolved = this.#runtime.patternManager
-      .artifactFromIdentitySync(
+      .artifactFromIdentitySyncInSpace(
         initialRef.identity,
         initialRef.symbol,
+        resultCell.space,
       ) as Pattern | undefined;
     if (!initialResolved) {
       cleanup();
@@ -6760,7 +7043,11 @@ export class Runner {
       return undefined;
     }
     const manager = this.#runtime.patternManager;
-    const loaded = manager.artifactFromIdentitySync(ref.identity, ref.symbol) ??
+    const loaded = manager.artifactFromIdentitySyncInSpace(
+      ref.identity,
+      ref.symbol,
+      resultCell.space,
+    ) ??
       await manager.loadPatternByIdentity(
         ref.identity,
         ref.symbol,
@@ -7040,9 +7327,10 @@ export class Runner {
       return Promise.resolve(false);
     }
     const pm = this.#runtime.patternManager;
-    const pattern = pm.artifactFromIdentitySync(
+    const pattern = pm.artifactFromIdentitySyncInSpace(
       identityRef.identity,
       identityRef.symbol,
+      rootCell.space,
     ) as Pattern | undefined;
     if (
       !pattern &&
@@ -14539,15 +14827,22 @@ export class Runner {
     if (outputRedirect === undefined) {
       return { ...io, childResultCell: undefined, sendToBindings: true };
     }
+    // A named instance the parent's `instanceChildren` records a child for
+    // runs that child, wherever its own spot would mint one.
+    const recordedChild = instanceName === undefined
+      ? undefined
+      : readInstanceChildren(resultCell.withTx(tx)).get(instanceName);
     return {
       ...io,
-      childResultCell: this.#mintChildResultCell(
-        tx,
-        module,
-        child,
-        outputRedirect,
-        resultCell,
-      ),
+      childResultCell: recordedChild !== undefined
+        ? this.#runtime.getCellFromLink(recordedChild, child.resultSchema, tx)
+        : this.#mintChildResultCell(
+          tx,
+          module,
+          child,
+          outputRedirect,
+          resultCell,
+        ),
       sendToBindings: true,
       ...(instanceName !== undefined && { instanceName }),
     };
@@ -14618,7 +14913,9 @@ export class Runner {
    * named sub-pattern node of `pattern` would set its child up over a child
    * the parent `resultCell` keeps elsewhere (`#refuseDisplacedChild()`), for
    * each such node whose child this parent owns: not a child that is its
-   * space's root, nor one managed in a space of its own.
+   * space's root, nor one managed in a space of its own. A named instance's
+   * child is the one the parent's `instanceChildren` records for it, where it
+   * records one.
    *
    * Only a parent its updater has pointed at `pattern` is judged: its stored
    * `patternIdentity` already names `pattern`, while its setup marker names
@@ -14649,25 +14946,29 @@ export class Runner {
     const manifest = storedManifestOf(parent);
     const recorded = recordedPositionalSpots(manifest);
     const recordedInstances = recordedInstanceNames(manifest);
+    const recordedChildren = readInstanceChildren(parent);
     for (const { module, partialCause } of subPatternNodes(pattern)) {
-      // Only a spot the stored manifest records can hold a child already, and
-      // only a positional or named one can hold another's: a spot a result
-      // key, a node input or `.for()` names does not shift with its siblings,
-      // and no instance stamps the child there.
+      // Only a spot the stored manifest records, or a child the parent's
+      // `instanceChildren` records for a named instance, can hold a child
+      // already, and only a positional or named one can hold another's: a
+      // spot a result key, a node input or `.for()` names does not shift with
+      // its siblings, and no instance stamps the child there.
       const instanceName = instanceNameOfPartialCause(partialCause);
       const judged = isPositionalPartialCause(partialCause)
         ? recorded.has(positionalNumber(partialCause))
-        : instanceName !== undefined && recordedInstances.has(instanceName);
+        : instanceName !== undefined &&
+          (recordedInstances.has(instanceName) ||
+            recordedChildren.has(instanceName));
       if (!judged) continue;
       // A space's root sits where its space's genesis reserved it, whatever
       // the node's cause, so no shift between this parent's spots moves it.
       if (module.targetSpaceRoot) continue;
-      const child = this.#childAtPartialCause(
-        tx,
-        resultCell,
-        module,
-        partialCause,
-      );
+      const link = instanceName === undefined
+        ? undefined
+        : recordedChildren.get(instanceName);
+      const child = link !== undefined
+        ? this.#runtime.getCellFromLink(link, undefined, tx)
+        : this.#childAtPartialCause(tx, resultCell, module, partialCause);
       if (resumesIndependently(child, resultCell)) continue;
       this.#refuseDisplacedChild(
         tx,
@@ -14685,14 +14986,15 @@ export class Runner {
    * Throws rather than let the child of `childPattern`, at the positional or
    * named spot `partialCause` names, set up over `storedChild` when that cell
    * holds a different child the parent `resultCell` keeps elsewhere: a child
-   * stamped with another instance's name, or, where `partialCause` is
-   * positional, a sign that the parent's positional children have moved
-   * spots, which is `storedChild` running another pattern identity while
-   * either a child of `childPattern`'s identity runs at another positional
-   * spot, or another positional spot of `pattern` sets up the identity
-   * `storedChild` runs. A child is looked for only at the positional spots in
-   * `recorded`, the ones the parent's stored manifest records, and no spot
-   * whose node sets up a space's root is counted. A child whose identity
+   * stamped with another instance's name, a child the parent's
+   * `instanceChildren` records for another named instance, or, where
+   * `partialCause` is positional, a sign that the parent's positional children
+   * have moved spots, which is `storedChild` running another pattern identity
+   * while either a child of `childPattern`'s identity runs at another
+   * positional spot, or another positional spot of `pattern` sets up the
+   * identity `storedChild` runs. A child is looked for only at the positional
+   * spots in `recorded`, the ones the parent's stored manifest records, and no
+   * spot whose node sets up a space's root is counted. A child whose identity
    * differs with no such sign is the same child under a newer version of its
    * own source.
    */
@@ -14717,28 +15019,36 @@ export class Runner {
     );
     const describe = (ref: { identity: string; symbol: string }) =>
       `${ref.identity}#${ref.symbol}`;
-    // The stamp alone decides this refusal, so it holds for a child whose
-    // pattern identity was never stored; the identities only name the two
-    // sides in the message.
+    const holder = instanceName !== undefined
+      ? `instance "${instanceName}"`
+      : "a positional spot";
+    const settingUp = incoming !== undefined
+      ? describe(incoming)
+      : "a pattern with no identity";
+    const over = stored !== undefined
+      ? `the child of ${describe(stored)}`
+      : "a child with no stored pattern identity";
+    // The stamp and the parent's `instanceChildren` record alone decide these
+    // refusals, so they hold for a child whose pattern identity was never
+    // stored, and whatever the two identities; the identities only name the
+    // two sides in the message.
     const stamped = getInstanceNameStamp(storedChild);
     if (stamped !== undefined && stamped !== instanceName) {
-      const holder = instanceName !== undefined
-        ? `instance "${instanceName}"`
-        : "a positional spot";
-      const settingUp = incoming !== undefined
-        ? describe(incoming)
-        : "a pattern with no identity";
-      const over = stored !== undefined
-        ? `the child of ${describe(stored)}`
-        : "a child with no stored pattern identity";
       throw new Error(
         `refusing to set up ${settingUp} for ${holder} over ${over} that ` +
           `instance "${stamped}" set up`,
       );
     }
+    const storedKey = documentKey(storedChild.getAsNormalizedFullLink());
+    for (const [name, link] of readInstanceChildren(resultCell.withTx(tx))) {
+      if (name === instanceName || documentKey(link) !== storedKey) continue;
+      throw new Error(
+        `refusing to set up ${settingUp} for ${holder} over ${over} that ` +
+          `instance "${name}" carries`,
+      );
+    }
     if (stored === undefined || incoming === undefined) return;
     if (!positional || samePatternRef(stored, incoming)) return;
-    const storedKey = documentKey(storedChild.getAsNormalizedFullLink());
     for (const { module, partialCause } of subPatternNodes(pattern)) {
       // A space's root child sits at its space's genesis address rather than
       // at a spot of this parent, so it shows nothing about how the parent's
