@@ -1298,7 +1298,11 @@ first does so for free. The classes:
   head is: the batch carries each contribution's reads, a commit admitted
   between the wave's own check and that transaction stales a read there,
   and the refusal names the read, so that the event requeues alone and
-  the wave re-attempts. The reads are what the client arm
+  the wave re-attempts. The reads held are the home space's, as a
+  client commit's are: a client's transaction commits once per space it
+  wrote, each commit carrying that space's reads, and a space it only
+  read gets no commit and no validation, so a read in another space is
+  held to nothing on either arm. The reads are what the client arm
   validates, and the replica gap above is why the basis cannot stand in
   for them here: a commit admitted before the seal opened the wave sits
   at or below the basis while the run that read the doc never saw it,
