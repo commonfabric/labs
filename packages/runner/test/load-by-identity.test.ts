@@ -1606,6 +1606,41 @@ describe("load by module identity (warm + version-bump recovery)", () => {
         .toBe(false);
     });
 
+    it("writes once into a space that refuses the write-back for want of a grant", async () => {
+      // A refusal the store marks permanent is one no attempt can write past,
+      // so it spends the session's attempts at once: the loads after it are
+      // served from memory with no further write and no recompile.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, [spaceB]);
+      const manager = runtime.patternManager.accessForTestingOnly;
+      const compiles = countColdCompiles();
+      let writes = 0;
+      manager.compileCacheWriter = () => {
+        writes++;
+        return Promise.reject(
+          Object.assign(new Error("no grant to write the space"), {
+            name: "AuthorizationError",
+            permanentEvidence: true,
+            aclRevision: 1,
+          }),
+        );
+      };
+      try {
+        const loaded = await load(entryIdentity, spaceB);
+        await flushed();
+        expect(writes).toBe(1);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          expect(await load(entryIdentity, spaceB)).toBe(loaded);
+          await flushed();
+        }
+        expect(writes).toBe(1);
+        expect(compiles()).toBe(1);
+      } finally {
+        manager.compileCacheWriter = undefined;
+      }
+    });
+
     it("copies once into a space, however many loads it serves there", async () => {
       const { entryIdentity, loaded } = await coldLoadedInSpace();
       const { compileCacheWrites } =

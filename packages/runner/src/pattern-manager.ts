@@ -150,7 +150,9 @@ const MAX_RETAINED_COMPILES = 8;
  * How many times one session writes an entry's closure back into a space
  * that refuses it before leaving the space to a later session's loads. The
  * store retries a transient failure inside each attempt, so a failure that
- * recurs across attempts is one the session cannot write past.
+ * recurs across attempts is one the session cannot write past; a refusal for
+ * want of a grant (`isGrantRefusal()`), which no attempt can supply, spends
+ * the whole count at once.
  */
 const MAX_COMPILE_CACHE_WRITE_BACK_FAILURES = 3;
 
@@ -1491,7 +1493,11 @@ export class PatternManager {
    * flight already (`#inProgressCacheRepairs`). A write-back that lands
    * clears the repair the space was owed; one that fails counts once against
    * the session's attempts for the space and keeps the compile retained for
-   * the next load's attempt. Module-update authority does not cross a space:
+   * the next load's attempt, and one the space refuses for want of a grant
+   * spends every attempt at once and is logged at debug
+   * (`compile-cache-repair-refused`): the session may only read the space,
+   * which is no fault, and the next session that writes as a principal who
+   * may write it supplies it. Module-update authority does not cross a space:
    * the compile's delegations are written only into the space whose source
    * closure authenticated them, and any other space keeps the grants already
    * authenticated there, as a replication leaves them.
@@ -1516,11 +1522,24 @@ export class PatternManager {
       this.#failedCompileCacheRecoveries.delete(recoveryKey);
       this.#recordDeferredCacheRepair(space, compile.modules, false);
     }).catch((error) => {
+      this.#retainCompile(entryIdentity, compile);
+      if (isGrantRefusal(error)) {
+        this.#failedCompileCacheRecoveries.set(
+          recoveryKey,
+          MAX_COMPILE_CACHE_WRITE_BACK_FAILURES,
+        );
+        logger.debug("compile-cache-repair-refused", () => [
+          `entry=${entryIdentity}`,
+          `symbol=${symbol}`,
+          `space=${space}`,
+          String(error),
+        ]);
+        return;
+      }
       this.#failedCompileCacheRecoveries.set(
         recoveryKey,
         (this.#failedCompileCacheRecoveries.get(recoveryKey) ?? 0) + 1,
       );
-      this.#retainCompile(entryIdentity, compile);
       logger.warn("load-pattern-by-identity-writeback-failed", () => [
         `entry=${entryIdentity}`,
         `symbol=${symbol}`,
