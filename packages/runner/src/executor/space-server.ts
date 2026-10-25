@@ -4241,17 +4241,31 @@ export class SpaceServer implements TransactionSealDestination {
             if (!this.#active || this.#runtime !== runtime) return undefined;
             for (const target of catchUp.docs) {
               if (taken(target) !== 0) continue;
-              await runtime.storageManager.syncCell(
-                runtime.getCellFromLink({
-                  space,
-                  id: target.id as never,
-                  scope: (target.scope ?? "space") as never,
-                  path: [],
-                }),
-                catchUp.scopeKeyIdentity === undefined
-                  ? undefined
-                  : { scopeKeyIdentity: catchUp.scopeKeyIdentity },
-              );
+              // A load that fails leaves the doc untaken, and the entry
+              // defers below with the gate still armed, as it does behind
+              // a sidecar whose sync failed.
+              try {
+                await runtime.storageManager.syncCell(
+                  runtime.getCellFromLink({
+                    space,
+                    id: target.id as never,
+                    scope: (target.scope ?? "space") as never,
+                    path: [],
+                  }),
+                  catchUp.scopeKeyIdentity === undefined
+                    ? undefined
+                    : { scopeKeyIdentity: catchUp.scopeKeyIdentity },
+                );
+              } catch (error) {
+                if (!this.#active || this.#runtime !== runtime) {
+                  return undefined;
+                }
+                logger.warn("event-catch-up-load-failed", () => [
+                  `Could not load ${target.id} for event ${entry.eventId}'s ` +
+                  "replica to catch up on; the event waits",
+                  error,
+                ]);
+              }
               if (!this.#active || this.#runtime !== runtime) return undefined;
             }
           }
