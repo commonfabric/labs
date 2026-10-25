@@ -7,7 +7,6 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
 
 import {
-  attachDocTags,
   extractDocFromSymbolAndDecls,
   getDeclDocs,
   symbolHasDeprecatedTag,
@@ -123,7 +122,6 @@ function attachPropertyDoc(
   if (!text) return;
   const conflicts = all.filter((s) => s && s !== text);
   schema.description = text;
-  attachDocTags(schema, text);
   if (conflicts.length > 0) {
     const comment = typeof schema.$comment === "string"
       ? (schema.$comment as string)
@@ -495,7 +493,6 @@ export class ObjectFormatter implements TypeFormatter {
       }
       if (foundDocs.length > 0 && isObjectOrArray(apSchema)) {
         (apSchema as Record<string, unknown>).description = foundDocs[0]!;
-        attachDocTags(apSchema as Record<string, unknown>, foundDocs[0]!);
         if (foundDocs.length > 1) {
           const comment = typeof apSchema.$comment === "string"
             ? (apSchema.$comment as string)

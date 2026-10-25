@@ -71,7 +71,7 @@ import {
   soleNonNullishMember,
   type TypeWithInternals,
 } from "./type-utils.ts";
-import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
+import { extractDocFromType } from "./doc-utils.ts";
 import { unionFoldedFrom } from "./schema-origins.ts";
 import {
   reportUnreadCfcRecursion,
@@ -3170,9 +3170,6 @@ export class SchemaGenerator {
       docInfo.firstDoc && isObjectOrArray(schema) && !("description" in schema)
     ) {
       (schema as Record<string, unknown>).description = docInfo.firstDoc;
-    }
-    if (isObjectOrArray(schema) && typeof schema.description === "string") {
-      attachDocTags(schema as Record<string, unknown>, schema.description);
     }
     return schema;
   }
