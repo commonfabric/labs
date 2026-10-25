@@ -644,18 +644,24 @@ describe("stored-setup-build-repair", () => {
   it("reads a record of version 1 as none", async () => {
     // Version 1 described a sub-pattern child by the first of its module's
     // names for it that a load registered, and a cold reopen can register them
-    // in another order than setup did. Its record of a child is one this
-    // build's description of the child need not match.
-    const { cell } = await setUpAndStop("version-1", ALIASED_CHILDREN);
-    const record = stampOf(cell)!;
+    // in another order than setup did. This is the record of a setup whose
+    // load registered `Tally` first, which this build's description of the
+    // child does not match.
+    const { cell, pattern, ref } = await setUpAndStop(
+      "version-1",
+      ALIASED_CHILDREN,
+    );
+    const registeredFirst = (artifact: object) => {
+      const entry = entryRefOf(artifact);
+      return entry?.symbol === "Counter"
+        ? { ...entry, symbol: "Tally" }
+        : entry;
+    };
     await stamp(
       cell,
       {
-        ...record,
+        ...storedSetupBuildOf(pattern, ref, registeredFirst),
         v: 1,
-        state: record.state.map((
-          [number, description],
-        ) => [number, description.replace(/#Counter$/, "#Tally")]),
       } as never,
     );
     expect(stampOf(cell)).toBeUndefined();
