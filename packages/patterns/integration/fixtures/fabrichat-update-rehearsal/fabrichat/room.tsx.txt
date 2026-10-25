@@ -113,6 +113,7 @@ import {
   type AddMemberRefusalCode,
   CHAT_ADD_MEMBER_ACTION,
   CHAT_ADD_MEMBER_SURFACE,
+  CHAT_REPLY_SHAPE,
   CHAT_RETITLE_ACTION,
   CHAT_RETITLE_SURFACE,
   CHAT_SEND_ACTION,
@@ -122,6 +123,7 @@ import {
   type ChatContainer,
   type ChatDisplay,
   type ChatProfile,
+  type ChatReplyShape,
   type ChatRequestOutcome,
   type ChatRoomAbout,
   type ChatRoomKind,
@@ -888,6 +890,15 @@ export const threadTitleOf = (
 };
 
 /**
+ * How a composer's bar shows the message it replies to: its text, or
+ * `Attachments` for one with no text, only attachments.
+ */
+const quotedText = (record: RepliedMessage | undefined): string => {
+  const text = bodyText(record);
+  return record !== undefined && text.trim() === "" ? "Attachments" : text;
+};
+
+/**
  * The title each thread's record holds, by its root's key, from `threadInfo`;
  * none where the room is given no list of them.
  */
@@ -1074,6 +1085,12 @@ export interface ChatMessageRights extends MessageRights {
 export interface ChatRoomView {
   /** What the room says about itself. */
   about: ChatRoomAbout;
+
+  /**
+   * The shape of `replyTo` the room reads and stores, which a client sends a
+   * reply in. A room offering none takes a reply that names one `message`.
+   */
+  replyShape: ChatReplyShape;
 
   /**
    * The room's participants: for a room that is its space's root, those who
@@ -1581,9 +1598,12 @@ export const FabriChatRoomCore = pattern<
         places[entry.key]?.thread === openThreadKey
       ).map((entry) => entry.cell)
   );
-  const replyingTo = computed(() => bodyText(composer.get()?.replyTo?.get()));
+  // What each composer is replying to, as its bar shows it: a message with
+  // no text, only attachments, reads as "Attachments", so its bar still says
+  // what the reply quotes and still offers its cancel.
+  const replyingTo = computed(() => quotedText(composer.get()?.replyTo?.get()));
   const threadReplyingTo = computed(() =>
-    bodyText(composer.get()?.threadQuotes?.get())
+    quotedText(composer.get()?.threadQuotes?.get())
   );
   // The open thread's title, as the thread's summary gives it, including
   // for a root that holds no reply yet.
@@ -1607,11 +1627,12 @@ export const FabriChatRoomCore = pattern<
   );
   // Per-session and per-viewer parts are hidden by a prop, never built as a
   // different tree (see `FabriChatMessageRow`).
-  const replyDisplay = computed(
-    (): ChatDisplay => (replyingTo ? "flex" : "none"),
+  // Each bar shows while its composer quotes a message.
+  const replyDisplay = computed((): ChatDisplay =>
+    composer.get()?.replyTo?.get() === undefined ? "none" : "flex"
   );
-  const threadReplyDisplay = computed(
-    (): ChatDisplay => (threadReplyingTo ? "flex" : "none"),
+  const threadReplyDisplay = computed((): ChatDisplay =>
+    composer.get()?.threadQuotes?.get() === undefined ? "none" : "flex"
   );
   const threadDisplay = computed(
     (): ChatDisplay => (hasThread ? "flex" : "none"),
@@ -1712,6 +1733,7 @@ export const FabriChatRoomCore = pattern<
   };
   const view = {
     about: aboutView,
+    replyShape: CHAT_REPLY_SHAPE,
     participants,
     roster: joined,
     participantEntries: participantEntriesForUser,
@@ -2072,6 +2094,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       [NAME]: room[NAME],
       [VIEWS]: room[VIEWS],
       about: room.about,
+      replyShape: room.replyShape,
       participants: room.participants,
       roster: room.roster,
       participantEntries: room.participantEntries,
