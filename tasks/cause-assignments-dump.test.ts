@@ -61,7 +61,7 @@ describe("cause-assignments-dump", () => {
       expect(
         built?.levels[0].cells.map((cell) => [
           cell.number,
-          cell.holdsState,
+          cell.hasState,
           cell.description.replace(/sub-pattern \S+#/, "sub-pattern #"),
         ]),
       ).toEqual([
@@ -79,12 +79,12 @@ describe("cause-assignments-dump", () => {
       const after = await buildAssignment(runtime, CHILD_ONLY, "main.tsx");
 
       expect(
-        movedCells(before!, after!).map(({ holdsState, from, to }) => ({
-          holdsState,
+        movedCells(before!, after!).map(({ hasState, from, to }) => ({
+          hasState,
           from,
           to,
         })),
-      ).toEqual([{ holdsState: true, from: 1, to: 0 }]);
+      ).toEqual([{ hasState: true, from: 1, to: 0 }]);
     });
 
     it("returns builds whose comparison finds nothing moved, for one program built twice", async () => {

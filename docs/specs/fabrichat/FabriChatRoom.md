@@ -48,10 +48,10 @@ for each reader too, `viewer` from their profile and access, and
 `represents-principal` label on each profile with `principalOf()`, and
 `participantPrincipals` is computed from those entries. A profile lives in its
 owner's own space, so a reader that space refuses reads no principal from it.
-Both are derived per session, so each session reads instances of its own,
-derived under its own access.
+Both are derived per user, so each user reads instances of their own, derived
+under their own access, which every session of theirs shares.
 
-The `PerSession` values in the contract are `participantEntries` and
+The contract's derived `PerUser` values are `participantEntries` and
 `participantPrincipals`.
 
 The room's `[UI]` keeps its composer's state, the draft, the reply and the

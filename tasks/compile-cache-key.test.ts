@@ -22,7 +22,11 @@ describe("compile-cache-key", () => {
     // follows: a baked literal in `compile-cache-version.ts` left behind by a
     // build would answer here and would not match this fingerprint. Were the
     // two to part, a restored entry would be one the runtime never looks for,
-    // and the cache would silently stop doing anything.
+    // and the cache would silently stop doing anything. So would an
+    // output-version memo the tree records for itself
+    // (`compile-cache-output-memo.deno.ts`), which a CI checkout never does:
+    // the memo is for a checkout that runs as it stands, such as loom's
+    // vendored one.
 
     expect(await getCompileCacheRuntimeVersion()).toBe(
       `${VERSION_NAMESPACE}/${fingerprint}`,
