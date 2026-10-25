@@ -4387,7 +4387,8 @@ const sidecarHeldEntryAt = (
  * read's seq. The append creates only new indices, so it changed nothing
  * that read observed. A read of an index the sidecar did not hold then
  * observed an absence the append may have filled, and is held to it like
- * any other read.
+ * any other read. A document whose head has not passed the read's seq has
+ * no revision after it, and is answered from the head alone.
  */
 export const findHandlerStaleReadSeq = (
   engine: Engine,
@@ -4395,6 +4396,12 @@ export const findHandlerStaleReadSeq = (
   holder: string | undefined,
   branch?: BranchName,
 ): number | null => {
+  const head = selectDocHead(engine, {
+    branch,
+    id: read.id,
+    scopeKey: read.scopeKey,
+  });
+  if (head <= read.seq) return null;
   const entryIndex = streamEntryIndexOf(read);
   const readHeldEntry = entryIndex !== undefined &&
     sidecarHeldEntryAt(engine, read, entryIndex, branch);
