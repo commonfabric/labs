@@ -88,7 +88,12 @@ import {
 } from "@commonfabric/memory/v2";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 
-import { type Cell, createCell, encodeSqliteParams } from "../cell.ts";
+import {
+  type Cell,
+  convertCellsToLinks,
+  createCell,
+  encodeSqliteParams,
+} from "../cell.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
 import type { CfcConfClause } from "../cfc/clause.ts";
 import { runtimeWritePolicyAuthorization } from "../cfc/types.ts";
@@ -253,16 +258,13 @@ function readDbRef(value: unknown): SqliteDbRef {
     const ref = value as SqliteDbRef;
     return {
       id: ref.id,
-      // Materialize to plain JSON: sqliteDatabase stores the handle value
-      // inline (self-contained), but a handle written before that fix (or a
-      // proxy-carried read) can still hold doc LINKS where the rule's AST
-      // nodes should be — the wire (server provenance gate) and every local
-      // consumer need the resolved spec.
+      // The wire and local label derivation both need every declaration,
+      // including linked rules. Read proxy-backed schemas as a whole so the
+      // copy registers recursive reads for the subtrees it reaches.
       tables: ref.tables
-        ? cloneIfNecessary(
-          ref.tables as Parameters<typeof cloneIfNecessary>[0],
-          { frozen: false },
-        ) as SqliteDbRef["tables"]
+        ? convertCellsToLinks(ref.tables, {
+          doNotConvertCellResults: true,
+        }) as SqliteDbRef["tables"]
         : undefined,
       // Validate at the boundary: an invalid scope value must not flow into
       // query execution / on-disk filename derivation.
