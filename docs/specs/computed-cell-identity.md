@@ -141,10 +141,18 @@ numbers, where another cell's state sits. The refusal comes before any of the
 piece's nodes are installed and before any transaction is opened, so no child
 runs and nothing is written, and it leaves no in-memory registration, so the
 next start judges the piece again. A setup of the version the record names
-refuses the same way, before staging anything. The stored setup and its record
-stay as evidence of what moved, until a build that numbers those cells as the
-record does, or a migration that moves their state and re-stamps the record,
-lets the piece run. A serving runtime counts a refusal into its
+refuses the same way, before staging anything. A child's record is judged when
+the child is set up, as part of instantiating its parent's graph, and a refused
+child stops its parent's start, naming the child (`PieceStateMovedError`'s
+`piece`). `runSynced()` and `runSyncedWithCommit()` start the piece after their
+setup commits and report that refusal to their caller, the second as the cause
+of a `PatternSetupPostCommitError`, which a source update's receipt reports as
+a failed refresh. A bare `run(tx)` whose start comes only after its commit, with
+the child's record not yet loaded, cannot judge the child before it returns: the
+piece is left not running, and the refusal is logged. The stored setup and its
+record stay as evidence of what moved, until a build that numbers those cells as
+the record does, or a migration that moves their state and re-stamps the
+record, lets the piece run. A serving runtime counts a refusal into its
 `structureLoadRefused` stat and parks the refused root until a commit to it
 (`docs/specs/server-side-execution/serving-loop.md`). A document with no record
 of the pattern it runs is judged by its manifest alone: it is re-staged on a

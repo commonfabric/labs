@@ -33,6 +33,11 @@ import {
   parseLink,
 } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import {
+  getPieceSourceSnapshot,
+  PatternSetupPostCommitError,
+  preparePieceSourceTransitionBaseline,
+} from "../src/runner.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
   PieceStateMovedError,
@@ -728,8 +733,72 @@ describe("stored-setup-build-repair", () => {
         cells: "a record of another build",
         state: [[0, description], [1, description], [2, description]],
       });
-      return { cell, pattern, child };
+      return { cell, pattern, ref: entryRefOf(pattern)!, child };
     };
+
+    it("rejects `runSynced()` of the parent's version with the child's refusal", async () => {
+      // `runSynced()` commits the setup, then starts the piece and awaits the
+      // start, so the child's refusal reaches its caller. The parent's own
+      // record agrees with the build, so its setup re-stages what it holds.
+      const { cell, pattern, child } = await setUpWithRefusedChild(
+        "child-refused-run-synced",
+      );
+      const storedChild = storedSetupOf(child);
+
+      const refused = await rt.runSynced(cell, pattern, {}).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(refused).toBeInstanceOf(PieceStateMovedError);
+      expect((refused as PieceStateMovedError).piece).toBe(child.sourceURI);
+      expect(rt.runner.isRunning(cell)).toBe(false);
+      await settled();
+      expect(storedSetupOf(child)).toEqual(storedChild);
+    });
+
+    it("rejects `runSyncedWithCommit()` of the parent's version with a post-commit error whose cause is the child's refusal", async () => {
+      // The receipted setup a source update runs: its setup commits, and the
+      // start after it is refused, so the caller gets the receipt of the
+      // commit and, as its cause, the refusal.
+      const { cell, pattern, ref, child } = await setUpWithRefusedChild(
+        "child-refused-receipt",
+      );
+      const storedChild = storedSetupOf(child);
+      const expected = getPieceSourceSnapshot(
+        cell,
+        rt.runner.sessionPatternPointerFor(cell),
+      )!;
+      const pieceSourceTransition = {
+        revisionId: crypto.randomUUID(),
+        baseline: await preparePieceSourceTransitionBaseline(
+          rt,
+          cell,
+          expected,
+        ),
+        timestamp: Date.now(),
+        operation: "edit" as const,
+        origin: null,
+        expected,
+      };
+
+      const refused = await rt.runSyncedWithCommit(cell, pattern, {}, {
+        expectedPatternIdentity: expected.pattern,
+        pieceSourceTransition,
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(refused).toBeInstanceOf(PatternSetupPostCommitError);
+      const { commit, cause } = refused as PatternSetupPostCommitError;
+      expect(commit.pattern).toEqual(ref);
+      expect(cause).toBeInstanceOf(PieceStateMovedError);
+      expect((cause as PieceStateMovedError).piece).toBe(child.sourceURI);
+      expect(rt.runner.isRunning(cell)).toBe(false);
+      await settled();
+      expect(storedSetupOf(child)).toEqual(storedChild);
+    });
 
     it("refuses the parent's start, naming the child, and writes to neither", async () => {
       const { cell, child } = await setUpWithRefusedChild("child-refused");
@@ -752,10 +821,12 @@ describe("stored-setup-build-repair", () => {
       expect(refusalsLogged()).toBe(starts + 1);
     });
 
-    it("refuses a setup of the parent's version before it commits, naming the child", async () => {
-      // The parent's start would run only once this setup's transaction
-      // commits, after its caller is answered; the child is judged within
-      // the setup instead.
+    it("refuses a setup of the parent's version whose start sets the child up in the same transaction, naming the child", async () => {
+      // Here the child's record is loaded, and the parent's start, which
+      // sets the child up, runs within `run()`'s own transaction, so the
+      // child's refusal reaches `run()`'s caller. Where the child's record is
+      // not loaded yet, `run()` cannot judge it: the refusal comes when the
+      // parent starts, and is logged rather than thrown to `run()`'s caller.
       const { cell, pattern, child } = await setUpWithRefusedChild(
         "child-refused-setup",
       );
