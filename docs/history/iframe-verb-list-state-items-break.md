@@ -19,11 +19,13 @@ the pattern's own cell, and holds both the items and the check marks.
 `addItem` writes `state.items`, and the guest is granted that path to read and
 `state.checked` to write, as two resources of one `$context` record.
 
-The contract changes in two places, both named in the accepted break:
+The contract changes in these places, all named in the accepted break:
 
 - `argument.items` is gone. A piece created from the earlier source keeps its
   items in its argument cell, which the new source does not read, so after an
   update its list reads empty, and those items are not carried into `state`.
+  The argument declares no field at all, so it also refuses the extra fields
+  the recorded argument accepted, which the proof reports under `argument`.
 - `result.items` is gone. A caller reads the list as `state.items`.
 
 The break was accepted because the pattern is an example a day old, written to

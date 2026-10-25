@@ -23,6 +23,8 @@
 import { join } from "@std/path";
 import { collectAllPatternFiles } from "./pattern-files.ts";
 import {
+  type AmbiguousCells,
+  ambiguousCells,
   assignmentDigest,
   type MovedCell,
   movedCells,
@@ -70,15 +72,26 @@ export const GATE_PATHS: readonly string[] = [
 
 /** The verdict on one comparison of two dumps. */
 export interface Comparison {
-  /** The moves no accepted entry forgives, by pattern. */
+  /**
+   * The moves no accepted entry forgives, by pattern, and the descriptions
+   * whose cells cannot be matched. A move among the cells of such a
+   * description is not among `moved`, since the pairing that found it is not
+   * to be trusted there. A pattern fails on a move, or on such a description
+   * of cells holding state; one of cells holding none fails it only through
+   * a move the pairing finds among them, and is listed for the report.
+   */
   failing: {
     pattern: string;
     base: string;
     head: string;
     moved: MovedCell[];
+    ambiguous: AmbiguousCells[];
   }[];
 
-  /** The patterns whose moves an accepted entry forgives. */
+  /**
+   * The patterns whose moves, and cells that cannot be matched, an accepted
+   * entry forgives.
+   */
   forgiven: string[];
 
   /** The accepted entries that forgave nothing. */
@@ -136,8 +149,26 @@ export function compareDumps(
     const prior = before.get(after.pattern);
     if (prior === undefined || prior.source !== after.source) continue;
     comparison.compared++;
-    const moved = movedCells(prior, after);
-    if (moved.length === 0) continue;
+    const ambiguous = ambiguousCells(prior, after);
+    const pairedMoves = movedCells(prior, after);
+    // TODO(danfuzz): A shift among cells holding no state that the pairing
+    // reports no move for passes here, though the cells are listed in the
+    // report where the pattern fails for another reason. Fail it too, once how
+    // those cells are to be matched is settled; the case is pinned in
+    // `check-cause-assignments.test.ts`.
+    if (
+      pairedMoves.length === 0 && !ambiguous.some((found) => found.hasState)
+    ) {
+      continue;
+    }
+    const ambiguousKeys = new Set(
+      ambiguous.map(({ level, description }) =>
+        JSON.stringify([level, description])
+      ),
+    );
+    const moved = pairedMoves.filter(({ level, description }) =>
+      !ambiguousKeys.has(JSON.stringify([level, description]))
+    );
     const baseDigest = assignmentDigest(prior);
     const headDigest = assignmentDigest(after);
     const entry = accepted.find((candidate) =>
@@ -153,6 +184,7 @@ export function compareDumps(
         base: baseDigest,
         head: headDigest,
         moved,
+        ambiguous,
       });
     }
   }
@@ -205,18 +237,31 @@ export function describeFailures(comparison: Comparison): string {
     "A compiler change moves anonymous cells of these patterns to new " +
     "numbers while their source stays the same. A deployed piece set up " +
     "before the change would read each moved cell's state from the document " +
-    "another cell wrote.",
+    "another cell wrote. Where cells share a description and their count or " +
+    "their numbers changed, which cell went where cannot be told, so the " +
+    "report gives each build's numbers for them, or names them added or " +
+    "removed where only one build has any.",
     "",
   ];
-  for (const { pattern, base, head, moved } of comparison.failing) {
+  const where = (level: string) => level === "" ? "entry pattern" : level;
+  const list = (numbers: readonly number[]) => `[${numbers.join(", ")}]`;
+  for (const { pattern, base, head, moved, ambiguous } of comparison.failing) {
     lines.push(`${pattern} (base build ${base}, this build ${head}):`);
     for (const cell of moved) {
-      const where = cell.level === "" ? "entry pattern" : cell.level;
       lines.push(
-        `  ${cell.from} -> ${cell.to}${
-          cell.holdsState ? ", holds state" : ""
-        }` +
-          `: ${cell.description} (${where})`,
+        `  ${cell.from} -> ${cell.to}${cell.hasState ? ", holds state" : ""}` +
+          `: ${cell.description} (${where(cell.level)})`,
+      );
+    }
+    for (const cells of ambiguous) {
+      const [kind, numbers] = cells.after.length === 0
+        ? ["removed", list(cells.before)]
+        : cells.before.length === 0
+        ? ["added", list(cells.after)]
+        : ["ambiguous", `${list(cells.before)} -> ${list(cells.after)}`];
+      lines.push(
+        `  ${kind}${cells.hasState ? ", holds state" : ""}: ${numbers}: ` +
+          `${cells.description} (${where(cells.level)})`,
       );
     }
   }

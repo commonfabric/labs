@@ -22,7 +22,8 @@
  * A break the repository decides to ship — a surface removed on purpose, its
  * held state an accepted casualty — cannot be recorded away and must not be
  * deleted away. It is declared in `pattern-compat-accepted-breaks.ts`, which
- * forgives named `(pattern, baseline)` pairs and nothing else.
+ * forgives the paths it names over the `(pattern, baseline)` pairs it names,
+ * and nothing else.
  */
 
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -55,6 +56,7 @@ import {
   readBaselines,
   selectItems,
   shouldRecord,
+  unusedAcceptances,
   writeBaseline,
 } from "./pattern-compat-lib.ts";
 
@@ -202,9 +204,8 @@ async function main() {
 
   const recorded: string[] = [];
   // Every `(pattern, baseline)` pair a deliberate break is allowed to fail
-  // against, mapped to the schema paths it may blame, and the ones that turned
-  // out not to fail — a pair that needs no forgiving is an exemption outliving
-  // its break, so it fails the run.
+  // against, mapped to the schema paths it may blame. What none of them turned
+  // out to need fails the run, below.
   const acceptedBreaks = new Map<string, ReadonlySet<string>>(
     ACCEPTED_CONTRACT_BREAKS.flatMap((accepted) =>
       accepted.baselines.map((baseline) =>
@@ -215,7 +216,6 @@ async function main() {
       )
     ),
   );
-  const breaksUsed = new Set<string>();
   const forgivenBreaks: Finding[] = [];
   // `unavailable` keys are included so a file that USED to export a pattern is
   // caught: it has baselines but no contract, which `checkPattern` reports.
@@ -270,10 +270,6 @@ async function main() {
       allFindings,
       acceptedBreaks,
     );
-    for (const finding of forgiven) {
-      if (finding.kind !== "incompatible") continue;
-      breaksUsed.add(acceptedBreakKey(finding.pattern, finding.baseline));
-    }
     for (const forgivenBreak of forgiven) forgivenBreaks.push(forgivenBreak);
 
     if (update && current !== undefined) {
@@ -309,37 +305,39 @@ async function main() {
   }
 
   if (forgivenBreaks.length > 0) {
+    // One line per pair: an old baseline of a much-changed pattern can carry
+    // hundreds of forgiven issues, and the registry lists them all.
+    const forgivenByPair = Map.groupBy(
+      forgivenBreaks.flatMap((finding) =>
+        finding.kind === "incompatible" ? [finding] : []
+      ),
+      (finding) => `${finding.pattern} over ${finding.baseline}`,
+    );
     console.log(
-      `\nForgave ${forgivenBreaks.length} accepted contract break(s) ` +
+      `\nForgave ${forgivenBreaks.length} issue(s) over ` +
+        `${forgivenByPair.size} pair(s) as accepted contract breaks ` +
         `(tasks/pattern-compat-accepted-breaks.ts):`,
     );
-    for (const finding of forgivenBreaks) {
-      if (finding.kind !== "incompatible") continue;
-      console.log(
-        `  ${finding.pattern} over ${finding.baseline}: ` +
-          `${finding.detail.split("\n").slice(1).join(" ").trim()}`,
-      );
+    for (const [pair, pairFindings] of forgivenByPair) {
+      console.log(`  ${pair}: ${pairFindings.length} issue(s)`);
     }
   }
   // Asked per pattern rather than of the whole list, because a lane runs only
   // the patterns `--only` gave it, so a check gated on a run of the whole list
   // would not execute where the patterns are divided between lanes. The run
-  // that examined a pattern can say whether its pairs were needed, and the
-  // runs between them cover every entry.
+  // that examined a pattern can say whether its pairs and paths were needed,
+  // and the runs between them cover every entry.
   //
   // An entry whose pattern file is gone is left out: with no contract, its
   // pairs are never used, and it is reported as orphaned instead. Retiring a
   // pattern deletes its baselines with it, which is exactly when an acceptance
   // stops meaning anything, so such an entry makes its pattern an item of its
   // own, and the run given that item reports it.
-  const examined = new Set(compiled);
-  const staleBreaks = ACCEPTED_CONTRACT_BREAKS
-    .filter((accepted) => examined.has(accepted.pattern))
-    .flatMap((accepted) =>
-      accepted.baselines
-        .map((baseline) => acceptedBreakKey(accepted.pattern, baseline))
-        .filter((pair) => !breaksUsed.has(pair))
-    );
+  const { pairs: staleBreaks, paths: stalePaths } = unusedAcceptances(
+    ACCEPTED_CONTRACT_BREAKS,
+    new Set(compiled),
+    forgivenBreaks,
+  );
 
   if (unavailable.size > 0) {
     console.log(
@@ -367,16 +365,27 @@ async function main() {
 
   if (findings.length > 0) {
     console.error("\nPattern update compatibility failures:");
+    let lastPair: string | undefined;
     for (const finding of findings) {
+      if (finding.kind === "incompatible") {
+        // Each issue is a finding of its own, and a pair's issues arrive
+        // together, so the pair is named once above them.
+        const pair = acceptedBreakKey(finding.pattern, finding.baseline);
+        if (pair !== lastPair) {
+          console.error(
+            `\n${finding.pattern}\n  cannot be applied over baseline ` +
+              `${finding.baseline}:`,
+          );
+        }
+        lastPair = pair;
+        console.error(`- ${finding.detail}`);
+        continue;
+      }
+      lastPair = undefined;
       if (finding.kind === "missing-baseline") {
         console.error(
           `\n${finding.pattern}\n  contract ${finding.hash} is not recorded.` +
             `\n  Run: deno task pattern-compat --update`,
-        );
-      } else if (finding.kind === "incompatible") {
-        console.error(
-          `\n${finding.pattern}\n  cannot be applied over baseline ` +
-            `${finding.baseline}:\n${finding.detail}`,
         );
       } else if (finding.kind === "invalid-schema") {
         console.error(
@@ -425,6 +434,16 @@ async function main() {
         `not name, so the exemption outlives its break — remove it.`,
     );
   }
+  for (const stale of stalePaths) {
+    console.error(
+      `\nAn accepted contract break for ${stale.pattern} in ` +
+        `tasks/pattern-compat-accepted-breaks.ts (${stale.record}) names ` +
+        `${stale.paths.length} path(s) that none of its pairs blames: ` +
+        `${stale.paths.join(", ")}. The entry forgives exactly the paths it ` +
+        `names, so a path no issue blames is an exemption outliving its ` +
+        `break, and would forgive a later one at that path — remove it.`,
+    );
+  }
   if (orphanedBreaks.length > 0) {
     console.error(
       `\n${orphanedBreaks.length} accepted contract break(s) in ` +
@@ -437,7 +456,8 @@ async function main() {
 
   if (
     findings.length > 0 || unexpectedFailures.length > 0 ||
-    recovered.length > 0 || staleBreaks.length > 0 || orphanedBreaks.length > 0
+    recovered.length > 0 || staleBreaks.length > 0 ||
+    stalePaths.length > 0 || orphanedBreaks.length > 0
   ) Deno.exit(1);
   console.log(
     `\n${contracts.size} pattern(s) can be updated from every recorded contract.`,
