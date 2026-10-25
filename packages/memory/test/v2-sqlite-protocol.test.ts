@@ -136,7 +136,7 @@ describe("sqlite protocol verbs (loopback)", () => {
       }, { principal: SPACE, sessionId: 1 }]
     ) {
       expect(parseClientMessage(encodeMemoryBoundary({ ...base, reader })))
-        .toBeNull();
+        .toEqual({ type: "invalid", requestId: "reader-parse" });
     }
     const reader = { principal: SPACE, sessionId: "reader-session" };
     expect(parseClientMessage(encodeMemoryBoundary({ ...base, reader })))

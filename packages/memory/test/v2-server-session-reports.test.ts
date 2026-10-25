@@ -202,7 +202,7 @@ describe("server", () => {
       }));
       expect(messages).toEqual([{
         type: "response",
-        requestId: "invalid",
+        requestId: "malformed",
         error: {
           name: "InvalidMessageError",
           message: "Unable to parse memory message",

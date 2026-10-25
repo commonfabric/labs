@@ -19,12 +19,12 @@ interface ChatRoomOutput {
   roster: Cell<ChatProfile>[];
 
   /** Each participant's profile, with the principal it attests. */
-  participantEntries: PerSession<
+  participantEntries: PerUser<
     { profile: Cell<ChatProfile>; principal?: string }[]
   >;
 
   /** The principals `participantEntries` holds, once each. */
-  participantPrincipals: PerSession<string[]>;
+  participantPrincipals: PerUser<string[]>;
 
   /** Adds a profile to those who joined the room, once. */
   addParticipant: Stream<{ profile: Cell<ChatProfile> }>;
@@ -224,10 +224,10 @@ space.
   claims, not proof of access.
 - **`messageRights`** says what the reader may do to each of the room's
   messages: one entry per message, oldest first, holding the `message`, as the
-  link `messages.latest` holds for it, and `canEdit`, `canDelete`, and
-  `canObliterate`, decided by the rules the streams below admit an event by, so
-  a client offers exactly the acts the room would take. Every entry is all
-  `false` while `canSend` doesn't hold.
+  link to its own cell that every field of the room naming it holds, and
+  `canEdit`, `canDelete`, and `canObliterate`, decided by the rules the streams
+  below admit an event by, so a client offers exactly the acts the room would
+  take. Every entry is all `false` while `canSend` doesn't hold.
 - **`canAdd`** says whether the reader can add someone to the room's space: the
   room is a group room in a space of its own, and their access is OWNER. It is
   false in a direct room, whose space keeps its two members, and in a space's
@@ -256,22 +256,21 @@ space.
 
 ## Scopes
 
-A room's fields fall into three [scopes](../scoped-cell-instances.md#summary),
-plus two values computed for each reader, and the difference matters to a
-client:
+A room's fields fall into two [scopes](../scoped-cell-instances.md#summary),
+plus values computed for each reader, and the difference matters to a client:
 
 - **`PerSpace`**: one instance for the whole room, the same for everyone the
   room's space admits. That is nearly everything: `about`, the messages,
   `participants` and `roster`, and the streams. These are the room: a link to the room names them,
   and passing the link around, to another component or another person, passes
   the room.
-- **`PerSession`**: one instance per memory session in the room's space. That is
-  `participantEntries` and `participantPrincipals`, which each session derives
-  under its own access. Passing the room's link to someone else passes neither:
-  they read their own.
 - **`PerUser`**: one instance per user, which follows them across sessions.
-  That is only `addRequests` and `titleRequests`, the outcomes of the reader's
-  own adds and retitles. No one else reads them.
+  That is `participantEntries` and `participantPrincipals`, which each user
+  derives under their own access, and `addRequests` and `titleRequests`, the
+  outcomes of the reader's own adds and retitles. Read access is a property of
+  the principal, so every session of one user derives the same entries and
+  principals. Passing the room's link to someone else passes none of these:
+  they read their own.
 - **Computed for each reader**: `canSend`, `canAdd`, `viewer`, and
   `messageRights`. Each is derived when it's read, from the reader's own access
   and profile, so each reader sees their own answer, and it needs no instance

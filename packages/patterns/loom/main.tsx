@@ -671,7 +671,8 @@ function resolvedProfile(
 /**
  * Duplicates `panel` under the profile this session acts as: the one it
  * claimed in `viewerState`, or else the viewer's `#profile`. With neither, the
- * copy records the principal the duplication acted for.
+ * copy records the principal the duplication acted for. A profile that is not
+ * the viewer's own is refused, as `admitPanel` refuses one in any event.
  */
 const duplicateAsViewer = handler<
   void,

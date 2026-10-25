@@ -1,10 +1,16 @@
-/** A panel links the profile its adder acted under, and nothing else writes it. */
+/**
+ * A panel links the profile its adder acted under, which is a profile of the
+ * adder's own, and nothing else writes it.
+ */
 import {
   action,
   type AddIntegrity,
   assert,
+  handler,
   pattern,
+  type RepresentsCurrentUser,
   TESTS,
+  type TrustedActionWrite,
   UI,
   Writable,
 } from "commonfabric";
@@ -12,9 +18,45 @@ import { clickButton, findElement } from "../test/vnode-helpers.ts";
 import Loom from "./main.tsx";
 import type { Panel } from "./schemas.tsx";
 
-// Labeled with integrity only, as a Fabric profile is: its fields carry the
-// owner's `represents-principal`, and no confidentiality.
-type TestProfile = AddIntegrity<
+/** The reviewed surface and action a person writes their own profile from. */
+const PROFILE_SURFACE = "LoomTestProfileSurface";
+const PROFILE_ACTION = "LoomTestWriteProfile";
+
+/** The gesture writing a profile takes. */
+const profileGesture = { surface: PROFILE_SURFACE, action: PROFILE_ACTION };
+
+/**
+ * A person's own profile, labeled with the principal who wrote it, which only
+ * `writeOwnProfile` writes, from its reviewed surface.
+ */
+type OwnProfile = RepresentsCurrentUser<
+  TrustedActionWrite<
+    { name?: string; avatar?: string },
+    typeof writeOwnProfile,
+    typeof PROFILE_ACTION,
+    typeof PROFILE_SURFACE
+  >
+>;
+
+/** What `writeOwnProfile` is bound to. */
+interface ProfileWriteState {
+  /** The profile to write. */
+  profile: Writable<OwnProfile>;
+
+  /** The name to write into it. */
+  name: string;
+}
+
+/** Writes the acting person's own profile, under `name`. */
+const writeOwnProfile = handler<unknown, ProfileWriteState>((
+  _event,
+  { profile, name },
+) => {
+  profile.set({ name });
+});
+
+/** A profile labeled with integrity only, which names no principal. */
+type UnclaimedProfile = AddIntegrity<
   { name?: string; avatar?: string },
   readonly ["loom-test-profile"]
 >;
@@ -24,8 +66,12 @@ const urlOf = (panel: Panel): string | undefined =>
   panel.kind === "url" ? panel.url : undefined;
 
 export default pattern(() => {
-  const member = Writable.of<TestProfile>({ name: "Member" });
-  const other = Writable.of<TestProfile>({ name: "Other" });
+  // Two profiles of the person running the test, and one that names nobody.
+  const member = Writable.of<OwnProfile>();
+  const other = Writable.of<OwnProfile>();
+  const unclaimed = Writable.of<UnclaimedProfile>({ name: "Nobody" });
+  const writeMember = writeOwnProfile({ profile: member, name: "Member" });
+  const writeOther = writeOwnProfile({ profile: other, name: "Other" });
   const alice = "did:key:z6MkAliceAddsPanelsToTheSharedLoom";
 
   const loom = Loom({});
@@ -128,14 +174,34 @@ export default pattern(() => {
   const duplicateFromUI = action(() =>
     clickButton(findElement(loom[UI], "cf-card"), "Duplicate")
   );
+  // A profile that names nobody is no one's to add under, through any of the
+  // streams, including where the event would otherwise change nothing.
+  const unclaimedPiece = new Writable({ title: "Unclaimed target" });
+  const addPieceAsUnclaimed = action(() =>
+    loom.addPiece.send({ piece: unclaimedPiece, as: unclaimed })
+  );
+  const addUrlAsUnclaimed = action(() =>
+    loom.addPanel.send({ panel: url, as: unclaimed })
+  );
+  const addPresentAsUnclaimed = action(() =>
+    loom.addPanel.send({ panel: loom.panels[0], as: unclaimed })
+  );
+  const duplicateAsUnclaimed = action(() =>
+    loom.duplicatePanel.send({ panel: loom.panels[0], as: unclaimed })
+  );
+  const claimUnclaimed = action(() =>
+    loom.viewerState.key("actingProfile").set(unclaimed)
+  );
 
   return {
     // Each refused write is reported as a CFC policy warning, and each
     // refused event as a runtime error.
     allowConsoleWarnings: true,
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 2,
+    expectRuntimeErrors: 7,
     [TESTS]: [
+      { action: writeMember, event: {}, trustedUi: profileGesture },
+      { action: writeOther, event: {}, trustedUi: profileGesture },
       { action: addPieceAsMember },
       {
         assertion: assert(() =>
@@ -267,6 +333,22 @@ export default pattern(() => {
         assertion: assert(() =>
           loom.panels[0].get().titleOverride === "Renamed field" &&
           loom.panels[0].key("addedByProfile").equals(other)
+        ),
+      },
+      { action: addPieceAsUnclaimed },
+      { action: addUrlAsUnclaimed },
+      { action: addPresentAsUnclaimed },
+      { action: duplicateAsUnclaimed },
+      { action: claimUnclaimed },
+      { render: loom[UI] },
+      { action: duplicateFromUI },
+      {
+        assertion: assert(() =>
+          loom.panels.length === 3 && loom.pieceRegistry.length === 0 &&
+          !loom.panels.some((panel) =>
+            panel.get().addedByProfile !== undefined &&
+            panel.key("addedByProfile").equals(unclaimed)
+          )
         ),
       },
     ],

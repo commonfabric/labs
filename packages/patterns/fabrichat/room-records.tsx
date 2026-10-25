@@ -41,7 +41,11 @@ import {
   Writable,
   type WritePolicyAnyOf,
 } from "commonfabric";
-import type { FileEntry } from "../fabrifile/schemas.tsx";
+import type {
+  FileEntry,
+  FileRequestOutcome,
+  FileStoreOutput,
+} from "../fabrifile/schemas.tsx";
 import { profileKeyOf } from "../system/private-inbox.tsx";
 import { isSharedSpaceCatalog } from "../system/shared-space-catalog.ts";
 import {
@@ -367,7 +371,11 @@ const now = (): FabricEpochNsec => epochNsecFromMsec(Date.now());
  * values, and follows a link only where it hands one on.
  */
 export interface MessageEntry extends ViewItem {
-  /** A link to the stored message. */
+  /**
+   * The stored message's own cell: the document that holds it, never its slot
+   * in the room's messages, so two entries name one message exactly when
+   * their links are equal.
+   */
   cell: MessageCell;
 
   /** Whether the message is shown in the main conversation. */
@@ -433,8 +441,8 @@ export const messageEntries = (
   const entries = ((messages.get() ?? []) as MessageRecord[]).flatMap(
     (record, index): MessageEntry[] => {
       if (record?.sentAt === undefined) return [];
-      const cell = cellAt(messages, index);
-      const key = viewKeyOf(cell);
+      const cell = cellAt(messages, index).resolveAsCell();
+      const key = entityKeyOf(cell);
       if (key === undefined) return [];
       const target = record.replyTo?.message;
       const targetKey = target === undefined ? undefined : viewKeyOf(target);
@@ -606,10 +614,28 @@ export interface RoomStreamEvent {
   readonly target?: { readonly value?: string };
 }
 
-/** Where a rendered composer keeps the reply and the edit it is composing. */
+/** A file a composer is attaching: the request adding it to the store. */
+export interface ComposerAttachment {
+  /** The request's id, under which the store records its outcome. */
+  requestId: string;
+
+  /** The name the file had, which the request asked for. */
+  name: string;
+}
+
+/**
+ * Where a rendered composer keeps the reply, the edit and the attachments it
+ * is composing.
+ */
 export interface ComposerState {
   /** The message the next send replies to in the main conversation. */
   replyTo?: MessageCell;
+
+  /**
+   * The files the next send attaches, in the order they were picked, each as
+   * the request adding it to the space's store.
+   */
+  attaching?: ComposerAttachment[];
 
   /** The message being edited. */
   editing?: MessageCell;
@@ -684,8 +710,17 @@ export interface SendState extends ActState {
 
 /** What a rendered composer's send is bound to. */
 export interface ComposerSendState extends SendState {
-  /** The session's composer state, whose reply the send takes and ends. */
+  /**
+   * The session's composer state, whose reply and attachments the send takes
+   * and ends.
+   */
   composer: ComposerCell;
+
+  /**
+   * The space's file store, whose outcomes say which entry each attachment's
+   * request added; absent while the space keeps none.
+   */
+  store?: Cell<FileStoreOutput>;
 }
 
 /** What a rendered thread composer's send is bound to. */
@@ -864,6 +899,9 @@ const NOT_IN_ROOM = "That message isn't in this chat.";
 /** Why an act on a deleted message, other than its obliteration, is refused. */
 const DELETED = "That message was deleted.";
 
+/** Why a file is refused in a space that keeps no file store yet. */
+const NOWHERE_FOR_FILES = "This chat has nowhere to keep files yet.";
+
 /**
  * The files `links` names, as the attachments of a message sent into the
  * room: each an entry of the space `room`, any of the room's records, lives
@@ -956,8 +994,8 @@ const leaveTombstone = (target: MessageCell, keepsAuthor: boolean): void => {
 };
 
 /**
- * Pushes a send onto `messages`: the text and the attachments `event`
- * carries, from `myProfile`, as a reply to `reply` where that names a
+ * Pushes a send onto `messages`: the text `event` carries, attaching
+ * `attached`, from `myProfile`, as a reply to `reply` where that names a
  * message, shown `shownIn`, with a reaction list of its own; then `joined` is
  * told.
  *
@@ -976,6 +1014,7 @@ const leaveTombstone = (target: MessageCell, keepsAuthor: boolean): void => {
  */
 const sendInto = (
   event: RoomStreamEvent,
+  attached: readonly (Cell<FileEntry> | undefined)[] | undefined,
   myProfile: ProfileCell | undefined,
   messages: MessagesCell,
   reply: Cell<RepliedMessage> | undefined,
@@ -985,7 +1024,7 @@ const sendInto = (
   const profile = resolvedProfile(myProfile);
   if (profile === undefined) throw new Error(NO_PROFILE);
   const body = textOf(event);
-  const attachments = attachmentsIn(messages, event?.attachments);
+  const attachments = attachmentsIn(messages, attached);
   if (body === "" && attachments.length === 0) {
     throw new Error("This send has no text in `body`, and no attachments.");
   }
@@ -1016,6 +1055,7 @@ export const commitSend = handler<RoomStreamEvent, SendState>(
   (event, { myProfile, messages, joined }) => {
     sendInto(
       event,
+      event?.attachments,
       myProfile,
       messages,
       event?.replyTo?.message,
@@ -1026,17 +1066,170 @@ export const commitSend = handler<RoomStreamEvent, SendState>(
 );
 
 /**
+ * The entries the composer's attachments added to `store`, in their order,
+ * leaving out any the store refused, which the composer shows as refused. A
+ * request's outcome is read by its id alone, so the send reads no more of
+ * the store's outcomes than its own.
+ *
+ * @throws If a request has no outcome yet, so that its file is still being
+ *   added, or the composer attaches files to a space with no store.
+ */
+const composedAttachments = (
+  attaching: readonly ComposerAttachment[],
+  store: Cell<FileStoreOutput> | undefined,
+): Cell<FileEntry>[] => {
+  if (attaching.length === 0) return [];
+  const requests = store?.resolveAsCell().key("requests");
+  if (requests === undefined) throw new Error(NOWHERE_FOR_FILES);
+  return attaching.flatMap(({ requestId }) => {
+    const outcome = requests.key(requestId).get() as
+      | FileRequestOutcome
+      | undefined;
+    if (outcome === undefined) {
+      throw new Error("A file is still being attached.");
+    }
+    return outcome.status === "done" ? [outcome.entry] : [];
+  });
+};
+
+/**
  * Sends a rendered composer's text, from `ChatSendSurface`, replying in the
- * main conversation to the message the composer holds, if any, and ending
- * that reply.
+ * main conversation to the message the composer holds, if any, and attaching
+ * the files the store added for it; then ends that reply, and those
+ * attachments.
  */
 export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
-  (event, { myProfile, messages, composer, joined }) => {
+  (event, { myProfile, messages, composer, store, joined }) => {
     // A cleared link still reads back as a cell, holding nothing.
     const link = composer.get()?.replyTo;
     const reply = link?.get() === undefined ? undefined : link;
-    sendInto(event, myProfile, messages, reply, "main", joined);
+    const attaching = composer.get()?.attaching ?? [];
+    sendInto(
+      event,
+      composedAttachments(attaching, store),
+      myProfile,
+      messages,
+      reply,
+      "main",
+      joined,
+    );
     if (reply !== undefined) composer.key("replyTo").set(undefined);
+    if (attaching.length > 0) composer.key("attaching").set(undefined);
+  },
+);
+
+/** One file `cf-file-input` reports it has stored in the blob store. */
+export interface UploadedFile {
+  /** The blob's id. */
+  id: string;
+
+  /** The name the file had. */
+  name: string;
+
+  /** The media type the blob was stored with. */
+  mediaType: string;
+
+  /** The size of the file, in bytes. */
+  size: number;
+}
+
+/** The `cf-change` event `cf-file-input` fires after storing files. */
+export interface UploadEvent {
+  detail?: { files?: UploadedFile[] };
+}
+
+/** What a composer's attach control is bound to, as it opens its picker. */
+export interface PrepareAttachState {
+  /** Creates the space's file store, unless it has one. */
+  ensureFileStore: Stream<void>;
+}
+
+/** What a composer's attach control is bound to, once files are stored. */
+export interface AttachState {
+  /** The session's composer state, whose attachments the control adds to. */
+  composer: ComposerCell;
+
+  /** The space's file store, which holds nothing while the space keeps none. */
+  store?: Cell<FileStoreOutput>;
+
+  /**
+   * Whether the space keeps a store: a link to none still reads as a cell,
+   * and reading the store itself to find out would read all of it.
+   */
+  hasStore: boolean;
+}
+
+/** What a composer's control removing an attachment is bound to. */
+export interface DropAttachmentState {
+  /** The session's composer state, whose attachment the control removes. */
+  composer: ComposerCell;
+
+  /** The request adding the attachment removed. */
+  requestId: string;
+}
+
+/**
+ * Makes sure the space has a file store before the person picks a file, by
+ * sending the room's `ensureFileStore`, which changes nothing where the space
+ * has one; `cf-file-input` fires it as it opens the file picker.
+ */
+export const prepareAttach = handler<unknown, PrepareAttachState>(
+  (_event, { ensureFileStore }) => {
+    ensureFileStore.send();
+  },
+);
+
+/**
+ * Adds each file `cf-file-input` reports it stored to the space's store,
+ * under the name it had or a free one, and to the composer's attachments as
+ * the request adding it. The store's outcome for each request says which
+ * entry it added, or why it refused, and the composer's send reads that. Each
+ * request is named by the event's key and the file's place in it, so every
+ * run of one event names the same requests, and the store adds each file once.
+ *
+ * @throws If the space has no store, or the files would make more
+ *   attachments than the room's policy allows.
+ */
+export const commitAttach = handler<UploadEvent, AttachState>(
+  (event, { composer, store, hasStore }) => {
+    const files = event?.detail?.files ?? [];
+    if (files.length === 0) return;
+    const target = hasStore === true ? store?.resolveAsCell() : undefined;
+    const space = target === undefined ? undefined : spaceOf(target);
+    if (target === undefined || space === undefined) {
+      throw new Error(NOWHERE_FOR_FILES);
+    }
+    const attaching = composer.get()?.attaching ?? [];
+    const max = FABRICHAT_POLICY.maxAttachments;
+    if (attaching.length + files.length > max) {
+      throw new Error(`A message can have at most ${max} attachments.`);
+    }
+    const key = eventKey();
+    const added = files.map((file, index) => {
+      const requestId = `attach-${key}-${index}`;
+      target.key("add").send({
+        requestId,
+        name: file.name,
+        mediaType: file.mediaType,
+        blob: { space, id: file.id },
+        size: file.size,
+        onConflict: "rename",
+      });
+      return { requestId, name: file.name };
+    });
+    composer.key("attaching").set([...attaching, ...added]);
+  },
+);
+
+/**
+ * Takes one file out of the composer's attachments. Its entry stays in the
+ * store, where the request put it.
+ */
+export const dropAttachment = handler<unknown, DropAttachmentState>(
+  (_event, { composer, requestId }) => {
+    const attaching = composer.get()?.attaching ?? [];
+    const kept = attaching.filter((file) => file.requestId !== requestId);
+    composer.key("attaching").set(kept.length === 0 ? undefined : kept);
   },
 );
 
@@ -1048,7 +1241,7 @@ export const commitThreadSend = handler<RoomStreamEvent, ThreadSendState>(
   (event, { myProfile, messages, composer, shownIn, joined }) => {
     const link = composer.get()?.thread;
     const reply = link?.get() === undefined ? undefined : link;
-    sendInto(event, myProfile, messages, reply, shownIn, joined);
+    sendInto(event, undefined, myProfile, messages, reply, shownIn, joined);
   },
 );
 
@@ -1058,7 +1251,7 @@ export const commitThreadSend = handler<RoomStreamEvent, ThreadSendState>(
  */
 export const commitReply = handler<RoomStreamEvent, ReplyState>(
   (event, { myProfile, messages, message, shownIn, joined }) => {
-    sendInto(event, myProfile, messages, message, shownIn, joined);
+    sendInto(event, undefined, myProfile, messages, message, shownIn, joined);
   },
 );
 

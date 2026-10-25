@@ -29,6 +29,7 @@ import {
   NAME,
   pattern,
   type PerSession,
+  type PerUser,
   principalOf,
   SELF,
   spaceAccess,
@@ -41,6 +42,15 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import type {
+  FileRequestOutcome,
+  FileStoreOutput,
+} from "../fabrifile/schemas.tsx";
+import {
+  ensureFileStore,
+  type FileStoreRecord,
+  type FileStoreRecordCell,
+} from "../fabrifile/store.tsx";
 import {
   addParticipant,
   type ParticipantRosterCell,
@@ -50,6 +60,7 @@ import { profileKeyOf } from "../system/private-inbox.tsx";
 import { type ShownIn, type ViewPlace, viewPlaces } from "./logic.ts";
 import {
   canActIn,
+  commitAttach,
   commitComposerSend,
   commitDelete,
   commitDeleteReaction,
@@ -59,7 +70,10 @@ import {
   commitSendReaction,
   commitSetTitle,
   commitThreadSend,
+  type ComposerAttachment,
+  type ComposerCell,
   type ComposerState,
+  dropAttachment,
   FABRICHAT_POLICY,
   isOwnerOf,
   type JoiningManager,
@@ -71,6 +85,7 @@ import {
   type MessagesValue,
   NO_MESSAGE_RIGHTS,
   ownersMayObliterateIn,
+  prepareAttach,
   rightsOf,
   type RoomStreamEvent,
   type SetTitleEvent,
@@ -332,7 +347,7 @@ export interface RoomManager extends JoiningManager {
    * The people the viewer's rooms list, other than the viewer: by principal,
    * the profiles attesting it.
    */
-  people: PerSession<Record<string, ProfileCell[]>>;
+  people: PerUser<Record<string, ProfileCell[]>>;
 }
 
 /** Each of the viewer's adds' outcomes, by its `requestId`. */
@@ -643,7 +658,7 @@ export interface AddMemberInput {
   manager?: RoomManager;
 
   /** The principals of those already in the room, whom the picker leaves out. */
-  present: PerSession<string[]>;
+  present: PerUser<string[]>;
 }
 
 /** What the control adding a member to a room provides. */
@@ -727,8 +742,10 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
       shown === "" ? "none" : "block"
     );
     // Each person the manager lists who isn't in the room, by the first
-    // profile attesting them, per session, as the manager's people are.
-    const candidates = computed((): PerSession<ProfileCell[]> =>
+    // profile attesting them, per user, as the manager's people are. The
+    // binding's name is the value's cause, the identity of the document that
+    // stores it, so renaming it moves its data.
+    const candidatesForUser = computed((): PerUser<ProfileCell[]> =>
       Object.entries(manager?.people ?? {}).flatMap(
         ([principal, profiles]): ProfileCell[] =>
           present.includes(principal) || profiles[0] === undefined
@@ -737,7 +754,7 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
       )
     );
     const candidatesDisplay = computed((): ChatDisplay =>
-      candidates.length === 0 ? "none" : "block"
+      candidatesForUser.length === 0 ? "none" : "block"
     );
 
     return {
@@ -769,7 +786,7 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
               <cf-text variant="caption">
                 Or add people from your chats:
               </cf-text>
-              {candidates.map((profile) => (
+              {candidatesForUser.map((profile) => (
                 <cf-hstack
                   gap="2"
                   align="center"
@@ -959,7 +976,9 @@ const viewerProfileOf = (
 
 /** What a room's reader may do to one of its messages. */
 export interface ChatMessageRights extends MessageRights {
-  /** The message, as `messages.latest` links it. */
+  /**
+   * The message's own cell, the link every field of the room naming it holds.
+   */
   message: MessageCell;
 }
 
@@ -991,13 +1010,13 @@ export interface ChatRoomView {
    * attests none or the label can't be read where the list is derived. Like
    * `participants`, it is not proof of access.
    */
-  participantEntries: PerSession<ParticipantEntry[]>;
+  participantEntries: PerUser<ParticipantEntry[]>;
 
   /**
    * The principals `participantEntries` holds, each once, in the order of
    * `participants`.
    */
-  participantPrincipals: PerSession<string[]>;
+  participantPrincipals: PerUser<string[]>;
 
   /**
    * Adds a profile to those who joined the room, once. Any participant may add
@@ -1070,6 +1089,27 @@ export interface ChatRoomView {
 
   /** The outcome of each of this reader's retitles, by its `requestId`. */
   titleRequests: Record<string, SetTitleOutcome>;
+
+  /**
+   * The store of the files of the room's space: for a room that is its
+   * space's root, the one it names itself; for any other, the one its space's
+   * root names. Absent while that names none.
+   */
+  fileStore?: Cell<FileStoreOutput>;
+
+  /**
+   * Names a new store as the space's, unless the space names one already. A
+   * room that is its space's root keeps the store itself; any other asks its
+   * space's root to, and does nothing in a space whose root keeps none.
+   */
+  ensureFileStore: Stream<void>;
+
+  /**
+   * Where the room keeps its space's file store, for a room that is its
+   * space's root, as a root offering its space's store does; absent for any
+   * other room, which keeps none.
+   */
+  fileStoreRecord?: Cell<FileStoreRecord>;
 }
 
 /** What a room offers everyone its space admits: `ChatRoomOutput`. */
@@ -1083,6 +1123,27 @@ export interface ChatRoomOutput extends ChatRoomView {
   /** The room's data face, as one group. */
   [VIEWS]: { room: ChatRoomView };
 }
+
+/**
+ * Names a new store as the room's space's: through `own`, for a room that is
+ * its space's root, and otherwise through `root`, which keeps it where the
+ * space's root does, when that root keeps a record of its store, as a
+ * container offering its space's store does. `rootKeeps` says whether it
+ * does: `root` is bound whether or not the root keeps a record, and reads as
+ * one either way.
+ */
+const ensureSpaceFileStore = handler<
+  void,
+  {
+    ownSpace: boolean;
+    rootKeeps: boolean;
+    own: Stream<void>;
+    root: Stream<void>;
+  }
+>((_, { ownSpace, rootKeeps, own, root }) => {
+  if (ownSpace) own.send();
+  else if (rootKeeps) root.send();
+});
 
 /** What a room stores, and who is looking at it. */
 export interface FabriChatRoomCoreInput {
@@ -1109,6 +1170,12 @@ export interface FabriChatRoomCoreInput {
 
   /** Those who joined the room; absent for a room nobody can join. */
   roster?: ParticipantRosterCell;
+
+  /**
+   * Where the room keeps its space's store, for a room that is its space's
+   * root; absent where it keeps none.
+   */
+  fileStore?: FileStoreRecordCell;
 
   /** The viewer's adds' outcomes; absent where they aren't remembered. */
   addRequests?: AddRequestsCell;
@@ -1150,6 +1217,57 @@ export interface FabriChatRoomCoreOutput extends ChatRoomOutput {
   threadComposerSend: Stream<RoomStreamEvent>;
 }
 
+/** What one file a composer is attaching renders. */
+interface AttachingFileInput {
+  /** The file, as the request adding it to the space's store. */
+  file: ComposerAttachment;
+
+  /** The space's file store, which records the request's outcome. */
+  store: Cell<FileStoreOutput> | undefined;
+
+  /** The session's composer state, which the file's remove control changes. */
+  composer: ComposerCell;
+}
+
+/**
+ * One file the composer is attaching: its name, whether the store has added
+ * it yet, under which name, or why it refused it, and a control that takes it
+ * out of the next send.
+ */
+const FabriChatAttachingFile = pattern<AttachingFileInput, { [UI]: VNode }>(
+  ({ file, store, composer }) => {
+    // The store's outcome for this file's request, read by its id alone.
+    const outcome = computed(() =>
+      store?.key("requests").key(file.requestId).get() as
+        | FileRequestOutcome
+        | undefined
+    );
+    const status = computed(() =>
+      outcome === undefined
+        ? `${file.name}: attaching…`
+        : outcome.status === "refused"
+        ? `${file.name}: ${outcome.reason}`
+        : outcome.name === file.name
+        ? file.name
+        : `${file.name}, as ${outcome.name}`
+    );
+    return {
+      [UI]: (
+        <cf-hstack gap="1" align="center">
+          <cf-text variant="caption">{status}</cf-text>
+          <cf-button
+            size="sm"
+            variant="ghost"
+            onClick={dropAttachment({ composer, requestId: file.requestId })}
+          >
+            Remove
+          </cf-button>
+        </cf-hstack>
+      ),
+    };
+  },
+);
+
 /**
  * A conversation with a composer that sends as the viewer: the whole of
  * `ChatRoomOutput`, given the viewer's profile.
@@ -1165,6 +1283,7 @@ export const FabriChatRoomCore = pattern<
     messages,
     titles,
     roster,
+    fileStore,
     addRequests,
     startDirect,
     self,
@@ -1226,14 +1345,16 @@ export const FabriChatRoomCore = pattern<
   );
   const participants = computed(() => participantsOf(listed, facts.authors));
   // A profile lives in its owner's own space, and attests no one to a reader
-  // that space refuses, so the entries, and the principals taken from them,
-  // are derived per session: one instance for every reader is one their
-  // runtimes hold differently.
-  const participantEntries = computed((): PerSession<ParticipantEntry[]> =>
+  // that space refuses. That access is the reader's principal's, so the
+  // entries, and the principals taken from them, are derived per user: one
+  // instance for every reader is one their runtimes hold differently. Each
+  // binding's name is its value's cause, the identity of the document that
+  // stores it, so renaming one moves its data.
+  const participantEntriesForUser = computed((): PerUser<ParticipantEntry[]> =>
     participantEntriesOf(participants)
   );
-  const participantPrincipals = computed((): PerSession<string[]> =>
-    principalsOf(participantEntries)
+  const participantPrincipalsForUser = computed((): PerUser<string[]> =>
+    principalsOf(participantEntriesForUser)
   );
   const join = addParticipant({ roster });
   const canSend = computed(() => canActIn(messages, myProfile));
@@ -1245,7 +1366,7 @@ export const FabriChatRoomCore = pattern<
     requests: addRequests,
     self,
     manager,
-    present: participantPrincipals,
+    present: participantPrincipalsForUser,
   });
   // The composers' `disabled`. It defaults to `true`, which is what a
   // composer renders until this has computed: without a default the prop is
@@ -1366,14 +1487,43 @@ export const FabriChatRoomCore = pattern<
     alsoToMain.get() ? "both" : "thread"
   );
 
+  // A room that is its space's root names its space's store itself; any other
+  // uses the one its space's root names.
+  const rootFileStore = container?.key("fileStoreRecord");
+  const rootKeepsFileStore = computed(() => rootFileStore?.get() !== undefined);
+  const spaceFileStore = computed((): Cell<FileStoreOutput> | undefined =>
+    ownSpace ? fileStore?.get().store : rootFileStore?.get()?.store
+  );
+  const ensureFileStoreHere = ensureSpaceFileStore({
+    ownSpace,
+    rootKeeps: rootKeepsFileStore,
+    own: ensureFileStore({ fileStore }),
+    root: ensureFileStore({ fileStore: rootFileStore }),
+  });
+
   // Each handler is bound to the cells it uses and no others.
   const sendMessage = commitSend({ myProfile, messages, joined: tellJoined });
   const composeSend = commitComposerSend({
     myProfile,
     messages,
     composer,
+    store: spaceFileStore,
     joined: tellJoined,
   });
+  const openAttach = prepareAttach({ ensureFileStore: ensureFileStoreHere });
+  const attachFiles = commitAttach({
+    composer,
+    store: spaceFileStore,
+    hasStore: computed(() =>
+      (ownSpace ? fileStore?.get().store : rootFileStore?.get()?.store) !==
+        undefined
+    ),
+  });
+  // The files this session's composer is attaching, a list of the session's
+  // own, so that each session's rows are its own.
+  const attachingFiles = computed((): PerSession<ComposerAttachment[]> =>
+    composer.get()?.attaching ?? []
+  );
   const sendThreadReply = commitThreadSend({
     myProfile,
     messages,
@@ -1402,8 +1552,8 @@ export const FabriChatRoomCore = pattern<
     about: aboutView,
     participants,
     roster: joined,
-    participantEntries,
-    participantPrincipals,
+    participantEntries: participantEntriesForUser,
+    participantPrincipals: participantPrincipalsForUser,
     addParticipant: join,
     messages: facts.list,
     canSend,
@@ -1415,6 +1565,9 @@ export const FabriChatRoomCore = pattern<
     addRequests: addMember.outcomes,
     setTitle,
     titleRequests,
+    fileStore: spaceFileStore,
+    ensureFileStore: ensureFileStoreHere,
+    fileStoreRecord: ownSpace ? fileStore : undefined,
   };
   const closeThread = action(() => composer.key("thread").set(undefined));
   const cancelReply = action(() => composer.key("replyTo").set(undefined));
@@ -1529,6 +1682,25 @@ export const FabriChatRoomCore = pattern<
             onClick={composeSend}
           />
         </div>
+        <cf-vstack id="fabrichat-attachments" gap="1">
+          {attachingFiles.map((file) => (
+            <FabriChatAttachingFile
+              file={file}
+              store={spaceFileStore}
+              composer={composer}
+            />
+          ))}
+          <cf-file-input
+            multiple
+            showPreview={false}
+            buttonText="📎 Attach"
+            variant="ghost"
+            size="sm"
+            disabled={cannotSend}
+            oncf-click={openAttach}
+            oncf-change={attachFiles}
+          />
+        </cf-vstack>
 
         <cf-vstack
           id="fabrichat-thread"
@@ -1615,6 +1787,12 @@ export interface FabriChatRoomInput {
    * one writer its write contract admits.
    */
   participants?: ParticipantRosterCell;
+
+  /**
+   * Where a room that is its space's root keeps its space's file store; a
+   * room naming none, and every other room, holds `{}`.
+   */
+  fileStore?: FileStoreRecordCell;
 }
 
 /**
@@ -1628,6 +1806,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     messages,
     titles,
     participants,
+    fileStore,
     // The room itself, the link another member's manager lists it by.
     [SELF]: self,
   }) => {
@@ -1657,6 +1836,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         messages,
         titles,
         roster: participants,
+        fileStore,
         addRequests,
         startDirect: managerWish.result?.openDirect,
         self,
@@ -1688,6 +1868,9 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       addRequests: room.addRequests,
       setTitle: room.setTitle,
       titleRequests: room.titleRequests,
+      fileStore: room.fileStore,
+      ensureFileStore: room.ensureFileStore,
+      fileStoreRecord: room.fileStoreRecord,
       [UI]: (
         <cf-screen>
           {room[UI]}
