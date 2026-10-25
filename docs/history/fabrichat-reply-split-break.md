@@ -27,7 +27,7 @@ its own, `threadInfo`, which a send that starts a thread and a retitle write.
 ## What the gate reports
 
 The pattern-update proof reports every issue it finds against a baseline,
-each blaming one path. Against all ninety-nine of the room's baselines
+each blaming one path. Against all one hundred of the room's baselines
 recorded before this change, it reports a stored reply's `message` as removed:
 `replyTo.message: existing result field was removed` at up to thirty paths a
 baseline, thirty-one in all, one for each place the room's views and outputs
@@ -55,7 +55,7 @@ Twenty-five of the newer baselines also report the scope the room's
 recorded with this change before that scope reached it. The room's entries for
 the two breaks are one per group of baselines, each naming exactly the paths
 its group blames: both breaks', for the twenty-five that report both; the reply
-split's alone, for the three recorded with the scope; and the scope's alone, for
+split's alone, for the four recorded with the scope; and the scope's alone, for
 the one recorded with the split. They take the place of that break's own entry
 for the room.
 

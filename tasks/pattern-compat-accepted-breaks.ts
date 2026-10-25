@@ -2242,6 +2242,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261024T002137Z-Vy-7CaW79knps1fr",
       "20261024T171044Z-nGvvC4U9_mwy0apw",
       "20261024T225741Z-8YOlM5udTSKb1gzT",
+      "20261025T001716Z-DEzuKnfU3PpA3lJ5",
     ],
     paths: [
       "result.$VIEWS.room.deleteMessage.message.replyTo.message",
