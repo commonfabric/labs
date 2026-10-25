@@ -68,8 +68,9 @@ export interface DumpRuntime {
     ): { identity: string; symbol: string } | undefined;
 
     /**
-     * The entry ref the runtime describes a sub-pattern child by. A checkout
-     * without it describes a child by `getArtifactEntryRef()`'s.
+     * The entry ref the runtime describes a sub-pattern child by. Where a
+     * checkout's runtime has none, the dump describes a child by
+     * `getArtifactEntryRef()`'s ref.
      */
     getLeastArtifactEntryRef?(
       artifact: object,

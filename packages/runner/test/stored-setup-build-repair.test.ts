@@ -268,6 +268,11 @@ describe("stored-setup-build-repair", () => {
     return { cell, pattern, ref };
   };
 
+  // The sub-pattern a node of `parent` instantiates.
+  const childOf = (parent: Pattern): object =>
+    (parent.nodes as { module: { type: string; implementation: object } }[])
+      .find((node) => node.module.type === "pattern")!.module.implementation;
+
   const positionalDescriptors = (pattern: Pattern): PositionalDescriptor[] =>
     (pattern.derivedInternalCells ?? []).filter(isPositional);
 
@@ -744,6 +749,36 @@ describe("stored-setup-build-repair", () => {
 
     expect(holdsLogged()).toBe(holds);
     expect(storedSetupOf(reopened)).toEqual(stored);
+  });
+
+  it("describes children alike on setup and on a cold reopen, which register their names in different orders", async () => {
+    // Each load registers all of a module's names before it returns a
+    // pattern, so the least of them is known by the time a description is
+    // computed, whatever order the load registered them in.
+    const { cell, pattern, ref } = await setUpAndStop(
+      "cold-described",
+      ALIASED_CHILDREN,
+    );
+    expect(rt.patternManager.getArtifactEntryRef(childOf(pattern))?.symbol)
+      .toBe("Counter");
+    const stamped = stampOf(cell);
+    await rt.patternManager.flushCompileCacheWrites();
+    await rt.storageManager.synced();
+    await rt.dispose();
+
+    rt = openRuntime(signer);
+    const reopened = rt.getCell<Result>(space, "cold-described");
+    expect(await rt.start(reopened)).toBe(true);
+    await reopened.pull();
+    await settled();
+    const loaded = rt.patternManager.artifactFromIdentitySync(
+      ref.identity,
+      ref.symbol,
+    ) as Pattern;
+
+    expect(rt.patternManager.getArtifactEntryRef(childOf(loaded))?.symbol)
+      .toBe("Tally");
+    expect(storedSetupBuildOf(loaded, ref, entryRefOf)).toEqual(stamped);
   });
 
   describe("for a principal with READ access to the space", () => {

@@ -200,7 +200,9 @@ export function isKeylessPatternIdentity(identity: string): boolean {
  * one. The keyless mint can run before a module's post-evaluation indexing
  * ("refs are indexed only post-evaluation — AFTER build-time copies were
  * made"), and letting the mint win would permanently shadow the value's real,
- * loadable identity behind a pointer no other session can resolve.
+ * loadable identity behind a pointer no other session can resolve. Every
+ * registration, first or not, also counts toward the least symbol
+ * {@link getLeastArtifactEntryRef} gives.
  */
 export function setArtifactEntryRef(
   value: unknown,
