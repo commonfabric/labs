@@ -70,6 +70,42 @@ describe("cause-assignments-dump", () => {
       ]);
     });
 
+    it("returns, for a sub-pattern child its module exports under several names, a description naming the least of them", async () => {
+      // The module exports the child first under a name that is not the
+      // least, which a load registers first.
+      const built = await buildAssignment(runtime, {
+        main: "/main.tsx",
+        files: [{
+          name: "/tally.tsx",
+          contents: [
+            "import { pattern } from 'commonfabric';",
+            "export const Tally = pattern<{ n: number }, { n: number }>(",
+            "  ({ n }) => ({ n }),",
+            ");",
+            "export const Counter = Tally;",
+            "",
+          ].join("\n"),
+        }, {
+          name: "/main.tsx",
+          contents: [
+            "import { pattern } from 'commonfabric';",
+            "import { Tally } from './tally.tsx';",
+            "export default pattern<{ n: number }>(({ n }) => {",
+            "  const children = [Tally({ n })];",
+            "  return { views: children };",
+            "});",
+            "",
+          ].join("\n"),
+        }],
+      }, "main.tsx");
+
+      expect(
+        built?.levels[0].cells.map((cell) =>
+          cell.description.replace(/sub-pattern \S+#/, "sub-pattern #")
+        ),
+      ).toEqual(["cell, computed, written by sub-pattern #Counter"]);
+    });
+
     it("returns builds whose comparison finds a child moved, where a cell ahead of it is gone", async () => {
       // The two programs differ in source, which the gate never compares;
       // here the difference stands in for a compiler change that drops the

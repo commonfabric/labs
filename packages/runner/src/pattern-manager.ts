@@ -6,6 +6,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   brandTrustedPattern,
   getArtifactEntryRef,
+  getLeastArtifactEntryRef,
   getPatternProgram,
   getPatternSourcePath,
   isKeylessPatternIdentity,
@@ -3834,6 +3835,18 @@ export class PatternManager {
     // module-level store (refs are indexed post-evaluation, after build-time
     // copies were made, so the lookup walks the derivation link lazily).
     return getArtifactEntryRef(value);
+  }
+
+  /**
+   * The reference `getArtifactEntryRef()` gives a builder artifact, with the
+   * least of the symbols the artifact is registered under for that identity:
+   * one that is the same however the artifact's module was loaded, for a
+   * description of it to hold across loads.
+   */
+  getLeastArtifactEntryRef(
+    value: object,
+  ): { identity: string; symbol: string } | undefined {
+    return getLeastArtifactEntryRef(value);
   }
 
   /**

@@ -125,7 +125,11 @@ number and description, the cells holding state by number and description, and a
 digest of the projection map, each result path that links a positional cell with
 the cell's number. The descriptions are the schema-free ones of
 `packages/runner/src/cause-assignment.ts`, so a schema-generator change that
-moves no cell changes no record. Because a positional cause is a place in the
+moves no cell changes no record. A sub-pattern child is described by its
+pattern identity and the least of the names its module gives it, so a child
+its module exports under several names is described alike whichever of them a
+load registers first. A record of another version than the one setup writes
+reads as no record. Because a positional cause is a place in the
 build, two builds of one pattern source can name different cells by one cause,
 and the result projection links each slot to the cell of the build that wrote
 it. A start therefore holds the stored setup against the build it loads

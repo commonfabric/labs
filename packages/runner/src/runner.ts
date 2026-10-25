@@ -5224,7 +5224,8 @@ export class Runner {
    * The description of `pattern`'s build for the identity `ref`: the record
    * setup stamps as `patternSetupBuild`, and the positional cells it
    * describes. A sub-pattern child is described by its own pattern's
-   * identity, which this runtime's pattern manager knows.
+   * identity and the least of its names, which this runtime's pattern manager
+   * knows.
    */
   #describedBuild(
     pattern: Pattern,
@@ -5239,7 +5240,7 @@ export class Runner {
     let described = byRef.get(key);
     if (described === undefined) {
       const entryRefOf = (artifact: object) =>
-        this.#runtime.patternManager.getArtifactEntryRef(artifact);
+        this.#runtime.patternManager.getLeastArtifactEntryRef(artifact);
       described = {
         record: storedSetupBuildOf(pattern, ref, entryRefOf),
         cells: numberedCells(pattern, entryRefOf),

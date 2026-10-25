@@ -46,7 +46,7 @@ function sourceDigest(
 
 /**
  * The runtime surface the dump reaches, which is the same in every checkout
- * the gate compiles with.
+ * the gate compiles with, but for `getLeastArtifactEntryRef()`.
  */
 export interface DumpRuntime {
   harness: {
@@ -64,6 +64,14 @@ export interface DumpRuntime {
   patternManager: {
     registerEvaluatedModules(evaluated: unknown): void;
     getArtifactEntryRef(
+      artifact: object,
+    ): { identity: string; symbol: string } | undefined;
+
+    /**
+     * The entry ref the runtime describes a sub-pattern child by. A checkout
+     * without it describes a child by `getArtifactEntryRef()`'s.
+     */
+    getLeastArtifactEntryRef?(
       artifact: object,
     ): { identity: string; symbol: string } | undefined;
   };
@@ -105,9 +113,13 @@ export async function buildAssignment(
   ) {
     return undefined;
   }
+  const { patternManager } = runtime;
   const levels = assignmentLevels(
     entry,
-    (artifact) => runtime.patternManager.getArtifactEntryRef(artifact),
+    (artifact) =>
+      patternManager.getLeastArtifactEntryRef === undefined
+        ? patternManager.getArtifactEntryRef(artifact)
+        : patternManager.getLeastArtifactEntryRef(artifact),
   );
   if (levels.length === 0) return undefined;
   return { pattern, source: sourceDigest(program.files), levels };
