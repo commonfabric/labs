@@ -2320,10 +2320,10 @@ export class Runtime {
       error: unknown;
 
       /**
-       * Whether the start refused a piece whose state moved
-       * (`PieceStateMovedError`), rather than failing to load it.
+       * Present, and `true`, where the start refused a piece whose state
+       * moved (`PieceStateMovedError`) rather than failing to load it.
        */
-      refused: boolean;
+      refused?: true;
     }) => void)
     | undefined;
 

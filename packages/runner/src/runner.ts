@@ -9738,7 +9738,7 @@ export class Runner {
       this.#runtime.pieceStartCommitFailureObserver?.({
         actionId,
         error,
-        refused,
+        ...(refused && { refused }),
       });
     } catch (observerError) {
       logger.warn("piece-start-commit-observer-failed", () => [
