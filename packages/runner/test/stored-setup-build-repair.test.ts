@@ -139,6 +139,41 @@ const WITH_CHILD: RuntimeProgram = {
   }],
 };
 
+// A parent whose one child, from a module of its own, holds two writables of
+// one description in its view.
+const WITH_STATEFUL_CHILD: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [
+    {
+      name: "/main.tsx",
+      contents: [
+        "import { pattern, UI } from 'commonfabric';",
+        "import { Inner } from './inner.tsx';",
+        "export default pattern<Record<string, never>>(() => {",
+        "  const child = Inner({});",
+        "  return { [UI]: <div>{child}</div> };",
+        "});",
+        "",
+      ].join("\n"),
+    },
+    {
+      name: "/inner.tsx",
+      contents: [
+        "import { pattern, UI, Writable } from 'commonfabric';",
+        "export const Inner = pattern<Record<string, never>>(() => ({",
+        "  [UI]: (",
+        "    <div>",
+        "      <span>{new Writable('x')}</span>",
+        "      <span>{new Writable('y')}</span>",
+        "    </div>",
+        "  ),",
+        "}));",
+        "",
+      ].join("\n"),
+    },
+  ],
+};
+
 const INPUT = 5;
 const SLOT_VALUES = [INPUT * 2, INPUT * 3];
 
@@ -668,6 +703,79 @@ describe("stored-setup-build-repair", () => {
     expect(storedSetupOf(cell)).toEqual(stored);
     expect(rt.runner.isRunning(cell)).toBe(false);
     expect(warned("piece-setup-refused")).toBe(before + 1);
+  });
+
+  describe("with a child whose record says its state moved", () => {
+    // The parent's own record agrees with the build; its child's says
+    // another build numbered three of its two writables' description, so
+    // which went where cannot be told.
+
+    // Sets up the parent and stops it, then stamps the child's record as
+    // another build's. Returns the parent, its pattern and the child.
+    const setUpWithRefusedChild = async (name: string) => {
+      const { cell, pattern } = await setUpAndStop(name, WITH_STATEFUL_CHILD);
+      const spot = getDerivedInternalCell(
+        cell as Cell,
+        positionalDescriptors(pattern)[0],
+      );
+      const child = rt.getCellFromLink<Result>(
+        parseLink(spot.getRaw(), spot)!,
+      );
+      const own = stampOf(child)!;
+      const description = own.state[0][1];
+      await stamp(child, {
+        ...own,
+        cells: "a record of another build",
+        state: [[0, description], [1, description], [2, description]],
+      });
+      return { cell, pattern, child };
+    };
+
+    it("refuses the parent's start, naming the child, and writes to neither", async () => {
+      const { cell, child } = await setUpWithRefusedChild("child-refused");
+      const stored = [storedSetupOf(cell), storedSetupOf(child)];
+      const starts = refusalsLogged();
+      const setups = warned("piece-setup-refused");
+
+      const refused = await rt.start(cell).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(refused).toBeInstanceOf(PieceStateMovedError);
+      expect((refused as PieceStateMovedError).piece).toBe(child.sourceURI);
+      expect(rt.runner.isRunning(cell)).toBe(false);
+      expect(rt.runner.isRunning(child)).toBe(false);
+      await settled();
+      expect([storedSetupOf(cell), storedSetupOf(child)]).toEqual(stored);
+      expect(warned("piece-setup-refused")).toBe(setups + 1);
+      expect(refusalsLogged()).toBe(starts + 1);
+    });
+
+    it("refuses a setup of the parent's version before it commits, naming the child", async () => {
+      // The parent's start would run only once this setup's transaction
+      // commits, after its caller is answered; the child is judged within
+      // the setup instead.
+      const { cell, pattern, child } = await setUpWithRefusedChild(
+        "child-refused-setup",
+      );
+      const stored = [storedSetupOf(cell), storedSetupOf(child)];
+
+      const tx = rt.edit();
+      let refused: unknown;
+      try {
+        rt.run(tx, pattern, {}, cell);
+      } catch (error) {
+        refused = error;
+      }
+      tx.abort("setup refused");
+      await settled();
+
+      expect(refused).toBeInstanceOf(PieceStateMovedError);
+      expect((refused as PieceStateMovedError).piece).toBe(child.sourceURI);
+      expect(rt.runner.isRunning(cell)).toBe(false);
+      expect([storedSetupOf(cell), storedSetupOf(child)]).toEqual(stored);
+    });
   });
 
   it("refuses to start a piece whose cells holding state of one description another build mapped the other way", async () => {

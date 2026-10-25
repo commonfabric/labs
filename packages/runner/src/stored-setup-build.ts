@@ -294,14 +294,15 @@ export function describeHold(
  * that numbers those cells as the record does, or a migration, lets it run.
  */
 export class PieceStateMovedError extends Error {
+  #piece: string;
   #pattern: PatternRef;
   #moved: readonly RenumberedCell[];
   #ambiguous: readonly AmbiguousDescription[];
 
   /**
-   * Constructs an instance for the piece `piece` set up by another build of
-   * `pattern`, naming the cells holding state that `moved` and the
-   * descriptions whose cells are `ambiguous`.
+   * Constructs an instance for the piece whose result document is `piece`,
+   * set up by another build of `pattern`, naming the cells holding state
+   * that `moved` and the descriptions whose cells are `ambiguous`.
    */
   constructor(
     piece: string,
@@ -311,16 +312,25 @@ export class PieceStateMovedError extends Error {
   ) {
     super(
       `Piece \`${piece}\` was set up by another build of ` +
-        `\`${pattern.identity}#${pattern.symbol}\`, and its cells holding ` +
-        "state cannot be matched to this build: " +
+        `\`${pattern.identity}#${pattern.symbol}\`, which numbers its ` +
+        "cells holding state differently from this build: " +
         `${describeHold(moved, ambiguous)}. It is not run, and nothing is ` +
         "written; a build that numbers these cells as the piece's record " +
         "does, or a migration of the piece, lets it run.",
     );
     this.name = "PieceStateMovedError";
+    this.#piece = piece;
     this.#pattern = { identity: pattern.identity, symbol: pattern.symbol };
     this.#moved = moved;
     this.#ambiguous = ambiguous;
+  }
+
+  /**
+   * The id of the refused piece's result document: the piece a start or
+   * setup was asked for, or a child of it set up as part of it.
+   */
+  get piece(): string {
+    return this.#piece;
   }
 
   /** The pattern whose other build set the piece up. */

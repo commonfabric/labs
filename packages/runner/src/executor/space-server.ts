@@ -5306,15 +5306,20 @@ export class SpaceServer implements TransactionSealDestination {
               // The piece's record says another build numbered its cells
               // holding state differently, which no retry of this build
               // changes. Park the root as a terminal one, until a commit to
-              // the demanded doc or the piece's own root, such as a
-              // migration's, re-arms it. The runner has logged what moved.
+              // the demanded doc, the piece's own root or the refused
+              // piece's, such as a migration's, re-arms it. The runner has
+              // logged what moved.
               this.#pendingStructureLoads.delete(key);
               this.#structureLoadDeferralStreaks.delete(key);
+              // The refused piece can be a child the demanded piece sets up,
+              // whose own record a migration would change.
               const owningRoot = this.#pieceRootByDemandKey.get(key);
               this.#terminalStructureLoads.set(
                 key,
                 new Set(
-                  owningRoot === undefined ? [root.id] : [root.id, owningRoot],
+                  [root.id, owningRoot, error.piece].filter((id) =>
+                    id !== undefined
+                  ),
                 ),
               );
               stats.structureLoadRefused += 1;

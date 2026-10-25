@@ -45,9 +45,16 @@ import {
 import { COMPONENT_READ_CONTRACT_VERSION } from "../src/component-read-contract.ts";
 import type { Action } from "../src/scheduler/types.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import { getMetaLink } from "../src/link-utils.ts";
+import {
+  getDerivedInternalCell,
+  getMetaLink,
+  parseLink,
+} from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
-import { storedSetupBuildOf } from "../src/stored-setup-build.ts";
+import {
+  readStoredSetupBuild,
+  storedSetupBuildOf,
+} from "../src/stored-setup-build.ts";
 import { Runtime } from "../src/runtime.ts";
 import type {
   IExtendedStorageTransaction,
@@ -1376,6 +1383,134 @@ describe("stage G SpaceServer recovery seams", () => {
       expect(viewNodesOf(rootId).length).toBeGreaterThan(0);
       expect(stats.structureLoadRefused).toBe(1);
       expect(stats.structureLoadRearmed).toBe(1);
+      expect(stats.structureLoadFailures).toBe(0);
+    } finally {
+      (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
+      await creator.dispose();
+      await creatorManager.close();
+    }
+  });
+
+  it("parks a root refused for its child's record until a commit to the child re-arms it", async () => {
+    // The demanded parent's own record agrees with the build; its child's
+    // says another build numbered three of its two writables' description.
+    // A migration would change the child's record, not the parent's, so
+    // the parked parent has to watch the child too.
+    const stats = emptyServingLoopStats();
+    const rootName = "refused-child-root";
+    const creatorManager = EmulatedStorageManager.connectTo(server, {
+      as: spaceSigner,
+    });
+    const creator = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: creatorManager,
+    });
+    let childId: string;
+    let restore: () => Promise<void>;
+    try {
+      const compiled = await creator.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [
+          {
+            name: "/main.tsx",
+            contents: [
+              "import { pattern, UI } from 'commonfabric';",
+              "import { Inner } from './inner.tsx';",
+              "export default pattern<Record<string, never>>(() => {",
+              "  const child = Inner({});",
+              "  return { [UI]: <div>{child}</div> };",
+              "});",
+            ].join("\n"),
+          },
+          {
+            name: "/inner.tsx",
+            contents: [
+              "import { pattern, UI, Writable } from 'commonfabric';",
+              "export const Inner = pattern<Record<string, never>>(() => ({",
+              "  [UI]: (",
+              "    <div>",
+              "      <span>{new Writable('x')}</span>",
+              "      <span>{new Writable('y')}</span>",
+              "    </div>",
+              "  ),",
+              "}));",
+            ].join("\n"),
+          },
+        ],
+      }, { space });
+      const creatorRoot = creator.getCell<Record<string, unknown>>(
+        space,
+        rootName,
+        undefined,
+      );
+      await creatorRoot.sync();
+      const runTx = creator.edit();
+      creator.run(runTx, compiled, {}, creatorRoot);
+      expect((await runTx.commit().settled).error).toBeUndefined();
+      await creator.idle();
+      creator.runner.stop(creatorRoot);
+      const spot = getDerivedInternalCell(
+        creatorRoot,
+        compiled.derivedInternalCells![0],
+      );
+      await spot.sync();
+      const child = creator.getCellFromLink(parseLink(spot.getRaw(), spot)!);
+      await child.sync();
+      childId = child.getAsNormalizedFullLink().id;
+      const own = readStoredSetupBuild(child.getMetaRaw("patternSetupBuild"))!;
+      const description = own.state[0][1];
+      const stampRecord = async (record: unknown) => {
+        const tx = creator.edit();
+        child.withTx(tx).setMetaRaw(
+          "patternSetupBuild",
+          fabricFromConvertibleJsValue(record as never),
+          rawMetaWriteAuthorization,
+        );
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await creator.storageManager.synced();
+      };
+      await stampRecord({
+        ...own,
+        cells: "a record of another build",
+        state: [[0, description], [1, description], [2, description]],
+      });
+      restore = () => stampRecord(own);
+    } catch (error) {
+      await creator.dispose();
+      await creatorManager.close();
+      throw error;
+    }
+
+    const created = newSpaceServer({ stats });
+    expect(await created.activate()).toBe(true);
+    const runtime = servingRuntime!;
+    const rootCell = runtime.getCell<Record<string, unknown>>(
+      space,
+      rootName,
+      undefined,
+    );
+    const rootId = rootCell.getAsNormalizedFullLink().id;
+    const originalWatched = server.demandForSpace.bind(server);
+    (server as { demandForSpace: unknown }).demandForSpace = () =>
+      sessionDemandOf(demandRowsFor([{ id: rootId }]));
+    try {
+      await awaitEach(cycles, () => {
+        created.noteDemandChanged();
+        return stats.structureLoadRefused === 1;
+      });
+      expect(runtime.runner.isRunning(rootCell)).toBe(false);
+
+      await restore();
+      created.enqueueCommit({
+        space,
+        seq: Engine.serverSeq(engine),
+        class: "authored",
+        sessionId: "session:refused-child-restorer",
+        writes: [{ id: childId, scopeKey: "space" }],
+      });
+      await awaitEach(cycles, () => runtime.runner.isRunning(rootCell));
+      expect(stats.structureLoadRearmed).toBe(1);
+      expect(stats.structureLoadRefused).toBe(1);
       expect(stats.structureLoadFailures).toBe(0);
     } finally {
       (server as { demandForSpace: unknown }).demandForSpace = originalWatched;

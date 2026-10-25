@@ -4367,25 +4367,8 @@ export class Runner {
     capturedArgumentFields: readonly string[] = [],
     droppedArgumentFields: readonly string[] = [],
   ): void {
-    // A setup of the version a piece's record names, over cells holding
-    // state that the record says another build numbered differently, would
-    // stage this build's projection over that state and record it as agreed.
-    // It is refused before anything is staged. A record of another version
-    // says nothing about this one: an update is judged by the positional-
-    // child guard below.
-    if (
-      entryRef !== undefined &&
-      !PatternManager.isKeylessPatternIdentity(entryRef.identity)
-    ) {
-      const verdict = this.#storedSetupVerdict(
-        resultCell.withTx(tx),
-        pattern,
-        entryRef,
-      );
-      if (verdict.owed === "hold" && verdict.recorded) {
-        throw this.#pieceStateMoved(resultCell, entryRef, verdict, "setup");
-      }
-    }
+    // Refused before anything is staged.
+    this.#refuseMovedState(tx, resultCell, pattern, entryRef);
     // Every write below fills a store this piece owns — the argument
     // document, each internal document the result projects to, and the result
     // document the projection lands in — so the transaction making them has to
@@ -5380,6 +5363,74 @@ export class Runner {
       return { ...verdict, owed: "repair" };
     }
     return verdict;
+  }
+
+  /**
+   * Throws, before a setup of `pattern` on `resultCell` pinned as `ref`
+   * stages anything, where the record of that piece, or of a child one of
+   * its sub-pattern nodes set up, says another build of the version it names
+   * numbered its cells holding state differently. Staging this build's
+   * projection over that state would record it as agreed. A child's own
+   * setup runs only once the parent's graph is instantiated, which a
+   * setup's caller may never see: a start the setup defers until after its
+   * commit reports a refusal to no one. A record of another version says
+   * nothing about this one, so an update is judged by the positional-child
+   * guard instead. Only children at spots the stored manifest records, or
+   * that a named instance's record names, are read, since no other can have
+   * been set up; a child that resumes independently, or a space's root, is
+   * judged by its own start.
+   */
+  #refuseMovedState(
+    tx: IExtendedStorageTransaction,
+    resultCell: Cell<any>,
+    pattern: Pattern,
+    ref: { identity: string; symbol: string } | undefined,
+    seen: Set<string> = new Set(),
+  ): void {
+    const key = this.#getDocKey(resultCell);
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (
+      ref !== undefined &&
+      !PatternManager.isKeylessPatternIdentity(ref.identity)
+    ) {
+      const verdict = this.#storedSetupVerdict(
+        resultCell.withTx(tx),
+        pattern,
+        ref,
+      );
+      if (verdict.owed === "hold" && verdict.recorded) {
+        throw this.#pieceStateMoved(resultCell, ref, verdict, "setup");
+      }
+    }
+    const parent = resultCell.withTx(tx);
+    const manifest = storedManifestOf(parent);
+    const recordedChildren = readInstanceChildren(parent);
+    for (const { module, partialCause } of subPatternNodes(pattern)) {
+      if (module.targetSpaceRoot) continue;
+      const instanceName = instanceNameOfPartialCause(partialCause);
+      const link = instanceName === undefined
+        ? undefined
+        : recordedChildren.get(instanceName);
+      if (
+        link === undefined &&
+        !manifest.some((entry) => deepEqual(entry.partialCause, partialCause))
+      ) {
+        continue;
+      }
+      const child = link !== undefined
+        ? this.#runtime.getCellFromLink(link, undefined, tx)
+        : this.#childAtPartialCause(tx, resultCell, module, partialCause);
+      if (resumesIndependently(child, resultCell)) continue;
+      const childPattern = module.implementation as Pattern;
+      this.#refuseMovedState(
+        tx,
+        child,
+        childPattern,
+        this.#runtime.patternManager.getArtifactEntryRef(childPattern),
+        seen,
+      );
+    }
   }
 
   /**
@@ -7036,6 +7087,17 @@ export class Runner {
         // caused it — and a cancel running against half-initialized state
         // fails in ways that look nothing like the original. Report it and
         // rethrow what actually went wrong.
+        if (
+          error instanceof PieceStateMovedError &&
+          error.piece !== resultCell.sourceURI
+        ) {
+          // A child the piece sets up was refused, and has been logged as
+          // such; this names the piece whose start it stopped.
+          logger.warn("piece-start-refused", () => [
+            `piece ${resultCell.sourceURI} is not started: the setup of its ` +
+            `child ${error.piece} was refused`,
+          ]);
+        }
         try {
           cleanup();
         } catch (cleanupError) {
