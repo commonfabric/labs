@@ -127,6 +127,7 @@ than guessing at unsupported internals.
 |-----------|-----|
 | handler created per item inside a loop | Create a shared handler and bind per item |
 | expensive computation embedded directly in render loops | Pre-compute outside the loop |
+| a row pattern that derives what it shows the viewer, or what the session has open, in several computeds whose fields read the same inputs or are cheap | Fold them into one computed for the viewer and one for the session (`docs/common/patterns/multi-user-patterns.md#fold-what-a-row-shows-the-viewer-into-one-computed`); `minor`, since each viewer sees the right result at a cost that grows with the rows times the viewers |
 
 ### 11. Action vs Handler Choice
 

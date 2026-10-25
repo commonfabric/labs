@@ -43,6 +43,16 @@ Warnings summary line, never Failed.
   `docs/common/patterns/multi-user-patterns.md#presenting-identity`
   (critique-guide category 16).
 
+- **Per-viewer work (multi-user):** under server execution a derivation that
+  reads the viewer's state runs once for each viewer, or for each session, by
+  what it read, and so does everything downstream of it. Flag a row pattern, one
+  instantiated for each item of a list, that derives what it shows the viewer,
+  or what the session has open, in several computeds whose fields read the same
+  inputs or are cheap: one computed for the viewer and one for the session, each
+  returning every field, do the same work in two runs. See
+  `docs/common/patterns/multi-user-patterns.md#fold-what-a-row-shows-the-viewer-into-one-computed`
+  (critique-guide category 10).
+
 - **Oversized cross-pattern contracts:** for every type describing linked,
   wished, registered, or otherwise external data — imported or declared inline —
   compare the declared shape with the fields and bindings the consumer actually
