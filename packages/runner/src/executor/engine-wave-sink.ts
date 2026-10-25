@@ -281,8 +281,15 @@ export class EngineWaveCommitSink implements WaveCommitSink {
   ): Promise<ReadonlyArray<{ read: WaveReadQuery; seq: number }>> {
     const engine = this.#engineFor(space);
     const stale: Array<{ read: WaveReadQuery; seq: number }> = [];
+    const heads = new Map<string, number>();
     for (const read of reads) {
-      const seq = findHandlerStaleReadSeq(engine, read, holder);
+      const seq = findHandlerStaleReadSeq(
+        engine,
+        read,
+        holder,
+        undefined,
+        heads,
+      );
       if (seq !== null) stale.push({ read, seq });
     }
     return Promise.resolve(stale);

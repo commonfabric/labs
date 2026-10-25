@@ -4388,19 +4388,27 @@ const sidecarHeldEntryAt = (
  * that read observed. A read of an index the sidecar did not hold then
  * observed an absence the append may have filled, and is held to it like
  * any other read. A document whose head has not passed the read's seq has
- * no revision after it, and is answered from the head alone.
+ * no revision after it, and is answered from the head alone; `heads` holds
+ * the heads read so far for a caller checking many reads while nothing
+ * writes the store under it, so one document's head is read once per pass.
  */
 export const findHandlerStaleReadSeq = (
   engine: Engine,
   read: WaveHandlerRead,
   holder: string | undefined,
   branch?: BranchName,
+  heads?: Map<string, number>,
 ): number | null => {
-  const head = selectDocHead(engine, {
-    branch,
-    id: read.id,
-    scopeKey: read.scopeKey,
-  });
+  const key = `${read.id} ${read.scopeKey}`;
+  let head = heads?.get(key);
+  if (head === undefined) {
+    head = selectDocHead(engine, {
+      branch,
+      id: read.id,
+      scopeKey: read.scopeKey,
+    });
+    heads?.set(key, head);
+  }
   if (head <= read.seq) return null;
   const entryIndex = streamEntryIndexOf(read);
   const readHeldEntry = entryIndex !== undefined &&
@@ -4684,6 +4692,7 @@ export const applyWaveCommit = (
       const staleReads: Array<
         { contribution: number; read: number; seq: number }
       > = [];
+      const readHeads = new Map<string, number>();
       for (const { contribution, reads } of waveBasis.handlerReads ?? []) {
         for (const [index, read] of reads.entries()) {
           const seq = findHandlerStaleReadSeq(
@@ -4691,6 +4700,7 @@ export const applyWaveCommit = (
             read,
             applyOptions.holder,
             applyOptions.commit.branch,
+            readHeads,
           );
           if (seq !== null) staleReads.push({ contribution, read: index, seq });
         }
