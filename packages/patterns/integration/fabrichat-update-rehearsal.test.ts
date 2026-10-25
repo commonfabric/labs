@@ -495,7 +495,7 @@ const rehearse = (title: string, readBefore: boolean): void => {
         trusted(
           {
             body: "In the thread",
-            replyTo: { message: first, shownIn: "thread" },
+            replyTo: { thread: first, shownIn: "thread" },
           },
           "ChatSendSurface",
           "ChatSend",
