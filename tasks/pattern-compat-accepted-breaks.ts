@@ -2430,6 +2430,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261022T220216Z-drGbEASF5X5lV4en",
       "20261023T225638Z-ul8itnlMjhVPl5G4",
       "20261024T000758Z-cjuKEPPeYWQzIxGW",
+      "20261025T215338Z-AZsOpv9_QnlOYBuD",
     ],
     paths: [
       "result.chatManager.$VIEWS.chats.people",

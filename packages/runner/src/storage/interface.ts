@@ -2,6 +2,7 @@ import type {
   CellScope,
   FabricValue,
   SchemaPathSelector,
+  TextChange,
 } from "@commonfabric/api";
 import {
   type ACL,
@@ -1741,6 +1742,26 @@ export interface IStorageTransaction {
   recordSqliteWrite?(space: MemorySpace, op: SqliteOperation): void;
 
   /**
+   * Optional: record `changes` to the string at `address`, so that the commit
+   * carries them as an `apply-op` without a base (memory-v2 §7.7.1), which
+   * applies only while the field holds the value this transaction read there:
+   * the commit's read of the field says so, and so does the hash of that value
+   * the operation carries. Returns the
+   * changed string, which the caller writes to `address` through the ordinary
+   * write path: the transaction's later reads, its CFC checks, and the local
+   * view all see that write, and the commit sends the field's change as the
+   * `apply-op` instead of inside the document's patch.
+   *
+   * Calls at one address accumulate, each against the value the one before it
+   * left. Throws when `address` does not hold a string, when a change does not
+   * fit it, or when this transaction wrote the field by other means first.
+   */
+  recordTextChanges?(
+    address: IMemorySpaceAddress,
+    changes: readonly TextChange[],
+  ): string;
+
+  /**
    * Optional: whether this transaction has replaced any document root.
    *
    * Read by materialization as a fast path — before the first write every read
@@ -2266,6 +2287,16 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * resolving the link to a memory address.
    */
   recordMergeableOp?(link: NormalizedFullLink, delta: MergeableOpDelta): void;
+
+  /**
+   * Record text changes to the string addressed by `link`, forwarded to the
+   * underlying transaction after resolving the link to a memory address. See
+   * {@link IStorageTransaction.recordTextChanges}.
+   */
+  recordTextChanges?(
+    link: NormalizedFullLink,
+    changes: readonly TextChange[],
+  ): string;
 
   /**
    * Abandon the mergeable fast path for the array addressed by `link`, forwarded
@@ -3903,7 +3934,35 @@ export interface NativeStorageCommit {
    * doc-pending / touched / notify machinery.
    */
   sqliteOps?: readonly SqliteOperation[];
+
+  /**
+   * Collaborative-field edits recorded with `recordTextChanges()`, applied in
+   * the same wire commit after every other operation. The field changes they
+   * carry are left out of the patch in `operations`, whose `value` still holds
+   * them, so the local view shows the edited text while the store integrates
+   * it.
+   *
+   * The replica shows that text ahead of the verdict, which is sound only for
+   * what the list holds: edits this transaction generated, one per field, each
+   * with no base and a hash of the value the transaction read, combining every
+   * change the transaction made to the field, and producing exactly the text
+   * its ordinary write left there. An accepted edit then yields that text and
+   * nothing else. A cursor-based edit, which the store rebases, a blind one, or
+   * a second operation on the same field would make the result unpredictable,
+   * and none of them belongs here; {@link NativeTextEdit} keeps out the first
+   * two.
+   */
+  applyOps?: readonly NativeTextEdit[];
 }
+
+/**
+ * An `apply-op` as a transaction's native commit carries it in
+ * {@link NativeStorageCommit.applyOps}: no base, and a hash of the value the
+ * transaction read.
+ */
+export type NativeTextEdit =
+  & Omit<ApplyOpOperation, "base" | "baselineHash">
+  & { base?: never; baselineHash: string };
 
 export type Activity = Variant<{
   read: IReadActivity;
