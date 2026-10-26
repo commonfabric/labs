@@ -1,7 +1,9 @@
 /**
- * Reports the CFC labels a generated schema could not read. The lowering
- * carries such a label as no label at all or as a `null` atom, which says
- * nothing about the value it was written to protect.
+ * Reports the CFC labels a generated schema could not read. An atom the
+ * lowering could not read is carried as a `null` atom, a label nobody holds,
+ * which says nothing about the value it was written to protect. A label list
+ * that does not read as a list at all is an error: the runtime reads labels
+ * only from a list, so none of what is written there would reach it.
  */
 
 import { getLogger } from "@commonfabric/utils/logger";
@@ -33,30 +35,44 @@ const IFC_LABEL_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether `labels`, a label list as the lowering read it, is missing or holds
- * an atom it could not read in full: one with an `undefined` anywhere in it,
+ * How much of a label list the lowering read: all of it; a list holding an
+ * atom it could not read in full, one with an `undefined` anywhere in it,
  * whether the atom itself, a field of an object atom, or an alternative of an
- * `AnyOf` clause.
+ * `AnyOf` clause; or no list at all, as an array type or a union of tuples
+ * reads.
  */
-export function holdsUnreadLabel(labels: unknown): boolean {
-  return !Array.isArray(labels) || labels.some(holdsUnreadValue);
+export type LabelListReading = "read" | "partial" | "not-a-list";
+
+/** How much of `labels`, a label list as the lowering read it, it read. */
+export function readingOfLabelList(labels: unknown): LabelListReading {
+  if (!Array.isArray(labels)) return "not-a-list";
+  return labels.some(holdsUnreadValue) ? "partial" : "read";
 }
 
 /**
- * Whether `metadata`, a `Cfc` payload as the lowering read it, holds a label
- * list it could not read in full: one under an `ifc` label key, or a UI
- * contract's `requiredEventIntegrity`, where one is written.
+ * How much of the label lists in `metadata`, a `Cfc` payload as the lowering
+ * read it, it read, judged by the list it read least of: one under an `ifc`
+ * label key, or a UI contract's `requiredEventIntegrity`, where one is written.
  */
-export function holdsUnreadMetadataLabel(
+export function readingOfMetadataLabels(
   metadata: Readonly<Record<string, unknown>>,
-): boolean {
+): LabelListReading {
   const uiContract = metadata.uiContract;
-  return Object.entries(metadata).some(([key, labels]) =>
-    IFC_LABEL_KEYS.has(key) && holdsUnreadLabel(labels)
-  ) ||
-    (isObjectOrArray(uiContract) && !Array.isArray(uiContract) &&
-      "requiredEventIntegrity" in uiContract &&
-      holdsUnreadLabel(uiContract.requiredEventIntegrity));
+  const lists = [
+    ...Object.entries(metadata)
+      .filter(([key]) => IFC_LABEL_KEYS.has(key))
+      .map(([, labels]) => labels),
+    ...(isObjectOrArray(uiContract) && !Array.isArray(uiContract) &&
+        "requiredEventIntegrity" in uiContract
+      ? [uiContract.requiredEventIntegrity]
+      : []),
+  ];
+  const readings = lists.map(readingOfLabelList);
+  return readings.includes("not-a-list")
+    ? "not-a-list"
+    : readings.includes("partial")
+    ? "partial"
+    : "read";
 }
 
 /** Whether `value`, an atom or a part of one, holds an `undefined`. */
@@ -112,15 +128,14 @@ const withOwnText = (node: ts.TypeNode): ts.TypeNode => {
 };
 
 /**
- * Reports that `aliasName`'s label argument, printed from `labelNode` or else
- * from `labelType`, could not be read in full, as one warning.
+ * The label printed from `labelNode`, or else from `labelType`, on one line
+ * and cut to `LABEL_TEXT_LIMIT`, as a code span.
  */
-export function reportUnreadLabel(
+const printedLabel = (
   context: GenerationContext,
-  aliasName: string,
   labelType: ts.Type | undefined,
   labelNode: ts.TypeNode | undefined,
-): void {
+): string => {
   // An authored node prints from its own source, where its literals' text
   // is; a node built in substitution has no source, and prints from the text
   // each of its leaves holds.
@@ -136,23 +151,51 @@ export function reportUnreadLabel(
     ? context.typeChecker.typeToString(labelType)
     : "(missing)";
   const text = printed.replace(/\s+/g, " ");
-  const diagnostic: SchemaGenerationDiagnostic = {
-    severity: "warning",
-    type: "cfc-label:unread",
-    message: `A label of \`${aliasName}\` could not be read: ` +
-      backtickQuote(
-        text.length > LABEL_TEXT_LIMIT
-          ? `${text.slice(0, LABEL_TEXT_LIMIT)}…`
-          : text,
-      ) +
-      ". An atom is a literal, an object literal of them, `AnyOf<…>`, or " +
-      "`PolicyOf<typeof …>`; the schema carries what it could not read as " +
-      "no label, or as an atom that serializes as `null`.",
-    ...((labelNode ?? context.typeNode) &&
-      { node: labelNode ?? context.typeNode }),
-  };
+  return backtickQuote(
+    text.length > LABEL_TEXT_LIMIT
+      ? `${text.slice(0, LABEL_TEXT_LIMIT)}…`
+      : text,
+  );
+};
+
+/**
+ * Reports `aliasName`'s label argument, printed from `labelNode` or else from
+ * `labelType`, as the lowering read it: a list read only in part as a
+ * `cfc-label:unread` warning, and one that is no list at all as a
+ * `cfc-label:not-a-list` error.
+ */
+export function reportLabelReading(
+  context: GenerationContext,
+  aliasName: string,
+  reading: Exclude<LabelListReading, "read">,
+  labelType: ts.Type | undefined,
+  labelNode: ts.TypeNode | undefined,
+): void {
+  const label = printedLabel(context, labelType, labelNode);
+  const node = labelNode ?? context.typeNode;
+  const diagnostic: SchemaGenerationDiagnostic = reading === "not-a-list"
+    ? {
+      severity: "error",
+      type: "cfc-label:not-a-list",
+      message: `A label list of \`${aliasName}\` is not a list: ${label}. ` +
+        "The runtime reads labels only from a list, so none of what is " +
+        "written there would reach it. Write the labels as a tuple of atoms, " +
+        'such as `readonly ["secret"]`.',
+      ...(node && { node }),
+    }
+    : {
+      severity: "warning",
+      type: "cfc-label:unread",
+      message: `A label of \`${aliasName}\` could not be read: ${label}. ` +
+        "An atom is a literal, an object literal of them, `AnyOf<…>`, or " +
+        "`PolicyOf<typeof …>`; the schema carries what it could not read as " +
+        "an atom that serializes as `null`, or as a field left out.",
+      ...(node && { node }),
+    };
   if (context.onDiagnostic) {
     context.onDiagnostic(diagnostic);
+  } else if (diagnostic.severity === "error") {
+    logger.error("schema-gen", () => diagnostic.message);
   } else {
     logger.warn("schema-gen", () => diagnostic.message);
   }
