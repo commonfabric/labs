@@ -300,8 +300,8 @@ export type {
 
 /**
  * `descriptorOf()` from `conformance-fixtures.ts`, which returns a value's
- * descriptor, JSON by which two values the formats cannot tell apart compare
- * equal.
+ * descriptor: JSON of everything about the value that the formats carry, so
+ * that two values with equal descriptors are ones no format tells apart.
  */
 export const descriptorOfForTestingOnly: (
   value: FabricValue,
@@ -309,8 +309,9 @@ export const descriptorOfForTestingOnly: (
 
 /**
  * `probesOf()` from `conformance-fixtures.ts`, which returns a value's probes,
- * in the vocabulary `test/fixtures/value-probes.md` defines, but none where a
- * patch puts what no text carries.
+ * in the vocabulary `test/fixtures/value-probes.md` defines, but none at or
+ * under a path a patch in `patches` states, no text carrying what a patch puts
+ * there.
  */
 export const probesOfForTestingOnly: (
   value: FabricValue,

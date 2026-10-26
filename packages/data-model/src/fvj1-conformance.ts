@@ -862,9 +862,9 @@ function fixtureEntryOf(
   if (specReencoded !== undefined) {
     if (isSameOutcome(decoded, specDecoded)) {
       compare("encode", reencode(), specReencoded);
-    } else if ("refused" in decoded && "make" in conformanceCase) {
-      // This package's decoder refuses the text, so what is re-encoded is
-      // the value the case makes.
+    } else if ("make" in conformanceCase) {
+      // This package's decoder refuses the text, or returns a value other
+      // than the one the case makes, so what is re-encoded is that value.
       compare(
         "encode",
         fvj1EncodeOutcomeOf(conformanceCase.make()),

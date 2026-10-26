@@ -608,8 +608,8 @@ function defineOwn(target: object, key: PropertyKey, value: unknown): void {
 
 /**
  * Returns the probes of `value`: one for each node a reader walking it
- * reaches, but none at or under the path of a patch in `patches`, the patch
- * being what states that part. A node's probe comes before those of what it
+ * reaches, but none at or under a path a patch in `patches` states, no text
+ * carrying what a patch puts there. A node's probe comes before those of what it
  * holds, in index order in an array, in UTF-8 order of key in a record, and in
  * an instance in the order of its fields, which
  * `test/fixtures/value-probes.md` gives.

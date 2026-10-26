@@ -100,10 +100,11 @@ decodes. The entry has no `problematicAt`, this package's lenient decoder making
 no `Problematic` value there, and nothing is re-encoded, the spec having no
 value to re-encode.
 
-Where this package's decoder refuses a text the spec decodes, as it does for a
-record with the key `__proto__` or `constructor`, `divergence.decode` is the
-refusal, and `test/fvj1-conformance.test.ts` re-encodes the value the case makes
-instead of the value decoded.
+Where the spec decodes a text that this package's decoder refuses, as it does
+for a record with the key `__proto__` or `constructor`, or decodes to another
+value, `divergence.decode` is this package's outcome, and
+`test/fvj1-conformance.test.ts` re-encodes the value the case makes instead of
+the value decoded.
 
 A divergence that does not hold fails generation, so that a fix here retires the
 mark rather than leaving it to mislead.

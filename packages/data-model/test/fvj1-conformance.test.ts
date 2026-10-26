@@ -2,9 +2,9 @@
  * Holds `test/fixtures/fvj1-conformance.json` to this package's JSON codec:
  * the file must be what the conformance cases generate, and every decode,
  * re-encode and lenient decode it records must be what the codec does, read
- * from the file alone. The one exception is a text this package's decoder
- * refuses where the spec does not, which a divergence marks: what is
- * re-encoded there is the value the case makes.
+ * from the file alone. The one exception is a text the spec decodes and this
+ * package's decoder refuses or decodes otherwise, which a divergence marks:
+ * what is re-encoded there is the value the case makes.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -127,16 +127,15 @@ describe("fvj1-conformance", () => {
     }
   });
 
-  it("records for each text this package's decoder refuses, where the spec does not, what encoding the case's value does", () => {
+  it("records for each text the spec decodes and this package decodes otherwise what encoding the case's value does", () => {
     const cases = new Map(
       FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY.map((c) => [c.name, c]),
     );
-    const refused = entries.filter((entry) =>
-      entry.divergence?.decode !== undefined &&
-      "refused" in entry.divergence.decode
+    const diverging = entries.filter((entry) =>
+      entry.refused === undefined && entry.divergence?.decode !== undefined
     );
-    expect(refused.length).toBeGreaterThan(0);
-    for (const entry of refused) {
+    expect(diverging.length).toBeGreaterThan(0);
+    for (const entry of diverging) {
       const { name } = entry;
       const conformanceCase = cases.get(name);
       if (conformanceCase === undefined || !("make" in conformanceCase)) {
@@ -230,6 +229,29 @@ describe("fvj1-conformance", () => {
           },
         ])
       ).toThrow('proto: the decode is {"refused":"malformed"}, not');
+    });
+
+    it("returns a divergence holding the encode of the value a case makes, where its text decodes to another value", () => {
+      // The getter returns a new number at each read, so the text is decoded
+      // to a value other than the one the probes are taken from, and the
+      // value made a second time encodes unlike the text.
+
+      let reads = 0;
+      const text = fvj1ConformanceFixtureTextForTestingOnly([
+        {
+          name: "drifting",
+          section: "s",
+          divergence: "note",
+          make: () => ({
+            get a() {
+              reads++;
+              return reads;
+            },
+          }),
+        },
+      ]);
+      const { divergence } = JSON.parse(text).cases[0];
+      expect(Object.keys(divergence)).toEqual(["note", "decode", "encode"]);
     });
 
     it("throws given a refused text whose lenient decode yields more than one problematic value", () => {
