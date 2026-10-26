@@ -7,6 +7,7 @@ import "@commonfabric/utils/equal-ignoring-symbols";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { Server as MemoryV2Server } from "@commonfabric/memory/v2/server";
+import { patternLiteralForTestingOnly } from "@commonfabric/runner/for-testing-only";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
@@ -4347,7 +4348,7 @@ describe("runner utils", () => {
           schema: { asCell: ["stream"] },
         },
       };
-      const pattern: Pattern = {
+      const pattern: Pattern = patternLiteralForTestingOnly({
         argumentSchema: {
           type: "object",
           properties: {
@@ -4409,7 +4410,7 @@ describe("runner utils", () => {
             outputs: {},
           },
         ],
-      };
+      });
 
       const resultCell = runtime.getCell<any>(
         space,

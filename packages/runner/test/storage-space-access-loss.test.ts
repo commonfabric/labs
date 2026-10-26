@@ -66,8 +66,17 @@ describe("storage space access loss", () => {
       manager.subscribeSpaceAccessLoss((target, error) =>
         observed.push({ target, error })
       );
+      manager.subscribeSpaceSessionError(() => {
+        throw failure;
+      });
+      const ended: { target: MemorySpace; error: Error }[] = [];
+      manager.subscribeSpaceSessionError((target, error) =>
+        ended.push({ target, error })
+      );
       expect(() => session.handleRevoked("unauthorized")).not.toThrow();
       expect(observed).toEqual([{ target: space, error: session.closeError }]);
+      expect(ended).toEqual(observed);
+      expect(manager.spaceSessionError(space)).toBe(session.closeError);
       expect(manager.spaceAccessError(space)).toBe(session.closeError);
       expect(changed).toEqual([space]);
       // The memory client also logs the session's end through
@@ -79,6 +88,7 @@ describe("storage space access loss", () => {
       ).toEqual([
         ["space-access-loss subscriber threw:", failure],
         ["space-access-change subscriber threw:", failure],
+        ["space-session-error subscriber threw:", failure],
       ]);
     } finally {
       reported.restore();

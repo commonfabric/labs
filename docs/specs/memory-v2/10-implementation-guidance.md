@@ -38,9 +38,9 @@ target. In particular:
   simple `query` / wildcard selector shape remains future protocol design
 - watch installation remains current-state only in this pass; do not treat
   watch specs as historical subscriptions keyed by `atSeq`
-- steady-state topology shrink does not yet drive automatic unwatch/removal
-  semantics; clients should only rely on `removes` from explicit watch-set
-  replacement in this pass
+- a refresh retracts a document a write left no watch reaching, by the
+  attribution of tracked documents to what reached them (04-protocol.md section
+  4.6.3); explicit watch-set replacement and removal retract the rest
 - branch lifecycle commands are not yet exposed on the v2 wire; current branch
   creation keeps its fork-seq semantics until that cutover lands
 

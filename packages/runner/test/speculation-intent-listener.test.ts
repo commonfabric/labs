@@ -708,6 +708,55 @@ describe("intent listener — scripted notification seam (design (e) pins 1–5,
     expect(resolved).toBe(true);
     destination.close();
   });
+
+  it("quiescence waiter for one space: resolves once that space's intents retire, while another space's intent keeps the every-space waiter parked", async () => {
+    const { scripted, destination } = scriptedDestination();
+    const OTHER = "did:key:z6MkIntentListenerOtherSpace" as MemorySpace;
+    scripted.seed(SPACE, SIDECAR, { entries: [] });
+    scripted.seed(OTHER, SIDECAR, { entries: [] });
+    destination.trackIntent(SPACE, SIDECAR, "evt-here");
+    destination.trackIntent(OTHER, SIDECAR, "evt-there");
+    for (
+      const [space, eventId] of [[SPACE, "evt-here"], [OTHER, "evt-there"]]
+    ) {
+      scripted.deliver(space as MemorySpace, SIDECAR, (value) => {
+        value.entries = [{ eventId, stream: { id: "s", path: [] }, seq: 1 }];
+      }, [["value", "entries"]]);
+    }
+    await flushMicrotasks();
+    expect(destination.pendingIntentCount).toBe(2);
+
+    let here = false;
+    let everywhere = false;
+    const hereQuiesced = destination.waitForIntentQuiescence(SPACE).then(
+      () => {
+        here = true;
+      },
+    );
+    const everywhereQuiesced = destination.waitForIntentQuiescence().then(
+      () => {
+        everywhere = true;
+      },
+    );
+
+    scripted.deliver(SPACE, SIDECAR, (value) => {
+      value.entries![0].consequenced = true;
+    }, [["value", "entries", "0", "consequenced"]]);
+    await flushMicrotasks();
+    await hereQuiesced;
+    expect(here).toBe(true);
+    expect(everywhere).toBe(false);
+    // A space with nothing outstanding resolves at once.
+    await destination.waitForIntentQuiescence(SPACE);
+
+    scripted.deliver(OTHER, SIDECAR, (value) => {
+      value.entries![0].consequenced = true;
+    }, [["value", "entries", "0", "consequenced"]]);
+    await flushMicrotasks();
+    await everywhereQuiesced;
+    expect(everywhere).toBe(true);
+    destination.close();
+  });
 });
 
 //
@@ -1329,6 +1378,97 @@ describe("intent listener — W2.1 cascade-echo retirement (scripted; the jobles
     });
   });
 
+  describe("an echo of an event that was never fired", () => {
+    // The transaction that sent the event failed or was aborted, so nothing
+    // will answer the event, and an attempt run again can fire it under the
+    // same id.
+
+    it("retires the echo and its cascade, and signals no outcome", async () => {
+      const { destination, echoOf, verdictOf } = cascadeDestination();
+      const outcomes: unknown[] = [];
+      destination.subscribeIntentOutcomes((outcome) => {
+        outcomes.push(outcome);
+      });
+      await destination.seal(echoOf("evt-attempt", { writes: ["of:own"] }))
+        .settled;
+      await destination.seal(echoOf("evt:c:0:attempt-child", {
+        parentEventId: "evt-attempt",
+        writes: ["of:child"],
+      })).settled;
+      expect(destination.entryCount(SPACE)).toBe(2);
+
+      destination.retireUnfiredEcho(SPACE, "evt-attempt");
+
+      expect(destination.entryCount(SPACE)).toBe(0);
+      const verdict = await verdictOf(10) as {
+        withdrawn?: { superseded?: boolean };
+      };
+      expect(verdict?.withdrawn?.superseded).toBe(true);
+      expect(outcomes).toEqual([]);
+      destination.close();
+    });
+
+    it("leaves the echo of a later fire of the same event standing", async () => {
+      const { destination, echoOf } = cascadeDestination();
+      await destination.seal(echoOf("evt-attempt", { writes: ["of:own"] }))
+        .settled;
+      destination.retireUnfiredEcho(SPACE, "evt-attempt");
+
+      await destination.seal(echoOf("evt-attempt", { writes: ["of:own"] }))
+        .settled;
+
+      expect(destination.entryCount(SPACE)).toBe(1);
+      destination.close();
+    });
+
+    it("drops the echo of a cascade child that runs after the retirement, and of that child's own child", async () => {
+      const { destination, echoOf } = cascadeDestination();
+      await destination.seal(echoOf("evt-attempt", { writes: ["of:own"] }))
+        .settled;
+      // The echo's run queued a child that is still waiting to run.
+      destination.threadCascadeChild("evt:c:0:attempt-child", "evt-attempt");
+
+      destination.retireUnfiredEcho(SPACE, "evt-attempt");
+      await destination.seal(echoOf("evt:c:0:attempt-child", {
+        parentEventId: "evt-attempt",
+        writes: ["of:child"],
+      })).settled;
+      // The child's run queued one of its own.
+      destination.threadCascadeChild(
+        "evt:c:0:attempt-grandchild",
+        "evt:c:0:attempt-child",
+      );
+      await destination.seal(echoOf("evt:c:0:attempt-grandchild", {
+        parentEventId: "evt:c:0:attempt-child",
+        writes: ["of:grandchild"],
+      })).settled;
+
+      expect(destination.entryCount(SPACE)).toBe(0);
+      expect(destination.lateEchoDropCount).toBe(2);
+      destination.close();
+    });
+
+    it("leaves the cascade of a later fire of the same event standing", async () => {
+      const { destination, echoOf } = cascadeDestination();
+      destination.threadCascadeChild("evt:c:0:attempt-child", "evt-attempt");
+      destination.retireUnfiredEcho(SPACE, "evt-attempt");
+
+      // The attempt run again sends the event under the same id, and its
+      // run queues a child minted for that attempt.
+      await destination.seal(echoOf("evt-attempt", { writes: ["of:own"] }))
+        .settled;
+      destination.threadCascadeChild("evt:c:1:attempt-child", "evt-attempt");
+      await destination.seal(echoOf("evt:c:1:attempt-child", {
+        parentEventId: "evt-attempt",
+        writes: ["of:child"],
+      })).settled;
+
+      expect(destination.entryCount(SPACE)).toBe(2);
+      expect(destination.lateEchoDropCount).toBe(0);
+      destination.close();
+    });
+  });
+
   it("W2.1-6: the post-sealInto re-check walks the thread too (combined review 2026-08-19, F1) — P's mark landing while a SILENT child's grandchild is MID-SEAL withdraws the collected entry at the re-check instead of registering it (mutation: the re-check one level deep → the grandchild registers and strands)", async () => {
     const { destination, echoOf, seedAppend, markConsequenced } =
       cascadeDestination();
@@ -1797,6 +1937,39 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
     const users = argument.key("users").get() as Array<{ name?: string }>;
     expect(users.length).toBe(1);
     expect(overlay.entryCount(space)).toBe(0);
+    cancelDemand();
+  });
+
+  it("drops the echo of a cascade child that its emitter queued before the emitter's send failed", async () => {
+    const { manager, runtime } = openClient({ serverExecution: true });
+    const { argument, result } = await standUp(runtime, "unfired", {
+      source: JOIN_CASCADE_PATTERN,
+      seed: { users: [] },
+    });
+    const cancelDemand = result.sink(() => {});
+    await runtime.idle();
+    await manager.synced();
+    const overlay = runtime.speculationOverlay!;
+
+    // The click's echo run, which forwards to joinAs: the forward queues a
+    // cascade child that runs only on the scheduler's next pass.
+    const echo = runtime.edit();
+    stampSpeculationRunContext(echo, {
+      actionId: "test:join",
+      kind: "event-handler",
+      eventId: "evt-unfired-join",
+    });
+    expect((await echo.commit().settled).error).toBeUndefined();
+    (result.key("joinAs").withTx(echo) as unknown as {
+      send(value: unknown): unknown;
+    }).send({});
+    // The transaction that sent the click fails before the child runs.
+    overlay.retireUnfiredEcho(space, "evt-unfired-join");
+    await runtime.idle();
+
+    expect(overlay.lateEchoDropCount).toBe(1);
+    expect(overlay.entryCount(space)).toBe(0);
+    expect(argument.key("users").get()).toEqual([]);
     cancelDemand();
   });
 

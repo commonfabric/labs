@@ -6,7 +6,7 @@ up while designing implementation work. Started 2026-06-10 during the S16
 gap is filed as a specs pull request, as
 [`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
 describes, and the `open` entries below are being migrated to specs pull
-requests one group at a time, after which this list is archived. Each item: where, what's missing or contradictory, proposed edit. Tags:
+requests one group at a time, after which this list is archived. Each item, numbered `SC-<n>` for spec change: where, what's missing or contradictory, proposed edit. Tags:
 [clarify] prose fix, [normative] new requirement/profile text, [reconcile] two
 spec passages disagree, [registry] table data.
 

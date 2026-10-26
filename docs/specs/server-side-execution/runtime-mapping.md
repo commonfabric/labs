@@ -51,7 +51,7 @@ Status legend:
 | --- | --- | --- | --- | --- |
 | 14 | `RetryImmediately`: abort + immediate re-run after `inSpace("name")` DID resolution; a client under server execution creates no space, and its echo withdraws on an unrecorded name | `scheduler/retry-immediately.ts` (`RetryImmediately`, `InSpaceTargetUnresolved`), `runtime.ts` (`Runtime.resolveInSpaceName()`), `runner.ts` (`Runner.#resolvePendingSpaceNamesAndRetry()`), event path `scheduler/events.ts` (the `InSpaceTargetUnresolved` and `RetryImmediately` catches in `dispatchQueuedEvent`) | protocol §2b (provisioning kept); speculation §2 | COVERED |
 | 15 | Reactive stale-basis retry: off-budget re-queue on conflict / local inconsistency; server conflicts await catch-up and every named scoped instance pull, then re-queue only while the registration remains active | `scheduler/run.ts` (`watchReactiveActionCommit`), `runtime.ts` (`awaitCommitRetryReadiness`) | serving-loop §3d (mid-wave CAS drop) | CHANGED |
-| 16 | Bounded retry for non-conflict reactive failures (MAX_RETRIES_FOR_REACTIVE = 10); the permanent and terminal classes take no attempt, and every stop — including an exhausted name-resolution retry — abandons the transaction's staged work | `scheduler/run.ts` (`abandonAction`), `scheduler/constants.ts` (`MAX_RETRIES_FOR_REACTIVE`), `storage/extended-storage-transaction.ts` (`abandonStagedWork`) | serving-loop §3d (per-action failure isolation) | COVERED |
+| 16 | Bounded retry for non-conflict reactive failures (MAX_RETRIES_FOR_REACTIVE = 10); the permanent and terminal classes, and a refusal for lack of a grant whose write the replica reverted, take no attempt, and every stop — including an exhausted name-resolution retry — abandons the transaction's staged work | `scheduler/run.ts` (`abandonAction`), `scheduler/constants.ts` (`MAX_RETRIES_FOR_REACTIVE`), `storage/extended-storage-transaction.ts` (`abandonStagedWork`) | serving-loop §3d (per-action failure isolation) | COVERED |
 | 17 | Event-commit backpressure: capped exponential backoff window, `CommitConvergenceError`, disposition classes (permanent / terminal / give-up / backoff) | `scheduler/backpressure.ts` (`CommitBackpressurePolicy`), `scheduler/events.ts` (`dispatchQueuedEvent`, `classifyCommitDisposition`) | events §5 partially | CHANGED |
 | 18 | CFC-rejected-write loud drop, on the event path and the reactive-action path alike | `scheduler/cfc-rejection-report.ts`, called from `scheduler/events.ts` and `scheduler/run.ts` | serving-loop §3c (named explicitly) | COVERED |
 
@@ -263,6 +263,15 @@ the FIFO slot, `queueSchedulerEvent` in `events.ts`) maps to loading
 graph structure sufficient to run the event's handler — the event IS
 the demand for its handler; events run handlers eagerly, after
 preflight makes any dirty state inputs current (D-v2-2, events.md §2).
+For a stream a nested pattern defines, that structure is the enclosing
+piece's graph: the stream belongs to the nested instance, whose inputs
+the enclosing instance derives, so the auto-start starts the pieces
+those inputs come from first and leaves the nested instance to run as
+their child (`EnsurePieceOptions.startInputSources`). An argument whose
+links cannot be read fails the start rather than running the handler
+over what those pieces derived last. A client under server execution
+runs the handler only as its speculative echo, which the served run
+replaces, so its auto-start starts the nested instance alone.
 The derivation path needs no analog: a commit dirtying docs read by
 unmaterialized nodes leaves them dirty-unmaterialized until a
 value-granular client pull (a subscription) demands them and their

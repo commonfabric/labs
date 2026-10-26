@@ -103,15 +103,14 @@ that contract, before code in this repository relies on it.
 | Kind | The space |
 | --- | --- |
 | `fabrichat-room` | A standalone FabriChat room's own space, a chat-only social space whose root is the room, at the address the space's genesis commit reserves for a root `inSpace(..., { root: true })` places ([FabriChat](../specs/fabrichat/README.md)) |
-| `loom` | A social Loom's own space, created by a loom daemon's share sidecar or the host's [meeting-room allocator](meeting-room-allocation.md). A legacy Loom space may declare no kind. Its root is the Loom pattern's root (`packages/patterns/loom/main.tsx`), a piece of the space itself, which the sidecar reserves at the Loom's own publication cause (`{purpose: "loom-publication-root", publication: <seed>}`), not at the address `inSpace(..., { root: true })` reserves. A reader that needs more than the claim checks that the root is a piece of the space whose public composition is a Loom's (`panels`, and the `addPanel` and `removePanel` streams), as the loom daemon's Home-catalogue adapter does before registering one. A loom offer grants its recipient WRITE or OWNER; read-only access comes only through an invitation link |
+| `loom` | A social Loom's own space, created by a loom daemon's share sidecar or the host's [meeting-room allocator](meeting-room-allocation.md). A Loom space created before the kind was declared declares none. Its root is whatever the space's `defaultPattern` links: a piece of the space itself whose stored result schema has a Loom's public composition (`panels`, an array, and the `addPanel` and `removePanel` streams); the sidecar provisions it from `packages/patterns/loom/main.tsx`. The address is not the contract: the sidecar reserves the root at the Loom's own publication cause (`{purpose: "loom-publication-root", publication: <seed>}`), a migration may link another Loom in its place, and every reader finds the root through the link and validates it by that schema, loading none of its code, as the share intake and the loom daemon's Home-catalogue adapter do. A space declaring no kind passes that same check when offered as a `loom`; its declared kind stays absent. A loom offer grants its recipient `WRITE` or `OWNER`; read-only access comes only through an invitation link |
 
 Home's share intake reads the kind: it admits an offer of a `fabrichat-room`
 space only when the space declares that kind, and refuses an offer of a space
 declaring another kind or none, for good, since the kind never changes. It
-does not yet admit a `loom` offer, which it skips for a loom daemon to admit;
-admitting one needs the intake's root check to take the `loom` root contract
-above rather than the reserved address. A host
-that cannot tell the kind leaves the offer to be vetted again;
+admits a `loom` offer of a space declaring `loom` or no kind, and refuses one
+of a space declaring another kind, for good. A host that cannot tell the kind
+leaves the offer to be vetted again;
 [the private inbox](private-inbox.md#the-share-intake) describes the intake. The
 labs shell's join of a room the user visits uses the kind to select a locator:
 `fabrichat-room` uses that strict root contract, while every other kind,
@@ -131,11 +130,17 @@ A declared kind is the space's creator's claim, sealed so that nobody else can
 change it. The memory server checks its form and who made it, never whether
 the space is what it says: a creator can declare `fabrichat-room` for a space
 whose root is no chat room at all. A reader that needs more than the claim
-checks the rest itself: for a `fabrichat-room` space, at least that the root
-the space links is a piece of the space itself, at the address the space's
-genesis commit reserves for it, since a member with `WRITE` can link another
-document as the root. The share intake checks both, and so does the shell's
-join of a room the user visits.
+checks the rest itself, as the kind's contract says. For a `fabrichat-room`
+space, that is at least that the root the space links is a piece of the space
+itself, at the address the space's genesis commit reserves for it, since a
+member with `WRITE` can link another document as the root. The share intake
+checks both, and so does the shell's join of a room the user visits. For a
+`loom` space, it is that the root the space links is a piece of the space
+itself whose result schema is a Loom's composition, read from the piece's
+stored result schema without loading or running its code; a member with
+`WRITE` can link another Loom as the root, as such a member can already change
+everything the root holds, and a root that is no Loom is refused until one is
+linked back.
 
 ## On the wire
 

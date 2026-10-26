@@ -458,6 +458,11 @@ export enum RequestType {
    * otherwise failing as a confusing server 404.
    */
   UploadBlob = "runtime:uploadBlob",
+  /**
+   * Returns the URL the named space's host serves a blob at, so a host can
+   * show or offer a blob it holds a reference to.
+   */
+  BlobUrl = "runtime:blobUrl",
 
   // Piece operations (main -> worker)
 
@@ -592,6 +597,18 @@ export enum NotificationType {
 
   /** Reports authoritative loss of the runtime principal's access to a space. */
   SpaceAccessLost = "callback:space-access-lost",
+
+  /**
+   * Reports that a space which refused the runtime principal has admitted it
+   * again, so a load that the refusal failed may succeed if asked again.
+   */
+  SpaceAccessRestored = "callback:space-access-restored",
+
+  /**
+   * Reports that a connection to a memory server came back after it was
+   * lost, so a load that failed while it was down may succeed if asked again.
+   */
+  ConnectionRestored = "callback:connection-restored",
 
   /** Carries one telemetry marker, sent only while telemetry is enabled. */
   Telemetry = "callback:telemetry",
@@ -2377,10 +2394,44 @@ export type UploadBlobRequest = BaseRequest & {
   body: FabricBytes;
 
   /**
-   * The extension the stored blob is served under, defaulting to `bin`.
-   * A leading dot is stripped.
+   * The name of the file the bytes came from, if they have one. The stored blob
+   * keeps it, hashed into the blob's id with the media type and the bytes, and
+   * a download of the blob is offered under it.
+   */
+  name?: string;
+
+  /**
+   * The extension the stored blob is served under. A leading dot is stripped.
+   * With none, the store chooses one: the extension of `name`, or else one for
+   * the media type, or else `bin`.
    */
   suffix?: string;
+};
+
+/**
+ * The {@link RequestType.BlobUrl} request: a blob, named by its space and its
+ * id there.
+ */
+export type BlobUrlRequest = BaseRequest & {
+  type: RequestType.BlobUrl;
+
+  /** The space whose blob store holds the blob. */
+  space: DID;
+
+  /** The blob's id, `fid1:` and the hash of its record. */
+  id: string;
+
+  /**
+   * Whether the URL is one to save the blob from: its host then serves it as
+   * an attachment, which a browser saves from any origin, rather than shows.
+   */
+  download?: boolean;
+};
+
+/** Where a blob is served from. */
+export type BlobUrlResponse = {
+  /** The absolute URL the blob's space's host serves it at. */
+  url: string;
 };
 
 /** The stored blob's id, and the URL it is served from. */
@@ -3469,7 +3520,8 @@ export type IPCClientRequest =
   | DetectNonIdempotentRequest
   | GetPatternSourcesRequest
   | SetBreakpointsRequest
-  | UploadBlobRequest;
+  | UploadBlobRequest
+  | BlobUrlRequest;
 
 /**
  * The requests naming a piece by id, read off {@link IPCClientRequest} rather
@@ -3862,13 +3914,71 @@ export type LoggerCountsResponse = {
   compileCache: Record<string, number>;
 
   /**
-   * How large the runtime's live structures are at this moment: the
-   * scheduler's tables, storage's documents and subscriptions, the compiled
-   * code caches, and the worker's own subscription and mount tables. Each is
-   * a collection's own count, so a collection that keeps growing shows up
-   * here, while growth in what its entries hold does not.
+   * How large the runtime's live structures are at this moment, and what its
+   * channels have carried: the scheduler's tables, storage's documents and
+   * subscriptions with each space's share and the approximate size of its
+   * documents, the compiled code caches, the worker's own subscription and
+   * mount tables, and the traffic of the memory connections and the worker's
+   * ports. The counts are each a collection's own; the sizes are estimates
+   * that say so where they are declared. `storage` is `null`, not zeros, for
+   * a storage manager that reports no sizes, and its per-space view names
+   * the largest spaces up to a cap with the rest added together under
+   * `bySpaceOmitted`, as `StorageSizes` says.
    */
-  sizes: RuntimeSizes & { worker: WorkerSizes };
+  sizes: RuntimeSizes & { worker: WorkerSizes; ipc: WorkerIpcSizes | null };
+};
+
+/**
+ * What one of the worker's outbound channels has carried: every message is
+ * counted, and one in `IPC_SAMPLE_STRIDE` of them is measured, so the bytes
+ * are an estimate from a sample rather than a sum.
+ */
+export type IpcChannelSizes = {
+  /** Messages handed to the channel's `postMessage`. */
+  messages: number;
+
+  /** Messages measured, the first of the channel and every stride after. */
+  sampledMessages: number;
+
+  /**
+   * The approximate JSON length of the measured messages' encodings, in
+   * UTF-16 code units, as `approximateJsonSize()` measures one: a stand-in
+   * for what structured clone copied, which the clone's own per-object
+   * overhead puts above it and text outside ASCII puts below its UTF-8 size.
+   */
+  sampledBytes: number;
+
+  /**
+   * `sampledBytes` scaled from the measured messages to all of them. A
+   * channel whose messages vary widely in size is estimated loosely while
+   * its sample is small; `messages` and `sampledMessages` say how small.
+   */
+  approxBytes: number;
+};
+
+/**
+ * What the worker's ports have carried and how many it holds, for a read
+ * that attributes serialization traffic to the port it crossed.
+ */
+export type WorkerIpcSizes = {
+  /**
+   * The `MessagePort`s of attached clients the worker holds now, and how
+   * many it has closed. The owner speaks over the worker's own global, which
+   * is not a port and is in neither count.
+   */
+  openPorts: { open: number; closed: number };
+
+  /** Each outbound channel's traffic since the worker started. */
+  bytesSerialized: {
+    /** The worker's own global, over which the owner is reached. */
+    owner: IpcChannelSizes;
+
+    /** Each attached client's port, by client id. */
+    clients: Record<string, IpcChannelSizes>;
+
+    /** The ports of clients that have departed, added together. */
+    departedClients: IpcChannelSizes;
+  };
 };
 
 /** Sizes of the tables the worker keeps on its clients' behalf. */
@@ -3995,6 +4105,25 @@ export type EventIntentOutcomeNotification = EventIntentOutcomeNotice & {
 export type SpaceAccessLostNotification = {
   type: NotificationType.SpaceAccessLost;
   space: DID;
+};
+
+/**
+ * The runtime principal admitted again to one space that had refused it, as
+ * a retry of the space's access decides: one the memory server's
+ * `session/admissible` notice started, or one a client asked for.
+ */
+export type SpaceAccessRestoredNotification = {
+  type: NotificationType.SpaceAccessRestored;
+  space: DID;
+};
+
+/**
+ * A connection of the worker's to a memory server, back after it was lost.
+ * It names no space: a load reads from more than the space it asks about, so
+ * which connection it failed on is not something a client could match.
+ */
+export type ConnectionRestoredNotification = {
+  type: NotificationType.ConnectionRestored;
 };
 
 /**
@@ -4270,6 +4399,7 @@ export type RemoteResponse =
   | DetectNonIdempotentResponse
   | PatternSourcesResponse
   | UploadBlobResponse
+  | BlobUrlResponse
   | OperationCapabilitiesResponse
   | OperationFieldResponse
   | OperationApplyResponse
@@ -4288,6 +4418,8 @@ export type IPCRemoteNotification =
   | ErrorNotification
   | EventIntentOutcomeNotification
   | SpaceAccessLostNotification
+  | SpaceAccessRestoredNotification
+  | ConnectionRestoredNotification
   | TelemetryNotification
   | VDomBatchNotification
   | PendingWritesNotification
@@ -4665,6 +4797,10 @@ export type Commands = {
   [RequestType.UploadBlob]: {
     request: UploadBlobRequest;
     response: UploadBlobResponse;
+  };
+  [RequestType.BlobUrl]: {
+    request: BlobUrlRequest;
+    response: BlobUrlResponse;
   };
   // VDOM requests
   [RequestType.VDomMount]: {

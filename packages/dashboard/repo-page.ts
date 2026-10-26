@@ -48,7 +48,7 @@ import {
   STATUS_DOT,
   worstStatus,
 } from "./tile-render-values.ts";
-import { commitGanttHref, runOutcome } from "./tiles/recent-runs.ts";
+import { commitGanttHref, runOutcome } from "./tiles/recent-commits.ts";
 import {
   type Route,
   type Run,

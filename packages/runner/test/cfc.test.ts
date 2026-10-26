@@ -21,7 +21,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchemaObj } from "@commonfabric/api";
-import { deepFreeze } from "@commonfabric/data-model";
+import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import {
   formatExternalSchemaRef,
@@ -47,6 +47,31 @@ import {
   acquireSchemaRegistryLease,
   registerSchemaDocument,
 } from "../src/schema-registry.ts";
+
+describe("ContextualFlowControl.getSchemaAtPath", () => {
+  it("returns one deep-frozen empty schema for every position a `true` schema admits", () => {
+    // A fresh `{}` per call would be a mutable schema at every such
+    // position, which the derivation cache and the hash cache both miss.
+    const schema: JSONSchema = {
+      type: "object",
+      properties: { a: true, b: { type: "object", properties: { c: true } } },
+    };
+
+    const first = ContextualFlowControl.getSchemaAtPath(schema, ["a"]);
+    const second = ContextualFlowControl.getSchemaAtPath(schema, ["b", "c"]);
+
+    expect(first).toEqual({});
+    expect(second).toBe(first);
+    expect(isDeepFrozen(first)).toBe(true);
+  });
+
+  it("returns `undefined` for a position a `false` schema refuses", () => {
+    const schema: JSONSchema = { type: "object", properties: { a: false } };
+
+    expect(ContextualFlowControl.getSchemaAtPath(schema, ["a"]))
+      .toBe(undefined);
+  });
+});
 
 describe("ContextualFlowControl.schemaAtPath", () => {
   it("rejects leading-zero array index like '01'", () => {

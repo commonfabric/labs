@@ -387,10 +387,47 @@ export function createRuntimeClientOptions({
   };
 }
 
-/** One loaded piece, and whether the load started it. */
+/** One loaded piece, whether the load started it, and whether it failed. */
 interface PatternCacheEntry {
-  promise: Promise<PieceHandle<NameSchema>>;
-  started: boolean;
+  /** The load, as every caller asking for this address is handed it. */
+  readonly promise: Promise<PieceHandle<NameSchema>>;
+
+  /** Whether the load asked the worker to start the piece. */
+  readonly started: boolean;
+
+  /**
+   * Whether the load has rejected. A failed load answers every caller,
+   * whichever start mode it was asked in: starting does everything a load
+   * without starting does and more, so a starting caller has no better
+   * chance of success than the load that already failed.
+   */
+  failed: boolean;
+
+  /**
+   * How many recoveries the runtime had seen for the piece's space when the
+   * load began. A load that fails after one more was in flight across that
+   * recovery, so its failure may be what the recovery repaired, and is not
+   * kept.
+   */
+  readonly recoveriesAtStart: number;
+}
+
+/**
+ * One looked-up space root, whether the lookup started it, and whether it
+ * failed. Kept and dropped by the rules a {@link PatternCacheEntry} is.
+ */
+interface SpaceRootCacheEntry {
+  /** The lookup, as every caller asking for this space's root is handed it. */
+  readonly pattern: Promise<PieceHandle<NameSchema> | undefined>;
+
+  /** Whether the lookup asked the worker to start the root. */
+  readonly started: boolean;
+
+  /** Whether the lookup has rejected. */
+  failed: boolean;
+
+  /** The recoveries the runtime had seen for the space when it began. */
+  readonly recoveriesAtStart: number;
 }
 
 /** Where a slug reference lands, as a page address can carry it. */
@@ -449,14 +486,9 @@ export class RuntimeInternals extends EventTarget {
   /** Cached space roots, with whether the cached one was STARTED: a
    * started root also answers a caller that only reads its exports, while
    * one resolved without starting does not answer a caller that needs it
-   * running. */
-  #spaceRootPatterns: Map<
-    DID,
-    {
-      pattern: Promise<PieceHandle<NameSchema> | undefined>;
-      started: boolean;
-    }
-  > = new Map();
+   * running. A lookup that failed is an entry like any other, and answers
+   * with its failure until the space recovers. */
+  #spaceRootPatterns: Map<DID, SpaceRootCacheEntry> = new Map();
   /**
    * Loaded pieces, nested space → scope → id: a piece's whole address, held
    * as the three things it is. One id in two scopes is two documents, and an
@@ -468,12 +500,24 @@ export class RuntimeInternals extends EventTarget {
    *
    * An entry carries whether the load was STARTED: a started piece answers a
    * caller that only reads it, while one loaded without starting does not
-   * answer a caller that needs it running.
+   * answer a caller that needs it running. A load that failed is an entry
+   * like any other, and answers with its failure until it is invalidated or
+   * its space recovers.
    */
   #patternCache: Map<
     DID,
     Map<CellScope, Map<string, PatternCacheEntry>>
   > = new Map();
+
+  /** How many of its connections the runtime has reported restored. */
+  #connectionsRestored = 0;
+
+  /**
+   * How many times the runtime has reported each space's refusal of its
+   * principal lifted.
+   */
+  #accessRestored = new Map<DID, number>();
+
   // TODO(runtime-worker-refactor)
   #telemetryMarkers: RuntimeTelemetryMarkerResult[] = [];
 
@@ -494,6 +538,8 @@ export class RuntimeInternals extends EventTarget {
     this.#client.on("navigaterequest", this.#onNavigateRequest);
     this.#client.on("error", this.#onError);
     this.#client.on("telemetry", this.#onTelemetry);
+    this.#client.on("connectionrestored", this.#onConnectionRestored);
+    this.#client.on("spaceaccessrestored", this.#onSpaceAccessRestored);
   }
 
   /**
@@ -566,6 +612,12 @@ export class RuntimeInternals extends EventTarget {
    * defaults to true, which a view that renders the root needs; pass false to
    * read its exports without running it. See
    * `RuntimeClient.getSpaceRootPattern` for when asking creates the root.
+   *
+   * A space with no root is asked again on the next request, since its owner
+   * can create the root at any time. A lookup that fails is kept, as a
+   * failed {@link RuntimeInternals.getPattern} is, and dropped when the
+   * space recovers: a lost connection comes back, or the space admits the
+   * runtime's principal again.
    */
   getSpaceRootPattern(
     space: DID,
@@ -574,13 +626,17 @@ export class RuntimeInternals extends EventTarget {
     this.#check();
     const start = options.start ?? true;
     const cached = this.#spaceRootPatterns.get(space);
-    if (cached && (cached.started || !start)) return cached.pattern;
+    if (cached && (cached.started || cached.failed || !start)) {
+      return cached.pattern;
+    }
     const pattern = this.#client.getSpaceRootPattern(space, { start });
-    const entry = { pattern, started: start };
+    const entry: SpaceRootCacheEntry = {
+      pattern,
+      started: start,
+      failed: false,
+      recoveriesAtStart: this.#recoveriesOf(space),
+    };
     this.#spaceRootPatterns.set(space, entry);
-    // Evict on rejection: a transient failure (unreachable host, authz)
-    // must not poison the space for the runtime's lifetime. Evict on no root
-    // too, since the space's owner can create its root at any time.
     const evict = () => {
       if (this.#spaceRootPatterns.get(space) === entry) {
         this.#spaceRootPatterns.delete(space);
@@ -588,7 +644,13 @@ export class RuntimeInternals extends EventTarget {
     };
     pattern.then((root) => {
       if (root === undefined) evict();
-    }, evict);
+    }, () => {
+      if (entry.recoveriesAtStart === this.#recoveriesOf(space)) {
+        entry.failed = true;
+      } else {
+        evict();
+      }
+    });
     return pattern;
   }
 
@@ -613,7 +675,31 @@ export class RuntimeInternals extends EventTarget {
    *
    * Cached per (space, scope, id) — a pattern's whole address. A cache entry
    * created with `start: false` is upgraded (re-fetched with start) when a
-   * starting caller asks for the same pattern.
+   * starting caller asks for the same pattern, unless that load failed.
+   *
+   * A load that fails is cached too, and every later request for that
+   * address rejects with the same error without asking the worker again,
+   * whether or not it asks to start the piece, until
+   * {@link RuntimeInternals.invalidatePattern} or
+   * {@link RuntimeInternals.refreshPattern} drops it, or the piece's space
+   * recovers. A space recovers when a connection of the runtime's to a
+   * memory server comes back after it was lost, which reaches every space
+   * and dispatches `connectionrestored`, and when the space admits the
+   * runtime's principal again after refusing it, which dispatches
+   * `spaceaccessrestored` with the space as `detail.space`. Either drops the
+   * failed loads it reaches before its event goes out, so a caller showing
+   * one asks again on the event and reaches the worker. So a failing piece
+   * is fetched once per recovery however often it is asked for, which keeps
+   * a caller that asks on a schedule of its own from repeating the failure
+   * on that schedule, and gives a failure the recovery repaired a request
+   * that can succeed.
+   *
+   * Every failure a recovery reaches is dropped, whatever caused it. An
+   * error crosses from the worker as its message, with a code for only a few
+   * kinds, so nothing here tells a dropped connection or a refusal from a
+   * piece that will never load; one that will never load fails once more per
+   * recovery. A load still in flight across a recovery is not kept if it
+   * then fails, since what the recovery repaired may be what failed it.
    */
   getPattern(
     space: DID,
@@ -627,7 +713,7 @@ export class RuntimeInternals extends EventTarget {
     const scope = options?.scope ?? "space";
     const byId = this.#patternCacheSlot(space, scope);
     const cached = byId.get(id);
-    if (cached && (cached.started || !start)) {
+    if (cached && (cached.started || cached.failed || !start)) {
       return cached.promise;
     }
     const promise = (async () => {
@@ -642,11 +728,19 @@ export class RuntimeInternals extends EventTarget {
       }
       return piece;
     })();
-    const entry: PatternCacheEntry = { promise, started: start };
+    const entry: PatternCacheEntry = {
+      promise,
+      started: start,
+      failed: false,
+      recoveriesAtStart: this.#recoveriesOf(space),
+    };
     byId.set(id, entry);
-    // Evict on rejection so the next request retries.
     promise.catch(() => {
-      if (byId.get(id) === entry) this.#dropPattern(space, scope, id);
+      if (entry.recoveriesAtStart === this.#recoveriesOf(space)) {
+        entry.failed = true;
+      } else if (byId.get(id) === entry) {
+        this.#dropPattern(space, scope, id);
+      }
     });
     return promise;
   }
@@ -669,7 +763,7 @@ export class RuntimeInternals extends EventTarget {
    * Drop one loaded piece, and any level of the cache it was the last thing
    * in. A nested map holds a level per address component, so a level left
    * empty is a space or a scope the runtime goes on holding for a piece it
-   * no longer has — and a run of failed lookups is a run of them.
+   * no longer has — and a run of invalidated lookups is a run of them.
    */
   #dropPattern(space: DID, scope: CellScope, id: string): void {
     const byScope = this.#patternCache.get(space);
@@ -811,6 +905,7 @@ export class RuntimeInternals extends EventTarget {
     space: DID;
     contentType: string;
     body: Uint8Array | ArrayBufferLike;
+    name?: string;
     suffix?: string;
   }): Promise<{ id: string; url: string }> {
     this.#check();
@@ -908,6 +1003,56 @@ export class RuntimeInternals extends EventTarget {
     }
     console.error("[RuntimeClient Error]", event);
   };
+
+  /**
+   * Drops every failed load, since one the lost connection caused can
+   * succeed now, and then tells this runtime's listeners, so that a view
+   * showing a failed load can ask for it again and reach the worker.
+   */
+  #onConnectionRestored = () => {
+    this.#connectionsRestored++;
+    for (const space of [...this.#patternCache.keys()]) {
+      this.#dropFailedLoads(space);
+    }
+    for (const space of [...this.#spaceRootPatterns.keys()]) {
+      this.#dropFailedLoads(space);
+    }
+    this.dispatchEvent(new Event("connectionrestored"));
+  };
+
+  /**
+   * Like {@link RuntimeInternals.#onConnectionRestored}, except for the one
+   * space that admitted the runtime's principal again, whose failed loads
+   * alone are dropped. Its event carries the space as `detail.space`.
+   */
+  #onSpaceAccessRestored = ({ space }: { space: DID }) => {
+    this.#accessRestored.set(space, (this.#accessRestored.get(space) ?? 0) + 1);
+    this.#dropFailedLoads(space);
+    this.dispatchEvent(
+      new CustomEvent("spaceaccessrestored", { detail: { space } }),
+    );
+  };
+
+  /**
+   * How many recoveries the runtime has seen that reach `space`: every
+   * restored connection, and every time the space admitted the runtime's
+   * principal again.
+   */
+  #recoveriesOf(space: DID): number {
+    return this.#connectionsRestored + (this.#accessRestored.get(space) ?? 0);
+  }
+
+  /** Drops every failed piece load and failed root lookup in `space`. */
+  #dropFailedLoads(space: DID): void {
+    for (const [scope, byId] of [...this.#patternCache.get(space) ?? []]) {
+      for (const [id, entry] of [...byId]) {
+        if (entry.failed) this.#dropPattern(space, scope, id);
+      }
+    }
+    if (this.#spaceRootPatterns.get(space)?.failed) {
+      this.#spaceRootPatterns.delete(space);
+    }
+  }
 
   #onTelemetry = (marker: RuntimeTelemetryMarkerResult) => {
     this.#telemetryMarkers.push(marker);

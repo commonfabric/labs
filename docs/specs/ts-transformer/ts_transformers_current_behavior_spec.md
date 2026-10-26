@@ -72,6 +72,15 @@ These string-level steps run in `transformCfDirective()`
 (`src/core/cf-helpers.ts`) before any AST transformer, because symbol binding
 happens before the transformer pipeline runs.
 
+A caller may also pass a rewrite of the authored text (`AuthoredSourceRewrite`),
+which is handed the parse the scan and the guard read and whose result takes
+the authored text's place between the prepended import and the trailer. The
+rewrite runs after the guard and the shim choice, so it must leave the module
+binding the names it bound. The runner splits imports that take a default
+export beside or inside a named-import list this way
+(`normalizeMixedModuleImports`, `packages/runner/src/harness/pretransform.ts`),
+so the pretransform parses each authored module once.
+
 TypeScript's subsequent JSX emit uses `__cfHelpers.h` for elements and
 `__cfHelpers.h.fragment` for fragment tags
 (`packages/js-compiler/typescript/options.ts`). Both resolve through the
@@ -3311,10 +3320,23 @@ A qualifying call, per `detectCallKind` (§5) — as of this writing:
   array methods in lift callbacks" / "…in lowered handler callbacks").
 - Calls whose callee is a **pattern factory** (`Child({...})` where `Child` is
   a `pattern(...)` result; `isPatternFactoryCalleeExpression`) are excluded
-  before all of the above — the sub-pattern instance is not re-caused, though
+  before all of the above — the sub-pattern instance takes no cause, though
   reactive values in its argument object still get property causes (test:
   "does not add root causes to pattern factory outputs" pins the absence of
-  `.for("child", true)` alongside `.for(["child", "value"], true)`).
+  `.for("child", true)` alongside `.for(["child", "value"], true)`). At
+  variable position, with no authored `.for()` in its chain, and with the
+  `instanceNames` transformation option on (off by default; the runner sets it
+  from its experimental flag of that name), the instance is instead wrapped in
+  `__cfHelpers.nameInstance(<call>, "<name>")` (`isNameableInstance` /
+  `createNameInstanceCall`): `const child = Child({ value })` becomes
+  `const child = __cfHelpers.nameInstance(Child({ value }), "child")` (tests,
+  under "instance naming": "wraps a pattern factory output a `const` binds in
+  `nameInstance` with the binding's name, when it is on" and "wraps nothing in
+  `nameInstance`, when it is off"). An instance name is not a cause.
+  The pattern builder takes it as the instance's partial cause only where a
+  result key or a node input gives the instance no name, so a name either of
+  those gives outranks it; the runtime half is in
+  `docs/specs/computed-cell-identity.md` § "Internal cell identity".
 - Variable position only, as a last resort: a call whose resolved type is a
   cell in every arm a value can take (`isCellByType`: `isCellLikeType` of the
   type, or of each member of a union apart from `undefined`, `null`, and

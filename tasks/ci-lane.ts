@@ -1409,8 +1409,7 @@ export interface Accounting {
    * Identities a pass was asked to run that the tree holds no test for,
    * as the names that pass's test processes registered show, and that no
    * pass left unaccounted for. A manifest carries one for a test renamed
-   * since it was published, and for a test only a branch ever ran, in a
-   * file the tree still holds.
+   * since it was published, in a file the tree still holds.
    * An invocation that stopped cannot have left one of these unrecorded,
    * since there was nothing to record, so an excusal stands beside them.
    */
@@ -1462,9 +1461,9 @@ export interface Missed {
  * An identity that went unaccounted for while its unit recorded costs an
  * excusal rather than the run, unless what the pass registered shows the
  * tree holds no such test. A manifest is hours old by construction, and it
- * holds every identity any run recorded in a file the tree still holds, so
- * it names tests renamed since and tests that only a branch ever ran. No run
- * of this tree can record one of those, and its missing record says
+ * holds every identity the default branch recorded in a file the tree
+ * still holds, so it names tests renamed since. No run of this tree can
+ * record one of those, and its missing record says
  * nothing about whether an invocation stopped, so it is set apart as
  * absent and an excusal stands beside it. Where the pass's registrations
  * say nothing about a unit, as for a suite whose processes leave no name
@@ -1621,8 +1620,7 @@ export function describeAccounting(
   // one, and this is where its author sees that it needs one.
   section(
     `${suite}: ${accounting.absent.length} identities the tree holds no ` +
-      `test for, which a rename since the manifest, or a test only a ` +
-      `branch ran, would explain:`,
+      `test for, which a rename since the manifest would explain:`,
     accounting.absent,
   );
   section(

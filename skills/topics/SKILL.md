@@ -73,8 +73,10 @@ reference edge and take no `agentName`.
   filing with `deno task cf piece step --cell "$TOPIC"`, or the board reads them
   as their defaults. Ordering is not at stake: the board falls back to
   `createdAt` for a topic that has never run.
-- The body is the living document, replaced whole; comments are append-only,
-  point-in-time progress; every relevant pull request is an `addLink` with
+- Recommended, not required: the Body states the core issue for a first-time
+  reader and is replaced whole, with any critical update noted at its top; the
+  Thread (comments) holds updates, append-only; Links hold references to
+  resources the body or thread uses, every relevant pull request among them as
   `kind: "pr"`; relationships between Topics are references, never pasted fids.
 - Changing the board's or a Topic's pattern source is a production migration
   over team-critical data, held behind the rehearsal and authorization rules in
@@ -87,5 +89,5 @@ reference edge and take no `agentName`.
 | `references/reading.md`         | surveying the board or reading a Topic: the index, addresses and how to compare them, durable inputs against stepped results                                         |
 | `references/verbs.md`           | discovering fields and operations, choosing a verb, identifying the deployed contract, retraction and by-reference verbs                                             |
 | `references/naming.md`          | citing or resolving a Topic by its number, `top/42`, and what the deployment carries                                                                                 |
-| `references/mutating.md`        | creating a Topic and recovering its address, the observation asymmetry, warming a filed Topic, the Topic verbs, references between Topics, the editorial conventions |
+| `references/mutating.md`        | creating a Topic and recovering its address, the observation asymmetry, warming a filed Topic, the Topic verbs, references between Topics, what to put in each field |
 | `references/pattern-updates.md` | changing pattern source: `setsrc` rehearsal, `--root`, team authorization                                                                                            |

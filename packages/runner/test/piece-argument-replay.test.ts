@@ -16,10 +16,17 @@
  * nothing takes its default, as does a stored slot the new code's input type
  * refuses, with a warning, once the value it held is copied into the piece's
  * refused-slot store.
+ *
+ * The document's bindings are the setup's to write, and the cells they name
+ * are not. A setup that binds a slot, or the whole argument, another way
+ * replaces the binding, and leaves the cell it named as that cell's owner left
+ * it; a setup that binds it the same way leaves the document as it was, also
+ * where the bound content is realized at a narrower scope.
  */
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/utils/logger";
 
@@ -28,6 +35,7 @@ import {
   type RefusedArgumentSlots,
   refusedArgumentSlotsCell,
 } from "../src/refused-argument-slots.ts";
+import { isPrimitiveCellLink, parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
@@ -626,6 +634,241 @@ describe("piece argument replay", () => {
           .toEqual([
             ["one"],
           ]);
+      });
+    });
+
+    it("keeps a session-scoped nested piece's argument object when its code changes under the same session", async () => {
+      // The parent mounts the nested piece per session over a computed
+      // object, so the nested piece's argument document holds a redirect to
+      // the computed's space slot. Here that slot's content is realized at
+      // its user instance, behind a same-document redirect. Setting the
+      // nested piece up again in the session that already holds its
+      // argument re-sets the argument to the redirect it holds, and the
+      // object at the user instance stays an object.
+      const childSource = (suffix: string) =>
+        [
+          "import { computed, pattern } from 'commonfabric';",
+          "",
+          "export interface Arguments { a: string; items: string[] }",
+          "export interface Surface { joined: string }",
+          "",
+          "export default pattern<Arguments, Surface>(({ a, items }) => ({",
+          `  joined: computed(() => a + ':' + items.join(',') + '${suffix}'),`,
+          "}));",
+          "",
+        ].join("\n");
+      const parentSource = [
+        "import { computed, pattern, Writable } from 'commonfabric';",
+        "import Child from './child.tsx';",
+        "",
+        "export default pattern<",
+        "  { x: string },",
+        "  { joined: string; child: unknown }",
+        ">(({ x }) => {",
+        "  const items = Writable.of<string[]>(['i1']);",
+        "  const child = Child.asScope('session')(",
+        "    computed(() => ({ a: x, items })),",
+        "  );",
+        "  return { joined: child.joined, child };",
+        "});",
+        "",
+      ].join("\n");
+
+      await withRuntime(async (runtime) => {
+        const tx = runtime.edit();
+        const pattern = await compiledParent(
+          runtime,
+          changedFiles(childSource(""), parentSource),
+          tx,
+        );
+        const cell = runtime.getCell<Record<string, unknown>>(
+          space,
+          "session-child-realized-argument",
+          undefined,
+          tx,
+        );
+        const running = runtime.run(tx, pattern, { x: "hello" }, cell);
+        await tx.commit().settled;
+        await running.pull();
+        await runtime.idle();
+        await cell.pull();
+        expect(cell.key("joined").get()).toBe("hello:i1");
+
+        const argument = cell.key("child").resolveAsCell().getArgumentCell();
+        expect(argument?.getAsNormalizedFullLink().scope).toBe("session");
+        const argumentLink = parseLink(argument?.getRaw(), argument);
+        expect(argumentLink?.overwrite).toBe("redirect");
+        const slot = (scope: "space" | "user") =>
+          runtime.getCellFromLink<FabricValue>({
+            ...argumentLink!,
+            path: [],
+            scope,
+          });
+        const content = slot("space").getRaw();
+        expect(isPrimitiveCellLink(content)).toBe(false);
+
+        const realize = runtime.edit();
+        slot("user").withTx(realize).setRaw(content);
+        slot("space").withTx(realize).setRaw({
+          "/": { "link@1": { overwrite: "redirect", path: [], scope: "user" } },
+        });
+        await realize.commit().settled;
+
+        await runChanged(
+          runtime,
+          cell,
+          changedFiles(childSource("!"), parentSource),
+        );
+
+        expect(
+          isPrimitiveCellLink(slot("user").getRaw()),
+          "the argument's re-set wrote a link to the space slot into the " +
+            "instance that slot redirects to",
+        ).toBe(false);
+        expect(
+          cell.key("joined").get(),
+          "the nested piece started on the changed code; a link cycle at its " +
+            "argument refuses the start's commit",
+        ).toBe("hello:i1!");
+      });
+    });
+  });
+
+  describe("when the parent binds the nested piece's argument another way", () => {
+    // A parent passing a cell of its own binds the nested piece's argument to
+    // that cell: the argument document holds a write redirect to it, and the
+    // nested piece's writes through the argument reach the parent's cell.
+    // When the parent's code changes to pass something else, setting the
+    // nested piece up again binds the argument anew. The cell it was bound to
+    // stays the parent's, as it was.
+
+    const BINDING_CHILD_SOURCE = [
+      "import { computed, pattern } from 'commonfabric';",
+      "",
+      "export interface Arguments { a: string; items: string[] }",
+      "",
+      "export default pattern<Arguments, { joined: string }>(",
+      "  ({ a, items }) => ({",
+      "    joined: computed(() => a + ':' + items.join(',')),",
+      "  }),",
+      ");",
+      "",
+    ].join("\n");
+
+    // `argument` is the expression the parent passes the nested piece. The
+    // parent returns its own two cells, so a test reads what they hold.
+    const bindingParentSource = (argument: string) =>
+      [
+        "import { computed, pattern, Writable } from 'commonfabric';",
+        "import Child from './child.tsx';",
+        "",
+        "export default pattern<",
+        "  { x: string },",
+        "  {",
+        "    joined: string;",
+        "    shared: { a: string; items: string[] };",
+        "    sharedItems: string[];",
+        "  }",
+        ">(({ x }) => {",
+        "  const shared = Writable.of<{ a: string; items: string[] }>({",
+        "    a: 'shared',",
+        "    items: ['s1'],",
+        "  });",
+        "  const sharedItems = Writable.of<string[]>(['parent-item']);",
+        `  const child = Child(${argument});`,
+        "  return { joined: child.joined, shared, sharedItems };",
+        "});",
+        "",
+      ].join("\n");
+
+    /**
+     * Run the parent passing `before`, then run it again on code passing
+     * `after`, and return what the nested piece and the parent's two cells
+     * hold afterwards.
+     */
+    const rebound = async (
+      runtime: Runtime,
+      cause: string,
+      before: string,
+      after: string,
+    ) => {
+      const tx = runtime.edit();
+      const pattern = await compiledParent(
+        runtime,
+        changedFiles(BINDING_CHILD_SOURCE, bindingParentSource(before)),
+        tx,
+      );
+      const cell = runtime.getCell<Record<string, unknown>>(
+        space,
+        cause,
+        undefined,
+        tx,
+      );
+      const running = runtime.run(tx, pattern, { x: "hello" }, cell);
+      await tx.commit().settled;
+      await running.pull();
+      await runtime.idle();
+      await cell.pull();
+
+      await runChanged(
+        runtime,
+        cell,
+        changedFiles(BINDING_CHILD_SOURCE, bindingParentSource(after)),
+      );
+      return {
+        joined: cell.key("joined").get(),
+        shared: cell.key("shared").get(),
+        sharedItems: cell.key("sharedItems").get(),
+      };
+    };
+
+    it("leaves the parent's cell as it was when the parent passes a record in its place", async () => {
+      await withRuntime(async (runtime) => {
+        const after = await rebound(
+          runtime,
+          "rebind-whole-to-record",
+          "shared",
+          "{ a: x, items: ['lit'] }",
+        );
+
+        expect(after.joined).toBe("hello:lit");
+        expect(
+          after.shared,
+          "the record was written through the old binding into the cell it " +
+            "named",
+        ).toEqual({ a: "shared", items: ["s1"] });
+      });
+    });
+
+    it("leaves the parent's cell as it was when the parent passes a computed object in its place", async () => {
+      await withRuntime(async (runtime) => {
+        const after = await rebound(
+          runtime,
+          "rebind-whole-to-computed",
+          "shared",
+          "computed(() => ({ a: x, items: ['c1'] }))",
+        );
+
+        expect(after.joined).toBe("hello:c1");
+        expect(after.shared).toEqual({ a: "shared", items: ["s1"] });
+      });
+    });
+
+    it("leaves the parent's cell as it was when the parent passes a value for the slot bound to it", async () => {
+      await withRuntime(async (runtime) => {
+        const after = await rebound(
+          runtime,
+          "rebind-slot-to-value",
+          "{ a: x, items: sharedItems }",
+          "{ a: x, items: ['lit'] }",
+        );
+
+        expect(after.joined).toBe("hello:lit");
+        expect(
+          after.sharedItems,
+          "the value was written through the slot's old binding into the " +
+            "cell it named",
+        ).toEqual(["parent-item"]);
       });
     });
   });

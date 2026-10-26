@@ -254,10 +254,16 @@ function bindValue(value: unknown, walk: BindingWalk): FabricExecValue {
     // narrows the argument schema at every slot, and `schemaAtPath()` keeps a
     // narrowing only for a deep-frozen schema. The walk has just rebuilt
     // both, record by record and array by array, so the graph has schema
-    // objects of its own to freeze.
+    // objects of its own to freeze. The same holds for the manifest of
+    // derived internal cells: the runtime keeps the id a partial cause names
+    // by the cause's identity only where the cause is deep-frozen, and a
+    // piece's start asks for each of those ids once per node and per action.
     if (isGraph) {
       deepFreeze(bound.argumentSchema);
       deepFreeze(bound.resultSchema);
+      if (bound.derivedInternalCells !== undefined) {
+        deepFreeze(bound.derivedInternalCells);
+      }
     }
     return bound;
   }

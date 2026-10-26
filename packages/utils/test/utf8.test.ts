@@ -11,7 +11,11 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { utf8Compare, utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import {
+  utf8ByteLength,
+  utf8Compare,
+  utf8SortedKeysOf,
+} from "@commonfabric/utils/utf8";
 
 describe("utf8Compare()", () => {
   it("returns `0` for two equal UTF-8 strings", () => {
@@ -156,5 +160,33 @@ describe("utf8SortedKeysOf()", () => {
     const sorted1 = utf8SortedKeysOf(obj);
     const sorted2 = utf8SortedKeysOf(obj);
     expect(sorted1).toBe(sorted2);
+  });
+});
+
+describe("utf8ByteLength()", () => {
+  it("returns the encoded size for text across every code-unit width", () => {
+    for (
+      const text of [
+        "",
+        "abc",
+        "caf\u00e9",
+        "\u20ac",
+        "\ud83d\ude00",
+        "a\u00e9\u20ac\ud83d\ude00z",
+      ]
+    ) {
+      expect(utf8ByteLength(text)).toBe(
+        new TextEncoder().encode(text).byteLength,
+      );
+    }
+  });
+
+  it("counts a lone surrogate as the three bytes the encoder writes for it", () => {
+    expect(utf8ByteLength("\ud83d")).toBe(
+      new TextEncoder().encode("\ud83d").byteLength,
+    );
+    expect(utf8ByteLength("\ud83dx")).toBe(
+      new TextEncoder().encode("\ud83dx").byteLength,
+    );
   });
 });

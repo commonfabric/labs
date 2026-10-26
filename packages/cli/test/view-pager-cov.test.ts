@@ -16,6 +16,7 @@ import {
   realPagerDeps,
   runPager,
 } from "../lib/view/pager.ts";
+import type { BlameLine, BlameRequest } from "../lib/view/blame.ts";
 import { fileSource } from "../lib/view/editsource.ts";
 import { parseDiff } from "../lib/view/diff.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
@@ -57,6 +58,7 @@ interface FakeOpts {
   addSignalThrowsFor?: Deno.Signal;
   removeSignalThrows?: boolean;
   env?: Record<string, string>;
+  blame?: PagerDeps["blame"];
 }
 
 function makeFake(opts: FakeOpts = {}) {
@@ -162,6 +164,11 @@ function makeFake(opts: FakeOpts = {}) {
       parserListeners.add(listener);
       return () => parserListeners.delete(listener);
     },
+    pushIo: () => {
+      throw new Error("these tests push nothing");
+    },
+    blame: opts.blame ??
+      (() => Promise.reject(new Error("these tests blame nothing"))),
   };
   return {
     deps,
@@ -175,6 +182,77 @@ function makeFake(opts: FakeOpts = {}) {
     parserWrites,
   };
 }
+
+Deno.test("pager: b draws the blame column when git blame returns", async () => {
+  const dir = Deno.makeTempDirSync();
+  try {
+    const path = join(dir, "f.ts");
+    Deno.writeTextFileSync(path, "const a = 1;\n");
+    const line: BlameLine = {
+      commit: "a".repeat(40),
+      author: "Alice",
+      time: Date.UTC(2026, 2, 4) / 1000,
+      text: "const a = 1;",
+    };
+    const requests: BlameRequest[] = [];
+    const drawn = Promise.withResolvers<void>();
+    const fake = makeFake({
+      steps: [{ bytes: enc("b") }, { wait: drawn.promise }, {
+        bytes: enc("q"),
+      }],
+      blame: (request) => {
+        requests.push(request);
+        return Promise.resolve([line]);
+      },
+    });
+    const write = fake.deps.write;
+    fake.deps.write = (text) => {
+      write(text);
+      if (text.includes("4d Alice")) drawn.resolve();
+    };
+    await runPager(
+      parseDocument("const a = 1;\n"),
+      { ...OPTS, now: () => Date.UTC(2026, 2, 8) },
+      undefined,
+      fileSource(path),
+      fake.deps,
+    );
+    assertEquals(requests.map((request) => request.path), ["f.ts"]);
+    const frames = fake.writes.filter((w) => w.includes("\x1b[?7l"));
+    assert(
+      !frames[0].includes("Alice"),
+      "the first frame was drawn before blame was asked for",
+    );
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+Deno.test("pager: closing the viewer stops a blame still running", async () => {
+  const dir = Deno.makeTempDirSync();
+  try {
+    const path = join(dir, "f.ts");
+    Deno.writeTextFileSync(path, "const a = 1;\n");
+    const signals: AbortSignal[] = [];
+    const { deps } = makeFake({
+      steps: [{ bytes: enc("b") }, { bytes: enc("q") }],
+      blame: (_request, signal) => {
+        signals.push(signal);
+        return new Promise(() => {});
+      },
+    });
+    await runPager(
+      parseDocument("const a = 1;\n"),
+      OPTS,
+      undefined,
+      fileSource(path),
+      deps,
+    );
+    assertEquals(signals.map((signal) => signal.aborted), [true]);
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
 
 Deno.test("pager: a missing /dev/tty raises a ViewError", async () => {
   const { deps } = makeFake({ openThrows: true });
@@ -531,6 +609,9 @@ Deno.test("realPagerDeps: the wrappers reach the real primitives", () => {
   const cancel = d.setTimer(() => {}, 0);
   cancel();
   d.onGrammarLoad(() => {})();
+  // Setting up a push reads the environment and runs nothing that changes a
+  // repository.
+  d.pushIo(() => {}, new AbortController().signal);
   // Opening the controlling terminal either succeeds (close it) or throws when
   // the test has none; both reach the wrapper.
   try {

@@ -239,6 +239,7 @@ describe("snapshot-share", () => {
     const runtime = {
       cfcReadMaxConfidentiality: [],
       getCellFromLink: () => ({ runtime, sync: () => synchronized.promise }),
+      releaseUnreadDocuments: () => Promise.resolve(),
     };
     const processor = buildProcessor({ runtime });
     const ref: CellRef = {

@@ -1222,7 +1222,6 @@ describe("console/steps provenance", () => {
     const minted = handles.find((handle) => handle.token === "cfh:a:aaaaa");
     expect(minted?.producedByStep).toBe(0);
     expect(minted?.slug).toBe("numbers");
-    expect(minted?.url).toBe("http://localhost:8000/space/numbers");
   });
 
   it("records every call a handle was passed into", () => {

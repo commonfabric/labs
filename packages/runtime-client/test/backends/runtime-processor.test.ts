@@ -4004,10 +4004,131 @@ describe("runtime-processor", () => {
       );
       // The host is resolved for the REQUEST's space, not any init space.
       expect(hostForSpaceCalls).toEqual(["did:key:test-space"]);
-      expect(requestedPayload).toEqual({
+      // Strict, so that a request naming no file posts no `name` key at all:
+      // the blob's id is the hash of exactly what is posted.
+      expect(requestedPayload).toStrictEqual({
         type: "image/png",
         body: new FabricBytes(new Uint8Array([1, 2, 3])),
       });
+    });
+
+    it("posts the file's name with the contents when the request names one", async () => {
+      const originalFetch = globalThis.fetch;
+      let requestedUrl: string | undefined;
+      let requestedPayload: unknown;
+      const blobFetch: RuntimeFetch = (input, init) => {
+        requestedUrl = input.toString();
+        requestedPayload = decodeMemoryBoundary(init?.body as string);
+        return Promise.resolve(
+          Response.json({ id: "fid1:test", url: "blobs/test.png" }, {
+            status: 201,
+          }),
+        );
+      };
+      globalThis.fetch = blobFetch as typeof globalThis.fetch;
+      const processor = buildProcessor({
+        runtime: { hostForSpace: () => new URL("http://toolshed.test/base") },
+      });
+
+      try {
+        await processor.handleUploadBlob({
+          type: RequestType.UploadBlob,
+          space: "did:key:test-space" as never,
+          contentType: "image/png",
+          body: new FabricBytes(new Uint8Array([1, 2, 3])),
+          name: "photo.png",
+        });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      expect(requestedPayload).toStrictEqual({
+        type: "image/png",
+        body: new FabricBytes(new Uint8Array([1, 2, 3])),
+        name: "photo.png",
+      });
+      // The request names no suffix, so the path names no blob, and the store
+      // takes the suffix from the name.
+      expect(requestedUrl).toBe(
+        "http://toolshed.test/did:key:test-space/blobs",
+      );
+    });
+
+    it("returns the URL a blob's space's host serves it at", () => {
+      const hostForSpaceCalls: string[] = [];
+      const processor = buildProcessor({
+        runtime: {
+          hostForSpace: (space: string) => {
+            hostForSpaceCalls.push(space);
+            return new URL("http://toolshed.test/base");
+          },
+        },
+      });
+
+      expect(
+        processor.handleBlobUrl({
+          type: RequestType.BlobUrl,
+          space: "did:key:test-space" as never,
+          id: "fid1:abc_-123",
+        }),
+      ).toEqual({
+        url: "http://toolshed.test/did:key:test-space/blobs/abc_-123",
+      });
+      expect(hostForSpaceCalls).toEqual(["did:key:test-space"]);
+    });
+
+    it("returns the URL to save a blob from for a request to download it", () => {
+      const processor = buildProcessor({
+        runtime: { hostForSpace: () => new URL("http://toolshed.test/base") },
+      });
+
+      expect(
+        processor.handleBlobUrl({
+          type: RequestType.BlobUrl,
+          space: "did:key:test-space" as never,
+          id: "fid1:abc",
+          download: true,
+        }).url,
+      ).toBe("http://toolshed.test/did:key:test-space/blobs/abc?download");
+    });
+
+    it("throws for a blob URL request naming no space or no blob", () => {
+      const processor = buildProcessor({
+        runtime: { hostForSpace: () => new URL("http://toolshed.test/base") },
+      });
+
+      expect(() =>
+        processor.handleBlobUrl({
+          type: RequestType.BlobUrl,
+          space: "not a did" as never,
+          id: "fid1:abc",
+        })
+      ).toThrow("blobUrl requires a space DID");
+      expect(() =>
+        processor.handleBlobUrl({
+          type: RequestType.BlobUrl,
+          space: "did:key:test-space" as never,
+          id: "",
+        })
+      ).toThrow("blobUrl requires a blob id");
+    });
+
+    it("throws for a request whose name is not a string", async () => {
+      const processor = buildProcessor({
+        runtime: { hostForSpace: () => new URL("http://toolshed.test/base") },
+      });
+
+      await expect(
+        processor.handleUploadBlob({
+          type: RequestType.UploadBlob,
+          space: "did:key:test-space" as never,
+          contentType: "image/png",
+          body: new FabricBytes(new Uint8Array([1, 2, 3])),
+          name: 7 as never,
+        }),
+      ).rejects.toThrow(
+        "uploadBlob requires any name it is given to be a string",
+      );
     });
   });
 
@@ -5178,6 +5299,51 @@ describe("runtime-processor", () => {
       const { diagnostics } = await subscribeToShapes(undefined);
 
       expect(diagnostics).toHaveLength(1);
+    });
+
+    it("logs an empty-schema subscription for a ref read under `true`, once however often it delivers", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const cell = runtime.getCell(
+          cfcSigner.did(),
+          "true-schema-subscribe",
+          schema,
+        );
+        const write = async (x: number) => {
+          const tx = runtime.edit();
+          cell.withTx(tx).set({ state: { shapes: [{ x }] } });
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await runtime.idle();
+        };
+        await write(1);
+        const { schema: _schema, ...address } = createCellRef(cell);
+        const posted: unknown[] = [];
+        using errors = stub(console, "error");
+
+        buildProcessor({ runtime }).handleCellSubscribe({
+          type: RequestType.CellSubscribe,
+          cell: { ...address, path: ["state", "shapes"], schema: true },
+        }, {
+          id: 1,
+          post: (message) => {
+            posted.push(message);
+            return true;
+          },
+        });
+        // The sink posts from a microtask.
+        await Promise.resolve();
+        await write(2);
+        await Promise.resolve();
+
+        const diagnostics = errors.calls.map(({ args }) => String(args[0]))
+          .filter((message) => message.includes("EMPTY SCHEMA SUBSCRIPTION"));
+        expect(posted.length).toBeGreaterThanOrEqual(2);
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]).toContain("schema: true");
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
     });
   });
 
@@ -7391,7 +7557,43 @@ describe("runtime-processor", () => {
       expect(response.sizes).toEqual({
         ...runtimeSizes,
         worker: workerSizesAtRest,
+        ipc: null,
       });
+    });
+
+    it("carries what the client registry says its ports have carried", () => {
+      const ipc = {
+        openPorts: { open: 2, closed: 1 },
+        bytesSerialized: {
+          owner: {
+            messages: 4,
+            sampledMessages: 1,
+            sampledBytes: 100,
+            approxBytes: 400,
+          },
+          clients: {},
+          departedClients: {
+            messages: 0,
+            sampledMessages: 0,
+            sampledBytes: 0,
+            approxBytes: 0,
+          },
+        },
+      };
+      const processor = buildProcessor({
+        runtime: {
+          getCfcStats: () => cfcStats,
+          patternManager: { getCompileCacheStats: () => compileCacheStats },
+          getSizes: () => runtimeSizes,
+        },
+        ipcSizes: () => ipc,
+      });
+
+      const response = processor.getLoggerCounts({
+        type: RequestType.GetLoggerCounts,
+      });
+
+      expect(response.sizes.ipc).toEqual(ipc);
     });
 
     it("counts a cell subscription while it stands and not after its unsubscribe", () => {
@@ -10620,12 +10822,18 @@ describe("runtime-processor", () => {
             cancel: () => cancelled.push("second/mount-1"),
           }],
         ]) as never;
+        // What had been cancelled each time a release was asked for.
+        const releases: string[][] = [];
         state.runtime = {
           dispose: () => {
             throw new Error("the runtime must outlive a departing client");
           },
+          releaseUnreadDocuments: () => {
+            releases.push([...cancelled]);
+            return Promise.resolve();
+          },
         } as never;
-        return { processor, state, cancelled, unmounted };
+        return { processor, state, cancelled, unmounted, releases };
       }
 
       it("cancels only the departing client's subscriptions and mounts", () => {
@@ -10674,6 +10882,16 @@ describe("runtime-processor", () => {
         expect([...state.operationSessions.keys()]).toEqual([
           "session-of-second",
         ]);
+      });
+
+      it("asks the runtime to release what nothing reads once the departing client's subscriptions are gone", () => {
+        const { processor, releases } = departureState();
+        processor.disposeClient(testClient(1).client);
+        expect(releases).toEqual([[
+          "first/cell-a",
+          "first/op",
+          "first/mount-1",
+        ]]);
       });
 
       it("leaves the runtime running", () => {

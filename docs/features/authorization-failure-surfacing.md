@@ -78,13 +78,14 @@ a connection-authentication denial, client-wide for a handshake mismatch), and
 only recoverable and transport-level conditions retry, on transports that can
 discard a failed connection.
 
-`SpaceSession.subscribeAccessLoss` also delivers an authoritative
-`AuthorizationError` immediately when an established session loses access. An
-`unauthorized` revocation carries that error. A `taken-over` revocation closes
-with `SessionRevokedError` and does not emit access loss. Normal close,
-disconnect, protocol failure, and a recoverable challenge race do not emit it
-either. A late subscriber receives the retained authorization verdict until the
-session is replaced successfully.
+`SpaceSession.subscribeTermination` delivers the error that ends an established
+session immediately, and the runner's replica reports it as access loss when it
+is a permanent (non-retriable) `AuthorizationError`. An `unauthorized` revocation carries
+that error. A `taken-over` revocation closes with `SessionRevokedError`, which
+is a termination but not access loss. A recoverable challenge race that ends the
+session is likewise not access loss. Normal close and an ordinary disconnect do
+not terminate the session. A late subscriber receives the retained error until
+the session is replaced successfully.
 
 `StorageManager.subscribeSpaceAccessChange` observes both a new authoritative
 denial and its clearance after a successful authorized reopen. Renderers use
@@ -119,8 +120,9 @@ The storage provider exposes `subscribeSpaceAccessLoss` and `spaceAccessError`
 for consumers of already-rendered cells. An authoritative session loss updates
 the affected space immediately, without waiting for another document watch. An
 explicit successful session replacement after a new grant clears the old
-verdict. The runtime client forwards `spaceaccesslost` with the affected space;
-it does not send the server's diagnostic error text to the UI.
+verdict. The runtime client forwards `spaceaccesslost` with the affected space,
+and `spaceaccessrestored` with the space once a retry admits the principal
+again; it does not send the server's diagnostic error text to the UI.
 
 The worker renderer subscribes at cell boundaries. Revoking a foreign target
 removes that target's content and event handlers while retaining the authorized

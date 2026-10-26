@@ -4370,12 +4370,11 @@ Some operations (especially \`invoke()\` with patterns) create "Pages" - running
       tools: toolCatalog.llmTools,
     };
 
-  // TODO(bf): sendRequest must be given a callback, even if it does nothing
   const mappedLlmHost = runtime.mappedHostFor(space);
   const doWork = () =>
     client.sendRequest(
       llmParams,
-      () => {},
+      undefined,
       abortSignal,
       mappedLlmHost
         ? { endpoint: new URL("/api/ai/llm", mappedLlmHost) }

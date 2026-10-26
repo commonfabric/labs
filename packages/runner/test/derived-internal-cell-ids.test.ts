@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONValue } from "@commonfabric/api";
+import { deepFreeze } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -63,8 +64,8 @@ describe("derived-internal-cell-ids", () => {
         ["a number", 3],
         ["a boolean", true],
         ["`null`", null],
-        ["an object", { $generated: 2 }],
-        ["an array", ["a", 1]],
+        ["an object", deepFreeze({ $generated: 2 })],
+        ["an array", deepFreeze(["a", 1])],
       ];
       for (const [kind, partialCause] of causes) {
         it(`returns it for a partial cause that is ${kind}`, () => {
@@ -122,7 +123,7 @@ describe("derived-internal-cell-ids", () => {
 
     it("returns the id of each result cell for one partial cause", () => {
       const { ids, mints } = counted();
-      const partialCause = { $generated: 1 };
+      const partialCause = deepFreeze({ $generated: 1 });
 
       expect(ids.idFor(first, partialCause).toString()).toBe(
         derived(first, partialCause),
@@ -160,34 +161,68 @@ describe("derived-internal-cell-ids", () => {
       expect(mints()).toBe(2);
     });
 
-    it("hashes each time for a partial cause that is not deep-frozen, and returns the id of its content at the time", () => {
-      // An object that can change names whatever it holds when asked, so no
-      // id is kept for it.
-
+    it("throws for a partial cause that is an object but not deep-frozen", () => {
       const { ids, mints } = counted();
-      const partialCause = { $generated: 1, name: ["a"] };
-      const before = ids.idFor(first, partialCause);
-      const again = ids.idFor(first, partialCause);
-      partialCause.$generated = 2;
-      const after = ids.idFor(first, partialCause);
 
-      expect(before.toString()).toBe(
-        derived(first, { $generated: 1, name: ["a"] }),
+      expect(() => ids.idFor(first, { $generated: 1 })).toThrow(
+        "not deep-frozen",
       );
-      expect(again.toString()).toBe(before.toString());
-      expect(after.toString()).toBe(
-        derived(first, { $generated: 2, name: ["a"] }),
-      );
-      expect(mints()).toBe(3);
+      expect(() => ids.idFor(first, ["a", 1])).toThrow("not deep-frozen");
+      expect(mints()).toBe(0);
     });
 
-    it("hashes each time for a frozen partial cause that holds an object that is not", () => {
+    it("throws for a frozen partial cause that holds an object that is not", () => {
       const { ids, mints } = counted();
       const partialCause = Object.freeze({ $generated: 1, name: ["a"] });
-      ids.idFor(first, partialCause);
-      ids.idFor(first, partialCause);
 
-      expect(mints()).toBe(2);
+      expect(() => ids.idFor(first, partialCause)).toThrow("not deep-frozen");
+      expect(mints()).toBe(0);
+    });
+
+    it("returns ids that differ for `{ n: 0 }` and `{ n: -0 }`, each as derived", () => {
+      const { ids } = counted();
+      const zero = ids.idFor(first, deepFreeze({ n: 0 })).toString();
+      const negativeZero = ids.idFor(first, deepFreeze({ n: -0 })).toString();
+
+      expect(zero).toBe(derived(first, { n: 0 }));
+      expect(negativeZero).toBe(derived(first, { n: -0 }));
+      expect(zero).not.toBe(negativeZero);
+    });
+
+    it("returns ids that differ for an array holding a hole, one holding `undefined` and one holding `null`, each as derived", () => {
+      const { ids } = counted();
+      const hole = deepFreeze([1, , 3]) as JSONValue;
+      const holdingUndefined = deepFreeze(
+        [1, undefined, 3],
+      ) as unknown as JSONValue;
+      const holdingNull = deepFreeze([1, null, 3]);
+      const found = [hole, holdingUndefined, holdingNull].map((partialCause) =>
+        ids.idFor(first, partialCause).toString()
+      );
+
+      expect(found).toEqual(
+        [hole, holdingUndefined, holdingNull].map((partialCause) =>
+          derived(first, partialCause)
+        ),
+      );
+      expect(new Set(found).size).toBe(3);
+    });
+
+    it("returns ids that differ for a partial cause holding one object twice and one holding two equal objects, each as derived", () => {
+      // `createRef()` derives an object it reaches a second time as `null`,
+      // so where a cause holds the same object twice its content alone does
+      // not say what the id was derived from.
+
+      const { ids } = counted();
+      const shared = { name: "a" };
+      const twice = deepFreeze({ x: shared, y: shared });
+      const equal = deepFreeze({ x: { name: "a" }, y: { name: "a" } });
+      const twiceId = ids.idFor(first, twice).toString();
+      const equalId = ids.idFor(first, equal).toString();
+
+      expect(twiceId).toBe(derived(first, twice));
+      expect(equalId).toBe(derived(first, equal));
+      expect(twiceId).not.toBe(equalId);
     });
 
     it("hashes each time for a partial cause that is no JSON value", () => {

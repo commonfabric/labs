@@ -2490,10 +2490,15 @@ const storedMetadataFor = (
   id: URI,
   scope: ReturnType<typeof normalizeCellScope>,
   type: MediaType,
+  meta = INTERNAL_VERIFIER_META,
 ): CfcMetadata | undefined =>
-  readStoredCfcMetadata(tx, { space, id, scope, type }, {
-    meta: INTERNAL_VERIFIER_META,
-  });
+  readStoredCfcMetadata(tx, { space, id, scope, type }, { meta });
+
+// The same read for a consumer that is run again when what it consumed
+// changes (a sink): a verifier read still, so it adds no taint and the
+// collection below skips it, but one reactivity sees, so a write of a label
+// alone, the value left as it was, runs that consumer again.
+const SUBSCRIBED_ENVELOPE_META = internalVerifierRead;
 
 /** A source's projected view and the principal claims its root owns. */
 type LinkSourceProjection = {
@@ -10593,6 +10598,14 @@ type ConsumedReadAddress = Pick<
  */
 const collectConsumedLabelImpl = (
   tx: IExtendedStorageTransaction,
+  options: {
+    /**
+     * Read each consumed document's stored labels so that reactivity sees
+     * them: a consumer run again on what it read (a sink) is then run again
+     * when a label alone moves. Off, as the prepare pass reads them.
+     */
+    subscribe?: boolean;
+  } = {},
 ): {
   confidentiality: readonly CfcConfClause[];
   integrity: readonly CfcAtom[];
@@ -10674,7 +10687,14 @@ const collectConsumedLabelImpl = (
     const type = read.type ?? "application/json";
     const metadataKey = stringTupleKey([read.space, read.id, scope, type]);
     if (!labelIndexes.has(metadataKey)) {
-      const metadata = storedMetadataFor(tx, read.space, read.id, scope, type);
+      const metadata = storedMetadataFor(
+        tx,
+        read.space,
+        read.id,
+        scope,
+        type,
+        options.subscribe ? SUBSCRIBED_ENVELOPE_META : INTERNAL_VERIFIER_META,
+      );
       labelIndexes.set(
         metadataKey,
         metadata === undefined
@@ -14109,53 +14129,7 @@ export function* prepareBoundaryCommitSteps(
         envelopeRoot.rootDocument,
       );
     }
-    // A version-2 envelope stages a label document for every label above
-    // the inline limit into THIS transaction, so the commit carries what
-    // the envelope references (the write-side obligation the commit
-    // boundary enforces); the staging dedupes per transaction and elides
-    // documents the space's server already holds.
-    // The stored label map holds the payload entries and the document-rooted
-    // ones in one list; readers decode them apart again.
-    const storedEntries = [
-      ...metadata.labelMap.entries,
-      ...(metadata.labelMap.documentEntries ?? []),
-    ];
-    const stampPlacement = metadata.stampPlacement === undefined
-      ? {}
-      : { stampPlacement: metadata.stampPlacement };
-    const storedEnvelope: StoredCfcMetadata = metadata.version === 2
-      ? {
-        version: 2,
-        schemaHash: metadata.schemaHash,
-        labelMap: {
-          version: 1,
-          entries: storedLabelMapEntries(
-            storedEntries,
-            (content) =>
-              tx.stageContentAddressedDocument(
-                space,
-                content as unknown as FabricValue,
-              ),
-          ),
-        },
-        ...stampPlacement,
-      }
-      : {
-        version: 1,
-        schemaHash: metadata.schemaHash,
-        labelMap: { version: 1, entries: storedEntries },
-        ...stampPlacement,
-      };
-    tx.writeOrThrow({
-      space,
-      id,
-      scope,
-      type: "application/json",
-      path: ["cfc"],
-      // System-owned embedded metadata write. Boundary evaluation is driven by
-      // user-surface reads/writes plus explicit policy inputs, not by recursive
-      // attempted-target tracking of this internal metadata update.
-    }, storedEnvelope);
+    writeStoredCfcEnvelope(tx, { space, id, scope }, metadata);
     metadataResolver.didPrepare(key);
   }
   for (const reason of verifySinkRequestCeilings(tx)) reasons.push(reason);
@@ -14179,6 +14153,73 @@ export function* prepareBoundaryCommitSteps(
   return reasons;
 }
 
+/**
+ * Writes `metadata` as the envelope stored at the reserved `["cfc"]` member of
+ * `target`, in the stored spelling of its `version`. The schema document
+ * `metadata.schemaHash` names must already be in place or staged. Called
+ * inside the runtime's privileged persistence scope: the write is the
+ * runtime's own bookkeeping, and from outside that scope it is recorded as an
+ * unprivileged write to a protected surface.
+ */
+export const writeStoredCfcEnvelope = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  metadata: CfcMetadata,
+): void => {
+  const { space, id, scope } = target;
+  // A version-2 envelope stages a label document for every label above the
+  // inline limit into THIS transaction, so the commit carries what the
+  // envelope references (the write-side obligation the commit boundary
+  // enforces); the staging dedupes per transaction and elides documents the
+  // space's server already holds.
+  // The stored label map holds the payload entries and the document-rooted
+  // ones in one list; readers decode them apart again.
+  const storedEntries = [
+    ...metadata.labelMap.entries,
+    ...(metadata.labelMap.documentEntries ?? []),
+  ];
+  const stampPlacement = metadata.stampPlacement === undefined
+    ? {}
+    : { stampPlacement: metadata.stampPlacement };
+  const storedEnvelope: StoredCfcMetadata = metadata.version === 2
+    ? {
+      version: 2,
+      schemaHash: metadata.schemaHash,
+      labelMap: {
+        version: 1,
+        entries: storedLabelMapEntries(
+          storedEntries,
+          (content) =>
+            tx.stageContentAddressedDocument(
+              space,
+              content as unknown as FabricValue,
+            ),
+        ),
+      },
+      ...stampPlacement,
+    }
+    : {
+      version: 1,
+      schemaHash: metadata.schemaHash,
+      labelMap: { version: 1, entries: storedEntries },
+      ...stampPlacement,
+    };
+  tx.writeOrThrow({
+    space,
+    id,
+    scope,
+    type: "application/json",
+    path: ["cfc"],
+    // System-owned embedded metadata write. Boundary evaluation is driven by
+    // user-surface reads/writes plus explicit policy inputs, not by recursive
+    // attempted-target tracking of this internal metadata update.
+  }, storedEnvelope);
+};
+
 const cfcLogger = getLogger("cfc", { enabled: false });
 
 /**
@@ -14198,10 +14239,13 @@ export const deriveFlowJoin: typeof deriveFlowJoinImpl = (tx, options) => {
 };
 
 /** Collects consumed labels and records its preparation span. */
-export const collectConsumedLabel: typeof collectConsumedLabelImpl = (tx) => {
+export const collectConsumedLabel: typeof collectConsumedLabelImpl = (
+  tx,
+  options,
+) => {
   const started = performance.now();
   try {
-    return collectConsumedLabelImpl(tx);
+    return collectConsumedLabelImpl(tx, options);
   } finally {
     cfcLogger.time(started, "collectConsumedLabel");
   }

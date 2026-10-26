@@ -50,6 +50,7 @@ import { findSectionPassage, rankSections } from "../docs-corpus/sections.ts";
 import { errorMessage } from "../error-message.ts";
 import { inputCellsContextMessage } from "../input-cells.ts";
 import { orientationGuidance } from "../orientation.ts";
+import { DEFAULT_HARNESS_RUN_DEPTH } from "../contracts/run-depth.ts";
 import { PATTERN_COMPOSITION_GUIDANCE } from "../pattern-authoring.ts";
 import { PIECE_TARGETING_GUIDANCE } from "../piece-targeting.ts";
 import type {
@@ -541,7 +542,12 @@ const systemPrompt = (
     "This is CF documentation, skills, pattern-index, source, dependency, and handle research; it is not web research.",
     PIECE_TARGETING_GUIDANCE,
     PATTERN_COMPOSITION_GUIDANCE,
-    ...(purpose === "orient" ? [orientationGuidance({ patternIndex })] : []),
+    ...(purpose === "orient"
+      ? [orientationGuidance({
+        patternIndex,
+        shape: { depth: DEFAULT_HARNESS_RUN_DEPTH },
+      })]
+      : []),
     "Search for the next unresolved fact. Search results are leads, not proof of applicability. Read exact evidence only when it changes the decision; do not keep searching after the question is answered.",
     "A long section or source file is never represented by its first chunk alone. Follow nextOffset with another exact read whenever the needed answer could continue later.",
     "Use the pattern index and available data to find a short path to the goal. Prefer composing suitable existing pieces; describe the smallest missing reusable capability when authoring is needed. If the approach becomes large or tangled, reconsider the component boundaries and data contracts before expanding it. One source file per component does not mean one component for the entire goal.",

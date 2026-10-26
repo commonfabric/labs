@@ -26,7 +26,7 @@ import {
   type RenderLabelSummary,
   type RenderPolicy,
 } from "@commonfabric/html/worker";
-import type { FabricValue } from "@commonfabric/data-model";
+import { fabricAwareEqual, type FabricValue } from "@commonfabric/data-model";
 import { isPlainObject } from "@commonfabric/utils/types";
 import {
   type Cancel,
@@ -218,10 +218,14 @@ export class HostReadGate {
   /**
    * Subscribes a host to `cell`, delivering each read as a cell update for
    * `ref`: its value, or the refusal that stands in its place, decided again
-   * whenever the membership or a module policy its labels name changes. Each
-   * change to a refused read delivers a refusal of its own, so a host that
-   * listens only for change still hears one. `inspect` sees each value as it
-   * was read, before conversion.
+   * whenever the membership or a module policy its labels name changes. A
+   * read that finds the value and label the last update delivered sends
+   * nothing: the host holds them already, and a change elsewhere in what the
+   * read depends on is no change to it. Each change to a refused read
+   * delivers a refusal of its own, so a host that listens only for change
+   * still hears one, and the first value admitted after a refusal is
+   * delivered whatever it holds. `inspect` sees each value as it was read,
+   * before conversion.
    *
    * A stream holds no value: its sink delivers the events sent to it, which
    * no read consumed, so an event is decided on the labels of the stream's
@@ -235,22 +239,54 @@ export class HostReadGate {
     deliver: (update: CellUpdateNotification) => void,
   ): Cancel {
     const includeCfcLabel = options.includeCfcLabel === true;
-    const update = (value: FabricValue, cfcLabel: CfcLabelView | undefined) =>
-      decided({
+    // Sends `value` with `label`, the display form of a label view.
+    const sendUpdate = (
+      value: FabricValue,
+      label: CfcLabelView | undefined,
+    ): void =>
+      deliver(decided({
         type: NotificationType.CellUpdate as const,
         cell: ref,
         value,
-        ...(includeCfcLabel ? { cfcLabel: displayLabel(cfcLabel) } : {}),
-      });
+        ...(includeCfcLabel ? { cfcLabel: label } : {}),
+      }));
+    // What the last update delivered, or `undefined` while none has, and
+    // again after a refusal.
+    let sent:
+      | { value: FabricValue; cfcLabel: CfcLabelView | undefined }
+      | undefined;
+    const deliverValue = (
+      value: FabricValue,
+      cfcLabel: CfcLabelView | undefined,
+    ): void => {
+      const label = includeCfcLabel ? displayLabel(cfcLabel) : undefined;
+      if (
+        sent !== undefined && fabricAwareEqual(sent.value, value) &&
+        fabricAwareEqual(sent.cfcLabel, label)
+      ) {
+        return;
+      }
+      sent = { value, cfcLabel: label };
+      sendUpdate(value, label);
+    };
+    // An event is an occurrence, and two alike are two: each is sent as it
+    // comes, compared with nothing.
+    const deliverEvent = (
+      event: FabricValue,
+      cfcLabel: CfcLabelView | undefined,
+    ): void =>
+      sendUpdate(event, includeCfcLabel ? displayLabel(cfcLabel) : undefined);
     const policy = this.#policy;
     if (policy === undefined) {
+      const send = holdsEvents(cell) ? deliverEvent : deliverValue;
       return cell.sink((value, cfcLabel) => {
         inspect(value);
-        deliver(update(hostValueOf(value), cfcLabel));
+        send(hostValueOf(value), cfcLabel);
       }, { includeCfcLabel });
     }
     const refusedUpdate = (refusal: RenderLabelSummary) => {
       this.#report(refusal, policy);
+      sent = undefined;
       return decided({
         type: NotificationType.CellUpdate as const,
         cell: ref,
@@ -268,16 +304,20 @@ export class HostReadGate {
         );
         deliver(
           refusal === undefined
-            ? update(
-              hostValueOf(event),
+            ? decided({
+              type: NotificationType.CellUpdate as const,
+              cell: ref,
+              value: hostValueOf(event),
               // An event carries the label of the stream's document, which
               // the decision above was made on.
-              includeCfcLabel
-                ? cfcLabelViewForResolvedCell(cell, {
-                  kickCrossSpaceTargets: false,
-                })
-                : undefined,
-            )
+              ...(includeCfcLabel
+                ? {
+                  cfcLabel: displayLabel(cfcLabelViewForResolvedCell(cell, {
+                    kickCrossSpaceTargets: false,
+                  })),
+                }
+                : {}),
+            })
             : refusedUpdate(refusal),
         );
       });
@@ -296,11 +336,8 @@ export class HostReadGate {
         this.#sources,
         watch,
       );
-      deliver(
-        refusal === undefined
-          ? update(last.value, last.cfcLabel)
-          : refusedUpdate(refusal),
-      );
+      if (refusal === undefined) deliverValue(last.value, last.cfcLabel);
+      else deliver(refusedUpdate(refusal));
     };
     const watch: FitWatch = {
       watched: new Set<string>(),

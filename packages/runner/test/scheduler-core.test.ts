@@ -24,6 +24,7 @@ import type {
 } from "./scheduler-test-utils.ts";
 import { getDirectTransactionReactivityLog } from "../src/storage/transaction-inspection.ts";
 import { PASS_RUN_BUDGET } from "../src/scheduler/constants.ts";
+import { entityKey } from "../src/scheduler/keys.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
@@ -580,6 +581,41 @@ describe("scheduler", () => {
     await c.pull();
     expect(runCount).toBe(2);
     expect(c.get()).toBe(4);
+  });
+
+  it("reports a document as read while a subscribed action reads it", async () => {
+    const read = runtime.getCell<number>(
+      space,
+      "reads entity 1",
+      undefined,
+      tx,
+    );
+    read.set(1);
+    const unread = runtime.getCell<number>(
+      space,
+      "reads entity 2",
+      undefined,
+      tx,
+    );
+    unread.set(2);
+    tx.commit();
+    tx = runtime.edit();
+    const entityOf = (cell: typeof read) =>
+      entityKey(cell.getAsNormalizedFullLink(), runtime.scopeKeyIdentity);
+    const reader: Action = (tx) => {
+      read.withTx(tx).get();
+    };
+    runtime.scheduler.subscribe(reader, {
+      reads: [],
+      shallowReads: [],
+      writes: [],
+    }, { isEffect: true });
+    await runtime.idle();
+    expect(runtime.scheduler.readsEntity(entityOf(read))).toBe(true);
+    expect(runtime.scheduler.readsEntity(entityOf(unread))).toBe(false);
+
+    runtime.scheduler.unsubscribe(reader);
+    expect(runtime.scheduler.readsEntity(entityOf(read))).toBe(false);
   });
 
   it("scheduler should return a cancel function", async () => {

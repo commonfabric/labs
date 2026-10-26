@@ -26,7 +26,9 @@
  * Home's one answer for its profile. A request for a profile pointed elsewhere
  * reads `not-held`, one for a profile without `setInbox` `unpointable`, one to
  * a Home with no profiles `unlisted`, and one to a Home without the stream
- * sends nothing.
+ * sends nothing. Two runtimes of the owner's each point one profile at an
+ * inbox of their own, only while it points at none, with both sends in
+ * flight at once, and the profile keeps the one the server admits first.
  *
  * The inbox's space grants every principal `WRITE` in both server-execution
  * postures: the serving loop makes a sender's write where server execution is
@@ -39,7 +41,6 @@ import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { aclDocId } from "@commonfabric/memory/acl";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -216,6 +217,26 @@ describe("private inbox across runtimes", () => {
     return ((await owner.rawRead(address)).value as { value?: unknown }).value;
   };
 
+  /** The entries of the stream sidecar `id` in `space`, as stored. */
+  const streamEntries = async (
+    space: string,
+    id: string,
+  ): Promise<Record<string, unknown>[]> => {
+    const address = { id, space };
+    await owner.client().call("readAddress", {
+      link: { ...address, path: [], type: "application/json" },
+    });
+    const stored = (await owner.rawRead(address)).value as
+      | { value?: { entries?: Record<string, unknown>[] } }
+      | undefined;
+    return stored?.value?.entries ?? [];
+  };
+
+  /** Whether the drain has finished with a stream entry, however it ended. */
+  const terminal = (entry: Record<string, unknown>): boolean =>
+    entry.consequenced === true || entry.error !== undefined ||
+    entry.status !== undefined;
+
   /** The offers the owner reads in `piece`, the private inbox by default. */
   const ownerOffers = async (
     piece: PieceAddress = inbox,
@@ -224,14 +245,14 @@ describe("private inbox across runtimes", () => {
 
   /**
    * How many commits the CFC write gate has refused, in the sender's runtime
-   * and in this process, where the serving loop runs. The gate counts each
+   * and where the serving loop runs. The gate counts each
    * refusal whatever the log level shows.
    */
   const refusals = async (
     from: MultiRuntimeSession = sender,
   ): Promise<number> =>
     writeRefusals(await from.loggerCounts()) +
-    writeRefusals(getLoggerCountsBreakdown());
+    writeRefusals((await harness.servingDiagnostics()).loggerCounts);
 
   /**
    * Has `from`'s own handler send an offer, keyed `id`, through a profile, by
@@ -335,6 +356,67 @@ describe("private inbox across runtimes", () => {
     await harness.settle();
     const refusalsAfter = await adoptionRefusals();
     return { refusal, refusalsBefore, refusalsAfter };
+  });
+
+  /**
+   * `racingHome`: one profile, which the owner's runtime points at the
+   * loom-shaped inbox, only while it points at none. Once that send's
+   * consequence has arrived back and both runtimes have caught up, a second
+   * runtime of the owner's points it at the other inbox, again only while it
+   * points at none. Returns the inbox the profile pointed at after the first
+   * send, and the inbox each runtime reads it pointing at once the second
+   * send's `setInbox` has run.
+   */
+  const racing = once(async () => {
+    const ownerAgain = await harness.addSession({
+      label: "private-inbox-owner-again",
+      identity: owner.identity,
+    });
+    await owner.send("createRacingProfile");
+    await harness.settle();
+    const held = ["racingHome", "profiles", 0, "inbox", "piece"];
+    const pointer = await owner.link(["racingHome", "profiles", 0, "inbox"]);
+    const admitted = await harness.admittedCommitsDuring(async () => {
+      await owner.send("pointRacingProfileAtLoomIfUnset", { index: 0 });
+      await owner.awaitEventConsequences();
+      await harness.settleUntil(async () =>
+        await pointed(["racingHome", "profiles", 0])
+      );
+    });
+    const first = await owner.link(held);
+    // With server execution on, each send reaches the profile's `setInbox`
+    // as an entry in that stream's sidecar, appended by a commit in the
+    // profile's space. The second send's expected outcome is no change, so
+    // what says it has run is its entry's terminal mark, not the pointer.
+    const sidecars = new Set(
+      admitted.filter((commit) => commit.space === pointer.space)
+        .flatMap((commit) => commit.eventAppends ?? [])
+        .map((append) => append.id),
+    );
+    await ownerAgain.send("pointRacingProfileAtOtherIfUnset", { index: 0 });
+    await ownerAgain.awaitEventConsequences();
+    if (SERVER_EXECUTION) {
+      expect(sidecars.size).toBe(1);
+      const [sidecar] = sidecars;
+      let entries: Record<string, unknown>[] = [];
+      await harness.settleUntil(async () => {
+        entries = await streamEntries(pointer.space, sidecar);
+        return entries.length === 2 && entries.every(terminal);
+      });
+      // A handler that threw, or an entry that was dropped, also leaves the
+      // pointer as it was, so each entry has to have run to completion.
+      expect(
+        entries.filter((entry) =>
+          entry.error !== undefined || entry.status !== undefined
+        ),
+      ).toEqual([]);
+    }
+    await harness.settle();
+    return {
+      first,
+      ownerReads: await owner.link(held),
+      ownerAgainReads: await ownerAgain.link(held),
+    };
   });
 
   /**
@@ -961,6 +1043,21 @@ describe("private inbox across runtimes", () => {
     ).toEqual([]);
   });
 
+  it("keeps a profile's pointer when a second runtime of the owner's points it only while unset after the first has set it", async () => {
+    // The second send's `setInbox` runs after the first one's consequence has
+    // arrived back, so it reads the pointer the first one set, whichever
+    // runtime runs it. With server execution on, the event reaches the
+    // profile's space through the serving loop's outbox, and keeps its
+    // `replacing: undefined` only if that delivery does.
+
+    const { first, ownerReads, ownerAgainReads } = await racing();
+
+    const loom = await owner.link(["loomInbox", "piece"]);
+    expect(first.id).toBe(loom.id);
+    expect(ownerReads.id).toBe(loom.id);
+    expect(ownerAgainReads.id).toBe(loom.id);
+  });
+
   it("creates no inbox while a profile whose pointer it cannot read advertises one", async () => {
     // The profile keeps its pointer per user in a space of its own. With
     // server execution on, the Home's serving runtime refuses to read that
@@ -1160,12 +1257,15 @@ describe("private inbox across runtimes", () => {
   }, async () => {
     await offer("private");
 
-    const refusedBefore = writeRefusals(getLoggerCountsBreakdown());
+    const refusedBefore = writeRefusals(
+      (await harness.servingDiagnostics()).loggerCounts,
+    );
     await stranger.send("copyOffers");
     await harness.settle();
-    expect(writeRefusals(getLoggerCountsBreakdown())).toBeGreaterThan(
-      refusedBefore,
-    );
+    expect(writeRefusals((await harness.servingDiagnostics()).loggerCounts))
+      .toBeGreaterThan(
+        refusedBefore,
+      );
     expect(await stranger.read(["copiedOffers"])).toEqual([]);
   });
 

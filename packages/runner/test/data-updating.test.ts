@@ -34,7 +34,12 @@ import { Runtime } from "../src/runtime.ts";
 import { resolveSchema } from "../src/schema.ts";
 import { decomposeSchema } from "../src/schema-decompose.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
+import type { URI } from "../src/sigil-types.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import {
+  isLinkResolutionProbe,
+  isWriteDestinationRead,
+} from "../src/storage/reactivity-log.ts";
 import { getTransactionWriteDetails } from "../src/storage/transaction-inspection.ts";
 import { toURI } from "../src/uri-utils.ts";
 
@@ -1262,6 +1267,397 @@ describe("data-updating", () => {
     // Verify neither source nor destination cells were modified
     expect(sourceCell.get()).toEqual({ value: 99 });
     expect(destinationCell.get()).toEqual({ value: 42 });
+  });
+
+  describe("a link written into the slot it resolves to", () => {
+    // A slot whose content is realized at a narrower scope holds a
+    // same-document link to that instance: a write redirect, or the plain
+    // link scope narrowing stores, which for a session declaration reaches
+    // the session instance through the user instance. A link to the broader
+    // slot written into the instance it realizes at would point that
+    // instance back at the slot that points at it, and every later read
+    // would meet a link cycle.
+
+    const redirectTo = (
+      id: URI,
+      scope: "space" | "user",
+      path: string[] = [],
+    ) => ({
+      "/": { "link@1": { id, overwrite: "redirect", path, scope } },
+    });
+
+    const linkTo = (scope: "user" | "session") => ({
+      "/": { "link@1": { path: [], scope } },
+    });
+
+    const slot = (
+      id: URI,
+      scope: "space" | "user" | "session",
+      path: string[] = [],
+    ) =>
+      runtime.getCellFromLink(
+        { space, id, path, scope },
+        undefined,
+        tx,
+      );
+
+    // Stores `{ a: "hello" }` behind a target id. `"redirect"` puts it at the
+    // user instance, with the space slot redirecting there; `"link"` does the
+    // same with a plain link; `"chain"` puts it at the session instance, with
+    // the space slot linking to the user instance and that to the session
+    // instance, the shape a session declaration on a space slot stores;
+    // `"none"` puts it at the space slot itself.
+    const target = (
+      cause: string,
+      realization: "redirect" | "link" | "chain" | "none",
+    ) => {
+      const id = runtime.getCell(space, cause, undefined, tx)
+        .getAsNormalizedFullLink().id;
+      switch (realization) {
+        case "redirect":
+          slot(id, "user").setRaw({ a: "hello" });
+          slot(id, "space").setRaw({
+            "/": {
+              "link@1": { overwrite: "redirect", path: [], scope: "user" },
+            },
+          });
+          break;
+        case "link":
+          slot(id, "user").setRaw({ a: "hello" });
+          slot(id, "space").setRaw(linkTo("user"));
+          break;
+        case "chain":
+          slot(id, "session").setRaw({ a: "hello" });
+          slot(id, "user").setRaw(linkTo("session"));
+          slot(id, "space").setRaw({
+            "/": {
+              "link@1": {
+                path: [],
+                scope: "user",
+                scopeInitialization: "session",
+              },
+            },
+          });
+          break;
+        case "none":
+          slot(id, "space").setRaw({ a: "hello" });
+          break;
+      }
+      return id;
+    };
+
+    it("writes nothing for a link to the space slot realized at this user instance", () => {
+      const id = target("self link realized at user", "redirect");
+
+      const changes = normalizeAndDiff(
+        runtime,
+        tx,
+        slot(id, "user").getAsNormalizedFullLink(),
+        redirectTo(id, "space"),
+      );
+
+      expect(changes).toEqual([]);
+    });
+
+    it("writes nothing for a link to the space slot realized at this user instance by a plain link", () => {
+      const id = target("self link linked to user", "link");
+
+      const changes = normalizeAndDiff(
+        runtime,
+        tx,
+        slot(id, "user").getAsNormalizedFullLink(),
+        redirectTo(id, "space"),
+      );
+
+      expect(changes).toEqual([]);
+    });
+
+    it("writes nothing for a link to the space slot realized at this session instance through the user instance", () => {
+      const id = target("self link chained to session", "chain");
+
+      const changes = normalizeAndDiff(
+        runtime,
+        tx,
+        slot(id, "session").getAsNormalizedFullLink(),
+        redirectTo(id, "space"),
+      );
+
+      expect(changes).toEqual([]);
+    });
+
+    it("writes nothing for a link to the user slot realized at this session instance", () => {
+      const id = target("user self link chained to session", "chain");
+
+      const changes = normalizeAndDiff(
+        runtime,
+        tx,
+        slot(id, "session").getAsNormalizedFullLink(),
+        redirectTo(id, "user"),
+      );
+
+      expect(changes).toEqual([]);
+    });
+
+    it("writes nothing for a link to a child of the space slot realized at this user instance from the root", () => {
+      // The redirect sits at the space slot's root and hands over the whole
+      // subtree, so the space slot's `a` is realized at the user instance's.
+      const id = target("child self link realized at user", "redirect");
+
+      const changes = normalizeAndDiff(
+        runtime,
+        tx,
+        slot(id, "user", ["a"]).getAsNormalizedFullLink(),
+        redirectTo(id, "space", ["a"]),
+      );
+
+      expect(changes).toEqual([]);
+    });
+
+    it("keeps content realized through a scope-declaring schema when its user instance is set to a link to the space slot", async () => {
+      // The realization here is the one scope narrowing stores when content
+      // is written through a schema declaring `scope: "user"`.
+      const id = runtime.getCell(
+        space,
+        "self link realized by schema",
+        undefined,
+        tx,
+      ).getAsNormalizedFullLink().id;
+      diffAndUpdate(runtime, tx, {
+        space,
+        id,
+        path: [],
+        scope: "space",
+        schema: { type: "object", scope: "user" },
+      }, { a: "hello" });
+
+      slot(id, "user").set(redirectTo(id, "space"));
+      expect((await tx.commit().settled).error).toBeUndefined();
+      tx = runtime.edit();
+
+      expect(slot(id, "user").getRaw()).toEqual({ a: "hello" });
+      expect(slot(id, "space").get()).toEqual({ a: "hello" });
+    });
+
+    it("journals its reads of the realizing slots as link probes, not as write-destination reads", async () => {
+      // Those slots are not the region the write lands in, so what the guard
+      // reads there is which reference sits at each one.
+      const id = target("realization reads chained to session", "chain");
+      await tx.commit().settled;
+      tx = runtime.edit();
+
+      const changes = normalizeAndDiff(
+        runtime,
+        tx,
+        slot(id, "session", ["a"]).getAsNormalizedFullLink(),
+        redirectTo(id, "space", ["a"]),
+      );
+
+      expect(changes).toEqual([]);
+      const reads = [...tx.getReadActivities!()].filter((read) =>
+        read.id === id && read.scope !== "session"
+      );
+      expect(reads.length).toBeGreaterThan(0);
+      expect(
+        reads.filter((read) =>
+          !isLinkResolutionProbe(read.meta) || isWriteDestinationRead(read.meta)
+        ),
+      ).toEqual([]);
+    });
+
+    it("writes a link to the space slot of a document whose content is at that slot", () => {
+      // Not a realization: the space slot holds content, so a link from the
+      // user instance to it reaches content and closes no cycle.
+      const id = target("self link not realized", "none");
+
+      const changes = normalizeAndDiff(
+        runtime,
+        tx,
+        slot(id, "user").getAsNormalizedFullLink(),
+        redirectTo(id, "space"),
+      );
+
+      expect(changes.length).toBe(1);
+    });
+
+    it("keeps a realized target's content when an argument document is set to the redirect it holds", () => {
+      // `Cell.set()` follows the argument document's stored redirect to the
+      // target's user instance before it diffs, as the runner's argument
+      // write does when a nested piece's code changes under a live session.
+      const id = target("argument re-set realized at user", "redirect");
+      const argumentId = runtime.getCell(
+        space,
+        "argument re-set argument",
+        undefined,
+        tx,
+      ).getAsNormalizedFullLink().id;
+      slot(argumentId, "session").setRaw(redirectTo(id, "space"));
+
+      slot(argumentId, "session").set(redirectTo(id, "space"));
+
+      expect(slot(argumentId, "session").getRaw()).toEqual(
+        redirectTo(id, "space"),
+      );
+      expect(slot(id, "user").getRaw()).toEqual({ a: "hello" });
+      expect(slot(argumentId, "session").get()).toEqual({ a: "hello" });
+    });
+  });
+
+  describe("a walk that replaces bindings", () => {
+    // A piece's setup writes its argument document's bindings: a write
+    // redirect stored there names a cell the caller owns, and setup writes
+    // none of that cell. A same-document redirect to another scope's instance
+    // is the position itself, realized at that scope.
+
+    const slot = (id: URI, scope: "space" | "user" | "session") =>
+      runtime.getCellFromLink(
+        { space, id, path: [], scope },
+        undefined,
+        tx,
+      );
+
+    const idFor = (cause: string) =>
+      runtime.getCell(space, cause, undefined, tx).getAsNormalizedFullLink()
+        .id;
+
+    it("replaces a redirect to another document and leaves that document as it was", () => {
+      const bound = idFor("binding walk bound cell");
+      const argument = idFor("binding walk argument");
+      slot(bound, "space").setRaw({ a: "bound" });
+      slot(argument, "space").setRaw({
+        "/": {
+          "link@1": {
+            id: bound,
+            overwrite: "redirect",
+            path: [],
+            scope: "space",
+          },
+        },
+      });
+
+      diffAndUpdate(
+        runtime,
+        tx,
+        slot(argument, "space").getAsNormalizedFullLink(),
+        { a: "supplied" },
+        undefined,
+        { replacesBindings: true },
+      );
+
+      expect(slot(argument, "space").getRaw()).toEqual({ a: "supplied" });
+      expect(slot(bound, "space").getRaw()).toEqual({ a: "bound" });
+    });
+
+    it("replaces a redirect to another document's user instance and leaves that instance as it was", () => {
+      const bound = idFor("binding walk per-user bound cell");
+      const argument = idFor("binding walk per-user argument");
+      slot(bound, "user").setRaw({ a: "bound" });
+      slot(argument, "space").setRaw({
+        "/": {
+          "link@1": {
+            id: bound,
+            overwrite: "redirect",
+            path: [],
+            scope: "user",
+          },
+        },
+      });
+
+      diffAndUpdate(
+        runtime,
+        tx,
+        slot(argument, "space").getAsNormalizedFullLink(),
+        { a: "supplied" },
+        undefined,
+        { replacesBindings: true },
+      );
+
+      expect(slot(argument, "space").getRaw()).toEqual({ a: "supplied" });
+      expect(slot(bound, "user").getRaw()).toEqual({ a: "bound" });
+    });
+
+    it("replaces a redirect to its own position's space instance and leaves that instance as it was", () => {
+      // A narrower instance redirecting to a broader one is no realization:
+      // the broader instance is shared, and setup content written through
+      // the redirect would land there for every reader.
+      const argument = idFor("binding walk broader-scope argument");
+      slot(argument, "space").setRaw({ a: "shared" });
+      slot(argument, "session").setRaw({
+        "/": { "link@1": { overwrite: "redirect", path: [], scope: "space" } },
+      });
+
+      diffAndUpdate(
+        runtime,
+        tx,
+        slot(argument, "session").getAsNormalizedFullLink(),
+        { a: "supplied" },
+        undefined,
+        { replacesBindings: true },
+      );
+
+      expect(slot(argument, "session").getRaw()).toEqual({ a: "supplied" });
+      expect(slot(argument, "space").getRaw()).toEqual({ a: "shared" });
+    });
+
+    it("replaces the binding held by its own narrower instance", async () => {
+      // The realization hop is the position itself; the redirect its narrower
+      // instance holds is a binding like any other.
+      const bound = idFor("binding walk chained binding target");
+      const argument = idFor("binding walk chained argument");
+      slot(bound, "user").setRaw({ a: "bound" });
+      slot(argument, "user").setRaw({
+        "/": {
+          "link@1": {
+            id: bound,
+            overwrite: "redirect",
+            path: [],
+            scope: "user",
+          },
+        },
+      });
+      slot(argument, "space").setRaw({
+        "/": { "link@1": { overwrite: "redirect", path: [], scope: "user" } },
+      });
+
+      diffAndUpdate(
+        runtime,
+        tx,
+        slot(argument, "space").getAsNormalizedFullLink(),
+        { a: "supplied" },
+        undefined,
+        { replacesBindings: true },
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      tx = runtime.edit();
+
+      expect(slot(bound, "user").getRaw()).toEqual({ a: "bound" });
+      expect(slot(argument, "user").getRaw()).toEqual({ a: "supplied" });
+    });
+
+    it("writes through a redirect to its own position's user instance", () => {
+      const argument = idFor("binding walk realized argument");
+      slot(argument, "user").setRaw({ a: "mine" });
+      slot(argument, "space").setRaw({
+        "/": { "link@1": { overwrite: "redirect", path: [], scope: "user" } },
+      });
+
+      diffAndUpdate(
+        runtime,
+        tx,
+        slot(argument, "space").getAsNormalizedFullLink(),
+        { a: "supplied" },
+        undefined,
+        { replacesBindings: true },
+      );
+
+      expect(
+        slot(argument, "user").getRaw(),
+        "the content landed at the shared space slot, over the redirect to " +
+          "the user instance that holds it",
+      ).toEqual({ a: "supplied" });
+      expect(slot(argument, "space").getRaw()).toEqual({
+        "/": { "link@1": { overwrite: "redirect", path: [], scope: "user" } },
+      });
+    });
   });
 
   describe("authoritative container re-assert in normalizeAndDiff", () => {

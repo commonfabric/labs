@@ -363,21 +363,26 @@ export function moduleDelegationsFromDocs(
  * transformer pipeline or SES verifier that alters emitted bytes (the source
  * set, keyed by content identity alone, persists across the change).
  *
- * The value is generated from a hash of the compiler inputs defined in
- * `compiler-fingerprint.deno.ts`. Editing those inputs moves the tag and
- * invalidates stale compiled docs. Deno source runs resolve the checked-in
- * source marker to that hash at runtime. Runtimes without repository file access
- * skip the compiled cache until a binary build bakes the hash into
- * `compile-cache-version.ts`. See `getCompileCacheRuntimeVersion()` and
- * `compiler-fingerprint.deno.ts`.
+ * A built artifact carries a version that is a hash of what its compiler
+ * emits for a fixed corpus (`compile-cache-output-version.deno.ts`), baked in
+ * at build time: a compiler change that compiles the corpus to the same
+ * documents keeps the tag, and one that changes any of them (a body, a stored
+ * field, an import edge), or an epoch bump, moves it. A Deno source run
+ * resolves the checked-in source marker instead: to the output version its
+ * tree has recorded for itself, while that memo still matches the tree, and
+ * otherwise to a hash of the compiler inputs, which moves on any edit to them
+ * (`compile-cache-output-memo.deno.ts`). Runtimes without repository file
+ * access skip the compiled cache until a build bakes a version into
+ * `compile-cache-version.ts` or defines one. See
+ * `getCompileCacheRuntimeVersion()`.
  */
 export {
   COMPILE_CACHE_RUNTIME_VERSION,
   SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
 } from "./compile-cache-version.ts";
 
-type CompilerFingerprintModule = {
-  computeCurrentCompilerVersion(): Promise<string>;
+type SourceCompileCacheVersionModule = {
+  computeCurrentSourceCompileCacheVersion(): Promise<string>;
 };
 
 type CompileCacheVersionGlobal = typeof globalThis & {
@@ -433,12 +438,12 @@ async function resolveCompileCacheRuntimeVersion(
     return undefined;
   }
   const specifier = new URL(
-    "./compiler-fingerprint.deno.ts",
+    "./compile-cache-output-memo.deno.ts",
     import.meta.url,
   ).href;
   try {
-    const module = await import(specifier) as CompilerFingerprintModule;
-    return await module.computeCurrentCompilerVersion();
+    const module = await import(specifier) as SourceCompileCacheVersionModule;
+    return await module.computeCurrentSourceCompileCacheVersion();
   } catch (error) {
     if (isUnavailableSourceFingerprint(error)) {
       return undefined;
@@ -499,7 +504,8 @@ export function compiledDocKey(
  * resolves a module's edges from its own source, not its stored links).
  * Explicit source-package roots use {@link SOURCE_ROOT_SPECIFIER} and attached
  * data files use {@link DATA_FILE_SPECIFIER} instead; both participate in the
- * entry module's identity.
+ * identity of the module whose document carries them, which is the entry for a
+ * root and the reading module for a data file its source names.
  */
 export const ROOT_LINK_SPECIFIER = "cf:cache-root/";
 

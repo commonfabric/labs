@@ -15,6 +15,7 @@ import {
   CellUpdateNotification,
   ClientNotificationType,
   ClientTransportNotificationType,
+  ConnectionRestoredNotification,
   ConsoleNotification,
   ErrorNotification,
   EventIntentOutcomeNotification,
@@ -33,6 +34,7 @@ import {
   PresenceUpdateNotification,
   RequestType,
   SpaceAccessLostNotification,
+  SpaceAccessRestoredNotification,
   TelemetryNotification,
   TransportNotificationType,
   VDomBatchNotification,
@@ -159,6 +161,8 @@ export function isIPCRemoteNotification(
     isPresenceUpdateNotification(value) ||
     isEventNeedsAttentionNotification(value) ||
     isSpaceAccessLostNotification(value) ||
+    isSpaceAccessRestoredNotification(value) ||
+    isConnectionRestoredNotification(value) ||
     isEventIntentOutcomeNotification(value);
 }
 
@@ -272,6 +276,22 @@ export function isSpaceAccessLostNotification(
 ): value is SpaceAccessLostNotification {
   return isObjectNotArray(value) &&
     value.type === NotificationType.SpaceAccessLost && isDID(value.space);
+}
+
+/** Recognizes a space-scoped notification that access was restored. */
+export function isSpaceAccessRestoredNotification(
+  value: unknown,
+): value is SpaceAccessRestoredNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.SpaceAccessRestored && isDID(value.space);
+}
+
+/** Recognizes a notification that a memory connection was restored. */
+export function isConnectionRestoredNotification(
+  value: unknown,
+): value is ConnectionRestoredNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.ConnectionRestored;
 }
 
 /**

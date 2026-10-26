@@ -1,7 +1,12 @@
-import type { SpaceAccessLevel } from "@commonfabric/api";
+import type {
+  DID,
+  SpaceAccessLevel,
+  SpaceGrantLevel,
+  SpaceMemberList,
+} from "@commonfabric/api";
 import { debugStr } from "@commonfabric/data-model";
-import { isWellFormedDID } from "@commonfabric/identity/did";
-import { type ACL, aclDocId } from "@commonfabric/memory/acl";
+import { isDID, isWellFormedDID } from "@commonfabric/identity/did";
+import { aclDocId, ANYONE_USER, isACL } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
 import { type Cell, unwrapCell } from "../cell.ts";
@@ -55,45 +60,17 @@ export function spaceAccess(
   // check below has a case to catch from untyped callers.
   ...args: [target?: unknown]
 ): SpaceAccessLevel | undefined {
-  const frame = topFrame();
-  const kind = frame?.frameKind;
-  if (kind !== "lift" && kind !== "handler") {
-    throw new Error(
-      "`spaceAccess(target)` can only be called from a handler or a reactive " +
-        "computation, where there is one principal to ask about.",
-    );
-  }
-  const { runtime, tx } = frame!;
-  if (runtime === undefined || tx === undefined) {
-    throw new Error("`spaceAccess(target)` requires an executing runtime.");
-  }
-  if (args.length === 0) {
-    throw new Error(
-      "`spaceAccess()` requires a `target`: a cell in the space to ask about.",
-    );
-  }
-  const [target] = args;
-
-  let principal: string | undefined;
-  if (kind === "lift") {
-    // The answer depends on who is asking, so the computation's value is a
-    // per-user one whatever the principal turns out to be. This goes first so
-    // that no return below skips it.
-    if (scopeRank(tx.getNarrowestReadScope()) < scopeRank("user")) {
-      tx.resetNarrowestReadScope("user");
-    }
-    principal = runtime.homeSpacePrincipalFor(tx);
-  } else {
-    principal = runtime.actingPrincipalFor(tx);
-  }
-
+  const { runtime, tx, target, principal, reactive } = ownCall(
+    "spaceAccess",
+    args,
+  );
   if (target === undefined) return undefined;
   return accessLevel(
     runtime,
     tx,
     spaceOfTarget(target, "spaceAccess(target)"),
     principal,
-    kind === "lift",
+    reactive,
     true,
   );
 }
@@ -155,6 +132,58 @@ export function spaceAccessOf(
     kind === "lift",
     false,
   );
+}
+
+/**
+ * Returns the principals the access list of the space `target`'s value lives
+ * in names, each with the level its entry grants, and the list's `*` entry
+ * apart, as `anyone`: so that a pattern can list a space's members. The
+ * memory server also grants configured service DIDs `OWNER` without an entry,
+ * and those are not listed.
+ *
+ * Only a principal the list grants access gets it: the current principal,
+ * found as {@link spaceAccess} finds it, through its own entry or the `*`
+ * entry. Anyone else gets `undefined`, which is also what an access list that
+ * has not arrived, a space that has no access list, a run with no principal,
+ * and a `target` passed as `undefined` all return. The answer depends on who
+ * asks, so a call in a computation makes its value a per-user one, as
+ * {@link spaceAccess} does, and is run again when the list changes or, on a
+ * client, when the memory server refuses or readmits this runtime.
+ *
+ * The list tells a member only what a member can already read, since any
+ * member can read the whole access list. On a serving runtime, which reads
+ * every space as its owner, the check on the current principal is what keeps
+ * a non-member's demand from reading it.
+ *
+ * @throws If called outside a handler or a reactive computation, with no
+ *   `target`, or with a `target` that is neither a cell nor `undefined`.
+ */
+export function spaceMembers(
+  // Optional here, though the declared API requires it, so that the runtime
+  // check below has a case to catch from untyped callers.
+  ...args: [target?: unknown]
+): SpaceMemberList | undefined {
+  const { runtime, tx, target, principal, reactive } = ownCall(
+    "spaceMembers",
+    args,
+  );
+  if (target === undefined) return undefined;
+  const space = spaceOfTarget(target, "spaceMembers(target)");
+  const level = accessLevel(runtime, tx, space, principal, reactive, true);
+  if (level === undefined || level === "none") return undefined;
+
+  // A level other than `none` comes from a well-formed list, so the check
+  // below only narrows its type.
+  const acl = aclOf(runtime, tx, space);
+  if (!isACL(acl)) return undefined;
+  const principals: Record<DID, SpaceGrantLevel> = {};
+  let anyone: SpaceGrantLevel | undefined;
+  for (const [user, entry] of Object.entries(acl)) {
+    if (entry === undefined) continue;
+    if (user === ANYONE_USER) anyone = entry;
+    else if (isDID(user)) principals[user] = entry;
+  }
+  return anyone === undefined ? { principals } : { principals, anyone };
 }
 
 /**
@@ -232,12 +261,74 @@ export function cellOfTarget(target: unknown, call: string): Cell<unknown> {
 }
 
 /**
- * Helper for {@link spaceAccess}, which returns `principal`'s access to
- * `space`, reading the space's access list through `tx`. With `reactive`, a
- * change to whether the memory server admits this runtime to `space` runs the
- * executing action again. `own` says whether `principal` is the one the
- * calling code runs for, whose session this runtime's may be; the session
- * says nothing about any other principal.
+ * Helper for {@link spaceAccess} and {@link spaceMembers}, which checks that
+ * the call to the function `name` was made where there is one principal to
+ * ask about, and with a `target`, and returns what the call works from: the
+ * executing runtime and transaction, `target`, the principal the calling code
+ * runs for, and whether the call is in a reactive computation. In a
+ * computation it narrows the read scope to `user` before anything else, since
+ * the answer depends on who is asking.
+ *
+ * @throws If called outside a handler or a reactive computation, or with no
+ *   `target`.
+ */
+function ownCall(name: string, args: [target?: unknown]): {
+  runtime: Runtime;
+  tx: IExtendedStorageTransaction;
+  target: unknown;
+  principal: string | undefined;
+  reactive: boolean;
+} {
+  const frame = topFrame();
+  const kind = frame?.frameKind;
+  if (kind !== "lift" && kind !== "handler") {
+    throw new Error(
+      `\`${name}(target)\` can only be called from a handler or a reactive ` +
+        "computation, where there is one principal to ask about.",
+    );
+  }
+  const { runtime, tx } = frame!;
+  if (runtime === undefined || tx === undefined) {
+    throw new Error(`\`${name}(target)\` requires an executing runtime.`);
+  }
+  if (args.length === 0) {
+    throw new Error(
+      `\`${name}()\` requires a \`target\`: a cell in the space to ask about.`,
+    );
+  }
+  const [target] = args;
+
+  if (kind === "lift") {
+    // The answer depends on who is asking, so the computation's value is a
+    // per-user one whatever the principal turns out to be. This goes first so
+    // that no return in the caller skips it.
+    if (scopeRank(tx.getNarrowestReadScope()) < scopeRank("user")) {
+      tx.resetNarrowestReadScope("user");
+    }
+    return {
+      runtime,
+      tx,
+      target,
+      principal: runtime.homeSpacePrincipalFor(tx),
+      reactive: true,
+    };
+  }
+  return {
+    runtime,
+    tx,
+    target,
+    principal: runtime.actingPrincipalFor(tx),
+    reactive: false,
+  };
+}
+
+/**
+ * Helper for {@link spaceAccess} and its siblings, which returns
+ * `principal`'s access to `space`, reading the space's access list through
+ * `tx`. With `reactive`, a change to whether the memory server admits this
+ * runtime to `space` runs the executing action again. `own` says whether
+ * `principal` is the one the calling code runs for, whose session this
+ * runtime's may be; the session says nothing about any other principal.
  */
 function accessLevel(
   runtime: Runtime,
@@ -258,16 +349,29 @@ function accessLevel(
     runtime.spaceAccessWatch.rerunOnChange(space, action);
   }
 
-  const acl = runtime.getCellFromLink<unknown>(
+  const acl = aclOf(runtime, tx, space);
+
+  if (sessionIsPrincipal && isRefused(runtime, space)) return "none";
+  if (acl === undefined) return undefined;
+  const role = spaceReaderRole(isACL(acl) ? acl : undefined, principal);
+  return role === null ? "none" : LEVEL_OF_ROLE[role];
+}
+
+/**
+ * Helper for {@link accessLevel} and {@link spaceMembers}, which returns the
+ * value of `space`'s access list, read through `tx`: `undefined` while it has
+ * not arrived, and for a space that has none.
+ */
+function aclOf(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+): unknown {
+  return runtime.getCellFromLink<unknown>(
     { space, id: aclDocId(space) as URI, path: [] },
     undefined,
     tx,
   ).get();
-
-  if (sessionIsPrincipal && isRefused(runtime, space)) return "none";
-  if (acl === undefined) return undefined;
-  const role = spaceReaderRole(acl as ACL, principal);
-  return role === null ? "none" : LEVEL_OF_ROLE[role];
 }
 
 /**

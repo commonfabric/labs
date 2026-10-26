@@ -1,6 +1,7 @@
 /**
- * Covers the connection state `Client` reports and the promise it hands a
- * caller waiting for the next report of it. The states are the branches
+ * Covers the connection state `Client` reports, the promise it hands a
+ * caller waiting for the next report of it, and the observers it tells each
+ * time a lost connection comes back. The states are the branches
  * `#ensureConnected()` takes, and the cases hold the getter to the part of
  * that order a caller can observe — `#connected` ahead of the fall through
  * to `reconnecting`, and `#closed` ahead of `#fatalError` — checking it
@@ -425,6 +426,132 @@ describe("Client", () => {
           expect(readings).toEqual(["connected"]);
           expect(client.isConnected()).toBe(true);
         } finally {
+          await client.close();
+        }
+      });
+    });
+
+    describe("subscribeReconnected()", () => {
+      it("calls its observer once when a severed connection comes back", async () => {
+        const { transport, client } = await connectSeverable("ok");
+        let calls = 0;
+        client.subscribeReconnected(() => calls++);
+
+        try {
+          transport.sever();
+          await client.restoreConnection();
+
+          expect(calls).toBe(1);
+        } finally {
+          await client.close();
+        }
+      });
+
+      it("calls its observer once for each time the connection comes back", async () => {
+        const { transport, client } = await connectSeverable("ok");
+        let calls = 0;
+        client.subscribeReconnected(() => calls++);
+
+        try {
+          transport.sever();
+          await client.restoreConnection();
+          transport.sever();
+          await client.restoreConnection();
+
+          expect(calls).toBe(2);
+        } finally {
+          await client.close();
+        }
+      });
+
+      it("calls its observer only once the reconnect has reopened its sessions", async () => {
+        const { transport, client } = await connectSeverable("ok");
+        const calledDuringReopen: number[] = [];
+        let calls = 0;
+        client.subscribeReconnected(() => calls++);
+
+        try {
+          transport.onSessionOpen = () => {
+            calledDuringReopen.push(calls);
+          };
+          transport.sever();
+          await client.restoreConnection();
+
+          expect(calledDuringReopen).toEqual([0]);
+          expect(calls).toBe(1);
+        } finally {
+          await client.close();
+        }
+      });
+
+      it("does not call its observer for a reconnect whose reopen fails", async () => {
+        const { transport, client } = await connectSeverable("ok");
+        transport.denyReopen = true;
+        let calls = 0;
+        client.subscribeReconnected(() => calls++);
+
+        try {
+          const severed = client.whenStateChanged();
+          transport.sever();
+          await severed;
+          const reconnected = client.whenStateChanged();
+          await reconnected;
+          expect(client.connectionState).toBe("connected");
+
+          // The reopen is denied, which drops the connection again: the
+          // attempt is over, and it did not bring the connection back.
+          const lost = client.whenStateChanged();
+          await lost;
+
+          expect(client.connectionState).toBe("reconnecting");
+          expect(calls).toBe(0);
+        } finally {
+          await client.close();
+        }
+      });
+
+      it("does not call its observer when the client gives up reconnecting", async () => {
+        const { transport, client } = await connectSeverable("mismatch");
+        let calls = 0;
+        client.subscribeReconnected(() => calls++);
+
+        try {
+          const severed = client.whenStateChanged();
+          transport.sever();
+          await severed;
+          const gaveUp = client.whenStateChanged();
+          await gaveUp;
+
+          expect(client.connectionState).toBe("failed");
+          expect(calls).toBe(0);
+        } finally {
+          await client.close();
+        }
+      });
+
+      it("calls every observer after one that throws, and none that unsubscribed", async () => {
+        const { transport, client } = await connectSeverable("ok");
+        const heard: string[] = [];
+        const errors = stub(console, "error", () => {});
+        client.subscribeReconnected(() => {
+          throw new Error("observer failure");
+        });
+        client.subscribeReconnected(() => heard.push("kept"));
+        const unsubscribe = client.subscribeReconnected(() =>
+          heard.push("dropped")
+        );
+        unsubscribe();
+
+        try {
+          transport.sever();
+          await client.restoreConnection();
+
+          expect(heard).toEqual(["kept"]);
+          expect(errors.calls.map((call) => call.args[0])).toEqual([
+            "reconnected subscriber threw:",
+          ]);
+        } finally {
+          errors.restore();
           await client.close();
         }
       });

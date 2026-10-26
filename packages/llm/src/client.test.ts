@@ -12,6 +12,8 @@ import {
   LLMStreamError,
   loadConversationFixture,
   normalizeLLMResponse,
+  parseLLMReply,
+  readLLMResponse,
   readLLMStream,
   resetMockMode,
   setMockResponseGate,
@@ -391,19 +393,26 @@ describe("LLMClient test-environment guard", () => {
     resetMockMode();
   });
 
-  it("sendRequest stream validation errors still work", async () => {
+  it("sendRequest takes a stream request without a callback", async () => {
+    enableMockMode();
+    addMockResponse(
+      () => true,
+      { role: "assistant", content: "whole", id: "mock-whole" },
+    );
+
+    const result = await client.sendRequest({
+      messages: [{ role: "user", content: "hello" }],
+      model: "test-model",
+      stream: true,
+    });
+
+    expect(result.content).toBe("whole");
+    resetMockMode();
+  });
+
+  it("sendRequest rejects a callback on a request that is not a stream", async () => {
     disableMockMode();
 
-    // Stream requested without callback
-    await expect(
-      client.sendRequest({
-        messages: [{ role: "user", content: "hello" }],
-        model: "test-model",
-        stream: true,
-      }),
-    ).rejects.toThrow("no callback provided");
-
-    // Callback provided without stream
     await expect(
       client.sendRequest(
         {
@@ -466,6 +475,22 @@ describe("LLMClient test-environment guard", () => {
     });
   });
 
+  it("reports the text so far to the callback after each text event", async () => {
+    const seen: string[] = [];
+
+    await readLLMStream(
+      streamFromChunks([
+        JSON.stringify({ type: "text-delta", textDelta: "hel" }) + "\n",
+        JSON.stringify({ type: "text-delta", textDelta: "lo" }) + "\n",
+        JSON.stringify({ type: "finish" }) + "\n",
+      ]),
+      "trace-1",
+      (text) => seen.push(text),
+    );
+
+    expect(seen).toEqual(["hel", "hello"]);
+  });
+
   it("logs and ignores garbage lines mid-stream", async () => {
     const originalConsoleError = console.error;
     const loggedErrors: unknown[][] = [];
@@ -492,6 +517,157 @@ describe("LLMClient test-environment guard", () => {
       expect(loggedErrors[1][1]).toBe("not final json");
     } finally {
       console.error = originalConsoleError;
+    }
+  });
+});
+
+describe("parseLLMReply()", () => {
+  const nativeModelToolResults = [{
+    type: "cf-harness.native-model-tool-result" as const,
+    toolId: GOOGLE_SEARCH_NATIVE_MODEL_TOOL,
+    provider: "google",
+    providerMetadata: { query: "example" },
+    sources: [{ url: "https://example.com" }],
+  }];
+  const transcript = [
+    JSON.stringify({ type: "text-delta", textDelta: "hel" }) + "\n",
+    JSON.stringify({ type: "text-delta", textDelta: "lo" }) + "\n",
+    JSON.stringify({
+      type: "tool-call",
+      toolCallId: "call-1",
+      toolName: "lookup",
+      args: { topic: "donuts" },
+    }) + "\n",
+    JSON.stringify({ type: "finish", nativeModelToolResults }) + "\n",
+  ];
+  const reply = {
+    role: "assistant",
+    content: [
+      { type: "text", text: "hello" },
+      {
+        type: "tool-call",
+        toolCallId: "call-1",
+        toolName: "lookup",
+        input: { topic: "donuts" },
+      },
+    ],
+    id: "trace-1",
+    nativeModelToolResults,
+  };
+
+  it("returns the reply the events describe", () => {
+    expect(parseLLMReply(transcript.join(""), "trace-1")).toEqual(reply);
+  });
+
+  it("returns what `readLLMStream()` returns for the same body, however the body is split", async () => {
+    const text = transcript.join("");
+    const splits = [
+      transcript,
+      [text.slice(0, 7), text.slice(7, 40), text.slice(40)],
+      [text],
+    ];
+    for (const pieces of splits) {
+      expect(await readLLMStream(streamFromChunks(pieces), "trace-1")).toEqual(
+        reply,
+      );
+    }
+  });
+
+  it("takes a final text event that ends without a newline", () => {
+    const body = JSON.stringify({ type: "text-delta", textDelta: "tail" });
+
+    expect(parseLLMReply(body, "trace-1").content).toEqual([
+      { type: "text", text: "tail" },
+    ]);
+  });
+
+  it("throws `LLMStreamError` for an error event, with or without a trailing newline", () => {
+    const event = JSON.stringify({ type: "error", error: "boom" });
+    for (const body of [event + "\n", event]) {
+      expect(() => parseLLMReply(body, "trace-1")).toThrow(LLMStreamError);
+    }
+  });
+});
+
+describe("readLLMResponse()", () => {
+  const transcript = [
+    JSON.stringify({ type: "text-delta", textDelta: "hel" }) + "\n",
+    JSON.stringify({ type: "text-delta", textDelta: "lo" }) + "\n",
+    JSON.stringify({ type: "finish" }) + "\n",
+  ];
+  const reply = {
+    role: "assistant",
+    content: [{ type: "text", text: "hello" }],
+    id: "trace-9",
+  };
+
+  /**
+   * A response that counts reads of its `body` getter, which is what creates
+   * the body's `ReadableStream` in WebKit.
+   */
+  function responseCountingBodyReads(
+    body: BodyInit | null,
+    contentType: string,
+  ): { response: Response; bodyReads: () => number } {
+    let bodyReads = 0;
+    const response = new (class extends Response {
+      override get body(): Response["body"] {
+        bodyReads++;
+        return super.body;
+      }
+    })(body, {
+      headers: { "content-type": contentType, "x-cf-llm-trace-id": "trace-9" },
+    });
+    return { response, bodyReads: () => bodyReads };
+  }
+
+  it("reads a streamed reply whole, never reading `response.body`, when no callback is given", async () => {
+    const { response, bodyReads } = responseCountingBodyReads(
+      streamFromChunks(transcript),
+      "text/event-stream",
+    );
+
+    expect(await readLLMResponse(response)).toEqual(reply);
+    expect(bodyReads()).toBe(0);
+  });
+
+  it("reads a streamed reply through `response.body`, reporting the text so far, when a callback is given", async () => {
+    const { response, bodyReads } = responseCountingBodyReads(
+      streamFromChunks(transcript),
+      "text/event-stream",
+    );
+    const seen: string[] = [];
+
+    expect(await readLLMResponse(response, (text) => seen.push(text))).toEqual(
+      reply,
+    );
+    expect(seen).toEqual(["hel", "hello"]);
+    expect(bodyReads()).toBeGreaterThan(0);
+  });
+
+  it("throws for a successful response with no body, with or without a callback", async () => {
+    for (const callback of [undefined, () => {}]) {
+      const { response } = responseCountingBodyReads(null, "text/event-stream");
+
+      await expect(readLLMResponse(response, callback)).rejects.toThrow(
+        "No response body",
+      );
+    }
+  });
+
+  it("reads a JSON reply whole, with or without a callback", async () => {
+    for (const callback of [undefined, () => {}]) {
+      const { response, bodyReads } = responseCountingBodyReads(
+        JSON.stringify({ role: "assistant", content: "cached", id: "srv-1" }),
+        "application/json",
+      );
+
+      expect(await readLLMResponse(response, callback)).toEqual({
+        role: "assistant",
+        content: "cached",
+        id: "srv-1",
+      });
+      expect(bodyReads()).toBe(0);
     }
   });
 });

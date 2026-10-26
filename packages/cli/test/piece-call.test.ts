@@ -1081,9 +1081,8 @@ describe("executePieceCallable", () => {
       },
     );
 
-    // The default prefix is the top-level spelling: a page minted with no
-    // mount to name must not teach the deprecated one. Each mount passes its
-    // own spelling as helpCommandPrefix.
+    // With no helpCommandPrefix passed, the page names the command by its
+    // own spelling.
     expect(result.helpText).toContain(
       "cf piece call ... search --help",
     );
@@ -4148,7 +4147,7 @@ describe("call selection", () => {
 
     it("reports a malformed selection without naming an invocation to retry", async () => {
       const { code, stderr } = await cf(
-        argv`call
+        argv`piece call
           --identity ./definitely-missing-piece-call-review.key
           --api-url https://cf.dev --space common-knowledge
           --piece fid1:piece-123 addTopic -- --select a..b`,

@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import type { SpaceAccessFunction } from "@commonfabric/api";
+import type {
+  SpaceAccessFunction,
+  SpaceMembersFunction,
+} from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
@@ -12,9 +15,14 @@ import * as Engine from "@commonfabric/memory/v2/engine";
 import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { defer } from "@commonfabric/utils/defer";
+import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
-import { spaceAccess, spaceAccessOf } from "../../src/builder/space-access.ts";
+import {
+  spaceAccess,
+  spaceAccessOf,
+  spaceMembers,
+} from "../../src/builder/space-access.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
@@ -22,6 +30,11 @@ import { stampWaveRunContext } from "../../src/executor/wave.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../cfc-seed-envelope.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
 import { ArrivalLog, awaitAdmitted } from "../support/serving-waits.ts";
 import { createTrustedBuilder } from "../support/trusted-builder.ts";
@@ -124,14 +137,23 @@ describe("spaceAccess()", () => {
     ).length;
   }
 
-  /** Returns a client runtime acting as `user`. */
-  function clientRuntime(user: Identity): Runtime {
+  /**
+   * Returns a client runtime acting as `user`. With `strict`, a CFC misfit
+   * refuses a commit, and the labels a commit's flow derives are stored.
+   */
+  function clientRuntime(
+    user: Identity,
+    options: { strict?: boolean } = {},
+  ): Runtime {
     const storageManager = EmulatedStorageManager.connectTo(server, {
       as: user,
     });
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,
+      ...(options.strict
+        ? { cfcEnforcementMode: "enforce-strict", cfcFlowLabels: "persist" }
+        : {}),
     });
     cleanups.push(async () => {
       await runtime.dispose();
@@ -219,11 +241,12 @@ describe("spaceAccess()", () => {
   }
 
   /**
-   * Calls `spaceAccess()` as code in a `kind` frame of `frameSpace` would,
-   * through `tx`, and returns what it returns. The target is `target`, or a
-   * cell in `frameSpace`.
+   * Calls `call` as code in a `kind` frame of `frameSpace` would, through
+   * `tx`, and returns what it returns. The target is `target`, or a cell in
+   * `frameSpace`.
    */
-  function callIn(
+  function callWith<T>(
+    call: (target: unknown) => T,
     runtime: Runtime,
     tx: IExtendedStorageTransaction,
     options: {
@@ -231,7 +254,7 @@ describe("spaceAccess()", () => {
       frameSpace?: MemorySpace;
       target?: unknown;
     } = {},
-  ): ReturnType<typeof spaceAccess> {
+  ): T {
     const frame = pushFrame({
       runtime,
       tx,
@@ -239,13 +262,92 @@ describe("spaceAccess()", () => {
       frameKind: options.kind ?? "lift",
     });
     try {
-      return spaceAccess(
+      return call(
         options.target ??
           runtime.getCell<unknown>(frameSpaceOf(options), "space-access here"),
       );
     } finally {
       popFrame(frame);
     }
+  }
+
+  /** Like {@link callWith}, calling `spaceAccess()`. */
+  function callIn(
+    runtime: Runtime,
+    tx: IExtendedStorageTransaction,
+    options: Parameters<typeof callWith>[3] = {},
+  ): ReturnType<typeof spaceAccess> {
+    return callWith(spaceAccess, runtime, tx, options);
+  }
+
+  /** Like {@link callWith}, calling `spaceMembers()`. */
+  function membersIn(
+    runtime: Runtime,
+    tx: IExtendedStorageTransaction,
+    options: Parameters<typeof callWith>[3] = {},
+  ): ReturnType<typeof spaceMembers> {
+    return callWith(spaceMembers, runtime, tx, options);
+  }
+
+  const resultSchema = {
+    type: "object",
+    properties: { level: { type: "string" }, derived: { type: "string" } },
+  } as const satisfies JSONSchema;
+
+  /**
+   * Runs, in `user`'s home space, a pattern whose computation `level`
+   * returns what `compute` returns for a cell in `space`, and returns the
+   * result cell. The computation takes the cell as a cell, or with `byValue`
+   * as the value it holds. A second computation, `derived`, reads `level`'s
+   * value and nothing else.
+   */
+  async function computedCell(
+    runtime: Runtime,
+    user: Identity,
+    compute: (target: Cell<unknown>) => string,
+    options: { byValue?: boolean } = {},
+  ): Promise<Cell<{ level?: string; derived?: string }>> {
+    const argumentSchema = {
+      type: "object",
+      properties: {
+        target: options.byValue
+          ? { type: "object" }
+          : { type: "unknown", asCell: ["cell"] },
+      },
+    } as const satisfies JSONSchema;
+    const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+    const level = lift(
+      (input: { target?: unknown }) => compute(input.target as Cell<unknown>),
+      argumentSchema,
+      { type: "string" },
+    );
+    const derive = lift(
+      (input: { level?: string }) => `derived:${input.level}`,
+      { type: "object", properties: { level: { type: "string" } } },
+      { type: "string" },
+    );
+    const levelPattern = pattern(
+      ({ target }) => {
+        const levelOf = level({ target });
+        return { level: levelOf, derived: derive({ level: levelOf }) };
+      },
+      argumentSchema,
+      resultSchema,
+    );
+
+    const home = user.did() as MemorySpace;
+    await (await aclWriter(user))({ [home]: "OWNER" });
+    const tx = runtime.edit();
+    const resultCell = runtime.getCell(
+      home,
+      "space-access level",
+      undefined,
+      tx,
+    );
+    const target = runtime.getCell<unknown>(space, "space-access target");
+    const result = runtime.run(tx, levelPattern, { target }, resultCell);
+    await tx.commit().settled;
+    return result as Cell<{ level?: string; derived?: string }>;
   }
 
   describe("on a client", () => {
@@ -568,65 +670,21 @@ describe("spaceAccess()", () => {
   });
 
   describe("in a dependent computation", () => {
-    const resultSchema = {
-      type: "object",
-      properties: { level: { type: "string" }, derived: { type: "string" } },
-    } as const satisfies JSONSchema;
-
     /**
-     * Runs, in `user`'s home space, a pattern whose computation `level`
-     * returns `user`'s level in the space of a cell in `space`, and returns
-     * the result cell; `unknown` stands in for `undefined`. The computation
-     * takes the cell as a cell, or with `byValue` as the value it holds. A
-     * second computation, `derived`, reads `level`'s value and nothing else.
+     * Like {@link computedCell}, where `level` returns `user`'s level in the
+     * space of a cell in `space`; `unknown` stands in for `undefined`.
      */
-    async function levelCell(
+    function levelCell(
       runtime: Runtime,
       user: Identity,
       options: { byValue?: boolean } = {},
     ): Promise<Cell<{ level?: string; derived?: string }>> {
-      const argumentSchema = {
-        type: "object",
-        properties: {
-          target: options.byValue
-            ? { type: "object" }
-            : { type: "unknown", asCell: ["cell"] },
-        },
-      } as const satisfies JSONSchema;
-      const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
-      const level = lift(
-        (input: { target?: unknown }) =>
-          spaceAccess(input.target as Cell<unknown>) ?? "unknown",
-        argumentSchema,
-        { type: "string" },
+      return computedCell(
+        runtime,
+        user,
+        (target) => spaceAccess(target) ?? "unknown",
+        options,
       );
-      const derive = lift(
-        (input: { level?: string }) => `derived:${input.level}`,
-        { type: "object", properties: { level: { type: "string" } } },
-        { type: "string" },
-      );
-      const levelPattern = pattern(
-        ({ target }) => {
-          const levelOf = level({ target });
-          return { level: levelOf, derived: derive({ level: levelOf }) };
-        },
-        argumentSchema,
-        resultSchema,
-      );
-
-      const home = user.did() as MemorySpace;
-      await (await aclWriter(user))({ [home]: "OWNER" });
-      const tx = runtime.edit();
-      const resultCell = runtime.getCell(
-        home,
-        "space-access level",
-        undefined,
-        tx,
-      );
-      const target = runtime.getCell<unknown>(space, "space-access target");
-      const result = runtime.run(tx, levelPattern, { target }, resultCell);
-      await tx.commit().settled;
-      return result as Cell<{ level?: string; derived?: string }>;
     }
 
     it("writes its value where only its own user reads it", async () => {
@@ -1114,5 +1172,480 @@ describe("spaceAccess()", () => {
         return {};
       })
     ).toThrow("can only be called from a handler or a reactive computation");
+  });
+
+  describe("spaceMembers()", () => {
+    /**
+     * Returns the member list naming `principals`, in the order of their DIDs
+     * so that two equal lists render as the same JSON, and `anyone`, if given.
+     */
+    const listOf = (
+      principals: AclValue,
+      anyone?: "OWNER" | "WRITE" | "READ",
+    ) => {
+      const sorted = Object.fromEntries(
+        utf8SortedKeysOf(principals).map((key) => [key, principals[key]]),
+      );
+      return anyone === undefined
+        ? { principals: sorted }
+        : { principals: sorted, anyone };
+    };
+
+    describe("on a client", () => {
+      it("returns every principal the access list names with its level, and the `*` entry apart", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({
+          [carol.did()]: "READ",
+          "*": "READ",
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+        });
+
+        const runtime = clientRuntime(bob);
+        await syncAcl(runtime);
+        expect(membersIn(runtime, runtime.edit())).toStrictEqual(listOf({
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+          [carol.did()]: "READ",
+        }, "READ"));
+      });
+
+      it("returns no `anyone` for a list with no `*` entry", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+        const runtime = clientRuntime(bob);
+        await syncAcl(runtime);
+        const members = membersIn(runtime, runtime.edit());
+        expect(members).toStrictEqual(listOf({
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+        }));
+        expect(Object.hasOwn(members!, "anyone")).toBe(false);
+      });
+
+      it("returns the list to a member holding `READ`", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", [carol.did()]: "READ" });
+
+        const runtime = clientRuntime(carol);
+        await syncAcl(runtime);
+        expect(membersIn(runtime, runtime.edit())).toStrictEqual(listOf({
+          [alice.did()]: "OWNER",
+          [carol.did()]: "READ",
+        }));
+      });
+
+      it("returns the list, without them in it, to a principal only the `*` entry admits", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", "*": "WRITE" });
+
+        const runtime = clientRuntime(dave);
+        await syncAcl(runtime);
+        expect(membersIn(runtime, runtime.edit())).toStrictEqual(
+          listOf({ [alice.did()]: "OWNER" }, "WRITE"),
+        );
+      });
+
+      it("returns `undefined` to a principal the memory server refuses the space", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER" });
+
+        const runtime = clientRuntime(dave);
+        await syncAcl(runtime);
+        expect(runtime.storageManager.spaceAccessError?.(space)?.name).toBe(
+          "AuthorizationError",
+        );
+        expect(membersIn(runtime, runtime.edit())).toBeUndefined();
+      });
+
+      it("returns `undefined` before the access list has arrived", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+        const runtime = clientRuntime(bob);
+        expect(membersIn(runtime, runtime.edit())).toBeUndefined();
+
+        // The same runtime returns the list once it is in, so what the first
+        // call lacked was the list and nothing else.
+        await syncAcl(runtime);
+        expect(membersIn(runtime, runtime.edit())).toStrictEqual(listOf({
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+        }));
+      });
+
+      it("returns `undefined` for a space that has no access list", async () => {
+        const runtime = clientRuntime(bob);
+        await syncAcl(runtime);
+        expect(runtime.storageManager.spaceAccessError?.(space))
+          .toBeUndefined();
+        expect(membersIn(runtime, runtime.edit())).toBeUndefined();
+      });
+
+      it("returns the list of the space a linked cell's value lives in, not the calling code's", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", [carol.did()]: "READ" });
+        const home = carol.did() as MemorySpace;
+        await (await aclWriter(carol))({ [home]: "OWNER" });
+
+        const runtime = clientRuntime(carol);
+        await syncAcl(runtime);
+        await syncAcl(runtime, home);
+        const tx = runtime.edit();
+        const link = runtime.getCell<unknown>(
+          home,
+          "space-access link",
+          undefined,
+          tx,
+        );
+        link.set(runtime.getCell<unknown>(space, "space-access target"));
+        expect((await tx.commit().settled).error).toBeUndefined();
+
+        expect(
+          membersIn(runtime, runtime.edit(), {
+            frameSpace: home,
+            target: link,
+          }),
+        ).toStrictEqual(listOf({
+          [alice.did()]: "OWNER",
+          [carol.did()]: "READ",
+        }));
+        expect(membersIn(runtime, runtime.edit(), { frameSpace: home }))
+          .toStrictEqual(listOf({ [home]: "OWNER" }));
+      });
+
+      it("returns `undefined` for a target passed as `undefined`", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+        const runtime = clientRuntime(bob);
+        await syncAcl(runtime);
+        const frame = pushFrame({
+          runtime,
+          tx: runtime.edit(),
+          space,
+          frameKind: "lift",
+        });
+        try {
+          expect(spaceMembers(undefined)).toBeUndefined();
+        } finally {
+          popFrame(frame);
+        }
+      });
+
+      it("returns the list to the runtime user in a handler", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+        const runtime = clientRuntime(bob);
+        await syncAcl(runtime);
+        const tx = runtime.edit();
+        expect(membersIn(runtime, tx, { kind: "handler" })).toStrictEqual(
+          listOf({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" }),
+        );
+        expect(tx.getNarrowestReadScope()).toBe("space");
+      });
+
+      it("narrows a computation's read scope to `user`, whether or not it returns a list", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+        const runtime = clientRuntime(bob);
+        await syncAcl(runtime);
+        const tx = runtime.edit();
+        expect(tx.getNarrowestReadScope()).toBe("space");
+        expect(membersIn(runtime, tx)).toBeDefined();
+        expect(tx.getNarrowestReadScope()).toBe("user");
+
+        const unknownTx = runtime.edit();
+        const frame = pushFrame({
+          runtime,
+          tx: unknownTx,
+          space,
+          frameKind: "lift",
+        });
+        try {
+          expect(spaceMembers(undefined)).toBeUndefined();
+        } finally {
+          popFrame(frame);
+        }
+        expect(unknownTx.getNarrowestReadScope()).toBe("user");
+      });
+    });
+
+    describe("on a serving runtime", () => {
+      it("returns the list to each demanding member, and `undefined` to a non-member's demand", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+          [carol.did()]: "READ",
+        });
+        const expected = listOf({
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+          [carol.did()]: "READ",
+        });
+
+        const runtime = servingRuntime();
+        await syncAcl(runtime);
+        expect(membersIn(runtime, servedTx(runtime, bob))).toStrictEqual(
+          expected,
+        );
+        expect(membersIn(runtime, servedTx(runtime, carol))).toStrictEqual(
+          expected,
+        );
+        expect(membersIn(runtime, servedTx(runtime, dave))).toBeUndefined();
+      });
+
+      it("returns `undefined` to a run with no demanding principal", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER" });
+
+        const runtime = servingRuntime();
+        await syncAcl(runtime);
+        const tx = servedTx(runtime);
+        expect(membersIn(runtime, tx)).toBeUndefined();
+        expect(tx.getNarrowestReadScope()).toBe("user");
+      });
+
+      it("returns the list to a served handler's actor who is a member, and `undefined` to one who is not, whoever owns the instance", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+        const runtime = servingRuntime();
+        await syncAcl(runtime);
+        expect(
+          membersIn(runtime, handlerTx(runtime, dave, bob), {
+            kind: "handler",
+          }),
+        ).toStrictEqual(
+          listOf({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" }),
+        );
+        expect(
+          membersIn(runtime, handlerTx(runtime, bob, dave), {
+            kind: "handler",
+          }),
+        ).toBeUndefined();
+      });
+    });
+
+    describe("in a dependent computation", () => {
+      /**
+       * Like {@link computedCell}, where `level` returns the list
+       * `spaceMembers()` returns for a cell in `space`, as the JSON of
+       * {@link listOf}; `unknown` stands in for `undefined`.
+       */
+      function membersCell(
+        runtime: Runtime,
+        user: Identity,
+      ): Promise<Cell<{ level?: string; derived?: string }>> {
+        return computedCell(runtime, user, (target) => {
+          const members = spaceMembers(target);
+          return members === undefined
+            ? "unknown"
+            : JSON.stringify(listOf(members.principals, members.anyone));
+        });
+      }
+
+      /** Returns the JSON `membersCell()` holds for `principals`. */
+      const json = (principals: AclValue) => JSON.stringify(listOf(principals));
+
+      it("writes its value where only its own user reads it", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+        const expected = json({
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+        });
+
+        const runtime = clientRuntime(bob);
+        const members = (await membersCell(runtime, bob)).key("level");
+        await waitForCellValue(runtime, members, (v) => v === expected, {
+          stuckLabel: "bob's member list to arrive",
+        });
+        expect(members.resolveAsCell().getAsNormalizedFullLink().scope).toBe(
+          "user",
+        );
+      });
+
+      it("runs again when a grant or revoke changes the list", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+        const runtime = clientRuntime(bob);
+        const members = (await membersCell(runtime, bob)).key("level");
+        const before = json({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+        await waitForCellValue(runtime, members, (v) => v === before, {
+          stuckLabel: "bob's member list to arrive",
+        });
+
+        await setAcl({
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+          [carol.did()]: "READ",
+        });
+        const granted = json({
+          [alice.did()]: "OWNER",
+          [bob.did()]: "WRITE",
+          [carol.did()]: "READ",
+        });
+        await waitForCellValue(runtime, members, (v) => v === granted, {
+          stuckLabel: "bob's member list to follow the grant to carol",
+        });
+
+        await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+        await waitForCellValue(runtime, members, (v) => v === before, {
+          stuckLabel: "bob's member list to follow the revoke of carol",
+        });
+
+        await setAcl({ [alice.did()]: "OWNER" });
+        await waitForCellValue(runtime, members, (v) => v === "unknown", {
+          stuckLabel: "bob's member list to follow bob's own revoke",
+        });
+      });
+
+      it("runs again with the list when the memory server readmits the runtime after a grant", async () => {
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER" });
+
+        const runtime = clientRuntime(dave);
+        const members = (await membersCell(runtime, dave)).key("level");
+        await waitForCellValue(runtime, members, (v) => v === "unknown", {
+          stuckLabel: "dave's member list to arrive as `unknown`",
+        });
+        // A list not yet arrived reads `unknown` as well, so the refusal is
+        // waited for by letting every load it set off settle.
+        await runtime.idle();
+        await runtime.storageManager.synced();
+        expect(runtime.storageManager.spaceAccessError?.(space)?.name).toBe(
+          "AuthorizationError",
+        );
+
+        // A read of a document the replica has not asked for opens the space
+        // again, and the memory server now admits it.
+        await setAcl({ [alice.did()]: "OWNER", [dave.did()]: "READ" });
+        const reopened = await runtime.storageManager.open(space).sync(
+          "of:space-access-reopen" as URI,
+        );
+        expect(reopened.error).toBeUndefined();
+        const granted = json({ [alice.did()]: "OWNER", [dave.did()]: "READ" });
+        await waitForCellValue(runtime, members, (v) => v === granted, {
+          stuckLabel: "dave's member list to follow the grant",
+        });
+      });
+    });
+
+    describe("under `enforce-strict`", () => {
+      it("commits a computation's list into a user document of the space, where a read of the viewer's private Home root is refused", async () => {
+        // Bob's Home root carries a label private to Home's own readers. The
+        // control writes the same document after also reading the root, and
+        // is refused, so what admits the first write is that the list
+        // carries no such label.
+
+        const setAcl = await aclWriter();
+        await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+        const home = bob.did() as MemorySpace;
+        await (await aclWriter(bob))({ [home]: "OWNER" });
+
+        const runtime = clientRuntime(bob, { strict: true });
+        await syncAcl(runtime);
+        await syncAcl(runtime, home);
+        const rootId = runtime.getHomeSpaceCell().getAsNormalizedFullLink().id;
+        {
+          const seed = runtime.edit();
+          writeSeedEnvelopeDoc(seed, home);
+          seedStoredEnvelope(seed, {
+            space: home,
+            scope: "space",
+            id: rootId,
+            path: [],
+          }, {
+            value: { secret: "s3cr3t" },
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [{
+                  path: [],
+                  label: {
+                    confidentiality: [{
+                      type: "https://commonfabric.org/cfc/atom/Space",
+                      id: home,
+                    }],
+                  },
+                }],
+              },
+            },
+          });
+          expect((await seed.commit().settled).error).toBeUndefined();
+        }
+
+        const commitList = async (readHome: boolean) => {
+          const tx = runtime.edit();
+          tx.setCfcEnforcementMode("enforce-strict");
+          const members = membersIn(runtime, tx);
+          expect(members).toStrictEqual(listOf({
+            [alice.did()]: "OWNER",
+            [bob.did()]: "WRITE",
+          }));
+          const secret = readHome
+            ? (runtime.getCellFromLink<{ secret?: string }>(
+              { space: home, scope: "space", id: rootId, path: [] },
+              undefined,
+              tx,
+            ).getRaw())?.secret
+            : undefined;
+          expect(secret).toBe(readHome ? "s3cr3t" : undefined);
+          const target = runtime.getCell<Record<string, unknown>>(
+            space,
+            `space-members list ${readHome}`,
+            undefined,
+            tx,
+            "user",
+          );
+          target.set({ members: JSON.stringify(members), secret });
+          tx.prepareCfc();
+          return await tx.commit().settled;
+        };
+
+        expect((await commitList(false)).error).toBeUndefined();
+        expect((await commitList(true)).error?.message).toContain(
+          "writer-fit confidentiality misfit",
+        );
+      });
+    });
+
+    it("throws when called without a `target`", () => {
+      const runtime = clientRuntime(bob);
+      const frame = pushFrame({
+        runtime,
+        tx: runtime.edit(),
+        space: bob.did() as MemorySpace,
+        frameKind: "lift",
+      });
+      try {
+        // The declared type refuses this call; the runtime check is for
+        // callers the compiler never saw.
+        const declared: SpaceMembersFunction = spaceMembers;
+        // @ts-expect-error: `target` is required.
+        expect(() => declared()).toThrow("requires a `target`");
+      } finally {
+        popFrame(frame);
+      }
+    });
+
+    it("throws in a pattern body", () => {
+      const runtime = clientRuntime(bob);
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      expect(() =>
+        pattern(() => {
+          spaceMembers(undefined);
+          return {};
+        })
+      ).toThrow("can only be called from a handler or a reactive computation");
+    });
   });
 });

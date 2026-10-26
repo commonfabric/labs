@@ -64,6 +64,7 @@ export * from "./components/cf-hgroup/index.ts";
 export * from "./components/cf-hscroll/index.ts";
 export * from "./components/cf-hstack/index.ts";
 export * from "./components/cf-iframe/index.ts";
+export * from "./components/cf-blob-link/index.ts";
 export * from "./components/cf-image/index.ts";
 export * from "./components/cf-image-input/index.ts";
 export * from "./components/cf-input/index.ts";

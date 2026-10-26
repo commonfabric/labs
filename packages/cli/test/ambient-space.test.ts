@@ -75,7 +75,7 @@ describe("an ambient space", () => {
   it("is what the command targets when only the variable is set", async () => {
     // The reference names EXPLICIT, so a command targeting AMBIENT refuses and
     // names AMBIENT as the space it was pointed at.
-    const { stderr } = await cf(argv`get ${REF}`, {
+    const { stderr } = await cf(argv`cell get ${REF}`, {
       env: { ...FABRIC, CF_SPACE: AMBIENT },
     });
     expect(errorText(stderr)).toContain(
@@ -127,7 +127,7 @@ describe("an ambient space", () => {
     // the variable cannot make this fail. It is here because the variable is
     // only safe to leave set for a whole session if the flag keeps winning,
     // and nothing else states that.
-    const { stderr } = await cf(argv`get ${REF} --space ${EXPLICIT}`, {
+    const { stderr } = await cf(argv`cell get ${REF} --space ${EXPLICIT}`, {
       env: { ...FABRIC, CF_SPACE: AMBIENT },
     });
     expect(errorText(stderr)).not.toContain("but the command targets space");

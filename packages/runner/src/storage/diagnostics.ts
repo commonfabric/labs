@@ -5,6 +5,7 @@
  */
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import type { SpaceDocumentSizes } from "./document-sizes.ts";
 
 /** Provenance read only when a pending-work snapshot is requested. */
 export type PendingCommitContext = {
@@ -111,6 +112,68 @@ export type StorageSizes = SpaceStorageSizes & {
 
   /** Cross-space promises in flight. */
   pendingCrossSpace: number;
+
+  /**
+   * Each open space's documents and their approximate size, largest first,
+   * at most {@link STORAGE_DIAGNOSTICS_LIMIT} of them; `bySpaceOmitted` adds
+   * the rest together. The entries' `documents` and `watched` add up to the
+   * manager's `documents` and `watchedDocuments`.
+   */
+  bySpace: SpaceDocumentSizes[];
+
+  /** The spaces past the cap on `bySpace`, added together. */
+  bySpaceOmitted: Omit<SpaceDocumentSizes, "space"> & { spaces: number };
+
+  /** Documents measured whole across every space; see `SpaceDocumentSizes`. */
+  measuredDocuments: number;
+
+  /** Documents held as a lower bound across every space. */
+  truncatedDocuments: number;
+
+  /** The approximate size of every space's documents, added together. */
+  approxBytes: number;
+
+  /**
+   * What the memory connections have carried, or `null` for a session
+   * factory that reports none.
+   */
+  wire: MemoryConnectionSizes | null;
+};
+
+/**
+ * What the connections to memory servers have carried since the session
+ * factory was created, closed ones included, and what the open ones hold
+ * queued. A transport is one logical connection, which keeps its place and
+ * its counts across the sockets it dials; the bytes are the frames' sizes
+ * on the wire, a text frame's UTF-8 size among them.
+ */
+export type MemoryConnectionSizes = {
+  /** Transports the factory holds, a reconnecting one included. */
+  transports: number;
+
+  /** Transports closed since the factory was created. */
+  transportsClosed: number;
+
+  /** Transports whose socket is open right now. */
+  socketsOpen: number;
+
+  /** Frames handed to a socket. */
+  messagesSent: number;
+
+  /** The size of every frame handed to a socket. */
+  bytesSent: number;
+
+  /** Frames a socket delivered. */
+  messagesReceived: number;
+
+  /** The size of every frame a socket delivered. */
+  bytesReceived: number;
+
+  /**
+   * Bytes the open sockets hold queued for the network, as each socket's own
+   * `bufferedAmount` reports; a peer that reads slowly shows up here.
+   */
+  bufferedAmount: number;
 };
 
 /** Adds every replica's sizes together, field by field. */

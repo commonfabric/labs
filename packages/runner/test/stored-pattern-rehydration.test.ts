@@ -1,5 +1,6 @@
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { deepFreeze } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
@@ -85,8 +86,11 @@ describe("stored pattern-value rehydration", () => {
     const compiled = await runtime!.patternManager.compilePattern(
       fixture.program,
     );
-    const graph = JSON.parse(
-      JSON.stringify(serializePatternGraph(compiled as unknown as Pattern)),
+    // Deep-frozen, as a stored graph reads back through `getRaw()`.
+    const graph = deepFreeze(
+      JSON.parse(
+        JSON.stringify(serializePatternGraph(compiled as unknown as Pattern)),
+      ),
     ) as Pattern;
     expect("$patternRef" in graph).toBe(false);
     expect(Array.isArray(graph.nodes)).toBe(true);

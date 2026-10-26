@@ -52,6 +52,7 @@ import {
   hasIntrusionSince,
   readState,
   RowLabelCommitError,
+  selectCommitsSince,
   selectDocHead,
   selectSessionOverwritePathsSince,
   selectWritePathsSince,
@@ -62,16 +63,23 @@ import {
 import type { CellScope } from "@commonfabric/api";
 import type { Operation } from "@commonfabric/memory/v2";
 import type {
+  AdmittedCommitNotice,
   ServedAclChange,
   ServedAclChangeVerdict,
 } from "@commonfabric/memory/v2/server";
+import { getLogger } from "@commonfabric/utils/logger";
 import type { MemorySpace, Result } from "../storage/interface.ts";
-import type {
-  WaveCommitRejection,
-  WaveCommitSink,
-  WaveSpaceCommit,
+import {
+  warmWritesOf,
+  type WaveCommitRejection,
+  type WaveCommitSink,
+  type WaveSpaceCommit,
 } from "./wave.ts";
 
+const logger = getLogger("engine-wave-sink", {
+  enabled: true,
+  level: "warn",
+});
 export function waveCommitFailureResult(
   error: unknown,
 ): { error: WaveCommitRejection } {
@@ -134,6 +142,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
     ) => { attachments: Map<string, string>; detach: () => void })
     | undefined;
   readonly #onHomeRefused: (() => void) | undefined;
+  readonly #reportCommit: ((notice: AdmittedCommitNotice) => void) | undefined;
   readonly #commitServedAclChange:
     | ((
       change: ServedAclChange,
@@ -201,6 +210,16 @@ export class EngineWaveCommitSink implements WaveCommitSink {
     onHomeRefused?: () => void;
 
     /**
+     * Called with each committed batch's admitted-commit notice, the one
+     * `Server.noteExecutorCommit()` takes, as soon as the commit is in the
+     * store and before `commitWave` returns. A sink given this reports its
+     * commits itself ({@link EngineWaveCommitSink.reportsCommits}), which
+     * is what keeps the server's fan-out of the derived rows ahead of
+     * whatever the loop does next when the loop runs on another thread.
+     */
+    reportCommit?: (notice: AdmittedCommitNotice) => void;
+
+    /**
      * The access-list hook (the memory server's `commitServedAclChange()`):
      * admit and commit a served run's access-list change under `envelope`,
      * this sink's session and the next number of its counter. Without it,
@@ -217,7 +236,13 @@ export class EngineWaveCommitSink implements WaveCommitSink {
     this.#localSeq = options.localSeqRef ?? { value: 0 };
     this.#sqliteAttachmentsFor = options.sqliteAttachmentsFor;
     this.#onHomeRefused = options.onHomeRefused;
+    this.#reportCommit = options.reportCommit;
     this.#commitServedAclChange = options.commitServedAclChange;
+  }
+
+  /** @inheritDoc */
+  get reportsCommits(): boolean {
+    return this.#reportCommit !== undefined;
   }
 
   currentHeads(
@@ -452,6 +477,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
             ? {}
             : { delegated: batch.delegated }),
         });
+        this.#report(engine, batch, applied.seq);
         return Promise.resolve({ ok: { seq: applied.seq } });
       }
       // The sqlite bound's discharge (stage G): attach the cell-db
@@ -526,10 +552,55 @@ export class EngineWaveCommitSink implements WaveCommitSink {
         // discipline as the transact path).
         detachSqlite?.();
       }
+      this.#report(engine, batch, applied.seq);
       return Promise.resolve({ ok: { seq: applied.seq } });
     } catch (error) {
       if (batch.home) this.#onHomeRefused?.();
       return Promise.resolve(waveCommitFailureResult(error));
+    }
+  }
+
+  /**
+   * Helper for `commitWave()`, which hands `reportCommit` the notice for
+   * `batch`'s commit at `seq`, as the space server builds it for a commit it
+   * reports itself: a home batch is a derived commit under the holder, a
+   * foreign one an authored commit carrying the warm request.
+   */
+  #report(engine: Engine, batch: WaveSpaceCommit, seq: number): void {
+    if (this.#reportCommit === undefined) return;
+    try {
+      const record = selectCommitsSince(engine, { fromSeq: seq - 1, limit: 1 })
+        .find((entry) => entry.seq === seq);
+      if (record === undefined) return;
+      this.#reportCommit(
+        batch.home
+          ? {
+            space: batch.space,
+            seq,
+            class: "derived",
+            // The lease holder the batch names, which is this sink's own
+            // session: the loop commits under the holder's session.
+            holder: batch.holder ?? this.#sessionId,
+            sessionId: record.sessionId,
+            writes: record.writes as AdmittedCommitNotice["writes"],
+          }
+          : {
+            space: batch.space,
+            seq,
+            class: "authored",
+            sessionId: record.sessionId,
+            writes: warmWritesOf(batch),
+            warm: true,
+          },
+      );
+    } catch (error) {
+      // The commit is in the store whatever the report did, so a failure to
+      // announce it is logged rather than returned as a failed commit, which
+      // would send the wave back to commit the same writes again.
+      logger.error("wave-commit-report-failed", () => [
+        `reporting the wave commit at seq ${seq} in ${batch.space} failed`,
+        error,
+      ]);
     }
   }
 }

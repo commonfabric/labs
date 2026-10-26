@@ -34,6 +34,7 @@ export const swiftLanguage: Language = {
       // it is part of the claim.
       ["xcrun", "swift"],
     ],
+    signatures: [],
     sharedExtensions: [],
   },
 

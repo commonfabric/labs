@@ -10,14 +10,18 @@ A less-like viewer for the dense output of '--show-transformed' and saved source
 files. Transformed TypeScript is parsed with the same parser the transformer
 uses, so blocks, closures, schemas, type positions and Common Fabric builders
 (pattern/lift/handler/…) are colored exactly as the compiler sees them.
-Markdown, JSON, JSONC, YAML, Python, Swift, Kotlin, TOML, shell, Java
-properties, ProGuard and XML files use syntax highlighting selected from
-language metadata. Kotlin covers Gradle's '.gradle.kts' build scripts, shell
-covers Bash and POSIX shell, and XML covers Android manifests and resources, SVG
-and Apple property lists. Python interpreter shebangs select Python, 'swift' and
-'xcrun swift' shebangs select Swift, 'kotlin' shebangs select Kotlin, and 'sh',
-'bash', 'dash' and 'ash' shebangs select shell. Node, Deno and Bun shebangs
-select the TypeScript and JavaScript language family.
+Markdown, JSON, JSONC, YAML, Python, Swift, Kotlin, TOML, HCL, shell, makefile,
+Java properties, INI, ProGuard and XML files use syntax highlighting selected
+from language metadata. Kotlin covers Gradle's '.gradle.kts' build scripts, HCL
+covers OpenTofu and Terraform configuration, shell covers Bash and POSIX shell,
+makefiles color their recipes as shell, INI covers Ansible configuration and
+inventories, and XML covers Android manifests and resources, SVG and Apple
+property lists. Python interpreter shebangs select Python, 'swift' and 'xcrun
+swift' shebangs select Swift, 'kotlin' shebangs select Kotlin, 'sh', 'bash',
+'dash' and 'ash' shebangs select shell, and 'make' and 'gmake' shebangs select
+the makefile language. Node, Deno and Bun shebangs select the TypeScript and
+JavaScript language family. For a name no language claims, source that starts
+with an XML declaration ('<?xml'), after any byte order mark, selects XML.
 Known binary filenames, NUL-containing input and invalid UTF-8 select the binary
 language. Its rendered view is a read-only hex dump with control pictures for
 bytes that have no printable ASCII character.
@@ -30,13 +34,13 @@ The Markdown language also has a rendered view that formats headings, lists,
 quotes, tables, links, emphasis and code while retaining source line positions.
 Source views remain verbatim and add color only.
 
-Raw unified diffs are detected automatically when their structural header is
-the first nonblank line. Standard Git commit output is detected from its complete
-header. Binary detection examines bytes; other source content is not used to
-guess a language. Piping 'git diff' in gives added and removed lines their
-tints, full syntax color, a structure tree of the code each hunk touches, and
-the semantic features (inferred types, go-to-definition) answered against the
-CURRENT state of the workspace files the diff names.
+Raw unified diffs are detected automatically when their structural header is the
+first nonblank line. Standard Git commit output is detected from its complete
+header. Binary detection examines bytes; beyond shebangs and XML declarations,
+source content is not used to guess a language. Piping 'git diff' in gives added
+and removed lines their tints, full syntax color, a structure tree of the code
+each hunk touches, and the semantic features (inferred types, go-to-definition)
+answered against the CURRENT state of the workspace files the diff names.
 
 COMMON USAGE:
   cf check ./pattern.tsx --show-transformed --no-run | cf view
@@ -46,11 +50,13 @@ COMMON USAGE:
   cf check ./p.tsx --show-transformed --no-run | cf view --plain | bat
 
 KEYS (press ? in the viewer for the full list):
-  mouse wheel, ↑/↓ or k/j scroll · ←/→ h/l pan · Space/b page
+  mouse wheel, ↑/↓ or k/j scroll · ←/→ h/l pan · Space/PgUp page
   g/G top/bottom · / search
   structure tree: w/s sibling · a/d parent/child · Tab/⇧Tab depth-first
   Enter info card · in it: ↑/↓ pick a reference · Enter opens it · z reveals it
-  v source/rendered · t look up a definition · # line numbers · \\ wrap mode · q quit
+  v source/rendered · t look up a definition · # line numbers · \\ wrap mode
+  b blame: when each line last changed, and who changed it · q quit
+  P push the checked-out branch to origin and open the pull request page
 
 When stdout is not a terminal (piped/redirected) it prints the colorized text
 and exits, like less.`,

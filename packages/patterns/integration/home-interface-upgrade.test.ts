@@ -10,6 +10,7 @@ import { fromFileUrl, join } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
+import { deepFreeze } from "@commonfabric/data-model";
 import {
   FabricDurationNsec,
   FabricEpochNsec,
@@ -369,7 +370,7 @@ describe("Home interface upgrade", () => {
             });
             const spot = reader.getCellFromLink(
               getDerivedInternalCellLink(root, {
-                partialCause: { $generated: 4 },
+                partialCause: deepFreeze({ $generated: 4 }),
               }),
             );
             await spot.sync();

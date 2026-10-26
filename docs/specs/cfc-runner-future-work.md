@@ -393,7 +393,7 @@ policy (store labels + write-authority claims), not these mechanisms.
 | Sandbox structured-result contract, caveat clearing, runsc/gVisor mediation, tool-invoke | §14.2.2, §18.2 | `@commonfabric/cf-harness` (runner provides the validator seam only) |
 | Labeled filesystem, subagents, command/CLI exec, `node=CodeHash` identity | §14.2 | cf-harness + sibling gVisor repo |
 | Tool-registry snapshot, agent plan trace, NL-refinement, measured contract | §14.1.3.5, §14.2.2.1 | cf-harness (overlaps the Reactive-Interpreter meta-node effort) |
-| Direct content-addressed storage (label-bearing CAS, miss-indistinguishability) | §17.2–6 | Deferred behind causal-path rollout (WS12) |
+| Direct content-addressed storage (label-bearing CAS, miss-indistinguishability) | §17.2–6 | Deferred behind causal-path rollout (WS12). Until it lands, a blob record is an unlabeled `cid:` document, written by the toolshed's unauthenticated blob routes and by a handler's `nameBlob()`, which stages the record of an existing blob's bytes under a name the pattern chooses. Anyone holding a blob's id can fetch it, name included; the id hashes the name in, so fetching takes knowing the name, but a guess at a name, bytes and type can be confirmed by fetching. |
 | **Recombination attack** (overlapping declassifiers leak more than either alone) | §14.3.2 | **Explicitly OPEN research problem** in the spec — no owner; note as a known residual |
 | Recursive label-metadata introspection (labels-of-labels) | §14.3.3 | Intentionally out of scope — first-layer `inspectConfLabel` only |
 

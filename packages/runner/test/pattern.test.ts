@@ -122,6 +122,20 @@ describe("pattern", () => {
     });
   });
 
+  it("deep-freezes its manifest of derived internal cells, partial causes included", () => {
+    const increment = lift((x: number) => x + 1);
+    const double = lift((x: number) => x * 2);
+    const testPattern = pattern<{ x: number }>(({ x }) => {
+      const intermediate = increment(x);
+      return { doubled: double(intermediate) };
+    });
+
+    const manifest = testPattern.derivedInternalCells!;
+    expect(manifest[0].partialCause).toEqual({ $generated: 0 });
+    expect(Object.isFrozen(manifest[0].partialCause)).toBe(true);
+    expect(isDeepFrozen(manifest)).toBe(true);
+  });
+
   it("uniquifies repeated stable internal paths with schemas", () => {
     const isPositive = lift(
       (value: number) => value > 0,
@@ -186,12 +200,26 @@ describe("pattern", () => {
     ).toThrow("is reserved");
   });
 
+  it("rejects a reserved $instance key in user-supplied causes at build time", () => {
+    const isPositive = lift((value: number) => value > 0);
+
+    // A user cause carrying `$instance` would mimic a named sub-pattern
+    // instance's cause — the build throws at the `.for()` call.
+    expect(() =>
+      pattern(() => {
+        const sneaky = (isPositive(1) as any).for({ $instance: "child" });
+        return { sneaky };
+      })
+    ).toThrow('top-level key "$instance" is reserved');
+  });
+
   it("accepts record causes without a top-level $generated key", () => {
     const isPositive = lift((value: number) => value > 0);
 
     const testPattern = pattern(() => {
       // Nested `$generated` can't collide with the flat generated causes, and
-      // only `$generated` is reserved — other `$`-keys stay legal.
+      // only `$generated` and `$instance` are reserved — other `$`-keys stay
+      // legal.
       const nested = (isPositive(1) as any).for({ outer: { $generated: 0 } });
       const sigilish = (isPositive(2) as any).for({ $kind: "stream" });
       return { nested, sigilish };

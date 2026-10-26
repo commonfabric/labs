@@ -78,6 +78,19 @@ mapped **directly**, which is the case that already works, so it needs no fix.
 Setting the perSession cell from an `onClick`/action is **not** affected — only
 the nested *read* (when mapping a computed-produced list) is.
 
+### What baking it in costs under server execution
+
+The producing `computed()` now reads the session's state, so under server
+execution it runs once for every session, and so does everything downstream of
+it; a client runtime runs only its own session's. Where that list is large or
+feeds other derivations, keep the rows cells, render each with a row pattern
+handed the row and the perSession cell as inputs, and read the cell at the row
+pattern's top level. FabriChat's message row
+(`packages/patterns/fabrichat/message-row.tsx`) reads its session's editor and
+picker state that way, for each message cell of a list the room's `computed()`
+produces. See
+[per-viewer work](../../../common/patterns/multi-user-patterns.md#per-viewer-work).
+
 **Verify:** deploy, click the per-row trigger, confirm the inline form opens
 *and* closes. The minimal repro: a per-row `computed` over a perSession cell,
 mapping a `computed(() => perSpaceCell.get())` list — perSpace control flips,

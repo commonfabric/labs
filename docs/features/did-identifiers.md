@@ -102,9 +102,6 @@ generic message will do:
   segment to `spaceDid`, so a DID-shaped name would not survive the round trip.
 
 A surface with something better to say tests `isDID` and raises its own error.
-The harness console's `--fabric-space` is the example: its message names
-`assign_slug` and says that a URL is composed from the space's name, which is
-the fact its caller needs and a generic message cannot carry.
 
 Refuse a DID at any new surface that takes a space name, an identity name, or
 anything else a DID would be mistaken for. Failing at the surface costs one

@@ -2149,7 +2149,7 @@ Tasks:
       under ON, because receipts went unwritten under the flag by
       events.md §4/N26's exactly-once subsumption, which replaced only
       that role and left the receipt's result-carriage
-      (plainResultReceipts; `cf call`'s `.result`) with no substitute.
+      (plainResultReceipts; `cf piece call`'s `.result`) with no substitute.
       The owner RULED it 2026-08-29 — "yes, Serving-side receipt/result
       write, as that is indeed what i said before" — and the PR's
       result-carriage commit (its fourth) builds it: the served handler

@@ -109,3 +109,12 @@ The cycles that predate the gate are listed in `ALLOWLIST` in
 `tasks/check-package-cycles.ts`, each with what the two sides take from each
 other. That list may only shrink: break one of those cycles and the gate fails
 until its entry is deleted.
+
+## Test-only code has one export-map entry
+
+What a package offers only to other packages' tests goes behind an entry named
+`./for-testing-only`, and no other entry or barrel reaches it.
+`packages/data-model/deno.jsonc` is the example. Nothing checks that only tests
+and benchmarks import it, so the rest of the convention, from naming to who may
+import it, is `docs/development/DEVELOPMENT.md`, § Offering test-only code to
+other packages.

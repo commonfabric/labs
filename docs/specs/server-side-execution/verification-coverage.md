@@ -3766,7 +3766,7 @@ discharge OW28. The flip's changes and validation record follow:
   serverExecution !== true`) on events.md §4/N26's subsumption,
   which subsumes only the EXACTLY-ONCE role — the receipt's
   RESULT-CARRIAGE role (plainResultReceipts, verb contract WS-C/D —
-  `cf call`'s `.result`/`.receipt`) had no replacement sentence and
+  `cf piece call`'s `.result`/`.receipt`) had no replacement sentence and
   no serving-side writer. The ruling resolves the fork to a
   SERVING-SIDE receipt/result write, on the owner's stated model:
   "all handlers write result cells (even if the value is undefined),

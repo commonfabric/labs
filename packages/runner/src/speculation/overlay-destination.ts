@@ -265,6 +265,14 @@ type OverlayEntry = {
   parentEventId?: string;
 };
 
+type PendingSeal = {
+  settled: Promise<Result<Unit, CommitError>>;
+
+  /** Absent when a legacy/custom transaction exposes no exact target-space
+   * surface; those seals conservatively participate in every space's wait. */
+  spaces?: ReadonlySet<MemorySpace>;
+};
+
 /**
  * The overlay destination: one per non-serving Runtime under the flag,
  * created lazily by `Runtime.edit()` and consulted for every
@@ -305,15 +313,18 @@ export class SpeculationOverlayDestination
   static readonly #MAX_TERMINAL_INTENTS = 4096;
 
   /** The client cascade THREAD (stage C W2.1): cascade child eventId →
-   * its emitter's eventId, recorded at the seal of every event-handler
+   * its emitter's eventId, recorded when the scheduler queues the child
+   * (`threadCascadeChild`) and again at the seal of every event-handler
    * echo that carries a `parentEventId` — with or without writes, so a
    * "router" child that only forwards (no entry of its own) still links
    * its grandchildren to the root intent. Process-local, bounded and
    * insertion-ordered like `#terminalIntents` (oldest pruned); never
    * persisted, never sent, never a dependency on history: it is read
-   * only at `retireIntent` to walk a live entry's ancestry to the intent
-   * whose terminal consequence just arrived. A link is needed only for
-   * the round trip between a cascade's seal and its root's consequence. */
+   * at a retirement to walk a live entry's ancestry to the intent whose
+   * terminal consequence just arrived, and to find the descendants still
+   * queued behind an event that was never fired. A link is needed only
+   * for the round trip between a cascade's queueing and its root's
+   * consequence. */
   readonly #cascadeParents = new Map<string, string>();
 
   /** Walk cap for the ancestry walk — ids are fresh per attempt, so no
@@ -332,9 +343,10 @@ export class SpeculationOverlayDestination
   /** DIAGNOSTIC counter (tests): late echoes dropped at seal. */
   #lateEchoDrops = 0;
 
-  /** Stage C W2.1: cascade-child echoes retired because an ANCESTOR
-   * intent's terminal consequence arrived (`retireIntent` walked the
-   * cascade thread to them). */
+  /** Stage C W2.1: cascade-child echoes retired along the cascade
+   * thread, because an ANCESTOR intent's terminal consequence arrived
+   * (`retireIntent`) or because the transaction that sent the ancestor
+   * event did not commit (`retireUnfiredEcho`). */
   #cascadeEchoRetirements = 0;
 
   /** The subset of those retired while NO doc they wrote had yet moved
@@ -426,9 +438,22 @@ export class SpeculationOverlayDestination
 
   readonly #intentConsequenceMemo = new Map<string, IntentConsequence>();
 
-  /** Resolvers parked by `waitForIntentQuiescence`, flushed by the same
-   * untrack step that empties the outstanding-intent set (and by close). */
-  #intentQuiescenceWaiters: Array<() => void> = [];
+  /**
+   * Waiters parked by `waitForIntentQuiescence`, each with the space whose
+   * outstanding intents it waits on, or none for every space's. The untrack
+   * step that empties a space's set flushes them, as close does.
+   */
+  #intentQuiescenceWaiters: Array<
+    { space: MemorySpace | undefined; resolve: () => void }
+  > = [];
+
+  /** Speculative seals that have started but have not finished collecting
+   * their entries. `#entries` alone has an empty window during `sealInto`,
+   * so diagnostic quiescence waits include these promises. */
+  readonly #pendingSeals = new Set<PendingSeal>();
+
+  /** Wakes a quiescence wait parked on an unfinished seal during close. */
+  readonly #closedForQuiescence = Promise.withResolvers<void>();
 
   #closed = false;
 
@@ -441,17 +466,25 @@ export class SpeculationOverlayDestination
     return this.#entries.get(space)?.size ?? 0;
   }
 
-  /** DIAGNOSTIC (tests): await every live overlay entry in `space`
-   * settling, including entries registered while the wait is in flight.
-   * Event-driven: each pass sleeps on the entries' own settlement
-   * promises and rechecks after they resolve, rather than polling
-   * `entryCount`. Resolves immediately when the space is already empty
-   * and when the overlay closes. */
+  /** DIAGNOSTIC (tests): await speculative seals already in flight, then
+   * every live overlay entry in `space` settling. A seal is included before
+   * `sealInto` can register its entries, closing the empty-map window.
+   * Event-driven: each pass sleeps on seals and entries, then rechecks.
+   * Resolves immediately when both are already empty or the overlay closes. */
   async waitForSpaceQuiescence(space: MemorySpace): Promise<void> {
     while (!this.#closed) {
       const entries = this.#entries.get(space);
-      if (entries === undefined || entries.size === 0) return;
-      await Promise.all([...entries.values()].map((entry) => entry.settled));
+      const pending = [
+        ...[...this.#pendingSeals]
+          .filter((seal) => seal.spaces?.has(space) !== false)
+          .map((seal) => seal.settled),
+        ...[...(entries?.values() ?? [])].map((entry) => entry.settled),
+      ];
+      if (pending.length === 0) return;
+      await Promise.race([
+        Promise.allSettled(pending),
+        this.#closedForQuiescence.promise,
+      ]);
     }
   }
 
@@ -483,9 +516,10 @@ export class SpeculationOverlayDestination
     return this.#lateEchoDrops;
   }
 
-  /** DIAGNOSTIC (tests): client cascade-child echoes retired by an
-   * ANCESTOR intent's terminal consequence (stage C W2.1 — the cascade
-   * arm of `retireIntent`). */
+  /** DIAGNOSTIC (tests): client cascade-child echoes retired along the
+   * cascade thread (stage C W2.1), by an ANCESTOR intent's terminal
+   * consequence (`retireIntent`) or by the ancestor event's send never
+   * firing (`retireUnfiredEcho`). */
   get cascadeEchoRetirementCount(): number {
     return this.#cascadeEchoRetirements;
   }
@@ -573,7 +607,15 @@ export class SpeculationOverlayDestination
       // Ordinary writes use the store's verdict, coverage, and sync hold.
       return tx.tx.commit(options);
     }
-    return createTransactionCommitReceipt(this.#sealSpeculative(tx));
+    const targetSpaces = tx.tx.getWriteTargetSpaces?.();
+    const pending: PendingSeal = {
+      settled: this.#sealSpeculative(tx),
+      spaces: targetSpaces === undefined ? undefined : new Set(targetSpaces),
+    };
+    this.#pendingSeals.add(pending);
+    return createTransactionCommitReceipt(
+      pending.settled.finally(() => this.#pendingSeals.delete(pending)),
+    );
   }
 
   /**
@@ -1328,32 +1370,49 @@ export class SpeculationOverlayDestination
     });
   }
 
-  /** Await the outstanding-intent set EMPTYING (speculation.md §4 step 2
-   * quiescence, the set `pendingIntentCount` counts): every event this
-   * runtime fired has reached a terminal consequence — consequenced,
-   * errored, dropped, or refused — AND that signal has arrived back
-   * here. Event-driven: resolves from the same untrack step that
-   * retires the last outstanding intent, immediately when nothing is
-   * outstanding, and on overlay close (nothing can retire afterwards).
-   * Carries no deadline of its own — a caller that needs a bound races
-   * it (the multi-runtime harness's budgeted settle does). Note this is
-   * a FIRST-ORDER signal, like the count it mirrors: a server-side
-   * cascade child (an event a served handler itself emits) is no
-   * client's intent and commits in a later wave, outside this wait. */
-  waitForIntentQuiescence(): Promise<void> {
-    if (this.#closed || this.pendingIntentCount === 0) {
+  /**
+   * Await the outstanding-intent set EMPTYING (speculation.md §4 step 2
+   * quiescence, the set `pendingIntentCount` counts), or only `space`'s part
+   * of it when one is given: every event this runtime fired, into `space`
+   * when one is given, has reached a terminal consequence — consequenced,
+   * errored, dropped, or refused — AND that signal has arrived back here.
+   * Event-driven: resolves from the same untrack step that retires the last
+   * such intent, immediately when none is outstanding, and on overlay close
+   * (nothing can retire afterwards). Carries no deadline of its own — a
+   * caller that needs a bound races it (the multi-runtime harness's budgeted
+   * settle does). Note this is a FIRST-ORDER signal, like the count it
+   * mirrors: a server-side cascade child (an event a served handler itself
+   * emits) is no client's intent and commits in a later wave, outside this
+   * wait.
+   */
+  waitForIntentQuiescence(space?: MemorySpace): Promise<void> {
+    if (this.#closed || !this.#intentsOutstandingIn(space)) {
       return Promise.resolve();
     }
     return new Promise((resolve) => {
-      this.#intentQuiescenceWaiters.push(resolve);
+      this.#intentQuiescenceWaiters.push({ space, resolve });
     });
   }
 
+  /** Whether an intent is outstanding in `space`, or in any space if none. */
+  #intentsOutstandingIn(space: MemorySpace | undefined): boolean {
+    return space === undefined
+      ? this.#trackedIntents.size > 0
+      : this.#trackedIntents.has(space);
+  }
+
+  /** Resolves every parked waiter whose space, or every space, has quiesced. */
   #flushIntentQuiescenceWaiters(): void {
     if (this.#intentQuiescenceWaiters.length === 0) return;
     const waiters = this.#intentQuiescenceWaiters;
     this.#intentQuiescenceWaiters = [];
-    for (const resolve of waiters) resolve();
+    for (const waiter of waiters) {
+      if (!this.#closed && this.#intentsOutstandingIn(waiter.space)) {
+        this.#intentQuiescenceWaiters.push(waiter);
+      } else {
+        waiter.resolve();
+      }
+    }
   }
 
   #settleIntentConsequence(
@@ -1440,12 +1499,15 @@ export class SpeculationOverlayDestination
     ]);
   }
 
-  /** Whether a live entry is a client cascade DESCENDANT of `ancestor`:
-   * its own `parentEventId` is the ancestor, or the thread recorded at
-   * seal leads there through intermediate cascade ids (a child that
-   * wrote nothing has no entry to hang the walk on — the thread does
-   * not need one). */
-  #cascadeReaches(entry: OverlayEntry, ancestor: string): boolean {
+  /** Whether a live entry, or a child the thread names, is a client
+   * cascade DESCENDANT of `ancestor`: its own `parentEventId` is the
+   * ancestor, or the thread leads there through intermediate cascade ids
+   * (a child that wrote nothing has no entry to hang the walk on — the
+   * thread does not need one). */
+  #cascadeReaches(
+    entry: Pick<OverlayEntry, "parentEventId">,
+    ancestor: string,
+  ): boolean {
     let id = entry.parentEventId;
     let hops = 0;
     while (id !== undefined) {
@@ -1609,13 +1671,13 @@ export class SpeculationOverlayDestination
     if (ids.size === 0) {
       bySidecar!.delete(sidecarId);
       this.#intentSidecarStates.delete(`${space}\0${sidecarId}`);
-      if (bySidecar!.size === 0) this.#trackedIntents.delete(space);
-      // The listener lives exactly as long as something is outstanding
-      // (contract point 5). The sidecar WATCH stays: a session's watch
-      // set is coarse by ruling (R-D), and the next fire on this stream
-      // is likely imminent.
-      if (this.#trackedIntents.size === 0) {
-        this.#releaseIntentListener();
+      if (bySidecar!.size === 0) {
+        this.#trackedIntents.delete(space);
+        // The listener lives exactly as long as something is outstanding
+        // (contract point 5). The sidecar WATCH stays: a session's watch
+        // set is coarse by ruling (R-D), and the next fire on this stream
+        // is likely imminent.
+        if (this.#trackedIntents.size === 0) this.#releaseIntentListener();
         this.#flushIntentQuiescenceWaiters();
       }
     }
@@ -1691,6 +1753,66 @@ export class SpeculationOverlayDestination
     eventId: string,
     witness?: { markSidecarId: string },
   ): void {
+    this.#retireEchoes(space, eventId, {
+      own: "event echo retired: the authoritative consequences " +
+        "(or the dropped-event notice) arrived (speculation.md §4)",
+      cascade: "cascade echo retired: its ancestor intent's authoritative " +
+        "consequences (or notice) arrived (speculation.md §4 step 2)",
+    }, witness);
+  }
+
+  /**
+   * Retire the echo of an event that was never fired, and its client
+   * cascade, as {@link retireIntent} retires those of an answered intent:
+   * the transaction that sent the event failed or was aborted, so no append
+   * carries the event and nothing will ever answer it. The event's intent
+   * was never tracked, so nothing is settled or signaled, and the event's
+   * own id does not join the jobless set: an attempt run again under the
+   * same id fires the event after all, and that attempt's echo stands.
+   *
+   * A cascade child the echo's run queued can still be waiting to run, and
+   * its echo would seal after this retirement with nothing left to retire
+   * it. Every descendant the thread reaches joins the jobless set instead,
+   * so such an echo is dropped at its seal. A child's id is minted for the
+   * attempt that queued it, so an attempt run again under the event's id
+   * queues children the set does not name.
+   */
+  retireUnfiredEcho(space: MemorySpace, eventId: string): void {
+    for (const [child, parent] of [...this.#cascadeParents]) {
+      if (this.#cascadeReaches({ parentEventId: parent }, eventId)) {
+        this.#noteJoblessIntent(child);
+      }
+    }
+    this.#retireEchoes(space, eventId, {
+      own: "event echo retired: the transaction that sent the event did " +
+        "not commit, so the event was never fired",
+      cascade: "cascade echo retired: the transaction that sent its " +
+        "ancestor event did not commit, so that event was never fired",
+    });
+  }
+
+  /**
+   * Thread a client cascade child to the event whose run queued it, as the
+   * child's seal does later. The thread has to reach the child while it
+   * waits in the queue: the transaction that sent the root event can fail
+   * before the child runs, and {@link retireUnfiredEcho} then finds the
+   * child by it.
+   */
+  threadCascadeChild(eventId: string, parentEventId: string): void {
+    this.#noteCascadeParent(eventId, parentEventId);
+  }
+
+  /**
+   * The walk both retirements share. `withdrawals` holds the message an
+   * entry of the event's own is withdrawn with, and the one a cascade
+   * descendant's is.
+   */
+  #retireEchoes(
+    space: MemorySpace,
+    eventId: string,
+    withdrawals: { own: string; cascade: string },
+    witness?: { markSidecarId: string },
+  ): void {
     let view:
       | ((
         id: URI,
@@ -1713,15 +1835,14 @@ export class SpeculationOverlayDestination
         if (!own && !this.#cascadeReaches(entry, eventId)) continue;
         entries.delete(entry.localSeq);
         if (!own) {
-          // A cascade descendant: jobless by its ancestor's consequence.
+          // A cascade descendant: jobless with its ancestor.
           this.#cascadeEchoRetirements += 1;
           if (entry.eventId !== undefined) {
             this.#noteJoblessIntent(entry.eventId);
           }
           logger.debug("cascade-echo-retired", () => [
-            `cascade echo ${entry.eventId} retired: its ancestor intent ` +
-            `${eventId} reached a terminal consequence (speculation.md §4 ` +
-            "step 2, the jobless-cascade consequence)",
+            `cascade echo ${entry.eventId} retired with its ancestor ` +
+            `intent ${eventId}: ${withdrawals.cascade}`,
           ]);
           // The witness compares seqs, and a seq orders commits within one
           // space, so it reads only an echo in the mark's own space.
@@ -1776,11 +1897,7 @@ export class SpeculationOverlayDestination
         }
         entry.resolveVerdict({
           withdrawn: {
-            message: own
-              ? "event echo retired: the authoritative consequences " +
-                "(or the dropped-event notice) arrived (speculation.md §4)"
-              : "cascade echo retired: its ancestor intent's authoritative " +
-                "consequences (or notice) arrived (speculation.md §4 step 2)",
+            message: own ? withdrawals.own : withdrawals.cascade,
             superseded: true,
           },
         });
@@ -2170,6 +2287,7 @@ export class SpeculationOverlayDestination
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#closedForQuiescence.resolve();
     for (const entries of this.#entries.values()) {
       for (const entry of entries.values()) {
         entry.resolveVerdict({

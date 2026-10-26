@@ -21,6 +21,7 @@ import {
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import { observedOutputsIn } from "../run-pattern-output-concerns.ts";
+import { pieceUrl } from "../piece-url.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
 export interface AssignSlugToolInput {
@@ -47,11 +48,17 @@ export interface AssignSlugToolSuccessOutput {
   pieceId: string;
 
   /**
-   * Absolute URL for the named piece, composed from the session's API URL
-   * and the space's configured name. Absent when the session was configured
-   * by `did:key` rather than by name: the only URL available then would
-   * carry the space DID, a bare fabric identifier that does not cross the
-   * model boundary, so no URL is offered rather than a fabricated one.
+   * The DID of the space the slug names the piece in. Artifact-only, like
+   * the URL that carries it.
+   */
+  space: string;
+
+  /**
+   * Absolute URL for the named piece, composed from the session's API URL,
+   * the space's DID, and the slug (`pieceUrl`). Absent only when the API URL
+   * cannot be read as a URL. Artifact-only: the prompt loop strips it from
+   * model context because it carries the space's DID, and the console reads
+   * it from the artifact.
    */
   url?: string;
 }
@@ -112,6 +119,7 @@ export const assignSlugToolDescriptor: HarnessToolDescriptor = {
       status: { enum: ["ok", "error"] },
       slug: { type: "string" },
       pieceId: { type: "string" },
+      space: { type: "string" },
       url: { type: "string" },
       message: { type: "string" },
     },
@@ -220,32 +228,6 @@ const slugAvailability = async (
     // slug and nothing the caller did not already have.
     if (state === "unknown") return { state, reason: errorMessage(error) };
     return state === "free" ? { state, binding } : { state };
-  }
-};
-
-/**
- * The URL a person opens for a named piece, or `undefined` when none can be
- * composed without inventing one. The address is the session's API URL, then
- * the space, then the slug — the same shape `cf piece new` prints. Only a
- * space configured by NAME yields one: a space configured by `did:key` would
- * put a bare fabric identifier in the URL, and that does not cross the model
- * boundary.
- */
-export const namedPieceUrl = (
-  pieces: PiecesController,
-  slug: string,
-): string | undefined => {
-  const spaceName = pieces.getSpaceName();
-  if (spaceName === undefined) {
-    return undefined;
-  }
-  try {
-    const url = new URL(pieces.runtime.apiUrl);
-    const base = url.pathname.endsWith("/") ? url.pathname : `${url.pathname}/`;
-    url.pathname = `${base}${encodeURIComponent(spaceName)}/${slug}`;
-    return url.toString();
-  } catch {
-    return undefined;
   }
 };
 
@@ -380,12 +362,14 @@ export const assignSlugTool: HarnessToolDefinition<
         slug,
         ref: createLLMFriendlyLink(cell.getAsNormalizedFullLink()),
       });
-      const url = namedPieceUrl(pieces, slug);
+      const space = pieces.getSpace();
+      const url = pieceUrl(pieces.runtime.apiUrl, space, slug);
       return {
         outputId,
         status: "ok",
         slug,
         pieceId: targetId,
+        space,
         ...(url !== undefined ? { url } : {}),
       };
     };

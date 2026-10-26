@@ -1,6 +1,7 @@
 /**
  * Word Search Maker: a form for the words and settings beside the puzzle they
- * make, which updates as the form changes and downloads as a PDF.
+ * make, which updates as the form changes and downloads as a PDF, and a Play
+ * tab where the same puzzle is solved by tapping each word's two ends.
  *
  * The form owns the settings and hands its cells to `WordSearch`, which owns
  * generation, the answer view, shuffling and export. The word list is typed as
@@ -23,6 +24,7 @@ import {
   parseWordList,
   type WordSearch as Puzzle,
 } from "./generator.ts";
+import { WordSearchPlay } from "./play.tsx";
 import { WordSearch } from "./wordsearch.tsx";
 
 interface WordSearchMakerInput {
@@ -55,6 +57,10 @@ export default pattern<WordSearchMakerInput, WordSearchMakerOutput>(
       backwards,
       seed,
     });
+    // The same puzzle, to play; its finds are each player's own.
+    const play = WordSearchPlay({ title, puzzle: puzzle.puzzle });
+    // Which view of the puzzle this tab shows.
+    const view = Writable.perSession.of("make");
     // The size the grid has, which a typed-in value may have been brought to.
     const rowsLabel = computed(() => `Rows: ${puzzle.puzzle.rows}`);
     const colsLabel = computed(() => `Columns: ${puzzle.puzzle.cols}`);
@@ -94,7 +100,16 @@ export default pattern<WordSearchMakerInput, WordSearchMakerOutput>(
                 <cf-text>Backwards</cf-text>
               </cf-hstack>
             </cf-vstack>
-            <div style="flex: 2 1 20rem; min-width: 0;">{puzzle}</div>
+            <div style="flex: 2 1 20rem; min-width: 0;">
+              <cf-tabs $value={view}>
+                <cf-tab-list>
+                  <cf-tab value="make">Make</cf-tab>
+                  <cf-tab value="play">Play</cf-tab>
+                </cf-tab-list>
+                <cf-tab-panel value="make">{puzzle}</cf-tab-panel>
+                <cf-tab-panel value="play">{play}</cf-tab-panel>
+              </cf-tabs>
+            </div>
           </cf-hstack>
         </cf-screen>
       ),

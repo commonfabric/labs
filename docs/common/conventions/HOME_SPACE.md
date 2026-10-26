@@ -413,9 +413,7 @@ identity Home, and nothing replaces or unlinks it: root
 recreation refuses a Home before stopping, unlinking or compiling anything,
 whether the Home is absent, installed, or pointing at a target that cannot
 currently be loaded, and the low-level link and unlink
-refuse to replace or drop a root a Home holds. (`cf space set-home` is
-retired; see
-[Retired: `cf space set-home`](../../../packages/cli/README.md#retired-cf-space-set-home).)
+refuse to replace or drop a root a Home holds.
 
 To run custom Home source, open the Home once so it exists, find its root, and
 update the root in place with the complete authored source and its tests. The

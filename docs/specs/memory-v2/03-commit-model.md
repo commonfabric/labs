@@ -812,10 +812,10 @@ The client provider fires three notification types:
 A principal may read a space it cannot write, and a reactive computation it
 runs there still writes its outputs. Those writes are derived: running the
 computation again reproduces them. When the server refuses such a commit with
-an `AuthorizationError` it has not marked retriable, the client keeps each
-written document's new value instead of reverting it, as a _local fold_: the
-confirmed value at the same `seq`, with the refused write applied, held by
-that replica alone.
+an `AuthorizationError` it has not marked retriable, a client running under
+the `localFold` flag keeps each written document's new value instead of
+reverting it, as a _local fold_: the confirmed value at the same `seq`, with
+the refused write applied, held by that replica alone.
 
 - A document is folded only where the refused write sits directly on the
   confirmed version it was made over. Where a newer confirmed version arrived
@@ -835,6 +835,13 @@ that replica alone.
 
 Event handlers are not folded. Their writes are acts rather than derivations,
 and a refusal of one is reverted and reported.
+
+The fold is gated by the `localFold` experimental flag
+([registry](../../development/EXPERIMENTAL_OPTIONS.md#localfold)), off by
+default. Without it, a refused derived write is reverted as any other
+rejection is. The computation is not retried, and the revert of its own
+write does not run it again; it runs again when an input it did not write
+changes, and is refused again while the grant is missing.
 
 ## 3.9 Commit Ordering
 

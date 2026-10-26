@@ -91,14 +91,17 @@ export {
   joinVisitedRoomOf,
 } from "./join-visited-room.ts";
 export {
-  CHAT_ROOM_SPACE_KIND,
-  LOOM_OFFER_KIND,
   type OfferDecision,
   type OfferRefusal,
   ShareIntake,
   startShareIntakeOf,
 } from "./share-intake.ts";
-export { type SpaceRefusal, vetSpace } from "./space-vetting.ts";
+export {
+  CHAT_ROOM_SPACE_KIND,
+  LOOM_SPACE_KIND,
+  type SpaceRefusal,
+  vetSpace,
+} from "./space-vetting.ts";
 export {
   type PatternCompatibilityReport,
   type PatternUpdateReceipt,
@@ -154,6 +157,14 @@ export {
   type ServedSetSourceRequest,
   servedUploadPattern,
 } from "./served-lifecycle.ts";
+export {
+  buildServedLifecycleVerb,
+  runServedLifecycleVerb,
+  type ServedLifecycleReceipts,
+  servedLifecycleRunner,
+  type ServedLifecycleVerbDescriptor,
+  type ServedLifecycleVerbRunner,
+} from "./served-lifecycle-verbs.ts";
 
 export {
   inspectProfileNameProtection,

@@ -46,10 +46,17 @@ type TestProvider = IStorageProvider & {
   ): Promise<unknown>;
 };
 
+/**
+ * A loopback transport that, the first time the client sends the commit of
+ * each `dropOnFirstLocalSeqs` entry or a `session.watch.add` naming the
+ * document `dropOnFirstWatchOf`, hands the frame to the server, discards the
+ * responses, and drops the connection.
+ */
 class SabotagedReconnectTransport implements MemoryV2Client.Transport {
   connectionCount = 0;
   onConnectionCount?: (connectionCount: number) => void;
   droppedLocalSeqs: number[] = [];
+  droppedWatchAdds = 0;
   #receiver: (payload: string) => void = () => {};
   #closeReceiver: (error?: Error) => void = () => {};
   #connection: ReturnType<MemoryV2Server.Server["connect"]> | null = null;
@@ -58,13 +65,16 @@ class SabotagedReconnectTransport implements MemoryV2Client.Transport {
 
   readonly #server: MemoryV2Server.Server;
   readonly #dropOnFirstLocalSeqs: number[];
+  readonly #dropOnFirstWatchOf: string | undefined;
 
   constructor(
     server: MemoryV2Server.Server,
     dropOnFirstLocalSeqs: number[] = [],
+    dropOnFirstWatchOf?: string,
   ) {
     this.#server = server;
     this.#dropOnFirstLocalSeqs = dropOnFirstLocalSeqs;
+    this.#dropOnFirstWatchOf = dropOnFirstWatchOf;
   }
 
   setReceiver(receiver: (payload: string) => void): void {
@@ -79,17 +89,28 @@ class SabotagedReconnectTransport implements MemoryV2Client.Transport {
     const message = decodeMemoryBoundary(payload) as {
       type?: string;
       commit?: { localSeq?: number };
+      watches?: { query: { roots?: { id: string }[] } }[];
     };
     const localSeq = message.commit?.localSeq;
-
-    if (
-      message.type === "transact" &&
+    const dropsCommit = message.type === "transact" &&
       typeof localSeq === "number" &&
       this.#dropOnFirstLocalSeqs.includes(localSeq) &&
-      !this.#dropped.has(localSeq)
-    ) {
-      this.#dropped.add(localSeq);
-      this.droppedLocalSeqs.push(localSeq);
+      !this.#dropped.has(localSeq);
+    const dropsWatch = message.type === "session.watch.add" &&
+      this.droppedWatchAdds === 0 &&
+      (message.watches ?? []).some((watch) =>
+        (watch.query.roots ?? []).some((root) =>
+          root.id === this.#dropOnFirstWatchOf
+        )
+      );
+
+    if (dropsCommit || dropsWatch) {
+      if (dropsCommit) {
+        this.#dropped.add(localSeq);
+        this.droppedLocalSeqs.push(localSeq);
+      } else {
+        this.droppedWatchAdds++;
+      }
       this.#dropResponses = true;
       try {
         await this.#openConnection().receive(payload);
@@ -330,6 +351,63 @@ Deno.test("memory v2 runner does not integrate its own replayed commit after rec
     assertEquals(provider.get(localUri), { value: { local: 1 } });
     assertEquals(provider.get(remoteUri), { value: { remote: 7 } });
     assertEquals(transport.connectionCount >= 2, true);
+  } finally {
+    await writerClient.close();
+    await storageManager.close();
+    await server.close();
+  }
+});
+
+Deno.test("memory v2 runner loads and keeps watching a document when its load's response is lost to a reconnect", async () => {
+  const server = new MemoryV2Server.Server({
+    ...TEST_MEMORY_SERVER_AUTH,
+    store: new URL(`memory://runner-v2-lost-load-${crypto.randomUUID()}`),
+  });
+  const uri = `of:memory-v2-lost-load-${crypto.randomUUID()}` as URI;
+  const transport = new SabotagedReconnectTransport(server, [], uri);
+  const sessionFactory = new SingleSessionFactory(transport);
+  const storageManager = TestStorageManager.create({
+    as: signer,
+    memoryHost: new URL("memory://runner-v2-lost-load"),
+  }, sessionFactory);
+  const notifications = new NotificationRecorder();
+  const writerClient = await MemoryV2Client.connect({
+    transport: MemoryV2Client.loopback(server),
+  });
+  const writer = await writerClient.mount(
+    space,
+    {},
+    testSessionOpenAuthFactory,
+  );
+  const provider = storageManager.open(space) as TestProvider;
+
+  storageManager.subscribe(notifications);
+
+  try {
+    await writer.transact({
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{ op: "set", id: uri, value: { value: { remote: 1 } } }],
+    });
+
+    assertEquals(await provider.sync(uri), { ok: {} });
+    assertEquals(transport.droppedWatchAdds, 1);
+    assertEquals(transport.connectionCount, 2);
+    assertEquals(provider.get(uri), { value: { remote: 1 } });
+
+    const gotRemote2 = defer<void>();
+    notifications.onNotification = (notification) => {
+      if (notificationCarriesField(notification, uri, "remote", 2)) {
+        gotRemote2.resolve();
+      }
+    };
+    await writer.transact({
+      localSeq: 2,
+      reads: { confirmed: [], pending: [] },
+      operations: [{ op: "set", id: uri, value: { value: { remote: 2 } } }],
+    });
+    await gotRemote2.promise;
+    assertEquals(provider.get(uri), { value: { remote: 2 } });
   } finally {
     await writerClient.close();
     await storageManager.close();

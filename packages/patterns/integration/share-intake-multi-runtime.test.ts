@@ -12,7 +12,10 @@
  * direct room that manager offers through the owner's inbox itself, which the
  * intake has the owner's manager accept, and which a start of the owner's with
  * its sender then finds, and of a group that manager offers to the owner named
- * by their profile.
+ * by their profile. It registers a `loom` offer of a space created the way a
+ * loom daemon's sidecar creates a Loom's, declaring `loom` or no kind, with no
+ * acceptance, and refuses one of a space declaring another kind or whose root
+ * is no Loom.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -130,7 +133,7 @@ describe("share intake across runtimes", () => {
    */
   const createAndRefuse = async (
     id: string,
-    request: { root?: boolean; spaceKind?: string | null },
+    request: { root?: boolean; spaceKind?: string | null; kind?: string },
   ): Promise<{ decisions: string[]; logged: number; received: boolean }> => {
     const before = await refusalsLogged();
     await sender.send("createAndOffer", {
@@ -458,6 +461,156 @@ describe("share intake across runtimes", () => {
       "space-root-misplaced",
     ]);
     expect(await refusalsLogged()).toBe(before + 1);
+  });
+
+  /**
+   * Has the sender create a space the way a loom daemon's sidecar creates a
+   * social Loom's, declaring `spaceKind` (`loom` when absent, none for
+   * `null`), and offer it under `id` as a `loom`, and waits for the offer to
+   * reach the owner's inbox. Returns the space and the address of its root.
+   */
+  const createLoomAndOffer = async (
+    id: string,
+    spaceKind?: string | null,
+  ): Promise<{ space: string; root: PieceAddress }> => {
+    const created = (await sender.client().call("createLoomSpace", {
+      recipient: owner.identity.did(),
+      spaceKind,
+      title: `Loom ${id}`,
+    })) as { space: string; root: PieceAddress };
+    await sender.send("offerAgain", {
+      id,
+      space: created.space,
+      title: `Loom ${id}`,
+      kind: "loom",
+    });
+    await harness.settleUntil(async () => await delivered(sender, id));
+    return created;
+  };
+
+  it("registers a `loom` offer of a space a loom daemon's sidecar creates, with `kind` `loom`, its sender, `since` and the receipt, and has no manager accept it", async () => {
+    const { space, root } = await createLoomAndOffer("loom");
+    await harness.settleUntil(async () =>
+      (await catalog())?.offers[receiptKey(sender, "loom")] !== undefined
+    );
+
+    const entry = (await catalog())?.entries[space];
+    expect(entry?.state).toBe("saved");
+    expect(entry?.kind).toBe("loom");
+    expect(entry?.from).toBe(sender.identity.did());
+    expect(entry?.title).toBe("Loom loom");
+    expect(typeof entry?.since).toBe("number");
+    expect((await catalog())?.offers[receiptKey(sender, "loom")]).toEqual({
+      from: sender.identity.did(),
+      id: "loom",
+      space,
+      host: entry?.host,
+      kind: "loom",
+    });
+    // No manager accepted the Loom, which would have joined the owner's
+    // profile to its participants.
+    await harness.settle();
+    expect(await sender.read(["participants", "length"], { piece: root }))
+      .toBe(0);
+  });
+
+  it("registers a `loom` offer of a Loom space that declares no kind", async () => {
+    const { space } = await createLoomAndOffer("legacy loom", null);
+    await harness.settleUntil(async () =>
+      (await catalog())?.offers[receiptKey(sender, "legacy loom")] !==
+        undefined
+    );
+
+    expect((await catalog())?.entries[space]).toMatchObject({
+      kind: "loom",
+      state: "saved",
+      from: sender.identity.did(),
+    });
+  });
+
+  it("refuses a `loom` offer of a space declaring `fabrichat-room`, and logs it", async () => {
+    expect(await createAndRefuse("room as loom", { kind: "loom" })).toEqual({
+      decisions: ["space-kind-mismatch"],
+      logged: 1,
+      received: false,
+    });
+  });
+
+  it("refuses a `loom` offer of a Loom space whose root a member re-pointed to a document that is no Loom, and logs it", async () => {
+    const { space } = await createLoomAndOffer("loom to repoint");
+    await harness.settleUntil(async () =>
+      (await catalog())?.offers[receiptKey(sender, "loom to repoint")] !==
+        undefined
+    );
+    await sender.client().call("repointSpaceRoot", { space });
+    const before = await refusalsLogged();
+    await sender.send("offerAgain", {
+      id: "repointed loom",
+      space,
+      title: "Repointed loom",
+      kind: "loom",
+    });
+    await harness.settleUntil(async () =>
+      await delivered(sender, "repointed loom")
+    );
+
+    // The intake decides an inbox's offers in order, so the repointed offer
+    // was decided by the time an offer after it is registered.
+    await createAndOffer("after the repointed loom");
+
+    expect((await catalog())?.offers[receiptKey(sender, "repointed loom")])
+      .toBeUndefined();
+    expect(await decisions(sender, "repointed loom")).toEqual([
+      "space-root-mismatch",
+    ]);
+    expect(await refusalsLogged()).toBe(before + 1);
+  });
+
+  it("adds a receipt and nothing else when a Loom is offered again, and keeps an archived Loom entry archived", async () => {
+    const { space } = await createLoomAndOffer("loom to resend");
+    await harness.settleUntil(async () =>
+      (await catalog())?.offers[receiptKey(sender, "loom to resend")] !==
+        undefined
+    );
+    const registered = (await catalog())?.entries[space];
+
+    await sender.send("offerAgain", {
+      id: "loom resent",
+      space,
+      title: "Loom resent",
+      kind: "loom",
+    });
+    await harness.settleUntil(async () =>
+      (await catalog())?.offers[receiptKey(sender, "loom resent")] !==
+        undefined
+    );
+    expect((await catalog())?.entries[space]).toEqual(registered);
+
+    await owner.send("changeSharedSpaceMembership", {
+      space,
+      id: "archive loom",
+      expectedRevision: registered?.revision,
+      state: "archived",
+    });
+    await harness.settleUntil(async () =>
+      (await catalog())?.entries[space]?.state === "archived"
+    );
+    const archived = (await catalog())?.entries[space]?.revision;
+    await sender.send("offerAgain", {
+      id: "loom resent again",
+      space,
+      title: "Loom resent again",
+      kind: "loom",
+    });
+    await harness.settleUntil(async () =>
+      (await catalog())?.offers[receiptKey(sender, "loom resent again")] !==
+        undefined
+    );
+
+    const entry = (await catalog())?.entries[space];
+    expect(entry?.state).toBe("archived");
+    expect(entry?.revision).toBe(archived);
+    expect(entry?.title).toBe("Loom loom to resend");
   });
 
   it("keeps an archived entry archived when the same space is offered again, recording the new offer's receipt", async () => {

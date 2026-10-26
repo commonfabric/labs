@@ -109,6 +109,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-avatar-input` | Picks an image and fires it as profile-picture bytes, cropped square and scaled down | |
 | `cf-badge` | Status indicator / label with visual variants | |
 | `cf-bar-mark` | Bar mark rendered inside `cf-chart` | `$data` |
+| `cf-blob-link` | Link that downloads a blob from a space's blob store, given its reference `{ space, id }` (see [files](../capabilities/files.md)) | |
 | `cf-button` | Interactive button with color/variant/size options | |
 | `cf-calendar` | Month-grid mini calendar | `$value`, `$markedDates` |
 | `cf-canvas` | Fixed-size canvas surface emitting `cf-canvas-click` with x/y | |
@@ -147,6 +148,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-hscroll` | Horizontal scroll container | |
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
 | `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities | |
+| `cf-image` | Image from raw `bytes` and a `media-type`, or from a blob reference `{ space, id }` (see [files](../capabilities/files.md)) | |
 | `cf-image-input` | Image capture/upload with compression, EXIF, camera support | |
 | `cf-input` | Text input with validation and reactive binding | `$value` |
 | `cf-input-otp` | One-time-password input with individual digit fields | |

@@ -677,17 +677,10 @@ July result-schema work, and what #5309 got right by hand.
 
 This plan is exhausted when the sequence above is walked and the issue tail is
 empty — the items build the surface, and the tail is that surface failing where
-it is already built, so neither alone finishes it. Two arcs are queued behind
-it, and naming their triggers here is what keeps them from being dropped when
-this document stops being read.
-
-**The command surface** —
-[The CLI surface shape](cli-surface-shape.md), already sequenced. Positional
-addresses and the top-level names land first, and can start as soon as the read
-layer has merged; they touch the same commands, so starting earlier means
-resolving the same files twice. Every spelling it retires is dated rather than
-conditional: each notice names the day after which the spelling it replaces is
-no longer guaranteed.
+it is already built, so neither alone finishes it. One arc is queued behind it,
+and naming its trigger here is what keeps it from being dropped when this
+document stops being read. The command surface, the other arc that followed it,
+is executed and archived as [The CLI surface shape](../history/plans/cli-surface-shape.md).
 
 **Retention and CFC execution provenance** —
 [its own plan](retention-and-provenance.md). Gated on a CFC review that has not
@@ -743,11 +736,9 @@ on a CFC review, sized large, and not about verbs: it is a program that was
 filed under one. It is sequenced in
 [its own plan](retention-and-provenance.md).
 
-**The command surface** —
-[The CLI surface shape](cli-surface-shape.md) sequences positional addresses,
-the top-level names, deprecation, and the move of each command under the noun
-it acts on. Kept apart because it renames rather than adds, so every step of it
-can break a caller who learned the current spelling.
+**The command surface** — renaming rather than adding, so every step of it
+could break a caller, and kept apart for that reason. It is executed and
+archived as [The CLI surface shape](../history/plans/cli-surface-shape.md).
 
 **The designs.** Nothing here amends
 [the pattern verb contract](pattern-verb-contract.md) or

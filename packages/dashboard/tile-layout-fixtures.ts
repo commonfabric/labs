@@ -310,7 +310,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    label: "recent main runs",
+    label: "recent commits",
     wide: true,
     view: { status: "good" },
   },

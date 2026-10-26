@@ -1,7 +1,7 @@
 /**
  * The plain-text language for input whose syntax `cf view` cannot select from
- * a filename or shebang. It remains last in the language registry and is the
- * registry's fallback.
+ * a filename, a shebang, or a signature such as an XML declaration. It remains
+ * last in the language registry and is the registry's fallback.
  */
 
 import type { Language } from "../language.ts";
@@ -23,6 +23,7 @@ export const plainTextLanguage: Language = {
     filenamePatterns: [/^(?:LICENSE|NOTICE)\..+$/i],
     aliases: ["text", "plaintext"],
     interpreters: [],
+    signatures: [],
     sharedExtensions: [],
   },
 

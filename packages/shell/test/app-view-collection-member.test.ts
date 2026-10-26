@@ -1415,8 +1415,9 @@ describe("AppView collection members", () => {
     }
   });
 
-  it("retries a load that failed after the reference resolved", async () => {
+  it("keeps a failed load's error on screen, reloading nothing while the reference stands", async () => {
     const restore = installBrowserGlobals();
+    const errors = captureErrors();
     try {
       const { XAppView } = await import("../src/views/AppView.ts");
       const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
@@ -1426,77 +1427,77 @@ describe("AppView collection members", () => {
         viewOf({ pieceSlug: "top", pieceMember: "42" }),
       );
 
-      // The reference resolves, and loading the piece it names fails — a
-      // dropped connection, say. The answer is identified and the view is
-      // not showing it.
-      stub.failLoads(new Error("the socket went away"));
+      // The reference resolves, and loading the piece it names fails.
+      stub.failLoads(new Error("the piece would not start"));
       view.updated(new Map([["app", undefined]]));
-      await pollAndSettle(view, stub);
+      await stub.settle();
+      view._selectedPattern.run();
+      await view._selectedPattern.taskComplete.catch(() => {});
       const afterFailedLoad = view.accessForTestingOnly.slugRevision;
+      const loadsAfterFailure = stub.started.length;
 
-      // Nothing about the reference has changed, so no later poll brings a
-      // new answer. Recovery has to come from the answer still being
-      // unhandled — otherwise the view sits on the error for good.
-      stub.failLoads(undefined);
-      await pollAndSettle(view, stub);
+      // Every poll reaches the answer whose failure is on screen. Each one
+      // that called it news would fetch and start the piece again.
+      for (let tick = 0; tick < 3; tick++) await pollAndSettle(view, stub);
 
-      expect(view.accessForTestingOnly.slugRevision).toBeGreaterThan(
-        afterFailedLoad,
-      );
-      expect(stub.started.map((call) => call[1])).toContain("fid1:member-42");
+      expect(view.accessForTestingOnly.slugRevision).toBe(afterFailedLoad);
+      expect(stub.started).toHaveLength(loadsAfterFailure);
+      const [loadError] = templateBindings(view.render(), "loadError") as [
+        { kind: string; error: Error },
+      ];
+      expect(loadError.kind).toBe("piece");
+      expect(loadError.error.message).toBe("the piece would not start");
+      expect(errors.lines).toEqual([
+        "[AppView] Failed to load selected piece: Error: the piece would not start",
+      ]);
     } finally {
+      errors.restore();
       restore();
     }
   });
 
-  it("retries a load that failed after the watch behind it was replaced", async () => {
+  it("keeps the error of a failed load reached from a refusal, reloading nothing while the reference stands", async () => {
     const restore = installBrowserGlobals();
+    const errors = captureErrors();
     try {
       const { XAppView } = await import("../src/views/AppView.ts");
-      const first = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
-      const view = appViewOver(
-        XAppView as never,
-        first,
-        viewOf({ pieceSlug: "top", pieceMember: "42" }),
-      );
-
-      // A piece is on screen, so an answer is recorded.
-      view.updated(new Map([["app", undefined], ["rt", undefined]]));
-      await first.settle();
-      view._selectedPattern.run();
-      await view._selectedPattern.taskComplete;
-
-      // A replacement runtime takes over. It reaches the same answer, and the
-      // load of it fails — so what the recorded answer names is not what is
-      // on screen, and the answer alone cannot say so.
-      const replacement = stubRuntime({
-        pieceId: "fid1:member-42",
-        pathAfter: [],
+      const stub = stubRuntime({
+        refusal: { code: "missing-member", message: "no member 42 in top" },
       });
-      replacement.failLoads(new Error("the socket went away"));
-      view.rt = replacement.rt;
-      view.updated(new Map([["rt", undefined]]));
-      await replacement.settle();
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
       view._selectedPattern.run();
       await view._selectedPattern.taskComplete.catch(() => {});
+
+      // The member arrives and its load fails. The refusal before it is not
+      // what the view now shows, so a poll measuring against that refusal
+      // would call every later answer news.
+      stub.failLoads(new Error("the piece would not start"));
+      stub.answer({ pieceId: "fid1:member-42", pathAfter: [] });
+      await pollAndSettle(view, stub);
       const afterFailedLoad = view.accessForTestingOnly.slugRevision;
+      const loadsAfterFailure = stub.started.length;
+      expect(loadsAfterFailure).toBe(1);
 
-      // Nothing about the reference changed, so no later answer differs from
-      // the one recorded. Recovery has to come from the run having reported
-      // that it reached nothing to show.
-      replacement.failLoads(undefined);
-      await replacement.poll();
+      for (let tick = 0; tick < 3; tick++) await pollAndSettle(view, stub);
 
-      expect(view.accessForTestingOnly.slugRevision).toBeGreaterThan(
-        afterFailedLoad,
-      );
+      expect(view.accessForTestingOnly.slugRevision).toBe(afterFailedLoad);
+      expect(stub.started).toHaveLength(loadsAfterFailure);
     } finally {
+      errors.restore();
       restore();
     }
   });
 
-  it("retries a load that failed with the reference and its watch unchanged", async () => {
+  it("reloads a failed load once the reference reaches another piece", async () => {
     const restore = installBrowserGlobals();
+    const errors = captureErrors();
     try {
       const { XAppView } = await import("../src/views/AppView.ts");
       const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
@@ -1506,35 +1507,26 @@ describe("AppView collection members", () => {
         viewOf({ pieceSlug: "top", pieceMember: "42" }),
       );
 
-      view.updated(new Map([["app", undefined], ["rt", undefined]]));
-      await stub.settle();
-      view._selectedPattern.run();
-      await view._selectedPattern.taskComplete;
-
-      // A new app state naming the same reference: every input the watch is
-      // built from is what it was, so the running watch stands and no
-      // teardown runs at all. The selection runs again anyway, and its load
-      // fails.
-      view.app = {
-        identity: {},
-        config: {},
-        view: viewOf({ pieceSlug: "top", pieceMember: "42" }),
-      };
+      stub.failLoads(new Error("the piece would not start"));
       view.updated(new Map([["app", undefined]]));
       await stub.settle();
-      stub.failLoads(new Error("the socket went away"));
       view._selectedPattern.run();
       await view._selectedPattern.taskComplete.catch(() => {});
       const afterFailedLoad = view.accessForTestingOnly.slugRevision;
 
+      // Recording the failure as shown settles THIS answer and no other: the
+      // member pointed elsewhere is news, and the reload goes and gets it.
       stub.failLoads(undefined);
-      await stub.poll();
+      stub.answer({ pieceId: "fid1:member-42-replaced", pathAfter: [] });
+      await pollAndSettle(view, stub);
 
       expect(view.accessForTestingOnly.slugRevision).toBeGreaterThan(
         afterFailedLoad,
       );
-      expect(stub.started.map((call) => call[1])).toContain("fid1:member-42");
+      expect(stub.started.at(-1)?.[1]).toBe("fid1:member-42-replaced");
+      expect(templateBindings(view.render(), "loadError")).toEqual([undefined]);
     } finally {
+      errors.restore();
       restore();
     }
   });

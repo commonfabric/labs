@@ -443,6 +443,51 @@ export function liveImmutableSnapshotCount(): number {
   return snapshots.size;
 }
 
+/** The key an unattributed snapshot counts under, by space. */
+export const IMMUTABLE_SNAPSHOTS_NO_SPACE = "(none)";
+
+/**
+ * The snapshots {@link liveImmutableSnapshotCount} counts, by the space of
+ * the stored document each was read out of, following an element's chain of
+ * origins to its root. A snapshot whose chain ends anywhere but a stored
+ * document, at a value no space has stored, at an inline document, or at an
+ * origin that has expired, and one whose own value has been reclaimed ahead
+ * of its identifier count under {@link IMMUTABLE_SNAPSHOTS_NO_SPACE}. One
+ * pass over the snapshot table, so the read costs what the table holds.
+ */
+export function liveImmutableSnapshotsBySpace(): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const { value } of snapshots.values()) {
+    const key = storedOriginSpace(value.deref()) ??
+      IMMUTABLE_SNAPSHOTS_NO_SPACE;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Helper for `liveImmutableSnapshotsBySpace()`: the space of the stored
+ * document at the root of `snapshot`'s chain of origins, or `undefined` when
+ * the chain ends at no stored document: at a snapshot with no origin, at an
+ * inline document, or at an origin that has expired.
+ */
+function storedOriginSpace(
+  snapshot: ImmutableSnapshot | undefined,
+): string | undefined {
+  let origin = snapshot?.origin;
+  while (origin !== undefined) {
+    const { id } = origin;
+    if (id === undefined) return origin.space;
+    if (!isImmutableCellId(id)) {
+      return hasInlineCellScheme(id) ? undefined : origin.space;
+    }
+    const next = snapshots.get(id)?.value.deref();
+    if (next === undefined) return undefined;
+    origin = next.origin;
+  }
+  return undefined;
+}
+
 /**
  * Whether `id` names a snapshot minted from a value no space has stored: one
  * read out of no stored document, so with no origin, or an element snapshot

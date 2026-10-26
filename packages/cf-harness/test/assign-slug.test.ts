@@ -55,9 +55,9 @@ import {
   assignSlugTool,
   type AssignSlugToolErrorOutput,
   type AssignSlugToolSuccessOutput,
-  namedPieceUrl,
 } from "../src/tools/assign-slug.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
+import { urlToAppView } from "@commonfabric/navigation";
 import type { HarnessToolContext } from "../src/tools/types.ts";
 import type { RunPatternToolSuccessOutput } from "../src/tools/run-pattern.ts";
 import type {
@@ -180,6 +180,9 @@ describe("assign-slug", () => {
     let queries = 0;
     const serving = await startServingMemoryServer({
       apiUrl: new URL("http://toolshed.test"),
+      // The stub below reaches into the serving runtime's storage manager,
+      // which a loop in a worker does not hand out.
+      worker: false,
       prepareStorageManager: (manager, space) => {
         const rpc = stub(manager.open(space), "sqliteQuery", () => {
           queries++;
@@ -614,9 +617,18 @@ describe("assign-slug", () => {
       expect(output.slug).toBe("doubling-report");
       expect(output.pieceId).toBe(created.pieceId);
       expect(created.patternPublication).toBeUndefined();
-      // The URL is the session's API URL, the space name, and the slug.
-      expect(output.url).toContain("http://toolshed.test/");
-      expect(output.url).toContain("/doubling-report");
+      // The URL is the session's API URL, the space's DID, and the slug,
+      // even for a space this session opened by its legacy name.
+      expect(output.url).toBe(
+        `http://toolshed.test/${pieces.getSpace()}/doubling-report`,
+      );
+      expect(pieces.getSpaceName()).toBeDefined();
+      expect(output.url).not.toContain(`/${pieces.getSpaceName()}/`);
+      expect(output.space).toBe(pieces.getSpace());
+      expect(urlToAppView(new URL(output.url!))).toEqual({
+        spaceDid: pieces.getSpace(),
+        pieceSlug: "doubling-report",
+      });
       const registered = await pieces.getRegisteredPieces();
       expect(registered.map((piece) => piece.id)).toEqual([created.pieceId]);
       // The slug resolves to the same piece, so the address a person opens
@@ -1311,11 +1323,7 @@ describe("assign-slug", () => {
       expect(registered.map((piece) => piece.id)).toEqual([first.pieceId]);
     });
 
-    it("returns the slug without a URL when the session's space is configured by DID", async () => {
-      // A space configured by `did:key` has no name to put in a URL, and the
-      // only address available would carry the space DID — a bare fabric
-      // identifier that does not cross the model boundary. The slug still
-      // reaches the model, because it is the caller's own word.
+    it("returns a URL naming the space's DID when the session's space is configured by DID", async () => {
       const spaceIdentity = await signer.derive(
         `assign-slug-did-${crypto.randomUUID()}`,
       );
@@ -1353,9 +1361,10 @@ describe("assign-slug", () => {
       const output = result.output as AssignSlugToolSuccessOutput;
       expect(output.status).toBe("ok");
       expect(output.slug).toBe("doubling-report");
-      expect(output.url).toBeUndefined();
-      // The naming really happened, so the missing URL is a refusal to
-      // compose one rather than an assignment that did not take place.
+      expect(output.url).toBe(
+        `http://toolshed.test/${spaceIdentity.did()}/doubling-report`,
+      );
+      expect(output.space).toBe(spaceIdentity.did());
       expect(await resolvePieceAddress(didPieces, "doubling-report")).toBe(
         piece.pieceId,
       );
@@ -1569,16 +1578,6 @@ describe("assign-slug", () => {
         "could not establish the fabric session",
       );
       expect(output.message).toContain("authorization denied");
-    });
-
-    it("composes no URL when the session's API URL cannot carry one", () => {
-      // The URL guard fails closed: a session whose API URL does not parse
-      // yields no link rather than a broken one.
-      const broken = {
-        getSpaceName: () => "demo",
-        runtime: { apiUrl: "http://[invalid" },
-      } as unknown as Parameters<typeof namedPieceUrl>[0];
-      expect(namedPieceUrl(broken, "doubling-report")).toBeUndefined();
     });
 
     it("returns an error for a token that does not parse as a reference", async () => {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { deepFreeze } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
 import {
@@ -74,7 +75,7 @@ describe("instance-name-stamp", () => {
   /** The id of the child the parent at `cell` runs for the instance `name`. */
   const namedChild = (cell: Cell<unknown>, name: string): string => {
     const spot = getDerivedInternalCellLink(cell, {
-      partialCause: instancePartialCause(name),
+      partialCause: deepFreeze(instancePartialCause(name)),
     });
     return rt.getCell(space, {
       resultFor: { space: spot.space, id: spot.id, path: [] },

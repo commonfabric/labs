@@ -31,8 +31,13 @@
 // above the stream's `eventWatermark`; an at-or-below duplicate admits
 // and is skipped at processing time).
 
+import type { FabricValue } from "@commonfabric/api";
 import type { Engine } from "./engine.ts";
-import type { StreamLinkRef } from "../v2.ts";
+import {
+  decodeTrustedMemoryBoundary,
+  encodeMemoryBoundary,
+  type StreamLinkRef,
+} from "../v2.ts";
 
 /** One durable outbound append row (serving-loop.md §5, FP1). */
 export type OutboxAppendRow = {
@@ -53,10 +58,11 @@ export type OutboxAppendRow = {
    * horizon keys on it. */
   eventId: string;
 
-  /** The event payload, JSON — bounded by the event, never
-   * graph-scaled (protocol.md §7's metadata discipline applies to the
-   * carried event too). */
-  payload: unknown;
+  /** The event payload, stored in the memory boundary's encoding, so a
+   * property holding `undefined` arrives as one — bounded by the event,
+   * never graph-scaled (protocol.md §7's metadata discipline applies to
+   * the carried event too). */
+  payload: FabricValue;
 
   /** The ORIGINATING chain actor (events.md §2): absent only for a
    * chain with no acting user (a space-scope derivation's emission). */
@@ -143,7 +149,7 @@ export const insertExecutionOutboxRows = (
         ? null
         : JSON.stringify(row.targetStreamLink),
       event_id: row.eventId,
-      payload: JSON.stringify(row.payload ?? null),
+      payload: encodeMemoryBoundary(row.payload),
       acting_principal: row.actingPrincipal ?? null,
       acting_session: row.actingSession ?? null,
       sessionless_space_scope: row.sessionlessSpaceScope === true ? 1 : null,
@@ -195,7 +201,7 @@ ORDER BY id ASC
       ? {}
       : { targetStreamLink: JSON.parse(row.target_stream_link) }),
     eventId: row.event_id,
-    payload: JSON.parse(row.payload),
+    payload: decodeTrustedMemoryBoundary(row.payload),
     ...(row.acting_principal === null
       ? {}
       : { actingPrincipal: row.acting_principal }),

@@ -42,6 +42,7 @@ export async function uploadFile(
     space,
     contentType: mediaType,
     body: buffer,
+    ...(file.name ? { name: file.name } : {}),
     suffix: fileSuffix(file.name, mediaType),
   });
 

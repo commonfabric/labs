@@ -38,6 +38,7 @@ export const typeScriptLanguage: Language = {
     filenamePatterns: [],
     aliases: ["ts", "javascript", "js"],
     interpreters: ["deno", "node", "nodejs", "bun"],
+    signatures: [],
     sharedExtensions: [],
   },
 

@@ -1,5 +1,5 @@
 /**
- * Ctx tests: makeCtx() builds the memoized data sources every tile reads. The
+ * Ctx tests: makeCtx() builds the data sources every tile reads. The
  * GitHub API is stubbed with a workflow's whole run list, served a page at a
  * time as GitHub serves it, and with a filtered list that can lag it, so these
  * pin which runs a source takes, the age cutoff, the cap, the order the window
@@ -9,7 +9,7 @@
 
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { FakeTime } from "@std/testing/time";
-import { makeCtx } from "./ctx.ts";
+import { changesRunSource, makeCtx } from "./ctx.ts";
 import {
   CI_RUNS_MAX,
   CI_RUNS_MAX_AGE_DAYS,
@@ -19,7 +19,9 @@ import {
   REPO,
 } from "./config.ts";
 import type { GitHubRun } from "./github-runs.ts";
+import { GitHubWebhooks } from "./github-webhooks.ts";
 import { GreenBranch } from "./green-branch.ts";
+import { pushPayload, workflowRunPayload } from "./test/webhook-relay.ts";
 import { type Ctx, runSource } from "./types.ts";
 
 const DAY_MS = 86_400_000;
@@ -502,4 +504,54 @@ Deno.test("runsFor: a run on main carries what its repo's green branch says of i
       [`/repos/${LOOM_REPO}/activity`],
     );
   }, (repo) => repo === LOOM_REPO ? loom : undefined);
+});
+
+Deno.test("changesRunSource: a delivered run of the source's workflow, in its scope, changes it", () => {
+  const main = runSource(REPO, CI_WORKFLOW, "main");
+  const pulls = runSource(REPO, CI_WORKFLOW, "pull requests");
+  const delivered = (over: Partial<GitHubRun>, repo = REPO, file = CI_WORKFLOW) => ({
+    event: "workflow_run",
+    payload: workflowRunPayload(
+      repo,
+      run({ id: TOP, ...over }),
+      `.github/workflows/${file}`,
+    ),
+  });
+
+  assert(changesRunSource(main, delivered({})));
+  assert(!changesRunSource(pulls, delivered({})));
+  const pull = delivered({ event: "pull_request", head_branch: "feature" });
+  assert(changesRunSource(pulls, pull));
+  assert(!changesRunSource(main, pull));
+  assert(!changesRunSource(main, delivered({}, LOOM_REPO)));
+  assert(!changesRunSource(main, delivered({}, REPO, LOOM_CI_WORKFLOW)));
+  assert(changesRunSource(main, delivered({}, REPO.toUpperCase())));
+});
+
+Deno.test("changesRunSource: a push to the green branch changes the repository's main runs, and no other push does", () => {
+  const green = new GreenBranch(LOOM_REPO, "main-green", new GitHubWebhooks());
+  const greenOf = (repo: string) => repo === LOOM_REPO ? green : undefined;
+  const main = runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main");
+  const pushed = (ref: string, repo = LOOM_REPO) => ({
+    event: "push",
+    payload: pushPayload(repo, ref),
+  });
+
+  assert(changesRunSource(main, pushed("refs/heads/main-green"), greenOf));
+  assert(!changesRunSource(main, pushed("refs/heads/main"), greenOf));
+  assert(
+    !changesRunSource(
+      runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "pull requests"),
+      pushed("refs/heads/main-green"),
+      greenOf,
+    ),
+  );
+  assert(
+    !changesRunSource(
+      runSource(REPO, CI_WORKFLOW, "main"),
+      pushed("refs/heads/main-green", REPO),
+      greenOf,
+    ),
+  );
+  assert(!changesRunSource(main, { event: "issues", payload: {} }, greenOf));
 });

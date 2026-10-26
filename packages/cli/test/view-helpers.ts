@@ -4,8 +4,10 @@
  */
 
 import { parseDocument } from "../lib/view/languages/typescript/parse.ts";
-import type { ViewState } from "../lib/view/render.ts";
-import type { Rgb } from "../lib/view/ansi.ts";
+import { renderFrame, type ViewState } from "../lib/view/render.ts";
+import { type Rgb, stripAnsi, term } from "../lib/view/ansi.ts";
+import type { Key } from "../lib/view/keys.ts";
+import type { Session } from "../lib/view/session.ts";
 
 export { parseDocument };
 
@@ -27,6 +29,39 @@ export function promptText(v: ViewState): string {
   const d = v.dialog;
   if (!d) return "";
   return [d.title, ...d.body, ...d.buttons.map((b) => b.label)].join(" ");
+}
+
+/**
+ * Returns the zero-based screen cell where `text` first appears among the drawn
+ * `rows`, for a test to aim the mouse at. Throws when no row shows it.
+ */
+export function cellOf(
+  rows: readonly string[],
+  text: string,
+): { x: number; y: number } {
+  for (let y = 0; y < rows.length; y++) {
+    const x = stripAnsi(rows[y]).indexOf(text);
+    if (x >= 0) return { x, y };
+  }
+  throw new Error(`no row shows ${JSON.stringify(text)}`);
+}
+
+/** Returns the rows the screen shows for `s`. */
+export function drawnRows(s: Session): string[] {
+  return renderFrame(s.displayDoc(), s.view());
+}
+
+/**
+ * Returns the rows of a frame the pager wrote, one per screen row. Each row
+ * starts after the escape that clears its line.
+ */
+export function frameRows(text: string): string[] {
+  return text.split(term.clearLine).slice(1);
+}
+
+/** Returns the key of the primary mouse button going down or coming up. */
+export function mouseKey(down: boolean, at: { x: number; y: number }): Key {
+  return { name: "mouse", mouse: { down, ...at } };
 }
 
 /**

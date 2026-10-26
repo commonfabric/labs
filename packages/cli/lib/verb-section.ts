@@ -32,7 +32,7 @@
  *
  * The design, and the four shapes rejected in reaching it, are recorded under
  * "Naming the target" in
- * [CLI surface shape](../../../docs/plans/cli-surface-shape.md).
+ * [CLI surface shape](../../../docs/history/plans/cli-surface-shape.md).
  */
 
 import { Command, ValidationError } from "@cliffy/command";

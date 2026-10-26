@@ -113,15 +113,13 @@ describe("section-marker", () => {
       // `--select` and returns an unprojected value — the silent wrong answer
       // the refusal is for.
       const { text, exitCode } = await outputFrom(
-        pieceDataCommand("get", { spelling: "cell get" }),
+        pieceDataCommand("get"),
         ["addr", "--", "--select", "title"],
       );
       expect(text).toContain("closes a callable's section");
       expect(text).toContain("--select title");
-      // The refusal writes the corrected line back in the spelling its mount
-      // carries, so the line a caller is handed is one they can paste: the
-      // canonical spelling, not the superseded top-level one the same builder
-      // also answers at.
+      // The refusal writes the corrected line back in the command's own
+      // spelling, so the line a caller is handed is one they can paste.
       expect(text).toContain("cf cell get addr --select title");
       // 2 is cliffy's exit for a validation error, which is what this is —
       // the point being that it is not 0, which is what the silent discard
@@ -131,7 +129,7 @@ describe("section-marker", () => {
 
     it("refuses a marker on `set`", async () => {
       const { text } = await outputFrom(
-        pieceDataCommand("set", { spelling: "cell set" }),
+        pieceDataCommand("set"),
         ["addr", "--", "--json", "1"],
       );
       expect(text).toContain("closes a callable's section");
@@ -157,12 +155,12 @@ describe("section-marker", () => {
         const [name, command, args] of [
           [
             "get",
-            pieceDataCommand("get", { spelling: "cell get" }),
+            pieceDataCommand("get"),
             ["addr", "--"],
           ],
           [
             "set",
-            pieceDataCommand("set", { spelling: "cell set" }),
+            pieceDataCommand("set"),
             ["addr", "--"],
           ],
           ["wish", wish, ["#profile", "--"]],
@@ -179,7 +177,7 @@ describe("section-marker", () => {
       // this one is refused too, but for the identity and api-url it never
       // named.
       const { text } = await outputFrom(
-        pieceDataCommand("get", { spelling: "cell get" }),
+        pieceDataCommand("get"),
         ["addr"],
       );
       expect(text).not.toContain("closes a callable's section");
@@ -190,7 +188,7 @@ describe("section-marker", () => {
       // arguments, so the marker is the boundary it exists for. A refusal
       // here would take away the spelling the design prescribes.
       const { text } = await outputFrom(
-        pieceDataCommand("call", { spelling: "piece call" }),
+        pieceDataCommand("call"),
         ["addr", "verb", "--", "--select", "title"],
       );
       expect(text).not.toContain("closes a callable's section");

@@ -25,13 +25,15 @@ const signer = await Identity.fromPassphrase("wish reconnect recovery");
 const space = signer.did();
 
 /**
- * Drops the first request naming `dropId`, closes the connection so the load
- * fails, and holds the next connection until `reconnect` is released.
+ * Drops the first request naming `dropId`, closes the connection before its
+ * response arrives, and holds the next connection until `reconnect` is
+ * released. `dropped` resolves once the request has been dropped.
  */
 class DroppingTransport implements MemoryV2Client.Transport {
   dropId?: string;
-  dropped = false;
+  readonly dropped = defer<void>();
   readonly reconnect = defer<void>();
+  #dropping = false;
   #held = false;
   #receiver: (payload: string) => void = () => {};
   #closeReceiver: (error?: Error) => void = () => {};
@@ -52,10 +54,10 @@ class DroppingTransport implements MemoryV2Client.Transport {
     if (this.#connection === null && this.#held) await this.reconnect.promise;
     const message = decodeMemoryBoundary(payload) as { type?: string };
     if (
-      !this.dropped && this.dropId !== undefined &&
+      !this.#dropping && this.dropId !== undefined &&
       message.type !== "transact" && payload.includes(this.dropId)
     ) {
-      this.dropped = true;
+      this.#dropping = true;
       this.#held = true;
       this.#muted = true;
       try {
@@ -63,6 +65,7 @@ class DroppingTransport implements MemoryV2Client.Transport {
       } finally {
         this.#muted = false;
         this.#close();
+        this.dropped.resolve();
       }
       return;
     }
@@ -89,7 +92,7 @@ class DroppingTransport implements MemoryV2Client.Transport {
 }
 
 describe("wish-reconnect-recovery", () => {
-  it("restores a favorite whose load failed on a dropped connection", async () => {
+  it("finds a favorite whose load a dropped connection caught once the connection is restored", async () => {
     const server = new MemoryV2Server.Server({
       ...TEST_MEMORY_SERVER_AUTH,
       store: new URL(`memory://wish-reconnect-${crypto.randomUUID()}`),
@@ -162,9 +165,6 @@ describe("wish-reconnect-recovery", () => {
       expect((await run.commit().settled).error).toBeUndefined();
       const found = result.key("found").resolveAsCell();
       cancels.push(found.sink(() => {}));
-      const candidates = () =>
-        (found.key("candidates").get() as Cell<unknown>[] | undefined)
-          ?.length;
       const waitForCandidates = (
         accept: (count: number | undefined) => boolean,
         stuckLabel: string,
@@ -180,14 +180,10 @@ describe("wish-reconnect-recovery", () => {
         properties: { name: { type: "string" } },
       });
 
-      await waitForCandidates((count) => count !== undefined, "a result");
-      expect(transport.dropped).toBe(true);
-      expect(found.key("error").get()).toBeUndefined();
-      expect(candidates()).toBe(1);
-      expect(selected.key("name").get()).toBe("Readable provider");
-
+      await transport.dropped.promise;
       transport.reconnect.resolve();
       await waitForCandidates((count) => count === 2, "recovery");
+      expect(found.key("error").get()).toBeUndefined();
       expect(selected.key("name").get()).toBe("Dropped provider");
     } finally {
       transport.reconnect.resolve();

@@ -153,6 +153,7 @@ export const CRITICAL_SECTIONS: readonly { file: string; section: string }[] = [
   { file: BOUNDARIES, section: "8.10.3" },
   { file: BOUNDARIES, section: "8.10.4" },
   { file: STORE, section: "8.12.1" },
+  { file: STORE, section: "8.12.7" },
   { file: WRITE_AUTHORITY, section: "8.15.6" },
 ];
 
@@ -210,6 +211,46 @@ export const MANIFEST: readonly ManifestRow[] = [
     ],
     note: "covers declared entries on both sides, joined per path; the " +
       "integrity subset is decided by structural equality of atoms",
+  },
+  {
+    file: STORE,
+    section: "8.12.7",
+    name: "canReleaseStoredClause",
+    lean: "`Cfc/StoreRelease.lean`: `releasableBy`, `standsForActor`",
+    relation: "missing",
+    decidedToday: [
+      {
+        file: "cfc/confidentiality-release-plan.ts",
+        symbol: "clauseReleasableBy",
+      },
+      { file: "cfc/host-review.ts", symbol: "isActorOwnedAlternative" },
+    ],
+    note: "reads a field committed to the actor's DID as the DID, then asks " +
+      "`isActorOwnedAlternative` of each alternative; that is the " +
+      "pseudocode's `standsForActor`, which the custody seal shares",
+  },
+  {
+    file: STORE,
+    section: "8.12.7",
+    name: "ownerReleaseAt",
+    lean: "`Cfc/StoreRelease.lean`: `ownerReleaseAt`, `ownerReleaseEntriesAt`",
+    relation: "missing",
+    decidedToday: [
+      {
+        file: "cfc/confidentiality-release-plan.ts",
+        symbol: "planConfidentialityRelease",
+      },
+      {
+        file: "cfc/confidentiality-release.ts",
+        symbol: "releaseCellConfidentiality",
+      },
+    ],
+    note: "the stored clauses at a path are the payload label-map entries " +
+      "there and the stored schema's declaration; the home-space and " +
+      "writer-identity checks sit in the transaction's " +
+      "`releaseCfcConfidentiality()`, and `releaseCellConfidentiality` adds " +
+      "the route's recommended refusal of a clause the path still shows " +
+      "from a position the release does not rewrite",
   },
   {
     file: CORE,
@@ -582,5 +623,11 @@ export const COMPANIONS: readonly Companion[] = [
     section: "8.10.3",
     name: "isPathAtOrBelow",
     note: "helper of `pathsOverlap`, the one-sided prefix test",
+  },
+  {
+    file: STORE,
+    section: "8.12.7",
+    name: "standsForActor",
+    note: "helper of `canReleaseStoredClause`, deciding one alternative",
   },
 ];

@@ -100,7 +100,8 @@
  * | fetch                      | real everywhere; patternTest delta (mock)        |
  * | errorHandlers              | delta (collectors/telemetry), per preset         |
  * | consoleHandler             | delta (productionServer, browserWorker)          |
- * | clientClass                | pinned to `"web"` by browserWorker; unset       |
+ * | clientClass                | pinned to `"web"` by browserWorker; remoteClient |
+ * |                            | delta for a client modeling a browser tab; unset |
  * |                            | elsewhere                                        |
  * | navigateCallback           | delta (patternTest, remoteClient, browserWorker) |
  * | pieceCreatedCallback       | delta (browserWorker only)                       |
@@ -597,6 +598,14 @@ export interface RemoteClientPresetParams extends CoreParams {
 
   /** The read ceiling's fallback `onExceed`, beside the ceiling it qualifies. */
   cfcReadOnExceed?: CfcReadOnExceed;
+
+  /**
+   * The client class the runtime declares. A remote client is unclassed; one
+   * standing in for a browser tab, as the pattern integration harness's
+   * sessions do, declares `"web"`, and then follows the web client's flags,
+   * view-scoped replication among them, exactly as the browser worker does.
+   */
+  clientClass?: "web";
 }
 
 export interface PatternTestPresetParams extends CoreParams {
@@ -752,6 +761,9 @@ export const runtimePresets = {
         ? { cfcWriteFloor: params.cfcWriteFloor }
         : {}),
       ...readCeilingOptions(params),
+      ...(params.clientClass !== undefined
+        ? { clientClass: params.clientClass }
+        : {}),
       ...(params.errorHandlers !== undefined
         ? { errorHandlers: params.errorHandlers }
         : {}),

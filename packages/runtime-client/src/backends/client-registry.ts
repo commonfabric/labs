@@ -23,6 +23,7 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import { isDID } from "@commonfabric/identity";
 import {
   type InitializationData,
+  type IpcChannelSizes,
   type IPCClientMessage,
   type IPCRemotePost,
   type IPCRemoteResponse,
@@ -31,12 +32,14 @@ import {
   isIPCClientNotification,
   NotificationType,
   RequestType,
+  type WorkerIpcSizes,
 } from "@/protocol/mod.ts";
 import { RuntimeProcessor } from "@/backends/mod.ts";
 import { assertNoKeyMaterial } from "@/shared/key-material.ts";
 import type { MessagePortLike } from "@/shared/message-port-like.ts";
 import { describeFailure } from "@/shared/utils.ts";
-import { postThrough } from "./post-to-client.ts";
+import { IpcChannelTally } from "./ipc-channel-tally.ts";
+import { ownerChannelSizes, postThrough } from "./post-to-client.ts";
 import { runtimeErrorCode } from "./runtime-error.ts";
 import {
   type ClientId,
@@ -84,19 +87,27 @@ export interface RuntimeClientsOptions {
   /**
    * Stands the runtime up. Resolved at call time rather than captured, so a
    * caller substituting {@link RuntimeProcessor.initialize} still reaches its
-   * substitute.
+   * substitute. `ipcSizes` reads what the clients' channels have carried.
    */
   initializeRuntime?: (
     data: InitializationData,
     clients: () => Iterable<WorkerClient>,
+    ipcSizes: () => WorkerIpcSizes,
   ) => Promise<RuntimeProcessor>;
 }
 
-/** One connected client, its channel, and whether its attach is settled. */
+/**
+ * One connected client, its channel, the tally its posts count into, and
+ * whether its attach is settled. The tally is held through a holder the
+ * client's `post` reads at each call, so that a post made after the client
+ * is dropped counts into the departed clients' tally rather than into one
+ * nothing reports any more.
+ */
 type RegisteredClient = {
   client: WorkerClient;
   duplex: MessagePortLike;
   listener: (event: MessageEvent) => void;
+  channel: { tally: IpcChannelTally };
   attached: boolean;
 };
 
@@ -106,18 +117,29 @@ export class RuntimeClients {
   #attachedClients = new Map<ClientId, RegisteredClient>();
   #nextClientId: ClientId = OWNER_CLIENT_ID + 1;
 
+  /** Ports dropped so far. */
+  #closedPorts = 0;
+
+  /**
+   * What the clients on dropped ports have been sent, added together, a
+   * post made after the drop included.
+   */
+  readonly #departedClients = new IpcChannelTally();
+
   readonly #owner: WorkerClient;
   readonly #setConsoleBridge: (enabled: boolean) => void;
   readonly #initializeRuntime: (
     data: InitializationData,
     clients: () => Iterable<WorkerClient>,
+    ipcSizes: () => WorkerIpcSizes,
   ) => Promise<RuntimeProcessor>;
 
   constructor(options: RuntimeClientsOptions) {
     this.#owner = options.owner ?? ownerClient;
     this.#setConsoleBridge = options.setConsoleBridge;
     this.#initializeRuntime = options.initializeRuntime ??
-      ((data, clients) => RuntimeProcessor.initialize(data, clients));
+      ((data, clients, ipcSizes) =>
+        RuntimeProcessor.initialize(data, clients, ipcSizes));
   }
 
   /** The client that owns the worker and initializes its runtime. */
@@ -132,10 +154,15 @@ export class RuntimeClients {
    */
   attach(duplex: MessagePortLike): WorkerClient {
     const id = this.#nextClientId++;
+    const channel = { tally: new IpcChannelTally() };
     const client: WorkerClient = {
       id,
       post: (message) =>
-        postThrough((encoded) => duplex.postMessage(encoded), message),
+        postThrough(
+          (encoded) => duplex.postMessage(encoded),
+          message,
+          channel.tally,
+        ),
     };
     const listener = (event: MessageEvent) => {
       void this.handleMessage(client, event);
@@ -144,6 +171,7 @@ export class RuntimeClients {
       client,
       duplex,
       listener,
+      channel,
       attached: false,
     });
     duplex.addEventListener("message", listener);
@@ -154,6 +182,29 @@ export class RuntimeClients {
   /** How many clients this worker is serving besides its owner. */
   get attachedClientCount(): number {
     return this.#attachedClients.size;
+  }
+
+  /**
+   * The ports this worker holds and has closed, and what each channel has
+   * carried: the owner's global, each registered client's port by id, and
+   * the ports of departed clients added together.
+   */
+  getIpcSizes(): WorkerIpcSizes {
+    const clients: Record<string, IpcChannelSizes> = {};
+    for (const [id, { channel }] of this.#attachedClients) {
+      clients[id] = channel.tally.snapshot();
+    }
+    return {
+      openPorts: {
+        open: this.#attachedClients.size,
+        closed: this.#closedPorts,
+      },
+      bytesSerialized: {
+        owner: ownerChannelSizes(),
+        clients,
+        departedClients: this.#departedClients.snapshot(),
+      },
+    };
   }
 
   /**
@@ -169,6 +220,9 @@ export class RuntimeClients {
     const registered = this.#attachedClients.get(id);
     if (!registered) return;
     this.#attachedClients.delete(id);
+    this.#closedPorts++;
+    this.#departedClients.add(registered.channel.tally.snapshot());
+    registered.channel.tally = this.#departedClients;
     registered.duplex.removeEventListener?.("message", registered.listener);
     registered.duplex.close?.();
   }
@@ -277,12 +331,16 @@ export class RuntimeClients {
           throw new Error("Initialization of WorkerRuntime already attempted.");
         }
         this.#setConsoleBridge(request.data.forwardWorkerConsole === true);
-        this.#initialization = this.#initializeRuntime(request.data, () => [
-          this.#owner,
-          ...[...this.#attachedClients.values()]
-            .filter(({ attached }) => attached)
-            .map(({ client }) => client),
-        ]);
+        this.#initialization = this.#initializeRuntime(
+          request.data,
+          () => [
+            this.#owner,
+            ...[...this.#attachedClients.values()]
+              .filter(({ attached }) => attached)
+              .map(({ client }) => client),
+          ],
+          () => this.getIpcSizes(),
+        );
         this.#runtime = await this.#initialization;
         this.#reply({ msgId: message.msgId }, request.type, client);
         return;

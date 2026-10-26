@@ -1,10 +1,14 @@
 /**
  * Sizes of the structures a runtime holds live, for the diagnostics read that
- * tells which tracked collection kept growing while a heap did. Every figure
- * is a collection's own count, so reading them walks nothing: a read is safe
- * at any moment, including one where the runtime is already struggling. A
- * heap that grows through larger entries, or through a structure not counted
- * here, leaves every figure where it was.
+ * tells which tracked collection kept growing while a heap did, and which
+ * spaces and channels carry what it holds. Most figures are a collection's
+ * own count and cost nothing to read. The per-space views cost one bounded
+ * pass each: over the open spaces, over the snapshot table, and over the
+ * documents a node budget admits, as `DocumentSizeEstimate` says. So a read
+ * is safe at any moment, including one where the runtime is already
+ * struggling. A heap that grows through larger entries than the document
+ * estimate sees, or through a structure not counted here, leaves every
+ * figure where it was.
  */
 
 import type { ModuleDelegationSizes } from "./module-delegations.ts";
@@ -54,6 +58,14 @@ export type RuntimeOwnSizes = {
    * and how often their transitive snapshot has been built.
    */
   moduleDelegations: ModuleDelegationSizes;
+
+  /**
+   * `immutableSnapshots` by the space of the stored document each snapshot
+   * was read out of, the spaces holding the most first and at most
+   * {@link SIZES_BY_KEY_LIMIT} of them; the rest count under `(other)`, and
+   * snapshots read out of no stored document under `(none)`.
+   */
+  immutableSnapshotsBySpace: Record<string, number>;
 };
 
 /** What `Runtime.getSizes()` reports. */
@@ -73,6 +85,29 @@ export type RuntimeSizes = {
    */
   cfcRejectionsByReason: Record<string, number>;
 };
+
+/** How many keys a per-key view keeps before the rest share `(other)`. */
+export const SIZES_BY_KEY_LIMIT = 64;
+
+/** The key the counts past {@link SIZES_BY_KEY_LIMIT} are added under. */
+export const SIZES_BY_KEY_OTHER = "(other)";
+
+/**
+ * Returns `counts` as a record of its largest {@link SIZES_BY_KEY_LIMIT}
+ * entries, largest first, with every other entry added under
+ * {@link SIZES_BY_KEY_OTHER}; a map within the limit comes back whole.
+ */
+export function boundedCounts(
+  counts: ReadonlyMap<string, number>,
+): Record<string, number> {
+  const entries = [...counts].sort((a, b) => b[1] - a[1]);
+  const bounded = Object.fromEntries(entries.slice(0, SIZES_BY_KEY_LIMIT));
+  if (entries.length > SIZES_BY_KEY_LIMIT) {
+    bounded[SIZES_BY_KEY_OTHER] = entries.slice(SIZES_BY_KEY_LIMIT)
+      .reduce((sum, [, count]) => sum + count, 0);
+  }
+  return bounded;
+}
 
 /** The longest prefix a reason is tallied under. */
 const CFC_REJECTION_REASON_PREFIX_LIMIT = 80;

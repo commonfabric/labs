@@ -134,7 +134,22 @@ fund the service. These must be developed alongside confidential hosting.
 - **Analytics:** release aggregate statistics with differential privacy and
   minimum population thresholds. Noise, contribution limits, and repeated-query
   budgets need a defined privacy model; low-volume statistics stay withheld.
-- **Diagnostics:** turn known failure investigations into reusable agent skills.
+- **Diagnostics:** the health surface is public today: `/api/health/stats`
+  exposes per-space session IDs and principals without authentication.
+  `/api/health/document-interests` also exposes delegated identities and
+  connection liveness.
+  Restrict these surfaces to authenticated operators before claiming operator
+  exclusion. The immediate follow-up is shared operator-diagnostics middleware
+  based on the [memory-dump gate](../../packages/toolshed/routes/storage/memory/memory-dump.index.ts):
+  explicit opt-in, CF1 first-party signature verification against a DID
+  allowlist, and an audit log per request. The shared gate must refuse production
+  mounting and require an explicitly configured, recognized non-production
+  environment. An unset or unknown `ENV` must fail closed instead of inheriting
+  the current `development` default.
+  An operator gate is an interim access boundary; private operations must also
+  replace routine operator access to this metadata.
+
+  Turn known failure investigations into reusable agent skills.
   With user permission, an agent using confidential inference can inspect an
   issue and prepare a report for the user to review before sending it to us.
   Restricted diagnostic agents may emit only a small vocabulary of problem

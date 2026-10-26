@@ -1,5 +1,6 @@
 import { css, html } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
+import type { CFResizablePanelGroup } from "../cf-resizable-panel-group/cf-resizable-panel-group.ts";
 
 /**
  * @component cf-resizable-handle
@@ -194,11 +195,14 @@ export class CFResizableHandle extends BaseElement {
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
-    const panelGroup = this.closest("cf-resizable-panel-group");
+    const panelGroup = this.closest<CFResizablePanelGroup>(
+      "cf-resizable-panel-group",
+    );
     if (!panelGroup) return;
 
-    const direction = panelGroup.getAttribute("direction") || "horizontal";
-    const isHorizontal = direction === "horizontal";
+    // The group's property, not its attribute: a renderer assigns
+    // `direction`, and nothing copies it to an attribute.
+    const isHorizontal = panelGroup.direction !== "vertical";
 
     let handled = false;
 

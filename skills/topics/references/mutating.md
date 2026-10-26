@@ -3,7 +3,7 @@
 Part of `skills/topics/SKILL.md`, which is the map. This is the detail on every
 write: the run's invocation session, creating a Topic and recovering its
 address, what a call's answer does and does not prove, the Topic verbs,
-references between Topics, and the editorial conventions every write follows.
+references between Topics, and where each part of a Topic goes.
 
 ## One invocation session per run
 
@@ -38,7 +38,7 @@ export CF_INVOCATION_SESSION="$(cat '<run session file>')"
 CREATE="$(deno task cf piece call --cell "$TOPICS_BOARD" \
   --invocation '<unique-topic-create-id>' \
   addTopic \
-  '{"title":"<title>","body":"<initial living document>","agentName":"Sol"}' \
+  '{"title":"<title>","body":"<the core issue>","agentName":"Sol"}' \
   -- --schema '{"properties":{"topic":{"$link":true},"name":{"type":"string"}}}')"
 TOPIC="$(printf '%s\n' "$CREATE" | jq -r '.result.topic["$link"] // empty')"
 NAME="$(printf '%s\n' "$CREATE" | jq -r '.result.name // empty')"
@@ -161,14 +161,29 @@ bare canonical address.
 inside the body are removed by editing the body. An `addLink` URL that resolves
 to a piece also contributes to the reference graph.
 
-## Editorial conventions
+## Where each part of a Topic goes
 
-- Treat the body as the living big-picture document. Replace it whole with the
-  current state while preserving meaningful context and decisions. Fabric owns
-  revision history; do not duplicate it as an activity log.
-- Treat comments as append-only, point-in-time progress records. Record what
-  changed, what was learned or decided, and what comes next.
-- Add every relevant pull request explicitly with `addLink` and `kind: "pr"`;
-  mentioning a PR only in prose is not enough.
+A Topic has three places to write, shown in the UI as Body, Thread, and Links.
+What follows is recommended practice, not a requirement: the pattern accepts any
+content in any of them, and nothing breaks if a write lands elsewhere. Keeping
+each to its own job means a reader knows where to look, and later tooling can
+build on the distinction.
+
+- **Body** (`addTopic`'s `body`, then `setBody`): the core issue. What the Topic
+  is about, why it matters, and the current state of understanding and
+  decisions, written so that someone arriving for the first time can read the
+  body alone and know where things stand. Replace it whole when the picture
+  changes, preserving meaningful context and decisions. When an update is
+  critical for that first-time reader (a decision reversed, the work blocked or
+  superseded), put a short note about it at the top of the body as well as in
+  the thread. Fabric owns revision history, so the body does not need to record
+  how it got to its current state.
+- **Thread** (`addComment`): updates. Each comment is an append-only,
+  point-in-time record of progress: what changed, what was learned or decided,
+  and what comes next.
+- **Links** (`addLink`): references to resources the body or thread uses or
+  refers to, such as pull requests, documents, dashboards, and agent sessions.
+  The label names the resource. Add every relevant pull request with
+  `kind: "pr"`; mentioning a PR only in prose is not enough.
 - Use references for relationships between Topics. Do not rely on pasted fids or
   prose scanning.

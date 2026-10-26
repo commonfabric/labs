@@ -58,6 +58,7 @@ describe("ProcessModuleByteCache", () => {
         patternCoverageSpans: [SPAN],
         builderSourceSites: BUILDER_SOURCE_SITES,
         policyManifests: [POLICY_MANIFEST],
+        importSpecs: ["commonfabric", "./a.tsx"],
       },
     ]);
     expect(cache.getCompleteSet(RT, ["a", "b"])?.size).toBe(2);
@@ -67,6 +68,7 @@ describe("ProcessModuleByteCache", () => {
       patternCoverageSpans: [SPAN],
       builderSourceSites: BUILDER_SOURCE_SITES,
       policyManifests: [POLICY_MANIFEST],
+      importSpecs: ["commonfabric", "./a.tsx"],
     });
     cache.clear();
     expect(cache.getCompleteSet(RT, ["a", "b"])).toBeUndefined();
@@ -112,6 +114,7 @@ describe("ProcessModuleByteCache", () => {
       patternCoverageSpans: [SPAN],
       builderSourceSites: BUILDER_SOURCE_SITES,
       policyManifests: [POLICY_MANIFEST],
+      importSpecs: ["commonfabric", "./x.tsx"],
     });
     a.put("v2", "z", { js: "JS_Z" });
 
@@ -126,6 +129,7 @@ describe("ProcessModuleByteCache", () => {
       patternCoverageSpans: [SPAN],
       builderSourceSites: BUILDER_SOURCE_SITES,
       policyManifests: [POLICY_MANIFEST],
+      importSpecs: ["commonfabric", "./x.tsx"],
     });
     expect(b.get("v2", "z")).toEqual({ js: "JS_Z" });
     expect(b.getCompleteSet(RT, ["x", "y"])?.size).toBe(2);
@@ -169,6 +173,8 @@ describe("ProcessModuleByteCache", () => {
         builderSourceSites: { formatVersion: 2 },
       },
       { key: `${RT}\0badmanifests`, js: "NO", policyManifests: "bad" },
+      { key: `${RT}\0badimports`, js: "NO", importSpecs: "commonfabric" },
+      { key: `${RT}\0badimportspec`, js: "NO", importSpecs: ["ok", 7] },
       null,
       "garbage",
     ] as unknown[]);

@@ -23,7 +23,9 @@ export {
 export {
   collectDataFileNames,
   collectImportSpecifiers,
+  type ModuleDeclarations,
   resolveImportSpecifier,
+  scanModuleDeclarations,
 } from "./typescript/resolver.ts";
 export { assertImportInsideProgramRoot } from "./specifier.ts";
 export {

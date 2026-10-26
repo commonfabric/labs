@@ -14,6 +14,7 @@ import {
   NotificationType,
   RequestType,
   type RuntimeSecurityContext,
+  type WorkerIpcSizes,
 } from "@/protocol/mod.ts";
 import type { RuntimeProcessor } from "@/backends/mod.ts";
 import { RuntimeClients } from "@/backends/client-registry.ts";
@@ -691,6 +692,108 @@ describe("RuntimeClients", () => {
         expect(h.owner.posted).toHaveLength(1);
         expect(h.owner.posted[0].type).toBe(NotificationType.ErrorReport);
         expect(h.owner.posted[0].message).toContain("no port");
+      });
+    });
+
+    describe("getIpcSizes()", () => {
+      it("counts an attached client's port as open with what it was sent, and as closed once it departs", async () => {
+        const h = harness();
+        await h.initialize(1);
+        const port = await attachedClient(h);
+        try {
+          const held = h.clients.getIpcSizes();
+          expect(held.openPorts).toEqual({ open: 1, closed: 0 });
+          // The attach's ack is the one message the client has been sent.
+          expect(held.bytesSerialized.clients["1"]).toMatchObject({
+            messages: 1,
+            sampledMessages: 1,
+          });
+          expect(held.bytesSerialized.clients["1"].approxBytes)
+            .toBeGreaterThan(0);
+          expect(held.bytesSerialized.departedClients.messages).toBe(0);
+
+          const departed = port.next();
+          port.channel.port1.postMessage(
+            realmFromFabricValue(
+              { msgId: 2, data: { type: RequestType.Dispose } } as never,
+            ),
+          );
+          await departed;
+
+          const dropped = h.clients.getIpcSizes();
+          expect(dropped.openPorts).toEqual({ open: 0, closed: 1 });
+          expect(dropped.bytesSerialized.clients).toEqual({});
+          // The ack and the dispose's reply, carried to the departed total.
+          expect(dropped.bytesSerialized.departedClients.messages).toBe(2);
+        } finally {
+          port.channel.port1.close();
+        }
+      });
+
+      it("counts a post made to a client after its drop under the departed clients", async () => {
+        // In-flight work can still post to a client whose port is gone; the
+        // message is still handed to `postMessage`, so it is still counted.
+        const h = harness();
+        await h.initialize(1);
+        const { client } = attachDirect(h);
+        await h.deliver(client, {
+          msgId: 1,
+          data: { type: RequestType.Attach, data: runningContext },
+        });
+        await h.deliver(client, {
+          msgId: 2,
+          data: { type: RequestType.Dispose },
+        });
+        const departed = () =>
+          h.clients.getIpcSizes().bytesSerialized.departedClients.messages;
+        const before = departed();
+
+        client.post({ type: NotificationType.ErrorReport, message: "late" });
+
+        expect(h.clients.getIpcSizes().bytesSerialized.clients).toEqual({});
+        expect(departed() - before).toBe(1);
+      });
+
+      it("counts a refused client's port as closed", async () => {
+        const h = harness();
+        await h.initialize(1);
+        const { channel } = await attachedClient(h, {
+          ...runningContext,
+          identity: "did:key:z6Mk-someone-else" as DID,
+        });
+        try {
+          expect(h.clients.getIpcSizes().openPorts).toEqual({
+            open: 0,
+            closed: 1,
+          });
+        } finally {
+          channel.port1.close();
+        }
+      });
+
+      it("hands the runtime's initializer a reader of these sizes", async () => {
+        const fake = fakeProcessor();
+        const owner = testClient(0);
+        let reader: (() => WorkerIpcSizes) | undefined;
+        const clients = new RuntimeClients({
+          owner: owner.client,
+          setConsoleBridge: () => {},
+          initializeRuntime: (_data, _clients, ipcSizes) => {
+            reader = ipcSizes;
+            return Promise.resolve(fake.processor);
+          },
+        });
+        await clients.handleMessage(
+          owner.client,
+          new MessageEvent("message", {
+            data: realmFromFabricValue({
+              msgId: 1,
+              data: { type: RequestType.Initialize, data: initializationData },
+            } as never),
+          }),
+        );
+
+        expect(reader?.()).toEqual(clients.getIpcSizes());
       });
     });
   });

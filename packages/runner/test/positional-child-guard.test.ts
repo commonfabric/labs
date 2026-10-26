@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { deepFreeze } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 
@@ -186,7 +187,7 @@ describe("positional-child-guard", () => {
   // `{ $generated: n }`.
   const positionalChild = (cell: Cell<unknown>, n: number): string => {
     const spot = getDerivedInternalCellLink(cell, {
-      partialCause: { $generated: n },
+      partialCause: deepFreeze({ $generated: n }),
     });
     return rt.getCell(space, {
       resultFor: { space: spot.space, id: spot.id, path: [] },

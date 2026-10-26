@@ -95,6 +95,9 @@ export class SelectorTracker<T = Result<Unit, Error>> {
   #selectors = new Map<string, SchemaPathSelector>();
   #standardizedSelector = new Map<string, SchemaPathSelector>();
   #selectorPromises = new Map<string, Promise<T>>();
+
+  /** How many addresses track each selector. */
+  #selectorUses = new Map<string, number>();
   readonly #identity: () => ScopeKeyIdentity;
 
   constructor(identity: () => ScopeKeyIdentity) {
@@ -117,7 +120,14 @@ export class SelectorTracker<T = Result<Unit, Error>> {
       return;
     }
     const selectorRef = selectorRefFor(selector);
-    this.#refTracker.add(this.#toKey(address), selectorRef);
+    const key = this.#toKey(address);
+    if (!this.#refTracker.hasValue(key, selectorRef)) {
+      this.#selectorUses.set(
+        selectorRef,
+        (this.#selectorUses.get(selectorRef) ?? 0) + 1,
+      );
+    }
+    this.#refTracker.add(key, selectorRef);
     this.#selectors.set(selectorRef, selector);
     this.#standardizedSelector.set(selectorRef, {
       path: selector.path,
@@ -245,13 +255,17 @@ export class SelectorTracker<T = Result<Unit, Error>> {
 
   delete(address: BaseMemoryAddress, selector: SchemaPathSelector): void {
     const selectorRef = selectorRefFor(selector);
-    this.#refTracker.deleteValue(this.#toKey(address), selectorRef);
-    const promiseKey = `${this.#toKey(address)}?${selectorRef}`;
-    this.#selectorPromises.delete(promiseKey);
-    if (![...this.#refTracker].some(([, refs]) => refs.has(selectorRef))) {
-      this.#selectors.delete(selectorRef);
-      this.#standardizedSelector.delete(selectorRef);
+    const key = this.#toKey(address);
+    this.#selectorPromises.delete(`${key}?${selectorRef}`);
+    if (!this.#refTracker.deleteValue(key, selectorRef)) return;
+    const uses = (this.#selectorUses.get(selectorRef) ?? 1) - 1;
+    if (uses > 0) {
+      this.#selectorUses.set(selectorRef, uses);
+      return;
     }
+    this.#selectorUses.delete(selectorRef);
+    this.#selectors.delete(selectorRef);
+    this.#standardizedSelector.delete(selectorRef);
   }
 
   getAllPromises(): Iterable<Promise<T>> {

@@ -7,8 +7,9 @@ since the first two are closely coupled and the third moves on its own timeline.
 - [Shaped reads and verb results](shaped-reads-and-verb-results.md) — **the read
   layer, and calls.** How a read decides what to return, and what calling a verb
   adds on top.
-- [CLI surface shape](cli-surface-shape.md) — **the command surface.** What it
-  should look like, and how to get there without breaking callers.
+- [CLI surface shape](../history/plans/cli-surface-shape.md) — **the command surface.** An
+  executed plan, now archived: what the surface was to look like, and the
+  additive path that got it there without breaking callers.
 
 Call-specific investigation detail — what produces a receipt and what its
 existence proves, how its address is derived, the entity-URI change to
@@ -135,10 +136,9 @@ is an ordinary read. What belongs to the call is the surrounding envelope, safe
 retries, collecting a result later, and recovering an address when a response is
 lost. Same document as the read layer.
 
-**The command surface.** `piece` currently carries four unrelated jobs, two
-commands are named `inspect`, two are named `view`, `--piece` names a cell
-rather than a piece, and `--input` is an address disguised as a mode flag.
-Covered in [CLI surface shape](cli-surface-shape.md).
+**The command surface.** How commands are named, and how a caller writes
+what a command acts on. The plan that settled both is executed and archived as
+[CLI surface shape](../history/plans/cli-surface-shape.md).
 
 ## What follows from the split
 

@@ -379,7 +379,9 @@ editor semantics.
       and pending-commit durability barrier as ordinary writes.
 - [x] Do not place `apply-op` in `PendingVersion`: the editor owns its immediate
       local view, while Memory owns canonical materialization. Ordinary Cell
-      state advances from authoritative verdict/sync results.
+      state advances from authoritative verdict/sync results. WP11's edit
+      against a read is the one case the replica shows ahead of the verdict,
+      because its result is fixed by the value it was computed from.
 - [x] Ensure a collaboration commit participates in `synced()`, shutdown, route
       replacement, authorization errors, and telemetry.
 - [x] Keep emulated storage behavior on the real loopback Memory server rather
@@ -551,6 +553,64 @@ Completion gate:
       into shared APIs, and the remaining WordGard work is confined to a codec,
       editor adapter, and rich-text-specific product behavior.
 
+## WP11 — Text edits from pattern code
+
+Purpose: let a handler edit an active collaborative string, which an ordinary
+write may not change (§7.6), with an edit the open editors merge like any
+other.
+
+- [x] Let `apply-op` name no base: it applies at the field's current version
+      with nothing to rebase over, and activates an inactive field from its
+      value. With a `baselineHash` it applies only while the field holds that
+      value, and a stale hash in a wave commit is a conflict on that document;
+      without one it is a blind write, guarded by its commit's reads as a
+      `set` is. The engine states the base before applying it, so the apply
+      path itself is unchanged (§7.6, §7.7.1).
+- [x] Add `Writable<string>.applyChanges()`, taking changes in the shape of a
+      CodeMirror change spec against the value the handler read. The handler's
+      transaction records them and writes the changed text, so CFC, its later
+      reads, and reactivity see an ordinary write.
+- [x] Carry the recorded changes in the handler's own commit as one `apply-op`
+      per field, after the document writes, whose patch leaves the field out,
+      with the hash of the value the handler read. Carry them through a
+      sealed commit the same way, and leave them out of the client overlay's
+      whole-document seal, whose `set` carries the changed text.
+      The handler's read of the field rides the same commit, so a field that
+      moved refuses it as an ordinary conflict and the scheduler runs the
+      handler again; the handler's receipt makes the commit, and the edit with
+      it, apply once however many runtimes handle the event.
+- [x] Show the edit in the replica's pending layer as a replacement of the
+      field with the changed text, which is the store's result whenever the
+      commit is accepted.
+- [x] Encode the changes as a `codemirror-changeset@1` payload in
+      `packages/memory/v2/text-changes.ts`, which imports no CodeMirror, so the
+      runner names the codec without loading it.
+
+Required tests:
+
+- [x] An `apply-op` without a base applies at the current version, blind or
+      beside a read of the field, activates an inactive field, replays with
+      its commit, and is rejected by a stale read in its commit or under its
+      submission id in a later commit.
+- [x] A stale confirmed read of the field refuses the commit as a
+      `ConflictError` before the operation applies.
+- [x] A handler's edit commits beside an ordinary write to another field of the
+      same document, shows in the writer's view before the server's echo, and
+      a field that moved after the read refuses the commit.
+- [x] The payload encoding applies under CodeMirror exactly as the changes do.
+- [x] A served handler's edit commits through its wave, two in one wave both
+      land, and one computed before a keystroke its replica never saw is
+      refused rather than replacing it.
+
+Files:
+
+- `packages/memory/v2/engine.ts`
+- `packages/memory/v2/text-changes.ts`
+- `packages/runner/src/cell.ts`
+- `packages/runner/src/storage/v2-transaction.ts`
+- `packages/runner/src/storage/v2.ts`
+- `packages/patterns/shared-note/main.tsx`
+
 ---
 
 ## Cross-package validation matrix
@@ -563,6 +623,7 @@ Completion gate:
 | WP7 | Complete `packages/runtime-client` and runner tests |
 | WP8 | Complete UI Deno and browser tests plus focused integration test |
 | WP9–WP10 | All touched package tests, benchmarks recorded without pass/fail timing thresholds, repository-wide gates |
+| WP11 | Complete `packages/memory` and `packages/runner` test tasks, the `shared-note` pattern test, `deno task cfcheck` |
 
 Every review-ready PR must also run `deno fmt --check`, `deno lint`, relevant
 type checks, `deno task check-docs`, `deno task check-conflict-markers`,

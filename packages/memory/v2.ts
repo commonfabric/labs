@@ -896,8 +896,23 @@ export type ApplyOpOperation = OperationFieldAddress & {
   op: "apply-op";
   codec: string;
   submissionId: string;
-  base: OpCursor | null;
+
+  /**
+   * What the payload was written against: a cursor in the field's epoch, or
+   * `null` for the field's baseline. Absent, the payload applies at the version
+   * the field holds: only while the field holds the value `baselineHash`
+   * names, where it carries one, and otherwise blind, guarded only by the reads
+   * its commit carries, as a `set` or `patch` is.
+   */
+  base?: OpCursor | null;
+
+  /**
+   * Hash of the value the payload was written against: the field's baseline,
+   * required when `base` is `null`, or the value it holds now, optional when
+   * `base` is absent. Not allowed with a cursor.
+   */
   baselineHash?: string;
+
   payload: FabricValue;
 };
 
@@ -1182,6 +1197,12 @@ export type MemoryProtocolFlags = {
   /** Hash-keyed per-frame schema table. */
   syncSchemaTableV2: boolean;
 
+  /** Per-sync label/path tables, enabled only when both peers advertise it. */
+  readonly syncLabelTableV1: boolean;
+
+  /** Request/acknowledgment label/path tables, enabled by both peers' offers. */
+  readonly commitLabelTableV1: boolean;
+
   /**
    * Server capability: a session sync payload carries the links the
    * server's walk followed out of the space (`SessionSync.crossings`),
@@ -1193,6 +1214,16 @@ export type MemoryProtocolFlags = {
    * it.
    */
   syncCrossingsV1: boolean;
+
+  /**
+   * Server capability: `session.watch.remove` removes watches by id and
+   * answers with the difference between what the session was delivered and
+   * the smaller union (04-protocol.md §4.3.9). Inherent to the build, so a
+   * server of this version always advertises it. Absent (an older server)
+   * parses to false: a client then removes a watch by replacing the whole
+   * watch set, and keeps a document's watches rather than releasing them.
+   */
+  watchRemoveV1: boolean;
 
   /** The peer can exchange versioned binary gzip message envelopes. */
   messageCompressionV1: boolean;
@@ -1345,6 +1376,15 @@ export type MemoryProtocolFlags = {
 
   /** The peer supports router-scoped binary connection authentication. */
   routedAuthV1?: boolean;
+
+  /**
+   * The peer sends and expands routed message bodies in the `mcmp` version 2
+   * envelope end to end, through a router that forwards them opaquely. Needs
+   * `messageCompressionV1` too. A routed client without it receives text
+   * bodies, so an SDK that predates it never sees a binary body it would take
+   * for router credit.
+   */
+  routedCompressionV1?: boolean;
 };
 
 /**
@@ -1363,7 +1403,12 @@ export type WireMemoryProtocolFlags = {
   applyOp?: boolean;
   operationCodecs?: readonly string[];
   syncSchemaTableV2?: boolean;
+  readonly syncLabelTableV1?: boolean;
+
+  /** Optional advertisement of commit request/acknowledgment metadata tables. */
+  readonly commitLabelTableV1?: boolean;
   syncCrossingsV1?: boolean;
+  watchRemoveV1?: boolean;
   messageCompressionV1?: boolean;
   sqliteCommitRowLabelEval?: boolean;
   sqliteQueryReader?: boolean;
@@ -1382,6 +1427,7 @@ export type WireMemoryProtocolFlags = {
   elidedVerdicts?: boolean;
   sessionReportV1?: boolean;
   routedAuthV1?: boolean;
+  routedCompressionV1?: boolean;
 };
 
 export type HelloMessage = {
@@ -1556,6 +1602,8 @@ export type GraphQuery = {
   atSeq?: number;
   branch?: BranchName;
   excludeSent?: boolean;
+  /** Include the highest authored commit at or below the query's sequence. */
+  includeAuthoredSeq?: boolean;
 };
 
 export type EntitySnapshot = {
@@ -1587,6 +1635,11 @@ export type EntitySnapshot = {
 export type GraphQueryResult = {
   serverSeq: number;
   entities: EntitySnapshot[];
+  /**
+   * Present when requested, bounded by `atSeq` and restricted to the
+   * branch.
+   */
+  authoredSeq?: number;
 };
 
 export type EntityIdListResult = {
@@ -2052,6 +2105,16 @@ export type WatchAddRequest = {
   watches: WatchSpec[];
 };
 
+export type WatchRemoveRequest = {
+  type: "session.watch.remove";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+
+  /** The ids of the watches to remove; an id the session lacks is ignored. */
+  watchIds: string[];
+};
+
 export type SessionAckRequest = {
   type: "session.ack";
   requestId: string;
@@ -2380,6 +2443,7 @@ export type ClientMessage =
   | SqliteRegisterDiskSourceRequest
   | WatchSetRequest
   | WatchAddRequest
+  | WatchRemoveRequest
   | SessionAckRequest
   | SessionCloseRequest
   | EventAttentionResolveRequest
@@ -2411,6 +2475,10 @@ let ownWriteEchoEnabled = true;
 export {
   SERVER_EXECUTION_DEFAULT_ENABLED,
 } from "./v2/server-execution-default.ts";
+export {
+  applyTextChanges,
+  codeMirrorTextChangesPayload,
+} from "./v2/text-changes.ts";
 export {
   parseSessionReadCeiling,
   type ReadCeilingClause,
@@ -2628,10 +2696,15 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // reports about its session.
   sessionReportV1: true,
   routedAuthV1: false,
+  routedCompressionV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
+  syncLabelTableV1: true,
+  commitLabelTableV1: true,
   // Build-inherent: this build's query walk reports the links it follows
   // out of a space, and its session frames carry them.
   syncCrossingsV1: true,
+  // Build-inherent: this build's server removes watches by id.
+  watchRemoveV1: true,
 });
 
 /**
@@ -2655,6 +2728,12 @@ export const parseMemoryProtocolFlags = (
   }
   if (
     value.routedAuthV1 !== undefined && typeof value.routedAuthV1 !== "boolean"
+  ) {
+    return null;
+  }
+  if (
+    value.routedCompressionV1 !== undefined &&
+    typeof value.routedCompressionV1 !== "boolean"
   ) {
     return null;
   }
@@ -2722,6 +2801,20 @@ export const parseMemoryProtocolFlags = (
   if (
     syncSchemaTableV2 !== undefined &&
     typeof syncSchemaTableV2 !== "boolean"
+  ) {
+    return null;
+  }
+
+  const syncLabelTableV1 = value.syncLabelTableV1;
+  if (
+    syncLabelTableV1 !== undefined && typeof syncLabelTableV1 !== "boolean"
+  ) {
+    return null;
+  }
+
+  const commitLabelTableV1 = value.commitLabelTableV1;
+  if (
+    commitLabelTableV1 !== undefined && typeof commitLabelTableV1 !== "boolean"
   ) {
     return null;
   }
@@ -2840,6 +2933,11 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const watchRemoveV1 = value.watchRemoveV1;
+  if (watchRemoveV1 !== undefined && typeof watchRemoveV1 !== "boolean") {
+    return null;
+  }
+
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
@@ -2852,6 +2950,8 @@ export const parseMemoryProtocolFlags = (
       ? {}
       : { operationCodecs: [...operationCodecs].sort() as string[] }),
     syncSchemaTableV2: syncSchemaTableV2 === true,
+    syncLabelTableV1: syncLabelTableV1 === true,
+    commitLabelTableV1: commitLabelTableV1 === true,
     messageCompressionV1: messageCompressionV1 === true,
     // Absent (an older peer) parses to false: the capability must be
     // POSITIVELY advertised for the runner to relax its write gate.
@@ -2896,7 +2996,11 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client then finds the
     // links out of a space by reading what it synced.
     syncCrossingsV1: syncCrossingsV1 === true,
+    // Absent (an older server) parses to false: a client then replaces the
+    // whole watch set to remove a watch.
+    watchRemoveV1: watchRemoveV1 === true,
     routedAuthV1: value.routedAuthV1 === true,
+    routedCompressionV1: value.routedCompressionV1 === true,
   };
 };
 
@@ -2919,6 +3023,8 @@ export const wireMemoryProtocolFlags = (
     ? {}
     : { operationCodecs: flags.operationCodecs }),
   syncSchemaTableV2: flags.syncSchemaTableV2,
+  syncLabelTableV1: flags.syncLabelTableV1,
+  commitLabelTableV1: flags.commitLabelTableV1,
   messageCompressionV1: flags.messageCompressionV1,
   sqliteCommitRowLabelEval: flags.sqliteCommitRowLabelEval,
   sqliteQueryReader: flags.sqliteQueryReader,
@@ -2937,7 +3043,9 @@ export const wireMemoryProtocolFlags = (
   elidedVerdicts: flags.elidedVerdicts,
   sessionReportV1: flags.sessionReportV1,
   routedAuthV1: flags.routedAuthV1,
+  routedCompressionV1: flags.routedCompressionV1,
   syncCrossingsV1: flags.syncCrossingsV1,
+  watchRemoveV1: flags.watchRemoveV1,
 });
 
 /**
@@ -2963,6 +3071,13 @@ export const encodeMemoryBoundary = (value: FabricValue): string =>
   jsonFromFabricValue(value);
 
 export const commitPreconditionValueHash = (value: FabricValue): string =>
+  hashStringOf(encodeMemoryBoundary(value));
+
+/**
+ * Hash of a collaborative field's value, as an `apply-op` with a `null` base
+ * carries it in `baselineHash`.
+ */
+export const operationBaselineHash = (value: FabricValue): string =>
   hashStringOf(encodeMemoryBoundary(value));
 
 /**

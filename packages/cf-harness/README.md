@@ -243,13 +243,15 @@ What works today:
     (present only with `--loom-retrieval-config`; read-only, each row measured
     against the run's observation ceiling; a row loom returns without a label is
     given the query's label, and one whose label is malformed is withheld)
-  - `list_commands` and `run_command` (present only with
+  - `list_commands`, `run_command`, and `run_read_command` (present only with
     `--loom-commands-config` or `CF_HARNESS_LOOM_COMMANDS_CONFIG`; the commands
     the host's broker admits for this run, run as the agent; the listing shows
     each command as a one-line signature and is the host's command metadata,
     unmeasured; `run_command` refuses a name the listing does not show, takes
     one call or a batch of up to sixteen, and measures each answer like a
-    retrieval row)
+    retrieval row; `run_read_command` takes the same calls but sends only a
+    command a fresh listing declares a read and the broker grants read-only,
+    while `run_command` remains write-class)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,
@@ -576,8 +578,13 @@ research, and descendant calls. Each completed model call contributes once,
 including calls made by a child that later fails or is canceled. The persisted
 `run-report.json` keeps `usage` and `modelUsage` for the direct run, plus
 `totalUsage` including research and descendants. The batch result JSON carries
-that total usage object. `costUsd`, when present, came from the provider;
-`estimatedCostUsd` is an estimate based on the
+that total usage object. The report's `model` is the requested identifier.
+`modelResponses` records the provider's returned model identifier for each
+direct call, or `null` when unavailable. `actualModels` contains the distinct
+observed identifiers; `modelAttributionComplete` is true only when every direct
+turn has one. Research and descendant attribution belongs to those runs' own
+reports. `costUsd`, when present, came from the provider; `estimatedCostUsd` is
+an estimate based on the
 [public OpenAI price schedule](https://developers.openai.com/api/docs/pricing)
 for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 models and is not an invoice or a
 subscription quota conversion.
@@ -1474,11 +1481,12 @@ than it is told for a reference. It names a piece, not a cell inside one: a path
 after the slug is refused, and the general cell case is CT-2319's. The retired
 `piece:` spelling is not read as an address.
 
-A qualified name is resolved in the session's own space or not at all. A space
-the session cannot check the name of — one configured by `did:key`, which
-carries no name — refuses the qualified form rather than answering with this
-space's same-slug piece, because the same slug in another space is a different
-piece. A bare slug is unaffected: it names no space to disagree about.
+A qualified name is resolved in the session's own space or not at all. The space
+in `pattern:<space>/<slug>` is spelled by its DID, or by the legacy name a
+session opened it by. A name for a space that has none, and any other space, is
+refused rather than answered with this space's same-slug piece, because the same
+slug in another space is a different piece. A bare slug is unaffected: it names
+no space to disagree about.
 
 An input cell names a task target, so failure is closed and loud rather than
 tolerated: a malformed argument is a usage error, and a reference that does not
@@ -1982,32 +1990,32 @@ Research is a private tool loop, not web search or a delegable child profile.
 Its `inspect_pattern` and `open_pattern_file` tools accept a bare pattern id or
 `cf:pattern:<id>`; index lookups and retained evidence use the bare id.
 
-Fresh CLI tasks tagged `author` (see task classification below), and interactive
-sessions without retained research, request an opening `orient` pass for
-open-ended tasks. A task already selecting an implementation skips that
-automatic pass through attached `patternRefs` or explicit markers in the
-request: `pattern:<space>/<slug>`, `cf:pattern:<id>`, or `skill:<id>`. A skill
-id names a registered skill or an `owner/repository/skill` address. Bare ids,
-paths, and prose such as "use the named skill X" remain open unless X uses a
-marker. Recognition uses the existing address parsers; it does not resolve
-references, acquire skills, or grant authority. The ordinary tools do that. The
-parent can still call `research` for an unresolved question. Subsequent chat
-turns reuse the retained findings and let the parent request targeted answers;
-they do not repeat orientation. It runs through the ordinary policy, artifacts,
-provenance, cancellation, and usage path before the first parent turn. A
-host-supplied user message puts the result immediately before the task. The
-result's `purpose` limits what `complete` means: a complete orientation
-establishes a supported approach; it does not claim that the application has
-been built. Both purposes can inspect pattern source, describe handles, and
-return examples. Orientation's `leads` are host-observed metadata, usable as
-search references for delegation, and remain separate from inspected `patterns`.
-Orientation's `refinedTask` restates the request as the intersection of what was
-asked and what research verified is possible, each part bound to the grant or
-confirmed pattern that serves it, with the parts nothing serves left under
-`missing`; the parent works, and writes a delegation's goal, from it. An
-orientation that omits it is still admitted. The current user goal accompanies
-narrower research questions and delegated tasks so they retain the original
-context.
+Fresh CLI tasks tagged `author` (see task classification below), fresh CLI tasks
+in the `fabric` domain run at `--depth deep`, and interactive sessions without
+retained research, request an opening `orient` pass for open-ended tasks. A task
+already selecting an implementation skips that automatic pass through attached
+`patternRefs` or explicit markers in the request: `pattern:<space>/<slug>`,
+`cf:pattern:<id>`, or `skill:<id>`. A skill id names a registered skill or an
+`owner/repository/skill` address. Bare ids, paths, and prose such as "use the
+named skill X" remain open unless X uses a marker. Recognition uses the existing
+address parsers; it does not resolve references, acquire skills, or grant
+authority. The ordinary tools do that. The parent can still call `research` for
+an unresolved question. Subsequent chat turns reuse the retained findings and
+let the parent request targeted answers; they do not repeat orientation. It runs
+through the ordinary policy, artifacts, provenance, cancellation, and usage path
+before the first parent turn. A host-supplied user message puts the result
+immediately before the task. The result's `purpose` limits what `complete`
+means: a complete orientation establishes a supported approach; it does not
+claim that the application has been built. Both purposes can inspect pattern
+source, describe handles, and return examples. Orientation's `leads` are
+host-observed metadata, usable as search references for delegation, and remain
+separate from inspected `patterns`. Orientation's `refinedTask` restates the
+request as the intersection of what was asked and what research verified is
+possible, each part bound to the grant or confirmed pattern that serves it, with
+the parts nothing serves left under `missing`; the parent works, and writes a
+delegation's goal, from it. An orientation that omits it is still admitted. The
+current user goal accompanies narrower research questions and delegated tasks so
+they retain the original context.
 
 Orientation and the parent distinguish inputs already given, inputs findable
 within the granted scope, and actions the available capabilities cannot perform.
@@ -2053,21 +2061,50 @@ classifier that throws falls back to every tag. The tags, the path that chose
 them (`rule`, `assumed`, `fallback`), and the classification's wall time are
 recorded as `taskClassification` in `run-state.json` and `run-report.json`.
 `scripts/task-classification-eval.ts` scores the rule against a cheap-model
-classifier over the playtest asks, by hand. Only an `author` task gets the
-opening research pass. The parent's orientation follows the tags: `pieces` and
-`author` add the code-authoring framing (reading docs and skills, repairing
-code, acquiring a skill by its id), `pieces` a short held-pieces block (the
-input cells are the pieces of the loom the person is in; `describe_handle`,
-`read_value`, and `call_verb` read and act on them) where any other task gets
-one sentence saying handles may be held, `author` alone the piece-targeting
-guidance, the instruction to verify an effect, and the revision-verification
-guidance, `pieces` and `find` the held-handle and grant guidance, `find` and
-`author` the findable and pattern-index guidance, `author` what research is (a
-private pass that reports what to run and cannot execute) and the
-opening-research rule, `act`, `pieces` and `author` delegation, `find` and `act`
-the Weaver command guidance, and `act` the browser guidance. The tool allow-list
-does not narrow, so a task given too few tags can still reach what it needs; a
-run with no classification carries all of the orientation.
+classifier over the playtest asks, by hand. The classifier also names the
+domains a task's work happens in: `fabric` (held or authored pieces, the pattern
+index, how Common Fabric works), `personal` (the person's calendar, mail and
+messages), and `web`. Only a positive sign names one, so a question of general
+knowledge, or an operation in the person's application, has none; they and what
+chose them (`domainsPath`) are recorded beside the tags. Of classified runs,
+only an `author` task, or a `deep` run in the `fabric` domain, gets the opening
+research pass, since that pass reads Common Fabric's docs, pattern index and
+source; a run that was never classified, such as an interactive session, gets it
+whenever it is otherwise eligible. `src/prompt-sections.ts` says, in one table,
+which tags and depths each conditional part of the prompt reaches. The parent's
+orientation follows the tags: `pieces` and `author` add the code-authoring
+framing (reading docs and skills, repairing code, acquiring a skill by its id),
+`pieces` a short held-pieces block (the input cells are the pieces of the loom
+the person is in; `describe_handle`, `read_value`, and `call_verb` read and act
+on them) where any other task gets one sentence saying handles may be held,
+`author` alone the piece-targeting guidance, the instruction to verify an
+effect, and the revision-verification guidance, `pieces` and `find` the
+held-handle and grant guidance, `find` and `author` the findable and
+pattern-index guidance, `author` what research is (a private pass that reports
+what to run and cannot execute) and the opening-research rule, `act`, `pieces`
+and `author` delegation, `find` and `act` the Weaver command guidance, and `act`
+the browser guidance. The tool allow-list does not narrow, so a task given too
+few tags can still reach what it needs; a run with no classification carries all
+of the orientation.
+
+The caller chooses the run's depth before it starts, with `--depth quick`,
+`standard` (the default) or `deep`; the tags say what kind of work a task is,
+the domains where, and the depth how far to take it. A caller that knows more
+than the keyword rule can state the tags (`--task-tags`) or the domains
+(`--task-domains`, where `none` is no domain), each in place of the
+classifier's, which decides any part the caller leaves out; the record says
+`caller` for a part it stated. None of these grants authority. An agent-runner
+local job takes `depth`, `tags` and `domains` from its request, and
+`reasoningEffort` from its profile, which a request may lower but not raise. A
+`standard` run's prompt has no strategy section. A `quick` run is told to answer
+directly when it can, and otherwise to take the shortest path that does what was
+asked, adding nothing beyond it. A `deep` run is told to search every source of
+the person's data (`personal` domain) or to read several web sources (`web`), to
+leave only material worth opening, and to read its result back before it
+finishes (`src/strategy.ts`). A `deep` run also adds the opening research pass
+for a classified task in the `fabric` domain; an `author` task gets that pass at
+any depth. The effort applies to the job's own model calls and children on its
+model; research keeps its own effort setting.
 
 A tool descriptor is a contract: its name, its parameters with one-line
 descriptions, and a sentence or two on what the tool does and returns. Task tags
@@ -2530,7 +2567,7 @@ The slug is validated, then checked for availability, before anything is
 written, so an unusable slug is a structured error that changes nothing. A slug
 already naming another piece is never repointed: the tool appends a counter —
 `-2`, `-3`, and so on — to the requested word until it reaches a free name, or
-one already naming this piece, and the receipt's `slug` and `url` carry the name
+one already naming this piece, and the receipt's `slug` carries the name
 assigned, which is where the model reads the address it got. A requested word so
 long that no counter fits under the slug length limit is the one collision that
 is refused. The availability question fails closed: a slug is free only on the
@@ -2752,15 +2789,13 @@ does not change the original publication record. A missing publication report
 means that attempt queued nothing, and `status: "queued"` records intent rather
 than index acceptance. This join needs no source hashing or live index lookup.
 
-The URL is the session's API URL, the space, and the slug — the address
-`cf piece new` prints — and it appears only when `--fabric-space` names the
-space. A space configured as a `did:key` has no URL that is not built from that
-DID, and a bare fabric identifier does not cross the model boundary, so the
-model-facing output carries the slug alone rather than a fabricated link. The
-prompt loop strips `pieceId` and records that omission. Nothing in the remaining
-output is swapped for a handle token, because nothing in it is a fabric
-reference: the slug is the model's own word and the URL is the operator's API
-URL and space name. Its error `message`, which can carry a DID from an
+The URL is the session's API URL, the space's DID, and the slug, which is the
+address the shell opens. A session configured by a space's legacy name gets the
+URL of the DID that name resolves to. The prompt loop strips `pieceId` and `url`
+from what the model is shown, because both carry fabric identifiers, and records
+those omissions; the console reads the URL from the persisted output. Nothing in
+the remaining output is swapped for a handle token, because the slug is the
+model's own word. Its error `message`, which can carry a DID from an
 authorization failure, is scrubbed for bare fabric identifiers like the other
 free-text fields. Compiler diagnostics come back as
 `{ status: "compile-error", message }` so the model can iterate on the source;

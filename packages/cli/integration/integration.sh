@@ -621,10 +621,10 @@ run_piece_call() {
   echo "Created callable piece: $CALLABLE_PIECE_ID"
 
   CALL_HELP=$(cf piece call $SPACE_ARGS --piece $CALLABLE_PIECE_ID search --help)
-  # These greps assert cf's output: the help page names the mount that was
-  # invoked, and the invocation above is the top-level spelling.
+  # These greps assert cf's output: the help page names the command as it
+  # was invoked.
   echo "$CALL_HELP" | grep -q "cf piece call ... search --help" ||
-    error "Top-level callable help should work without the delimiter"
+    error "Callable help should work without the delimiter"
   echo "$CALL_HELP" | grep -q "cf piece call ... search <json>" ||
     error "Piece-call help should describe JSON input without --json"
   echo "$CALL_HELP" | grep -q "cf piece call ... search --json \[<json>\]" ||

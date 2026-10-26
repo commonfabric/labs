@@ -78,7 +78,7 @@ const guidanceFor = (...tags: HarnessTaskTag[]): string =>
       loomCommandsAvailable: true,
       loomRetrievalAvailable: true,
     }),
-    new Set(tags),
+    { tags: new Set(tags), depth: "standard" },
   ).join("\n\n");
 
 /** Rule prose that each lived in a carry tool's descriptor. */

@@ -329,8 +329,10 @@ Deno.test("declaredSlots skips the help Cliffy propagates to every command", () 
     slots.positionals.some((slot) => slot.key.endsWith("help:command")),
   );
   assertEquals(
-    slots.positionals.filter((slot) => slot.where === "call").map((s) => s.key),
-    ["call:callable", "call:tail"],
+    slots.positionals.filter((slot) => slot.where === "piece call").map((s) =>
+      s.key
+    ),
+    ["piece call:callable", "piece call:tail"],
   );
 });
 

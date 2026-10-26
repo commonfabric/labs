@@ -81,7 +81,7 @@ Both carry the canonical reference string, so the address a caller reads is one
 `--piece` already accepts. The CLI's dispatch gate now accepts it as a verb
 argument too, converting it against the declared contract — which is what makes
 the capability compose, and is the property
-[CLI surface shape](cli-surface-shape.md) already states for commands. The
+[CLI surface shape](../history/plans/cli-surface-shape.md) already states for commands. The
 callers that still cannot pass one in are the webhook and ingest paths, which
 reach the same handler through no gate at all.
 

@@ -524,20 +524,18 @@ And a unit that recorded nothing recorded nothing under any name, which
 fails the run whether or not anything was there to excuse.
 
 What the tree holds is what the unit's own test processes registered. A
-manifest holds every identity any run recorded in a file the tree still
-holds, so it names tests renamed since it was published and tests only a
-branch ever ran, and no run of this tree can record one of those. Where a
-unit's processes registered no test by an identity's name and none inside
-it, that identity is absent, so long as everything they registered that
-encloses it is a group they registered a test inside. A registered test
-can record steps it names only as it runs, so a registration says
-nothing about what lies beneath a test, and a group registered with
-nothing inside it says nothing about what the group holds. An absent
-identity's missing record says nothing about whether the invocation
-stopped. Only a registration shows a test
-absent. A process that died before it could say what it registered shows
-nothing, and an identity it left unrecorded withdraws the excusal like any
-other.
+manifest holds every identity the default branch recorded in a file the tree
+still holds, so it names tests renamed since it was published, and no run of
+this tree can record one of those. Where a unit's processes registered no
+test by an identity's name and none inside it, that identity is absent, so
+long as everything they registered that encloses it is a group they
+registered a test inside. A registered test can record steps it names only
+as it runs, so a registration says nothing about what lies beneath a test,
+and a group registered with nothing inside it says nothing about what the
+group holds. An absent identity's missing record says nothing about whether
+the invocation stopped. Only a registration shows a test absent. A process
+that died before it could say what it registered shows nothing, and an
+identity it left unrecorded withdraws the excusal like any other.
 
 A test file that an `error` or `unhandledrejection` event reached before any of
 its hooks or tests began shows nothing either. Either can stop a module part way
@@ -1188,6 +1186,24 @@ nothing but the list of names a runner is told to skip.
 
 The worst a corrupted manifest achieves is a change that ran fewer tests
 than it should have, which the full run on the default branch catches.
+
+## Which tests there are
+
+The default branch says which tests there are and where each one lives. A
+consumer that keeps a rolling aggregate adds an identity, and takes the file
+its records name, from the default branch's records alone. A workstation or
+a pull request may be running a tree that adds, renames, or moves tests.
+Read as a description of the tree, its records would describe that branch's
+tree rather than the one the lanes run: a branch that moves every test would
+give every test a file the default branch's tree does not hold, and leave
+every test out of the manifest. So its records are evidence about the
+identities the default branch recorded before them, and about nothing else.
+They count toward those identities' runs, failures, flakes, and new real
+test failures, and a pull request's lanes toward their costs. A failure of
+any other identity still counts toward its run's crowd, since the crowd says
+how much one run broke rather than anything about one test. A test a change
+adds enters once the default branch records it, which is once the change
+lands.
 
 ## Renames
 

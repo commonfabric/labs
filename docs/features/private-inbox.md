@@ -262,8 +262,18 @@ of the inbox's result other than its name. For the event's refused inbox, the
 second of those is the one the measurement above bears out.
 
 The read and the `setInbox` it leads to are two transactions, in Home's space
-and then in the profile's, so a pointer that something else sets between them
-is replaced by Home's inbox.
+and then in the profile's, so the event carries `replacing` and `setInbox`
+checks the pointer again in the transaction that writes it: holding
+`undefined` from `pointAtInboxIfUnset()`, and holding a link to the refused
+inbox from `pointAtInboxInPlaceOf()`. A pointer that something else sets
+between the two,
+such as a loom daemon pointing the profile at a share inbox it has minted, is
+kept, and the profile goes on advertising it. Two senders racing to point the
+same unpointed profile both read it unset, and the one that commits second
+finds its commit stale, runs again, and leaves the first one's pointer. A
+profile still running a `setInbox` that predates the condition ignores it
+and sets the pointer as sent, so on such a profile a pointer set in between is
+still replaced, until the profile runs the current handler.
 
 A profile whose stored `inbox` is not an object holding a link, as a writer
 bypassing `setInbox` can leave it, is repaired: the typed read takes it for no
@@ -557,10 +567,12 @@ it had among those it reads. A daemon running as the owner's identity therefore
 adopts Home's inbox at its next reading and goes on reading the refused one. A
 daemon running as another identity refuses Home's inbox, which grants that
 identity no `OWNER`, and leaves the pointer as it is. Senders then deliver to
-Home's inbox, where the share intake skips loom offers, as "The share intake"
-says, so that daemon stops receiving loom shares. The daemon never re-points a
-profile that already points at an inbox, so the two don't contend for the
-pointer.
+Home's inbox, where the share intake registers loom offers in Home's catalog,
+as "The share intake" says. That daemon reads the catalog of its own
+identity's Home, not the owner's, so it stops receiving loom shares, which
+reach the owner's Home instead, as the line beside the button says. The daemon
+never re-points a profile that already points at an inbox, so the two don't
+contend for the pointer.
 
 The replacement never clears a profile's pointer, only replaces one, so it
 doesn't depend on how a cleared pointer reads.
@@ -703,9 +715,8 @@ retain, and an offer arriving in any of them, is taken up as it lands, with no
 restart. It reads the pointers through `inboxPieceLinkSchema`, as the ensure
 does.
 
-An offer of `kind` `loom` is skipped, since a loom daemon admits those; so is
-an offer whose `from` and `id` already key a receipt in the catalog. Any other
-offer is registered when:
+An offer whose `from` and `id` already key a receipt in the catalog is
+skipped. Any other offer is registered when:
 
 - its envelope is well formed: `space` and `from` are well-formed DIDs, `host`
   is an origin, as `normalizeSpaceHost()` reads one, `ownerOrigin` is empty,
@@ -713,8 +724,8 @@ offer is registered when:
   origin, every string fits the length `receive` cuts it to, and `sharedAt` is
   a nonnegative integer;
 - its `kind` is one the intake admits, which `ADMITTED_SPACE_KINDS` in the
-  intake's module lists: `fabrichat-room`, a kind of space as
-  [`space-kinds.md`](space-kinds.md) lists it. An offer of any other kind is
+  intake's module lists: `fabrichat-room` and `loom`, kinds of space as
+  [`space-kinds.md`](space-kinds.md) lists them. An offer of any other kind is
   refused, and stays in the inbox for a reader that knows it;
 - its `host` is the origin of the host the intake runs against, the one whose
   memory it can read, with both normalized as `normalizeSpaceHost()` normalizes
@@ -725,27 +736,40 @@ offer is registered when:
 - the owner can open `space` and holds `WRITE` or `OWNER` there, through an
   entry of its own or the grant to every principal;
 - `space` declares the offer's `kind` as its own, in its genesis commit, as
-  `Runtime.spaceKind()` reads it;
+  `Runtime.spaceKind()` reads it, or, for a `loom` offer, declares no kind;
 - `space` has a root, its space cell linking a piece in `space` itself, and
-  that piece is at the address the space's genesis commit reserves for a root
+  that piece is what the kind's contract asks for. For a `fabrichat-room`
+  offer, it is at the address the space's genesis commit reserves for a root
   `inSpace()` makes with `root: true`: the address `inSpaceRootCause(space)`
-  derives in `space`.
+  derives in `space`. For a `loom` offer, its stored result schema is a Loom's
+  composition: `panels`, an array, and the `addPanel` and `removePanel`
+  streams.
 
 The kind check reads the kind the space's creator declared, which nobody can
 change afterward, so it is the creator's claim and no more; the intake loads
 and runs none of the space's code to read it. A space created without a kind
-never has one, so an offer of it is refused, whatever its root. The root check
-is what a `fabrichat-room` space's contract asks of a reader beyond the claim,
-as "What a kind does not vouch for" in [`space-kinds.md`](space-kinds.md)
-says: a member with `WRITE` can link another document as the space's root,
-and the intake refuses an offer of the space while it does. A consumer of the
-catalog reads the live root when it opens the space.
+never has one, so a `fabrichat-room` offer of it is refused, whatever its
+root, while a `loom` offer of it is held to the same root check as one of a
+space declaring `loom`, since a Loom space created before the kind was
+declared declares none. The root check is what each kind's contract asks of a
+reader beyond the claim, as "What a kind does not vouch for" in
+[`space-kinds.md`](space-kinds.md) says: a member with `WRITE` can link
+another document as the space's root, and the intake refuses an offer of the
+space while what it links is not what the kind asks for. The Loom check reads
+the result schema the root's setup stored, as `readResultSchemaMeta()` reads
+it, and loads none of the root's code; a schema stored as a reference whose
+documents have not reached the host is a failure to read, which leaves the
+offer to be vetted again. A consumer of the catalog reads the live root when
+it opens the space.
 
 FabriChat's manager creates each room as its space's root, at that reserved
 address, in a space that declares itself a `fabrichat-room`, so an offer of a
 room it creates passes both checks while the space's root stays at that
 address. A room in a space created without a kind is refused, as above,
-however it was made.
+however it was made. A loom daemon's sidecar creates each Loom as its space's
+root, at the Loom's publication cause, in a space that declares itself a
+`loom`, so a `loom` offer of a Loom it creates passes while the space's root
+is a Loom, at that address or another.
 
 Each refusal has a reason of its own, which its log entry names. A final one
 decides its row for good, and any other leaves the row to be vetted again, as
@@ -758,10 +782,11 @@ the paragraph below on deciding rows says:
 | `offer-foreign-host` | names another host | yes |
 | `sender-not-member` | names a `from` holding no `WRITE` or `OWNER` entry of its own | no |
 | `recipient-access-refused` | names a space the owner cannot open, or holds no `WRITE` or `OWNER` in | no |
-| `space-kind-undeclared` | names a space declaring no kind | yes |
+| `space-kind-undeclared` | names a space declaring no kind, as a kind other than `loom` | yes |
 | `space-kind-mismatch` | names a space declaring another kind | yes |
 | `space-root-missing` | names a space whose root is no piece of the space | no |
-| `space-root-misplaced` | names a space whose root is not at the address its genesis reserves | no |
+| `space-root-misplaced` | names a `fabrichat-room` space whose root is not at the address its genesis reserves | no |
+| `space-root-mismatch` | names a `loom` space whose root's result schema is not a Loom's composition | no |
 
 The intake sends Home's `registerSharedSpace` the offer's `space`, its `host` as
 normalized, its `kind`, its `title` unless it is empty, and `{ from, id }`. It
@@ -773,10 +798,13 @@ so an offer of a space already in the catalog under the same host and kind,
 archived or not, adds a receipt and leaves the entry as it is; one under another
 host or kind is a `conflict`, which writes nothing.
 
-When Home's handler returns `registered`, a new entry, the intake then accepts
-the room on the owner's behalf: it sends the space's root, the one vetting read,
-to Home's `chatManager.accept`, when Home has that stream, with `keepArchived`
-set. The manager records the room as an acceptance from the room itself would.
+When Home's handler returns `registered`, a new entry, for a `fabrichat-room`
+offer, the intake then accepts the room on the owner's behalf: it sends the
+space's root, the one vetting read, to Home's `chatManager.accept`, when Home
+has that stream, with `keepArchived` set. A `loom` entry gets no acceptance;
+the catalog entry is the whole of the Loom's arrival, which Home's shared-space
+collection lists under its kind and a loom daemon reads from the catalog. The
+manager records the room as an acceptance from the room itself would.
 A direct room goes in its `direct` under the room's creator, unless `direct`
 already holds a room with that creator, which stays; either way, the owner's
 later start of a chat with that creator finds the room `direct` holds rather
@@ -795,8 +823,8 @@ intake sent, skipped for its receipt, or refused for something in the row itself
 which never changes, is decided for the life of the runtime worker. A row
 refused for the state of its space (the access list, or the root) is vetted
 again the next time the offers of its inbox change; a change to the space alone,
-such as a grant to the sender or a root linked back at its reserved address,
-does not bring that about. A refusal is logged once per row, as a warning under
+such as a grant to the sender, a room linked back at its reserved address or a
+Loom linked back as the root, does not bring that about. A refusal is logged once per row, as a warning under
 `piece.share-intake`, with its reason. When Home's handler returns a `conflict`
 for a row it was sent, as for a space the catalog already holds under another
 kind, the intake logs that once too, with the reason. A failure to read what

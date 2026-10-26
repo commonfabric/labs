@@ -16,7 +16,10 @@ import {
   agentQueueIndexCell,
   AgentRunRecordSchema,
 } from "@commonfabric/runner/agent-run";
+import { WorkerReconciler } from "@commonfabric/html/worker";
 import { patternCoverageCollector } from "@commonfabric/integration/pattern-coverage";
+import { rowKeyOf } from "@commonfabric/integration/row-key";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
   debugVDOMSchema,
   rendererVDOMSchema,
@@ -42,6 +45,7 @@ import type {
 import {
   cellRuntime,
   convertCellsToLinks,
+  createSpaceRootIfAbsent,
   isCell,
   markUiInputBlindWriteTx,
   parseLink,
@@ -58,7 +62,7 @@ import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import {
   ensurePrivateInboxOf,
   inboxPieceLinkSchema,
@@ -85,7 +89,11 @@ import {
   type WorkerResponse,
 } from "./multi-runtime-ipc.ts";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import {
+  clearTimingMeasures,
+  getLoggerCountsBreakdown,
+  TIMING_MEASURE_PREFIX,
+} from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
 import { authenticatedOwnerFromLabel } from "../../ui/src/v2/components/cf-owner-view/owner-predicate.ts";
@@ -96,6 +104,25 @@ let resultSchema: unknown;
 let resultSinkCancel: (() => void) | undefined;
 let boundedReads = false;
 let watchPaths: readonly (readonly (string | number)[])[] = [[]];
+
+/**
+ * Whether this session holds a rendered view of the piece, as a mounted
+ * browser does: the worker reconciler's recursive demand over `$UI`, its
+ * operations discarded. Without it a session derives only what its watched
+ * paths read, and the view's own derivations never run on this client.
+ */
+let renderView = false;
+
+let viewMountCancel: (() => void) | undefined;
+let viewMounts = 0;
+
+/**
+ * What the rendered view's reconciler reported since `renderErrors` last
+ * read them: a view that fails to mount or to reconcile is otherwise a view
+ * that silently derives nothing, and a measurement over it measures the
+ * data alone.
+ */
+const viewRenderErrors: string[] = [];
 
 /**
  * The result cells of the pieces other than the attached one that a command
@@ -167,6 +194,20 @@ function addressKey(address: PieceAddress): string {
 }
 
 /**
+ * The value `path` reaches inside `value`, reading through every cell along
+ * it, so a field held as a link resolves to what it links to.
+ */
+function valueAt(value: unknown, path: readonly (string | number)[]): unknown {
+  let current = value;
+  for (const segment of path) {
+    if (isCell(current)) current = current.get();
+    current = (current as Record<string | number, unknown> | undefined)
+      ?.[segment];
+  }
+  return isCell(current) ? current.get() : current;
+}
+
+/**
  * The result cell of the piece at `address`, or of the attached piece when
  * `address` is absent, read through its pattern's result schema either way.
  * Opening a piece other than the attached one starts it in this runtime, as
@@ -220,6 +261,35 @@ async function attachPiece(next: PieceController): Promise<void> {
   });
   resultSinkCancel = () => {
     for (const cancel of cancels) cancel();
+  };
+  viewMountCancel?.();
+  viewMountCancel = renderView ? await mountView() : undefined;
+}
+
+/**
+ * Mounts the rendered view the way the browser worker does: under view-scoped
+ * replication the mount is first registered as a view interest on the piece's
+ * result, so the server selects the documents this session receives for it
+ * and the plan admits the actions it may run, and the reconciler's demand
+ * follows; otherwise the reconciler's demand is the whole of the view.
+ */
+async function mountView(): Promise<() => void> {
+  const { runtime } = controller();
+  const onError = (error: Error) => {
+    viewRenderErrors.push(error.message);
+  };
+  const cancelView = runtime.viewScopedReplicationRequested
+    ? await runtime.viewReplication.mount(
+      controller().getResult(currentPiece().getCell()),
+      `harness-view-${++viewMounts}`,
+      onError,
+    )
+    : undefined;
+  const cancelRender = new WorkerReconciler({ onOps: () => {}, onError })
+    .mount(result().key("$UI").asSchema(rendererVDOMSchema));
+  return () => {
+    cancelRender();
+    cancelView?.();
   };
 }
 
@@ -470,6 +540,8 @@ const handlers: Record<
       cfcWriteFloor,
       cfc,
       watchPaths: requestedWatchPaths,
+      renderView: requestedRenderView,
+      clientClass,
     },
   ) {
     const identity = await Identity.fromKeyPair(
@@ -481,6 +553,7 @@ const handlers: Record<
       (cfc as MultiRuntimeCfcOptions | undefined)?.cfcReadMaxConfidentiality !==
         undefined;
     if (Array.isArray(requestedWatchPaths)) watchPaths = requestedWatchPaths;
+    renderView = requestedRenderView === true;
     cc = await initializePiecesController({
       apiUrl: new URL(apiUrl as string),
       identity,
@@ -489,6 +562,7 @@ const handlers: Record<
       ...(cfcWriteFloor !== undefined
         ? { cfcWriteFloor: cfcWriteFloor as CfcWriteFloorMode }
         : {}),
+      ...(clientClass === "web" ? { clientClass } : {}),
     });
     if (recordRejections === true) {
       recordRejectionsInto(controller().runtime.telemetry);
@@ -497,6 +571,7 @@ const handlers: Record<
       const scheduler = controller().runtime.scheduler;
       scheduler.enableSettleStats();
       scheduler.setActionRunTraceEnabled(true);
+      scheduler.setTriggerTraceEnabled(true);
     }
     await maybeAttachOtelBridge(identity);
     return { did: identity.did() };
@@ -883,6 +958,43 @@ const handlers: Record<
     if (boundedReads) cell.get();
     if (boundedReads) await cell.pull();
     return convertCellsToLinks(cell.get(), { doNotConvertCellResults: true });
+  },
+
+  /**
+   * Resolve once the list the piece result holds at `path`, read as a map
+   * from each element's values at the `keys` paths to its value at the
+   * `valueKey` path, equals `expected`: the same keys and no others, each at
+   * its expected value in its string form. A path descends through a cell
+   * where an element holds one, so a key may name a field of the row's author.
+   * Read at this runtime's quiescence and woken by the cell's own changes.
+   * Visible rows can include speculation; this does not assert that the
+   * serving runtime has committed their consequences.
+   */
+  async waitForRows({ path, piece, keys, valueKey, expected }) {
+    const target = await resultAt(piece);
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    const keyPaths = keys as (string | number)[][];
+    const valuePath = valueKey as (string | number)[];
+    const wanted = expected as Record<string, string>;
+    const wantedKeys = Object.keys(wanted);
+    await waitForCellValue<unknown>(controller().runtime, cell, (value) => {
+      if (!Array.isArray(value) || value.length !== wantedKeys.length) {
+        return false;
+      }
+      const found = new Map<string, string>();
+      for (const element of value) {
+        found.set(
+          rowKeyOf(keyPaths.map((keyPath) => valueAt(element, keyPath))),
+          String(valueAt(element, valuePath)),
+        );
+      }
+      return found.size === wantedKeys.length &&
+        wantedKeys.every((key) => found.get(key) === wanted[key]);
+    }, { stuckLabel: `waitForRows at ${JSON.stringify(path)}` });
+    return {};
   },
 
   /**
@@ -1296,6 +1408,44 @@ const handlers: Record<
     return {};
   },
 
+  /**
+   * Creates a space the way a loom daemon's sidecar creates a social Loom's:
+   * its genesis commit reserves the Loom root at the Loom's publication cause
+   * and declares `spaceKind`, `loom` when absent and no kind for `null`, and
+   * grants `recipient` `WRITE`, as the daemon's offer does. Then provisions
+   * the root, titled `title`, from `system:loom/main.tsx` at the host this
+   * runtime reads. Answers the space and the address of its root.
+   */
+  async createLoomSpace({ recipient, spaceKind, title }) {
+    const runtime = controller().runtime;
+    const root = {
+      source: "system:loom/main.tsx",
+      sourceRoots: [
+        "system:loom/main.test.tsx",
+        "system:loom/presentation-refusals.test.tsx",
+        "system:loom/multi-user.test.tsx",
+        "system:loom/url-view.test.tsx",
+      ],
+      cause: JSON.stringify({
+        purpose: "loom-publication-root",
+        publication: crypto.randomUUID(),
+      }),
+      argument: { title: title as string },
+    };
+    const space = await runtime.createSpace({
+      grants: { [recipient as DID]: "WRITE" },
+      root,
+      ...(spaceKind === null
+        ? {}
+        : { spaceKind: (spaceKind ?? "loom") as string }),
+    });
+    const { error } = await createSpaceRootIfAbsent(runtime, space, root);
+    if (error) throw new Error(`createLoomSpace failed: ${error.message}`);
+    await idle();
+    const { id } = runtime.getCell(space, root.cause).getAsNormalizedFullLink();
+    return { space, root: { space, id } };
+  },
+
   /** Reads an explicit held address with the same stored-label gate as any Cell. */
   async readAddress({ link }) {
     const cell = controller().runtime.getCellFromLink(link as never);
@@ -1303,6 +1453,34 @@ const handlers: Record<
     return convertCellsToLinks(
       cell.asSchema({ ifc: { confidentiality: [] } }).get(),
     );
+  },
+
+  /**
+   * The rendered view's reconciliation errors since the last call, as
+   * messages, and nothing when the view mounted and reconciled cleanly or
+   * the session holds no view. Drained on each call.
+   */
+  renderErrors() {
+    return Promise.resolve(viewRenderErrors.splice(0) as FabricValue);
+  },
+
+  /**
+   * The timing measures this worker's loggers emitted since the last call,
+   * as the perf-investigation scripts read them, and nothing when emission
+   * is off. Drained on each call, so a capture is the measures of one window.
+   */
+  timingMeasures() {
+    const entries: { name: string; startTime: number; duration: number }[] = [];
+    for (const entry of performance.getEntriesByType("measure")) {
+      if (!entry.name.startsWith(TIMING_MEASURE_PREFIX)) continue;
+      entries.push({
+        name: entry.name,
+        startTime: entry.startTime,
+        duration: entry.duration,
+      });
+    }
+    clearTimingMeasures();
+    return Promise.resolve(entries as unknown as FabricValue);
   },
 
   async idle() {
@@ -1329,45 +1507,6 @@ const handlers: Record<
     return {};
   },
 
-  // Wait until this runtime has NO outstanding event intents: every event it
-  // fired has reached a terminal consequence (consequenced, errored, dropped,
-  // or refused) AND that consequence has arrived back here — speculation.md
-  // §4 step 2's retirement, whose outstanding set the overlay maintains
-  // (`Runtime.speculationOverlay.pendingIntentCount`). Under the served (ON)
-  // topology this is the client-observable "the server has drained my sends"
-  // signal the harness settle uses in place of the in-process server's
-  // `idle()` (see MultiRuntimeHarness.settle). Resolves `{ pending: 0 }` on
-  // quiescence, or with the still-outstanding count once `timeoutMs`
-  // elapses — the caller's settle round proceeds and the test's own assert
-  // speaks, so a wedged consequence degrades loudly instead of hanging the
-  // harness. The OFF arm has no overlay and resolves immediately.
-  async eventQuiescence({ timeoutMs }) {
-    const overlay = controller().runtime.speculationOverlay;
-    if (overlay === undefined || overlay.pendingIntentCount === 0) {
-      return { pending: 0 };
-    }
-    const budget = typeof timeoutMs === "number" ? timeoutMs : 10_000;
-    // Event-driven with a budget: the overlay resolves the quiescence
-    // waiter from the same untrack step that retires the last intent
-    // (consequence pushes arrive on the WebSocket; nothing here needs
-    // nudging), raced against the budget timer. A waiter whose race the
-    // timer wins stays parked until the set empties or the overlay
-    // closes — a spent resolver, not a leak (growth is bounded by the
-    // caller's settle rounds and every parked waiter flushes together).
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const budgetElapsed = new Promise<"budget">((resolve) => {
-      timer = setTimeout(() => resolve("budget"), budget);
-    });
-    const raced = await Promise.race([
-      overlay.waitForIntentQuiescence().then(() => "quiescent" as const),
-      budgetElapsed,
-    ]);
-    clearTimeout(timer);
-    return {
-      pending: raced === "quiescent" ? 0 : overlay.pendingIntentCount,
-    };
-  },
-
   // Wait — with no budget of its own — until every event this runtime
   // fired has reached a terminal consequence (consequenced, errored,
   // dropped, or refused) that has ARRIVED back here: the overlay's
@@ -1380,9 +1519,8 @@ const handlers: Record<
   // reading handler then no-ops SILENTLY (the 2026-08-22 ON-lane
   // group-chat flake). Once the first event's consequence has arrived
   // back, its commit is in the space's history, so any later-fired
-  // event is served against a view that includes it. Backstopped by
-  // the harness RPC timeout, which names this session and command;
-  // instant on the OFF arm (no overlay) and when nothing is
+  // event is served against a view that includes it. Nothing bounds
+  // the wait; instant on the OFF arm (no overlay) and when nothing is
   // outstanding. First-order only, like the count it drains — a
   // server-side cascade child is no session's intent.
   async awaitEventConsequences() {
@@ -1407,6 +1545,7 @@ const handlers: Record<
       graph: scheduler.getGraphSnapshot(),
       settleStatsHistory: scheduler.getSettleStatsHistory(),
       actionRunTrace: scheduler.getActionRunTrace(),
+      triggerTrace: scheduler.getTriggerTrace(),
     } satisfies RuntimeDiagnosticsSnapshot;
   },
 
@@ -1447,6 +1586,8 @@ const handlers: Record<
 
   async dispose() {
     for (const intake of shareIntakes.splice(0)) intake.stop();
+    viewMountCancel?.();
+    viewMountCancel = undefined;
     resultSinkCancel?.();
     resultSinkCancel = undefined;
     piece = undefined;

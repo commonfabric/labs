@@ -28,9 +28,30 @@ export const EXECUTION_LEASE_RENEW_INTERVAL_MS = 5_000;
  * across every renew and reacquire within one process lifetime; fresh
  * whenever the process is genuinely new. This is what lets the admission
  * equality check itself fence every CROSS-process succession: a successor
- * process's holder never equals its predecessor's.
+ * process's holder never equals its predecessor's. A realm that serves on a
+ * process's behalf adopts the component that process minted for it
+ * ({@link adoptProcessInstanceId}) in place of this one.
  */
 export const processInstanceId: string = crypto.randomUUID();
+
+/** The component holders are minted with: the adopted one, else the realm's. */
+let currentProcessInstance: string = processInstanceId;
+
+/** The process-instance component every holder minted from now on carries. */
+export const currentProcessInstanceId = (): string => currentProcessInstance;
+
+/**
+ * Makes `id` the process-instance component of every holder minted from here
+ * on. The serving loop's worker adopts the component the process minted for
+ * that worker's start: the lease rows the worker then writes name the holder
+ * the process's memory server matches against, and a component fresh per
+ * start keeps a restarted worker's commits apart from its predecessor's under
+ * the engine's replay keying. The process adopts the same component itself,
+ * so the two realms agree.
+ */
+export const adoptProcessInstanceId = (id: string): void => {
+  currentProcessInstance = id;
+};
 
 /**
  * The DR1 holder identity: the SpaceServer's service identity plus the
@@ -41,7 +62,7 @@ export const processInstanceId: string = crypto.randomUUID();
  */
 export const executionLeaseHolder = (
   serviceIdentity: string,
-  processInstance: string = processInstanceId,
+  processInstance: string = currentProcessInstance,
 ): string => `${serviceIdentity}#${processInstance}`;
 
 /**

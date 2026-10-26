@@ -54,9 +54,10 @@ import {
 } from "./cfc/types.ts";
 import { createRef } from "./create-ref.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
-import { resolveLink } from "./link-resolution.ts";
+import { readMaybeLink, resolveLink } from "./link-resolution.ts";
 import {
   areNormalizedLinksSame,
+  areNormalizedLinksSameIgnoringScope,
   createSigilLinkFromParsedLink,
   declareStreamSchema,
   isCellLink,
@@ -541,6 +542,17 @@ export type DiffAndUpdateOptions = IReadOptions & {
    * marker on the containing document cannot cover them.
    */
   schemaRole?: "output";
+
+  /**
+   * The walk writes the bindings of the document it starts in, as a piece's
+   * setup writes its argument document. A write redirect stored at a
+   * position, or a link to a narrower scope's instance of another document, is
+   * replaced by what is written there rather than followed: the cell it names
+   * belongs to whoever bound it, and the walk writes none of that cell. A link
+   * to the same position in a narrower scope's instance is the position
+   * itself, realized at that scope, and is followed as on any write.
+   */
+  replacesBindings?: true;
 };
 
 /**
@@ -1257,6 +1269,64 @@ function consumeSteeringSlot(
   tx.readValueOrThrow(link, options);
 }
 
+/** Whether `other` names `link`'s position in a narrower scope's instance. */
+function isNarrowerInstanceOf(
+  other: NormalizedFullLink,
+  link: NormalizedFullLink,
+): boolean {
+  return areNormalizedLinksSameIgnoringScope(other, link) &&
+    scopeRank(other.scope) > scopeRank(link.scope);
+}
+
+/**
+ * Whether `target`, a link about to be written at `link`, names the same
+ * position of the same document at a broader scope, and that position is
+ * realized at `link`. A broader-scope slot whose content lives at a narrower
+ * scope holds a same-document link to that instance: a write redirect, or
+ * the plain link scope narrowing stores. It sits at the position itself or at
+ * an ancestor, which hands over the whole subtree, and a session realization
+ * of a space slot reaches the session instance through the user instance.
+ * Written at `link`, a link to a slot realized there would point the instance
+ * back at the slot that points at it: a link cycle every later read meets.
+ * Written there, the link refers to the instance itself.
+ *
+ * The slots read are the broader-scope ones, not the region the write lands
+ * in, so they are not write-destination reads. What is read at each is which
+ * reference sits there, and `readMaybeLink` journals exactly that.
+ */
+function realizesAt(
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+  target: NormalizedFullLink,
+): boolean {
+  if (!isNarrowerInstanceOf(link, target)) return false;
+  let scope: CellScope | undefined = target.scope;
+  while (scope !== undefined && scopeRank(scope) < scopeRank(link.scope)) {
+    scope = realizationScope(tx, { ...target, scope });
+  }
+  return scope === link.scope;
+}
+
+/**
+ * The narrower scope `slot` hands its content to, decided as link resolution
+ * decides it: by the nearest link stored at `slot`'s path or above it. A
+ * position holding content has no link above it, since a link stores no
+ * children. `undefined` when there is no such link, or when it names anything
+ * but the same position of the same document at a narrower scope.
+ */
+function realizationScope(
+  tx: IExtendedStorageTransaction,
+  slot: NormalizedFullLink,
+): CellScope | undefined {
+  for (let depth = slot.path.length; depth >= 0; depth--) {
+    const position = { ...slot, path: slot.path.slice(0, depth) };
+    const hop = readMaybeLink(tx, position);
+    if (hop === undefined) continue;
+    return isNarrowerInstanceOf(hop, position) ? hop.scope : undefined;
+  }
+  return undefined;
+}
+
 /**
  * Traverses objects and returns an array of changes that should be written. An
  * empty array means no changes.
@@ -1759,9 +1829,12 @@ export function normalizeAndDiff(
     );
   }
 
-  // If we're about to create a reference to ourselves, no-op
+  // If we're about to create a reference to ourselves, no-op: a link to this
+  // very slot, or to the broader-scope slot whose realization this is.
   if (
-    newValueLink !== undefined && areNormalizedLinksSame(link, newValueLink)
+    newValueLink !== undefined &&
+    (areNormalizedLinksSame(link, newValueLink) ||
+      realizesAt(tx, link, newValueLink))
   ) {
     diffLogger.debug(
       "diff",
@@ -1827,20 +1900,29 @@ export function normalizeAndDiff(
   }
 
   // Handle alias in current value (at this point: if newValue is not an alias)
-  if (currentValueIsLink && isWriteRedirectLink(currentValue)) {
+  const storedRedirect = currentValueIsLink && isWriteRedirectLink(currentValue)
+    ? parseLink(currentValue, link)
+    : undefined;
+  if (
+    storedRedirect !== undefined &&
+    (options?.replacesBindings !== true ||
+      isNarrowerInstanceOf(storedRedirect, link))
+  ) {
     consumeSteeringSlot(tx, link, options);
     diffLogger.debug(
       "diff",
       () =>
         `[BRANCH_CURRENT_ALIAS] Following current value alias at path=${pathStr}`,
     );
-    // Log reads of the alias, so that changing aliases cause refreshes
-    const redirectLink = resolveLink(
-      runtime,
-      tx,
-      parseLink(currentValue, link),
-      "writeRedirect",
-    );
+    // Log reads of the alias, so that changing aliases cause refreshes. A walk
+    // that replaces bindings takes the realization hop alone and diffs again
+    // at the narrower instance, so a binding stored there is replaced too
+    // rather than followed with the rest of the chain.
+    const redirectLink = options?.replacesBindings === true
+      ? storedRedirect.schema === undefined && link.schema !== undefined
+        ? { ...storedRedirect, schema: link.schema }
+        : storedRedirect
+      : resolveLink(runtime, tx, storedRedirect, "writeRedirect");
     return normalizeAndDiff(
       runtime,
       tx,
@@ -1864,10 +1946,17 @@ export function normalizeAndDiff(
   // into the narrower-scope instance — overwriting it would land per-user /
   // per-session state at the shared base scope. Reference values are exempt:
   // writing a link re-binds the slot (and the schema-declared narrowing above
-  // already handled scoped re-binds before reaching here).
+  // already handled scoped re-binds before reaching here). A walk that
+  // replaces bindings follows only a link to this position's own narrower
+  // instance: a narrower-scope link to another document is a binding, which it
+  // replaces.
   if (currentValueIsLink && newValueLink === undefined) {
     const storedLink = parseLink(currentValue as PrimitiveCellLink, link);
-    if (scopeRank(storedLink.scope) > scopeRank(link.scope)) {
+    if (
+      scopeRank(storedLink.scope) > scopeRank(link.scope) &&
+      (options?.replacesBindings !== true ||
+        isNarrowerInstanceOf(storedLink, link))
+    ) {
       consumeSteeringSlot(tx, link, options);
       diffLogger.debug(
         "diff",

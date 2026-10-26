@@ -55,6 +55,22 @@ describe("message-compression", () => {
     expect(await decodeCompressedMemoryMessage(encoded)).toBe(payload);
   });
 
+  it("round-trips payloads from the threshold up to several megabytes", async () => {
+    for (const repeats of [200, 2_000, 20_000, 200_000, 800_000]) {
+      const payload = `fvj1:${
+        JSON.stringify({
+          type: "session/effect",
+          text: "chunk ".repeat(repeats),
+        })
+      }`;
+
+      const encoded = await encodeCompressedMemoryMessage(payload);
+
+      expect(encoded).toBeInstanceOf(Uint8Array);
+      expect(await decodeCompressedMemoryMessage(encoded)).toBe(payload);
+    }
+  });
+
   it("rejects an envelope whose declared expansion is too small", async () => {
     const payload = "repeated memory message ".repeat(1_000);
     const encoded = await encodeCompressedMemoryMessage(payload);

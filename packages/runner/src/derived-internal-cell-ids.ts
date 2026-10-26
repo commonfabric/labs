@@ -1,5 +1,5 @@
 import type { JSONValue } from "@commonfabric/api";
-import { isDeepFrozen } from "@commonfabric/data-model";
+import { debugStr, isDeepFrozen } from "@commonfabric/data-model";
 import { LRUCache } from "@commonfabric/utils/cache";
 
 import type { AnyCell } from "./cell.ts";
@@ -22,10 +22,9 @@ const ID_LIMIT = 65_536;
  * more per action whose scheduler summary lists it.
  *
  * A partial cause that is a string, a number, a boolean or `null` is told
- * apart by value. One that is an object is told apart by identity, and only
- * where it is deep-frozen, as the causes of a compiled pattern are: such an
- * object names the same id for as long as it lives. An id is hashed on
- * every call for any other partial cause.
+ * apart by value, and one that is an object by identity. An object cause must
+ * be deep-frozen, as the builder leaves every cause it assigns, and so names
+ * the same id for as long as it lives.
  */
 export class DerivedInternalCellIds {
   #ids: LRUCache<string, EntityId>;
@@ -65,6 +64,8 @@ export class DerivedInternalCellIds {
    * Returns the id of the derived internal cell `partialCause` names on
    * `resultCell`. The id carries no entity kind: the caller applies one when
    * it writes the id as a URI.
+   *
+   * @throws Error if `partialCause` is an object that is not deep-frozen.
    */
   idFor(resultCell: AnyCell<unknown>, partialCause: JSONValue): EntityId {
     const resultId = resultCell.getAsNormalizedFullLink().id;
@@ -99,7 +100,8 @@ export class DerivedInternalCellIds {
   /**
    * The key component standing for `partialCause`, or `undefined` for a
    * value this instance keeps no id for. Each kind of value has a tag of its
-   * own, so `1`, `"1"` and `true` share no key.
+   * own, so `1`, `"1"` and `true` share no key. Throws for an object that is
+   * not deep-frozen.
    */
   #causeKey(partialCause: JSONValue): string | undefined {
     switch (typeof partialCause) {
@@ -111,7 +113,11 @@ export class DerivedInternalCellIds {
         return `b${partialCause}`;
       case "object": {
         if (partialCause === null) return "l";
-        if (!isDeepFrozen(partialCause)) return undefined;
+        if (!isDeepFrozen(partialCause)) {
+          throw new Error(
+            debugStr`Partial cause is not deep-frozen: $quote${partialCause}`,
+          );
+        }
         let number = this.#causeNumbers.get(partialCause);
         if (number === undefined) {
           number = this.#nextCauseNumber++;

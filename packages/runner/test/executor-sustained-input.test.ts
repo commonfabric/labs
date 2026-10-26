@@ -56,43 +56,53 @@ describe("SpaceServer", () => {
       expect(covered.length).toBe(stream.inputs.length);
     });
 
-    it("covers each input within two cycles of its admission when every frame barrier completes after the flush deadline", async () => {
-      // The fixture drives the deadline's clock and moves it past the
-      // deadline as each barrier's frames land, so every settle the stream
-      // feeds ends exhausted at its first barrier, with that barrier
-      // complete, on a machine of any speed. A client writes the inputs, so
-      // each one re-arms the argument's terminal root. The cycle after an
-      // input's admission drains it, applies its frames at that barrier,
-      // and starts the root's retry there. The cycle after that awaits the
-      // retry, finds the scheduler idle, and proves the head that barrier
-      // applied, whatever later input has re-armed the root by then. With
-      // the clock driven, those two cycles are steps of the loop and not a
-      // measure of elapsed time. A loop that leaves the retry for a barrier
-      // ahead of the deadline, or that proves nothing while a re-armed root
-      // is pending, covers the stream's first input only once the stream
-      // stops.
+    for (const overlapWaveCommit of [false, true]) {
+      const coverageCycles = overlapWaveCommit ? 3 : 2;
+      const description = overlapWaveCommit
+        ? "covers each input within three cycles with overlap when every frame barrier completes after the flush deadline"
+        : "covers each input within two cycles of its admission when every frame barrier completes after the flush deadline";
+      it(description, async () => {
+        // The fixture drives the deadline's clock and moves it past the
+        // deadline as each barrier's frames land, so every settle the stream
+        // feeds ends exhausted at its first barrier, with that barrier
+        // complete, on a machine of any speed. A client writes the inputs, so
+        // each one re-arms the argument's terminal root. The cycle after an
+        // input's admission drains it, applies its frames at that barrier,
+        // and starts the root's retry there. The cycle after that awaits the
+        // retry, finds the scheduler idle, and proves the head that barrier
+        // applied, whatever later input has re-armed the root by then. With
+        // the clock driven, those two cycles are steps of the loop and not a
+        // measure of elapsed time. A loop that leaves the retry for a barrier
+        // ahead of the deadline, or that proves nothing while a re-armed root
+        // is pending, covers the stream's first input only once the stream
+        // stops.
+        // An overlapped commit is finished in the following cycle, so its
+        // durable coverage is observed one cycle later: the overlap arm's
+        // bound is three cycles.
 
-      const opened = await openSustainedInputFixture({
-        flushDeadlineMs: 600_000,
-        lateBarriers: true,
+        const opened = await openSustainedInputFixture({
+          flushDeadlineMs: 600_000,
+          lateBarriers: true,
+          overlapWaveCommit,
+        });
+        fixture = opened;
+        const { cycles, engine, host, server } = opened;
+        const stream = opened.stream();
+        await cycles.reached(cycles.entries.length + 8);
+        await stream.stop();
+        const last = stream.inputs[stream.inputs.length - 1].seq;
+        await awaitAdmitted(server, () => readWatermarkSeq(engine) >= last);
+
+        const stats = host.stats();
+        const covered = stats.settle.series.filter((row) =>
+          stream.inputs.some((input) => input.seq === row.seq)
+        );
+        expect(covered.length).toBe(stream.inputs.length);
+        expect(maxOf(covered.map((row) => row.cycles)))
+          .toBeLessThanOrEqual(coverageCycles);
+        expect(stats.exhaustedAdvances).toBeGreaterThan(0);
       });
-      fixture = opened;
-      const { cycles, engine, host, server } = opened;
-      const stream = opened.stream();
-      await cycles.reached(cycles.entries.length + 8);
-      await stream.stop();
-      const last = stream.inputs[stream.inputs.length - 1].seq;
-      await awaitAdmitted(server, () => readWatermarkSeq(engine) >= last);
-
-      const stats = host.stats();
-      const covered = stats.settle.series.filter((row) =>
-        stream.inputs.some((input) => input.seq === row.seq)
-      );
-      expect(covered.length).toBe(stream.inputs.length);
-      expect(maxOf(covered.map((row) => row.cycles)))
-        .toBeLessThanOrEqual(2);
-      expect(stats.exhaustedAdvances).toBeGreaterThan(0);
-    });
+    }
 
     it("leaves the watermark below an input whose derivations the deadline cut off", async () => {
       // A deadline shorter than one stage of the cascade cuts every settle
@@ -121,6 +131,56 @@ describe("SpaceServer", () => {
         expect(end.total).toBe(22);
       }
       expect(host.stats().wavesBudgetExhausted).toBeGreaterThan(0);
+    });
+
+    it("doubles the deadline of each settle after one the deadline cut, up to the cap, and takes the base again after one that reached quiescence", async () => {
+      // A deadline shorter than one stage of the cascade cuts the settle
+      // that has the cascade to run, so the settles after it grow: twice
+      // the one before, never past the cap, until the cascade finishes
+      // inside one and that settle reaches quiescence, after which the next
+      // settle takes the base again. Which settle finishes the cascade, and
+      // whether a cycle before the first input was already cut, depend on
+      // the machine, so each settle is checked against the one before it
+      // rather than the count asserted: after a cut settle the next takes
+      // twice its deadline under the cap, or the base where the loop found
+      // no work between them, and after one that reached quiescence the
+      // base; one grew; and one that followed a grown one is the base again.
+
+      const opened = await openSustainedInputFixture({
+        flushDeadlineMs: 10,
+        flushDeadlineMaxMs: 80,
+        stageSpins: 20_000_000,
+      });
+      fixture = opened;
+      const { cycles, deadlines, host, settles } = opened;
+      const before = deadlines.entries.length;
+      const settledBefore = settles.entries.length;
+      const seq = await opened.write(3);
+      await cycles.matching((end) => end.watermark >= seq && end.total === 22);
+      const ran = settles.entries.slice(settledBefore);
+      expect(ran.some(({ deadlineMs }) => deadlineMs > 10)).toBe(true);
+      for (const [index, { deadlineMs }] of ran.entries()) {
+        const previous = ran[index - 1];
+        if (previous === undefined) {
+          expect([10, 20, 40, 80]).toContain(deadlineMs);
+          continue;
+        }
+        expect(
+          previous.exhausted
+            ? [Math.min(80, previous.deadlineMs * 2), 10]
+            : [10],
+        ).toContain(deadlineMs);
+      }
+      expect(host.stats().wavesBudgetExhausted).toBeGreaterThan(0);
+
+      const next = await opened.write(4);
+      await cycles.matching((end) => end.watermark >= next && end.total === 29);
+      const taken = deadlines.entries.slice(before);
+      expect(
+        taken.some((deadline, index) =>
+          index > 0 && taken[index - 1] > 10 && deadline === 10
+        ),
+      ).toBe(true);
     });
 
     it("holds the advance below input the serving replica still shadows while the stream runs", async () => {

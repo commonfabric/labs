@@ -8,6 +8,7 @@ import type {
   MemoryAddressPathComponent,
   StorageNotification,
 } from "../storage/interface.ts";
+import { isPermanentAuthorizationRefusal } from "../storage/rejection.ts";
 import { summarizeTriggerTraceValue } from "./diagnostics.ts";
 import { dirtyFanOutAll, dirtyFanOutForCause } from "./fan-out.ts";
 import type { MaterializerIndexState } from "./materializers.ts";
@@ -167,9 +168,16 @@ export function processStorageNotification(
       // "own retirement is not a trigger" rider, RULED 2026-08-16): the
       // `integrate` a retiring echo produces carries the echo's own
       // transaction as `source`, so the writer does not re-run for the
-      // flip of its OWN output to the authoritative value.
+      // flip of its OWN output to the authoritative value. The `revert` of a
+      // write the space refused for lack of a grant is the same case: it
+      // restores what the writer read before it wrote, and a run over that
+      // would recompute the write the space just refused. A revert for any
+      // other reason stays a trigger for its writer, whose re-run against the
+      // restored state is how a stale basis converges.
       const isOwnCommitSource =
-        (notification.type === "commit" || notification.type === "integrate") &&
+        (notification.type === "commit" || notification.type === "integrate" ||
+          (notification.type === "revert" &&
+            isPermanentAuthorizationRefusal(notification.reason))) &&
         notification.source !== undefined &&
         notification.source.sourceAction === action;
       const plan = planPullTriggeredAction({

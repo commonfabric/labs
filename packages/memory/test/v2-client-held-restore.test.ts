@@ -440,7 +440,7 @@ Deno.test("a capacity refusal during a restore holds the session and reports no 
         },
       }]);
       const lost: Error[] = [];
-      a.subscribeAccessLoss((error) => lost.push(error));
+      a.subscribeTermination((error) => lost.push(error));
       peer.drop();
       await until(() => a.held);
       assert((await within(a.transact(commit(1)))).seq > 0, step);
@@ -464,7 +464,7 @@ Deno.test("a capacity refusal during a restore holds the session and reports no 
   try {
     const a = await client.mount(SPACE_A, {}, principal());
     const lost: Error[] = [];
-    a.subscribeAccessLoss((error) => lost.push(error));
+    a.subscribeTermination((error) => lost.push(error));
     peer.drop();
     await client.restoreConnection();
     await until(() => lost.length === 1);

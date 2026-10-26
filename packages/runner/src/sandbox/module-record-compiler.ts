@@ -1,4 +1,8 @@
-import type { Source, SourceMap } from "@commonfabric/js-compiler";
+import type {
+  ModuleDeclarations,
+  Source,
+  SourceMap,
+} from "@commonfabric/js-compiler";
 import {
   resolveDataFilePath,
   resolveImportSpecifier,
@@ -448,6 +452,15 @@ export interface CompileSourcesOptions {
   precompiledBuilderSourceSites?: Map<string, BuilderSourceSitesV1>;
 
   /**
+   * Runtime import specifiers per source name, for precompiled bodies whose
+   * `require()` calls were already listed by the same scan this adapter runs.
+   * A source with an entry takes its record's imports from it, and its body is
+   * not parsed for them. An entry for a source with no precompiled body is
+   * ignored.
+   */
+  precompiledImportSpecs?: ReadonlyMap<string, readonly string[]>;
+
+  /**
    * Whole-program path prefix (`/<id>`, no trailing slash) to strip from each
    * module's path *for content-addressed identity only*. The compile path
    * resolves a program whose files are prefixed with `/<computeId>/...` (a
@@ -540,16 +553,42 @@ function stripIdentityPrefix(name: string, idPrefix?: string): string {
 }
 
 /**
- * The parts of a deployed source package that bind to the entry module's
- * identity without being reachable from it through an import. `rootPaths` are
- * attached source entry points such as tests; `dataPaths` are attached data
- * files. Each contributes one identity-only edge from `entryPath`, so adding,
- * changing, or removing any of them yields a distinct entry identity.
+ * The parts of a deployed source package that bind to one module's identity
+ * without being reachable from it through an import. Each contributes one
+ * identity-only edge from `ownerPath`, so adding, changing, or removing any of
+ * them yields a distinct identity for that module and for every module that
+ * reaches it.
  */
 export interface SourcePackageIdentity {
-  entryPath: string;
+  /** The module the edges leave from. */
+  ownerPath: string;
+
+  /** Attached source entry points, such as tests. The entry owns these. */
   rootPaths: readonly string[];
+
+  /**
+   * Attached data files. The module whose `dataFile()` call names a file owns
+   * its edge, and the entry owns a file no module's source names.
+   */
   dataPaths?: readonly string[];
+}
+
+/** How {@link computeModuleIdentities} names and hashes a set of sources. */
+export interface ModuleIdentitiesOptions {
+  /** Whole-program path prefix (`/<id>`) left out of every identity. */
+  idPrefix?: string;
+
+  /** Identity of the runtime surface, as `computeModuleHashes()` takes it. */
+  runtimeFingerprint?: string;
+
+  /** The source-package edges each owning module carries. */
+  sourcePackages?: readonly SourcePackageIdentity[];
+
+  /**
+   * Modules already scanned, keyed by source name, from `scanModules()`. A
+   * source with an entry is resolved from that scan rather than parsed again.
+   */
+  declarations?: ReadonlyMap<string, ModuleDeclarations>;
 }
 
 /**
@@ -561,11 +600,7 @@ export interface SourcePackageIdentity {
  */
 export function computeModuleIdentities(
   sources: Source[],
-  options: {
-    idPrefix?: string;
-    runtimeFingerprint?: string;
-    sourcePackages?: readonly SourcePackageIdentity[];
-  } = {},
+  options: ModuleIdentitiesOptions = {},
 ): Map<string, string> {
   const stripPath = (path: string) =>
     stripIdentityPrefix(path, options.idPrefix);
@@ -575,17 +610,17 @@ export function computeModuleIdentities(
   >();
   const dataFiles = new Set<string>();
   for (const sourcePackage of options.sourcePackages ?? []) {
-    const entryPath = stripPath(sourcePackage.entryPath);
+    const ownerPath = stripPath(sourcePackage.ownerPath);
     const rootPaths = [
       ...new Set(sourcePackage.rootPaths.map(stripPath)),
     ]
-      .filter((rootPath) => rootPath !== entryPath);
+      .filter((rootPath) => rootPath !== ownerPath);
     const dataPaths = [
       ...new Set((sourcePackage.dataPaths ?? []).map(stripPath)),
     ]
-      .filter((dataPath) => dataPath !== entryPath);
+      .filter((dataPath) => dataPath !== ownerPath);
     for (const dataPath of dataPaths) dataFiles.add(dataPath);
-    const entryDeps = [
+    const ownerDeps = [
       ...rootPaths.map((rootPath) => ({
         specifier: sourceRootSpecifier(rootPath),
         target: rootPath,
@@ -595,8 +630,16 @@ export function computeModuleIdentities(
         target: dataPath,
       })),
     ];
-    if (entryDeps.length > 0) {
-      additionalInternalDeps.set(entryPath, entryDeps);
+    if (ownerDeps.length > 0) {
+      additionalInternalDeps.set(ownerPath, ownerDeps);
+    }
+  }
+  // Stripping a prefix keeps a module's base name, so its scan still holds.
+  const declarations = new Map<string, ModuleDeclarations>();
+  for (const source of sources) {
+    const declared = options.declarations?.get(source.name);
+    if (declared !== undefined) {
+      declarations.set(stripPath(source.name), declared);
     }
   }
   const hashes = computeModuleHashes(
@@ -613,6 +656,7 @@ export function computeModuleIdentities(
         : {}),
       ...(additionalInternalDeps.size === 0 ? {} : { additionalInternalDeps }),
       ...(dataFiles.size === 0 ? {} : { dataFiles }),
+      ...(declarations.size === 0 ? {} : { declarations }),
     },
   );
   const identityByPath = new Map<string, string>();
@@ -646,11 +690,7 @@ export interface FabricMount {
 export function computeFabricModuleIdentities(
   sources: Source[],
   mounts: readonly FabricMount[],
-  options: {
-    idPrefix?: string;
-    runtimeFingerprint?: string;
-    sourcePackages?: readonly SourcePackageIdentity[];
-  } = {},
+  options: ModuleIdentitiesOptions = {},
 ): Map<string, string> {
   const authored: Source[] = [];
   const mountFiles = new Map<FabricMount, Source[]>();
@@ -679,6 +719,9 @@ export function computeFabricModuleIdentities(
       idPrefix: `${FABRIC_MOUNT_ROOT}${mount.entryIdentity}`,
       ...(options.runtimeFingerprint !== undefined
         ? { runtimeFingerprint: options.runtimeFingerprint }
+        : {}),
+      ...(options.declarations !== undefined
+        ? { declarations: options.declarations }
         : {}),
     });
     const actual = identities.get(mount.entryPath);
@@ -899,9 +942,14 @@ export function compileSourcesToRecords(
     // become record edges — unlike `collectImportSpecifiers`, which includes
     // them for module *identity*.
     compiledBodies.set(specifier, compiled);
-    // Copy the readonly extractor result into a mutable array the record owns
-    // (VirtualModuleRecord.imports is `string[]`); this is the cold compile path.
-    const importSpecs = [...extractRuntimeImports(compiled)];
+    const listedImports = precompiled === undefined
+      ? undefined
+      : options.precompiledImportSpecs?.get(source.name);
+    // Copy the readonly list into a mutable array the record owns
+    // (VirtualModuleRecord.imports is `string[]`).
+    const importSpecs = [
+      ...(listedImports ?? extractRuntimeImports(compiled)),
+    ];
     const resolutions: Record<string, string> = {};
     // The specifiers whose runtime namespace declares `dataFile`, and so the
     // only ones this module reads a data file through.

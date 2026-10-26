@@ -563,7 +563,8 @@ export class LLMClient {
    * Sends a request to the LLM service.
    *
    * @param request The LLM request object.
-   * @param callback Optional callback for streaming text responses.
+   * @param callback Receives the text so far after each streamed text event.
+   *   Without one, a streamed reply is read whole once all of it has arrived.
    * @param abortSignal Optional signal that abandons the request.
    * @param opts Optional per-call overrides, currently the endpoint.
    * @returns The full LLM response with content and tool information.
@@ -579,11 +580,6 @@ export class LLMClient {
       endpoint?: string | URL;
     },
   ): Promise<LLMResponse> {
-    if (request.stream && !callback) {
-      throw new Error(
-        "Requested an LLM request stream but no callback provided.",
-      );
-    }
     if (!request.stream && callback) {
       throw new Error(
         "Requested an LLM request with callback, but not configured as a stream.",
@@ -664,24 +660,142 @@ export class LLMClient {
       );
     }
 
-    if (!response.body) {
-      throw new Error("No response body");
-    }
-
-    const id = response.headers.get("x-cf-llm-trace-id") as string;
-
-    // the server might return cached data instead of a stream
-    if (response.headers.get("content-type")?.includes("application/json")) {
-      const data = await response.json();
-      return normalizeLLMResponse(data, id);
-    }
-    return await readLLMStream(response.body, id, callback);
+    return await readLLMResponse(response, callback);
   }
 }
 
 /**
- * Reads one streamed LLM response to completion, reporting partial text
- * to `callback` as it arrives.
+ * Reads the reply the service sent in `response`: a JSON reply, which is how
+ * a cached answer arrives, whole; a streamed reply through its stream when
+ * `callback` wants the text as it arrives, and otherwise whole as well.
+ */
+export async function readLLMResponse(
+  response: Response,
+  callback?: PartialCallback,
+): Promise<LLMResponse> {
+  const id = response.headers.get("x-cf-llm-trace-id") as string;
+  if (response.headers.get("content-type")?.includes("application/json")) {
+    return normalizeLLMResponse(await response.json(), id);
+  }
+  if (callback) {
+    if (!response.body) {
+      throw new Error("No response body");
+    }
+    return await readLLMStream(response.body, id, callback);
+  }
+  // With nothing waiting on partial text, the body is read whole, and
+  // `response.body` is never touched. In WebKit that getter creates the
+  // `ReadableStream` a later `text()` then drains, and a body drained through
+  // a stream whose last pull is still pending when the load ends stays
+  // reachable for the life of the realm; `text()` on an untouched body reads
+  // it without a stream. A body that reads as nothing, which is what a
+  // bodyless response reads as, is refused the way a missing stream is above.
+  const text = await response.text();
+  if (!text) {
+    throw new Error("No response body");
+  }
+  return parseLLMReply(text, id);
+}
+
+/**
+ * Assembles one LLM reply from the newline-delimited JSON events the service
+ * streams, in whatever pieces the body arrives, reporting the text so far to
+ * `callback` after each text event.
+ */
+function assembleLLMReply(id: string, callback?: PartialCallback) {
+  let buffer = "";
+  let text = "";
+  const toolCalls: LLMToolCall[] = [];
+  const toolResults: LLMToolResult[] = [];
+  let nativeModelToolResults: LLMNativeModelToolResult[] | undefined;
+
+  const takeEvent = (line: string, place: "line" | "final") => {
+    try {
+      const event = JSON.parse(line);
+      // The event types are those of the AI SDK's `fullStream`.
+      if (typeof event === "string") {
+        // Legacy text delta format
+        text += event;
+        if (callback) callback(text);
+      } else if (event.type === "text-delta") {
+        text += event.textDelta;
+        if (callback) callback(text);
+      } else if (event.type === "tool-call") {
+        toolCalls.push({
+          id: event.toolCallId,
+          name: event.toolName,
+          input: event.args,
+        });
+      } else if (event.type === "tool-result") {
+        toolResults.push({
+          toolCallId: event.toolCallId,
+          result: event.result,
+          error: event.error,
+        });
+      } else if (event.type === "finish") {
+        if (isLLMNativeModelToolResults(event.nativeModelToolResults)) {
+          nativeModelToolResults = event.nativeModelToolResults;
+        }
+      } else if (event.type === "error") {
+        throw new LLMStreamError(event.error ?? "LLM stream error");
+      }
+    } catch (error) {
+      if (error instanceof LLMStreamError) throw error;
+      console.error(
+        place === "final"
+          ? "Failed to parse final JSON line:"
+          : "Failed to parse JSON line:",
+        line,
+        error,
+      );
+    }
+  };
+
+  return {
+    /** Takes the next piece of the body's text. */
+    push(chunk: string): void {
+      buffer += chunk;
+      let newlineIndex: number;
+      while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        if (line) takeEvent(line, "line");
+      }
+    },
+
+    /** Returns the reply, once every piece of the body has been pushed. */
+    finish(): LLMResponse {
+      const last = buffer.trim();
+      buffer = "";
+      if (last) takeEvent(last, "final");
+
+      const content: any[] = [];
+      if (text.trim()) {
+        content.push({ type: "text", text });
+      }
+      for (const toolCall of toolCalls) {
+        content.push({
+          type: "tool-call",
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          input: toolCall.input,
+        });
+      }
+      return {
+        role: "assistant",
+        content: content.length > 0 ? content : text,
+        id,
+        ...(nativeModelToolResults !== undefined
+          ? { nativeModelToolResults }
+          : {}),
+      };
+    },
+  };
+}
+
+/**
+ * Reads one streamed LLM reply to completion, reporting the text so far to
+ * `callback` as it arrives.
  */
 export async function readLLMStream(
   body: ReadableStream,
@@ -690,116 +804,21 @@ export async function readLLMStream(
 ): Promise<LLMResponse> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
-
-  let doneReading = false;
-  let buffer = "";
-  let text = "";
-  const toolCalls: LLMToolCall[] = [];
-  const toolResults: LLMToolResult[] = [];
-  let nativeModelToolResults: LLMNativeModelToolResult[] | undefined;
-
-  while (!doneReading) {
+  const reply = assembleLLMReply(id, callback);
+  while (true) {
     const { value, done } = await reader.read();
-    doneReading = done;
-    if (value) {
-      const chunk = decoder.decode(value, { stream: true });
-      buffer += chunk;
-
-      let newlineIndex: number;
-      while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, newlineIndex).trim();
-        buffer = buffer.slice(newlineIndex + 1);
-
-        if (line) {
-          try {
-            const event = JSON.parse(line);
-
-            // Handle different event types from AI SDK fullStream
-            if (typeof event === "string") {
-              // Legacy text delta format
-              text += event;
-              if (callback) callback(text);
-            } else if (event.type === "text-delta") {
-              // New structured text delta
-              text += event.textDelta;
-              if (callback) callback(text);
-            } else if (event.type === "tool-call") {
-              // Tool call event
-              const toolCall: LLMToolCall = {
-                id: event.toolCallId,
-                name: event.toolName,
-                input: event.args,
-              };
-              toolCalls.push(toolCall);
-            } else if (event.type === "tool-result") {
-              // Tool result event
-              const toolResult: LLMToolResult = {
-                toolCallId: event.toolCallId,
-                result: event.result,
-                error: event.error,
-              };
-              toolResults.push(toolResult);
-            } else if (event.type === "finish") {
-              if (
-                isLLMNativeModelToolResults(event.nativeModelToolResults)
-              ) {
-                nativeModelToolResults = event.nativeModelToolResults;
-              }
-              // Stream finished
-              break;
-            } else if (event.type === "error") {
-              throw new LLMStreamError(event.error ?? "LLM stream error");
-            }
-          } catch (error) {
-            if (error instanceof LLMStreamError) throw error;
-            console.error("Failed to parse JSON line:", line, error);
-          }
-        }
-      }
-    }
+    if (done) break;
+    reply.push(decoder.decode(value, { stream: true }));
   }
+  return reply.finish();
+}
 
-  // Handle any remaining buffer
-  if (buffer.trim()) {
-    try {
-      const event = JSON.parse(buffer.trim());
-      if (typeof event === "string") {
-        text += event;
-        if (callback) callback(text);
-      } else if (event.type === "error") {
-        throw new LLMStreamError(event.error ?? "LLM stream error");
-      } else if (event.type === "finish") {
-        if (isLLMNativeModelToolResults(event.nativeModelToolResults)) {
-          nativeModelToolResults = event.nativeModelToolResults;
-        }
-      }
-    } catch (error) {
-      if (error instanceof LLMStreamError) throw error;
-      console.error("Failed to parse final JSON line:", buffer, error);
-    }
-  }
-
-  // Build content array with text and tool calls
-  const content: any[] = [];
-
-  if (text.trim()) {
-    content.push({ type: "text", text });
-  }
-
-  // Add tool calls as content parts
-  for (const toolCall of toolCalls) {
-    content.push({
-      type: "tool-call",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      input: toolCall.input,
-    });
-  }
-
-  return {
-    role: "assistant",
-    content: content.length > 0 ? content : text,
-    id,
-    ...(nativeModelToolResults !== undefined ? { nativeModelToolResults } : {}),
-  };
+/**
+ * Assembles one LLM reply from the whole body of a streamed reply, read after
+ * all of it has arrived.
+ */
+export function parseLLMReply(text: string, id: string): LLMResponse {
+  const reply = assembleLLMReply(id);
+  reply.push(text);
+  return reply.finish();
 }

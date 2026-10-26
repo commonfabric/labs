@@ -124,9 +124,9 @@ export function assertImportInsideProgramRoot(
 
 /**
  * Refuse a `dataFile()` path that climbs above the program root, naming the
- * path and the module that reads it. The scan that turns a call site into an
- * attached file calls this before resolving, so the refusal names the path the
- * author wrote rather than the in-root path the clamping join would produce.
+ * path and the module that reads it. {@link resolveDeclaredDataFile} calls this
+ * before resolving, so the refusal names the path the author wrote rather than
+ * the in-root path the clamping join would produce.
  *
  * {@link resolveDataFilePath} stays total for the same reason
  * {@link resolveImportSpecifier} does: the runtime read resolves a path the
@@ -141,4 +141,15 @@ export function assertDataFileInsideProgramRoot(
       `Data file "${path}" read in "${from.name}" escapes the program root.`,
     );
   }
+}
+
+/**
+ * Resolves a path a `dataFile()` call in `from` names to the name the program
+ * stores that file under, which is the name the runtime looks it up by.
+ *
+ * @throws If the path climbs above the program root.
+ */
+export function resolveDeclaredDataFile(path: string, from: Source): string {
+  assertDataFileInsideProgramRoot(path, from);
+  return resolveDataFilePath(path, from.name);
 }

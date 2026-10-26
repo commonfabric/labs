@@ -1,4 +1,5 @@
 export type {
+  AuthoredSourceRewrite,
   BuilderSourceSiteOptions,
   DiagnosticSeverity,
   PatternCoverageKind,

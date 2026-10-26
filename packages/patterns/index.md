@@ -118,20 +118,23 @@ that exercises it; the library is the reference, the board is a demo),
 explorations), `fabrichat/` (chat among real profiles: a room per conversation,
 whose messages and reactions are written only through reviewed surfaces, each
 user's manager of their rooms, and placements that show a room in other spaces),
-`file-share/` (a minimal file-sharing example: bytes go to the blob store, cells
-hold descriptors), `habit-tracker/`, `iframe-cursor-canvas/` (a shared board in
-a sandboxed iframe: shapes are stored, while each viewer's pointer and a shape
-held mid-drag or mid-resize travel through a presence room and are stored
-nowhere), `iframe-verb-list/` (a list in a sandboxed iframe whose guest adds an
-item only by sending the pattern's `addItem` verb, which the generated frame
-takes as a stream), `lobby/`, `lunch-poll/`, `profile-group-chat/`,
-`project-list/`, [`recommend-a-book/`](recommend-a-book/README.md) (personal
-reading shelf and private visitor recommendations), `router/`,
-`scoped-group-chat/`, `scoped-user-directory/`, `scrabble/`, `shared-note/` (a
-shared Markdown document whose live cursors carry each viewer's profile name),
+`fabrifile/` (a space's set of named files: a store with no rendering, each
+entry a record linking a blob named as the entry is, and a view of it for VDOM
+hosts in a module the store never imports), `file-share/` (a minimal
+file-sharing example: bytes go to the blob store, cells hold descriptors),
+`habit-tracker/`, `iframe-cursor-canvas/` (a shared board in a sandboxed iframe:
+shapes are stored, while each viewer's pointer and a shape held mid-drag or
+mid-resize travel through a presence room and are stored nowhere),
+`iframe-verb-list/` (a list in a sandboxed iframe whose guest adds an item only
+by sending the pattern's `addItem` verb, which the generated frame takes as a
+stream), `lobby/`, `lunch-poll/`, `profile-group-chat/`, `project-list/`,
+[`recommend-a-book/`](recommend-a-book/README.md) (personal reading shelf and
+private visitor recommendations), `router/`, `scoped-group-chat/`,
+`scoped-user-directory/`, `scrabble/`, `shared-note/` (a shared Markdown
+document whose live cursors carry each viewer's profile name),
 `shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
-`weekly-calendar/`, `wordsearch/` (a word search maker: form, puzzle, and a PDF
-of the puzzle and its answer key).
+`weekly-calendar/`, `wordsearch/` (a word search maker: form, puzzle, a PDF of
+the puzzle and its answer key, and a Play tab).
 
 Connector-owned patterns live with their connector families: the
 [agent debug view](../connectors/agents/debug-view/README.md) and
@@ -773,6 +776,35 @@ interface WordSearchMakerInput {
 ```ts
 interface WordSearchMakerOutput {
   puzzle: WordSearch; // from wordsearch/generator.ts
+}
+```
+
+## `wordsearch/play.tsx`
+
+Play a word search: tap a hidden word's first letter, then its last, and it is
+marked found. Found words are each player's own (`PerUser`); a reshuffled puzzle
+starts unsolved. Takes the `puzzle` that `wordsearch/wordsearch.tsx` puts out.
+
+**Keywords:** word search, puzzle, game, play, solve
+
+### Input Schema
+
+```ts
+interface WordSearchPlayInput {
+  title?: string | Default<"Word Search">;
+  puzzle?: WordSearch; // from wordsearch/generator.ts
+  found?: PerUser<Writable<string[] | Default<[]>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface WordSearchPlayOutput {
+  foundCount: number;
+  solved: boolean;
+  tap: Stream<{ index: number }>;
+  restart: Stream<void>;
 }
 ```
 

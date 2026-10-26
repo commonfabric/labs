@@ -181,8 +181,13 @@ describe("view language fixture corpus", () => {
 
       const selection = fixture.selection;
       if (selection !== undefined) {
-        it("selects the language from representative filenames, aliases, and shebangs", () => {
-          for (const fileName of selection.filenames) {
+        it("selects the language from representative filenames, aliases, shebangs, and content", () => {
+          for (
+            const fileName of [
+              ...selection.filenames,
+              ...selection.unclaimedFilenames ?? [],
+            ]
+          ) {
             expect(languageForSource(fileName, after).id).toBe(
               fixture.languageId,
             );
@@ -196,11 +201,12 @@ describe("view language fixture corpus", () => {
           }
         });
 
-        it("selects the language in a diff from representative filenames and shebangs", () => {
+        it("selects the language in a diff from representative filenames, shebangs, and content", () => {
           const diffs = [
-            ...selection.filenames.map((fileName) =>
-              wholeFileDiff(fileName, before, after)
-            ),
+            ...[
+              ...selection.filenames,
+              ...selection.unclaimedFilenames ?? [],
+            ].map((fileName) => wholeFileDiff(fileName, before, after)),
             ...(selection.shebangs ?? []).map((shebang) =>
               wholeFileDiff(
                 "script",

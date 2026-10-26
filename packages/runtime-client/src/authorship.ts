@@ -10,17 +10,21 @@
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import {
   authorPrincipalCandidates,
+  isWrittenProfileName,
   PRINCIPAL_CLAIM_KINDS,
   principalClaimEntries,
   principalClaimSubject,
   representsPrincipalSubject,
 } from "@commonfabric/runner/cfc/represents-principal";
+import type { JSONSchema } from "@commonfabric/runner/shared";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
+  type CellDelivery,
   type CellHandleRead,
   CellReadRefusedError,
   type CellSubscribeOptions,
+  isCellHandle,
 } from "./cell-handle.ts";
 
 /**
@@ -40,8 +44,11 @@ export interface AuthorshipObservation {
 
   /**
    * Who the author cell claims wrote the value: the principal its label
-   * names, as `{ subject, name? }`, else the cell's own value. An author
-   * given as a plain value rather than a cell is its own claim.
+   * names, as `{ subject, name? }`, else what the cell reads as. A
+   * `CellHandle` reads under {@link AUTHOR_CLAIM_SCHEMA}, as the claim fields
+   * it holds and no more, so a profile reads as `{ name }` rather than whole;
+   * any other cell reads whole. An author given as a plain value rather than
+   * a cell is its own claim.
    */
   readonly authorClaim: unknown;
 }
@@ -71,7 +78,11 @@ type CfcLabelResolvableValue = {
 
 type CfcLabelSubscribableValue = {
   subscribe(
-    callback: (value: unknown, cfcLabel?: CfcLabelView | undefined) => void,
+    callback: (
+      value: unknown,
+      cfcLabel?: CfcLabelView | undefined,
+      delivery?: CellDelivery,
+    ) => void,
     options: CellSubscribeOptions,
   ): () => void;
 
@@ -106,6 +117,41 @@ const AUTHOR_DISPLAY_FIELDS = [
   "label",
   "username",
 ] as const;
+
+/** A claim's own value, or one of its fields: a primitive. */
+const PRIMITIVE_CLAIM_SCHEMA = {
+  type: ["string", "number", "boolean"],
+} as const;
+
+/**
+ * The shape an author cell is read under: a primitive, which is its own
+ * claim, or a record of the fields a claim is read from (`AUTHOR_FIELDS` and
+ * `AUTHOR_DISPLAY_FIELDS`), each a primitive. A read under it reaches those
+ * fields and nothing else the author's document holds or links. Without it
+ * a cell bound with no schema reads whole, following every link in it: an
+ * author profile reads together with its inbox and whatever that reaches,
+ * and a change anywhere in that closure runs the observation again.
+ */
+export const AUTHOR_CLAIM_SCHEMA: JSONSchema = {
+  anyOf: [
+    PRIMITIVE_CLAIM_SCHEMA,
+    {
+      type: "object",
+      properties: Object.fromEntries(
+        [...new Set<string>([...AUTHOR_FIELDS, ...AUTHOR_DISPLAY_FIELDS])]
+          .map((field) => [field, PRIMITIVE_CLAIM_SCHEMA]),
+      ),
+    },
+  ],
+};
+
+/**
+ * `author` as the observation reads it: narrowed to
+ * {@link AUTHOR_CLAIM_SCHEMA} when it is a `CellHandle`, else as given. A
+ * plain value is its own claim, and any other cell is read as it is bound.
+ */
+const asClaimReader = (author: unknown): unknown =>
+  isCellHandle(author) ? author.asSchema(AUTHOR_CLAIM_SCHEMA) : author;
 
 const hasLabelQuery = (value: unknown): value is CfcLabelQueryableValue =>
   isObjectOrArray(value) &&
@@ -299,12 +345,40 @@ const cellTargetKey = (value: unknown): string | undefined => {
   return JSON.stringify([space, id, path]);
 };
 
+/**
+ * A label a subscription delivered as the one the worker read with the value:
+ * `undefined` inside for a cell the worker read no label for.
+ */
+type DeliveredLabel = { readonly cfcLabel: CfcLabelView | undefined };
+
+/**
+ * The label a delivery hands a subscriber, as a read of it, when the delivery
+ * says it is the label the worker read with the value; `undefined` for a
+ * delivery carrying the label the handle last received, which may predate
+ * the value.
+ */
+const deliveredLabel = (
+  cfcLabel: CfcLabelView | undefined,
+  delivery: CellDelivery | undefined,
+): DeliveredLabel | undefined =>
+  delivery?.cfcLabelCurrent === true ? { cfcLabel } : undefined;
+
+/**
+ * The label of `value`, read as the verdict reads it: `delivered`, when the
+ * subscription on `value` delivered the label the worker read with its latest
+ * value, else the worker's answer to `getCfcLabel()`. When the direct label
+ * lacks a root claim of `requiredRootIntegrityKind`, the label of the cell
+ * `value` resolves to is read and merged in.
+ */
 const readLabelView = async (
   value: unknown,
   requiredRootIntegrityKind?: string,
+  delivered?: DeliveredLabel,
 ): Promise<LabelViewResult> => {
   let direct: CfcLabelView | undefined;
-  if (hasLabelQuery(value)) {
+  if (delivered !== undefined) {
+    direct = delivered.cfcLabel;
+  } else if (hasLabelQuery(value)) {
     direct = await value.getCfcLabel();
   }
 
@@ -463,10 +537,15 @@ export const authorshipStateForLabel = (
  * `value` is the content whose authorship is in question and `author` the
  * claim, each usually a `CellHandle` as a render binds one (`$value` and
  * `$author` on `cf-cfc-authorship`). Either may also be a plain value, which
- * has no label to load. A label counts as loaded once a read of it has
- * finished with nothing left waiting: the value's own label, or that of the
- * cell it resolves to, is read; when the resolved cell's label reads as
- * missing, the observation watches that cell and reads again once an update
+ * has no label to load. An author `CellHandle` is read under
+ * {@link AUTHOR_CLAIM_SCHEMA}, the fields a claim is read from and no more,
+ * whatever schema it was bound with. A label counts as loaded once a read of
+ * it has finished with nothing left waiting: the value's own label, or that
+ * of the
+ * cell it resolves to, is read, from the subscription's update when that
+ * delivers the label the worker read with the value and from the worker
+ * otherwise; when the resolved cell's label reads as missing, the
+ * observation watches that cell and reads again once an update
  * or a read of it shows it has loaded, and a read that still finds none then
  * is final. A source the worker refuses carries no attestation, so its
  * refusal ends the wait, and the verdict is reached without that label, as
@@ -533,7 +612,7 @@ class AuthorshipObservationState {
     authorName: string | undefined,
   ) {
     this.#value = value;
-    this.#author = author;
+    this.#author = asClaimReader(author);
     this.#onState = onState;
     this.#kind = kind;
     this.#authorName = authorName;
@@ -565,11 +644,11 @@ class AuthorshipObservationState {
 
     // includeCfcLabel makes the worker read this cell's label (and that of
     // the document its path resolves to) on the sink's tracked tx, so a
-    // label-only change re-fires this subscription and `#refreshLabel()`
-    // re-reads the new label. The first delivery is synchronous, and starts
-    // the first read.
-    this.#unsubscribeValue = value.subscribe(() => {
-      void this.#refreshLabel();
+    // label-only change re-fires this subscription with the new label, which
+    // `#refreshLabel()` takes as read when the delivery says it is the
+    // worker's. The first delivery is synchronous, and starts the first read.
+    this.#unsubscribeValue = value.subscribe((_value, cfcLabel, delivery) => {
+      void this.#refreshLabel(deliveredLabel(cfcLabel, delivery));
     }, {
       includeCfcLabel: true,
       // A value the worker will not show carries no attestation here, and
@@ -587,34 +666,47 @@ class AuthorshipObservationState {
   #observeAuthor(): void {
     const author = this.#author;
     if (hasLabelSubscription(author)) {
-      this.#unsubscribeAuthor = author.subscribe((claim) => {
-        if (hasLabelQuery(author) || hasLabelResolution(author)) {
-          void this.#refreshAuthorClaim();
-          return;
-        }
-        this.#authorClaim = claim;
-        this.#report();
-      }, {
-        includeCfcLabel: true,
-        // An author the worker will not show makes no claim here, and the
-        // watch on the cell it resolved to ends.
-        onRefused: () => {
-          this.#authorRequestId++;
-          this.#authorClaim = undefined;
-          this.#endLabelWatch("author");
-          this.#settleLabel("author");
+      // The first delivery is synchronous; when it starts a read of the
+      // author's label, that read carries the label the delivery brought,
+      // and the read below would only ask the worker for the same label.
+      let readStarted = false;
+      this.#unsubscribeAuthor = author.subscribe(
+        (claim, cfcLabel, delivery) => {
+          if (hasLabelQuery(author) || hasLabelResolution(author)) {
+            readStarted = true;
+            void this.#refreshAuthorClaim(deliveredLabel(cfcLabel, delivery));
+            return;
+          }
+          this.#authorClaim = claim;
+          this.#report();
         },
-      });
+        {
+          includeCfcLabel: true,
+          // An author the worker will not show makes no claim here, and the
+          // watch on the cell it resolved to ends.
+          onRefused: () => {
+            this.#authorRequestId++;
+            this.#authorClaim = undefined;
+            this.#endLabelWatch("author");
+            this.#settleLabel("author");
+          },
+        },
+      );
+      if (readStarted) return;
     }
     void this.#refreshAuthorClaim();
   }
 
-  /** Reads the value's label, and records it if no later read has started. */
-  async #refreshLabel(): Promise<void> {
+  /**
+   * Reads the value's label, taking `delivered`, the label the value's
+   * subscription delivered as the worker's read of its latest value, as the
+   * read when there is one, and records it if no later read has started.
+   */
+  async #refreshLabel(delivered?: DeliveredLabel): Promise<void> {
     const requestId = ++this.#labelRequestId;
     let result: LabelViewResult;
     try {
-      result = await readLabelView(this.#value, this.#kind);
+      result = await readLabelView(this.#value, this.#kind, delivered);
     } catch (error) {
       if (this.#cancelled || requestId !== this.#labelRequestId) return;
       if (error instanceof CellReadRefusedError) {
@@ -639,8 +731,13 @@ class AuthorshipObservationState {
     this.#settleLabel("value");
   }
 
-  /** Reads the author's claim, and records it if no later read has started. */
-  async #refreshAuthorClaim(): Promise<void> {
+  /**
+   * Reads the author's claim, taking `delivered`, the label the author's
+   * subscription delivered as the worker's read of its latest value, as the
+   * author's label when there is one, and records the claim if no later read
+   * has started.
+   */
+  async #refreshAuthorClaim(delivered?: DeliveredLabel): Promise<void> {
     const requestId = ++this.#authorRequestId;
     const author = this.#author;
     const canReadAuthor = hasReadableClaim(author);
@@ -660,9 +757,22 @@ class AuthorshipObservationState {
       const valueClaim = canReadAuthor
         ? await readClaimValue(author)
         : undefined;
-      const profile = await readLabelView(author, "represents-principal");
+      const profile = await readLabelView(
+        author,
+        "represents-principal",
+        delivered,
+      );
       unloadedCell = profile.unloadedCell;
-      const candidates = authorPrincipalCandidates(profile.view);
+      // A profile whose owner wrote a name attests by that name, so the value
+      // read above, when there is one, says which of its fields count. A name
+      // the value holds as a handle is read through it.
+      const name = isObjectNotArray(valueClaim) ? valueClaim.name : undefined;
+      const candidates = authorPrincipalCandidates(
+        profile.view,
+        isWrittenProfileName(
+          hasReadableClaim(name) ? await readClaimValue(name) : name,
+        ),
+      );
       // A label naming more than one principal names none, and the claim's
       // own value does not stand in for it.
       authorClaim = candidates.length > 1 ? undefined : principalAuthorClaim(

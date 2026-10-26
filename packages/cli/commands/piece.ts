@@ -64,11 +64,6 @@ import {
   parseCellSelectionOptions,
 } from "../lib/cell-selection.ts";
 import { cliCommand, cliText } from "../lib/cli-name.ts";
-import {
-  type CommandSpellingNotice,
-  commandSpellingNotice,
-  noCommandSpellingNotice,
-} from "../lib/deprecated-spelling.ts";
 import { toCompactDebugString } from "@commonfabric/data-model";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
 
@@ -1590,35 +1585,11 @@ export function withNoSectionMarker<
 }
 
 /**
- * The step-7 notice this mount carries, which is none when the mount is the
- * blessed one.
- *
- * `replacedBy` is what distinguishes the two mounts of one builder: the
- * blessed spelling passes nothing and stays silent. Each builder takes the
- * notice through both halves — around its action, and around the command it
- * returns — so a caller is told whether they ran the command or only asked
- * what it is.
- */
-function mountNotice(
-  spelling: string,
-  replacedBy: string | undefined,
-): CommandSpellingNotice {
-  return replacedBy === undefined
-    ? noCommandSpellingNotice
-    : commandSpellingNotice(spelling, replacedBy);
-}
-
-/**
- * The definition of `get`, blessed as `cf cell get` and mounted a second time
- * at the superseded `cf get`. `spelling` is only how the command names itself
- * in its own help; `replacedBy` is what makes a mount carry the step-7 notice.
+ * The definition of `get`, mounted as `cf cell get`. `spelling` is how the
+ * command names itself in its own help and refusals.
  */
 // deno-lint-ignore no-explicit-any
-function buildGetCommand(
-  spelling: string,
-  replacedBy?: string,
-): Command<any> {
-  const notice = mountNotice(spelling, replacedBy);
+function buildGetCommand(spelling: string): Command<any> {
   // deno-lint-ignore no-explicit-any
   const command: Command<any> = new Command()
     .description(
@@ -1734,24 +1705,15 @@ before qualifiers or path, to select the arguments cell the way --input does.`,
       { conflicts: ["select"] },
     )
     .arguments("[addressOrPath:string] [path:string]")
-    // The notice is outermost, so a line that is refused before the action
-    // runs is told too: the refusal quotes the spelling the caller wrote,
-    // which is the one thing on screen that must not stand unqualified.
-    .action(
-      notice.action(withNoSectionMarker(spelling, getCellValueFromCommand)),
-    );
-  return notice.helpPage(command);
+    .action(withNoSectionMarker(spelling, getCellValueFromCommand));
+  return command;
 }
 
 /**
  * The one definition of `set`; see {@link buildGetCommand} for the shape.
  */
 // deno-lint-ignore no-explicit-any
-function buildSetCommand(
-  spelling: string,
-  replacedBy?: string,
-): Command<any> {
-  const notice = mountNotice(spelling, replacedBy);
+function buildSetCommand(spelling: string): Command<any> {
   // deno-lint-ignore no-explicit-any
   const command: Command<any> = new Command()
     .description(
@@ -1798,13 +1760,8 @@ selects the arguments cell the way --input does, on any of them.`,
         '"#argument" suffix on the target spells the same selection)',
     )
     .arguments("[addressOrPath:string] [path:string]")
-    // The notice is outermost, so a line that is refused before the action
-    // runs is told too: the refusal quotes the spelling the caller wrote,
-    // which is the one thing on screen that must not stand unqualified.
-    .action(
-      notice.action(withNoSectionMarker(spelling, setCellValueFromCommand)),
-    );
-  return notice.helpPage(command);
+    .action(withNoSectionMarker(spelling, setCellValueFromCommand));
+  return command;
 }
 
 /**
@@ -1812,11 +1769,7 @@ selects the arguments cell the way --input does, on any of them.`,
  * shape.
  */
 // deno-lint-ignore no-explicit-any
-function buildCallCommand(
-  spelling: string,
-  replacedBy?: string,
-): Command<any> {
-  const notice = mountNotice(spelling, replacedBy);
+function buildCallCommand(spelling: string): Command<any> {
   // deno-lint-ignore no-explicit-any
   const command: Command<any> = new Command()
     .description(
@@ -1984,15 +1937,11 @@ with no link to a piece at it is refused ("names no piece").`,
     )
     .stopEarly()
     .arguments("<callable:string> [tail...:string]")
-    .action(notice.action(function (
+    .action(function (
       options: PieceCallCLIOptions,
       callableArg: string,
       ...tailArgs: string[]
     ) {
-      // Wrapped here rather than around `callFromCommand`, so the notice
-      // fires when the command runs and never when a test drives the tail
-      // directly.
-      //
       // Both argv-derived arrays are returned by methods on the command
       // Cliffy binds as this action's `this`, so they are read here and
       // handed on as values: the raw arguments a grammar refusal quotes
@@ -2006,36 +1955,36 @@ with no link to a piece at it is refused ("names no piece").`,
         this.getRawArgs(),
         this.getLiteralArgs(),
       );
-    }));
-  return notice.helpPage(command);
+    });
+  return command;
 }
 
 /**
- * One of the three data commands, built for one of its mounts.
+ * The spelling each data command is mounted at, under the noun it acts on.
  *
- * There is one definition per command and two mounts of it: blessed under the
- * noun it acts on — `cf cell get`, `cf cell set`, `cf piece call` — and hidden
- * at the top-level spelling it had, which warns and is dated.
- *
- * `name` picks the definition. `spelling` is how that mount names itself in
- * its own help and examples, because a caller reads back the line they typed
- * rather than the key it is registered under; it defaults to `name`, which is
- * the spelling the top-level mounts answer at. `replacedBy` names the spelling
- * that supersedes this mount, and is what makes it carry the step-7 notice.
+ * A command names itself by this in its own help, examples and refusals,
+ * because a caller reads back the line they typed rather than the key the
+ * command is registered under.
+ */
+const PIECE_DATA_SPELLINGS = {
+  get: "cell get",
+  set: "cell set",
+  call: "piece call",
+} as const;
+
+/**
+ * One of the three data commands: `cf cell get`, `cf cell set` or
+ * `cf piece call`, picked by `name`.
  */
 // deno-lint-ignore no-explicit-any
-export function pieceDataCommand(
-  name: "get" | "set" | "call",
-  mount: { spelling?: string; replacedBy?: string } = {},
-): Command<any> {
+export function pieceDataCommand(name: "get" | "set" | "call"): Command<any> {
   const builders = {
     get: buildGetCommand,
     set: buildSetCommand,
     call: buildCallCommand,
   };
-  const spelling = mount.spelling ?? name;
   return targetOptions(
-    builders[name](spelling, mount.replacedBy),
+    builders[name](PIECE_DATA_SPELLINGS[name]),
     { global: false },
   );
 }
@@ -2071,19 +2020,13 @@ interface SpaceCommandCLIOptions extends PieceCLIOptions {
  * `recreate-root`, which rebuilds a space's root pattern.
  *
  * `spelling` is how the command names itself in its own help and examples.
- * `replacedBy`, when given, names the spelling that supersedes this mount and
- * makes it carry the step-7 notice.
  *
  * The target options are attached per command rather than globally, because
  * `cf space` is not a target-scoped noun the way `cf piece` is: its other
  * subcommands read a store on disk and take no server, identity or space.
  */
 // deno-lint-ignore no-explicit-any
-export function buildRecreateRootCommand(
-  spelling: string,
-  replacedBy?: string,
-): Command<any> {
-  const notice = mountNotice(spelling, replacedBy);
+export function buildRecreateRootCommand(spelling: string): Command<any> {
   const act = async (options: SpaceCommandCLIOptions) => {
     refuseJsonOutput(spelling, options);
     setQuietMode(!!options.quiet);
@@ -2111,62 +2054,7 @@ export function buildRecreateRootCommand(
       cliText(`cf ${spelling} ${EX_ID} ${EX_URL}`),
       `Recreate the root pattern for "${EX_SPACE}".`,
     );
-  return notice.helpPage(
-    targetOptions(command.action(notice.action(act)), { global: false }),
-  );
-}
-
-/**
- * The last day `cf space set-home` and its superseded `cf piece set-home`
- * mount answer at all.
- *
- * A literal, fixed when the retirement reaches main, for the reason
- * `COMMAND_SPELLING_END_DATE` gives: a caller who reads the refusal today and
- * acts on it next week has to be told the same day both times. Nothing
- * consults it at run time; what removes the mounts is a later change that
- * deletes them with this constant.
- */
-export const SET_HOME_RETIRED_END_DATE = "2026-10-21";
-
-/**
- * What a run of the retired command is told, on its help page and in the
- * refusal: what creates a Home, and what changes one.
- */
-const SET_HOME_RETIREMENT = "A Home is created on its user's first open, " +
-  "and its source is changed in place: " +
-  "cf piece setsrc --cell <home-root> ./my-home.tsx, where the root is the " +
-  "link cf wish '#default' --select @ answers with in the Home space. " +
-  "This spelling stops answering after " + SET_HOME_RETIRED_END_DATE + ".";
-
-/**
- * `set-home`, retired.
- *
- * A Home is created on its user's first open and changed only by an in-place
- * source update, which retains the account data its root owns, so there is
- * nothing for a command that installs a Home root to do. Both mounts stay,
- * hidden, through {@link SET_HOME_RETIRED_END_DATE}, so a script that still
- * writes the command meets the replacement instead of an unknown command.
- * Options are not parsed: every line written for the command is answered the
- * same way.
- */
-// deno-lint-ignore no-explicit-any
-export function buildRetiredSetHomeCommand(spelling: string): Command<any> {
-  return new Command()
-    .description(`Retired. ${SET_HOME_RETIREMENT}`)
-    .useRawArgs()
-    // Raw arguments reach the action unparsed, `--help` among them, so the
-    // page a caller asks for is rendered here rather than by the parser.
-    // deno-lint-ignore no-explicit-any
-    .action(function (this: Command<any>, _options, ...args: string[]) {
-      if (args.some((word) => word === "--help" || word === "-h")) {
-        this.showHelp();
-        return;
-      }
-      throw new ValidationError(
-        `'cf ${spelling}' is retired. ${SET_HOME_RETIREMENT}`,
-        { exitCode: 1 },
-      );
-    });
+  return targetOptions(command.action(act), { global: false });
 }
 
 /**
@@ -2208,15 +2096,10 @@ export function buildCreateSpaceCommand(spelling: string): Command<any> {
 /**
  * `get-label`, which reports the effective CFC label view at a cell path.
  *
- * `spelling` and `replacedBy` carry the meanings they have in
- * {@link buildRecreateRootCommand}.
+ * `spelling` carries the meaning it has in {@link buildRecreateRootCommand}.
  */
 // deno-lint-ignore no-explicit-any
-export function buildGetLabelCommand(
-  spelling: string,
-  replacedBy?: string,
-): Command<any> {
-  const notice = mountNotice(spelling, replacedBy);
+export function buildGetLabelCommand(spelling: string): Command<any> {
   // deno-lint-ignore no-explicit-any
   const command: Command<any> = new Command()
     .description(
@@ -2245,26 +2128,18 @@ declared, derived, and link-carried labels. Omit path to inspect the root.`,
       "Select JSON output explicitly. This command always outputs JSON.",
     )
     .arguments("[path:string]");
-  return notice.helpPage(
-    targetOptions(
-      command.action(notice.action(getCellCfcLabelFromCommand)),
-      { global: false },
-    ),
-  );
+  return targetOptions(command.action(getCellCfcLabelFromCommand), {
+    global: false,
+  });
 }
 
 /**
  * `set-label`, which records a declared CFC label at a cell path.
  *
- * `spelling` and `replacedBy` carry the meanings they have in
- * {@link buildRecreateRootCommand}.
+ * `spelling` carries the meaning it has in {@link buildRecreateRootCommand}.
  */
 // deno-lint-ignore no-explicit-any
-export function buildSetLabelCommand(
-  spelling: string,
-  replacedBy?: string,
-): Command<any> {
-  const notice = mountNotice(spelling, replacedBy);
+export function buildSetLabelCommand(spelling: string): Command<any> {
   // deno-lint-ignore no-explicit-any
   const command: Command<any> = new Command()
     .description(
@@ -2275,11 +2150,20 @@ INPUT: An object with confidentiality and/or integrity arrays, plus an optional
 observes value: value, shape, enumerate, or followRef.
 
 The command records the label through the same checked write operation used for
-piece data. It never changes raw CFC metadata. Confidentiality may only become
-more restrictive. An integrity update may keep or remove existing claims, but
-cannot add trust. Conflicting observation classes are rejected. If observes is
-omitted, an existing unambiguous class is preserved. The command returns the
-updated effective label view.`,
+piece data. Without --dangerously-allow-lowering-confidentiality it never changes
+raw CFC metadata, and confidentiality may only become more restrictive. An
+integrity update may keep or remove existing claims, but cannot add trust.
+Conflicting observation classes are rejected. If observes is omitted, an
+existing unambiguous class is preserved. The command returns the updated
+effective label view.
+
+With --dangerously-allow-lowering-confidentiality, the command lowers
+confidentiality at the path instead, rewriting the stored CFC metadata: every
+stored clause the input's confidentiality list does not name is removed from
+the declared label, from the labels derived from what was written there (the
+shape and value entries get-label shows), and from a link's own label. The
+input holds confidentiality alone, naming only clauses the path already
+stores. Labels at other paths, an ancestor's included, are not changed.`,
       ),
     )
     .usage(`${pieceUsage} [path]`)
@@ -2295,6 +2179,12 @@ updated effective label view.`,
       ),
       "Remove declared integrity claims from an input value.",
     )
+    .example(
+      cliText(
+        `echo '{"confidentiality":[]}' | cf ${spelling} ${EX_ID} ${EX_COMP_PIECE} queue --dangerously-allow-lowering-confidentiality`,
+      ),
+      "Remove every confidentiality clause stored at a value you own.",
+    )
     .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_PATH_HELP)
     .option(
       "--input",
@@ -2302,16 +2192,25 @@ updated effective label view.`,
         '"#argument" reference suffix spells the same selection)',
     )
     .option(
+      "--dangerously-allow-lowering-confidentiality",
+      "Remove every confidentiality clause stored at the path that the " +
+        "input does not name, from every label there. Allowed only in the " +
+        "identity's own space (the space whose DID is the identity's), and " +
+        "only for clauses whose every alternative stands for the identity " +
+        "alone: its DID, User, Context or Resource naming it, or its own " +
+        "space as Space or PersonalSpace. Refused when the path also shows " +
+        "a clause the input does not name from an ancestor's or wildcard " +
+        "label or the piece's own schema. Records a receipt of the removal, " +
+        "readable by the identity alone, in that space.",
+    )
+    .option(
       "--json",
       "Select JSON output explicitly. This command always outputs JSON.",
     )
     .arguments("[path:string]");
-  return notice.helpPage(
-    targetOptions(
-      command.action(notice.action(setCellCfcLabelFromCommand)),
-      { global: false },
-    ),
-  );
+  return targetOptions(command.action(setCellCfcLabelFromCommand), {
+    global: false,
+  });
 }
 
 export const piece = targetOptions(
@@ -2514,7 +2413,7 @@ export const piece = targetOptions(
     applyPieceInput(parsePieceOptions(options), await drainStdin())
   )
   /* piece call */
-  .command("call", pieceDataCommand("call", { spelling: "piece call" }))
+  .command("call", pieceDataCommand("call"))
   /* piece getsrc */
   .command("getsrc", "Retrieve the pattern source for the given piece.")
   .usage(`${pieceUsage} <outpath>`)
@@ -3133,16 +3032,6 @@ well-known IDs. See docs/common/concepts/well-known-ids.md for IDs and usage.`,
   → Visualize connections: cf piece map -i ... -a ... -s ...
   → Inspect target piece:  cf piece inspect --cell ${target.pieceId} ...`));
   })
-  /* piece get-label — moved to `cf cell get-label` */
-  .command(
-    "get-label",
-    buildGetLabelCommand("piece get-label", "cell get-label").hidden(),
-  )
-  /* piece set-label — moved to `cf cell set-label` */
-  .command(
-    "set-label",
-    buildSetLabelCommand("piece set-label", "cell set-label").hidden(),
-  )
   /* piece map */
   .command("map", "Show registered pieces and the connections between them")
   .usage(spaceUsage)
@@ -3251,15 +3140,7 @@ well-known IDs. See docs/common/concepts/well-known-ids.md for IDs and usage.`,
     const pieceConfig = parsePieceOptions(options);
     await removePiece(pieceConfig);
     render(`Removed piece ${pieceConfig.piece}`);
-  })
-  /* piece recreate-root — moved to `cf space recreate-root` */
-  .command(
-    "recreate-root",
-    buildRecreateRootCommand("piece recreate-root", "space recreate-root")
-      .hidden(),
-  )
-  /* piece set-home — retired, with `cf space set-home` */
-  .command("set-home", buildRetiredSetHomeCommand("piece set-home").hidden());
+  });
 
 /** Shared flags accepted by piece commands that resolve a target or source. */
 export interface PieceCLIOptions {
@@ -3300,6 +3181,12 @@ export interface PieceSummaryCLIOptions extends PieceCLIOptions {
 export interface PieceLabelCLIOptions extends PieceCLIOptions {
   input?: boolean;
   quiet?: boolean;
+}
+
+/** The options `set-label` takes beyond those `get-label` takes. */
+export interface PieceSetLabelCLIOptions extends PieceLabelCLIOptions {
+  /** Lower confidentiality at the path rather than adding to it. */
+  dangerouslyAllowLoweringConfidentiality?: boolean;
 }
 
 export interface PieceLabelCommandDependencies {
@@ -3670,10 +3557,7 @@ export async function callFromCommand(
         invocation.rawArgs,
         {
           invocation: identity,
-          // The verb help page names the mount that was invoked, so the
-          // blessed spelling never renders usage lines teaching the
-          // deprecated one — and the deprecated mount names itself, beside
-          // its own notice.
+          // The verb help page names the command as it was invoked.
           helpCommandPrefix: cliCommand(
             [...spelling.split(" "), "...", callableName],
           ),
@@ -3748,7 +3632,7 @@ export async function getCellCfcLabelFromCommand(
 }
 
 export async function setCellCfcLabelFromCommand(
-  options: PieceLabelCLIOptions,
+  options: PieceSetLabelCLIOptions,
   pathString?: string,
   deps: PieceLabelCommandDependencies = {},
 ): Promise<void> {
@@ -3766,7 +3650,12 @@ export async function setCellCfcLabelFromCommand(
     pieceConfig,
     pathSegments,
     update,
-    { input: pieceConfig.pieceInput },
+    {
+      input: pieceConfig.pieceInput,
+      ...(options.dangerouslyAllowLoweringConfidentiality === true
+        ? { lowerConfidentiality: true }
+        : {}),
+    },
   );
   (deps.render ?? render)(label, { json: true });
 }

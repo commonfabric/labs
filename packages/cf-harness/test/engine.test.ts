@@ -1135,6 +1135,63 @@ Deno.test("CfHarnessEngine resolves a named piece address through the session's 
   assertEquals(engine.handleTable, undefined);
 });
 
+Deno.test("CfHarnessEngine resolves a piece address spelling the space by its DID, and by name only when the space has one", async () => {
+  const space = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+  const establish = async (ref: string, name: string | undefined) => {
+    const asked: string[] = [];
+    const engine = new CfHarnessEngine({
+      ...INERT_RUNSC,
+      workspaceHostPath: "/host/project",
+      inputCells: [{ name: "pattern_1", ref }],
+      fabricSessionFactory: () =>
+        Promise.resolve(
+          {
+            pieces: {
+              getSpace: () => space,
+              getSpaceName: () => name,
+              get runtime(): never {
+                asked.push("reading-list");
+                throw new Error("no runtime in this session");
+              },
+            },
+            // deno-lint-ignore no-explicit-any
+          } as any,
+        ),
+    });
+    const error = await assertRejects(
+      () => engine.establishInputCells(),
+      Error,
+    );
+    return { message: error.message, asked };
+  };
+  // Each accepted spelling passes the space check and reaches the resolver.
+  for (
+    const [ref, name] of [
+      [`pattern:${space}/reading-list`, undefined],
+      [`pattern:${space}/reading-list`, "demo-space"],
+      ["pattern:demo-space/reading-list", "demo-space"],
+    ] as const
+  ) {
+    const { message, asked } = await establish(ref, name);
+    assertEquals(asked, ["reading-list"]);
+    assertEquals(
+      message.includes("which this space does not hold"),
+      true,
+      message,
+    );
+  }
+  // A name is refused when the space has none, before the resolver.
+  const refused = await establish("pattern:demo-space/reading-list", undefined);
+  assertEquals(refused.asked, []);
+  assertEquals(
+    refused.message.includes(
+      "only pieces in the session's own space can be attached",
+    ),
+    true,
+    refused.message,
+  );
+});
+
 Deno.test("CfHarnessEngine refuses a piece address naming a space that is not the session's", async () => {
   const engine = new CfHarnessEngine({
     ...INERT_RUNSC,

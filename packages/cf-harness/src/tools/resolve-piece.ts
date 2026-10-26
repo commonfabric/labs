@@ -101,15 +101,12 @@ export const resolvePieceTool: HarnessToolDefinition<
         "The Fabric session could not be opened to resolve the piece.",
       );
     }
-    const spaceName = session.pieces.getSpaceName();
-    if (address.spaceName !== undefined && spaceName === undefined) {
-      return error(
-        "unavailable",
-        "This session has no space name to check the qualified address against. Supply the piece's bare slug in this session's space.",
-      );
-    }
     try {
-      checkNamedPieceAddressSpace(address, spaceName);
+      checkNamedPieceAddressSpace(
+        address,
+        session.pieces.getSpace(),
+        session.pieces.getSpaceName(),
+      );
     } catch {
       return error(
         "foreign-space",

@@ -6,8 +6,10 @@ import {
   cloneIfNecessary,
   isFabricPlainObject,
   valueEqual,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
+import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 import { StagedMap } from "@commonfabric/utils/staged-map";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
@@ -112,6 +114,7 @@ import {
   type ViewQuery,
   type WatchAddRequest,
   type WatchAddResult,
+  type WatchRemoveRequest,
   type WatchSetRequest,
   type WatchSetResult,
   type WatchSpec,
@@ -124,6 +127,10 @@ import {
   commitStormThresholds,
 } from "./commit-rates.ts";
 import { classifyCommitTelemetry } from "./commit-telemetry.ts";
+import type {
+  DocumentInterestQuery,
+  DocumentInterestsReport,
+} from "./document-interests.ts";
 import {
   parseSessionReport,
   SessionReportLog,
@@ -162,7 +169,6 @@ import {
   extendTrackedGraph,
   fromDirtyKey,
   fromDocKey,
-  isGraphQueryCoveredByState,
   type QueryDocKey,
   type QueryEvaluationCache,
   type QueryEvaluationCacheDiagnostics,
@@ -171,6 +177,8 @@ import {
   type QueryGraphReuseContext,
   type QueryTraversalStats,
   refreshTrackedGraph,
+  releaseTrackedRoots,
+  rootReferrersOf,
   type SlowestQueryRoot,
   stageTrackedGraphState,
   syncCrossingsOf,
@@ -183,6 +191,7 @@ import {
   buildFullSync,
   cacheKeyForEntity,
   compareSyncAddress,
+  graphWatchesByBranch,
   groupedQueries,
   holdingsToCacheEntries,
   isEmptySync,
@@ -194,9 +203,14 @@ import {
   toWireRemove,
   toWireUpsert,
   trackedIdsFromEntries,
+  unionQuery,
 } from "./server-sync.ts";
 import { authorizationError } from "./session-open-auth.ts";
-import { SessionRegistry, type SessionState } from "./session-registry.ts";
+import {
+  type SessionLifecycleEvent,
+  SessionRegistry,
+  type SessionState,
+} from "./session-registry.ts";
 import { isSpaceKind } from "./space-kind.ts";
 import {
   columnOriginUnavailableReason,
@@ -214,6 +228,12 @@ import { assertReadOnly } from "./sqlite/guard.ts";
 import { ReadConnectionPool } from "./sqlite/read-pool.ts";
 import type { TableSchema } from "./sqlite/schema.ts";
 import { resolveSpaceStoreUrl } from "./storage-path.ts";
+import { compressServerMessageLabels } from "./sync-label-table.ts";
+import {
+  compressServerMessageCommitLabels,
+  expandClientMessageLabels,
+  hasClientMessageLabelMetadata,
+} from "./commit-label-table.ts";
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 import {
@@ -222,7 +242,11 @@ import {
   viewWatches,
 } from "./view-interest.ts";
 
-export { SessionRegistry } from "./session-registry.ts";
+export { MAX_DOCUMENT_INTEREST_SESSIONS } from "./document-interests.ts";
+export {
+  type SessionLifecycleEvent,
+  SessionRegistry,
+} from "./session-registry.ts";
 
 /**
  * A space DID pinned tightly enough to name a store. `isDID`
@@ -624,6 +648,16 @@ const sessionReportsProviders: (() => SessionReportsReport)[] = [];
 export const getSessionReports = (): SessionReportsReport | undefined =>
   sessionReportsProviders.at(-1)?.();
 
+/** Live servers' document-interest providers, newest live server last. */
+const documentInterestsProviders:
+  ((query: DocumentInterestQuery) => DocumentInterestsReport)[] = [];
+
+/** Reads the co-hosted server's session metadata; undefined without a server. */
+export const getDocumentInterests = (
+  query: DocumentInterestQuery,
+): DocumentInterestsReport | undefined =>
+  documentInterestsProviders.at(-1)?.(query);
+
 const randomHex = (bytes: number): string => {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
   return [...data].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -668,6 +702,43 @@ type AclState =
   | { kind: "missing" }
   | { kind: "invalid" }
   | { kind: "valid"; acl: Record<string, Capability | undefined> };
+
+/** The access list `engine` stores for `space`, classified. */
+const readAclState = (engine: Engine.Engine, space: string): AclState => {
+  const state = Engine.readState(engine, { id: aclDocId(space) });
+  if (state === null) return { kind: "missing" };
+  // A retracted ACL is not equivalent to a never-created ACL: treating the
+  // tombstone as public would turn deletion into an authorization bypass.
+  if (state.document === null) return { kind: "invalid" };
+  const acl = state.document.value;
+  if (!isACL(acl)) return { kind: "invalid" };
+  const byPrincipal = acl as Record<string, Capability | undefined>;
+  if (!hasConcreteOwner(byPrincipal)) return { kind: "invalid" };
+  return { kind: "valid", acl: byPrincipal };
+};
+
+/**
+ * The owner of `space` as the access list `engine` stores resolves it: the
+ * space itself when its list names it `OWNER`, else the first other concrete
+ * `OWNER` in sorted order, and `undefined` for a space whose list is missing
+ * or invalid. {@link Server.resolveSpaceOwner} returns this, and a serving
+ * loop holding its own connection to the store reads it directly.
+ */
+export const resolveSpaceOwnerOf = (
+  engine: Engine.Engine,
+  space: string,
+): string | undefined => {
+  const state = readAclState(engine, space);
+  if (state.kind !== "valid") return undefined;
+  if (state.acl[space] === "OWNER") return space;
+  const owners = Object.entries(state.acl)
+    .filter(([principal, capability]) =>
+      principal !== ANYONE_USER && capability === "OWNER"
+    )
+    .map(([principal]) => principal)
+    .sort();
+  return owners[0];
+};
 
 const commitTouchesAclDoc = (
   operations: readonly Operation[],
@@ -949,12 +1020,34 @@ export type ServerExecutionObserver = {
    * the serving runtime's OWN loopback session — the service principal's
    * tracked-set growth is the serving graph's own reads, not client
    * demand, and must neither wake the loop nor count in `pushGrowthWakes`
-   * (W1 review MINOR-4). */
+   * (W1 review MINOR-4). `sessionId` names the changed session where the
+   * change is one session's, so a mirror of the demand set can re-read
+   * that session's share alone. */
   demandChanged?: (
     space: string,
     reason?: DemandChangeReason,
     principal?: string,
+    sessionId?: string,
   ) => void;
+
+  /**
+   * A session's VIEW SET was set: a `session.watch.set` carried views,
+   * which is the one message that registers, revises or withdraws them.
+   * Fires beside the `demandChanged` the same message raises, and only
+   * then: a watch set without views leaves the session's views as they
+   * are, and a mirror of `viewInterestsForSpace` can hold its list across
+   * every such message.
+   */
+  viewsChanged?: (space: string, sessionId: string) => void;
+
+  /**
+   * A session opened, resumed, detached or removed on this server, as
+   * {@link SessionLifecycleEvent} describes it. Installing an observer that
+   * has this replays every session the server then holds, so a host that
+   * mirrors the sessions starts from the whole set. For an open, it fires
+   * before `sessionOpened` does.
+   */
+  sessionChanged?: (event: SessionLifecycleEvent) => void;
 };
 
 /** (d′): why `demandChanged` fired — `watch` (the pre-existing
@@ -1072,6 +1165,8 @@ class Connection {
   #ready = false;
   #closed = false;
   #syncSchemaTable = false;
+  #syncLabelTable = false;
+  #commitLabelTable = false;
   #stableExpressionResultIds = false;
   #admissionNotice = false;
   #elidedVerdicts = false;
@@ -1129,10 +1224,26 @@ class Connection {
   #send(message: ServerMessage): void {
     if (message.type === "response") this.#answered.add(message.requestId);
     try {
+      let prepared = message;
+      if (this.#syncLabelTable) {
+        const labelStart = performance.now();
+        prepared = compressServerMessageLabels(prepared);
+        timing.time(labelStart, "memory", "response", "prepareLabels");
+      }
+      if (this.#commitLabelTable) {
+        const commitLabelStart = performance.now();
+        prepared = compressServerMessageCommitLabels(prepared);
+        timing.time(
+          commitLabelStart,
+          "memory",
+          "response",
+          "prepareCommitLabels",
+        );
+      }
       const schemaStart = performance.now();
-      const prepared = this.#syncSchemaTable
-        ? compressServerMessageSchemas(message)
-        : message;
+      if (this.#syncSchemaTable) {
+        prepared = compressServerMessageSchemas(prepared);
+      }
       timing.time(schemaStart, "memory", "response", "prepareSchemas");
       const sendStart = performance.now();
       this.#sendRaw(prepared);
@@ -1495,7 +1606,9 @@ class Connection {
   }
 
   async receive(payload: string): Promise<void> {
-    const parsed = parseClientMessage(payload);
+    const parsed = parseClientMessage(payload, {
+      commitLabelTableV1: this.#commitLabelTable,
+    });
     // A presence message or a session report is handled as it is handed
     // over, not behind the frames already queued here: it carries no seq and
     // settles nothing, and the space a report describes is often the one
@@ -1633,7 +1746,7 @@ class Connection {
    * the lost message would have told it.
    */
   #answerFailedRequest(
-    parsed: ClientMessage | OversizedClientMessage | null,
+    parsed: ClientMessage | RejectedClientMessage | null,
     error: unknown,
   ): boolean {
     const requestId = requestIdOf(parsed);
@@ -1751,16 +1864,19 @@ class Connection {
   }
 
   async #receiveOrdered(
-    parsed: ClientMessage | OversizedClientMessage | null,
+    parsed: ClientMessage | RejectedClientMessage | null,
   ): Promise<void> {
     if (this.#closed) {
       return;
     }
 
-    if (parsed === null) {
+    if (parsed === null || parsed.type === "invalid") {
+      // Answered on the request the envelope named when it named one the
+      // reply may echo, so the client settles that request instead of
+      // waiting for its connection to close.
       this.#send({
         type: "response",
-        requestId: "invalid",
+        requestId: parsed?.requestId ?? "invalid",
         error: toError(
           "InvalidMessageError",
           "Unable to parse memory message",
@@ -1811,6 +1927,10 @@ class Connection {
         serverFlags?.elidedVerdicts === true;
       this.#syncSchemaTable = clientFlags?.syncSchemaTableV2 === true &&
         serverFlags?.syncSchemaTableV2 === true;
+      this.#syncLabelTable = clientFlags?.syncLabelTableV1 === true &&
+        serverFlags?.syncLabelTableV1 === true;
+      this.#commitLabelTable = clientFlags?.commitLabelTableV1 === true &&
+        serverFlags?.commitLabelTableV1 === true;
       this.#ready = true;
       return;
     }
@@ -2067,6 +2187,26 @@ class Connection {
           );
         }
         return;
+      case "session.watch.remove":
+        if (
+          !this.#requireSession(
+            parsed.requestId,
+            parsed.space,
+            parsed.sessionId,
+          )
+        ) {
+          return;
+        }
+        {
+          const response = await this.#server.watchRemove(parsed);
+          this.#sendSessionResponse(
+            parsed.space,
+            parsed.sessionId,
+            parsed.requestId,
+            response,
+          );
+        }
+        return;
       case "session.ack":
         if (
           !this.#requireSession(
@@ -2266,7 +2406,7 @@ class Connection {
  * at a time however many spaces the opens name.
  */
 const spaceOfFrame = (
-  message: ClientMessage | OversizedClientMessage | null,
+  message: ClientMessage | RejectedClientMessage | null,
 ): string | undefined => {
   if (message === null || !("space" in message)) return undefined;
   if (message.type === "session.open" && message.principal === undefined) {
@@ -2280,14 +2420,14 @@ const spaceOfFrame = (
  * could not be read, or a `hello`.
  */
 const requestIdOf = (
-  message: ClientMessage | OversizedClientMessage | null,
+  message: ClientMessage | RejectedClientMessage | null,
 ): string | undefined => {
   if (message === null || !("requestId" in message)) return undefined;
   return typeof message.requestId === "string" ? message.requestId : undefined;
 };
 
 const isPresenceClientMessage = (
-  message: ClientMessage | OversizedClientMessage,
+  message: ClientMessage | RejectedClientMessage,
 ): message is
   | PresenceJoinRequest
   | PresencePublishRequest
@@ -2306,7 +2446,7 @@ type ImmediateClientMessage =
   | SessionReportRequest;
 
 const isImmediateClientMessage = (
-  message: ClientMessage | OversizedClientMessage,
+  message: ClientMessage | RejectedClientMessage,
 ): message is ImmediateClientMessage =>
   isPresenceClientMessage(message) || message.type === "session.report";
 
@@ -2320,6 +2460,73 @@ export type EngineOpener = (
   space: string,
   open: (space: string) => Promise<Engine.Engine>,
 ) => Promise<Engine.Engine>;
+
+/** Whether every member of `subset` is in `superset`. */
+function isSubset(subset: Set<string>, superset: Set<string>): boolean {
+  for (const key of subset) if (!superset.has(key)) return false;
+  return true;
+}
+
+/**
+ * A planner delivery root's key: the branch its query reads, its address and
+ * its selector. A root whose selector changed reaches different documents,
+ * which only a full evaluation diffs out, so it is not the same root.
+ */
+function deliveryRootKey(
+  query: ViewQuery,
+  root: ViewQuery["roots"][number],
+): string {
+  return JSON.stringify([
+    query.branch ?? "",
+    root.scope ?? "space",
+    root.id,
+    root.selector,
+  ]);
+}
+
+/**
+ * The keys of the roots a planner delivery names (`deliveryRootKey()`): two
+ * deliveries naming the same keys, in whatever order, deliver the same
+ * documents.
+ */
+function deliveryRootKeys(delivery: readonly ViewQuery[]): Set<string> {
+  const keys = new Set<string>();
+  for (const query of delivery) {
+    for (const root of query.roots) keys.add(deliveryRootKey(query, root));
+  }
+  return keys;
+}
+
+/**
+ * What of `delivery`, a selection a view's planner proposes, the server has
+ * yet to resolve: the roots that `installed`, the selection the view holds
+ * under the same revision, does not deliver on the same branch, each query
+ * kept with those of its roots alone. Without such a selection it is all of
+ * `delivery`. A root the installed selection delivers was resolved when that
+ * selection was, and the session's refresh passes evaluate it whichever of
+ * the two selections is installed. A root that stops resolving in between,
+ * a schema it names gone, fails those passes either way: `refreshDirty`
+ * logs the failure, skips the session's frame and marks it for a full
+ * re-evaluation, which each later pass makes until the root resolves again
+ * or a selection without it is installed. Resolving the root here again
+ * would only refuse the new selection in favor of the installed one, which
+ * delivers the same root.
+ */
+function deliveryToResolve(
+  delivery: readonly ViewQuery[],
+  installed: { delivery: readonly ViewQuery[] } | undefined,
+): readonly ViewQuery[] {
+  if (installed === undefined) return delivery;
+  const held = deliveryRootKeys(installed.delivery);
+  const added: ViewQuery[] = [];
+  for (const query of delivery) {
+    const roots = query.roots.filter((root) =>
+      !held.has(deliveryRootKey(query, root))
+    );
+    if (roots.length > 0) added.push({ ...query, roots });
+  }
+  return added;
+}
 
 /**
  * The memory v2 server. An instance accepts connections and serves the
@@ -2641,6 +2848,7 @@ export class Server {
     },
   ) {
     this.#sessions = options.sessions ?? new SessionRegistry();
+    this.#sessions.setObserver((event) => this.#notifySessionChanged(event));
     this.#store = options.store;
     this.#operationCodecs = options.operationCodecs ??
       createDefaultOperationCodecRegistry();
@@ -2666,6 +2874,7 @@ export class Server {
     );
     commitRatesProviders.push(this.#commitRatesProvider);
     sessionReportsProviders.push(this.#sessionReportsProvider);
+    documentInterestsProviders.push(this.#documentInterestsProvider);
   }
 
   /**
@@ -2715,6 +2924,8 @@ export class Server {
   #documentCachesDiagnosticsProvider = () => this.documentCachesDiagnostics();
   #commitRatesProvider = () => this.commitRates();
   #sessionReportsProvider = () => this.sessionReports();
+  #documentInterestsProvider = (query: DocumentInterestQuery) =>
+    this.#sessions.documentInterests(query);
 
   /** Every open engine's document-cache counters, keyed by space. A peek:
    * nothing is opened by asking. */
@@ -2776,6 +2987,7 @@ export class Server {
       operationCodecs: this.#operationCodecs.ids(),
       connectionAuth: this.options.authorizeConnection !== undefined,
       routedAuthV1: false,
+      routedCompressionV1: false,
     };
   }
 
@@ -2883,16 +3095,7 @@ export class Server {
     engine: Engine.Engine,
     space: string,
   ): string | undefined {
-    const state = this.#aclState(engine, space);
-    if (state.kind !== "valid") return undefined;
-    if (state.acl[space] === "OWNER") return space;
-    const owners = Object.entries(state.acl)
-      .filter(([principal, capability]) =>
-        principal !== ANYONE_USER && capability === "OWNER"
-      )
-      .map(([principal]) => principal)
-      .sort();
-    return owners[0];
+    return resolveSpaceOwnerOf(engine, space);
   }
 
   /**
@@ -2923,16 +3126,7 @@ export class Server {
   }
 
   #aclState(engine: Engine.Engine, space: string): AclState {
-    const state = Engine.readState(engine, { id: aclDocId(space) });
-    if (state === null) return { kind: "missing" };
-    // A retracted ACL is not equivalent to a never-created ACL: treating the
-    // tombstone as public would turn deletion into an authorization bypass.
-    if (state.document === null) return { kind: "invalid" };
-    const acl = state.document.value;
-    if (!isACL(acl)) return { kind: "invalid" };
-    const byPrincipal = acl as Record<string, Capability | undefined>;
-    if (!hasConcreteOwner(byPrincipal)) return { kind: "invalid" };
-    return { kind: "valid", acl: byPrincipal };
+    return readAclState(engine, space);
   }
 
   #resolveCapability(
@@ -3715,6 +3909,10 @@ export class Server {
     );
     withdrawProvider(commitRatesProviders, this.#commitRatesProvider);
     withdrawProvider(sessionReportsProviders, this.#sessionReportsProvider);
+    withdrawProvider(
+      documentInterestsProviders,
+      this.#documentInterestsProvider,
+    );
     this.#cancelScheduledRefresh();
     for (const connection of [...this.#connections.values()]) {
       connection.close();
@@ -5883,8 +6081,13 @@ export class Server {
                 duplicate: resolution.duplicate,
               };
               operationApplyCount.add(1, attributes);
+              // An `apply-op` without a base lands at the field's current
+              // version, so it is rebased over nothing.
+              const baseVersion = operation.base === undefined
+                ? resolution.from.version
+                : operation.base?.version ?? 0;
               operationTransformSuffix.record(
-                resolution.from.version - (operation.base?.version ?? 0),
+                resolution.from.version - baseVersion,
                 attributes,
               );
             }
@@ -6460,39 +6663,89 @@ export class Server {
         }))),
       );
       if (denyForeign) return false;
-      // Resolve schema and graph closure before publishing planner output.
-      // A failed selection leaves the session's existing delivery intact.
-      await this.evaluateWatchSet(
-        space,
-        selection.delivery.map((query, index) => ({
-          id: `selection:${index}`,
-          kind: "graph" as const,
-          query,
-        })),
-        engine,
-        { principal: session!.principal, sessionId: session!.id },
-      );
-      if (!current()) return false;
+      // A selection delivering what the view's current one delivers changes
+      // only what the client may run or adopt: its support graphs stand, and
+      // the next frame carries the plans. One that delivers differently is
+      // resolved to its schema and graph closure first, so a failed selection
+      // leaves the session's existing delivery intact, and then rebuilds the
+      // graphs and diffs against the session's delivery state. The roots the
+      // current selection delivers were resolved when it was installed, so
+      // only the roots it does not deliver are resolved here
+      // (`deliveryToResolve`).
+      const deliveryKeys = deliveryRootKeys(selection.delivery);
+      const sameDelivery = (
+        previous: ReturnType<SessionState["viewSelections"]["get"]>,
+      ) => {
+        if (previous === undefined || previous.revision !== handle.revision) {
+          return false;
+        }
+        const previousKeys = deliveryRootKeys(previous.delivery);
+        return previousKeys.size === deliveryKeys.size &&
+          isSubset(previousKeys, deliveryKeys);
+      };
+      const installed = session!.viewSelections.get(handle.viewId);
+      if (!sameDelivery(installed)) {
+        await this.evaluateWatchSet(
+          space,
+          deliveryToResolve(
+            selection.delivery,
+            installed?.revision === handle.revision ? installed : undefined,
+          ).map((query, index) => ({
+            id: `selection:${index}`,
+            kind: "graph" as const,
+            query,
+          })),
+          engine,
+          { principal: session!.principal, sessionId: session!.id },
+        );
+        if (!current()) return false;
+      }
       this.#assertRoutedAuthority(session!);
       const previous = session!.viewSelections.get(handle.viewId);
       if (
         previous !== undefined && selection.generation <= previous.generation
       ) {
         return selection.generation === previous.generation &&
-          valueEqual(previous, { ...selection, revision: handle.revision });
+          valueEqualByWalk(previous, {
+            ...selection,
+            revision: handle.revision,
+          });
       }
       session!.viewSelections.set(handle.viewId, {
         ...selection,
         revision: handle.revision,
       });
-      session!.forceFullResync = true;
+      // A delivery that only grew extends the view's support graph on the
+      // next pass; one that dropped a root rebuilds the support graphs over
+      // the demand graphs the session holds, and diffs the departed
+      // documents out. A view's first selection evaluates everything.
+      if (sameDelivery(previous)) {
+        session!.viewPlansPending = true;
+      } else if (
+        previous !== undefined && previous.revision === handle.revision
+      ) {
+        if (
+          isSubset(deliveryRootKeys(previous.delivery), deliveryKeys)
+        ) {
+          session!.viewSupportGrown = true;
+        } else {
+          session!.viewSupportReplaced = true;
+        }
+        session!.viewPlansPending = true;
+      } else {
+        session!.forceFullResync = true;
+      }
       this.markSpaceDirty(space, []);
       return true;
     });
   }
 
-  /** Publishes eligibility only with the document frame that supplies its inputs. */
+  /**
+   * Publishes eligibility only with the document frame that supplies its
+   * inputs; the frame carries the plans a changed selection owed.
+   */
   #attachViewPlans(session: SessionState, sync: SessionSync): void {
+    session.viewPlansPending = false;
     sync.viewPlans = session.views.map((view) => {
       const selection = session.viewSelections.get(view.id);
       return {
@@ -6531,18 +6784,7 @@ export class Server {
       engine,
       identity,
     );
-    const selected: WatchSpec[] = [];
-    for (const view of views) {
-      const selection = session.viewSelections.get(view.id);
-      if (selection?.revision !== view.revision) continue;
-      for (const [index, query] of selection.delivery.entries()) {
-        selected.push({
-          id: `view-support:${view.id}:${index}`,
-          kind: "graph",
-          query,
-        });
-      }
-    }
+    const selected = this.#viewSupportWatches(session, views);
     const delivery = selected.length === 0
       ? demand
       : await this.evaluateWatchSet(
@@ -6567,6 +6809,72 @@ export class Server {
       demandGraphs: demand.graphs,
       demandEntities: demand.entities,
     };
+  }
+
+  /**
+   * Rebuilds a view session's support graphs from the planner's current
+   * selections over the demand graphs the session holds, after refreshing
+   * those by `dirtyIds`, the batch the pass would otherwise have refreshed
+   * incrementally: the full evaluation's result for a session whose
+   * delivery dropped a root, without walking its demand again.
+   */
+  async #reevaluateViewSupport(
+    session: SessionState,
+    dirtyIds: ReadonlySet<string> | undefined,
+  ) {
+    this.#assertRoutedAuthority(session);
+    const engine = await this.#openEngine(session.space);
+    this.#assertRoutedAuthority(session);
+    const identity = { principal: session.principal, sessionId: session.id };
+    if (dirtyIds !== undefined && dirtyIds.size > 0) {
+      for (const graph of session.viewDemandGraphs.values()) {
+        refreshTrackedGraph(session.space, engine, graph, dirtyIds);
+      }
+    }
+    const demandGraphs = session.viewDemandGraphs;
+    const selected = this.#viewSupportWatches(session, session.views);
+    const delivery = selected.length === 0
+      ? undefined
+      : await this.evaluateWatchSet(
+        session.space,
+        selected,
+        engine,
+        identity,
+      );
+    const graphs = new Map([...demandGraphs].map(([branch, graph]) => [
+      `view-demand:${branch}`,
+      graph,
+    ]));
+    for (const [branch, graph] of delivery?.graphs ?? []) {
+      graphs.set(`view-support:${branch}`, graph);
+    }
+    return {
+      serverSeq: delivery?.serverSeq ?? Engine.serverSeq(engine),
+      graphs,
+      entities: this.#entriesFromGraphs(graphs.values(), identity),
+      demandGraphs,
+      demandEntities: this.#entriesFromGraphs(demandGraphs.values(), identity),
+    };
+  }
+
+  /** The delivery-only watches the planner's current selections give views. */
+  #viewSupportWatches(
+    session: SessionState,
+    views: readonly ViewInterest[],
+  ): WatchSpec[] {
+    const selected: WatchSpec[] = [];
+    for (const view of views) {
+      const selection = session.viewSelections.get(view.id);
+      if (selection?.revision !== view.revision) continue;
+      for (const [index, query] of selection.delivery.entries()) {
+        selected.push({
+          id: `view-support:${view.id}:${index}`,
+          kind: "graph",
+          query,
+        });
+      }
+    }
+    return selected;
   }
 
   /** Extends ordinary demand while retaining the view's rendered and support graphs. */
@@ -6615,11 +6923,308 @@ export class Server {
     return await this.#watchSet(message);
   }
 
-  /** Helper for watchSet(), which stages and installs one watch union. */
+  /**
+   * Removes the named watches from a session and answers with the difference
+   * between what the session was delivered and the union that remains.
+   */
+  async watchRemove(
+    message: WatchRemoveRequest,
+  ): Promise<ResponseMessage<WatchSetResult>> {
+    const startedAt = performance.now();
+    try {
+      return await this.#watchRemove(message);
+    } finally {
+      timing.time(startedAt, "memory", "watchRemove", "total");
+    }
+  }
+
+  /**
+   * Helper for watchRemove(), which releases the removed watches' roots from
+   * the session's graphs, retracting what nothing else reaches, and walks
+   * nothing a remaining watch already reaches. A session that holds views,
+   * or one marked for a full re-evaluation, replaces its watch set with the
+   * remaining watches instead, which walks every one of them.
+   */
+  async #watchRemove(
+    message: WatchRemoveRequest,
+  ): Promise<ResponseMessage<WatchSetResult>> {
+    // Read when the request runs, which for a session with views is once the
+    // publication lock is held.
+    const remaining = (): WatchSetRequest => {
+      const removed = new Set(message.watchIds);
+      return {
+        type: "session.watch.set",
+        requestId: message.requestId,
+        space: message.space,
+        sessionId: message.sessionId,
+        watches: (this.#sessions.get(message.space, message.sessionId)
+          ?.watches ?? []).filter((watch) => !removed.has(watch.id)),
+      };
+    };
+    const session = this.#sessions.get(message.space, message.sessionId);
+    if (session !== null && session.views.length > 0) {
+      return await this.#withSpacePublicationLock(
+        message.space,
+        () => this.#watchSet(remaining(), "remove"),
+      );
+    }
+    if (session === null || session.forceFullResync) {
+      return await this.#watchSet(remaining(), "remove");
+    }
+    return await this.#removeWatchesByRelease(message, session);
+  }
+
+  /**
+   * Helper for `#watchRemove()`, which releases the removed watches' roots
+   * from their branches' graphs (`releaseTrackedRoots`): what no remaining
+   * root or link keeps retires and is retracted, a root a retired record
+   * had covered is walked again on its own, and a branch with no watch
+   * left drops its graph. Nothing else is walked.
+   */
+  async #removeWatchesByRelease(
+    message: WatchRemoveRequest,
+    session: SessionState,
+  ): Promise<ResponseMessage<WatchSetResult>> {
+    const aclEngine = this.#aclMode() === "off"
+      ? undefined
+      : await this.#openEngine(message.space);
+    {
+      const deny = aclEngine === undefined
+        ? await this.#authorizeMessage(
+          message.space,
+          session.principal,
+          "READ",
+        )
+        : this.#authorizeCurrentSessionWithEngine(
+          aclEngine,
+          message.space,
+          message.sessionId,
+          session,
+          "READ",
+        );
+      if (deny) {
+        return respondTypedError<WatchSetResult>(message.requestId, deny);
+      }
+    }
+    try {
+      const startedAt = performance.now();
+      const engine = aclEngine ?? await this.#openEngine(message.space);
+      this.#assertRoutedAuthority(session);
+      // Resume can share watch containers with an older registry object. Only
+      // the current registry object may publish into those containers.
+      if (this.#sessions.get(message.space, message.sessionId) !== session) {
+        return respondTypedError<WatchSetResult>(
+          message.requestId,
+          toError("SessionError", "Unknown session for space"),
+        );
+      }
+      const removedIds = new Set(message.watchIds);
+      const removedWatches = session.watches.filter((watch) =>
+        removedIds.has(watch.id)
+      );
+      if (removedWatches.length === 0) {
+        const serverSeq = Engine.serverSeq(engine);
+        return {
+          type: "response",
+          requestId: message.requestId,
+          ok: {
+            serverSeq,
+            sync: {
+              type: "sync",
+              fromSeq: session.lastSyncedSeq,
+              toSeq: serverSeq,
+              upserts: [],
+              removes: [],
+            },
+          },
+        };
+      }
+      const remaining = session.watches.filter((watch) =>
+        !removedIds.has(watch.id)
+      );
+      const remainingByBranch = graphWatchesByBranch(remaining);
+      const identity = this.#sessionScopeIdentity(session);
+      const graphs = new StagedMap(session.graphs);
+      const graphCommits: Array<() => void> = [];
+      const attribution = createRootAttribution();
+      // The graphs the release walked roots of again, whose crossings the
+      // session may not have been told of.
+      const touchedGraphs: TrackedGraphState[] = [];
+      const updates = new Map<string, SessionCacheEntry>();
+      const removes = new Map<string, SessionCacheEntry>();
+      const changedInterests = new Set<string>();
+      for (
+        const [branch, removedGroup] of graphWatchesByBranch(removedWatches)
+      ) {
+        const existing = graphs.get(branch);
+        if (existing === undefined) continue;
+        const retract = (docKey: QueryDocKey) => {
+          const { id, scopeKey } = fromDocKey(docKey);
+          const entry = session.entities.get(
+            cacheKeyForEntity(branch, id, scopeKey),
+          );
+          if (entry !== undefined) {
+            removes.set(cacheKeyForEntity(branch, id, scopeKey), entry);
+          }
+          changedInterests.add(toDirtyKey(id, scopeKey));
+        };
+        const group = remainingByBranch.get(branch) ?? [];
+        if (group.length === 0) {
+          for (const docKey of existing.entities.keys()) retract(docKey);
+          for (const [key] of existing.missed) {
+            try {
+              const { id, scopeKey } = fromDocKey(key as QueryDocKey);
+              changedInterests.add(toDirtyKey(id, scopeKey));
+            } catch {
+              continue;
+            }
+          }
+          graphs.delete(branch);
+          continue;
+        }
+        // A root two watches share stays while either does.
+        const kept = new Set(rootReferrersOf(
+          message.space,
+          group.flatMap((watch) => watch.query.roots),
+          identity,
+        ));
+        const released = rootReferrersOf(
+          message.space,
+          removedGroup.flatMap((watch) => watch.query.roots),
+          identity,
+        ).filter((referrer) => !kept.has(referrer));
+        if (released.length === 0) continue;
+        const staged = stageTrackedGraphState(engine, existing);
+        graphCommits.push(staged.commit);
+        touchedGraphs.push(staged.value);
+        const result = releaseTrackedRoots(
+          message.space,
+          engine,
+          staged.value,
+          released,
+        );
+        foldRootAttribution(attribution, result.stats);
+        for (const [docKey, entity] of result.updates) {
+          const { scopeKey } = fromDocKey(docKey);
+          const entry = toCacheEntry(entity, identity, scopeKey);
+          updates.set(
+            cacheKeyForEntity(entry.branch, entry.id, entry.scopeKey),
+            entry,
+          );
+          changedInterests.add(toDirtyKey(entry.id, entry.scopeKey));
+        }
+        for (const docKey of result.removed) retract(docKey);
+        for (const key of result.changedMisses) {
+          const { id, scopeKey } = fromDocKey(key as QueryDocKey);
+          changedInterests.add(toDirtyKey(id, scopeKey));
+        }
+      }
+      const upserts: SessionCacheEntry[] = [];
+      for (const [key, entry] of updates) {
+        if (!sameSnapshot(session.entities.get(key), entry)) {
+          upserts.push(entry);
+        }
+      }
+      // Stage A (OW17's wire leg): a lease-holder session's frames carry
+      // instance keys (see `#watchSet()`).
+      const keyed = session.leaseHolderReads === true;
+      const serverSeq = Engine.serverSeq(engine);
+      const sync: SessionSync = {
+        type: "sync",
+        fromSeq: session.lastSyncedSeq,
+        toSeq: serverSeq,
+        upserts: upserts.toSorted(compareSyncAddress).map((entry) =>
+          toWireUpsert(entry, keyed)
+        ),
+        removes: [...removes.values()].sort(compareSyncAddress).map((entry) =>
+          toWireRemove(entry, keyed)
+        ),
+      };
+      const newCrossings = this.#undeliveredCrossings(session, touchedGraphs);
+      if (newCrossings.crossings.length > 0) {
+        sync.crossings = newCrossings.crossings;
+      }
+      const response: ResponseMessage<WatchSetResult> = {
+        type: "response",
+        requestId: message.requestId,
+        ok: { serverSeq, sync },
+      };
+      // There is no await between graph evaluation and publication.
+      for (const commit of graphCommits) commit();
+      graphs.commit();
+      this.#markCrossingsDelivered(session, newCrossings.keys);
+      this.#forgetUnfollowedCrossings(session, session.graphs.values());
+      const watchIdentity = {
+        principal: session.principal,
+        sessionId: session.id,
+      };
+      session.watches = remaining;
+      session.watchIndex = new Map(
+        remaining.map((watch) => [watch.id, watch]),
+      );
+      session.operationWatches = remaining.filter((watch) =>
+        watch.kind === "operation"
+      );
+      for (const id of removedIds) session.operationCursors.delete(id);
+      session.operationTrackedIds = addOperationWatchTrackedIds(
+        new Set(),
+        remaining,
+        watchIdentity,
+      );
+      // A removed operation watch's keys stay interests only while a
+      // remaining watch owns them.
+      for (
+        const key of addOperationWatchTrackedIds(
+          new Set(),
+          removedWatches,
+          watchIdentity,
+        )
+      ) {
+        changedInterests.add(key);
+      }
+      for (const [key, entry] of updates) session.entities.set(key, entry);
+      for (const key of removes.keys()) session.entities.delete(key);
+      this.#reconcileTrackedInterests(session, changedInterests);
+      this.#touchDemand(session);
+      session.lastSyncedSeq = serverSeq;
+      this.#notifyDemandChanged(message.space, "watch", session.principal);
+      recordSlowQueryDuration(
+        "session.watch.remove",
+        message.space,
+        startedAt,
+        {
+          watches: message.watchIds.length,
+          upserts: upserts.length,
+          ...attribution,
+        },
+      );
+      return response;
+    } catch (error) {
+      // Evaluation state is staged (the session's graphs and watches are
+      // assigned only on success), so a failure answers the requester.
+      return respondTypedError<WatchSetResult>(
+        message.requestId,
+        toError(
+          "QueryError",
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
+  }
+
+  /**
+   * Helper for watchSet(), watchAdd() and watchRemove(), which stages and
+   * installs one watch union. A `replace` delivers against the request's
+   * holdings, or in full; an `add` merges the request's watches into the
+   * session's and keeps the session's operation cursors; a `remove` keeps the
+   * cursors of the watches that remain. Both an `add` and a `remove` deliver
+   * against what the session was delivered.
+   */
   async #watchSet(
     message: WatchSetRequest,
-    incremental = false,
+    mode: "replace" | "add" | "remove" = "replace",
   ): Promise<ResponseMessage<WatchSetResult>> {
+    const incremental = mode === "add";
     const session = this.#sessions.get(message.space, message.sessionId);
     if (session === null) {
       return respondTypedError<WatchSetResult>(
@@ -6730,9 +7335,19 @@ export class Server {
 
     try {
       this.#assertRoutedAuthority(session);
-      const nextOperationCursors = incremental
-        ? new Map(session.operationCursors)
-        : new Map<string, OpCursor>();
+      const nextOperationCursors = mode === "replace"
+        ? new Map<string, OpCursor>()
+        : new Map(session.operationCursors);
+      if (mode === "remove") {
+        const kept = new Set(message.watches.map((watch) => watch.id));
+        for (const id of nextOperationCursors.keys()) {
+          if (!kept.has(id)) nextOperationCursors.delete(id);
+        }
+      }
+      // An addition to a view session extends the graphs it holds; every
+      // other watch set evaluates them whole.
+      const extended = views.length > 0 && incremental &&
+        !session.forceFullResync;
       const evaluated: Awaited<ReturnType<Server["evaluateWatchSet"]>> & {
         demandGraphs?: typeof session.graphs;
         demandEntities?: typeof session.entities;
@@ -6746,7 +7361,7 @@ export class Server {
             sessionId: message.sessionId,
           },
         )
-        : incremental && !session.forceFullResync
+        : extended
         ? await this.#extendViewWatchSet(session, message.watches, aclEngine)
         : await this.#evaluateViewWatchSet(
           session,
@@ -6764,11 +7379,12 @@ export class Server {
       // scope name alone cannot distinguish. Every other session's
       // frames are byte-identical to before.
       const keyed = session.leaseHolderReads === true;
-      // Additions diff against this session's delivery state. Replacements
-      // use the client's declared holdings, or supply the full union when
-      // it declares none. A re-established session can therefore recover
-      // missing documents without assuming that its client holds them.
-      const sync = incremental
+      // Additions and removals diff against this session's delivery state.
+      // Replacements use the client's declared holdings, or supply the full
+      // union when it declares none. A re-established session can therefore
+      // recover missing documents without assuming that its client holds
+      // them.
+      const sync = mode !== "replace"
         ? buildDiffSync(
           session.entities,
           entities,
@@ -6799,7 +7415,7 @@ export class Server {
       // A replacement that declares no holdings, or holding nothing, tells
       // the client every crossing again; any other frame tells it only the
       // new ones.
-      const resetCrossings = !incremental &&
+      const resetCrossings = mode === "replace" &&
         (message.holdings === undefined || message.holdings.length === 0);
       const newCrossings = this.#undeliveredCrossings(
         session,
@@ -6851,6 +7467,13 @@ export class Server {
         ),
       );
       session.forceFullResync = false;
+      // A full evaluation installed every view's whole support graph, so a
+      // growth or a rebuild an earlier selection owed is already in it; an
+      // extension leaves both owed to the next pass.
+      if (!extended) {
+        session.viewSupportGrown = false;
+        session.viewSupportReplaced = false;
+      }
       session.viewDemandGraphs = demandGraphs;
       session.viewDemandEntities = demandEntities;
       session.watches = [...message.watches];
@@ -6873,6 +7496,12 @@ export class Server {
         newCrossings.keys,
         resetCrossings,
       );
+      if (mode === "remove") {
+        this.#forgetUnfollowedCrossings(session, [
+          ...graphs.values(),
+          ...demandGraphs.values(),
+        ]);
+      }
       session.trackedIds = addOperationWatchTrackedIds(
         trackedIdsFromEntries(entities.values()),
         message.watches,
@@ -6888,7 +7517,15 @@ export class Server {
       if (message.views !== undefined || views.length > 0) {
         this.#attachViewPlans(session, sync);
       }
-      this.#notifyDemandChanged(message.space, "watch", session.principal);
+      this.#notifyDemandChanged(
+        message.space,
+        "watch",
+        session.principal,
+        session.id,
+      );
+      if (message.views !== undefined) {
+        this.#notifyViewsChanged(message.space, session.id);
+      }
       return {
         type: "response",
         requestId: message.requestId,
@@ -6918,6 +7555,7 @@ export class Server {
     engine: Engine.Engine,
     watches: readonly WatchSpec[],
     previous: SessionState["graphs"],
+    keyOf: (branch: string) => string = (branch) => branch,
   ) {
     const graphs = new Map(previous);
     const identity = this.#sessionScopeIdentity(session);
@@ -6932,13 +7570,14 @@ export class Server {
       );
     };
     const attribution = createRootAttribution();
-    for (const [branch, query] of groupedQueries(watches)) {
-      const existing = graphs.get(branch);
+    for (const [branch, group] of graphWatchesByBranch(watches)) {
+      const key = keyOf(branch);
+      const existing = graphs.get(key);
       if (existing === undefined) {
         const tracked = trackGraph(
           session.space,
           engine,
-          query,
+          unionQuery(branch, group),
           undefined,
           {
             principal: session.principal,
@@ -6951,24 +7590,20 @@ export class Server {
         // failure (or a failing operation-field attachment) must not
         // leave an already-inserted entry over budget.
         this.#enforceEvaluationCacheBudget();
-        graphs.set(branch, tracked.state);
+        graphs.set(key, tracked.state);
         for (const [docKey, entity] of tracked.state.entities) {
           recordUpdate(docKey, entity);
         }
         continue;
       }
 
-      if (isGraphQueryCoveredByState(session.space, existing, query)) {
-        continue;
-      }
-
       const staged = cloneTrackedGraphState(engine, existing);
-      graphs.set(branch, staged);
+      graphs.set(key, staged);
       const extended = extendTrackedGraph(
         session.space,
         engine,
         staged,
-        query,
+        unionQuery(branch, group),
       );
       foldRootAttribution(attribution, extended.stats);
       for (const [docKey, entity] of extended.updates) {
@@ -7009,7 +7644,7 @@ export class Server {
           this.#watchSet({
             ...message,
             type: "session.watch.set",
-          }, true),
+          }, "add"),
       );
     }
     const aclEngine = this.#aclMode() === "off"
@@ -7156,13 +7791,13 @@ export class Server {
       // a new graph's state, or an extended graph's STAGED state, which is
       // where the extension's crossings sit until it commits.
       const touchedGraphs: TrackedGraphState[] = [];
-      for (const [branch, query] of groupedQueries(newWatches)) {
+      for (const [branch, group] of graphWatchesByBranch(newWatches)) {
         const existing = graphs.get(branch);
         if (existing === undefined) {
           const tracked = trackGraph(
             message.space,
             engine,
-            query,
+            unionQuery(branch, group),
             undefined,
             {
               principal: session.principal,
@@ -7184,10 +7819,6 @@ export class Server {
           continue;
         }
 
-        if (isGraphQueryCoveredByState(message.space, existing, query)) {
-          continue;
-        }
-
         const staged = stageTrackedGraphState(engine, existing);
         graphCommits.push(staged.commit);
         touchedGraphs.push(staged.value);
@@ -7195,7 +7826,7 @@ export class Server {
           message.space,
           engine,
           staged.value,
-          query,
+          unionQuery(branch, group),
         );
         foldRootAttribution(attribution, extended.stats);
         for (const [docKey, entity] of extended.updates) {
@@ -7304,7 +7935,12 @@ export class Server {
       }
       this.#touchDemand(session);
       session.lastSyncedSeq = serverSeq;
-      this.#notifyDemandChanged(message.space, "watch", session.principal);
+      this.#notifyDemandChanged(
+        message.space,
+        "watch",
+        session.principal,
+        session.id,
+      );
       recordSlowQueryDuration(
         "session.watch.add",
         message.space,
@@ -7421,9 +8057,10 @@ export class Server {
     try {
       // `stats` is diagnostics, not wire: split it off here so the
       // response carries exactly the declared result shape.
+      const queryEngine = engine ?? await this.#openEngine(space);
       const { stats, ...result } = queryGraph(
         space,
-        engine ?? await this.#openEngine(space),
+        queryEngine,
         query,
         reuse,
         {
@@ -7437,6 +8074,16 @@ export class Server {
         roots: query.roots.length,
         ...rootAttributionOf(stats),
       });
+      if (query.includeAuthoredSeq === true) {
+        return {
+          ...result,
+          authoredSeq: Engine.authoredSeqThrough(
+            queryEngine,
+            query.atSeq ?? result.serverSeq,
+            query.branch,
+          ),
+        };
+      }
       return result;
     } finally {
       // The insert precedes the snapshot mapping, so enforcement must
@@ -7630,10 +8277,10 @@ export class Server {
    * buffering: only a locally-throwing send is visible in-process, and a
    * dying socket loses "successfully sent" frames just the same — the
    * durable repair for that is resume-time catch-up, not a server-side
-   * buffer. A doc REMOVED by the lost frame is the accepted residue: its
-   * cache entry is already gone and cannot be re-diffed; the client keeps
-   * it until a full re-evaluation or reconnect (watch-shrink removes are
-   * advisory today). */
+   * buffer. A doc REMOVED by the lost frame is re-inserted as a tombstone
+   * and the next sync runs a full evaluation, which re-diffs it out: the
+   * incremental refresh retracts only what its own re-walks retire, and
+   * knows nothing of a frame the socket lost. */
   rollbackUndeliveredSync(
     space: string,
     sessionId: string,
@@ -7689,8 +8336,9 @@ export class Server {
         // The remove's cache entry died when the frame was built;
         // re-insert a tombstone claiming the client still holds the doc,
         // and force the next sync through a FULL evaluation — the
-        // incremental path never emits removes, so only a full re-diff
-        // (tombstone present, entity absent) regenerates the removal.
+        // incremental path retracts only what its re-walks retire, so only
+        // a full re-diff (tombstone present, entity absent) regenerates
+        // the removal.
         session.entities.set(
           cacheKeyForEntity(entry.branch, entry.id, entry.scopeKey),
           {
@@ -7821,6 +8469,24 @@ export class Server {
     for (const key of keys) session.deliveredCrossings.add(key);
   }
 
+  /**
+   * Forgets the delivered crossings that none of `graphs` follows, so that
+   * a crossing a removed watch followed is told again when a later watch
+   * follows it, and the client loads its target.
+   */
+  #forgetUnfollowedCrossings(
+    session: SessionState,
+    graphs: Iterable<TrackedGraphState>,
+  ): void {
+    const followed = new Set<string>();
+    for (const graph of graphs) {
+      for (const key of syncCrossingsOf(graph).keys()) followed.add(key);
+    }
+    for (const key of session.deliveredCrossings) {
+      if (!followed.has(key)) session.deliveredCrossings.delete(key);
+    }
+  }
+
   #addMissedToTrackedIds(
     trackedIds: Set<string>,
     graphs: Iterable<TrackedGraphState>,
@@ -7926,10 +8592,24 @@ export class Server {
     const preCallCaughtUp = session.caughtUpLocalSeq;
     const preCallPending = session.pendingCaughtUpLocalSeq;
     const preCallForceFullResync = session.forceFullResync;
+    const preCallViewPlansPending = session.viewPlansPending;
     // Whether THIS pass re-armed a lapsed lease-holder exemption (see
     // below); restored on a throw so the re-arm's full evaluation is
     // not lost with the failed pass.
     let rearmedLeaseHolder = false;
+    const preCallViewSupportReplaced = session.viewSupportReplaced;
+    // A dropped delivery root rebuilds the support graphs over the demand
+    // graphs, which first take this pass's dirty batch; a full evaluation
+    // rebuilds both, so it owes no separate rebuild.
+    let supportReplaced: { dirtyIds?: ReadonlySet<string> } | undefined;
+    if (session.viewSupportReplaced) {
+      session.viewSupportReplaced = false;
+      if (!session.forceFullResync && session.views.length > 0) {
+        supportReplaced = { dirtyIds };
+        dirtyIds = undefined;
+        dirtyOrigins = undefined;
+      }
+    }
     if (session.forceFullResync) {
       // Rollback re-inserted tombstones for a lost frame's removes; only a
       // full evaluation re-diffs them out. Self-clearing (restored by the
@@ -7967,7 +8647,17 @@ export class Server {
               sync.caughtUpLocalSeq = session.caughtUpLocalSeq;
             }
             await this.#attachOperationFields(space, sessionId, sync);
-            if (session.views.length > 0) this.#attachViewPlans(session, sync);
+            // A frame carries the plans when they are owed: a full
+            // evaluation rebuilt the graphs they describe, or a selection
+            // changed what the views may run or adopt. An incremental frame
+            // that owes none carries the documents alone, and the client
+            // keeps the plans it holds.
+            if (
+              session.views.length > 0 &&
+              (dirtyIds === undefined || session.viewPlansPending)
+            ) {
+              this.#attachViewPlans(session, sync);
+            }
             return {
               type: "session/effect",
               space,
@@ -7985,7 +8675,8 @@ export class Server {
               serverSeq > fromSeq;
             if (
               !hasPendingCatchUp && !mayCarryOperations &&
-              (session.views.length === 0 || !preCallForceFullResync)
+              (session.views.length === 0 ||
+                !(preCallForceFullResync || preCallViewPlansPending))
             ) {
               return null;
             }
@@ -8076,6 +8767,7 @@ export class Server {
             // branch).
             const batchDirtyIds = dirtyIds;
             const startedAt = performance.now();
+            const refreshFromSeq = session.lastSyncedSeq;
             // Per-session refresh rows (`memory/refresh/session/{untouched,
             // touched}`) and, for a touched session, the phase rows
             // (`memory/refresh/phase/{walk,diff,tracked,frame}`):
@@ -8087,8 +8779,9 @@ export class Server {
             // expensive failure is the one most worth attributing.
             let sessionKind: "untouched" | "touched" = "untouched";
             try {
-              let touched = false;
+              let touched = session.viewSupportGrown;
               for (const dirtyId of batchDirtyIds) {
+                if (touched) break;
                 if (session.trackedIds.has(dirtyId)) {
                   touched = true;
                   break;
@@ -8109,6 +8802,11 @@ export class Server {
               const fromSeq = session.lastSyncedSeq;
               const identity = this.#sessionScopeIdentity(session);
               const updates = new Map<string, SessionCacheEntry>();
+              // The delivered entries of the documents the re-walks retired:
+              // the frame retracts them.
+              const removed = new Map<string, SessionCacheEntry>();
+              const retired: Array<{ docKey: QueryDocKey; branch: string }> =
+                [];
               const changedInterests = new Set<string>();
               const walkStartedAt = performance.now();
 
@@ -8154,6 +8852,9 @@ export class Server {
                       entry,
                     );
                   }
+                  for (const docKey of refreshed.removed) {
+                    retired.push({ docKey, branch: graph.branch });
+                  }
                 }
               } finally {
                 timing.time(
@@ -8163,6 +8864,43 @@ export class Server {
                   "phase",
                   "walk",
                 );
+              }
+              // A planner selection that grew a view's delivery extends its
+              // support graph here, by the added roots, over the demand graph
+              // the refresh above kept current; the grown graphs take effect
+              // as this frame commits.
+              let grownGraphs: SessionState["graphs"] | undefined;
+              if (session.viewSupportGrown) {
+                const grown = this.#extendWatchGraphs(
+                  session,
+                  engine,
+                  this.#viewSupportWatches(session, session.views),
+                  session.graphs,
+                  (branch) => `view-support:${branch}`,
+                );
+                grownGraphs = grown.graphs;
+                for (const [key, entry] of grown.updates) {
+                  changedInterests.add(toDirtyKey(entry.id, entry.scopeKey));
+                  updates.set(key, entry);
+                }
+              }
+              // A session with views holds a demand graph and a support
+              // graph over one branch, so a document one of them retired can
+              // still be one the other reaches, the support graph as it grew
+              // above included. Only what no graph of the session over that
+              // branch tracks any more is retracted.
+              const frameGraphs = [...(grownGraphs ?? session.graphs).values()];
+              for (const { docKey, branch } of retired) {
+                if (
+                  frameGraphs.some((other) =>
+                    other.branch === branch && other.tracker.has(docKey)
+                  )
+                ) continue;
+                const { id, scopeKey } = fromDocKey(docKey);
+                const key = cacheKeyForEntity(branch, id, scopeKey);
+                const entry = session.entities.get(key);
+                if (entry !== undefined) removed.set(key, entry);
+                changedInterests.add(toDirtyKey(id, scopeKey));
               }
               if (
                 updates.size === 0 && changedInterests.size === 0 &&
@@ -8242,12 +8980,23 @@ export class Server {
               const commitEntities = () => {
                 const trackedStartedAt = performance.now();
                 try {
+                  if (grownGraphs !== undefined) {
+                    session.graphs = grownGraphs;
+                    this.#addMissedToTrackedIds(
+                      session.trackedIds,
+                      grownGraphs.values(),
+                    );
+                    session.viewSupportGrown = false;
+                  }
                   // A new delivered entity adds a key to the session's
                   // demand; a changed snapshot of a held one does not.
                   let enteredEntity = false;
                   for (const [key, entry] of updates) {
                     if (!session.entities.has(key)) enteredEntity = true;
                     session.entities.set(key, entry);
+                  }
+                  for (const key of removed.keys()) {
+                    session.entities.delete(key);
                   }
                   let changed = this.#reconcileTrackedInterests(
                     session,
@@ -8281,6 +9030,7 @@ export class Server {
                       space,
                       "push-growth",
                       session.principal,
+                      session.id,
                     );
                   }
                 } finally {
@@ -8295,12 +9045,16 @@ export class Server {
               };
               const toSeq = Engine.serverSeq(engine);
               // A re-walk that followed a link out of the space for the
-              // first time has a crossing to tell of, upserts or none.
+              // first time has a crossing to tell of, upserts or none, and so
+              // does the support graph's growth.
               const newCrossings = this.#undeliveredCrossings(
                 session,
-                session.graphs.values(),
+                frameGraphs,
               );
-              if (upserts.length === 0 && newCrossings.crossings.length === 0) {
+              if (
+                upserts.length === 0 && removed.size === 0 &&
+                newCrossings.crossings.length === 0
+              ) {
                 // The watched set was re-evaluated current as of toSeq even though it
                 // produced no net upserts; advance the watermark so a later default
                 // fromSeq is not stale. emptyCatchUp receives the original fromSeq
@@ -8338,7 +9092,9 @@ export class Server {
                     // before.
                     toWireUpsert(entry, keyed)
                   ),
-                  removes: [],
+                  removes: [...removed.values()].sort(compareSyncAddress).map(
+                    (entry) => toWireRemove(entry, keyed),
+                  ),
                   ...(newCrossings.crossings.length === 0
                     ? {}
                     : { crossings: newCrossings.crossings }),
@@ -8348,7 +9104,7 @@ export class Server {
                 // rolls back the EXACT instances (rollbackUndeliveredSync).
                 this.#deliveredFrameEntries.set(message, {
                   upserts: [...upserts],
-                  removes: [],
+                  removes: [...removed.values()],
                   crossings: newCrossings.keys,
                 });
               } finally {
@@ -8365,7 +9121,18 @@ export class Server {
               session.lastSyncedSeq = toSeq;
               return message;
             } finally {
-              timing.time(
+              timing.timeDetailed(
+                () =>
+                  JSON.stringify({
+                    space,
+                    session: sessionId,
+                    fromSeq: refreshFromSeq,
+                    toSeq: session.lastSyncedSeq,
+                    dirty: batchDirtyIds.size,
+                    graphs: session.graphs.size,
+                    tracked: session.trackedIds.size,
+                    views: session.views.length,
+                  }),
                 startedAt,
                 "memory",
                 "refresh",
@@ -8375,12 +9142,23 @@ export class Server {
             }
           }
 
+          // A support rebuild refreshes the demand graphs in place, so the
+          // demand they held before is read ahead of it.
+          const demandBeforeRebuild = supportReplaced !== undefined &&
+              this.#serverExecutionObserver?.demandChanged !== undefined
+            ? this.#viewDemandIds(session)
+            : undefined;
           const { serverSeq, graphs, entities, demandGraphs, demandEntities } =
-            await this.#evaluateViewWatchSet(
-              session,
-              session.watches,
-              session.views,
-            );
+            supportReplaced === undefined
+              ? await this.#evaluateViewWatchSet(
+                session,
+                session.watches,
+                session.views,
+              )
+              : await this.#reevaluateViewSupport(
+                session,
+                supportReplaced.dirtyIds,
+              );
           // protocol.md §3's applicable-set filter on the FULL
           // evaluation path: explicit foreign instances enter `entities`
           // only through admitted lease-holder reads, and the exemption
@@ -8467,15 +9245,10 @@ export class Server {
               this.#serverExecutionObserver?.demandChanged !== undefined;
             let changed = false;
             if (wantsDemandNotify) {
-              const previous = session.views.length === 0
-                ? session.trackedIds
-                : trackedIdsFromEntries(session.viewDemandEntities.values());
-              if (session.views.length > 0) {
-                this.#addMissedToTrackedIds(
-                  previous,
-                  session.viewDemandGraphs.values(),
-                );
-              }
+              const previous = demandBeforeRebuild ??
+                (session.views.length === 0
+                  ? session.trackedIds
+                  : this.#viewDemandIds(session));
               const next = session.views.length === 0
                 ? evaluatedTrackedIds
                 : evaluatedDemandIds;
@@ -8492,6 +9265,9 @@ export class Server {
             session.viewDemandGraphs = demandGraphs;
             session.viewDemandEntities = demandEntities;
             session.graphs = graphs;
+            // The full evaluation built the whole support graph, so a growth
+            // an earlier selection owed is already in it.
+            session.viewSupportGrown = false;
             session.entities = entities;
             this.#markCrossingsDelivered(session, newCrossings.keys);
             session.trackedIds = evaluatedTrackedIds;
@@ -8502,6 +9278,7 @@ export class Server {
                 space,
                 "push-growth",
                 session.principal,
+                session.id,
               );
             }
           };
@@ -8533,6 +9310,10 @@ export class Server {
           );
           session.forceFullResync = session.forceFullResync ||
             preCallForceFullResync;
+          session.viewPlansPending = session.viewPlansPending ||
+            preCallViewPlansPending;
+          session.viewSupportReplaced = session.viewSupportReplaced ||
+            preCallViewSupportReplaced;
           // A re-arm consumed by a throwing pass re-stages: the next
           // pass runs the full evaluation the lapse still owes.
           if (rearmedLeaseHolder) session.leaseHolderReadsLapsed = true;
@@ -8907,6 +9688,40 @@ export class Server {
     return demand;
   }
 
+  /**
+   * The shares of the sessions `sessionIds` name among `space`'s sessions, as
+   * `demandForSpace()` builds them, the sessions of `excludePrincipal` and
+   * the ids the registry no longer holds left out: what a mirror of the
+   * demand set reads for the sessions whose demand it was told changed.
+   */
+  demandForSessions(
+    space: string,
+    sessionIds: readonly string[],
+    options: { excludePrincipal?: string } = {},
+  ): SessionDemand[] {
+    // Prune once for the batch before the targeted, non-pruning lookups.
+    this.#sessions.sessionsForSpace(space);
+    const demand: SessionDemand[] = [];
+    for (const sessionId of sessionIds) {
+      const session = this.#sessions.peek(space, sessionId);
+      if (
+        session === undefined ||
+        (options.excludePrincipal !== undefined &&
+          session.principal === options.excludePrincipal)
+      ) {
+        continue;
+      }
+      let share = this.#sessionDemand.get(session);
+      if (share === undefined) {
+        share = this.#buildSessionDemand(session);
+        this.#sessionDemand.set(session, share);
+        this.#sessionDemandBuilds += 1;
+      }
+      demand.push(share);
+    }
+    return demand;
+  }
+
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a
    * space's client sessions, plus the union size (design §2.6 — the
    * demand-set size and its drift are measured, not assumed). */
@@ -8963,6 +9778,11 @@ export class Server {
     observer: ServerExecutionObserver | undefined,
   ): void {
     this.#serverExecutionObserver = observer;
+    if (observer?.sessionChanged !== undefined) {
+      for (const event of this.#sessions.snapshot()) {
+        this.#notifySessionChanged(event);
+      }
+    }
   }
 
   /**
@@ -9013,6 +9833,19 @@ export class Server {
     }
   }
 
+  #notifySessionChanged(event: SessionLifecycleEvent): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.sessionChanged === undefined) return;
+    try {
+      observer.sessionChanged(event);
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on sessionChanged",
+        error,
+      );
+    }
+  }
+
   #notifySessionOpened(space: string): void {
     const observer = this.#serverExecutionObserver;
     if (observer?.sessionOpened === undefined) return;
@@ -9026,15 +9859,29 @@ export class Server {
     }
   }
 
+  #notifyViewsChanged(space: string, sessionId: string): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.viewsChanged === undefined) return;
+    try {
+      observer.viewsChanged(space, sessionId);
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on viewsChanged",
+        error,
+      );
+    }
+  }
+
   #notifyDemandChanged(
     space: string,
     reason: DemandChangeReason = "watch",
     principal?: string,
+    sessionId?: string,
   ): void {
     const observer = this.#serverExecutionObserver;
     if (observer?.demandChanged === undefined) return;
     try {
-      observer.demandChanged(space, reason, principal);
+      observer.demandChanged(space, reason, principal, sessionId);
     } catch (error) {
       console.warn(
         "memory v2: server-execution observer threw on demandChanged",
@@ -9376,6 +10223,7 @@ export class Server {
     session: SessionState,
     commit: ClientCommit,
   ): void {
+    const startedAt = performance.now();
     session.pendingCaughtUpLocalSeq = Math.max(
       session.pendingCaughtUpLocalSeq,
       commit.localSeq,
@@ -9401,6 +10249,22 @@ export class Server {
       addInstanceKey(read.id, read.scope);
     }
     this.markSpaceDirty(space, ids);
+    timing.timeDetailed(
+      () =>
+        JSON.stringify({
+          space,
+          session: session.id,
+          localSeq: commit.localSeq,
+          dirty: [...ids],
+          operations: commit.operations.length,
+          confirmedReads: commit.reads.confirmed.length,
+          pendingReads: commit.reads.pending.length,
+        }),
+      startedAt,
+      "memory",
+      "refresh",
+      "conflict",
+    );
   }
 
   async flushSessions(spaces?: Iterable<string>): Promise<void> {
@@ -9591,6 +10455,10 @@ export class Server {
 
       for (const space of spaces) {
         await this.#withSpacePublicationLock(space, async () => {
+          // A space a caller names that nothing dirtied has no batch to send:
+          // every write and every owed frame marks its space dirty, and an
+          // absent batch would otherwise read as one that dirtied everything.
+          if (!this.#dirtySpaces.has(space)) return;
           // Removed at its own processing turn (CT-1927): pre-deleting the
           // whole selection meant a failure mid-batch stranded every
           // not-yet-processed space — dirty maps intact but the space no
@@ -9631,6 +10499,7 @@ export class Server {
               "memory.fanout",
               { root: true },
               async (span) => {
+                const startedAt = performance.now();
                 span.setAttribute("space.did", space);
                 span.setAttribute("subscriber.count", this.#connections.size);
                 span.setAttribute("dirty.count", dirtyIds?.size ?? 0);
@@ -9677,6 +10546,19 @@ export class Server {
                     }
                   }
                 } finally {
+                  timing.timeDetailed(
+                    () =>
+                      JSON.stringify({
+                        space,
+                        dirty: dirtyIds === undefined ? null : [...dirtyIds],
+                        derived: derivedDirty?.size ?? 0,
+                        connections: this.#connections.size,
+                      }),
+                    startedAt,
+                    "memory",
+                    "refresh",
+                    "batch",
+                  );
                   span.end();
                 }
               },
@@ -10042,23 +10924,29 @@ function isSqliteNamedParamEntries(
 }
 
 /**
- * A client message refused for standing for more than
- * `MAX_UNTRUSTED_MESSAGE_SLOTS` slots, with the id of the request it carried
- * so that the refusal can be answered on that request.
+ * A client message refused before it was understood, with the id of the
+ * request it carried so that the refusal can be answered on that request:
+ * `oversized` for one standing for more than `MAX_UNTRUSTED_MESSAGE_SLOTS`
+ * slots, `invalid` for one that decoded but failed metadata expansion or
+ * request-shape validation.
  */
-export type OversizedClientMessage = {
-  type: "oversized";
+export type RejectedClientMessage = {
+  type: "oversized" | "invalid";
   requestId: string;
 };
 
 /**
- * Decodes and validates one message from a client. Returns `null` for a
- * message that is malformed, or that is refused for its size without carrying
- * a request id to answer it on.
+ * Decodes and validates one message from a client. A message that decodes but
+ * is then refused is reported as `invalid` on its root `requestId` when that
+ * is a bounded identifier (see `isRoutedIdentifier()`); the result is `null`
+ * for a message that cannot be decoded, or that is refused without a usable
+ * request id to answer it on. Negotiated commit metadata expands after bounded
+ * wire decoding and before request-shape validation or downstream CFC checks.
  */
 export const parseClientMessage = (
   payload: string,
-): ClientMessage | OversizedClientMessage | null => {
+  options: { commitLabelTableV1?: boolean } = {},
+): ClientMessage | RejectedClientMessage | null => {
   let parsed: FabricValue;
   try {
     parsed = decodeMemoryBoundary(payload);
@@ -10071,7 +10959,26 @@ export const parseClientMessage = (
     }
     return null;
   }
+  const requestId = isFabricPlainObject(parsed) ? parsed.requestId : undefined;
+  const rejected: RejectedClientMessage | null = isRoutedIdentifier(requestId)
+    ? { type: "invalid", requestId }
+    : null;
+  try {
+    if (options.commitLabelTableV1 === true) {
+      parsed = expandClientMessageLabels(parsed);
+    } else if (hasClientMessageLabelMetadata(parsed)) {
+      return rejected;
+    }
+  } catch {
+    return rejected;
+  }
+  return parseDecodedClientMessage(parsed) ?? rejected;
+};
 
+/** Helper for `parseClientMessage()`, which checks a decoded message's shape. */
+const parseDecodedClientMessage = (
+  parsed: FabricValue,
+): ClientMessage | null => {
   if (!isFabricPlainObject(parsed)) {
     return null;
   }
@@ -10413,6 +11320,26 @@ export const parseClientMessage = (
       space: parsed.space,
       sessionId: parsed.sessionId,
       watches: parsed.watches as WatchSpec[],
+    };
+  }
+
+  if (
+    parsed.type === "session.watch.remove" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    Array.isArray(parsed.watchIds)
+  ) {
+    const watchIds = parsed.watchIds.filter((id: unknown): id is string =>
+      typeof id === "string"
+    );
+    if (watchIds.length !== parsed.watchIds.length) return null;
+    return {
+      type: "session.watch.remove",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      watchIds,
     };
   }
 

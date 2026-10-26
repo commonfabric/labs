@@ -6,7 +6,7 @@ import {
   type NormalizedFullLink,
   toMemorySpaceAddress,
 } from "../link-utils.ts";
-import { arraysOverlap } from "../reactive-dependencies.ts";
+import { arraysOverlap, sameAddresses } from "../reactive-dependencies.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type {
   IExtendedStorageTransaction,
@@ -142,6 +142,13 @@ export function filterIgnoredAddresses(
   return addresses.filter((address) =>
     !ignoredWrites.some((link) => addressMatchesLinkPrefix(address, link))
   );
+}
+
+/** Whether two logs name the same addresses in the same order. */
+export function sameReactivityLog(a: ReactivityLog, b: ReactivityLog): boolean {
+  return sameAddresses(a.reads, b.reads) &&
+    sameAddresses(a.shallowReads, b.shallowReads) &&
+    sameAddresses(a.writes, b.writes);
 }
 
 export function txToReactivityLog(

@@ -91,6 +91,13 @@ let writeClock = 0;
 export const $onCellUpdate = Symbol("$onCellUpdate");
 
 /**
+ * Tells a handle the worker delivered an update of its cell that the
+ * connection dropped: a value of `undefined`, which the handle cannot tell
+ * from a document not yet loaded, so it keeps the value it holds.
+ */
+export const $onCellUpdateDropped = Symbol("$onCellUpdateDropped");
+
+/**
  * Delivers to a handle a subscription update the worker refused, which
  * carries the refusal and nothing of the cell.
  */
@@ -114,6 +121,23 @@ export type CellHandleRead<T> =
 type CellAnswer<T> =
   | { readonly value: T | undefined }
   | { readonly refused: CellReadRefusal };
+
+/** What a subscriber is told about the delivery its value callback is for. */
+export type CellDelivery = {
+  /**
+   * Whether the `cfcLabel` handed to the callback is the label the worker
+   * read with the value: it is for a delivery the worker made with its label,
+   * and is not for a value-only delivery or a local write, which carry the
+   * label the handle last received, nor once the handle has left the cell's
+   * subscription and joined it again, until the worker delivers a label. Nor
+   * is it once the worker has sent an update the connection dropped, one
+   * holding nothing, since the handle then holds a value and label the worker
+   * has read past; a handle delivering labels tells its subscribers so with
+   * what it holds, and tells them again when the worker's next labeled update
+   * makes it current, whatever that update holds.
+   */
+  readonly cfcLabelCurrent: boolean;
+};
 
 /** How a subscriber to a handle hears what the handle holds of its cell. */
 export type CellSubscribeOptions = {
@@ -198,6 +222,17 @@ export class CellHandle<T = unknown> {
   #value: T | undefined;
   #cfcLabel: CfcLabelView | undefined;
 
+  /**
+   * Whether `#value` and `#cfcLabel` are the worker's latest read of the
+   * cell, the label being the one it read with that value: set by a delivery
+   * that carried a label, and cleared by a value that arrived without one, by
+   * a local write, by a refusal, by an update the connection dropped, and
+   * when the handle leaves the cell's subscription, as its last subscriber
+   * leaving and an upgrade to labels do, since it then stops hearing of the
+   * label.
+   */
+  #cfcLabelCurrent = false;
+
   /** The refusal of this handle's last read, while it stands. */
   #refusal: CellReadRefusal | undefined;
 
@@ -209,14 +244,19 @@ export class CellHandle<T = unknown> {
 
   /**
    * Whether any subscriber asked for the CFC label. Sticky: once a label-aware
-   * subscription exists on this handle, label changes also fire its callbacks.
+   * subscription exists on this handle, label changes, and changes in whether
+   * the label is current, also fire its callbacks.
    */
   #wantsCfcLabel = false;
 
   #callbacks = new Map<
     number,
     {
-      onValue: (value: Readonly<T>, cfcLabel: CfcLabelView | undefined) => void;
+      onValue: (
+        value: Readonly<T>,
+        cfcLabel: CfcLabelView | undefined,
+        delivery: CellDelivery,
+      ) => void;
       /** Runs the cleanup the subscriber's last value callback returned. */
       clear: () => void;
       onRefused: (refusal: CellReadRefusal) => void;
@@ -751,10 +791,14 @@ export class CellHandle<T = unknown> {
     this.#value = value;
     this.#refusal = undefined;
     this.#unread = false;
+    // A local update carries the label the handle last received, which the
+    // worker did not read with this value.
+    this.#cfcLabelCurrent = false;
     for (const { onValue } of this.#callbacks.values()) {
       try {
-        // A local update does not change the label; carry the current one.
-        onValue(value as Readonly<T>, this.#cfcLabel);
+        onValue(value as Readonly<T>, this.#cfcLabel, {
+          cfcLabelCurrent: false,
+        });
       } catch (error) {
         console.error("[CellHandle] Callback error:", error);
       }
@@ -768,6 +812,7 @@ export class CellHandle<T = unknown> {
   #refuse(refusal: CellReadRefusal): void {
     this.#value = undefined;
     this.#cfcLabel = undefined;
+    this.#cfcLabelCurrent = false;
     this.#refusal = refusal;
     this.#unread = false;
     for (const { clear, onRefused } of this.#callbacks.values()) {
@@ -1026,6 +1071,14 @@ export class CellHandle<T = unknown> {
     return this.#cfcLabel;
   }
 
+  /**
+   * Whether {@link cfcLabel} is the label the worker read with the value the
+   * handle holds, as {@link CellDelivery} tells a subscriber.
+   */
+  get cfcLabelCurrent(): boolean {
+    return this.#cfcLabelCurrent;
+  }
+
   /** Whether this handle subscribed asking for reactive CFC-label delivery. */
   get wantsCfcLabel(): boolean {
     return this.#wantsCfcLabel;
@@ -1045,9 +1098,14 @@ export class CellHandle<T = unknown> {
    * worker sends one for a document it has not loaded too), so a handle on a
    * cell that holds nothing stays unread until a read answers it. After that,
    * `callback` is called whenever the value changes, and `onRefused` with
-   * each refusal. The callback's return value, if a Cancel function, is
-   * called before the next value, when a refusal drops the value it was
-   * given, and when the subscription is cancelled.
+   * each refusal. Once any subscriber has asked for the label, every
+   * subscriber of the handle is called again with the value it holds when the
+   * label changes, and when the label stops or starts being current, as an
+   * update the connection dropped and the worker's next labeled update make
+   * it ({@link CellDelivery}). The
+   * callback's return value, if a Cancel function, is called before the next
+   * value, when a refusal drops the value it was given, and when the
+   * subscription is cancelled.
    *
    * A change reaches `callback` through an update, or through what a read
    * finds, whether this handle made it or another on the same cell under the
@@ -1062,6 +1120,7 @@ export class CellHandle<T = unknown> {
     callback: (
       value: T | undefined,
       cfcLabel?: CfcLabelView | undefined,
+      delivery?: CellDelivery,
     ) => Cancel | undefined | void,
     options: CellSubscribeOptions,
   ): Cancel {
@@ -1101,10 +1160,11 @@ export class CellHandle<T = unknown> {
     const wrappedCallback = (
       value: T | undefined,
       cfcLabel: CfcLabelView | undefined,
+      delivery: CellDelivery,
     ) => {
       clear();
       try {
-        cleanup = callback(value, cfcLabel);
+        cleanup = callback(value, cfcLabel, delivery);
       } catch (error) {
         console.error("[CellHandle] Callback error:", error);
       }
@@ -1115,6 +1175,10 @@ export class CellHandle<T = unknown> {
     // The subscriber added here hears what the handle holds once, below.
     if (upgradeToCfcLabel) {
       // Tear down the label-less backend sub, then re-open it label-aware.
+      // Off the cell's subscription in between, the handle hears of no
+      // change, so the label it holds is current only once the worker
+      // delivers one again, as when its last subscriber leaves.
+      this.#cfcLabelCurrent = false;
       void this.#conn.unsubscribe(this).finally(() => {
         this.#conn.subscribe(this);
       });
@@ -1138,7 +1202,9 @@ export class CellHandle<T = unknown> {
     // Call immediately with what the handle holds, as Cell does: the value,
     // even when it is undefined, or the refusal standing in its place.
     if (this.#refusal === undefined) {
-      wrappedCallback(this.#value, this.#cfcLabel);
+      wrappedCallback(this.#value, this.#cfcLabel, {
+        cfcLabelCurrent: this.#cfcLabelCurrent,
+      });
     } else {
       this.#callbacks.get(callbackId)?.onRefused(this.#refusal);
     }
@@ -1147,6 +1213,10 @@ export class CellHandle<T = unknown> {
       clear();
       this.#callbacks.delete(callbackId);
       if (this.#callbacks.size === 0) {
+        // Off the cell's subscription, the handle hears of no label change,
+        // so the one it holds is current only until the worker delivers
+        // another.
+        this.#cfcLabelCurrent = false;
         this.#conn.unsubscribe(this);
       }
     };
@@ -1550,12 +1620,32 @@ export class CellHandle<T = unknown> {
   }
 
   /**
+   * Handles an update of the cell the connection dropped. The handle keeps
+   * the value and label it holds, but the worker has read the cell since, so
+   * the label is no longer the one the worker read with the cell's value. A
+   * handle delivering labels hands its subscribers what it holds again,
+   * saying so: one that took the label as the worker's read, as
+   * `observeAuthorship()` does, would otherwise hear nothing more, since no
+   * later update need come.
+   */
+  [$onCellUpdateDropped](): void {
+    if (!this.#cfcLabelCurrent) return;
+    this.#cfcLabelCurrent = false;
+    if (!this.#wantsCfcLabel) return;
+    for (const { onValue } of this.#callbacks.values()) {
+      onValue(this.#value as Readonly<T>, this.#cfcLabel, {
+        cfcLabelCurrent: false,
+      });
+    }
+  }
+
+  /**
    * Handles an update of the cell from the backend, whose raw value may
    * contain `CellRef`s.
    */
   [$onCellUpdate](
     value: unknown,
-    labelUpdate?: { cfcLabel: CfcLabelView | undefined },
+    labelUpdate?: { cfcLabel: CfcLabelView | undefined; current: boolean },
   ): void {
     this.#updateGeneration++;
     // A value admitted after a refusal, or the first delivered to a handle
@@ -1577,19 +1667,35 @@ export class CellHandle<T = unknown> {
       this.#holdInQueue(queue, applied);
     }
     const valueChanged = !valuesOrCellsEqual(applied, this.#value);
-    // A label-only change (value identical) still fires label-aware subscribers.
-    // `labelUpdate` is present only on notifications that carried a label, so a
-    // value-only notification never spuriously churns the label.
+    // A label-only change (value identical) still fires label-aware
+    // subscribers, and so does a change in whether the label is current alone,
+    // as when the worker brings back the value and label a dropped update left
+    // stale. `labelUpdate` is present only on notifications that carried a
+    // label, so a value-only notification never spuriously churns the label.
     const labelChanged = labelUpdate !== undefined && this.#wantsCfcLabel &&
-      !cfcLabelViewsEqual(labelUpdate.cfcLabel, this.#cfcLabel);
+      (!cfcLabelViewsEqual(labelUpdate.cfcLabel, this.#cfcLabel) ||
+        labelUpdate.current !== this.#cfcLabelCurrent);
+    // The label the handle holds follows every update that carries one,
+    // whether or not a subscriber hears of it: a handle whose subscribers
+    // never asked for labels still seeds a later handle on the cell with the
+    // label it holds, and says how current it is.
+    if (labelUpdate !== undefined) {
+      this.#cfcLabel = labelUpdate.cfcLabel;
+      this.#cfcLabelCurrent = labelUpdate.current;
+    } else if (valueChanged) {
+      // The value moved on without its label, which the worker read with an
+      // earlier one.
+      this.#cfcLabelCurrent = false;
+    }
     if (!valueChanged && !labelChanged && !isNews) {
       return;
     }
 
     if (valueChanged) this.#value = applied;
-    if (labelUpdate !== undefined) this.#cfcLabel = labelUpdate.cfcLabel;
     for (const { onValue } of this.#callbacks.values()) {
-      onValue(this.#value as Readonly<T>, this.#cfcLabel);
+      onValue(this.#value as Readonly<T>, this.#cfcLabel, {
+        cfcLabelCurrent: this.#cfcLabelCurrent,
+      });
     }
   }
 

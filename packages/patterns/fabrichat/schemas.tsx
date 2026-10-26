@@ -20,6 +20,8 @@ import {
   FabricEpochNsec,
   isWellFormedDID,
 } from "commonfabric";
+import type { FileEntry } from "../fabrifile/schemas.tsx";
+import type { FileStoreRecord } from "../fabrifile/store.tsx";
 import type { ProfileInbox } from "../system/profile-home.tsx";
 
 //
@@ -173,12 +175,40 @@ export interface ChatDeletedBody {
 /** Where a reply is shown. */
 export type ChatReplyShownIn = "main" | "thread" | "both";
 
-/** What a reply replies to, and where it is shown. */
-export interface ChatReply {
-  /** The message replied to, in the same room. */
-  message: Cell<ChatMessage>;
+/**
+ * The shape of `replyTo` a room reads and stores, named by the fields it
+ * holds beside `shownIn`. `thread-quotes`: a reply names the thread it joins
+ * as `thread` and the message it answers as `quotes` (see `ChatReply`). A room
+ * that takes another shape names it here with another value.
+ */
+export type ChatReplyShape = "thread-quotes";
 
-  /** Where the reply is shown. */
+/** The shape of `replyTo` this room reads and stores. */
+export const CHAT_REPLY_SHAPE: ChatReplyShape = "thread-quotes";
+
+/**
+ * Which thread a message joins, which message it quotes, and where it is
+ * shown. A plain post in a thread names its `thread` alone, a reply in a
+ * thread names both, and a reply in the main conversation names what it
+ * `quotes` alone, and is shown in `"main"`.
+ */
+export interface ChatReply {
+  /**
+   * The root of the thread the message joins, a message of the same room that
+   * is in no thread itself; absent for a message in no thread.
+   */
+  thread?: Cell<ChatMessage>;
+
+  /**
+   * The message this one answers, in the same room, and in `thread` where
+   * that is set; absent for a plain post.
+   */
+  quotes?: Cell<ChatMessage>;
+
+  /**
+   * Where the message is shown: `"thread"` or `"both"` for a message in a
+   * thread, and `"main"` for one in none.
+   */
   shownIn: ChatReplyShownIn;
 }
 
@@ -199,8 +229,18 @@ export interface ChatMessage {
   /** The profile the sender sent under; absent once obliterated. */
   authorProfile?: ProfileCell;
 
-  /** The current text, or the marker of a deleted message. */
+  /**
+   * The current text, empty only where the message has attachments, or the
+   * marker of a deleted message.
+   */
   body: string | ChatDeletedBody;
+
+  /**
+   * The files sent with the message, as entries of its space's file store, in
+   * the order they were sent; absent for none, and once the message is
+   * deleted.
+   */
+  attachments?: Cell<FileEntry>[];
 
   /** The room's handler clock when it recorded the message. */
   sentAt: FabricEpochNsec;
@@ -211,7 +251,10 @@ export interface ChatMessage {
    */
   editedAt?: FabricEpochNsec;
 
-  /** What this message replies to, and where it is shown; absent for none. */
+  /**
+   * The thread this message joins, what it quotes, and where it is shown;
+   * absent for a message that joins no thread and quotes nothing.
+   */
   replyTo?: ChatReply;
 
   /**
@@ -221,7 +264,16 @@ export interface ChatMessage {
   reactions?: ChatReaction[];
 }
 
-/** A room's policy, stated correctly, with every key present. */
+/**
+ * How many attachments a message may have, in a room whose policy doesn't
+ * say: what an absent `maxAttachments` means.
+ */
+export const DEFAULT_MAX_ATTACHMENTS = 10;
+
+/**
+ * A room's policy, stated correctly, with every key present but
+ * `maxAttachments`, which an earlier room's policy doesn't hold.
+ */
 export interface ChatRoomPolicy {
   /** Whether an OWNER may obliterate messages. */
   ownersMayObliterate: boolean;
@@ -246,6 +298,12 @@ export interface ChatRoomPolicy {
 
   /** Stated for the policy's shape, and read by nothing: the room offers no windows. */
   maxOpenWindows: number;
+
+  /**
+   * The most attachments a message may have; absent for
+   * `DEFAULT_MAX_ATTACHMENTS`.
+   */
+  maxAttachments?: number;
 }
 
 /** The kind of room: how it was created, not how many members it has. */
@@ -273,6 +331,19 @@ export interface AboutRecord {
  */
 export interface TitleRecord {
   /** The title. */
+  title: string;
+}
+
+/**
+ * What a room keeps about one of its threads, beside the thread's messages:
+ * its title as a member last set it. The room stores it labeled
+ * `authored-by` that member.
+ */
+export interface ThreadInfoRecord {
+  /** The thread's root, by the root's own cell. */
+  root: Cell<unknown>;
+
+  /** The thread's title. */
   title: string;
 }
 
@@ -405,10 +476,20 @@ export interface ChatRoomLink {
   roster?: ManagerProfileCell[];
 }
 
-/** A container's explicit declaration of the conversation it holds. */
+/**
+ * A container's explicit declaration of the conversation it holds, and where
+ * it keeps the store of its space's files, which a room in its space that
+ * isn't its root uses as its own. It offers the record rather than a stream
+ * to create the store with: a stream declared here reads as present whether or
+ * not the container has one, and an event sent to one it lacks is dropped, so
+ * only a value can say whether the container keeps a store.
+ */
 export interface ChatContainer {
   /** The declared conversation, wherever its room lives. */
   chatRoom?: Cell<ChatRoomLink>;
+
+  /** Where the container keeps its space's file store. */
+  fileStoreRecord?: FileStoreRecord;
 }
 
 /** One room in a user's chat manager. */
@@ -554,6 +635,35 @@ export type SetTitleRefusalCode =
   | "not-member"
   | "invalid-title"
   | "fixed-title";
+
+/** The outcome of a retitle of one of a room's threads, by its `requestId`. */
+export type SetThreadTitleOutcome =
+  | {
+    /** The request set the thread's title. */
+    status: "done";
+  }
+  | {
+    /** The retitle was refused, and the title is as it was. */
+    status: "refused";
+
+    /** Why, for a person to read. */
+    reason: string;
+
+    /** Which refusal it is, for a client to act on. */
+    code: SetThreadTitleRefusalCode;
+  };
+
+/**
+ * Why a room refused a thread's retitle, which stays the same whatever its
+ * `reason` says. `not-member`: the sender can't write in the room, or isn't
+ * signed in. `invalid-title`: the title is not a string with some text in
+ * it. `not-a-root`: the message named is not one of the room's messages that
+ * can root a thread.
+ */
+export type SetThreadTitleRefusalCode =
+  | "not-member"
+  | "invalid-title"
+  | "not-a-root";
 
 /**
  * The `requestId` under which an add to the room in `space` asks the adder's

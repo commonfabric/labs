@@ -122,7 +122,7 @@ function update(container: FakeElement, ...tiles: FakeElement[]): void {
 }
 
 // A list of recent runs, each with a title link and an arrow link that share
-// an href, as the recent-runs tile renders them.
+// an href, as the recent commits tile renders them.
 function runList(...titles: string[]): FakeElement {
   return element(
     "div",
@@ -183,9 +183,9 @@ describe("reconcileTiles()", () => {
   });
 
   it("moves focus to the keyed link rather than another link with the same href", () => {
-    const container = board(tile("recent main runs", "good", runList("b", "a")));
+    const container = board(tile("recent commits", "good", runList("b", "a")));
     container.querySelectorAll("a")[3].focus();
-    update(container, tile("recent main runs", "good", runList("c", "b", "a")));
+    update(container, tile("recent commits", "good", runList("c", "b", "a")));
     expect(page.activeElement?.getAttribute("data-focus-key")).toBe("arrow-a");
     expect(container.contains(page.activeElement!)).toBe(true);
   });
@@ -212,13 +212,13 @@ describe("reconcileTiles()", () => {
   it("gives the element with the same focus key the scroll position of a scrolled keyed element", () => {
     const unkeyed = element("div", { class: "notes" });
     const container = board(
-      tile("recent main runs", "good", runList("b", "a"), unkeyed),
+      tile("recent commits", "good", runList("b", "a"), unkeyed),
     );
     container.querySelectorAll("[data-focus-key]")[0].scrollTop = 25;
     unkeyed.scrollTop = 10;
     const nextList = runList("c", "b", "a");
     const nextNotes = element("div", { class: "notes" });
-    update(container, tile("recent main runs", "warn", nextList, nextNotes));
+    update(container, tile("recent commits", "warn", nextList, nextNotes));
     expect(nextList.scrollTop).toBe(25);
     expect(nextNotes.scrollTop).toBe(0);
   });
@@ -226,7 +226,7 @@ describe("reconcileTiles()", () => {
   it("keeps focus and scroll position in a tile when a tile before it leaves the page", () => {
     const container = board(
       tile("scheduled workflows", "bad"),
-      tile("recent main runs", "good", runList("b", "a")),
+      tile("recent commits", "good", runList("b", "a")),
     );
     const [list] = container.children.item(1)!.querySelectorAll(
       "[data-focus-key]",
@@ -234,7 +234,7 @@ describe("reconcileTiles()", () => {
     list.scrollTop = 25;
     container.querySelectorAll("a")[3].focus();
     const nextList = runList("c", "b", "a");
-    update(container, tile("recent main runs", "warn", nextList));
+    update(container, tile("recent commits", "warn", nextList));
     expect(container.children).toHaveLength(1);
     expect(nextList.scrollTop).toBe(25);
     expect(page.activeElement?.getAttribute("data-focus-key")).toBe("arrow-a");

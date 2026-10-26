@@ -209,7 +209,8 @@ describe("piece-output", () => {
         outcome: "completed",
         pieces: [{
           slug: "spending-summary",
-          url: "http://toolshed.test/piece-output/spending-summary",
+          url: `http://toolshed.test/${pieces.getSpace()}/spending-summary`,
+          space: pieces.getSpace(),
         }],
       });
       const namedToken = resultToken(requests[5]);

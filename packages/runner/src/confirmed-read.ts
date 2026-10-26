@@ -12,11 +12,13 @@ export type ConfirmedRead<R> = {
   value: R;
 
   /**
-   * Whether every document `read` consumed holds confirmed state in `space`:
-   * watched and delivered, with no pending local write and no value the
-   * replica made up locally, or, for a content-addressed schema document in
-   * space scope, stored by the replica's own accepted commit
-   * (`ISpaceReplica.isConfirmedDocument`).
+   * Whether every document `read` consumed holds a known stored version in
+   * `space`, with no pending local write or value the replica made up locally.
+   * A delivery, an accepted whole-document set or deletion, a write the
+   * server elided against the commit's read of the document, or verified
+   * content-addressed content in space scope establishes that version
+   * (`ISpaceReplica.isConfirmedDocument`). A mutable document without a
+   * delivered watch may be stale; confirmation alone does not prove freshness.
    */
   confirmed: boolean;
 
@@ -26,7 +28,8 @@ export type ConfirmedRead<R> = {
    * reflected in `value`. Absent whenever the replica cannot say
    * (`ISpaceReplica.completeThroughSeq`): before its first push, after a
    * frame it failed to apply, and while its server runs server execution or
-   * does not say whether it does.
+   * does not say whether it does, or when a mutable document has only an
+   * accepted-write witness and no delivered watch for subsequent changes.
    */
   seq?: number;
 };
@@ -57,12 +60,15 @@ export function readConfirmed<R>(
     markDurableReadTx(tx);
     const value = read(tx);
     const { replica } = runtime.storageManager.open(space);
+    const activities = [...getTransactionReadActivities(tx)];
     const confirmed = replica.isConfirmedDocument !== undefined &&
-      [...getTransactionReadActivities(tx)].every((activity) =>
+      activities.every((activity) =>
         activity.space === space &&
         replica.isConfirmedDocument!(activity.id, activity.scope)
       );
-    const seq = confirmed ? replica.completeThroughSeq?.() : undefined;
+    const seq = confirmed
+      ? replica.completeThroughSeq?.(activities)
+      : undefined;
     return seq === undefined ? { value, confirmed } : { value, confirmed, seq };
   } finally {
     closeReadTx(tx);

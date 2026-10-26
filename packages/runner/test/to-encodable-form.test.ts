@@ -400,6 +400,29 @@ describe("to-encodable-form", () => {
       expect(Object.isFrozen(graph.resultSchema)).toBe(false);
     });
 
+    it("returns a graph holding a deep-frozen manifest of derived internal cells, leaving the pattern's as it was", () => {
+      // The runtime keeps the id a partial cause names by the cause's
+      // identity only where the cause is deep-frozen, and the walk has just
+      // rebuilt the manifest's records.
+      const graph = {
+        argumentSchema: {},
+        resultSchema: {},
+        derivedInternalCells: [
+          { partialCause: { $generated: 0 } },
+          { partialCause: { stream: ["a", 1] }, schema: { type: "object" } },
+        ],
+        nodes: [],
+      };
+
+      const out = withAliasBindings(graph) as typeof graph;
+      expect(out.derivedInternalCells).toEqual(graph.derivedInternalCells);
+      expect(isDeepFrozen(out.derivedInternalCells)).toBe(true);
+      expect(out.derivedInternalCells).not.toBe(graph.derivedInternalCells);
+      expect(Object.isFrozen(graph.derivedInternalCells)).toBe(false);
+      expect(Object.isFrozen(graph.derivedInternalCells[0]!.partialCause))
+        .toBe(false);
+    });
+
     it("returns a graph holding boolean schemas as they are", () => {
       const graph = { argumentSchema: false, resultSchema: true, nodes: [] };
       const out = withAliasBindings(graph) as typeof graph;

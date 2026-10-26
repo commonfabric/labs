@@ -1,8 +1,9 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { dirname, relative } from "@std/path";
+import { dirname, fromFileUrl, relative } from "@std/path";
 import { parse as parseYaml } from "@std/yaml";
 import { getBinary } from "@astral/astral";
 import { COVERAGE_ARTIFACT } from "@commonfabric/test-support/records";
+import { BuildConfig } from "./build-binaries.ts";
 import { commandWords, withoutComments } from "./ci-workflow.ts";
 import { phaseOf } from "./ci-step-phases.ts";
 import {
@@ -160,6 +161,58 @@ Deno.test("every workflow and composite action is valid YAML", async () => {
     "these files under .github do not parse as YAML — the runner will " +
       "schedule NO jobs from them, and every text-level check in this file " +
       "stays green while it does",
+  );
+});
+
+Deno.test("cache-only binary builders install their entrypoint graphs", async () => {
+  const installAction = await Deno.readTextFile(
+    new URL("../.github/actions/deno-install/action.yml", import.meta.url),
+  );
+  const toolshedDockerfile = await Deno.readTextFile(
+    new URL("../Dockerfile.toolshed", import.meta.url),
+  );
+  const root = fromFileUrl(new URL("../", import.meta.url));
+  const config = new BuildConfig({ root, toolshedFlags: [] });
+  const expectedEntrypoints = [
+    config.toolshedEntryPath(),
+    config.cliEntryPath(),
+  ].map((entrypoint) => relative(root, entrypoint).replaceAll("\\", "/"));
+  const listedEntrypoints = installAction.match(
+    /binary_entrypoints=\(\n(?<paths>(?: +\S+\n)+) +\)/,
+  )?.groups?.paths.trim().split(/\s+/);
+  const dockerEntrypoints = toolshedDockerfile.match(
+    /deno install --entrypoint --frozen (?<entrypoints>\S+(?: +\S+)*)/,
+  )?.groups?.entrypoints.split(/ +/);
+  const dockerBuilds = toolshedDockerfile.match(
+    /deno task build-binaries (?<binaries>\S+(?: +\S+)*)/,
+  )?.groups?.binaries.split(/ +/);
+
+  assertEquals(listedEntrypoints, expectedEntrypoints);
+  assertStringIncludes(
+    installAction,
+    'deno install --entrypoint --cached-only "${frozen_arg[@]}"',
+  );
+  assertStringIncludes(
+    installAction,
+    'deno install --entrypoint "${frozen_arg[@]}"',
+  );
+  assertEquals(dockerEntrypoints, [expectedEntrypoints[0]]);
+  assertEquals(dockerBuilds, ["toolshed"]);
+});
+
+Deno.test("the test-selection publisher installs only what it runs", async () => {
+  const publisher = (await parsedWorkflow("test-selection.yml")).jobs.publish;
+
+  assertEquals(
+    publisher.steps?.filter((step) =>
+      step.uses === "./.github/actions/deno-install"
+    ),
+    [],
+  );
+  assertEquals(
+    namedStep(publisher, "📦 Cache publisher dependencies").run,
+    "deno cache --frozen tasks/test-selection-publish.ts " +
+      "tasks/step-summary.ts",
   );
 });
 

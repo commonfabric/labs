@@ -53,6 +53,7 @@ export const jsonLanguage: Language = {
     filenamePatterns: [/\.jsonc?\.example$/i],
     aliases: ["jsonc"],
     interpreters: [],
+    signatures: [],
     sharedExtensions: [
       { extension: ".cfg", content: JSON_SHAPED_CONFIGURATION },
     ],
@@ -81,6 +82,7 @@ export const jsonLinesLanguage: Language = {
     filenamePatterns: [],
     aliases: ["jsonl", "ndjson"],
     interpreters: [],
+    signatures: [],
     sharedExtensions: [],
   },
 

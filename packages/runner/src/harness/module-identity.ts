@@ -1,5 +1,9 @@
 import { hashStringOf } from "@commonfabric/data-model";
-import type { Program } from "@commonfabric/js-compiler";
+import type {
+  ModuleDeclarations,
+  Program,
+  Source,
+} from "@commonfabric/js-compiler";
 import { resolveImportSpecifier } from "@commonfabric/js-compiler/specifier";
 
 import { compilerStack } from "./deferred-compiler-stack.ts";
@@ -72,6 +76,12 @@ export interface ModuleIdentityOptions {
    * another module's import edge.
    */
   dataFiles?: ReadonlySet<string>;
+
+  /**
+   * Modules already scanned, by name, as {@link scanModules} returns them. A
+   * module with an entry here is resolved from it rather than parsed again.
+   */
+  declarations?: ReadonlyMap<string, ModuleDeclarations>;
 }
 
 interface ModuleNode {
@@ -104,14 +114,14 @@ export interface ModuleImportEdges {
  * TypeScript, so they are not parsed and carry no edges, and an import that
  * would land on one resolves to nothing instead — such a specifier is reported
  * as external, and fails to resolve at compile time.
+ *
+ * A module with an entry in `options.declarations` is resolved from that scan,
+ * and any other is parsed here.
  */
 export function resolveModuleImports(
   program: Program,
-  options: { dataFiles?: ReadonlySet<string> } = {},
+  options: Pick<ModuleIdentityOptions, "dataFiles" | "declarations"> = {},
 ): Map<string, ModuleImportEdges> {
-  // Deferred compiler stack: import scanning parses with the TS parser, so
-  // every flow reaching this must have awaited ensureCompilerStack().
-  const { collectImportSpecifiers, ts } = compilerStack();
   const dataFiles = options.dataFiles ?? new Set<string>();
   const fileNames = new Set(
     program.files.map((f) => f.name).filter((name) => !dataFiles.has(name)),
@@ -124,12 +134,9 @@ export function resolveModuleImports(
       edges.set(file.name, { internalDeps, externalDeps });
       continue;
     }
-    for (
-      const specifier of collectImportSpecifiers(
-        file,
-        ts.ScriptTarget.ES2023,
-      )
-    ) {
+    const declared = options.declarations?.get(file.name) ??
+      scanModule(file);
+    for (const specifier of declared.imports) {
       const resolved = resolveImportSpecifier(specifier, file);
       const target = findInternalTarget(fileNames, resolved);
       if (target !== undefined && target !== file.name) {
@@ -145,6 +152,34 @@ export function resolveModuleImports(
 }
 
 /**
+ * Scans each of `files` once, keyed by its name, so the steps that resolve a
+ * module's imports and its `dataFile()` reads share one parse of it.
+ * `scanned(file)` supplies a scan already made of the same bytes under a name
+ * with the same base name, which is taken instead of parsing again.
+ *
+ * `files` holds code only: a data file is never parsed.
+ */
+export function scanModules(
+  files: readonly Source[],
+  scanned: (file: Source) => ModuleDeclarations | undefined = () => undefined,
+): Map<string, ModuleDeclarations> {
+  return new Map(
+    files.map((file) => [file.name, scanned(file) ?? scanModule(file)]),
+  );
+}
+
+/**
+ * Helper for `resolveModuleImports()` and `scanModules()`, which parses one
+ * module.
+ */
+function scanModule(file: Source): ModuleDeclarations {
+  // Deferred compiler stack: scanning parses with the TS parser, so every flow
+  // reaching this must have awaited ensureCompilerStack().
+  const { scanModuleDeclarations, ts } = compilerStack();
+  return scanModuleDeclarations(file, ts.ScriptTarget.ES2023);
+}
+
+/**
  * Compute a stable content hash for every module in `program`.
  * Returns a map from each file's path to its hash.
  */
@@ -153,10 +188,7 @@ export function computeModuleHashes(
   options: ModuleIdentityOptions = {},
 ): Map<string, string> {
   const runtimeFingerprint = options.runtimeFingerprint ?? "";
-  const edges = resolveModuleImports(
-    program,
-    options.dataFiles === undefined ? {} : { dataFiles: options.dataFiles },
-  );
+  const edges = resolveModuleImports(program, options);
   const nodes = new Map<string, ModuleNode>();
 
   for (const file of program.files) {

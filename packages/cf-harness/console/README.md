@@ -67,10 +67,10 @@ shared host, a tailnet with an access policy — and not behind a public address
 - **An identity keyfile.** A PKCS#8 key on this host, the same one the `cf` CLI
   uses. The fabric session loads it to sign with, and the pattern index signs
   its requests with the same identity.
-- **A space named by name.** `assign_slug` composes the URL a person opens from
-  the API URL and the space's name, and offers no URL at all for a space named
-  by `did:key`. The server refuses a `did:` space at startup rather than
-  finishing a run with no link to show.
+- **A space.** Opening a space never creates one, so the console needs a space
+  its identity can write to: the DID of one `cf space create` makes, or the
+  legacy name of one that already exists. `assign_slug` composes the URL a
+  person opens from the API URL, the space's DID, and the slug.
 - **A connected model provider.** The provider preference lives in
   `$CF_HARNESS_HOME/config.json` and its credentials in
   `$CF_HARNESS_HOME/auth.json`, both written by `cf-harness config set` and
@@ -115,7 +115,7 @@ CF_HARNESS_SANDBOX_RUNTIME=runsc \
   deno task --cwd packages/cf-harness console:launch --instance <loom-instance>
 deno task --cwd packages/cf-harness console:launch \
   --fabric-api-url http://localhost:8000 --store packages/toolshed/cache/memory \
-  --fabric-identity "$HOME/.cf/my-key.pkcs8" --fabric-space my-space
+  --fabric-identity "$HOME/.cf/my-key.pkcs8" --fabric-space <space-did>
 ```
 
 The first names the sandbox runtime, `runsc`, with its settings in the
@@ -153,7 +153,7 @@ would otherwise have resolved:
 ```sh
 export CF_HARNESS_FABRIC_API_URL=http://localhost:8000
 export CF_HARNESS_FABRIC_IDENTITY="$HOME/.cf/my-key.pkcs8"
-export CF_HARNESS_FABRIC_SPACE=my-space
+export CF_HARNESS_FABRIC_SPACE=<space-did>
 export CF_HARNESS_PATTERN_INDEX_URL=https://index.example/   # optional
 export CF_HARNESS_SKILLS_REGISTRY_URL=https://www.skills.sh/  # optional
 
@@ -181,7 +181,7 @@ Every environment variable has a flag, and the flag wins:
 | `--port`                      | `CF_HARNESS_CONSOLE_PORT`              | `8100`                                |
 | `--fabric-api-url`            | `CF_HARNESS_FABRIC_API_URL`            | `http://localhost:8000`               |
 | `--fabric-identity`           | `CF_HARNESS_FABRIC_IDENTITY`           | required                              |
-| `--fabric-space`              | `CF_HARNESS_FABRIC_SPACE`              | required, a name                      |
+| `--fabric-space`              | `CF_HARNESS_FABRIC_SPACE`              | required, a DID or a legacy name      |
 | `--fabric-foreign-spaces`     | `CF_HARNESS_FABRIC_FOREIGN_SPACES`     | no foreign spaces admitted            |
 | `--pattern-index-url`         | `CF_HARNESS_PATTERN_INDEX_URL`         | unset                                 |
 | `--skills-registry-url`       | `CF_HARNESS_SKILLS_REGISTRY_URL`       | unset                                 |
@@ -509,27 +509,32 @@ caller showing a rendered piece has to work with:
 {
   "text": "make the headings readable",
   "inputCells": [
-    { "name": "pattern_1", "ref": "pattern:my-space/reading-list" }
+    { "name": "pattern_1", "ref": "pattern:<space-did>/reading-list" }
   ]
 }
 ```
 
 `pattern:<space>/<slug>`, or the bare `<slug>` meaning a piece in this console's
-own space. The session resolves the name to the piece's address before it mints
-a handle, so what the handle table holds is the address either way and the model
-is told no more than it is told for any other cell. The alternative is every
-surface holding a piece deriving fabric ids of its own, which is one copy of the
-runtime's addressing rules per client — and a client is exactly where that copy
-goes stale.
+own space. `<space>` is the space's DID, or the legacy name a console was
+configured with. The session resolves the name to the piece's address before it
+mints a handle, so what the handle table holds is the address either way and the
+model is told no more than it is told for any other cell. The alternative is
+every surface holding a piece deriving fabric ids of its own, which is one copy
+of the runtime's addressing rules per client — and a client is exactly where
+that copy goes stale.
 
 Which side answers which mistake follows from what each side can know. A slug
 the runtime's own rule refuses, an address carrying a path under the piece
-rather than the piece, and an address naming a space that is not this console's
-are decidable from the text, so the route answers **400** naming which — the
-caller cannot see the space this console runs against, so a mismatch is this
-side's to explain. Whether the space HOLDS that slug is not a fact about the
-text; the turn finds it out and fails naming the slug, under the rule above that
-governs every reference which parses and still cannot mint.
+rather than the piece, an address naming a space that is not this console's, and
+a reference into a foreign space the operator did not admit are decidable from
+the text, so the route answers **400** naming which — the caller cannot see the
+space this console runs against, so a mismatch is this side's to explain. The
+route holds each reference to the rule the session's mint holds it to: the
+console resolves a configured legacy name to its DID at startup, as the session
+does, so an address may name this console's space by either. Whether the space
+HOLDS that slug is not a fact about the text; the turn finds it out and fails
+naming the slug, under the rule above that governs every reference which parses
+and still cannot mint.
 
 The address is scoped to pieces. A pane may show any cell in a space, and the
 general case is CT-2319's; a slug names a piece or it names nothing, which is
@@ -564,10 +569,11 @@ The completed-turn result is:
   "pieces": [
     {
       "slug": "reading-list",
-      "url": "http://localhost:8000/my-space/reading-list"
+      "url": "http://localhost:8000/<space-did>/reading-list",
+      "space": "<space-did>"
     }
   ],
-  "spaceName": "my-space",
+  "spaceName": "<space-did>",
   "finalText": "Your reading list is ready."
 }
 ```
@@ -609,17 +615,20 @@ receipts, replay flags, and current versions, and is empty when the run composed
 none. Optional `originLoomId` is the turn's submitted origin. Enable the tools
 with `--loom-authoring-config` or `CF_HARNESS_LOOM_AUTHORING_CONFIG`; the
 complete contract is [Durable Loom authoring](../docs/LOOM_AUTHORING.md). Each
-entry copies `slug` and `url` from the successful `assign_slug` observation.
-When that same held token also appeared in a verified successful composition,
-optional `loomComponents: [{loomId, componentId}]` identifies its saved
-membership. The correlation uses unique matching current-turn tool calls and
-request-order receipt IDs, never the human slug or assistant prose. When using
-this metadata, clients suppress duplicate placement only after verifying the
-pair in a freshly opened manifest. Weaver also retains a legacy exact-reference
-membership check; absent either proof it keeps ordinary placement. Different
-tokens for the same Pattern are not inferred equivalent. No cell address or
-token is added to the result. `spaceName` identifies this console's configured
-space.
+entry copies `slug`, `url`, and the piece's space DID `space` from the output a
+successful `assign_slug` call persisted; the model is shown the slug alone. A
+successful call whose output does not read back makes the result unavailable
+rather than leave the piece out. When that same held token also appeared in a
+verified successful composition, optional
+`loomComponents: [{loomId, componentId}]` identifies its saved membership. The
+correlation uses unique matching current-turn tool calls and request-order
+receipt IDs, never the human slug or assistant prose. When using this metadata,
+clients suppress duplicate placement only after verifying the pair in a freshly
+opened manifest. Weaver also retains a legacy exact-reference membership check;
+absent either proof it keeps ordinary placement. Different tokens for the same
+Pattern are not inferred equivalent. No cell address or token is added to the
+result. `spaceName` is this console's space as it was configured: its DID, or
+the legacy name it was started with.
 
 The route never holds a request open; it answers with where the turn stands, and
 the status code says whether asking again can change the answer:
@@ -701,12 +710,11 @@ sentence as "done", "waiting for your answer", or "stopped", without a failure
 badge. Child agents report blockers to their parent; they cannot end the user's
 task themselves.
 
-When the run names a piece, the `assign_slug` result carries a `slug` and a
-`url`, and the page raises an **Open your piece** link above the feed. That link
-is the point of the surface: everything above it is the work, and the link is
-what the work produced. The same result is durable under
-`<artifact-root>/<run-id>/tool-outputs/`; when a run ends without the link
-appearing, the Runs view below reads it back.
+When a turn that named a piece completes, the page raises an **Open your piece**
+link above the feed, with the URL the `assign_slug` call persisted under
+`<artifact-root>/<run-id>/tool-outputs/`. That link is the point of the surface:
+everything above it is the work, and the link is what the work produced. The
+Runs view below reads the same output back.
 
 Cancel stops the running turn. The session survives a cancel and a page reload
 both — the stream resumes from the last event the page rendered rather than
@@ -806,13 +814,14 @@ address is the one `assign_slug` recorded, which is the Fabric API's; a host
 that shows pieces somewhere else — a pane of its own, say, where the API's
 address answers with a login gate instead of the piece — names its prefix here,
 and every piece link on the page is composed as `<piecesBase>/<space>/<slug>`
-from the space and slug the turn's result carries, each escaped. With no prefix
-named, the recorded URL is used as it stands rather than rebuilt. The prefix has
-to be an absolute `http` or `https` URL: it arrives from whatever opened the
-page and ends up in an `href`, so anything else — a `javascript:` URL, a
-relative path — is refused, the page says so, and the links stay on the recorded
-address. The console composes against a prefix it is given and knows nothing
-about the host that gave it.
+from the space DID and slug the run recorded, written as the shell writes a
+piece's path. With no prefix named, or no space recorded, the recorded URL is
+used as it stands rather than rebuilt. The prefix has to be an absolute `http`
+or `https` URL: it arrives from whatever opened the page and ends up in an
+`href`, so anything else — a `javascript:` URL, a relative path — is refused,
+the page says so, and the links stay on the recorded address. The console
+composes against a prefix it is given and knows nothing about the host that gave
+it.
 
 The pane reads the same event stream the console page reads, from sequence zero
 — so a pane opened halfway through a turn shows the steps that already happened
@@ -1152,7 +1161,7 @@ exist:
 | `allowedToolIds`          | the tools a new session's policy asks for                             |
 | `allowedSubagentProfiles` | the subagent profiles it authorizes                                   |
 | `artifactRoot`            | where runs are filed                                                  |
-| `fabricSpace`             | the space name runs build in                                          |
+| `fabricSpace`             | the space runs build in, as configured                                |
 | `sessionDbPath`           | the durable session store, or `null` when sessions are held in memory |
 
 The prompt crosses as a digest and never as text, so a client can check that
@@ -1161,9 +1170,8 @@ process. `allowedToolIds` is what the policy asks for; the prompt loop withholds
 a tool again when its backing is absent, so this says a session may reach a tool
 rather than that a turn will hold it.
 
-The route carries the space name and the two host paths alongside the digest, so
-it says what a session here would run under without a session having been
-started.
+The route carries the space and the two host paths alongside the digest, so it
+says what a session here would run under without a session having been started.
 
 An unattended client is the caller this route is for: the measurement batch
 runner refuses a whole batch when the console it found is not the cell its

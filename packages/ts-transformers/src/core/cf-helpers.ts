@@ -159,32 +159,51 @@ export class CFHelpers {
 export { findFirstContentLineIndex } from "./runtime-contract.ts";
 import { findFirstContentLineIndex } from "./runtime-contract.ts";
 
-// Inject helpers so the AST transformer pipeline has access to helpers like
-// `lift`.
-// This operates on strings, and to be used outside of
-// the TypeScript transformer pipeline, since symbol binding
-// occurs before transformers run.
-//
-// We must also inject a usage of the module before the AST transformer
-// pipeline, otherwise the import is elided at emit and the helper module is
-// not available in the compiled JS. By default that usage is a forwarding
-// `h(...)` function delegating to `__cfHelpers.h`, which also lets authors
-// call `h` explicitly without importing it. JSX itself does not depend on the
-// shim: the js-compiler emits elements and fragments against `__cfHelpers.h`
-// directly (its `jsxFactory` / `jsxFragmentFactory`). When the authored
-// module already binds `h` in its module scope, the shim would collide with
-// that binding, so the same function is appended under the reserved name
-// `__cfHelpersShim` instead and the author's `h` keeps its meaning.
-//
-// Source maps are derived from this transformation.
-// Take care in maintaining source lines from its input.
-//
-// This injected statement enables subsequent transformations.
+/**
+ * Rewrites authored source text, given the parse {@link injectCfHelpers} made
+ * of that text. The injection runs its reserved-name check and chooses the
+ * shim's name over that parse before the rewrite runs, so a rewrite must leave
+ * the module binding the names it bound.
+ */
+export type AuthoredSourceRewrite = (
+  source: string,
+  sourceFile: ts.SourceFile,
+) => string;
+
+/**
+ * Injects helpers so the AST transformer pipeline has access to helpers like
+ * `lift`. This operates on strings, to be used outside of the TypeScript
+ * transformer pipeline, since symbol binding occurs before transformers run.
+ *
+ * We must also inject a usage of the module before the AST transformer
+ * pipeline, otherwise the import is elided at emit and the helper module is
+ * not available in the compiled JS. By default that usage is a forwarding
+ * `h(...)` function delegating to `__cfHelpers.h`, which also lets authors
+ * call `h` explicitly without importing it. JSX itself does not depend on the
+ * shim: the js-compiler emits elements and fragments against `__cfHelpers.h`
+ * directly (its `jsxFactory` / `jsxFragmentFactory`). When the authored
+ * module already binds `h` in its module scope, the shim would collide with
+ * that binding, so the same function is appended under the reserved name
+ * `__cfHelpersShim` instead and the author's `h` keeps its meaning.
+ *
+ * Source maps are derived from this transformation. Take care in maintaining
+ * source lines from its input.
+ *
+ * A source with no content line is returned unchanged, unparsed and
+ * unrewritten.
+ */
 export function transformCfDirective(
   source: string,
-  // Authored file name; when it has a JavaScript extension the injected
-  // helper statement uses JS-only syntax. Defaults to TypeScript syntax.
+  /**
+   * Authored file name; when it has a JavaScript extension the injected
+   * helper statement uses JS-only syntax. Defaults to TypeScript syntax.
+   */
   fileName?: string,
+  /**
+   * Applied to the authored text, which the result then holds in place of
+   * that text, so a caller that rewrites the source parses it once.
+   */
+  rewrite?: AuthoredSourceRewrite,
 ): string {
   const lines = source.split("\n");
   const firstContentLineIndex = findFirstContentLineIndex(lines);
@@ -192,12 +211,20 @@ export function transformCfDirective(
     return source;
   }
 
-  return injectCfHelpers(source, fileName);
+  return injectCfHelpers(source, fileName, rewrite);
 }
 
 const JS_FILE_RE = /\.(js|jsx|mjs|cjs)$/;
 
-export function injectCfHelpers(source: string, fileName?: string): string {
+/**
+ * Like {@link transformCfDirective}, except that a source with no content line
+ * is injected as well.
+ */
+export function injectCfHelpers(
+  source: string,
+  fileName?: string,
+  rewrite?: AuthoredSourceRewrite,
+): string {
   const sourceFile = parseAuthoredSource(source, fileName);
   checkCFHelperVar(sourceFile);
   const javascript = fileName !== undefined && JS_FILE_RE.test(fileName);
@@ -206,7 +233,7 @@ export function injectCfHelpers(source: string, fileName?: string): string {
     : (javascript ? HELPERS_USED_STMT_JS : HELPERS_USED_STMT);
   return [
     HELPERS_STMT,
-    source,
+    rewrite === undefined ? source : rewrite(source, sourceFile),
     usedStmt,
   ].join("\n");
 }
@@ -215,7 +242,9 @@ export function injectCfHelpers(source: string, fileName?: string): string {
 // `.ts` module keeps angle-bracket assertions and generic arrows as
 // TypeScript instead of mis-parsing them as JSX, which would swallow the
 // statements after them and hide their bindings from the scans below. An
-// absent or unrecognized name parses as TSX, the historical default.
+// absent or unrecognized name parses as TSX. Parent pointers are set because a
+// rewrite may print a node it reuses from this parse, and the printer reads a
+// literal's original text only through its parent.
 function parseAuthoredSource(
   source: string,
   fileName?: string,
@@ -224,7 +253,7 @@ function parseAuthoredSource(
     fileName ?? "source.tsx",
     source,
     ts.ScriptTarget.ES2023,
-    false,
+    true,
     scriptKindFor(fileName),
   );
 }

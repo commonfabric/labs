@@ -173,6 +173,45 @@ describe("local-jobs/lane", () => {
       });
     });
 
+    it("hands the harness the request's tags and domains, and neither where it names none", async () => {
+      const spec = await localJobSpecOf(
+        {
+          request: { ...REQUEST, tags: ["find"], domains: ["personal"] },
+        } as LocalJob,
+        ASK,
+        {},
+      );
+      const plain = await localJobSpecOf(
+        { request: REQUEST } as LocalJob,
+        ASK,
+        {},
+      );
+
+      expect(spec).toMatchObject({
+        taskTags: ["find"],
+        taskDomains: ["personal"],
+      });
+      expect("taskTags" in plain).toBe(false);
+      expect("taskDomains" in plain).toBe(false);
+    });
+
+    it("runs the task at the request's depth and the profile's reasoning effort, and names neither where they do not", async () => {
+      const spec = await localJobSpecOf(
+        { request: { ...REQUEST, depth: "deep" } } as LocalJob,
+        { ...ASK, reasoningEffort: "low" },
+        {},
+      );
+      const plain = await localJobSpecOf(
+        { request: REQUEST } as LocalJob,
+        ASK,
+        {},
+      );
+
+      expect(spec).toMatchObject({ depth: "deep", reasoningEffort: "low" });
+      expect("depth" in plain).toBe(false);
+      expect("reasoningEffort" in plain).toBe(false);
+    });
+
     it("takes the runner's retrieval file and model where the profile names none, and the profile's over the runner's", async () => {
       const runner = {
         loomRetrievalConfigPath: "/runner/retrieval.json",
@@ -281,6 +320,23 @@ describe("local-jobs/lane", () => {
       expect(
         localJobEventsOf(event({ role: "assistant", content: "Done." })),
       ).toEqual([]);
+    });
+
+    it("reports a read-only command's admitted output", () => {
+      expect(localJobEventsOf(event(
+        answer({
+          status: "executed",
+          outcome: { ok: true, id: "loom.inspect" },
+          entry: {
+            status: "admitted",
+            value: { ok: true, outputs: { title: "Trip" } },
+          },
+        }, "run_read_command"),
+        [calling("run_read_command")],
+      ))).toEqual([{
+        kind: "command",
+        body: { command: "loom.inspect", ok: true, outputs: { title: "Trip" } },
+      }]);
     });
 
     it("reports a command for each executed call of a batch, in order, and nothing for one the host never ran", () => {

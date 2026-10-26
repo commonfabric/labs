@@ -2,7 +2,9 @@ import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join, resolve, toFileUrl } from "@std/path";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
-import { Identity } from "@commonfabric/identity";
+import { Identity, legacySpaceDid } from "@commonfabric/identity";
+import { urlToAppView } from "@commonfabric/navigation";
+import { pieceUrl } from "../../src/piece-url.ts";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
@@ -77,6 +79,7 @@ import {
   harnessClientProtocolEcho,
 } from "../../src/contracts/client-command.ts";
 import { INERT_RUNSC } from "../support/inert-runsc.ts";
+import { persistAssignSlugOutputs } from "../support/assign-slug-outputs.ts";
 
 /**
  * A loop that answers the task it was given and nothing else. The console
@@ -169,6 +172,18 @@ const INDEXED_PATTERN = {
 /** An entity id of the shape an input-cell reference has to carry. */
 const CELL_ID = `of:fid1:${"A".repeat(43)}`;
 
+/** The DID the legacy name `console-test` resolves to, which its session opens. */
+const CONSOLE_TEST_SPACE_DID = await legacySpaceDid("console-test");
+
+/** A space created with a random key, which only its DID addresses. */
+const CREATED_SPACE =
+  "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+/** A reference into a space no operator admitted. */
+const FOREIGN_REF = `/@did:key:z6MkforeignSpaceForConsoleTest/of:fid1:${
+  "E".repeat(43)
+}/x`;
+
 const config = () =>
   resolveConsoleConfig(
     [
@@ -242,7 +257,9 @@ const writeTurnTranscript = async (
   await Deno.mkdir(runRoot, { recursive: true });
   await Deno.writeTextFile(
     join(runRoot, "transcript.json"),
-    JSON.stringify(transcript),
+    JSON.stringify(
+      await persistAssignSlugOutputs(artifactRoot, turnId, transcript),
+    ),
   );
   await Deno.writeTextFile(
     join(runRoot, "run-report.json"),
@@ -1940,6 +1957,79 @@ describe("console/server", () => {
       }
     });
 
+    it("returns a piece in a space created by DID at the address the shell opens", async () => {
+      const artifactRoot = await Deno.makeTempDir({
+        prefix: "cf-harness-console-result-created-space-",
+      });
+      try {
+        const resultServer = new ConsoleServer(
+          await resolveConsoleConfig(
+            [
+              "--fabric-identity",
+              "key.pkcs8",
+              "--fabric-space",
+              CREATED_SPACE,
+              "--session-db",
+              "none",
+              "--artifact-root",
+              artifactRoot,
+            ],
+            {},
+            "/console",
+          ),
+          (onEvent) =>
+            new HarnessInteractiveChatService({
+              createPromptLoop: answeringLoop,
+              onEvent,
+            }),
+        );
+        const page = await resultServer.handle(getRequest("/"));
+        await page.body?.cancel();
+        const started = await (await resultServer.handle(
+          jsonRequest("/api/task", { text: "track my books" }, {}),
+        )).json();
+        await resultServer.service.waitForTurn(
+          started.sessionId,
+          started.turnId,
+        );
+        const url = pieceUrl("http://localhost:8000", CREATED_SPACE, "books")!;
+        await writeTurnTranscript(artifactRoot, started.turnId, [
+          {
+            role: "tool",
+            toolCallId: "call-1",
+            toolName: "assign_slug",
+            content: JSON.stringify({
+              status: "ok",
+              slug: "books",
+              space: CREATED_SPACE,
+              url,
+            }),
+          },
+          { role: "assistant", content: "built it" },
+        ]);
+
+        const response = await resultServer.handle(getRequest(
+          `/api/turns/${started.turnId}/result`,
+          {},
+        ));
+
+        expect(response.status).toBe(200);
+        const result = await response.json();
+        expect(result.spaceName).toBe(CREATED_SPACE);
+        expect(result.pieces).toEqual([{
+          slug: "books",
+          url: `http://localhost:8000/${CREATED_SPACE}/books`,
+          space: CREATED_SPACE,
+        }]);
+        expect(urlToAppView(new URL(result.pieces[0].url))).toEqual({
+          spaceDid: CREATED_SPACE,
+          pieceSlug: "books",
+        });
+      } finally {
+        await Deno.remove(artifactRoot, { recursive: true });
+      }
+    });
+
     it("returns a completed turn after its session is restored", async () => {
       const artifactRoot = await Deno.makeTempDir({
         prefix: "cf-harness-console-result-restored-",
@@ -2696,6 +2786,93 @@ describe("console/server", () => {
       expect((await listSessions()).sessions).toHaveLength(0);
     });
 
+    it("answers 400 for a piece address naming a space by DID that is not this named console's", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "make the headings readable",
+        inputCells: [{
+          name: "pattern_1",
+          ref: "pattern:did:key:z6MkforeignSpaceForConsoleTest/bill-inbox",
+        }],
+      }));
+
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain(
+        `this session runs in \`${CONSOLE_TEST_SPACE_DID}\``,
+      );
+      expect((await listSessions()).sessions).toHaveLength(0);
+    });
+
+    it("starts a turn for a piece address naming this named console by the DID its name resolves to", async () => {
+      await startTask({
+        text: "make the headings readable",
+        inputCells: [{
+          name: "pattern_1",
+          ref: `pattern:${CONSOLE_TEST_SPACE_DID}/bill-inbox`,
+        }],
+      });
+      expect((await listSessions()).sessions).toHaveLength(1);
+    });
+
+    it("answers 400 for a reference into a foreign space the operator did not admit", async () => {
+      const response = await server.handle(jsonRequest("/api/task", {
+        text: "make the headings readable",
+        inputCells: [{ name: "pattern_1", ref: FOREIGN_REF }],
+      }));
+
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain("targets another space");
+      expect((await listSessions()).sessions).toHaveLength(0);
+    });
+
+    it("answers 400 on a console configured by DID for another DID, a foreign reference, or a name", async () => {
+      const didServer = new ConsoleServer(
+        await resolveConsoleConfig(
+          [
+            "--fabric-identity",
+            "key.pkcs8",
+            "--fabric-space",
+            CREATED_SPACE,
+            "--session-db",
+            "none",
+          ],
+          {},
+          "/console",
+        ),
+        (onEvent) =>
+          new HarnessInteractiveChatService({
+            createPromptLoop: answeringLoop,
+            onEvent,
+          }),
+      );
+      const page = await didServer.handle(getRequest("/"));
+      await page.body?.cancel();
+      const ask = (ref: string) =>
+        didServer.handle(jsonRequest("/api/task", {
+          text: "make the headings readable",
+          inputCells: [{ name: "pattern_1", ref }],
+        }, {}));
+
+      for (
+        const ref of [
+          "pattern:did:key:z6MkforeignSpaceForConsoleTest/bill-inbox",
+          "pattern:console-test/bill-inbox",
+        ]
+      ) {
+        const response = await ask(ref);
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toContain(
+          `this session runs in \`${CREATED_SPACE}\``,
+        );
+      }
+      const foreign = await ask(FOREIGN_REF);
+      expect(foreign.status).toBe(400);
+      expect((await foreign.json()).error).toContain("targets another space");
+      const own = await ask(`pattern:${CREATED_SPACE}/bill-inbox`);
+      expect(own.status).toBe(200);
+      const started = await own.json();
+      await didServer.service.waitForTurn(started.sessionId, started.turnId);
+    });
+
     it("answers 400 for a piece address whose slug is malformed", async () => {
       const response = await server.handle(jsonRequest("/api/task", {
         text: "make the headings readable",
@@ -3144,6 +3321,34 @@ describe("console/server", () => {
       await expect(resolveConsoleConfig([], {}, "/console")).rejects.toThrow(
         "a fabric session is required",
       );
+    });
+
+    it("returns the space DID a caller names, as the session's space and its DID", async () => {
+      for (
+        const resolved of [
+          await resolveConsoleConfig(
+            ["--fabric-identity", "k", "--fabric-space", CREATED_SPACE],
+            {},
+            "/console",
+          ),
+          await resolveConsoleConfig(["--fabric-identity", "k"], {
+            CF_HARNESS_FABRIC_SPACE: CREATED_SPACE,
+          }, "/console"),
+        ]
+      ) {
+        expect(resolved.fabricSession.space).toBe(CREATED_SPACE);
+        expect(resolved.fabricSpaceDid).toBe(CREATED_SPACE);
+      }
+    });
+
+    it("returns the DID a legacy name resolves to, as the session opens it", async () => {
+      const resolved = await resolveConsoleConfig(
+        ["--fabric-identity", "k", "--fabric-space", "console-test"],
+        {},
+        "/console",
+      );
+      expect(resolved.fabricSession.space).toBe("console-test");
+      expect(resolved.fabricSpaceDid).toBe(CONSOLE_TEST_SPACE_DID);
     });
 
     it("throws naming the flag for a port that is not a positive integer", async () => {

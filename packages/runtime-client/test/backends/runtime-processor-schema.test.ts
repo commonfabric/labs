@@ -1,20 +1,37 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { hasExplicitSubscriptionSchema } from "@/backends/runtime-processor.ts";
+import { subscriptionSchemaGivesShape } from "@/backends/runtime-processor.ts";
 
-describe("hasExplicitSubscriptionSchema", () => {
-  it("treats boolean true as an explicit subscription schema", () => {
-    expect(hasExplicitSubscriptionSchema(true)).toBe(true);
+describe("subscriptionSchemaGivesShape", () => {
+  it("gives no shape for a missing schema, `true`, or an empty object", () => {
+    expect(subscriptionSchemaGivesShape(undefined)).toBe(false);
+    expect(subscriptionSchemaGivesShape(true)).toBe(false);
+    expect(subscriptionSchemaGivesShape({})).toBe(false);
   });
 
-  it("rejects missing, false, and empty object schemas", () => {
-    expect(hasExplicitSubscriptionSchema(undefined)).toBe(false);
-    expect(hasExplicitSubscriptionSchema(false)).toBe(false);
-    expect(hasExplicitSubscriptionSchema({})).toBe(false);
+  it("gives no shape for a schema of annotations and the runtime's own keywords alone", () => {
+    expect(subscriptionSchemaGivesShape({ description: "an origin" })).toBe(
+      false,
+    );
+    expect(subscriptionSchemaGivesShape({ title: "t", default: 1 })).toBe(
+      false,
+    );
+    expect(subscriptionSchemaGivesShape({ asCell: ["cell"] })).toBe(false);
+    expect(subscriptionSchemaGivesShape({ tags: ["profile"] })).toBe(false);
+    expect(subscriptionSchemaGivesShape({ tier: "wrapper" })).toBe(false);
+    expect(
+      subscriptionSchemaGivesShape({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+      }),
+    ).toBe(false);
   });
 
-  it("accepts non-empty object schemas", () => {
-    expect(hasExplicitSubscriptionSchema({ type: "object" })).toBe(true);
+  it("gives a shape for a schema that constrains its value", () => {
+    expect(subscriptionSchemaGivesShape({ type: "object" })).toBe(true);
+    expect(
+      subscriptionSchemaGivesShape({ type: "object", properties: {} }),
+    ).toBe(true);
+    expect(subscriptionSchemaGivesShape(false)).toBe(true);
   });
 });

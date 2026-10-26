@@ -9,6 +9,8 @@
 
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type { RuntimeClient } from "@commonfabric/runtime-client";
+import type { TemplateResult } from "lit";
 import { CFImage } from "./index.ts";
 
 /** Access the component's private members for white-box testing. */
@@ -194,6 +196,87 @@ describe("CFImage", () => {
       element.disconnectedCallback();
 
       expect(priv._objectUrl).toBeNull();
+    });
+  });
+
+  describe("blob", () => {
+    const SPACE = "did:key:z6Mk-cf-image-blob";
+
+    /** A runtime whose `blobUrl()` answers each call with `answers`' next. */
+    const runtimeAnswering = (...answers: Promise<string>[]) => {
+      const calls: unknown[] = [];
+      return {
+        calls,
+        runtime: {
+          blobUrl: (options: unknown) => {
+            calls.push(options);
+            return answers.shift()!;
+          },
+        } as unknown as RuntimeClient,
+      };
+    };
+
+    /** The `src` the element's render gives its image, if it renders one. */
+    const srcOf = (element: CFImage): unknown => {
+      const result = element.render();
+      return result === null ? null : (result as TemplateResult).values[0];
+    };
+
+    it("renders the URL the runtime returns for a blob reference", async () => {
+      const answer = Promise.resolve("http://host/space/blobs/abc");
+      const { calls, runtime } = runtimeAnswering(answer);
+      const element = new CFImage();
+      element.runtime = runtime;
+      element.blob = { space: SPACE, id: "fid1:abc" };
+
+      element.willUpdate(new Map([["blob", undefined]]));
+      await answer;
+
+      expect(calls).toEqual([{ space: SPACE, id: "fid1:abc" }]);
+      expect(srcOf(element)).toBe("http://host/space/blobs/abc");
+    });
+
+    it("renders the bytes rather than the blob when it has both", async () => {
+      const answer = Promise.resolve("http://host/space/blobs/abc");
+      const element = new CFImage();
+      element.runtime = runtimeAnswering(answer).runtime;
+      element.blob = { space: SPACE, id: "fid1:abc" };
+      element.bytes = new Uint8Array([1, 2, 3]);
+
+      element.willUpdate(new Map([["blob", undefined], ["bytes", undefined]]));
+      await answer;
+
+      expect(srcOf(element)).toBe(asPrivate(element)._objectUrl);
+    });
+
+    it("renders nothing for a blob reference that names no space", () => {
+      const { calls, runtime } = runtimeAnswering();
+      const element = new CFImage();
+      element.runtime = runtime;
+      element.blob = { space: "not a did", id: "fid1:abc" };
+
+      element.willUpdate(new Map([["blob", undefined]]));
+
+      expect(calls).toEqual([]);
+      expect(element.render()).toBeNull();
+    });
+
+    it("renders the newer blob's URL when an older one's answer arrives later", async () => {
+      let answerFirst!: (url: string) => void;
+      const first = new Promise<string>((resolve) => answerFirst = resolve);
+      const second = Promise.resolve("http://host/space/blobs/second");
+      const element = new CFImage();
+      element.runtime = runtimeAnswering(first, second).runtime;
+
+      element.blob = { space: SPACE, id: "fid1:first" };
+      element.willUpdate(new Map([["blob", undefined]]));
+      element.blob = { space: SPACE, id: "fid1:second" };
+      element.willUpdate(new Map([["blob", undefined]]));
+      await second;
+      answerFirst("http://host/space/blobs/first");
+      await first;
+
+      expect(srcOf(element)).toBe("http://host/space/blobs/second");
     });
   });
 });
