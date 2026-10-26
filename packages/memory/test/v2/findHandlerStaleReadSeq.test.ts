@@ -9,6 +9,7 @@ import {
   findHandlerStaleReadSeq,
   open,
 } from "../../v2/engine.ts";
+import { ExecutionLeaseCycle } from "../../v2/execution-lease.ts";
 import {
   resetServerExecutionConfig,
   setServerExecutionConfig,
@@ -17,9 +18,10 @@ import {
 } from "../../v2.ts";
 
 describe("findHandlerStaleReadSeq()", () => {
-  // Every case reads one entry of one stream's sidecar, by index, and a
-  // peer then appends an entry to that sidecar. What the answers turn on is
-  // whether the sidecar held the read index when the read was taken.
+  // Every case reads one stream's sidecar, and a peer then appends an entry
+  // to it, or the lease holder marks one consequenced. What the answers turn
+  // on is whether the read named an entry the sidecar held when the read was
+  // taken, and whether the later write is a tail append.
 
   const space = "did:key:z6MkfindHandlerStaleReadSeqTestSpace";
   const stream = { id: "of:poll", path: ["votes"] };
@@ -57,23 +59,49 @@ describe("findHandlerStaleReadSeq()", () => {
       },
     }).seq;
 
-  const staleSince = (afterSeq: number, index: number): number | null =>
+  /** Marks the entry at `index` consequenced, as the holder's wave does. */
+  const mark = (index: number): number =>
+    applyCommit(engine, {
+      sessionId: holder,
+      space,
+      commitClass: "derived",
+      holder,
+      commit: {
+        localSeq: ++localSeq,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "patch",
+          id: sidecar,
+          patches: [{
+            op: "add",
+            path: `/value/entries/${index}/consequenced`,
+            value: true,
+          }],
+        }],
+      },
+    }).seq;
+
+  const staleSinceRead = (
+    afterSeq: number,
+    readPath: readonly string[],
+    exempting: string | undefined,
+  ): number | null =>
     findHandlerStaleReadSeq(
       engine,
-      {
-        id: sidecar,
-        scopeKey: "space",
-        path: ["value", "entries", String(index)],
-        seq: afterSeq,
-      },
-      holder,
+      { id: sidecar, scopeKey: "space", path: readPath, seq: afterSeq },
+      exempting,
     );
+
+  const staleSince = (afterSeq: number, index: number): number | null =>
+    staleSinceRead(afterSeq, ["value", "entries", String(index)], holder);
 
   beforeEach(async () => {
     setServerExecutionConfig(true);
     path = await Deno.makeTempFile({ suffix: ".sqlite" });
     engine = await open({ url: toFileUrl(path) });
     localSeq = 0;
+    const lease = new ExecutionLeaseCycle({ engine, space, holder });
+    if (!lease.acquire()) throw new Error("test lease acquire failed");
   });
 
   afterEach(async () => {
@@ -107,5 +135,25 @@ describe("findHandlerStaleReadSeq()", () => {
     append("e3");
     append("e4");
     expect(staleSince(seq, 1)).toBeNull();
+  });
+
+  it("returns the seq of a write to a held entry that is not a tail append, when no holder exempts it", () => {
+    const seq = append("e1");
+    const marked = mark(0);
+    expect(staleSinceRead(seq, ["value", "entries", "0"], undefined)).toBe(
+      marked,
+    );
+  });
+
+  it("returns `null` for the holder's own mark of a held entry", () => {
+    const seq = append("e1");
+    mark(0);
+    expect(staleSince(seq, 0)).toBeNull();
+  });
+
+  it("returns the append's seq for a read of the whole entries array", () => {
+    const seq = append("e1");
+    const appended = append("e2");
+    expect(staleSinceRead(seq, ["value", "entries"], holder)).toBe(appended);
   });
 });
