@@ -934,6 +934,53 @@ describe("stage D seal-into-wave", () => {
     });
   });
 
+  it("keeps a durable wave successful when its admission readback fails", async () => {
+    const lease = liveLease();
+    const wave = newWave({ lease });
+    runtime.installSealDestination(wave);
+    const cell = runtime.getCell<{ value: number }>(
+      space,
+      "report-failure",
+      undefined,
+    );
+    const tx = runtime.edit();
+    stampWaveRunContext(tx, { actionId: "report-failure", kind: "derivation" });
+    cell.withTx(tx).set({ value: 42 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    runtime.clearSealDestination();
+    const sink = new EngineWaveCommitSink({
+      engineFor: () => engine,
+      sessionId: executionLeaseHolder(`service:${space}`),
+      reportCommit: () => {
+        throw new Error("unexpected report after readback failure");
+      },
+    });
+    const prepare = engine.database.prepare.bind(engine.database);
+    let failures = 0;
+    let outcome;
+    {
+      using _prepare = stub(
+        engine.database,
+        "prepare",
+        ((sql: string) => {
+          if (sql.includes("SELECT seq, branch, class, holder, session_id")) {
+            failures++;
+            throw new Error("readback failed after commit");
+          }
+          return prepare(sql);
+        }) as typeof engine.database.prepare,
+      );
+      outcome = await wave.commitWave(sink);
+    }
+    await wave.settled();
+    expect(failures).toBe(1);
+    expect(outcome.aborted).toBeUndefined();
+    expect(outcome.dispositions).toEqual([{ kind: "committed" }]);
+    expect(
+      Engine.read(engine, { id: cell.getAsNormalizedFullLink().id })?.value,
+    ).toEqual({ value: 42 });
+  });
+
   it("seals into the wave instead of committing; later txs read the layered view; the wave commits once", async () => {
     const lease = liveLease();
     const leasedWave = newWave({ lease });
@@ -1396,6 +1443,75 @@ describe("stage D seal-into-wave", () => {
     });
     expect(Engine.readState(engine, { id: yLink.id })?.document).toEqual({
       value: { value: 51 },
+    });
+  });
+
+  /**
+   * A wave opened before the predecessor's home commit landed, as a seal
+   * opens one while that commit is in flight, so its basis predates the
+   * commit. A bookkeeping run then reads `x` with the commit applied and
+   * writes it, and the wave commits with the commit noted to it or not.
+   */
+  const predecessorCommitRace = async (
+    cellName: string,
+    noted: boolean,
+  ): Promise<{ outcome: WaveCommitOutcome; xId: string }> => {
+    const lease = liveLease();
+    const wave = newWave({ lease });
+    const x = runtime.getCell<{ value: number }>(space, cellName, undefined);
+    const xLink = x.getAsNormalizedFullLink();
+    Engine.applyCommit(engine, {
+      sessionId: "predecessor-session",
+      principal: signer.did(),
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [
+          { op: "set", id: xLink.id, value: { value: { value: 50 } } },
+        ],
+      },
+    });
+    const ownSeq = Engine.serverSeq(engine);
+    await x.sync();
+    expect(x.get()).toEqual({ value: 50 });
+    if (noted) wave.noteOwnWaveCommit(ownSeq, new Set([`${xLink.id} space`]));
+
+    runtime.installSealDestination(wave);
+    const tx = runtime.edit();
+    stampWaveRunContext(tx, { actionId: "seed-x", kind: "bookkeeping" });
+    const seen = x.withTx(tx).get()?.value ?? 0;
+    x.withTx(tx).set({ value: seen + 1 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    runtime.clearSealDestination();
+
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+    return { outcome, xId: xLink.id };
+  };
+
+  it("rebases a bookkeeping write to a doc sitting at the predecessor wave's commit, landed after this wave's basis, once that commit is noted to the wave", async () => {
+    const { outcome, xId } = await predecessorCommitRace(
+      "wave-predecessor-noted",
+      true,
+    );
+
+    expect(outcome.aborted).toBeUndefined();
+    expect(outcome.dispositions).toEqual([{ kind: "committed" }]);
+    expect(Engine.readState(engine, { id: xId })?.document).toEqual({
+      value: { value: 51 },
+    });
+  });
+
+  it("drops a bookkeeping write to a doc the predecessor wave's commit moved past this wave's basis when nothing noted that commit", async () => {
+    const { outcome, xId } = await predecessorCommitRace(
+      "wave-predecessor-unnoted",
+      false,
+    );
+
+    expect(outcome.aborted).toBeUndefined();
+    expect(outcome.dispositions).toEqual([{ kind: "dropped" }]);
+    expect(Engine.readState(engine, { id: xId })?.document).toEqual({
+      value: { value: 50 },
     });
   });
 

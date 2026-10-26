@@ -7,10 +7,7 @@ import type { ViewExecutionError } from "@commonfabric/memory/v2";
 
 import type { NormalizedFullLink } from "./link-utils.ts";
 import { entityNameKey } from "./scheduler/keys.ts";
-import {
-  forEachOverlappingWriter,
-  readsOverlapWrites,
-} from "./scheduler/scheduling-writes.ts";
+import { forEachOverlappingWriter } from "./scheduler/scheduling-writes.ts";
 import type { SpaceScopeAndURI } from "./scheduler/types.ts";
 import type {
   IMemorySpaceAddress,
@@ -108,17 +105,52 @@ export class ViewDependencyGraph {
       (node) => node.kind === "computation",
     );
     const selected = new Set(handlers);
-    const changedWrites = [
-      ...bindingWrites,
-      ...handlers.flatMap((node) => node.writes),
-    ];
+    // The edits a visible interaction can make, indexed by the entity they
+    // write. The index holds each source's edits sliced by entity, so an
+    // ancestor's read is tested only against the edits to the entity it names.
+    const editsByEntity = new Map<
+      SpaceScopeAndURI,
+      Set<readonly IMemorySpaceAddress[]>
+    >();
+    for (
+      const edits of [
+        bindingWrites,
+        ...handlers.map((node) => node.writes),
+      ]
+    ) {
+      const slices = new Map<SpaceScopeAndURI, IMemorySpaceAddress[]>();
+      for (const write of edits) {
+        const key = entityNameKey(write);
+        let slice = slices.get(key);
+        if (slice === undefined) {
+          slice = [];
+          slices.set(key, slice);
+          let writers = editsByEntity.get(key);
+          if (writers === undefined) {
+            writers = new Set();
+            editsByEntity.set(key, writers);
+          }
+          writers.add(slice);
+        }
+        slice.push(write);
+      }
+    }
     const consumers = new Map<ViewExecutionNode, Set<ViewExecutionNode>>();
     for (const node of ancestors) {
-      if (
-        readsOverlapWrites(node.log.reads, node.log.shallowReads, changedWrites)
-      ) {
-        selected.add(node);
-      }
+      let edited = false;
+      forEachOverlappingWriter(
+        {
+          writersByEntity: editsByEntity,
+          getSchedulingWrites: (edits) => edits,
+        },
+        node.log.reads,
+        node.log.shallowReads,
+        () => {
+          edited = true;
+          return true;
+        },
+      );
+      if (edited) selected.add(node);
       this.#visitWriters(node.log.reads, node.log.shallowReads, (writer) => {
         let next = consumers.get(writer);
         if (next === undefined) {

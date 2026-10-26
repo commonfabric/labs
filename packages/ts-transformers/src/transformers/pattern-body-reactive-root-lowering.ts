@@ -86,6 +86,7 @@ const WRITE_METHODS = new Set([
   // Cell write API
   "set",
   "update",
+  "applyChanges",
   ...MERGEABLE_OP_METHODS.map((op) => op.method),
   "remove",
   "removeAll",

@@ -125,6 +125,7 @@ than guessing at unsupported internals.
 
 | Violation | Fix |
 |-----------|-----|
+| a derivation over shared data that also reads the viewer's identity to mark what is theirs, feeding derivations over shared data or the view's shared parts | Derive the shared data from shared inputs alone, and decide what is the viewer's at the leaf (`docs/common/patterns/multi-user-patterns.md#keep-the-viewer-out-of-shared-derivations`); `minor`, since each viewer sees the right result at a cost that grows with what the derivation feeds times the viewers |
 | handler created per item inside a loop | Create a shared handler and bind per item |
 | expensive computation embedded directly in render loops | Pre-compute outside the loop |
 

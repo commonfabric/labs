@@ -43,11 +43,11 @@ interface ChatManagerOutput {
   >;
 
   /** Notices this user's requests have produced that no one has delivered. */
-  outgoingNotices: {
+  outgoingNotices: PerUser<{
     id: string;
     room: Cell<ChatRoomOutput>;
     recipient: string;
-  }[];
+  }[]>;
 
   /** The people this user's rooms list, by principal. */
   people: PerUser<Record<string, Cell<ChatProfile>[]>>;
@@ -142,19 +142,20 @@ Everything a manager stores is `PerSpace` in the user's home space (see
 user, so `PerSpace` there means one instance for that user, which is why nothing
 it stores needs to be `PerUser` or `PerSession`.
 
-`rooms`, which the manager doesn't store, is `PerUser` all the same, and so is
-`people`, which is drawn from it, though each room's `roster` is shared by
-everyone the room's space admits: a profile lives in its owner's own space, and
-attests no principal to a reader that space refuses, so two readers can key the
-same roster differently. Each room in it is read under the reader's own access,
-so a manager more than one principal reads, as one outside a home space can be,
-lists different rooms to a principal a room's space refuses than to its members.
-Stored once for every reader, a value readers derive differently is one their
-runtimes overwrite without end. Read access is a property of the principal, so
-every session of one user derives the same values, and one instance per user
-serves them all. A stream reads neither, except `offerRoom`, which reads
-`people` for the user that sends it: every other request names a room's members
-by principal or by profile itself.
+`rooms`, which the manager doesn't store, is `PerUser` all the same, and so are
+`people`, which is drawn from it, and `outgoingNotices`, which leaves out a
+notice whose room's roster attests its recipient, though each room's `roster` is
+shared by everyone the room's space admits: a profile lives in its owner's own
+space, and attests no principal to a reader that space refuses, so two readers
+can key the same roster differently. Each room in it is read under the reader's
+own access, so a manager more than one principal reads, as one outside a home
+space can be, lists different rooms to a principal a room's space refuses than
+to its members. Stored once for every reader, a value readers derive differently
+is one their runtimes overwrite without end. Read access is a property of the
+principal, so every session of one user derives the same values, and one
+instance per user serves them all. A stream reads none of them, except
+`offerRoom`, which reads `people` for the user that sends it: every other
+request names a room's members by principal or by profile itself.
 
 ## Facts
 

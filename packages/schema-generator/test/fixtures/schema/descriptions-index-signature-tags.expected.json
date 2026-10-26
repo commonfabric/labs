@@ -1,9 +1,6 @@
 {
   "additionalProperties": {
     "description": "Maps ids to #catalog entries.",
-    "tags": [
-      "catalog"
-    ],
     "type": "string"
   },
   "properties": {},

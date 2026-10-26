@@ -23,10 +23,7 @@
 // spaces activate on their first session, event, warm request, or
 // session-implying authored admission.
 
-import {
-  type AdmittedCommitNotice,
-  type Server as MemoryServer,
-} from "@commonfabric/memory/v2/server";
+import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 import { acquireServerExecutionEnabler } from "@commonfabric/memory/v2";
 import {
   type Engine,
@@ -36,6 +33,7 @@ import {
 import { getLogger } from "@commonfabric/utils/logger";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
+import type { HostMemoryServer } from "./host-memory-server.ts";
 import {
   type ParkedRuntimeHandle,
   ParkedServingRuntime,
@@ -58,6 +56,10 @@ import {
 } from "./stats.ts";
 
 export type { LifecycleVerb } from "./space-server.ts";
+export type {
+  LifecyclePhaseTiming,
+  LifecycleVerbRun,
+} from "./lifecycle-verb.ts";
 
 /**
  * Thrown by {@link ExecutorHost.runLifecycleVerb} when this process cannot
@@ -93,7 +95,13 @@ const DEFAULT_FAILURE_PARK_BACKOFF_MAX_MS = 30_000;
 const DEFAULT_PARKED_RUNTIME_RETENTION_MS = 10 * 60_000;
 const DEFAULT_MAX_PARKED_RUNTIMES = 8;
 
-const failureParkBackoffDelayMs = (
+/**
+ * How long the host waits before rebuilding a space after its `streak`th
+ * consecutive failure: `failureParkBackoffBaseMs` doubled per failure, up to
+ * `failureParkBackoffMaxMs`, both from `policy` or the defaults above. The
+ * serving worker's launcher paces a worker's restarts by the same shape.
+ */
+export const failureParkBackoffDelayMs = (
   streak: number,
   policy: SpaceServerPolicy | undefined,
 ): number => {
@@ -105,7 +113,7 @@ const failureParkBackoffDelayMs = (
 };
 
 export type ExecutorHostOptions = {
-  server: MemoryServer;
+  server: HostMemoryServer;
 
   /** The service identity (DID) DR1 holders are minted from — also the
    * loopback sessions' principal (the read-row admission matches it,
@@ -138,6 +146,10 @@ export type ExecutorHostOptions = {
 
   /** Forwarded internal deterministic-verification seam. */
   decorateWaveCommitSink?: SpaceServerOptions["decorateWaveCommitSink"];
+
+  /** Forwarded to every SpaceServer this host builds; see
+   * `SpaceServerOptions.createWaveCommitSink`. */
+  createWaveCommitSink?: SpaceServerOptions["createWaveCommitSink"];
 
   /** DIAGNOSTIC (tests): forwarded to every SpaceServer this host
    * builds, with the space it serves — see `SpaceServerOptions`. */
@@ -639,6 +651,9 @@ export class ExecutorHost {
           ? {
             decorateWaveCommitSink: this.#options.decorateWaveCommitSink,
           }
+          : {}),
+        ...(this.#options.createWaveCommitSink !== undefined
+          ? { createWaveCommitSink: this.#options.createWaveCommitSink }
           : {}),
         onParked: (reason) => {
           parked = true;

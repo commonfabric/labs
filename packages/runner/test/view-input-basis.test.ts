@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
+import { deepFreeze } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
 import {
@@ -75,6 +76,68 @@ describe("view input basis", () => {
         false,
       );
     }
+  });
+
+  it("observes nothing again when a basis is checked over the deep-frozen document it was last observed in", () => {
+    const cache = new ViewInputBasisCache();
+    const nested = deepFreeze({ count: 1 });
+    let observedAgain = false;
+    let armed = false;
+    const value = Object.defineProperty({}, "nested", {
+      enumerable: true,
+      get: () => {
+        if (armed) observedAgain = true;
+        return nested;
+      },
+    });
+    const document = deepFreeze({ value });
+    const basis = viewInputBasis([{
+      space,
+      id: "of:cache",
+      type: "application/json",
+      path: ["value", "nested"],
+    }], () => document)[0];
+    expect(cache.matches(document, basis)).toBe(true);
+    armed = true;
+    expect(cache.matches(document, basis)).toBe(true);
+    expect(observedAgain).toBe(false);
+  });
+
+  it("observes again a frozen document whose interior is not frozen", () => {
+    const cache = new ViewInputBasisCache();
+    const interior = { count: 1 };
+    const document = Object.freeze({ value: interior });
+    const basis = viewInputBasis([{
+      space,
+      id: "of:cache",
+      type: "application/json",
+      path: ["value", "count"],
+    }], () => document)[0];
+    expect(cache.matches(document, basis)).toBe(true);
+    interior.count = 2;
+    expect(cache.matches(document, basis)).toBe(false);
+  });
+
+  it("observes another document version afresh, matching an equal value and refusing a changed one", () => {
+    const cache = new ViewInputBasisCache();
+    const first = deepFreeze({ value: { nested: { count: 1 } } });
+    const basis = viewInputBasis([{
+      space,
+      id: "of:cache",
+      type: "application/json",
+      path: ["value", "nested"],
+    }], () => first)[0];
+    expect(cache.matches(first, basis)).toBe(true);
+    expect(cache.matches(first, basis)).toBe(true);
+    const changed = deepFreeze({ value: { nested: { count: 2 } } });
+    expect(cache.matches(changed, basis)).toBe(false);
+    expect(cache.matches(changed, basis)).toBe(false);
+    expect(cache.matches(first, basis)).toBe(true);
+    // An equal value in another document version matches as well.
+    expect(
+      cache.matches(deepFreeze({ value: { nested: { count: 1 } } }), basis),
+    )
+      .toBe(true);
   });
 
   it("retains the same currency checks after compacting ancestor reads", () => {

@@ -906,6 +906,27 @@ function chainOnCommit(
   return chained;
 }
 
+/**
+ * Starts the piece an event's stream belongs to. A runtime whose run of the
+ * handler is the one that counts, a serving runtime or any runtime with server
+ * execution off, starts first the pieces its inputs come from
+ * (`EnsurePieceOptions.startInputSources`): a stream a nested pattern defines
+ * belongs to the nested instance, whose handler reads what the instance
+ * enclosing it derives. A client under server execution runs the handler only
+ * as its speculative echo, which the served run replaces, so it starts the
+ * piece alone and leaves the pieces upstream of it, and the documents they
+ * read, to the server.
+ */
+function startEventPiece(
+  runtime: Runtime,
+  eventLink: NormalizedFullLink,
+): Promise<EnsurePieceVerdict> {
+  return ensurePieceRunningVerdict(runtime, eventLink, {
+    startInputSources: runtime.experimental.serverExecution !== true ||
+      runtime.servingPosture,
+  });
+}
+
 export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
   readonly eventLink: NormalizedFullLink;
   readonly event: unknown;
@@ -923,6 +944,15 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
   // ingress caller's opaque idempotency key is bound to its stream earlier,
   // at the send surface (cell.ts), via scopeCallerEventId.
   const id = args.eventId ?? mintEventId(args.eventLink, args.originTx);
+  // A flag-ON client's cascade child is threaded to its emitter before it
+  // waits in the queue, so an emitter whose event is never fired takes the
+  // child's echo with it however late the child runs.
+  if (args.parentEventId !== undefined) {
+    state.runtime.speculationOverlay?.threadCascadeChild(
+      id,
+      args.parentEventId,
+    );
+  }
   const handler = state.eventHandlers.get(args.eventLink);
 
   if (handler) {
@@ -1086,11 +1116,10 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
         while (true) {
           const rechecking = wait !== undefined;
           if (!rechecking) attempts++;
-          const verdict = await (state.loadPieceForEvent ??
-            ensurePieceRunningVerdict)(
-              state.runtime,
-              args.eventLink,
-            );
+          const verdict = await (state.loadPieceForEvent ?? startEventPiece)(
+            state.runtime,
+            args.eventLink,
+          );
           // The origin may have failed while the piece was loading.
           if (
             queuedEvent.finalOutcomeNotified ||
