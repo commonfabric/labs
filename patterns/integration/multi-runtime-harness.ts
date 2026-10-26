@@ -1,0 +1,1349 @@
+/**
+ * Multi-runtime pattern test harness.
+ *
+ * Runs the same piece in SEVERAL runtimes — one per (identity, session) pair,
+ * each in its own Deno Worker realm — all backed by one shared storage
+ * server. This is the headless equivalent of multiple users (or multiple
+ * tabs of one user) having the same piece open simultaneously, and is the
+ * only way to meaningfully exercise `PerUser` / `PerSession` scoped state
+ * and cross-client reactivity in a pattern test:
+ *
+ * - distinct identities → distinct `user:<did>` storage partitions
+ * - distinct harness sessions → distinct `session:<did>:<id>` partitions
+ * - `PerSpace` state is shared and propagates via subscription push
+ *
+ * Workers are essential, not an optimization: one JS realm cannot host two
+ * runtimes (verified-load registries, frame stacks and similar module-level
+ * state cross-talk), and production never does — every browser tab or CLI
+ * process is its own realm. The storage server is self-hosted in-process
+ * (@commonfabric/memory/v2/standalone), and serves the authored patterns tree
+ * beside it, so no toolshed is needed; pass `apiUrl` to target a running
+ * toolshed instead. Serving that tree is what lets a session resolve a
+ * `system:` origin, and so what lets a `#profile` wish open its real create
+ * surface rather than an account of why it could not.
+ *
+ * POSTURE (server-execution v2): the posture resolves the way a deployed
+ * entry point resolves it — the first session's explicit override, then the
+ * canonical env mapping, then the first-party default — and the self-hosted
+ * server matches it. OFF, it is a plain standalone storage server. ON, it is
+ * a serving one (`listenServingMemoryServer()`), with an `ExecutorHost`
+ * serving loop over it as a serving toolshed has, so the events the worker
+ * clients append are delivered. A storage server without that loop under ON
+ * clients is a topology no deployment produces, in which every cross-session
+ * consequence silently never happens.
+ */
+
+import { fromFileUrl } from "@std/path/from-file-url";
+import { join } from "@std/path/join";
+
+import type { JSONSchema } from "@commonfabric/api";
+import type { FabricValue } from "@commonfabric/data-model";
+import {
+  fabricFromRealmValue,
+  realmFromFabricValue,
+} from "@commonfabric/data-model/codecs";
+import { type DID, Identity } from "@commonfabric/identity";
+import type { ACL } from "@commonfabric/memory/acl";
+import type {
+  AdmittedCommitNotice,
+  MemoryAclMode,
+  Server as MemoryServer,
+} from "@commonfabric/memory/v2/server";
+import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import {
+  experimentalOptionsFromEnv,
+  getPatternEnvironment,
+  type PatternCoverageData,
+  type PatternEnvironment,
+  setPatternEnvironment,
+  writePatternCoverageLcov,
+} from "@commonfabric/runner";
+import {
+  patternCoverageCollector,
+  patternCoverageDir,
+  PATTERNS_ROOT,
+} from "@commonfabric/integration/pattern-coverage";
+import { createTestSpace } from "@commonfabric/integration/test-space";
+import type {
+  CfcConfClause,
+  CfcWriteFloorMode,
+} from "@commonfabric/runner/cfc";
+import {
+  listenServingMemoryServer,
+  runsInWorker,
+} from "@commonfabric/runner/executor/serving-memory-server.deno";
+import type {
+  ServingLoopDiagnostics,
+  ServingLoopHandle,
+} from "@commonfabric/runner/executor/serving-worker-host";
+import type { ServingLoopStats } from "@commonfabric/runner/executor/stats";
+import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import {
+  getLoggerCountsBreakdown,
+  getTimingStatsBreakdown,
+} from "@commonfabric/utils/logger";
+import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+import {
+  type CommitRejection,
+  type PieceAddress,
+  type RuntimeDiagnosticsSnapshot,
+  type TrustedUiDescriptor,
+  type WorkerRequest,
+  type WorkerResponse,
+} from "./multi-runtime-ipc.ts";
+import { awaitAdmitted } from "../../runtime/runner/test/support/serving-waits.ts";
+
+import {
+  type initializePiecesController,
+  moduleByteCache,
+} from "./pieces-controller.ts";
+
+/** Host CFC settings carried into each independent test runtime. */
+export type MultiRuntimeCfcOptions = Pick<
+  Parameters<typeof initializePiecesController>[0],
+  | "cfcEnforcementMode"
+  | "cfcFlowLabels"
+  | "cfcReadMaxConfidentiality"
+  | "experimental"
+>;
+
+export type { PieceAddress, TrustedUiDescriptor };
+export type { CommitRejection, RuntimeDiagnosticsSnapshot };
+
+export interface MultiRuntimeSessionSpec {
+  /** Explicit host policy for this session and, for the first session, creation. */
+  cfc?: Omit<MultiRuntimeCfcOptions, "cfcReadMaxConfidentiality">;
+
+  /**
+   * The read ceiling (`cfcReadMaxConfidentiality`) of this session's runtime,
+   * given the DID of the harness's space. It is a function because the harness
+   * may create that space, whose DID a caller then cannot know in advance.
+   */
+  readCeiling?: (spaceDid: DID) => readonly CfcConfClause[];
+  /** Label used in error messages and as the identity passphrase seed. */
+  label: string;
+
+  /**
+   * Identity for this session. Pass the same Identity in two specs to model
+   * one user with two concurrent sessions (e.g. two browser tabs).
+   */
+  identity?: Identity;
+
+  /**
+   * Test-only network shaping: delay every storage WebSocket frame (both
+   * directions) in this session's realm by this many milliseconds. Reproduces
+   * multiplayer contention (optimistic pipelining, conflict storms) that
+   * near-zero in-process latency hides.
+   */
+  wsDelayMs?: number;
+
+  /**
+   * Test-only network shaping: make this session's inbound storage frames
+   * holdable, with `send()`'s `thenHoldInbound` and `releaseInbound()`.
+   */
+  inboundHold?: boolean;
+
+  /** Routes this session through a test relay backed by the same storage server. */
+  apiUrl?: URL;
+
+  /**
+   * Hold a rendered view of the piece for the session's life, as a mounted
+   * browser does: the worker reconciler's recursive demand over `$UI`, its
+   * operations discarded. Without it a session derives only what its watched
+   * paths read, so the view's own derivations never run on the client and a
+   * measurement of "the view is current" measures the data alone.
+   */
+  renderView?: boolean;
+
+  /**
+   * Declare this session's runtime a web client, as a browser tab's worker
+   * is. The runtime then follows the web client's flags: under
+   * `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION` it opens the piece by its
+   * name and UI tip alone, registers its rendered view (`renderView`) as a
+   * view interest the server selects documents for, and runs locally only
+   * the actions that selection admits. Unset, the session is an unclassed
+   * remote client, which replicates what it watches.
+   */
+  clientClass?: "web";
+
+  /**
+   * Write-side `requiredIntegrity` floor for this session's runtime,
+   * overriding the harness-wide setting. Set it per session to model a fleet
+   * partway through the staged rollout, where one client already enforces the
+   * floor and another does not.
+   */
+  cfcWriteFloor?: CfcWriteFloorMode;
+}
+
+export interface MultiRuntimeHarnessOptions {
+  /** Result paths to keep active, instead of eagerly observing private siblings. */
+  watchPaths?: readonly (readonly (string | number)[])[];
+  /** Path to the pattern entry file (e.g. `<dir>/main.tsx`). */
+  programPath: string;
+
+  /** Module-resolution root, usually the `patterns` directory. */
+  rootPath: string;
+
+  /**
+   * Data files to store with the pattern, as paths on disk. A file the pattern
+   * reads with `dataFile()` is attached from that call alone and needs no
+   * entry here; this is for a file the source cannot name. The bootstrap
+   * worker compiles the pattern in its own process, so these travel with the
+   * request rather than being attached here.
+   */
+  dataFilePaths?: readonly string[];
+
+  /** Optional initial pattern input for the bootstrap-created piece. */
+  input?: Record<string, FabricValue>;
+
+  /** Enable scheduler graph/stats/action diagnostics for this harness run. */
+  diagnostics?: boolean;
+
+  /**
+   * Record every commit the sessions have refused, for
+   * {@link MultiRuntimeSession.rejections}. Separate from `diagnostics`
+   * because it costs a listener and an array, while that costs the
+   * scheduler's per-action tracing; a test measuring contention wants the
+   * first and not the second.
+   */
+  recordRejections?: boolean;
+  sessions: (string | MultiRuntimeSessionSpec)[];
+
+  /**
+   * The space every session opens the piece in. Opening a space never creates
+   * it, so one passed here must already exist on the server and grant every
+   * session's identity what that session needs; this is for a space made on the
+   * toolshed `apiUrl` names. When absent, the harness creates a space owned by
+   * the first session's identity, which authors the piece, and writable by
+   * every other session's.
+   */
+  spaceDid?: DID;
+
+  /**
+   * When set, sessions talk to a running toolshed at this URL instead of the
+   * self-hosted in-process storage server.
+   */
+  apiUrl?: URL;
+
+  /**
+   * The access-list mode of the self-hosted storage server. Under server
+   * execution its serving loop's identity is the server's delegating
+   * principal, as a toolshed running server execution lists its own. Absent,
+   * the server has no access-list configuration, which is `off`: no access
+   * check refuses anything, so a session reads a space it was never granted.
+   * A deployed toolshed runs `enforce`. Not accepted with `apiUrl`, whose
+   * toolshed has a mode of its own.
+   */
+  aclMode?: MemoryAclMode;
+
+  /**
+   * Write-side `requiredIntegrity` floor for every runtime this harness
+   * creates, the bootstrap worker that authors the piece included. Defaults to
+   * the runtime's own default, which is `off`.
+   */
+  cfcWriteFloor?: CfcWriteFloorMode;
+}
+
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * The execution-lease TTL of the serving loop the harness hosts. That loop
+ * runs on the test's thread, or on a worker's when the environment selects
+ * one, and a pattern compile does not yield either, so on a slow runner one
+ * compile can hold the loop's thread past the production TTL. Every
+ * space the loop serves then loses its lease at once, any wave in flight
+ * aborts, and a space that parks over it compiles again when it reactivates.
+ * Two minutes is well clear of the longest stall between renewals seen (22 s
+ * on a developer machine, with coverage on), and nothing in the harness
+ * contends for a lease, so a longer tenure costs no failover. A stall that
+ * outlasts it still loses the lease.
+ */
+const SERVED_LEASE_TTL_MS = 120_000;
+
+/**
+ * The claims harnesses in this process hold on its pattern environment,
+ * oldest first, each with the environment that was in force when it was
+ * made. The environment is the newest claim's; releasing a claim hands what it
+ * found to the claim made after it, or puts it back when there is none.
+ */
+const patternEnvironmentClaims: {
+  claim: symbol;
+  previous: PatternEnvironment;
+}[] = [];
+
+/**
+ * Sets this process's pattern environment to `apiUrl`, and returns what
+ * releases that claim, once however many times it is called. A harness
+ * released while one made after it still holds a claim leaves that one's
+ * environment in force.
+ */
+export function claimPatternEnvironment(apiUrl: URL): () => void {
+  const claim = Symbol("pattern environment claim");
+  patternEnvironmentClaims.push({ claim, previous: getPatternEnvironment() });
+  setPatternEnvironment({ apiUrl });
+  return () => {
+    const index = patternEnvironmentClaims.findIndex((each) =>
+      each.claim === claim
+    );
+    if (index === -1) return;
+    const [released] = patternEnvironmentClaims.splice(index, 1);
+    const next = patternEnvironmentClaims[index];
+    if (next === undefined) setPatternEnvironment(released.previous);
+    else next.previous = released.previous;
+  };
+}
+
+/**
+ * The authored patterns tree this repository deploys, served at the same
+ * address as the in-process storage server.
+ *
+ * A runtime resolves a `system:` provenance ref — the origin the wish
+ * builtin's sidecar surfaces record, and the one a space root carries —
+ * against the host serving its space. Self-hosting storage and leaving that
+ * route unanswered is a topology no deployment has, and under it a piece
+ * whose identity is a profile cell never gets its create surface. Answering it
+ * here is what lets a headless multi-runtime test drive the real resolution.
+ *
+ * One route for the process: it computes each pattern's closure identity once
+ * and holds it, and every harness in a run wants the same answers.
+ */
+let patternsRoute: PatternsRoute | undefined;
+function systemPatternsRoute(): PatternsRoute {
+  return patternsRoute ??= new PatternsRoute(
+    fromFileUrl(new URL("..", import.meta.url)),
+  );
+}
+
+/**
+ * Whether a harness runs the server-execution ON posture, given what its first
+ * session's `cfc.experimental.serverExecution` asks for: that, else the
+ * canonical environment mapping, else the first-party default, as the
+ * header's POSTURE block describes. A test whose expectations differ by
+ * posture resolves it here, with the same `explicit` its harness is given.
+ */
+export function resolveServerExecution(explicit?: boolean): boolean {
+  return explicit ??
+    experimentalOptionsFromEnv(Deno.env.get).serverExecution ??
+    SERVER_EXECUTION_DEFAULT_ENABLED;
+}
+
+const coverageFile =
+  `multi-runtime-${Deno.pid}-${crypto.randomUUID()}.pattern-coverage.lcov`;
+
+class WorkerClient {
+  #worker: Worker;
+  #ready = false;
+  #terminated = false;
+  #failure?: string;
+  #lifetimeLock?: string;
+  #nextId = 1;
+  #pending = new Map<
+    number,
+    {
+      request: WorkerRequest;
+      resolve: (value: FabricValue) => void;
+      reject: (error: Error) => void;
+    }
+  >();
+  readonly label: string;
+
+  constructor(label: string) {
+    this.label = label;
+    this.#worker = new Worker(
+      new URL("./multi-runtime-worker.ts", import.meta.url),
+      { type: "module", name: `multi-runtime:${label}` },
+    );
+    this.#worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      if ("ready" in event.data) {
+        this.#ready = true;
+        this.#lifetimeLock = event.data.lifetimeLock;
+        if (this.#lifetimeLock !== undefined) {
+          // The worker holds this lock until its runtime has been torn down,
+          // so being granted it means the worker will reply to nothing more.
+          void navigator.locks.request(
+            this.#lifetimeLock,
+            () => this.#fail("worker exited"),
+          );
+        }
+        for (const pending of this.#pending.values()) {
+          this.#worker.postMessage(pending.request);
+        }
+        return;
+      }
+      const pending = this.#pending.get(event.data.id);
+      if (!pending) return;
+      this.#pending.delete(event.data.id);
+      if ("error" in event.data) {
+        pending.reject(
+          new Error(`[${this.label}] ${event.data.error}`),
+        );
+      } else {
+        try {
+          pending.resolve(fabricFromRealmValue(event.data.ok));
+        } catch (error) {
+          pending.reject(
+            new Error(`[${this.label}] undecodable answer`, { cause: error }),
+          );
+        }
+      }
+    };
+    this.#worker.onerror = (event) => {
+      this.#fail(`worker error: ${event.message}`);
+    };
+  }
+
+  /**
+   * Calls `cmd` in the worker realm, answering with what it returns.
+   *
+   * `args` and the answer each cross as one `codec-realm` encoding, so both
+   * carry the whole `FabricValue` domain.
+   *
+   * The call waits for the worker's reply however long it takes. It is
+   * rejected, with an error naming it, once the worker errors, exits, or is
+   * terminated, and a call made after any of those is rejected at once.
+   */
+  call(
+    cmd: string,
+    args: Record<string, FabricValue> = {},
+  ): Promise<FabricValue> {
+    if (this.#failure !== undefined) {
+      return Promise.reject(this.#failureError(cmd));
+    }
+    const id = this.#nextId++;
+    const request: WorkerRequest = {
+      id,
+      cmd,
+      args: realmFromFabricValue(args),
+    };
+    return new Promise<FabricValue>((resolve, reject) => {
+      this.#pending.set(id, { request, resolve, reject });
+      if (this.#ready) this.#worker.postMessage(request);
+    });
+  }
+
+  /**
+   * Collects this realm before releasing its runtime and instrumented graph.
+   * A terminated realm has neither to give, so disposing one does nothing.
+   */
+  async dispose(): Promise<void> {
+    if (this.#terminated) return;
+    const collector = patternCoverageCollector();
+    const directory = patternCoverageDir();
+    if (collector && directory) {
+      const data = await this.call("patternCoverage");
+      if (data) collector.ingest(data as unknown as PatternCoverageData);
+      await writePatternCoverageLcov(collector, join(directory, coverageFile), {
+        root: PATTERNS_ROOT,
+        testName: "multi-runtime integration",
+      });
+    }
+    await this.call("dispose");
+  }
+
+  /**
+   * Rejects every call in flight, and terminates the worker, settling once it
+   * has been torn down. A call made after this is refused at once.
+   */
+  async terminate(): Promise<void> {
+    this.#terminated = true;
+    this.#fail("worker terminated");
+    await terminateWorker(this.#worker, this.#lifetimeLock);
+  }
+
+  /**
+   * Rejects every call in flight, and every later one, for `reason`. The
+   * first reason given is the one every rejection carries.
+   */
+  #fail(reason: string): void {
+    this.#failure ??= reason;
+    for (const pending of this.#pending.values()) {
+      pending.reject(this.#failureError(pending.request.cmd));
+    }
+    this.#pending.clear();
+  }
+
+  /** The error that rejects a call of `cmd` once this worker has failed. */
+  #failureError(cmd: string): Error {
+    return new Error(`[${this.label}] ${cmd}: ${this.#failure}`);
+  }
+}
+
+export class MultiRuntimeSession {
+  readonly label: string;
+  readonly identity: Identity;
+  #client: WorkerClient;
+
+  constructor(label: string, identity: Identity, client: WorkerClient) {
+    this.label = label;
+    this.identity = identity;
+    this.#client = client;
+  }
+
+  /**
+   * Send an event to a handler stream exposed on the piece result. Pass
+   * `trustedUi` to emulate a genuine user interaction on a trusted CFC
+   * surface (required for trusted-action handlers). Pass `piece` to send to a
+   * stream on another piece's result instead, as for {@link read}.
+   *
+   * Pass `thenHoldInbound` to hold every storage frame this session receives
+   * from the moment the event has run here until `releaseInbound()`, on a
+   * session created with `inboundHold: true`. Its replica then stays as it
+   * is, whatever other sessions commit, and nothing the server sends back
+   * reaches it: no commit confirmation, and no consequence of an event it
+   * fired, so the speculative writes of the event's run here stand. What it
+   * sends goes out as usual.
+   */
+  async send(
+    handler: string,
+    event: FabricValue = {},
+    trustedUi?: TrustedUiDescriptor,
+    opts: {
+      idle?: boolean;
+      thenHoldInbound?: boolean;
+      piece?: PieceAddress;
+    } = {},
+  ): Promise<void> {
+    await this.#client.call("send", {
+      handler,
+      event,
+      trustedUi,
+      idle: opts.idle,
+      thenHoldInbound: opts.thenHoldInbound,
+      piece: opts.piece,
+    });
+  }
+
+  /**
+   * Set a cell reached from the piece result by `path` with one attempt of the
+   * blind write a UI `$value` binding makes: one fresh edit tx and a single
+   * commit, without the retry `Runtime.commitUiCellWrite()` gives the UI's
+   * write. Returns the commit outcome so tests can observe conflicts. Pass
+   * `idle: false` to leave this runtime un-settled (preserves a stale local
+   * replica for own-write-race / no-op repros). Pass `piece` to reach the cell
+   * from another piece's result instead, as for {@link read}.
+   */
+  async set(
+    path: (string | number)[],
+    value: FabricValue,
+    opts: { idle?: boolean; piece?: PieceAddress } = {},
+  ): Promise<{ ok: boolean; error?: { name?: string; message?: string } }> {
+    return await this.#client.call("set", {
+      path,
+      value,
+      idle: opts.idle,
+      piece: opts.piece,
+    }) as { ok: boolean; error?: { name?: string; message?: string } };
+  }
+
+  /**
+   * Append `value` to the array cell reached by `path` as a read-modify-write
+   * that keeps its read as a compare-and-set precondition, so a concurrent
+   * push conflicts rather than being clobbered — unlike the blind `set` above.
+   * A UI's `CellHandle.push()` does not take this path: the runtime appends
+   * through `Cell.push()`'s mergeable operation instead. Pass `piece` to reach
+   * the cell from another piece's result, as for {@link read}.
+   */
+  async push(
+    path: (string | number)[],
+    value: FabricValue,
+    opts: { idle?: boolean; piece?: PieceAddress } = {},
+  ): Promise<{ ok: boolean; error?: { name?: string; message?: string } }> {
+    return await this.#client.call("push", {
+      path,
+      value,
+      idle: opts.idle,
+      piece: opts.piece,
+    }) as { ok: boolean; error?: { name?: string; message?: string } };
+  }
+
+  /**
+   * Read a value from the piece result, pulling fresh state first. Where the
+   * result schema says `asCell` — over a pattern's `[UI]` tree, among other
+   * places — the value carries the link that reaches the cell rather than the
+   * cell, which belongs to the runtime's own realm. Read a path below such a
+   * cell, or use `readRaw`, to reach its contents.
+   *
+   * Pass `piece` to read from another piece's result instead: one living in a
+   * space of its own, say, which the harness's piece holds a link to. Its
+   * address is what {@link link} returns for that link. The first command in
+   * this session to address a piece starts it here and syncs it. Each one
+   * throws the server's refusal once this session's identity may not read the
+   * space the piece lives in, whether it never could or has been revoked.
+   */
+  async read(
+    path: (string | number)[] = [],
+    opts: { piece?: PieceAddress } = {},
+  ): Promise<FabricValue> {
+    return await this.#client.call("read", { path, piece: opts.piece });
+  }
+
+  /**
+   * Read a value from the piece result through `schema`, a reader's own
+   * schema, rather than through the result schema: as a client that demands
+   * the fields it draws reads them. The walk starts from the result's raw
+   * link, and the result above `path` is not pulled first, so the value is
+   * the one `schema` alone shapes. Links and `piece` are as for {@link read}.
+   */
+  async readAs(
+    path: (string | number)[],
+    schema: JSONSchema,
+    opts: { piece?: PieceAddress } = {},
+  ): Promise<FabricValue> {
+    return await this.#client.call("readAs", {
+      path,
+      schema,
+      piece: opts.piece,
+    });
+  }
+
+  /**
+   * Read the RAW stored value at `path` (links resolved to the target cell,
+   * no result-schema shaping) — for state the declared schema does not
+   * carry, e.g. a query result's `requestHash`. Pass `piece` to read from
+   * another piece's result, as for {@link read}.
+   */
+  async readRaw(
+    path: (string | number)[] = [],
+    opts: { piece?: PieceAddress } = {},
+  ): Promise<FabricValue> {
+    return await this.#client.call("readRaw", { path, piece: opts.piece });
+  }
+
+  /**
+   * Mint a cell in this runtime's space holding `value`, and answer with the
+   * link that reaches it. `cause` names the cell: the same cause is the same
+   * cell, a different cause a different one.
+   *
+   * The link is ordinary data, so it can be passed straight back in a `send`
+   * event to reach a handler input declared `asCell`. That is how a headless
+   * caller hands a pattern a cell it did not create — a viewer identity, say,
+   * where a browser would supply a resolved `#profile`.
+   */
+  async createCell(
+    cause: FabricValue,
+    value: FabricValue,
+  ): Promise<FabricValue> {
+    return await this.#client.call("createCell", { cause, value });
+  }
+
+  /**
+   * Mint a profile of this session's own, holding `name`, in a space created
+   * for it that admits this session's identity alone, and answer with the
+   * link that reaches it. Its label attests this session's identity with
+   * `represents-principal`, as a Fabric profile's does, so a session the
+   * space refuses can't read whom it attests. The link can be passed back in
+   * a `send` event, as {@link createCell}'s can.
+   */
+  async createOwnProfile(name: string): Promise<FabricValue> {
+    return await this.#client.call("createOwnProfile", { name });
+  }
+
+  /**
+   * Have this session's runtime reconsider `space` after it was refused, as
+   * the shell's Retry does. A permanent refusal is retained until the
+   * runtime hears the verdict may have changed: an ACL notice on a session it
+   * holds, the server's `session/admissible` hint on the connection the
+   * refusal came on (which the storage manager answers with a retry of its
+   * own), or an explicit retry such as the shell's Retry or this. With one
+   * connection per space, the default and what these sessions use, a refused
+   * open closes its connection, and the server sends the hint on the
+   * connections the runtime's other spaces hold; a runtime holding none
+   * keeps the refusal until a retry.
+   */
+  async retrySpaceAccess(space: string): Promise<void> {
+    await this.#client.call("retrySpaceAccess", { space });
+  }
+
+  /**
+   * Whether this runtime retains a refusal of `space`, asked without opening
+   * the space, so the answer is the runtime's own and no retry of this
+   * call's.
+   */
+  async spaceRefused(space: string): Promise<boolean> {
+    return await this.#client.call("spaceRefused", { space }) as boolean;
+  }
+
+  /**
+   * Inspect the normalized link (id, space, scope) at `path` in the result,
+   * or in another piece's result when `piece` is given, as for {@link read}.
+   * The link at a path holding a piece is that piece's {@link PieceAddress}.
+   */
+  async link(
+    path: (string | number)[] = [],
+    opts: { piece?: PieceAddress } = {},
+  ): Promise<{ id: string; space: string; scope: string; path: string[] }> {
+    return await this.#client.call("link", { path, piece: opts.piece }) as {
+      id: string;
+      space: string;
+      scope: string;
+      path: string[];
+    };
+  }
+
+  /**
+   * Raw replica read at an explicit storage address — bypasses the piece
+   * result / schema / link resolution. Distinguishes "replica lacks the doc"
+   * from "schema-aware read fails to resolve it".
+   */
+  async rawRead(
+    address: {
+      id: string;
+      space: string;
+      path?: (string | number)[];
+      scope?: FabricValue;
+    },
+  ): Promise<{ ok: boolean; value?: FabricValue; error?: string }> {
+    return await this.#client.call("rawRead", address) as {
+      ok: boolean;
+      value?: FabricValue;
+      error?: string;
+    };
+  }
+
+  async idle(): Promise<void> {
+    await this.#client.call("idle");
+  }
+
+  /**
+   * Wait — with no budget — until every event THIS session fired has its
+   * terminal consequence (consequenced, errored, dropped, or refused)
+   * arrived back here: the overlay's outstanding-intent set is empty
+   * (speculation.md §4 step 2). Instant on the OFF arm and when nothing
+   * is outstanding. A consequence that never arrives leaves this pending
+   * until the run is stopped.
+   *
+   * This is the gate between two CHAINED events whose second served
+   * handler reads state the first one writes (a draft-then-trusted-
+   * action pair): events on different streams have no cross-stream
+   * serve-order guarantee (events.md §2), so firing the second while
+   * the first is in flight can serve it against a pre-first view — a
+   * precondition-reading handler then no-ops silently, an interleaving
+   * the real UI forbids (the trusted control stays disabled until the
+   * served precondition round-trips). Await this before the second
+   * fire; once the first consequence has arrived back, its commit is
+   * in the space's history and every later-fired event is served
+   * against a view that includes it.
+   */
+  async awaitEventConsequences(): Promise<void> {
+    await this.#client.call("awaitEventConsequences");
+  }
+
+  /**
+   * Resolve once this replica's list at `path`, read as a map from each
+   * element's values at the `keys` paths to its value at the `valueKey` path,
+   * equals `expected`: the same keys and no others, each at its expected
+   * value. A path descends through a cell where an element holds one, so a
+   * key may name a field of the row's author; build `expected` with
+   * `rowKeyOf` from `@commonfabric/integration/row-key`. Read at this
+   * runtime's quiescence and woken by the list's own changes, so it is the
+   * moment this session's view of the list is current, on either arm.
+   */
+  async waitForRows(
+    path: (string | number)[],
+    keys: (string | number)[][],
+    valueKey: (string | number)[],
+    expected: Record<string, string>,
+    opts: { piece?: PieceAddress } = {},
+  ): Promise<void> {
+    await this.#client.call("waitForRows", {
+      path,
+      keys,
+      valueKey,
+      expected,
+      piece: opts.piece,
+    });
+  }
+
+  /**
+   * How many events this session fired whose consequence has yet to arrive
+   * back here, or `null` on the OFF arm, which does not track them.
+   */
+  async outstandingEventCount(): Promise<number | null> {
+    return await this.#client.call("outstandingEventCount") as number | null;
+  }
+
+  /**
+   * Deliver the frames held since a `send()` with `thenHoldInbound`, in the
+   * order they arrived, and settle this runtime's reactivity.
+   */
+  async releaseInbound(): Promise<void> {
+    await this.#client.call("releaseInbound");
+  }
+
+  /**
+   * Force an ordered-after round trip on this runtime's open space connections,
+   * so any subscription fan-out the server has already sent has landed here.
+   * See `MultiRuntimeHarness.settle`.
+   */
+  async barrier(): Promise<void> {
+    await this.#client.call("barrier");
+  }
+
+  /**
+   * The rendered view's reconciliation errors since the last call, as
+   * messages; empty when the view, if the session holds one, mounted and
+   * reconciled cleanly. A test that measures a rendered view reads this
+   * outside its measured interval and fails on anything here, since a view
+   * that failed to mount derives nothing and would pass as a fast one.
+   */
+  async renderErrors(): Promise<string[]> {
+    return await this.#client.call("renderErrors") as string[];
+  }
+
+  /**
+   * The timing measures this session's loggers emitted since the last call,
+   * in the shape the perf-investigation scripts read; empty unless the worker
+   * runs with `CF_TIMING_MEASURES=1` in its environment. Drained on each call.
+   */
+  async timingMeasures(): Promise<
+    { name: string; startTime: number; duration: number }[]
+  > {
+    return await this.#client.call("timingMeasures") as {
+      name: string;
+      startTime: number;
+      duration: number;
+    }[];
+  }
+
+  /** Capture scheduler graph, settle stats history, and action run trace. */
+  async diagnostics(): Promise<RuntimeDiagnosticsSnapshot> {
+    return await this.#client.call("diagnostics") as RuntimeDiagnosticsSnapshot;
+  }
+
+  /**
+   * Every commit this session had refused since {@link clearRejections},
+   * oldest first, each carrying the rejection's text and the addresses the
+   * commit read and wrote. Throws unless the harness was created with
+   * `recordRejections`, so a test that forgets it fails rather than reading
+   * an empty list as an absence of refusals.
+   *
+   * These say what each refusal was over, which separates a document two
+   * sessions contend for from a commit dropped behind one that was. The
+   * `commit-revert` count in `loggerCounts` covers much the same population
+   * but is not the same measure: a revert is logged only for a commit with
+   * semantic operations and a subscriber to notify.
+   */
+  async rejections(): Promise<CommitRejection[]> {
+    const { rejections } = await this.#client.call("rejections") as {
+      rejections: CommitRejection[];
+    };
+    return rejections;
+  }
+
+  /** Drop what {@link rejections} has recorded, opening a fresh window. */
+  async clearRejections(): Promise<void> {
+    await this.#client.call("clearRejections");
+  }
+
+  /** Per-logger message counts (logger name -> key -> {total,...}). */
+  async loggerCounts(): Promise<
+    Record<string, Record<string, { total: number }>> & { total: number }
+  > {
+    return await this.#client.call("loggerCounts") as
+      & Record<
+        string,
+        Record<string, { total: number }>
+      >
+      & { total: number };
+  }
+
+  async disposeSession(): Promise<void> {
+    try {
+      await this.#client.dispose();
+    } finally {
+      await this.#client.terminate();
+    }
+  }
+
+  /** @internal */
+  client(): WorkerClient {
+    return this.#client;
+  }
+}
+
+/**
+ * `spec` as a full session spec, with the identity it names or else one derived
+ * from its label.
+ */
+async function withIdentity(
+  spec: string | MultiRuntimeSessionSpec,
+): Promise<MultiRuntimeSessionSpec & { identity: Identity }> {
+  const normalized: MultiRuntimeSessionSpec = typeof spec === "string"
+    ? { label: spec }
+    : spec;
+  const identity = normalized.identity ??
+    await Identity.fromPassphrase(
+      `multi-runtime-harness ${normalized.label}`,
+      { implementation: "noble" },
+    );
+  return { ...normalized, identity };
+}
+
+/** The in-process server a harness hosts, when it hosts one. */
+type HostedServer = {
+  /** The memory server, whose admitted commits include the serving loop's. */
+  readonly server: Pick<MemoryServer, "watchAdmittedCommits">;
+
+  /** The serving loop, when the server has one. */
+  readonly host?: Pick<ServingLoopHandle, "diagnostics" | "stats">;
+
+  /** The server's `idle()`, which covers storage and not a serving loop. */
+  idle(): Promise<void>;
+
+  /** Closes the server, and its serving loop first when it has one. */
+  close(): Promise<void>;
+};
+
+export class MultiRuntimeHarness {
+  readonly sessions: MultiRuntimeSession[];
+  readonly spaceDid: DID;
+  readonly pieceId: string;
+  #server?: HostedServer;
+  #awaitsServedConsequences: boolean;
+  #releasePatternEnvironment: () => void;
+  #startSession: (
+    spec: string | MultiRuntimeSessionSpec,
+  ) => Promise<MultiRuntimeSession>;
+  /** The labels of the sessions `addSession()` is still starting. */
+  readonly #startingLabels = new Set<string>();
+
+  private constructor(
+    sessions: MultiRuntimeSession[],
+    spaceDid: DID,
+    pieceId: string,
+    server: HostedServer | undefined,
+    awaitsServedConsequences: boolean,
+    releasePatternEnvironment: () => void,
+    startSession: (
+      spec: string | MultiRuntimeSessionSpec,
+    ) => Promise<MultiRuntimeSession>,
+  ) {
+    this.sessions = sessions;
+    this.spaceDid = spaceDid;
+    this.pieceId = pieceId;
+    this.#server = server;
+    this.#awaitsServedConsequences = awaitsServedConsequences;
+    this.#releasePatternEnvironment = releasePatternEnvironment;
+    this.#startSession = startSession;
+  }
+
+  static async create(
+    options: MultiRuntimeHarnessOptions,
+  ): Promise<MultiRuntimeHarness> {
+    if (options.sessions.length === 0) {
+      throw new Error("MultiRuntimeHarness needs at least one session");
+    }
+    if (options.aclMode !== undefined && options.apiUrl !== undefined) {
+      throw new Error(
+        "`aclMode` configures the storage server the harness hosts, and " +
+          "this harness targets a running toolshed",
+      );
+    }
+    // Resolve the posture exactly like a deployed entry point (canonical env
+    // mapping, else the first-party default), and host a server matching it —
+    // see the header's POSTURE block.
+    const firstSession = options.sessions[0];
+    const explicitServerExecution = typeof firstSession === "string"
+      ? undefined
+      : firstSession.cfc?.experimental?.serverExecution;
+    const serverExecutionOn = resolveServerExecution(explicitServerExecution);
+    const serve = (request: Request) => systemPatternsRoute().serve(request);
+    const { aclMode } = options;
+    const server = options.apiUrl !== undefined
+      ? undefined
+      : serverExecutionOn
+      ? await listenServingMemoryServer({
+        serve,
+        aclMode,
+        // The suite's compile byte cache, the one `pieces-controller.ts`
+        // holds for this realm, shared by every serving runtime: a space that
+        // reactivates, or another space serving the same program, skips the
+        // transform-and-emit step on this thread. A loop the environment puts
+        // in a worker takes no closure, so its runtimes compile without it.
+        ...(runsInWorker() ? {} : { moduleByteCache }),
+        policy: { leaseTtlMs: SERVED_LEASE_TTL_MS },
+      })
+      : StandaloneMemoryServer.start({
+        serve,
+        ...(aclMode !== undefined ? { acl: { mode: aclMode } } : {}),
+      });
+    const targetUrl = options.apiUrl ?? server!.url;
+    const apiUrl = targetUrl.href;
+    // A served handler reads the pattern environment of the realm its
+    // serving loop runs in, which a toolshed sets to its own address. The
+    // loop hosted here runs in this process, or in a worker that sets its
+    // own, so this process's is set to the address the harness hosts, as a
+    // handler run by a session's own runtime sees it, until the harness is
+    // disposed or terminated.
+    const releasePatternEnvironment = serverExecutionOn && server !== undefined
+      ? claimPatternEnvironment(targetUrl)
+      : () => {};
+
+    const sessions: MultiRuntimeSession[] = [];
+    let bootstrap: WorkerClient | undefined;
+    try {
+      const specs = await Promise.all(options.sessions.map(withIdentity));
+      const owner = specs[0].identity;
+      const grants: ACL = {};
+      for (const { identity } of specs.slice(1)) {
+        if (identity.did() !== owner.did()) grants[identity.did()] = "WRITE";
+      }
+      const spaceDid = options.spaceDid ??
+        await createTestSpace(owner, { apiUrl: targetUrl, grants });
+      const cfcFor = (spec: MultiRuntimeSessionSpec): FabricValue =>
+        ({
+          ...spec.cfc,
+          ...(spec.readCeiling
+            ? { cfcReadMaxConfidentiality: spec.readCeiling(spaceDid) }
+            : {}),
+        }) as FabricValue;
+
+      const startSession = async (
+        spec: string | MultiRuntimeSessionSpec,
+      ): Promise<MultiRuntimeSession> => {
+        const started = await withIdentity(spec);
+        const cfcWriteFloor = started.cfcWriteFloor ?? options.cfcWriteFloor;
+        const client = new WorkerClient(started.label);
+        // A worker whose runtime cannot start, as one the access list refuses
+        // cannot, is stopped here, since no session holds it.
+        await client.call("init", {
+          identity: started.identity.keyPair,
+          spaceDid,
+          apiUrl: started.apiUrl?.href ?? apiUrl,
+          diagnostics: options.diagnostics === true,
+          recordRejections: options.recordRejections === true,
+          cfc: cfcFor(started),
+          watchPaths: options.watchPaths as FabricValue,
+          ...(started.renderView === true ? { renderView: true } : {}),
+          ...(started.clientClass !== undefined
+            ? { clientClass: started.clientClass }
+            : {}),
+          ...(started.wsDelayMs !== undefined
+            ? { wsDelayMs: started.wsDelayMs }
+            : {}),
+          ...(started.inboundHold === true ? { inboundHold: true } : {}),
+          ...(cfcWriteFloor !== undefined ? { cfcWriteFloor } : {}),
+        }).catch(async (error) => {
+          await client.terminate();
+          throw error;
+        });
+        return new MultiRuntimeSession(started.label, started.identity, client);
+      };
+      for (const spec of specs) sessions.push(await startSession(spec));
+
+      // A throwaway bootstrap worker creates the piece, then every test
+      // session opens it BY ID from storage. This mirrors production: each
+      // client loads the pattern through a verified load (required for
+      // trusted-action CFC writes), and no session holds special in-memory
+      // compile state.
+      bootstrap = new WorkerClient("bootstrap");
+      await bootstrap.call("init", {
+        identity: owner.keyPair,
+        spaceDid,
+        apiUrl,
+        diagnostics: options.diagnostics === true,
+        watchPaths: options.watchPaths as FabricValue,
+        cfc: cfcFor(specs[0]),
+        ...(options.cfcWriteFloor !== undefined
+          ? { cfcWriteFloor: options.cfcWriteFloor }
+          : {}),
+      });
+      const { pieceId } = await bootstrap.call("createPiece", {
+        programPath: options.programPath,
+        rootPath: options.rootPath,
+        dataFilePaths: options.dataFilePaths,
+        input: options.input,
+      }) as { pieceId: string };
+      await bootstrap.dispose();
+      await bootstrap.terminate();
+      bootstrap = undefined;
+
+      for (const session of sessions) {
+        await session.client().call("openPiece", { pieceId });
+      }
+
+      // A server the harness cannot see into, or one whose serving loop runs
+      // behind its storage, has consequences still to arrive once it is idle.
+      return new MultiRuntimeHarness(
+        sessions,
+        spaceDid,
+        pieceId,
+        server,
+        server === undefined || serverExecutionOn,
+        releasePatternEnvironment,
+        startSession,
+      );
+    } catch (error) {
+      await bootstrap?.terminate();
+      for (const session of sessions) {
+        await session.disposeSession().catch(() => {});
+      }
+      await server?.close().catch(() => {});
+      releasePatternEnvironment();
+      throw error;
+    }
+  }
+
+  session(label: string): MultiRuntimeSession {
+    const session = this.sessions.find((s) => s.label === label);
+    if (!session) {
+      throw new Error(`No session labeled "${label}"`);
+    }
+    return session;
+  }
+
+  /**
+   * Starts a session in a runtime of its own and opens the piece in it, as a
+   * client starting after the others does: it holds nothing of the piece and
+   * reads all of it from storage. Its label must be one no session holds or
+   * is starting under. Throws, and starts nothing, when the space's access list
+   * does not admit its identity, as it did when the harness was made or as a
+   * grant since has.
+   */
+  async addSession(
+    spec: string | MultiRuntimeSessionSpec,
+  ): Promise<MultiRuntimeSession> {
+    const label = typeof spec === "string" ? spec : spec.label;
+    if (
+      this.#startingLabels.has(label) ||
+      this.sessions.some((session) => session.label === label)
+    ) {
+      throw new Error(`A session labeled "${label}" already exists`);
+    }
+    this.#startingLabels.add(label);
+    try {
+      const session = await this.#startSession(spec);
+      try {
+        await session.client().call("openPiece", { pieceId: this.pieceId });
+      } catch (error) {
+        await session.disposeSession().catch(() => {});
+        throw error;
+      }
+      this.sessions.push(session);
+      return session;
+    } finally {
+      this.#startingLabels.delete(label);
+    }
+  }
+
+  /**
+   * Disposes the session labeled `label`, as a client that closes, and drops
+   * it from the sessions `settle()` drives.
+   */
+  async closeSession(label: string): Promise<void> {
+    const session = this.session(label);
+    this.sessions.splice(this.sessions.indexOf(session), 1);
+    await session.disposeSession();
+  }
+
+  /**
+   * The serving loop's counters as it last reported them, from the loop the
+   * harness hosts; none when the harness hosts no loop.
+   */
+  servingStats(): ServingLoopStats | undefined {
+    return this.#server?.host?.stats();
+  }
+
+  /**
+   * What the serving loop's realm logged: the loop the harness hosts, where
+   * it runs, which is this process when the loop runs on its main thread and
+   * the worker when it runs there, and this process when the harness hosts
+   * no loop.
+   */
+  servingDiagnostics(): Promise<ServingLoopDiagnostics> {
+    return this.#server?.host?.diagnostics() ?? Promise.resolve({
+      loggerCounts: getLoggerCountsBreakdown(),
+      timingStats: getTimingStatsBreakdown(),
+    });
+  }
+
+  /**
+   * Let all runtimes finish local work and exchange pending sync traffic. Each
+   * round is one full cross-runtime hop, driven by real completion signals
+   * rather than a timer:
+   *
+   * 1. Every runtime settles its own reactivity and flushes its pending commits
+   *    to the server (`session.idle`).
+   * 2. The in-process server drains: it applies every commit it has received
+   *    and sends all pending subscription fan-out (`server.idle`).
+   * 3. Every runtime forces an ordered-after round trip on its open space
+   *    connections (`session.barrier`). Because a WebSocket delivers a
+   *    connection's frames in order, the fan-out the server just sent has been
+   *    received and applied by the time each round trip's response returns.
+   * 4. Every runtime settles again, so a foreign write that just arrived and
+   *    re-derives local cells has its recompute run before this round ends.
+   *
+   * Step 2 covers storage and not a serving loop. Under the ON posture a
+   * serving loop — the self-hosted one, or a toolshed's when `apiUrl` was
+   * passed — processes this harness's event appends asynchronously, and a
+   * toolshed offers no handle for step 2 at all. A fixed round count of
+   * idle/barrier hops races that drain (a 40-event pipelined storm needs
+   * ~2–3 s of server time while 20 rounds complete in well under a second,
+   * so the assert read a mid-drain head). So those harnesses add a wait to
+   * step 2: until every event each session fired has its terminal
+   * consequence ARRIVED back at that session (speculation.md §4 step 2 — the
+   * overlay's outstanding-intent set empties exactly then). CAVEAT: this
+   * covers FIRST-ORDER consequences only — a server-side cascade child (an
+   * event a served handler itself emits) is no session's intent and commits
+   * in a LATER wave, outside the wait; cascades ride the ordinary barrier
+   * rounds, so a test asserting on cascade results still needs enough rounds
+   * (or `settleUntil()`, or `waitFor()` against a toolshed). The wait has no
+   * budget, so a drain that is slow but healthy still completes before the
+   * caller's next read. It runs under the shared stuck-condition net, so a
+   * consequence that never arrives fails the call with an error naming the
+   * session, rather than hanging the run. The barrier then pulls each replica
+   * to a head ≥ every first-order consequence commit. The wait returns at once
+   * where there is no overlay and so no outstanding intent, as on an
+   * OFF-posture toolshed.
+   *
+   * After `rounds` rounds, those harnesses run more for as long as a session
+   * still has an event awaiting its consequence. A round's step 4 runs the
+   * reactions to what its barrier delivered, and one of them can fire an
+   * event, whose consequence the caller's next read would otherwise race.
+   */
+  async settle(rounds = 2): Promise<void> {
+    for (let i = 0; i < rounds; i++) await this.#settleRound();
+    while (await this.#anyEventOutstanding()) await this.#settleRound();
+  }
+
+  /**
+   * Settle, then resolve once `predicate` holds, settling again and asking
+   * again each time the hosted server admits a commit.
+   *
+   * This is the wait for state the serving loop writes on its own account,
+   * which `settle()` does not cover because no session fired an event for
+   * it: the surface a wish opens under server execution is one. The loop's
+   * wave commits are admitted like any other commit, so the commit that
+   * writes the state wakes the attempt that sees it. Throws on a harness that
+   * targets a running toolshed, whose commits this process does not see.
+   */
+  async settleUntil(predicate: () => Promise<boolean>): Promise<void> {
+    if (this.#server === undefined) {
+      throw new Error(
+        "settleUntil() watches the server the harness hosts, and this " +
+          "harness targets a running toolshed",
+      );
+    }
+    await awaitAdmitted(this.#server.server, async () => {
+      await this.settle();
+      return await predicate();
+    });
+  }
+
+  /**
+   * Runs `during`, and returns every commit the hosted server admitted while
+   * it ran, oldest first: the sessions' own and the serving loop's alike.
+   * Throws on a harness that targets a running toolshed, whose commits this
+   * process does not see.
+   */
+  async admittedCommitsDuring(
+    during: () => Promise<void>,
+  ): Promise<AdmittedCommitNotice[]> {
+    if (this.#server === undefined) {
+      throw new Error(
+        "admittedCommitsDuring() watches the server the harness hosts, and " +
+          "this harness targets a running toolshed",
+      );
+    }
+    const admitted: AdmittedCommitNotice[] = [];
+    const stopWatching = this.#server.server.watchAdmittedCommits((notice) => {
+      admitted.push(notice);
+    });
+    try {
+      await during();
+    } finally {
+      stopWatching();
+    }
+    return admitted;
+  }
+
+  /**
+   * Poll until `predicate` resolves truthy, settling between attempts.
+   * Use for assertions about state that must cross runtimes. Gives up at the
+   * first attempt made once `timeout` has passed; a settle in progress then
+   * runs to its end, and the attempt after it is the last.
+   */
+  async waitFor(
+    description: string,
+    predicate: () => Promise<boolean> | boolean,
+    { timeout = DEFAULT_TIMEOUT_MS }: { timeout?: number } = {},
+  ): Promise<void> {
+    const startedAt = Date.now();
+    let lastError: unknown;
+    while (true) {
+      try {
+        if (await predicate()) return;
+      } catch (error) {
+        lastError = error;
+      }
+      if (Date.now() - startedAt >= timeout) break;
+      await this.settle(1);
+    }
+    throw new Error(
+      `Timed out waiting for: ${description}` +
+        (lastError ? ` (last error: ${lastError})` : ""),
+    );
+  }
+
+  async dispose(): Promise<void> {
+    for (const session of this.sessions) {
+      await session.disposeSession().catch((error) => {
+        console.warn(`Failed to dispose session "${session.label}":`, error);
+      });
+    }
+    try {
+      await this.#server?.close();
+    } finally {
+      this.#releasePatternEnvironment();
+    }
+  }
+
+  /**
+   * Drop every worker without asking it to shut down first, for a caller that
+   * has no `await` to spend — a process-exit listener, which Deno runs
+   * synchronously. `dispose()` is the ordinary path and says goodbye properly;
+   * this one exists so a harness held for the life of a process is still
+   * released deterministically rather than left to process teardown. The
+   * in-process server is not closed, because closing it is asynchronous and it
+   * has nothing outside this process to release. The pattern environment the
+   * harness set is released, as `dispose()` releases it.
+   */
+  terminate(): void {
+    for (const session of this.sessions) void session.client().terminate();
+    this.#releasePatternEnvironment();
+  }
+
+  /** Helper for `settle()`, which runs one of its rounds. */
+  async #settleRound(): Promise<void> {
+    await Promise.all(this.sessions.map((session) => session.idle()));
+    await this.#server?.idle();
+    if (this.#awaitsServedConsequences) {
+      await Promise.all(
+        this.sessions.map((session) =>
+          withStuckNet(
+            session.awaitEventConsequences(),
+            `settle(): the consequence of every event session ` +
+              `"${session.label}" fired`,
+          )
+        ),
+      );
+    }
+    await Promise.all(this.sessions.map((session) => session.barrier()));
+    await Promise.all(this.sessions.map((session) => session.idle()));
+  }
+
+  /**
+   * Helper for `settle()`, which says whether a session has fired an event
+   * whose consequence has yet to arrive back at it. Always `false` on a
+   * harness that does not wait for served consequences.
+   */
+  async #anyEventOutstanding(): Promise<boolean> {
+    if (!this.#awaitsServedConsequences) return false;
+    const counts = await Promise.all(
+      this.sessions.map((session) => session.outstandingEventCount()),
+    );
+    return counts.some((count) => (count ?? 0) > 0);
+  }
+}

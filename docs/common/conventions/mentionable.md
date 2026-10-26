@@ -57,14 +57,14 @@ piece as a reference. A board-sized producer reaches for rows so that every
 reader of the universe loads one document instead of every listed piece;
 the Topics board's `mentionable` is the worked example, derived through the
 library both it and the collection-naming exemplar share (`MentionableRow` in
-`packages/patterns/collection-naming/mentionable.ts`).
+`patterns/product/collection-naming/mentionable.ts`).
 
 `piece` is therefore a RESERVED key on this contract: an entry carrying one
 IS a row, and the editors store what `piece` names — never the entry — as
 the mention's destination. A producer must not publish an unrelated
 property named `piece` on its mentionable entries; doing so silently
 redirects every mention of that entry. How consumers resolve rows is in
-[`mentionable-internals.md`](../../../packages/ui/docs/mentionable-internals.md).
+[`mentionable-internals.md`](../../../runtime/ui/docs/mentionable-internals.md).
 
 ### The member name, `shortName`
 
@@ -163,4 +163,4 @@ links by prepending `/of:`.
 How UI components resolve `@link` indirection (`asSchema()`,
 `resolveAsCell()`, MentionController, link-format conversion) is contributor
 documentation: see
-[`packages/ui/docs/mentionable-internals.md`](../../../packages/ui/docs/mentionable-internals.md).
+[`runtime/ui/docs/mentionable-internals.md`](../../../runtime/ui/docs/mentionable-internals.md).

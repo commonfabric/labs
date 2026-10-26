@@ -147,7 +147,7 @@ Proposed defaults, to be tuned against the health-route rate signal (Topic
 
 The storm traces and the quiet weeks that set the window and the threshold are
 replayed through the detector by
-`packages/runner/test/scheduler-remote-echo-breaker-traces.test.ts` against
+`runtime/runner/test/scheduler-remote-echo-breaker-traces.test.ts` against
 the fixture extracted from the space's 2026-08-18 export, so a change to either
 is held to every loop that space has run and to its busiest ordinary traffic.
 The backoff bounds and the quiet reset are not set by that replay.
@@ -359,7 +359,7 @@ without a staged rollout:
 
 ## 6. Tests
 
-`packages/runner/test/scheduler-remote-echo-breaker.test.ts` holds both
+`runtime/runner/test/scheduler-remote-echo-breaker.test.ts` holds both
 levels. Waits are on scheduler drains and the fake clock's `settle` and `tick`,
 never a sleep or a poll, per
 [`../development/waiting-in-tests.md`](../development/waiting-in-tests.md).
@@ -397,7 +397,7 @@ never a sleep or a poll, per
 Each of the renewal, convergence, identity, field-path, and unsubscribe
 behaviors has been checked to fail its test when reverted.
 
-`packages/runner/test/scheduler-remote-echo-breaker-traces.test.ts` replays
+`runtime/runner/test/scheduler-remote-echo-breaker-traces.test.ts` replays
 the Topics space's own history through the detector: two minutes of each of
 the five documents most rewritten in the July 2026 storms, the slow three at
 the cadence they sustained for hours, and every document written four or more
@@ -405,7 +405,7 @@ times in the three quiet weeks that followed, from
 `fixtures/topics-echo-traces.json.gz`. Every storm document trips and no quiet
 space- or user-scoped document does.
 
-`packages/runner/test/scoped-output-convergence.test.ts` runs the October
+`runtime/runner/test/scoped-output-convergence.test.ts` runs the October
 storm's own pattern shape, a derivation over a per-session input in two
 sessions: with the placement fix in, the sessions converge, the commit
 sequence stops moving, and the breaker counts no cycle.

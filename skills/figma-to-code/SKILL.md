@@ -32,7 +32,7 @@ Extract from the metadata:
 Search for a `.figma.ts` mapping file that matches the Figma component:
 
 ```
-Glob: packages/ui/src/v2/components/**/*.figma.ts
+Glob: runtime/ui/src/v2/components/**/*.figma.ts
 ```
 
 Read matching files to get the prop mapping. The `.figma.ts` files export a
@@ -58,7 +58,7 @@ If no `.figma.ts` file exists, fall back to searching for a component whose name
 matches the Figma component name:
 
 ```
-Glob: packages/ui/src/v2/components/cf-{name}/cf-{name}.ts
+Glob: runtime/ui/src/v2/components/cf-{name}/cf-{name}.ts
 ```
 
 Read the component source to understand its props, variants, and slots.
@@ -141,11 +141,11 @@ export const figmaMapping = {
 };
 ```
 
-Place the file at: `packages/ui/src/v2/components/cf-{name}/cf-{name}.figma.ts`
+Place the file at: `runtime/ui/src/v2/components/cf-{name}/cf-{name}.figma.ts`
 
 ## Key files
 
-- Mapping files: `packages/ui/src/v2/components/**/*.figma.ts`
-- Component source: `packages/ui/src/v2/components/cf-*/cf-*.ts`
-- Component catalog: `packages/patterns/catalog/catalog.tsx`
+- Mapping files: `runtime/ui/src/v2/components/**/*.figma.ts`
+- Component source: `runtime/ui/src/v2/components/cf-*/cf-*.ts`
+- Component catalog: `patterns/dev/catalog/catalog.tsx`
 - UI component docs: `docs/common/components/COMPONENTS.md`

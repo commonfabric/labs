@@ -74,7 +74,7 @@ export const ALLOWLIST: ReadonlyMap<string, string> = new Map([
   // writes and reads back; the direct declaration is how the version is held to
   // one. No toolshed source imports it by name.
   [
-    "packages/toolshed/deno.jsonc\t@arizeai/openinference-semantic-conventions",
+    "runtime/toolshed/deno.jsonc\t@arizeai/openinference-semantic-conventions",
     "pinned for check-single-copy-deps; reaches the tree only via " +
     "@arizeai/openinference-vercel",
   ],

@@ -13,7 +13,7 @@
 import type { RuntimeProgram } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { FragmentWriter } from "@commonfabric/test-support/records";
-import { createRuntime } from "../packages/cli/lib/dev.ts";
+import { createRuntime } from "../runtime/cli/lib/dev.ts";
 import { formatError, selectionFor, USAGE } from "./cfcheck-lib.ts";
 import { collectAllPatternFiles } from "./pattern-files.ts";
 

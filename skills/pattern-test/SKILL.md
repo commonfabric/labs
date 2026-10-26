@@ -17,9 +17,9 @@ deno task cf test <pattern>.test.tsx
 ```
 
 Imports resolve from the nearest ancestor whose `deno.json(c)` declares a
-package name (`packages/patterns` for repo patterns). A failure naming an import
-that "escapes the program root" means the test imports from above that root —
-pass `--root` naming a common ancestor of every imported file.
+package name (`patterns` for repo patterns). A failure naming an import that
+"escapes the program root" means the test imports from above that root — pass
+`--root` naming a common ancestor of every imported file.
 
 Keep the complete list of test entry paths for deployment. A deployed source
 revision carries those tests only when each entry is supplied with a repeatable

@@ -6,7 +6,7 @@ it already claims, and extends it to the pattern-owned vocabulary it does not
 yet reach.
 
 The design is unchanged and is not restated here.
-[`packages/cli/README.md`](../../packages/cli/README.md#shell-completion) is
+[`runtime/cli/README.md`](../../runtime/cli/README.md#shell-completion) is
 the reference for what completion covers and how it is installed;
 [Verbs over the CLI](../common/verbs/over-the-cli.md) is the caller-facing
 surface most of this plan serves. Read those for reasoning; read this for
@@ -180,13 +180,13 @@ server, `CF_IDENTITY` at a keyfile, deploy a fixture, and complete against it.
 An empty result from a provider proves nothing until the same target answers
 the equivalent `cf` command.
 
-**Where the tests go.** `packages/cli/test/completion-*.test.ts` hold the pure
+**Where the tests go.** `runtime/cli/test/completion-*.test.ts` hold the pure
 half — line resolution, candidate shaping, the degrade-to-empty path — and are
 the right home for anything answerable without a fabric.
 [`unit-test-coding-style.md`](../development/unit-test-coding-style.md) governs
 their shape and is worth reading first, since not every file in that directory
 follows it. Anything that needs a fabric belongs beside
-`packages/cli/integration/verbs-over-the-cli.sh`, which is item 18.
+`runtime/cli/integration/verbs-over-the-cli.sh`, which is item 18.
 
 **Two traps in the parsing layer.** A throwaway Cliffy command used to parse a
 token list needs `.noExit()`, or a bad flag ends the process instead of
@@ -456,7 +456,7 @@ two items are what a caller feels on slots that are otherwise working.
 both start on every Tab. Measured against a local server from a warm checkout: a
 purely static completion — subcommand names, no I/O at all — settles in about
 0.34s, and a completion that reaches the fabric takes 0.44s to 1.2s. This agrees
-with the figure `packages/cli/README.md` already records for the source path
+with the figure `runtime/cli/README.md` already records for the source path
 against the compiled binary.
 
 The compiled binary is declined for a reason that has nothing to do with
@@ -570,7 +570,7 @@ candidates as internal. Item 19's gate is the same subtraction made permanent.
 
 ### 17. The README table omits the top-level spellings
 
-The completion table in `packages/cli/README.md` names `call`, `get` and `set`,
+The completion table in `runtime/cli/README.md` names `call`, `get` and `set`,
 which are the spellings the surface leads with, and says that the `piece `
 spellings complete identically. It is the document each item updates as it
 lands, which is the obligation rather than the one edit.
@@ -579,7 +579,7 @@ lands, which is the obligation rather than the one edit.
 
 ### 18. A live-provider test seam
 
-`packages/cli/integration/completion-over-the-cli.sh` is where every provider
+`runtime/cli/integration/completion-over-the-cli.sh` is where every provider
 that reads state is exercised — the four that reach a fabric, the one that
 reads local stores, the one that reads the environment, and the pattern-file
 glob — at one of the slots it answers. The rest of the table hands the shell a

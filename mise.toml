@@ -6,4 +6,4 @@ deno = "2.9.8"
 # `deno task install-cf`, once per machine, for mise users and everyone else:
 # an `[env]` entry here would reach only shells whose mise hook ran for this
 # directory, and would need the trust prompt in every new worktree. See
-# "Installing cf on PATH" in packages/cli/README.md.
+# "Installing cf on PATH" in runtime/cli/README.md.

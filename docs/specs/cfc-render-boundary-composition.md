@@ -2,7 +2,7 @@
 
 How nested CFC render boundaries (`<cf-cfc-render-boundary>`,
 `<cf-cfc-authorship>`) combine in the HTML worker reconciler
-(`packages/html/src/worker/reconciler.ts`, `childRenderPolicyForNode`).
+(`runtime/html/src/worker/reconciler.ts`, `childRenderPolicyForNode`).
 
 ## Invariant: boundaries compose monotonically
 
@@ -31,7 +31,7 @@ unbounded child boundary" in `test/worker-reconciler-cfc-render-policy.test.ts`.
 
 The ceiling in force at a node gates what reaches the page from that node by
 the same fit (`canRenderLabelUnderPolicy`). The fit is a set of functions in
-`packages/html/src/worker/display-fit.ts`, taking the policy and the sources a
+`runtime/html/src/worker/display-fit.ts`, taking the policy and the sources a
 decision consults (the exchange-rule resolver, and the membership and
 module-policy providers a decision watches), so that every display sink in
 the worker decides by the same code. Each read that a value reaches the
@@ -106,7 +106,7 @@ adds values to render and changes no gate. What reaches the page through it
 passes the same confidentiality gates as opening the piece, the blocked
 placeholder included, with the exceptions listed below. Such a binding is a
 nested render root. The component read contract
-(`packages/runner/src/component-read-contract.ts`) gives each bound property a
+(`runtime/runner/src/component-read-contract.ts`) gives each bound property a
 `schema`, the read the component makes of it, and for a nested render root
 `renders`, the paths from the bound value to the references the component
 mounts a render from. A path is a list of steps, each a property name or `"*"`
@@ -244,9 +244,9 @@ The labels a sub-pattern's result document carries are the ones its own fields
 earned. A field aliasing an argument cell carries that cell's label through the
 link machinery. A field fed by a lift or a sub-pattern carries the join
 that module makes onto its own result (`applyArgumentIfcToResult`, called from
-`packages/runner/src/builder/module.ts`), and every module's output cells carry
+`runtime/runner/src/builder/module.ts`), and every module's output cells carry
 the join of its input cells' labels (`connectInputAndOutputs`, defined in
-`packages/runner/src/builder/node-utils.ts` and called from `module.ts` and
+`runtime/runner/src/builder/node-utils.ts` and called from `module.ts` and
 `pattern.ts`), which covers a built-in whose result is written at run time
 rather than declared. And under
 `cfcFlowLabels: "persist"` the per-transaction join is written as a `derived`
@@ -275,7 +275,7 @@ over that node's own edges. Neither takes a join over a pattern's argument as a
 whole, so a field a lift or a sub-pattern produces carries what its own edge
 carries: a confidential argument field's label reaches the fields that read it,
 and a public field beside it stays public.
-`packages/runner/test/cfc-argument-ifc-propagation.test.ts` measures both
+`runtime/runner/test/cfc-argument-ifc-propagation.test.ts` measures both
 halves of that over one result.
 
 A handler's write targets take no build-time label, and that is the division
@@ -296,7 +296,7 @@ A built-in that writes its own schema over its output's link composes that
 label back in rather than replacing it. Four do: `mapWithPattern`,
 `filterWithPattern` and `flatMapWithPattern` stamp a result-container schema
 onto the cell their node factory has just labeled, and a named aggregate stamps
-a scalar one. `schemaCarryingLinkIfc` in `packages/runner/src/cell.ts` carries
+a scalar one. `schemaCarryingLinkIfc` in `runtime/runner/src/cell.ts` carries
 the label onto what they write. CFC §8.5.4.3 requires it: a decomposed
 collection operation's coordinator taints its own structural writes —
 container, membership, order, length — with what its journal consumed. §8.9.2's
@@ -307,11 +307,11 @@ at the container root, which is the conservative shape rather than the
 pointwise one: `joinSchema` flattens a source's member-level atoms in with its
 container-level ones, so what §8.5.6.1 keeps apart as member and structural
 confidentiality arrives together.
-`packages/runner/test/list-result-schema.test.ts` measures a labeled source and
+`runtime/runner/test/list-result-schema.test.ts` measures a labeled source and
 an unlabeled one. An aggregate reduces without per-value attribution, so
 §8.17.1 gives its scalar the join of its contributors — a count and a sum are
 that section's own examples — and
-`packages/runner/test/cfc-argument-ifc-propagation.test.ts` measures one.
+`runtime/runner/test/cfc-argument-ifc-propagation.test.ts` measures one.
 
 The declared result schema adds none of its own: `factoryFromPattern` stores
 the schema the author declared, so a pattern that accepts a confidential
@@ -337,9 +337,9 @@ result binding (`recordOutputSchemaPolicyInputs`) is the schema at that
 binding's own path rather than one raised by a root entry, which narrows the
 grant — the direction that refuses rather than admits.
 
-`packages/runner/test/cfc-argument-ifc-propagation.test.ts` holds each builder
-against its own schema, and `packages/runner/test/pattern.test.ts` measures
+`runtime/runner/test/cfc-argument-ifc-propagation.test.ts` holds each builder
+against its own schema, and `runtime/runner/test/pattern.test.ts` measures
 where the label reaches the result instead.
-`packages/runner/test/cfc-builtin-output-ifc.test.ts` holds each LLM built-in
+`runtime/runner/test/cfc-builtin-output-ifc.test.ts` holds each LLM built-in
 to the input join, at both dial settings. The `cfc-render-policy-demo`
 integration test drives the composed case under the ceiling.

@@ -38,8 +38,8 @@ For pattern-building work, use this guidance stack in order:
 1. `docs/common/patterns/style.md`
 2. `docs/common/patterns/ui-cookbook.md`
 3. `docs/common/components/COMPONENTS.md`
-4. `packages/ui/README.md`
-5. `packages/ui/LLM-COMPONENT-INSTRUCTIONS.md`
+4. `runtime/ui/README.md`
+5. `runtime/ui/LLM-COMPONENT-INSTRUCTIONS.md`
 
 ## Design Brief Before Coding
 
@@ -182,8 +182,8 @@ Supported pattern-style aliases:
 
 See:
 
-- `packages/ui/src/v2/components/cf-theme/cf-theme.ts`
-- `packages/ui/src/v2/components/theme-context.ts`
+- `runtime/ui/src/v2/components/cf-theme/cf-theme.ts`
+- `runtime/ui/src/v2/components/theme-context.ts`
 
 ## What `cf-theme` Emits
 
@@ -335,11 +335,11 @@ inside a host tints, see the opening.
 
 Use these as concrete references for theme-forward UI composition:
 
-- `packages/patterns/catalog/stories/vignette-recipe-story.tsx`
+- `patterns/dev/catalog/stories/vignette-recipe-story.tsx`
   Warm editorial light theme with serif typography and layered surfaces.
-- `packages/patterns/catalog/stories/vignette-finance-story.tsx`
+- `patterns/dev/catalog/stories/vignette-finance-story.tsx`
   Dark dashboard-style theme with strong contrast and metric cards.
-- `packages/patterns/catalog/stories/`
+- `patterns/dev/catalog/stories/`
   Component stories for smaller component-specific usage.
 
 ## Avoid

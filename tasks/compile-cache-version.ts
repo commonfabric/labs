@@ -23,8 +23,8 @@ import {
   type MemoizedOutputVersion,
   memoizeOutputVersion,
   OUTPUT_VERSION_MEMO_PATH,
-} from "../packages/runner/src/compilation-cache/compile-cache-output-memo.deno.ts";
-import { computeCompilerOutputVersion } from "../packages/runner/src/compilation-cache/compile-cache-output-version.deno.ts";
+} from "../runtime/runner/src/compilation-cache/compile-cache-output-memo.deno.ts";
+import { computeCompilerOutputVersion } from "../runtime/runner/src/compilation-cache/compile-cache-output-version.deno.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 

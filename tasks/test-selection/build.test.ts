@@ -132,7 +132,7 @@ function stored(
 
 const KEY = testIdentityKey({ k: "unit", s: "memory", n: "space > writes" });
 /** The file a record of that identity names. */
-const UNIT = "packages/memory/test/space.test.ts";
+const UNIT = "runtime/memory/test/space.test.ts";
 const CI_NAME = "labs/test-records/submissions/ci/v1/2026/08/20/run-1-a.ndjson";
 const LOCAL_NAME =
   "labs/test-records/submissions/local/ianh/v1/2026/08/20/01K3-branch.ndjson";
@@ -255,21 +255,21 @@ describe("build", () => {
       expect(
         recordSurface(
           { k: "unit", s: "memory", n: "a" },
-          "packages/memory/test/space.test.ts",
+          "runtime/memory/test/space.test.ts",
         ).unit,
-      ).toBe("packages/memory/test/space.test.ts");
+      ).toBe("runtime/memory/test/space.test.ts");
     });
 
     it("keeps a file-backed unit when a later record has none", () => {
       const read = readReport(
         stored(CI_NAME, context(), [
-          record({ file: "packages/memory/test/space.test.ts" }),
+          record({ file: "runtime/memory/test/space.test.ts" }),
           record(),
         ]),
         NO_ALIASES,
       );
       expect([...read.surfaces.values()][0]!.unit).toEqual(
-        "packages/memory/test/space.test.ts",
+        "runtime/memory/test/space.test.ts",
       );
     });
 
@@ -1753,17 +1753,17 @@ describe("build", () => {
       const { placed } = locateSurfaces(
         [claiming("workspace-unit", () => ({
           level: "unit",
-          unit: "packages/memory/test/space.test.ts",
+          unit: "runtime/memory/test/space.test.ts",
         }))],
         new Map([[KEY, {
           suite: "unit:memory",
-          unit: "packages/memory/test/space.test.ts",
+          unit: "runtime/memory/test/space.test.ts",
           fromFile: true,
         }]]),
       );
       expect(placed.get(KEY)).toEqual({
         suite: "workspace-unit",
-        unit: "packages/memory/test/space.test.ts",
+        unit: "runtime/memory/test/space.test.ts",
         fromFile: true,
       });
     });
@@ -2811,11 +2811,11 @@ describe("history held under a name an alias has since replaced", () => {
     const states = new Map([[testIdentityKey(OLD), either()]]);
     const files = {
       [testIdentityKey(OLD)]: UNIT,
-      [testIdentityKey(NEW)]: "packages/memory/test/write.test.ts",
+      [testIdentityKey(NEW)]: "runtime/memory/test/write.test.ts",
     };
     resolveHistory(states, files, RENAMED);
     expect(files[testIdentityKey(NEW)]).toBe(
-      "packages/memory/test/write.test.ts",
+      "runtime/memory/test/write.test.ts",
     );
   });
 

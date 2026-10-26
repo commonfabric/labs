@@ -81,7 +81,7 @@ Stage 1 registers this metadata-only tool on the configured parent surface, as
 CT-2106 requires; a run with no public skill registry does not offer it.
 
 **Reuses.** `PatternIndexClient`'s shape for a typed client over a remote
-index (`packages/pattern-index/src/client.ts`); `HarnessFetch` from
+index (`runtime/pattern-index/src/client.ts`); `HarnessFetch` from
 `contracts/http-fetch.ts` so the egress is substitutable and testable;
 `searchPatternsToolDescriptor`'s descriptor shape and its `effectClass:
 "read"`; the `SEARCH_PATTERNS_MAX_RESULTS` convention of capping hits and
@@ -126,13 +126,13 @@ below is what eventually does.
 `85d4b6f4c9`) despite reading Triage in the tracker. What exists today:
 
 - `delegate_task` takes `skillHandle`, a token naming a cell whose value is
-  skill text (`packages/cf-harness/src/prompt-loop.ts`).
+  skill text (`runtime/cf-harness/src/prompt-loop.ts`).
 - An acquired token carries the `skill-context` handle capability. Exactly the
   `delegate_task.skillHandle` slot may consume it; browser value bindings,
   `describe_handle`, generic tool-input swapping, delegation prose, and child
   returns refuse it or keep it opaque.
 - `resolveHandleValue` materializes it trusted-side
-  (`packages/cf-harness/src/tools/handle-values.ts`): handle-table membership
+  (`runtime/cf-harness/src/tools/handle-values.ts`): handle-table membership
   is mandatory, only a `string` resolves — a number or object is refused
   rather than stringified, "because a coerced rendering is the value by
   another name" — and a reference in another space is refused. Every failure
@@ -142,7 +142,7 @@ below is what eventually does.
   `<skill_context source="handle:<token>">` block and returns an activation
   carrying the token, a sha256 digest of the exact text injected, and — for a
   handle an acquisition minted — the pin that acquisition recorded
-  (`packages/cf-harness/src/skills/registry.ts`).
+  (`runtime/cf-harness/src/skills/registry.ts`).
 - `scrubHandleSkillText` strips the payload from the child's final text
   **before** handle-token resolution, so the child cannot echo its skill back
   to the parent. The ordering is deliberate: resolving first would rewrite an
@@ -289,7 +289,7 @@ CT-2106 says CT-2068's "where it came from" dial "has no mechanism yet".
 Checked in code, that is wrong in a way worth stating precisely, because it
 changes what this plan has to build.
 
-**The labeling half exists.** `packages/runner/src/cfc/external-ingest.ts`
+**The labeling half exists.** `runtime/runner/src/cfc/external-ingest.ts`
 mints an `ExternalIngest` provenance mark on a durably-written value.
 `CFC_ATOM_TYPE.ExternalIngest` is classified as `provenance` in
 `atom-classes.ts`. The design is a **split-mint**: every field of the mark
@@ -312,7 +312,7 @@ those fields is read out of the fetched text.
 CT-2068's proposal is that an integrity fact ("this came from a static,
 digest-pinned skill served by a policy-trusted source") can be converted into
 releasing some classes of taint, sitting beside `schemaAllowsRawString` in
-`packages/runner/src/cfc/structured-result.ts` as an integrity predicate next
+`runtime/runner/src/cfc/structured-result.ts` as an integrity predicate next
 to a shape predicate. Nothing implements that today.
 
 **This plan is a consumer of the first half and deliberately not of the

@@ -224,7 +224,7 @@ const kneads = { k: "unit", s: "bakery", n: "kneads" };
 const proves = { k: "unit", s: "bakery", n: "proves" };
 
 /** The one unit every test these cases name lives in. */
-const bakeryUnit = "packages/bakery/test/bakery.test.ts";
+const bakeryUnit = "runtime/bakery/test/bakery.test.ts";
 
 /** A tree holding one suite of one unit, which is where these tests live. */
 const suites: Suite[] = [{
@@ -466,7 +466,7 @@ async function reporting(
         }
         if (args[0] === "cat-file") return Promise.resolve("");
         if (args.includes("--diff-filter=A")) return Promise.resolve("");
-        return Promise.resolve("packages/bakery/src/oven.ts\n");
+        return Promise.resolve("runtime/bakery/src/oven.ts\n");
       },
       topology: () => Promise.resolve(world.suites ?? []),
       manifest: ({ at }) => {
@@ -705,7 +705,7 @@ describe("post-main-report", () => {
     });
 
     it("carries what the packing says about room and cost", () => {
-      const oven = "packages/bakery/test/oven.test.ts";
+      const oven = "runtime/bakery/test/oven.test.ts";
       const view = manifestView(
         {
           ...manifest,
@@ -738,8 +738,8 @@ describe("post-main-report", () => {
       const measured: Suite = {
         ...suites[0]!,
         measured: [{
-          member: "packages/bakery",
-          reachedBy: ["packages/bakery/"],
+          member: "runtime/bakery",
+          reachedBy: ["runtime/bakery/"],
           units: [bakeryUnit],
         }],
       };
@@ -754,7 +754,7 @@ describe("post-main-report", () => {
           ...manifest.entries,
           sampleEntry(gate, {
             suite: "coverage-gate",
-            unit: "workspace-unit/packages/bakery",
+            unit: "workspace-unit/runtime/bakery",
             score: 0.9,
           }),
         ],
@@ -764,7 +764,7 @@ describe("post-main-report", () => {
         manifestView(
           withGate,
           topology,
-          new Set(["packages/bakery/src/x.ts"]),
+          new Set(["runtime/bakery/src/x.ts"]),
           new Set(),
           [],
           DEFAULT_RUN,
@@ -821,7 +821,7 @@ describe("post-main-report", () => {
       // `rises` lives in `oven.test.ts`, which nothing has measured. The
       // tree places it by the file its record names.
 
-      const oven = "packages/bakery/test/oven.test.ts";
+      const oven = "runtime/bakery/test/oven.test.ts";
       const rises = { k: "unit", s: "bakery", n: "rises" };
       const tree: Suite[] = [{
         ...suites[0]!,
@@ -1215,7 +1215,7 @@ describe("post-main-report", () => {
 
       const figures = (uncovered: number) => ({
         groups: new Map(),
-        sets: new Map([["workspace-unit/packages/bakery", uncovered]]),
+        sets: new Map([["workspace-unit/runtime/bakery", uncovered]]),
         cold: false,
       });
       const zips: Record<number, Uint8Array> = {
@@ -1257,7 +1257,7 @@ describe("post-main-report", () => {
 
       const zip = await recordsZip(coverageRecords({
         groups: new Map(),
-        sets: new Map([["workspace-unit/packages/bakery", 4]]),
+        sets: new Map([["workspace-unit/runtime/bakery", 4]]),
         cold: false,
       }));
       const original = globalThis.fetch;
@@ -1308,7 +1308,7 @@ describe("post-main-report", () => {
       const zips: Record<number, Uint8Array> = {
         5: await recordsZip(coverageRecords({
           groups: new Map(),
-          sets: new Map([["workspace-unit/packages/bakery", 4]]),
+          sets: new Map([["workspace-unit/runtime/bakery", 4]]),
           cold: false,
         })),
       };
@@ -1502,14 +1502,14 @@ describe("post-main-report", () => {
           2: [record("kneads", "pass")],
         },
         uncovered: {
-          1: { workspace: 1000, "packages/bakery": 40 },
-          2: { workspace: 900, "packages/bakery": 10 },
+          1: { workspace: 1000, "runtime/bakery": 40 },
+          2: { workspace: 900, "runtime/bakery": 10 },
         },
       }));
       expect(written.length).toBe(1);
       expect(written[0]!.body).toContain("Coverage debt");
       expect(written[0]!.body).toContain("from 900 to 1000");
-      expect(written[0]!.body).toContain("`packages/bakery`: 10 to 40");
+      expect(written[0]!.body).toContain("`runtime/bakery`: 10 to 40");
     });
 
     it("says what the pull request's own run did where the store holds it", async () => {
@@ -1990,7 +1990,7 @@ describe("post-main-report", () => {
           });\n` +
           `const typecheck = suites.find((suite) => suite.id === "typecheck");\n` +
           `console.log(JSON.stringify(typecheck.unitsForChange(` +
-          `new Set(["packages/runner/src/cell.ts"]))));\n`,
+          `new Set(["runtime/runner/src/cell.ts"]))));\n`,
       );
       const run = await new Deno.Command(Deno.execPath(), {
         // The script sits outside the tree, so it names the tree's manifest

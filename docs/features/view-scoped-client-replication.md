@@ -84,7 +84,7 @@ only to prepare fetches or LLM calls are not selected for previews. Cross-space
 reads require their own authorized subscription and do not make a local
 computation eligible through this planner.
 
-`packages/runner/src/component-read-contract.ts` contains data-only schemas
+`runtime/runner/src/component-read-contract.ts` contains data-only schemas
 shared with components. Fixed contracts include message lists, autocomplete,
 maps, locations, transcription, tools, editor mention lists/reference maps,
 profile fields, Markdown content, FAB preview text, and theme values. Components

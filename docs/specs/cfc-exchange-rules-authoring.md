@@ -19,7 +19,7 @@ the remaining surfaces are in
 [`cfc-exchange-rules-authoring-extensions.md`](./cfc-exchange-rules-authoring-extensions.md).
 
 The evaluator and direct authoring path live in
-`packages/runner/src/cfc/exchange-eval.ts`, `packages/api/cfc.ts`, and the CFC
+`runtime/runner/src/cfc/exchange-eval.ts`, `base/api/cfc.ts`, and the CFC
 transformer passes. The evaluator provides fueled-fixpoint guarded rewrites
 with clause locality, label-carried `referenced`
 policy records with home-clause locality (CT-1874, #4652), and §4.3.5 grant
@@ -155,7 +155,7 @@ type DriftFlag = Confidential<Flag, [PolicyOf<typeof driftFlagRules>]>;
 - `v("X")` is the `{ var: "X" }` placeholder of spec §4.3.3.
 - Field names follow the shipped authoring grammar and lower to the canonical
   evaluator dialect
-  (`packages/runner/src/cfc/policy.ts`, which documents its mapping to spec
+  (`runtime/runner/src/cfc/policy.ts`, which documents its mapping to spec
   §4.3.2): `appliesTo` is the spec's target pattern
   (`preCondition.confidentiality[0]`); `pre` holds the remaining side
   conditions — `confidentiality` and `integrity`; grant-backed state belongs in
@@ -293,7 +293,7 @@ Consequences, inherited from §4.3.5: default edits are grant CRUD — effective
 at next evaluation, no label migration; revocation is grant deletion; one-shot
 declassification rides single-use grants with receipt linearity already proved
 in `formal/Cfc/GrantConsumption.lean` and shipped as commit-precondition
-receipts (`packages/runner/src/cfc/grants.ts`). This resolves the open question the
+receipts (`runtime/runner/src/cfc/grants.ts`). This resolves the open question the
 spec records in `notes/WORKING_GOVERNANCE_EXAMPLES.md` ("How is Alice's
 medical policy at the time represented? What changes automatically for future
 data?").

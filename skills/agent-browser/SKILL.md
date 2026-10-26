@@ -148,7 +148,7 @@ agent-browser --session cf-shared eval "globalThis.app.state().identity?.did()"
 The last command prints the DID the page is signed in as; compare it with:
 
 ```bash
-deno run -A packages/cli/mod.ts id did "$CF_IDENTITY"
+deno run -A runtime/cli/mod.ts id did "$CF_IDENTITY"
 ```
 
 Use distinct `--session` names when comparing identities. A different identity

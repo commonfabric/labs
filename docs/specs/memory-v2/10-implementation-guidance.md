@@ -311,7 +311,7 @@ For one-shot reads, `graph.query` must honor:
 Do not silently drop `atSeq` from one-shot query semantics.
 
 Keep shared JSON-pointer and path-overlap helpers in one module under
-`packages/memory/v2` so patch application, conflict detection, and runner-side
+`runtime/memory/v2` so patch application, conflict detection, and runner-side
 read invalidation do not drift.
 
 ## 12. Branch Scope

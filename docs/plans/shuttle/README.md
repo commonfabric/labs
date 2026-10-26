@@ -53,7 +53,7 @@ change with every step, because they are the work. The fabric's cell
 reference grammar — `//<space>/<piece>[#member][@qualifier…][/path…]` and its
 space- and piece-relative forms, recorded in
 [`cell-reference-grammar.md`](../../specs/cell-reference-grammar.md) and read
-by `packages/runner/src/cell-reference.ts` — takes the levels a reference
+by `runtime/runner/src/cell-reference.ts` — takes the levels a reference
 omits from a context, and shuttle makes that context a position you
 navigate: **a place is the context that fills in the omitted levels of a
 reference**, moved by `cd`, relative references, and handles instead of by
@@ -75,7 +75,7 @@ invisible, the prompt renders the whole ambient record — place and scope
    cell, browse a collection) open on demand and return to the prompt. The
    prompt serves composition and muscle memory; the views serve the
    browse-and-observe loop a reactive substrate deserves.
-2. **Home: inside `packages/cli`**, in `lib/shuttle/`, reached as the `cf sh`
+2. **Home: inside `runtime/cli`**, in `lib/shuttle/`, reached as the `cf sh`
    subcommand. A shell is the `cf` verbs held open over one connection, so it
    is `cf`'s own subsystem rather than a package beside it: it calls the seams
    as neighbors, `cf sh` imports what it runs, and there is no package
@@ -128,7 +128,7 @@ invisible, the prompt renders the whole ambient record — place and scope
    [`runtime-integration.md`](runtime-integration.md) grounds
    this decision: the connection and watch mechanics that exist, the
    lifecycle discipline a long-lived process adds, and the prerequisite seam
-   work in `packages/cli`.
+   work in `runtime/cli`.
 10. **Run state: reaching in warms.** `cd` into a piece, `watch` on
     anything inside it, or any read aimed into it — `get topics/3/title`
     from outside warms `topics/3` exactly as `cd` would — starts the
@@ -138,7 +138,7 @@ invisible, the prompt renders the whole ambient record — place and scope
     designed and deferred past v1 ([`futures.md`](futures.md)).
 11. **A space root lists facets, never pieces directly** — `slugs/` and
     `pieces/` in v1; the `fuse/` facet (the FUSE layout mirrored,
-    leveraging `packages/fuse` rather than reinventing it) is designed and
+    leveraging `runtime/fuse` rather than reinventing it) is designed and
     deferred ([`futures.md`](futures.md)). Facet names are reserved
     wherever a walk from the root begins: as a segment at the space root,
     and as the first segment of a **rooted** reference, so `/slugs/todo`
@@ -153,7 +153,7 @@ invisible, the prompt renders the whole ambient record — place and scope
     is the canonical cell reference, the runner's `parseCellReference`,
     the same structure in patterns and at every `cf` intake seam, and this
     CLI resolves the piece segment by slug as well as by handle
-    (`packages/cli/lib/llm-friendly-ref.ts`). The facets are the
+    (`runtime/cli/lib/llm-friendly-ref.ts`). The facets are the
     shuttle-only half: a browsing overlay on the space root. So shuttle
     reads `/slugs/x` and `/pieces/x` differently from the way `cf` reads
     the same strings, and identically for every other slug. That is the
@@ -466,14 +466,14 @@ several) stay reachable later.
 
 | Component | Where | What it gives shuttle |
 | --- | --- | --- |
-| Cell reference grammar | [`cell-reference-grammar.md`](../../specs/cell-reference-grammar.md); `packages/runner/src/cell-reference.ts` — `parseCellReference`, `parseRelativeReference`, `parsePieceSegment`, `renderCellReference` — and `packages/cli/lib/llm-friendly-ref.ts` at the CLI's intake | The address syntax; shuttle consumes it and must not fork it |
-| Target option surface | `targetOptions` in `packages/cli/commands/piece.ts` | The enumeration of exactly what a place must supply |
-| Live-state listing and completion | `keysOf` in `packages/cli/lib/cell-listing.ts` — exported, beside the `listCellKeys` that reads a cell through it, which path completion in `packages/cli/lib/completion/providers.ts` uses | The `ls` primitive and tab completion; shuttle reads the cell over the connection it holds and names its rows through `keysOf`, and a failed read raises rather than listing empty. Shuttle's own tab completion reads that listing rather than a second read, and swallows the failure at its own call site, as the providers do at theirs |
-| Pager/TUI substrate | `packages/cli/lib/view/` — `pager.ts` is the only module doing raw-mode full-screen TTY handling; `mod.ts` and `loadinput.ts` touch stdio for the one-shot path (capability probes, plain-output writes, piped input); `keys.ts`, `ansi.ts`, `render.ts`, `session.ts` hold state and decoding as pure logic | The full-screen half: raw mode, frames, key decoding, testable without a terminal; already follows references and edits buffers |
-| FUSE mount | `packages/fuse` | The same addressing as a POSIX filesystem; prior art for layout (arrays as numeric directories, handlers as executables, links as symlinks). Shuttle is its interactive, live sibling, not a replacement |
-| Offline inspector | `packages/state-inspector`, `cf inspect` | The forensic counterpart (snapshots, scopes, history); its HTML explorer is prior art for tree-plus-detail browsing |
+| Cell reference grammar | [`cell-reference-grammar.md`](../../specs/cell-reference-grammar.md); `runtime/runner/src/cell-reference.ts` — `parseCellReference`, `parseRelativeReference`, `parsePieceSegment`, `renderCellReference` — and `runtime/cli/lib/llm-friendly-ref.ts` at the CLI's intake | The address syntax; shuttle consumes it and must not fork it |
+| Target option surface | `targetOptions` in `runtime/cli/commands/piece.ts` | The enumeration of exactly what a place must supply |
+| Live-state listing and completion | `keysOf` in `runtime/cli/lib/cell-listing.ts` — exported, beside the `listCellKeys` that reads a cell through it, which path completion in `runtime/cli/lib/completion/providers.ts` uses | The `ls` primitive and tab completion; shuttle reads the cell over the connection it holds and names its rows through `keysOf`, and a failed read raises rather than listing empty. Shuttle's own tab completion reads that listing rather than a second read, and swallows the failure at its own call site, as the providers do at theirs |
+| Pager/TUI substrate | `runtime/cli/lib/view/` — `pager.ts` is the only module doing raw-mode full-screen TTY handling; `mod.ts` and `loadinput.ts` touch stdio for the one-shot path (capability probes, plain-output writes, piped input); `keys.ts`, `ansi.ts`, `render.ts`, `session.ts` hold state and decoding as pure logic | The full-screen half: raw mode, frames, key decoding, testable without a terminal; already follows references and edits buffers |
+| FUSE mount | `runtime/fuse` | The same addressing as a POSIX filesystem; prior art for layout (arrays as numeric directories, handlers as executables, links as symlinks). Shuttle is its interactive, live sibling, not a replacement |
+| Offline inspector | `runtime/state-inspector`, `cf inspect` | The forensic counterpart (snapshots, scopes, history); its HTML explorer is prior art for tree-plus-detail browsing |
 | Entry-point resolution | `cf wish` | Headless resolution of `#favorites`-style targets — the mounts of decision 5 |
-| Web shell route grammar | `packages/shell` routes `/<space>/<piece>` | Another spelling of place; keep them mutually translatable |
+| Web shell route grammar | `runtime/shell` routes `/<space>/<piece>` | Another spelling of place; keep them mutually translatable |
 
 ## Relationship to the CLI surface arc
 
@@ -521,7 +521,7 @@ stands deferred is a *live* view of one, and that whole
 - Not an agent surface (stable machine-readable output, one-shot scripting)
   — leave the door open.
 - Not a bulk-operations or migration driver — leave the door open.
-- Not a replacement for `packages/fuse`, `cf view`, or `cf inspect`.
+- Not a replacement for `runtime/fuse`, `cf view`, or `cf inspect`.
 - No persisted cross-process ambient place, and no environment-variable
   mutation, ever.
 - Not a hosted or remote terminal — but shuttle must not assume a local

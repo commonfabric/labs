@@ -13,7 +13,7 @@ hybrid.
 ## Source layout and durable model
 
 ```text
-packages/patterns/babylon-shared-scene/
+patterns/babylon-shared-scene/
 ├── contract.ts
 ├── guest.ts
 ├── guest.html
@@ -355,15 +355,15 @@ once.
 ## Generate and validate
 
 ```bash
-deno run -A tools/write-iframe-wrapper.ts \
-  --contract packages/patterns/babylon-shared-scene/contract.ts \
-  --guest packages/patterns/babylon-shared-scene/guest.ts \
-  --html packages/patterns/babylon-shared-scene/guest.html \
-  --out packages/patterns/babylon-shared-scene/main.tsx
+deno run -A scripts/write-iframe-wrapper.ts \
+  --contract patterns/babylon-shared-scene/contract.ts \
+  --guest patterns/babylon-shared-scene/guest.ts \
+  --html patterns/babylon-shared-scene/guest.html \
+  --out patterns/babylon-shared-scene/main.tsx
 
-deno fmt packages/patterns/babylon-shared-scene
-deno check packages/patterns/babylon-shared-scene/guest.ts
-deno task cf check packages/patterns/babylon-shared-scene/main.tsx --no-run
+deno fmt patterns/babylon-shared-scene
+deno check patterns/babylon-shared-scene/guest.ts
+deno task cf check patterns/babylon-shared-scene/main.tsx --no-run
 ```
 
 Launch the pattern with the steps under

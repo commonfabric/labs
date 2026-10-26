@@ -24,7 +24,7 @@ anything, is that kind's own contract, which the table below states.
 A kind is a lowercase word of letters and digits that starts with a letter, or
 several such words joined by single hyphens, at most 32 characters long:
 `fabrichat-room` and `photo-album` are kinds, while `Room`, `chat_room` and
-`chat--room` are not. `isSpaceKind()` in `packages/memory/v2/space-kind.ts`
+`chat--room` are not. `isSpaceKind()` in `runtime/memory/v2/space-kind.ts`
 decides it. The memory server holds every declared kind to it, and `inSpace()`
 refuses a kind of any other form before it creates anything. `inSpace()` also
 refuses `spaceKind` with a DID or a cell, which name a space that already
@@ -103,7 +103,7 @@ that contract, before code in this repository relies on it.
 | Kind | The space |
 | --- | --- |
 | `fabrichat-room` | A standalone FabriChat room's own space, a chat-only social space whose root is the room, at the address the space's genesis commit reserves for a root `inSpace(..., { root: true })` places ([FabriChat](../specs/fabrichat/README.md)) |
-| `loom` | A social Loom's own space, created by a loom daemon's share sidecar or the host's [meeting-room allocator](meeting-room-allocation.md). A Loom space created before the kind was declared declares none. Its root is whatever the space's `defaultPattern` links: a piece of the space itself whose stored result schema has a Loom's public composition (`panels`, an array, and the `addPanel` and `removePanel` streams); the sidecar provisions it from `packages/patterns/loom/main.tsx`. The address is not the contract: the sidecar reserves the root at the Loom's own publication cause (`{purpose: "loom-publication-root", publication: <seed>}`), a migration may link another Loom in its place, and every reader finds the root through the link and validates it by that schema, loading none of its code, as the share intake and the loom daemon's Home-catalogue adapter do. A space declaring no kind passes that same check when offered as a `loom`; its declared kind stays absent. A loom offer grants its recipient `WRITE` or `OWNER`; read-only access comes only through an invitation link |
+| `loom` | A social Loom's own space, created by a loom daemon's share sidecar or the host's [meeting-room allocator](meeting-room-allocation.md). A Loom space created before the kind was declared declares none. Its root is whatever the space's `defaultPattern` links: a piece of the space itself whose stored result schema has a Loom's public composition (`panels`, an array, and the `addPanel` and `removePanel` streams); the sidecar provisions it from `patterns/system/loom/main.tsx`. The address is not the contract: the sidecar reserves the root at the Loom's own publication cause (`{purpose: "loom-publication-root", publication: <seed>}`), a migration may link another Loom in its place, and every reader finds the root through the link and validates it by that schema, loading none of its code, as the share intake and the loom daemon's Home-catalogue adapter do. A space declaring no kind passes that same check when offered as a `loom`; its declared kind stays absent. A loom offer grants its recipient `WRITE` or `OWNER`; read-only access comes only through an invitation link |
 
 Home's share intake reads the kind: it admits an offer of a `fabrichat-room`
 space only when the space declares that kind, and refuses an offer of a space

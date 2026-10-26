@@ -19,10 +19,10 @@ it.
 
 ## Anchors
 
-Paths are relative to `packages/runner/src/` unless another package is
+Paths are relative to `runtime/runner/src/` unless another package is
 named. The `scope_key` vocabulary lives in the wire-shape module (LD3,
 §3): `resolveScopeKey` plus the parse/inspect helpers
-(`packages/memory/v2.ts`, beside `CellScope`), producing `space`,
+(`runtime/memory/v2.ts`, beside `CellScope`), producing `space`,
 `user:<principal>`, `session:<principal>:<sessionId>` (components
 encodeURIComponent-encoded, so `:` splits segments exactly). The
 shared validator `isScopeKey` accepts exactly the constructor's image:
@@ -32,7 +32,7 @@ malformed input refuses (false), never throws. Admission gates on it
 wherever an explicit key ARRIVES rather than being constructed (the
 derived-commit annotation check in `applyCommitTransaction` and the
 wave basis-instance check in `applyWaveCommit`, both in
-`packages/memory/v2/engine.ts`), so a non-canonical key is refused at
+`runtime/memory/v2/engine.ts`), so a non-canonical key is refused at
 the door instead of keying a storage row that later corrupts
 `/`-delimited composite addressing or throws when a serving surface
 percent-decodes it. Storage rows are keyed `(branch, id, scope_key)`
@@ -54,8 +54,8 @@ OFF arm, the runtime's own authenticated session
 | 2 | `runner.ts` — `resultPatternCache` and `#writeJavaScriptActionResult`; N37's memo | `` Map<`${space}/${id}`, Map<ScopeKey, string>> `` | the ACTION instance whose result pattern is cached — two instances may resolve to different patterns | the run transaction's identity, falling back to `runtime.scopeKeyIdentity` |
 | 3 | `runner.ts` — `JavaScriptActionResultCells.byScope`, selected by `#writeJavaScriptActionResult` | `Map<ScopeKey, Cell<any>>` | one result cell PER INSTANCE, not per scope name: a name-keyed `byScope.get("session")` would return one cell where the server needs one per session | the run transaction's identity, falling back to `runtime.scopeKeyIdentity`, resolved over the discovered `effectiveOutputScope` |
 | 4 | `data-updating.ts` — `seedMemoKey(link, identity)`; dedupes eager scoped-property seeding | `` `${space}/${scope_key}/${id}` `` | per instance — one instance's presence must not suppress another's seed; at fan-out one USER's presence must not suppress another's | `runtime.scopeKeyIdentity` at the call sites |
-| 5 | `traverse.ts` — coverage key `isLinkedDocumentCovered` passes to `schemaTrackerCoversSelector` (constructed via site 6's `getTrackerKey`; consulted only for links that DECLARE a scope — an unscoped link refuses coverage explicitly, see the OFF-ARM NEUTRALITY note at the site) | `` `${space}/${scope_key}/${id}` `` | per instance read: coverage proven for one instance is not coverage of another | `TraversalContext.scopeKeyIdentity` (the traversal's acting identity; the memory server's query path supplies the querying session's — `packages/memory/v2/query.ts`) |
-| 6 | `traverse.ts` — `getTrackerKey(address, identity)`, over the exported `schemaTrackerKey(space, id, scope, identity)` that `packages/memory/v2/query.ts`'s `toDocKey` also builds through (one construction for writer and query-side reader); the schema-tracker key | `` `${space}/${scope_key}/${id}` `` | same as 5 — one tracker entry per instance | `TraversalContext.scopeKeyIdentity` |
+| 5 | `traverse.ts` — coverage key `isLinkedDocumentCovered` passes to `schemaTrackerCoversSelector` (constructed via site 6's `getTrackerKey`; consulted only for links that DECLARE a scope — an unscoped link refuses coverage explicitly, see the OFF-ARM NEUTRALITY note at the site) | `` `${space}/${scope_key}/${id}` `` | per instance read: coverage proven for one instance is not coverage of another | `TraversalContext.scopeKeyIdentity` (the traversal's acting identity; the memory server's query path supplies the querying session's — `runtime/memory/v2/query.ts`) |
+| 6 | `traverse.ts` — `getTrackerKey(address, identity)`, over the exported `schemaTrackerKey(space, id, scope, identity)` that `runtime/memory/v2/query.ts`'s `toDocKey` also builds through (one construction for writer and query-side reader); the schema-tracker key | `` `${space}/${scope_key}/${id}` `` | same as 5 — one tracker entry per instance | `TraversalContext.scopeKeyIdentity` |
 | 7 | `StorageManager.#registerPendingLoad()` in `storage/v2.ts`, the `#pendingLoads` key (built with site 1's `entityKey`, which the scheduler cross-matches in `collectPendingLoadParkKeys`) | `` `${space}/${scope_key}/${id}` `` | per instance: two instances of one doc are two loads, and collapsing them makes one waiter observe another's failure | the explicit load instance when supplied, otherwise the manager's own `scopeKeyIdentity()`; immutable input sync carries the requesting identity to linked targets |
 | 8 | `storage/transaction/address.ts` — `toString(address, identity)`; notification-differential address identity (`storage/differential.ts`, whose `toKey` shares the vocabulary) | `` `/${scope_key}/${id}/${JSON.stringify(path)}` `` (no space — per-space by construction) | per instance within a batch: one batch may carry several instances of one doc (scopes.md §2), and they must not collapse to one change entry | the owning session's identity, threaded through `Differential.create/load/checkout` from the replica |
 | 9 | `scheduler/graph-snapshot.ts` — `formatAddress(address, identity)`; diagnostic graph-snapshot labels (site 1's `entityKey` in `buildSchedulerGraphSnapshot` and `findOverlappingCells`) | `` `${space}/${id}/${scope_key}/${path.join("/")}` `` | per instance — diagnostic only, but a per-instance graph renders N indistinguishable rows without it, which is how a fan-out bug hides | `SchedulerGraphSnapshotState.scopeKeyIdentity` |
@@ -94,7 +94,7 @@ not coin flip:
   action run (protocol.md §1/§7) — and lease-holder reads name
   `entity_scope_key` on the wire (protocol.md §2). A format both
   endpoints speak on the wire is protocol vocabulary by construction.
-  Its home is the wire-shape module — `packages/memory/v2.ts`, where
+  Its home is the wire-shape module — `runtime/memory/v2.ts`, where
   `CellScope`, `SessionId`, and the other protocol types already live
   — as ONE exported constructor `(scope, identity) → scope_key`
   (`resolveScopeKey`) plus the parse/inspect helpers, which
@@ -104,7 +104,7 @@ not coin flip:
 - **What stays engine-owned is IDENTITY DERIVATION, not the format.**
   For `authored` traffic the memory server still derives the identity
   from the authenticated session at admission — `#decideTransaction()`
-  in `packages/memory/v2/server.ts` threads `session.principal` +
+  in `runtime/memory/v2/server.ts` threads `session.principal` +
   `message.sessionId` into `Engine.applyCommit`, whose
   `applyCommitTransaction` constructs the key — via the shared
   definition. Clients never name keys — their identity rides the
@@ -122,9 +122,9 @@ not coin flip:
 - **Layering: legal, and no new dependency direction.** The runner
   already imports memory-v2 protocol vocabulary
   (`@commonfabric/memory/v2` — e.g. the imports in
-  `packages/runner/src/storage/v2.ts`); what it must not import is
+  `runtime/runner/src/storage/v2.ts`); what it must not import is
   ENGINE internals, and the format is not one.
-  (`packages/state-inspector/scopes.ts` and `conflicts.ts` import
+  (`runtime/state-inspector/scopes.ts` and `conflicts.ts` import
   `resolveScopeKey` from the shared module; the runner's remaining
   reaches into `memory/v2` internals beyond the wire module are out of
   this ruling's scope.)
@@ -140,7 +140,7 @@ the wire that fills it — is re-keyed on stage E's shape: instance
 keys built from an explicitly supplied identity, partition unchanged
 at cardinality 1. The unifying device is an OPTIONAL EXPLICIT
 INSTANCE on the address type — `IMemoryAddress.scopeKey?: ScopeKey`
-(`packages/runner/src/storage/interface.ts`) — ABSENT everywhere off
+(`runtime/runner/src/storage/interface.ts`) — ABSENT everywhere off
 the serving path (every client, the whole OFF arm), so no key, frame,
 or serialized notification moves by a byte when it is absent, and SET
 only where a serving runtime knows the instance is not the ambient
@@ -186,7 +186,7 @@ resolving `scope` against its identity. The vocabulary:
   key by the instance, and the pending-load ledger keys the address
   with it (the event preflight's park cross-matches per instance).
 - **Wire** — `SessionSyncUpsert.scopeKey` / `SessionSyncRemove.scopeKey`
-  / `EntitySnapshot.scopeKey` (`packages/memory/v2.ts`), populated
+  / `EntitySnapshot.scopeKey` (`runtime/memory/v2.ts`), populated
   ONLY on frames/results to a session that has been admitted an
   explicit-instance read — its STICKY wire vocabulary (`SessionState.
   leaseHolderReads`, kept for the session's life; amended 2026-08-17,
@@ -240,7 +240,7 @@ FORBIDDEN once stage E lands:
   that does not update §5's list in the same change fires this
   tripwire too;
 - two definitions of the `scope_key` string format (LD3 ruled: the
-  wire-shape module `packages/memory/v2.ts` owns the ONE definition
+  wire-shape module `runtime/memory/v2.ts` owns the ONE definition
   — §3; the engine's row keys and the runner's in-memory keys
   import it, never restate it);
 - deriving an instance key from anything but a resolved identity
@@ -278,7 +278,7 @@ identity, partition-unchanged at cardinality 1 per §2's argument):
   served per-instance read names (stage A). The failure it closed:
   A's kick suppressed B's pull, and B's doc never loaded.
 - the server's wake/sync dirty keys — `toDirtyKey` =
-  `${scope_key}\0${id}` (`packages/memory/v2/query.ts`), marked at
+  `${scope_key}\0${id}` (`runtime/memory/v2/query.ts`), marked at
   admission from the COMMITTING session's resolved instance; the
   per-session sync cache carries `scopeKey` on its entries and keys
   `${branch}\0${scope_key}\0${id}` (`server-sync.ts`), with the
@@ -323,7 +323,7 @@ per-run identities where run contexts carry them):
 
 **Recorded sound-per-session:**
 
-- `packages/memory/v2/query.ts` — the `EngineObjectManager` caches
+- `runtime/memory/v2/query.ts` — the `EngineObjectManager` caches
   (`load`, `detail`, `invalidateIds`) key
   `${scope_key}/${id}/${type}`, the scope key resolved against the
   manager's bound identity (`#scopeKeyFor`), and are sound because the
@@ -336,7 +336,7 @@ per-run identities where run contexts carry them):
 - the shared schema memo — `schemaMemoAddressKey`
   (`traverse.ts`) has no identity component, and every sharing scope
   is single-identity today: `TrackedGraphState.memo` is bound to its
-  manager (`packages/memory/v2/query.ts`), and the query path's
+  manager (`runtime/memory/v2/query.ts`), and the query path's
   `sharedMemo` instances are per-call. Sharing one memo across
   identities is FORBIDDEN — schema narrowing memoized under one
   principal's traversal would leak into another's (value-bleed). The
@@ -346,7 +346,7 @@ per-run identities where run contexts carry them):
   constructor) and throws on any other identity — a future sharing
   change becomes a loud error, never silent value-bleed.
 - the query evaluation cache — `QueryEvaluationCache`
-  (`packages/memory/v2/query.ts`) serves whole tracked-graph
+  (`runtime/memory/v2/query.ts`) serves whole tracked-graph
   evaluations ACROSS identities, and its sharing rests on an
   assumption wider than key construction: evaluation is
   recipient-blind. The walk consults the requesting identity only

@@ -79,7 +79,7 @@ during that implementation are archived at
   covers only what a `system:` origin adds to it.
 - **Lineage / fork detection.** No substrate exists today — `parents` was
   deleted with the pattern-id retirement, and `pieceLineageSchema`
-  (`packages/runner/src/schemas.ts`) is dead code, referenced nowhere.
+  (`runtime/runner/src/schemas.ts`) is dead code, referenced nowhere.
   Deferred; automatic system-source updates continue to track one exact source
   path and do not attempt to infer user fork relationships.
 - **CFC provenance of fetched source.** Pattern source can carry private data;
@@ -96,11 +96,11 @@ during that implementation are archived at
 |---|---|---|
 | Pattern pointer `patternIdentity = {identity, symbol}` on the piece result cell | `runner.ts` (`applySetupState` / `getPatternIdentityRef`) | The thing an update rewrites |
 | **In-place re-run watcher** — `setupPatternWatcher` sinks the `patternIdentity` meta; on change it cancels the old pattern's nodes and re-instantiates the new pattern **onto the same result cell** | `runner.ts` (enabled unless `doNotUpdateOnPatternChange`) | Applies a pointer move when the piece is already running; a piece that is not running has the new pattern staged over its document by the transition itself |
-| `SourceReconciler` | `packages/runner/src/source-reconciler.ts` | Origin resolution, identity lookup, verified closure compile, and the guarded transition — one path for every piece |
-| Space root: `spaceCell.defaultPattern` link → root piece → `patternIdentity` | `packages/piece/src/ops/pieces-controller.ts` (`linkDefaultPattern`/`getDefaultPattern`) | What a system update rewrites |
-| `ensureDefaultPattern` (resolve → follow the origin → start; with `reconcile: false`, resolve → start, following the origin only if the held pattern cannot load) / `recreateDefaultPattern` (manual, **not** state-preserving) | `packages/piece/src/ops/pieces-controller.ts` | The root's open path and its repair ladder, and the state-losing escape hatch (recreate); both URL-based creation paths stamp `patternSource` |
-| System patterns = **raw TSX served by path**, bundled via `deno compile --include`; **no name→identity manifest** | `packages/runner/src/harness/patterns-route.deno.ts` defines the route; `packages/toolshed/routes/patterns/patterns-server.ts` and `patterns.routes.ts` name this deployment's directories and wire it into the server | Where the current system source + its identity come from |
-| Per-space host resolution: `mappedHostFor(space)` / `registerSpaceHost` (3-tier: seed `spaceHostMap` → learned site-table → default) | `Runtime.mappedHostFor` / `registerSpaceHost` in `packages/runner/src/runtime.ts`, `storage/v2-remote-session.ts` | Which toolshed a space's source is fetched from |
+| `SourceReconciler` | `runtime/runner/src/source-reconciler.ts` | Origin resolution, identity lookup, verified closure compile, and the guarded transition — one path for every piece |
+| Space root: `spaceCell.defaultPattern` link → root piece → `patternIdentity` | `runtime/piece/src/ops/pieces-controller.ts` (`linkDefaultPattern`/`getDefaultPattern`) | What a system update rewrites |
+| `ensureDefaultPattern` (resolve → follow the origin → start; with `reconcile: false`, resolve → start, following the origin only if the held pattern cannot load) / `recreateDefaultPattern` (manual, **not** state-preserving) | `runtime/piece/src/ops/pieces-controller.ts` | The root's open path and its repair ladder, and the state-losing escape hatch (recreate); both URL-based creation paths stamp `patternSource` |
+| System patterns = **raw TSX served by path**, bundled via `deno compile --include`; **no name→identity manifest** | `runtime/runner/src/harness/patterns-route.deno.ts` defines the route; `runtime/toolshed/routes/patterns/patterns-server.ts` and `patterns.routes.ts` name this deployment's directories and wire it into the server | Where the current system source + its identity come from |
+| Per-space host resolution: `mappedHostFor(space)` / `registerSpaceHost` (3-tier: seed `spaceHostMap` → learned site-table → default) | `Runtime.mappedHostFor` / `registerSpaceHost` in `runtime/runner/src/runtime.ts`, `storage/v2-remote-session.ts` | Which toolshed a space's source is fetched from |
 | Identity computation: `transformInjectHelperModule` + `computeModuleIdentities` | `harness/pretransform.ts`, `sandbox/module-record-compiler.ts` | What toolshed runs to answer `?identity` |
 | Entry-doc `annotations` + `annotatePattern` | `pattern-manager.ts`, `cell-cache.ts` | **Rejected as the carrier** — see below |
 
@@ -108,7 +108,7 @@ during that implementation are archived at
 non-hashed, excluded from `verifySourceDocs`) and looks like a natural home for
 "where updates live" — but it is **space-local**: `writeSourceDocs` preserves
 the *destination* cell's annotations, and replication does not copy the
-*source's* (`packages/runner/src/compilation-cache/cell-cache.ts`). An
+*source's* (`runtime/runner/src/compilation-cache/cell-cache.ts`). An
 `updatesAt` written in a publisher's space
 would not appear on a consumer's replicated copy. The **piece** is the reliable
 carrier: explicit source provenance travels with it. An unstamped piece follows
@@ -203,11 +203,11 @@ is stored on the root piece. It is dispatched by its scheme:
   updates); a bare slug **tracks**. Immutability is just a pinned ref.
 - **`system:` ref** (a pattern this deployment's toolshed serves from its
   patterns directory, addressed relative to that route, e.g.
-  `system:system/default-app.tsx` → `/api/patterns/system/default-app.tsx`) →
-  use `?identity` against the space's host, then fetch and compile whenever the
-  persisted artifact needs an update or repair. The ref is host-relative, so it
-  survives a space moving hosts; a ref that would climb out of the patterns
-  route is refused.
+  `system:system/default-app/default-app.tsx` →
+  `/api/patterns/system/default-app/default-app.tsx`) → use `?identity` against
+  the space's host, then fetch and compile whenever the persisted artifact needs
+  an update or repair. The ref is host-relative, so it survives a space moving
+  hosts; a ref that would climb out of the patterns route is refused.
 - **Anything else** → no fetch. The scheme is a whitelist rather than a
   filter, because a bare path cannot be distinguished from an authored module
   name that merely looks like a route, and resolving such a name against the
@@ -460,7 +460,7 @@ Because the updater applies without that comparison, an incompatible schema
 that merges reaches every running piece. CI carries the check instead:
 `tasks/pattern-compat.ts` compiles every authored pattern and proves its
 argument/result contract against every contract recorded for it under
-`packages/patterns/baselines/`, using the same
+`patterns/baselines/`, using the same
 `assertPatternSchemasBackwardCompatible` that `cf piece setsrc` enforces — so
 the two paths cannot drift apart on what "compatible" means.
 
@@ -479,7 +479,7 @@ the two paths cannot drift apart on what "compatible" means.
   survive it only to fail every prototype-matched read; updating such a piece
   takes redeployment or `dangerouslyAllowIncompatibleSchema`. The full
   argument lives with the check (`schemaSubsetIssue`,
-  `packages/piece/src/schema-compatibility.ts`).
+  `runtime/piece/src/schema-compatibility.ts`).
 - Baselines are **never pruned**, and `deno task pattern-compat --update` can
   only add one. An author-run command that could remove a baseline could remove
   the one that would have caught the break.
@@ -519,7 +519,8 @@ root, so adding roots does not repeatedly parse the combined file set.
 
 Three implementation facts make the light identity equal what the worker stores
 as `patternIdentity`, verified by a parity test against the real
-`default-app.tsx`, `home.tsx`, and `examples/phonetic-speller.tsx`:
+`default-app.tsx`, `home.tsx`, and
+`examples/phonetic-speller/phonetic-speller.tsx`:
 
 - **Hash pristine, not injected.** The engine restores each module's original
   pre-injection bytes (`pristineModuleSources`) before hashing, so the light
