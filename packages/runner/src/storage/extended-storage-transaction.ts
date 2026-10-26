@@ -2444,6 +2444,16 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       (this.#runtimeOwnedStores?.has(key) ?? false);
   }
 
+  isEnrolledRuntimeOwnedStore(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean {
+    if (!runtimeWritePolicyAuthorized(authorization)) return false;
+    return this.#runtimeOwnedStores?.has(runtimeOwnedStoreKey(space, id)) ??
+      false;
+  }
+
   isUndeclarablePolicyStore(
     space: string,
     id: string,
@@ -4938,6 +4948,14 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     authorization?: RuntimeWritePolicyAuthorization,
   ): boolean {
     return this.#wrapped.isRuntimeOwnedStore(space, id, authorization);
+  }
+
+  isEnrolledRuntimeOwnedStore(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean {
+    return this.#wrapped.isEnrolledRuntimeOwnedStore(space, id, authorization);
   }
 
   isUndeclarablePolicyStore(

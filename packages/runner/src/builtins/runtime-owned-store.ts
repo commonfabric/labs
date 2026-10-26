@@ -1,7 +1,8 @@
 /**
  * Names and enrolls the stores a builtin owns for as long as its piece runs.
- * CFC's fit check admits eligible labeled writes and records the flow join in
- * derived stamps; `docs/specs/cfc-enforcement-matrix.md` §4 states the boundary.
+ * CFC's fit check admits eligible labeled writes. Enrolled stores keep the
+ * flow join in derived stamps; transaction-only markers also declare it.
+ * `docs/specs/cfc-enforcement-matrix.md` §4 states the boundary.
  */
 
 import type { JSONSchema } from "../builder/types.ts";
@@ -24,8 +25,9 @@ import { scopedCell } from "./scope-policy.ts";
  * A builtin's state store holds whatever the transactions running that builtin
  * read, and an author cannot know which atoms a given transaction will carry,
  * so no confidentiality declaration written into a schema covers it. CFC's
- * write-side fit check reads this marker and admits eligible writes with their
- * derived stamps; `docs/specs/cfc-enforcement-matrix.md` §4 states the boundary.
+ * write-side fit check reads this marker and admits eligible writes. Without
+ * lifetime enrollment, it also declares the misfit so later authored clients
+ * can write the store; `docs/specs/cfc-enforcement-matrix.md` §4 states the boundary.
  * The runner records the same marker for a piece's own argument, result and
  * internal documents.
  *

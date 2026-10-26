@@ -3701,7 +3701,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       }
     });
 
-    it("derives labels on a document anchored inside a store it owns", async () => {
+    it("retains the declaration on a document anchored inside an enrolled store", async () => {
       // Anchoring splits one value across two documents. The child's id is
       // derived from the parent's rather than named by an author, and nothing
       // but this write puts anything in it, so it is the runtime's store
@@ -3740,15 +3740,15 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         expect((await tx.commit().settled).ok).toBeDefined();
 
         // The parent's own write is all links, so it takes shape-only stamps
-        // and is never measured; the content and its derived label land on
+        // and is never measured; the content and its declaration land on
         // the document the write anchored.
-        const derivedOn = writerFitDiagnostics(tx)
+        const declaredOn = writerFitDiagnostics(tx)
           .filter((flag) =>
-            flag.includes("writer-fit(runtime-owned-store-derived)")
+            flag.includes("writer-fit(runtime-owned-store-declared)")
           );
-        expect(derivedOn.length).toBe(1);
-        expect(derivedOn[0]).not.toContain(storeId);
-        expect(derivedOn[0]).toContain('"secret"');
+        expect(declaredOn.length).toBe(1);
+        expect(declaredOn[0]).not.toContain(storeId);
+        expect(declaredOn[0]).toContain('"secret"');
       } finally {
         await runtime.dispose();
         await storageManager.close();
@@ -4477,7 +4477,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       }
     });
 
-    it("derives labels on both documents a real setup writes", async () => {
+    it("retains declarations on transaction-marked stores written by setup", async () => {
       // Drives the production recorder rather than the marker the tests
       // above hand-record: `setup` marks the argument document and each
       // internal document its result projects to, and a first setup inside
@@ -4521,16 +4521,17 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
 
         for (const id of [argumentId, internalId]) {
           expect(
-            replicaEntries(storageManager, id).filter((entry) =>
-              entry.origin === "declared"
+            replicaEntries(storageManager, id).some((entry) =>
+              entry.origin === "declared" &&
+              entry.label.confidentiality?.includes("secret")
             ),
-          ).toEqual([]);
+          ).toBe(true);
           expect(
             replicaEntries(storageManager, id).filter((entry) =>
               entry.origin === "derived" && entry.observes === "value" &&
               (entry.label.confidentiality ?? []).includes("secret")
             ).length,
-          ).toBe(1);
+          ).toBe(0);
         }
       } finally {
         await runtime.dispose();
@@ -4640,7 +4641,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
     });
 
     for (const origin of ["declared", "derived"] as const) {
-      it(`keeps a ${origin} result label derived on a store added by an update`, async () => {
+      it(`retains a ${origin} result label in a new update store declaration`, async () => {
         const storageManager = StorageManager.emulate({ as: signer });
         const runtime = strictRuntime(storageManager);
         try {
@@ -4724,16 +4725,10 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           const addedId = getDerivedInternalCellLink(resultCell, added).id;
           expect(storedDocument(storageManager, addedId)?.value).toBe("fresh");
           const entries = replicaEntries(storageManager, addedId);
-          expect(entries.filter((entry) => entry.origin === "declared"))
-            .toEqual([]);
-          for (const observes of ["value", "shape"]) {
-            expect(
-              entries.some((entry) =>
-                entry.origin === "derived" && entry.observes === observes &&
-                entry.label.confidentiality?.includes("retained-source")
-              ),
-            ).toBe(true);
-          }
+          expect(entries.some((entry) =>
+            entry.origin === "declared" &&
+            entry.label.confidentiality?.includes("retained-source")
+          )).toBe(true);
           if (origin === "declared") {
             expect(
               replicaEntries(storageManager, resultId).filter((entry) =>
@@ -4882,7 +4877,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         const entries = replicaEntries(storageManager, argumentId);
         expect(
           entries.some((entry) =>
-            entry.origin === "derived" && entry.observes === "value" &&
+            entry.origin === "declared" &&
             (entry.label.confidentiality ?? []).includes("secret")
           ),
         ).toBe(true);

@@ -400,8 +400,8 @@ describe("compile-and-run-served", () => {
     // released rather than refused, so the path past the sink gate is covered
     // too. Setup reads the labeled source, so its flow join carries that
     // caveat and every store the setup transaction fills is measured against
-    // it; runtime ownership admits each write with the join in its derived
-    // stamp, and the compiler is handed the program.
+    // it; runtime ownership admits each write, and the compiler is handed
+    // the program.
     const signer = await Identity.fromPassphrase("compile labeled source");
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({

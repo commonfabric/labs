@@ -1514,8 +1514,8 @@ const recordSetupProjectionPolicyInputs = (
  * Such a store holds whatever the transaction filling it read, and an author
  * cannot know which atoms a given transaction will carry, so no
  * confidentiality declaration written into a schema covers it. CFC's
- * write-side fit check (spec §8.12.4) reads this marker and declares that
- * policy itself; `docs/specs/cfc-enforcement-matrix.md` §4 states the route.
+ * write-side fit check (spec §8.12.4) reads this marker and admits eligible
+ * writes; `docs/specs/cfc-enforcement-matrix.md` §4 states the route.
  *
  * `substrate` must be an address MINTED from `resultCell`'s cause, never one
  * read back out of stored metadata: a stored `argument` link can name another
@@ -4315,8 +4315,8 @@ export class Runner {
     // value the slot held is copied out first, in this same transaction: the
     // copy commits exactly when the write over it does. The refused-slot
     // store is minted from the piece's result cell and named as a store the
-    // runtime owns for it, so the fit check admits the copy and its derived
-    // stamp carries the transaction's confidentiality.
+    // runtime owns for it. This transaction-only marker admits the copy and
+    // declares its confidentiality for later authored writes.
     const kept = keepRefusedArgumentSlots(
       this.#runtime,
       tx,

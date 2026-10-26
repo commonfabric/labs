@@ -520,34 +520,46 @@ The strict-only delta is:
   cells and streams; for a builtin's node-owned state and per-event state; and
   for values anchored out of those documents. An authorized ownership marker
   admits a writer-fit misfit on these stores under the conditions below. The
-  flow-stamp pass records the write's confidentiality in its `derived`
-  component alone. This admission adds no `declared` entry.
+  persistence rule depends on the claim's lifetime. For a store with a live
+  enrollment, the flow-stamp pass records the write's confidentiality in its
+  `derived` component alone; admission adds no `declared` entry. A store named
+  only by a transaction-local marker still takes §8.12.5 option 2: the write
+  declares a covering policy in the same transaction. That declaration adds
+  clauses, never alternatives, and preserves existing declared clauses.
 
-  This implements the persistence change proposed in
-  [specs#78](https://github.com/commonfabric/specs/pull/78), §8.12.5. The
-  pinned specification still requires option 2's declaration on these
-  stores; the strict default implements the proposal ahead of its ruling.
-  The specification dependency remains open until the ruling and pin are
-  reconciled. The proposal admits more writes than this implementation:
-  existing authored-declaration, read-failed and foreign-container refusals
-  remain fail-closed residuals against the proposal.
+  The enrolled-store rule implements a slice of the persistence change in
+  [specs#78](https://github.com/commonfabric/specs/pull/78), §8.12.5. The pinned
+  specification still requires option 2's declaration on these stores; the
+  strict default implements this slice ahead of its ruling. The specification
+  dependency remains open until the ruling and pin are reconciled. The proposal
+  admits more writes than this implementation: existing authored-declaration,
+  read-failed and foreign-container refusals remain fail-closed residuals
+  against the proposal.
 
-  A reader of a labeled write consumes its derived label (§8.12.8). On a
-  path that already exists, a later write replaces the value and iteration
-  stamps with its own derivation. The existence stamp stays frozen at the
-  path's creation. A new store created under a label therefore still carries
+  A reader of a labeled write consumes its derived label (§8.12.8). On an
+  enrolled path that already exists, a later write replaces the value and
+  iteration stamps with its own derivation. The existence stamp stays frozen at
+  the path's creation. A new store created under a label therefore still carries
   that creation label after an overwrite; derived admission is not an owner
   release. Stored declarations also remain unchanged and continue to taint
   reads. Lowering them requires §8.12.7's release routes. A path with no
   recorded existence entry can also receive a legacy backfill on its first
   labeled write; that entry remains frozen even if the value already existed.
 
-  The route runs on every write while the runtime's ownership claim holds.
-  At strict it records `writer-fit(runtime-owned-store-derived)`, naming the
-  document, path and misfit. Lower rungs retain their
+  The route runs on every write while the runtime's ownership claim holds. At
+  strict it records `writer-fit(runtime-owned-store-derived)` for an enrolled
+  store and `writer-fit(runtime-owned-store-declared)` for a marker-only store,
+  naming the document, path and misfit. Lower rungs retain their
   `writer-fit(persist-and-flag)` diagnostic and derived stamps. Admission
-  changes no sink ceiling: a builtin that stages an effect still needs its
-  own sink gate, as described below.
+  changes no sink ceiling: a builtin that stages an effect still needs its own
+  sink gate, as described below.
+
+  Setup writes before enrollment, one-shot handoffs such as agent run records,
+  and marker-only anchored children retain the declaration route and its
+  ratchet. A child does not gain an enrollment merely because its parent has
+  one. The declared entries on these writes still pass through the cross-space
+  metadata protection used for flow-derived labels. Later authored clients of a
+  one-shot handoff continue to use its stored policy.
 
   What bounds the route:
 
@@ -588,6 +600,8 @@ The strict-only delta is:
     churning list ever held. A store minted per event takes the marker alone
     for the same reason. Both carry the runtime's authorization, and both
     are refused for an address naming part of a document or another space.
+    Only the enrollment selects derived-only persistence; a marker alone
+    continues to declare the write's misfit.
   - **Which builtins may take it.** A builtin whose result store moves onto
     the route gives up whatever its own ceiling was refusing, so the test is
     what refuses that write instead. A builtin that stages its request as a

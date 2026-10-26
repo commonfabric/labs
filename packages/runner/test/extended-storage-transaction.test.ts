@@ -450,11 +450,24 @@ describe("extended-storage-transaction", () => {
       const tx = runtime.edit();
       try {
         tx.recordCfcWritePolicyInput(
-          input("of:authorized"),
+          {
+            ...input("of:authorized"),
+            sources: [{ space, id: "of:owner", scope: "space", path: [] }],
+          },
           runtimeWritePolicyAuthorization,
         );
         const [recorded] = tx.getCfcState().writePolicyInputs;
         expect(tx.isRuntimeWritePolicyInput(recorded)).toBe(true);
+        expect(tx.isRuntimeOwnedStore(
+          space,
+          "of:authorized",
+          runtimeWritePolicyAuthorization,
+        )).toBe(true);
+        expect(tx.isEnrolledRuntimeOwnedStore(
+          space,
+          "of:authorized",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
       } finally {
         await tx.commit().settled;
       }
@@ -541,6 +554,13 @@ describe("extended-storage-transaction", () => {
             runtimeWritePolicyAuthorization,
           ),
         ).toBe(true);
+        expect(
+          later.isEnrolledRuntimeOwnedStore(
+            space,
+            "of:enrolled",
+            runtimeWritePolicyAuthorization,
+          ),
+        ).toBe(true);
       } finally {
         await later.commit().settled;
       }
@@ -554,9 +574,19 @@ describe("extended-storage-transaction", () => {
           "owner-key",
           runtimeWritePolicyAuthorization,
         );
-        expect(tx.isRuntimeOwnedStore(space, "of:unmarked-reader")).toBe(false);
+        expect(tx.isRuntimeOwnedStore(space, "of:unmarked-reader"))
+          .toBe(false);
         expect(
           tx.isRuntimeOwnedStore(
+            space,
+            "of:unmarked-reader",
+            runtimeWritePolicyAuthorization,
+          ),
+        ).toBe(true);
+        expect(tx.isEnrolledRuntimeOwnedStore(space, "of:unmarked-reader"))
+          .toBe(false);
+        expect(
+          tx.isEnrolledRuntimeOwnedStore(
             space,
             "of:unmarked-reader",
             runtimeWritePolicyAuthorization,
@@ -584,7 +614,17 @@ describe("extended-storage-transaction", () => {
           ),
         ).toBe(true);
         expect(
+          wrapper.isEnrolledRuntimeOwnedStore(
+            space,
+            "of:through-a-wrapper",
+            runtimeWritePolicyAuthorization,
+          ),
+        ).toBe(true);
+        expect(
           wrapper.isRuntimeOwnedStore(space, "of:through-a-wrapper"),
+        ).toBe(false);
+        expect(
+          wrapper.isEnrolledRuntimeOwnedStore(space, "of:through-a-wrapper"),
         ).toBe(false);
       } finally {
         await tx.commit().settled;
@@ -602,6 +642,13 @@ describe("extended-storage-transaction", () => {
         );
         expect(
           tx.isRuntimeOwnedStore(
+            space,
+            "of:enrolled-through-a-wrapper",
+            runtimeWritePolicyAuthorization,
+          ),
+        ).toBe(true);
+        expect(
+          tx.isEnrolledRuntimeOwnedStore(
             space,
             "of:enrolled-through-a-wrapper",
             runtimeWritePolicyAuthorization,
@@ -628,6 +675,13 @@ describe("extended-storage-transaction", () => {
         );
         expect(
           tx.isRuntimeOwnedStore(
+            space,
+            "of:scoped-instance",
+            runtimeWritePolicyAuthorization,
+          ),
+        ).toBe(true);
+        expect(
+          tx.isEnrolledRuntimeOwnedStore(
             space,
             "of:scoped-instance",
             runtimeWritePolicyAuthorization,

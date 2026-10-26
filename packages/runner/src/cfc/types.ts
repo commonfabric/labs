@@ -46,9 +46,10 @@ export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
 // recorded under {@link runtimeWritePolicyAuthorization}.
 //
 // The marker names the store for one transaction. A store written outside the
-// transaction that minted it is enrolled beside it
-// (`IExtendedStorageTransaction.enrollRuntimeOwnedStore`), which lasts for the
-// runtime's life.
+// transaction that minted it can be enrolled beside it
+// (`IExtendedStorageTransaction.enrollRuntimeOwnedStore`) until its piece stops.
+// Enrolled stores keep misfits solely in derived stamps; transaction-only
+// markers retain declarations for later authored clients.
 export const CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE =
   "runtime.owned-store";
 

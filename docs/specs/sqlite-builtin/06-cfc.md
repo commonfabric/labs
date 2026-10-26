@@ -751,11 +751,11 @@ read out of a labeled row puts that row's label on the hash. Which atoms that
 is depends on what the transaction issuing the request read, which no `ifc`
 written into a schema can say.
 
-The result cell is a store the runtime owns. Eligible misfits on its
-control paths are recorded in the issuing transaction's derived stamps,
-under the runtime-owned-store admission described in
-[`../cfc-enforcement-matrix.md`](../cfc-enforcement-matrix.md) §4. This is the
-persistence change proposed in specs#78, implemented ahead of its ruling.
+The result cell is a store the runtime owns and enrolls for the life of its
+node. Eligible misfits on its control paths are recorded in the issuing
+transaction's derived stamps, under the runtime-owned-store admission described
+in [`../cfc-enforcement-matrix.md`](../cfc-enforcement-matrix.md) §4. This is
+the persistence change proposed in specs#78, implemented ahead of its ruling.
 The control write adds no declared policy.
 
 `/requestHash` changes on each issue. `/pending` changes only when a claim

@@ -12021,6 +12021,9 @@ export function* prepareBoundaryCommitSteps(
     //   is one per-tx union with no per-atom attribution, so a single
     //   foreign labeled contribution makes the WHOLE stamped entry eligible
     //   — ambiguous provenance fails toward protection.
+    // - runtime-owned declarations retained for transaction-only markers:
+    //   these come from the flow join, not an authored schema, so the same
+    //   cross-space protection applies.
     //
     // NOT eligible (persist verbatim): AUTHORED `declared` entries (schema
     // policy — the schema document replicates to the destination anyway, so
@@ -13144,8 +13147,8 @@ export function* prepareBoundaryCommitSteps(
       const declaredPolicyEntries = flowConfidentiality.length > 0
         ? persistedLabelEntries.filter(isDeclaredValuePolicyEntry)
         : [];
-      // Whether a misfit can remain solely in the derived stamp: this
-      // document is a store the runtime owns, at a rung that would reject.
+      // Whether runtime ownership can admit a misfit at a rung that would
+      // reject. Only lifetime enrollment keeps it solely in derived stamps.
       // `cfc-enforcement-matrix.md` §4 states the admission boundary; the
       // remaining conditions are checked below.
       //
@@ -13340,16 +13343,34 @@ export function* prepareBoundaryCommitSteps(
               )
             )
           ) {
-            // A runtime-owned store records this attempt's misfit in its
-            // derived component, stamped below. It is a measurement of the
-            // written value, not a new declaration about the store's audience.
-            // Existing declarations and frozen existence stamps stay intact.
-            // This implements the persistence change proposed in specs#78;
-            // the admission guards above retain the current refusal boundary.
+            const enrolled = tx.isEnrolledRuntimeOwnedStore(
+              target.space,
+              id,
+              runtimeWritePolicyAuthorization,
+            );
+            // A store enrolled for a running piece keeps this attempt's
+            // misfit solely in the derived stamps below (specs#78). A
+            // transaction-only marker can describe a handoff to authored
+            // clients, including an AgentRun record or an anchored child;
+            // retain its declaration until those lifecycles are covered.
+            if (!enrolled) {
+              persistedLabelEntries.push(markFlowStampEntry({
+                path,
+                label: {
+                  confidentiality: foldedUnique([
+                    ...declaredCeiling as readonly CfcConfClause[],
+                    ...offending as readonly CfcConfClause[],
+                  ]),
+                },
+                origin: "declared",
+              }));
+            }
             tx.noteCfcDiagnostic(
-              `writer-fit(runtime-owned-store-derived): ${id} at /${
-                path.join("/")
-              } (§8.12.5): ${offending.map(renderCfcAtom).join(", ")}`,
+              `writer-fit(runtime-owned-store-${
+                enrolled ? "derived" : "declared"
+              }): ${id} at /${path.join("/")} (§8.12.5): ${
+                offending.map(renderCfcAtom).join(", ")
+              }`,
             );
             continue;
           }

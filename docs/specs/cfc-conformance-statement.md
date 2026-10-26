@@ -344,17 +344,20 @@ dials.
   to `observe` when a caller lowers flow labels, and leaves the enforcement
   mode as given. `cfc-enforcement-matrix.md` §3 asks for a deploy check; none
   exists.
-- Under strict, an authorized runtime-owned store admits eligible writer-fit
-  misfits and records them only in the derived component. This is the proposed
-  §8.12.5 change in [specs#78](https://github.com/commonfabric/specs/pull/78),
-  not the pinned rule: the pin requires declaring those misfits, so a later
-  clean overwrite can carry less taint here than under the pin. The strict
-  default implements the proposal ahead of its ruling; the specification
-  dependency remains open until the ruling and pin are reconciled.
-  Against the proposal, the authored-declaration, read-failed and foreign-
-  container refusals remain fail-closed residuals. Existing declarations and
-  frozen existence stamps remain; no automatic data repair is performed.
-  See `cfc-enforcement-matrix.md` §4, "Runtime-owned-store derived admission".
+- Under strict, an authorized runtime-owned store with a live enrollment admits
+  eligible writer-fit misfits and records them only in the derived component.
+  This is a slice of the proposed §8.12.5 change in
+  [specs#78](https://github.com/commonfabric/specs/pull/78), not the pinned
+  rule: the pin requires declaring those misfits, so a later clean overwrite can
+  carry less taint here than under the pin. The strict default implements the
+  proposal ahead of its ruling; the specification dependency remains open until
+  the ruling and pin are reconciled. Against the proposal, the
+  authored-declaration, read-failed and foreign-container refusals remain
+  fail-closed residuals. A transaction-local marker without a live enrollment
+  still takes the pinned declaration route: setup writes, one-shot handoffs and
+  marker-only anchored children retain that ratchet. Existing declarations and
+  frozen existence stamps remain; no automatic data repair is performed. See
+  `cfc-enforcement-matrix.md` §4, "Runtime-owned-store derived admission".
   `isDeclarablePolicyStore` in `cfc/prepare.ts` exempts the raw meta seam,
   `computed:` cells, stream entry documents and compilation-cache documents
   from the writer-fit refusal at every rung; the meta seam's residual, a

@@ -2727,6 +2727,18 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   ): boolean;
 
   /**
+   * Whether a running piece enrolled this store for its lifetime. A marker
+   * covering only this transaction does not count: one-shot stores can be
+   * handed to authored clients after the runtime creates them.
+   * Takes the same authorization as {@link isRuntimeOwnedStore}.
+   */
+  isEnrolledRuntimeOwnedStore(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean;
+
+  /**
    * Whether the store at `id` in `space` is one no schema declares a policy
    * on — named by an authorized whole-document
    * `CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE` marker on this transaction.

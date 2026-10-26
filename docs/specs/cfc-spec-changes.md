@@ -452,35 +452,39 @@ refuses a clause a policy evaluation would have discharged. A residual stands wh
 computed document, from a schema-carrying write: it stops being a write
 ceiling there, and stays a read floor.
 
-A fourth narrowing admits eligible misfits on runtime-owned stores. Its
-persistence rule is `proposed` in
+A fourth narrowing admits eligible misfits on runtime-owned stores. For a store
+with a live enrollment, its persistence rule implements a slice of
 [specs#78](https://github.com/commonfabric/specs/pull/78), option (b): the
 write's derived component holds the misfit, and the declared component is
-unchanged. The runtime implements this proposed persistence rule at the
-strict default, ahead of its ruling and reconciliation of the pin.
-The current pin requires option 2's declaration, so it does not conform to
-the pin on this point.
+unchanged. The runtime implements this proposed rule at the strict default,
+ahead of its ruling and reconciliation of the pin. The current pin requires
+option 2's declaration, so it does not conform to the pin on this point.
 
-The ownership marker covers a piece's argument, result and internal
-stores, a builtin's node-owned stores, and documents anchored out of them.
-It requires the runtime's authorization, a whole-document address in the
-owner's space, and either a transaction-local claim or a live enrollment.
-A document without that claim keeps its ordinary writer-fit check. The
-runtime also retains refusals for a schema declaration at the written
-path, an ungrantable read-failed clause, and a foreign-container clause;
-these are fail-closed residuals against the proposal.
+An authorized transaction-local marker without a live enrollment still takes
+option 2: the write declares a covering policy, adding clauses and preserving
+every stored alternative. Setup writes before enrollment, one-shot handoffs such
+as agent run records, and marker-only anchored children retain that behavior.
+Those declarations retain the ratchet; this slice addresses later writes to
+enrolled stores, not every runtime-minted document.
 
-The derived stamp taints readers of the write. A later write replaces the
-value stamp with its own derivation, while the existence stamp remains
-frozen at creation. Stored declarations remain unchanged; their repair is
-an explicit owner release under §8.12.7 route 2c when the owner has that
-authority. Nothing in this implementation repairs affected deployments.
+The ownership claim covers a piece's argument, result and internal stores, a
+builtin's node-owned stores, and documents anchored out of them. It requires the
+runtime's authorization and a whole-document address in the owner's space. A
+document without that claim keeps its ordinary writer-fit check. The runtime
+also retains refusals for a schema declaration at the written path, an
+ungrantable read-failed clause, and a foreign-container clause; these are
+fail-closed residuals against the proposal.
 
-Admitting the store write also lets the transaction commit any staged
-request. The builtin's sink gate still owns that request's release, which
-is independent of the state store's writer-fit check. Implementation and
-boundaries: `docs/specs/cfc-enforcement-matrix.md` §4; tests:
-`cfc-writer-fit.test.ts`.
+The derived stamp taints readers of the write. A later write to an enrolled
+store replaces the value stamp with its own derivation, while the existence
+stamp remains frozen at creation. Stored declarations remain unchanged; their
+repair is an explicit owner release under §8.12.7 route 2c when the owner has
+that authority. Nothing in this implementation repairs affected deployments.
+
+Admitting the store write also lets the transaction commit any staged request.
+The builtin's sink gate still owns that request's release, which is independent
+of the state store's writer-fit check. Implementation and boundaries:
+`cfc-enforcement-matrix.md` §4; tests: `cfc-writer-fit.test.ts`.
 
 (d) **[normative] Residency fit — the ceiling a document carries by living
 where it lives.** `proposed` in
