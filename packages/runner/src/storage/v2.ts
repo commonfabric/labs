@@ -4326,6 +4326,22 @@ class Provider
     return this.replica.presentCount(absences);
   }
 
+  /** See {@link SpaceReplica.storeReportedAbsent}. */
+  storeReportedAbsent(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean {
+    return this.replica.storeReportedAbsent(address, identity);
+  }
+
+  /** See {@link SpaceReplica.readStoreAbsenceAgain}. */
+  readStoreAbsenceAgain(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean | undefined {
+    return this.replica.readStoreAbsenceAgain(address, identity);
+  }
+
   async #replaySync(
     replica: SpaceReplica,
     uri: URI,
@@ -5631,9 +5647,9 @@ export class SpaceReplica
    * Re-reads every listed instance this replica holds a record for
    * through the installed store read-through and integrates the results
    * as one inbound frame (see IStorageManager.integrateStoreWrites).
-   * Returns how many were refreshed. An instance the replica has never
-   * read is left alone: nothing depends on it, and its first read serves
-   * it from the store anyway.
+   * Returns how many the read-through answered for, a read finding nothing
+   * included. An instance the replica has never read is left alone: nothing
+   * depends on it, and its first read serves it from the store anyway.
    */
   integrateStoreWrites(
     writes: readonly { id: string; scopeKey: ScopeKey }[],
@@ -9608,6 +9624,49 @@ export class SpaceReplica
       if ((this.#docs.get(key)?.confirmed.seq ?? 0) > 0) present += 1;
     }
     return present;
+  }
+
+  /**
+   * Whether the store read-through, asked for the instance `address` names
+   * under `identity`, reported holding nothing there, with no write to it
+   * reported since (see `#storeAbsences`). Without a read-through installed
+   * it never has.
+   */
+  storeReportedAbsent(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean {
+    const instance = this.instanceKey(address.scope, identity);
+    return isScopeKey(instance) &&
+      this.#storeAbsences.has(docKey(address.id, instance));
+  }
+
+  /**
+   * Asks the store read-through again for an instance it reported holding
+   * nothing at, through `integrateStoreWrites()` as the feed's report of a
+   * write does, and returns whether the store holds the document now. An
+   * instance with no such report is not asked, nor is one while a frame is
+   * being applied, as a read-through on a miss is not; either returns
+   * `undefined`, as does a read the store gives no answer to, which leaves
+   * the report standing. A re-read the store answers is a frame like any
+   * other: its storage notification reaches the subscribers before this
+   * returns, and the scheduler's subscriber marks the readers of what changed
+   * and queues a pass, so none of them runs inside the caller.
+   */
+  readStoreAbsenceAgain(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean | undefined {
+    if (this.#frameApplyDepth > 0) return undefined;
+    const instance = this.instanceKey(address.scope, identity);
+    if (!isScopeKey(instance)) return undefined;
+    const key = docKey(address.id, instance);
+    if (!this.#storeAbsences.has(key)) return undefined;
+    const answered = this.integrateStoreWrites([
+      { id: address.id, scopeKey: instance },
+    ]);
+    if (answered === 0) return undefined;
+    return !this.#storeAbsences.has(key);
   }
 
   #buildReads(

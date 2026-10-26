@@ -324,8 +324,9 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * Re-read every listed document instance that SPACE's replica holds
    * through its installed read-through and integrate the result as an
    * inbound frame, so a store commit the replica has no watch for still
-   * reaches its subscribers. Returns how many documents were refreshed;
-   * zero when no read-through is installed or the replica holds none of
+   * reaches its subscribers. Returns how many documents were refreshed, a
+   * read finding nothing included; zero when no read-through is installed,
+   * the replica holds none of them, or the read-through gives no answer for
    * them.
    */
   integrateStoreWrites?(
@@ -995,6 +996,33 @@ export interface IStorageProvider {
    * {@link unexaminedAbsences}.
    */
   presentCount?(absences: readonly UnexaminedAbsence[]): number;
+
+  /**
+   * Whether the store read-through, asked for the instance `address` names
+   * under `identity`, reported holding nothing there, with no write to it
+   * reported since. Such an absence stays unexamined for commit to
+   * reconcile ({@link unexaminedAbsences}), but the replica does not ask the
+   * store for the document again until the feed reports a write to it, or
+   * `readStoreAbsenceAgain()` asks. Optional: a provider with no
+   * read-through may leave it out, which a caller reads as no such report.
+   */
+  storeReportedAbsent?(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean;
+
+  /**
+   * Asks the store read-through again for an instance it reported holding
+   * nothing at (`storeReportedAbsent()`), as the feed's report of a write
+   * would, and integrates what it holds now. Returns whether the store holds
+   * the document now, or `undefined` when it was not asked, because no such
+   * report stands or a frame is being applied, or gave no answer. Optional,
+   * as `storeReportedAbsent()` is.
+   */
+  readStoreAbsenceAgain?(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean | undefined;
 
   /** INBOUND settlement only (server-execution v2 stage F): outstanding
    * watch refreshes/pulls, EXCLUDING commit settlement AND update
