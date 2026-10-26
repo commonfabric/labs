@@ -261,6 +261,10 @@ report the labs code they loaded, not their own repository's HEAD. A source
 checkout's HEAD cannot attest uncommitted changes or modules edited while a
 process is running.
 
+The cf CLI resolves its SHA on first use and shares that report across later
+runtime opens. Updating the checkout cannot change the report of an already
+identified process; checkout changes before first use remain unobservable.
+
 Shell, cf, and toolshed supply their build identity. Unconfigured runner
 embedders report `runner` with unknown SHA; a raw memory client reports
 `memory`. Generation is defined by the loaded memory client, independently of
@@ -283,6 +287,12 @@ current clients terminate the session, preserve received commit verdicts, and
 reject remaining pending work without replay. An unconfirmed write may already
 have committed before a disconnect: this error is not proof that it was rolled
 back. No browser reload is automatic.
+
+The refusal uses `AuthorizationError` so reconnecting clients retain the update
+guidance as the session's terminal error. Their `SessionRevokedError` recovery
+path replaces the supplied message with a generic takeover reason. Runner also
+exposes this permanent refusal through `authorizationError()`, so callers may
+present it as an access denial; the message identifies the required update.
 
 The floor is captured at startup. Apply it to every worker and restart the
 workers to disconnect existing sockets; changing configuration alone does not

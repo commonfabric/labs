@@ -814,7 +814,10 @@ export type BaseRequest = {
  * lifetime -- nothing here can be changed by a later request.
  */
 export type InitializationData = {
-  /** Loaded labs build reported by the embedding application. */
+  /**
+   * Application name and loaded labs commit reported by the embedder. When
+   * absent, the runtime reports `runtime-client` with an unknown Git SHA.
+   */
   clientBuild?: ClientBuild;
 
   /**

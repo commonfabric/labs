@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import {
   decodeMemoryBoundary,
@@ -25,6 +26,20 @@ const SPACE = "did:key:z6Mk-client-info";
 const BUILD = { application: "shell", gitSha: "a".repeat(40) };
 
 describe("client-info", () => {
+  describe("createClientInfo()", () => {
+    it("reports whole milliseconds when the clock returns a fractional time", () => {
+      using _clock = stub(Date, "now", () => 1_700_000_000_000.3918);
+      const report = createClientInfo(BUILD);
+      expect(report.startedAt).toBe(1_700_000_000_000);
+      expect(parseClientInfo(report)).toEqual(report);
+    });
+
+    it("rejects an invalid application name supplied by the embedder", () => {
+      expect(() => createClientInfo({ ...BUILD, application: "line\nfeed" }))
+        .toThrow("Invalid memory client build metadata");
+    });
+  });
+
   it("bounds reports and copies only recognized fields", () => {
     const report = createClientInfo(BUILD);
     expect(Object.isFrozen(report)).toBe(true);

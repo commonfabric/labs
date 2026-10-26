@@ -215,11 +215,15 @@ export const documentInterests = createRoute({
         sessions: z.array(z.object({
           sessionId: z.string(),
           client: z.object({
-            application: z.string().min(1).max(64),
-            gitSha: z.string().nullable(),
-            instanceId: z.string().min(1).max(128),
-            generation: z.number().int().positive(),
-            startedAt: z.number().int().nonnegative(),
+            application: z.string().regex(/^[\x20-\x7e]{1,64}$/),
+            gitSha: z.string().regex(/^[a-f0-9]{40}$/).nullable(),
+            instanceId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+            generation: z.number().int().positive().max(
+              Number.MAX_SAFE_INTEGER,
+            ),
+            startedAt: z.number().int().nonnegative().max(
+              Number.MAX_SAFE_INTEGER,
+            ),
           }).nullable(),
           principal: z.string().nullable(),
           actingPrincipal: z.string().nullable(),

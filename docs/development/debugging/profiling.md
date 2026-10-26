@@ -820,12 +820,21 @@ content-addressed document and whether their sessions are connected. The
 tracks the operator gate and the longer-term private-operations boundary.
 
 Each matching row identifies the `sessionId`, authenticated `principal`,
-optional delegated `actingPrincipal`, and owning `connectionId`. It distinguishes
-direct watch declarations (`directWatchCount`) from delivery-cache entries
-(`cached`) and graph-cache entries (`graphCount`), with separate view-demand
-cache fields. Graph entries can arise from following links or loading schema
-dependencies. Counts include absence records, so they attribute interest rather
-than measure retained bytes; shared object references are not separate copies.
+optional delegated `actingPrincipal`, and owning `connectionId`. Its `client`
+report identifies the application, loaded labs Git SHA (or `null`), runtime
+instance ID, support generation, and instance start time. The report is `null`
+when the client supplied none. This is self-reported attribution, not device or
+code attestation; it names no browser or individual tab, and multiple runtime
+instances may belong to one process. See
+[client attribution and admission](../../../packages/memory/README.md#client-attribution-and-admission)
+for host wiring and report lifetime.
+
+The row distinguishes direct watch declarations (`directWatchCount`) from
+delivery-cache entries (`cached`) and graph-cache entries (`graphCount`), with
+separate view-demand cache fields. Graph entries can arise from following links
+or loading schema dependencies. Counts include absence records, so they
+attribute interest rather than measure retained bytes; shared object references
+are not separate copies.
 
 Use this lookup when an investigation needs session attribution for a known
 schema CID. Aggregate retention counts can reveal subscription accumulation,
@@ -839,13 +848,12 @@ and graph indexes on demand, so use it for a targeted investigation rather than
 automatic dashboard polling.
 
 This is a current snapshot of one process, not a history of requests or a heap
-census. It does not identify an app build, browser, or individual tab, and does
-not attribute the process-wide schema registry or engine caches to sessions.
-An old schema in a session does not prove the client runs old code: a current
-client can retain a historical subscription. A restart or session eviction
-removes the attribution evidence. No registered memory server returns 503;
-an unknown space returns an empty report without opening it. A missing document
-can still match retained watches or absence records.
+census. It does not attribute the process-wide schema registry or engine caches
+to sessions. An old schema in a session does not prove the client runs old code:
+a current client can retain a historical subscription. A restart or session
+eviction removes the attribution evidence. No registered memory server returns
+503; an unknown space returns an empty report without opening it. A missing
+document can still match retained watches or absence records.
 
 ### Alerting on a write storm
 

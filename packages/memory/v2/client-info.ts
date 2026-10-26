@@ -65,17 +65,19 @@ export function parseClientInfo(value: unknown): ClientInfo | null {
 export function createClientInfo(
   build: ClientBuild = { application: "runner", gitSha: null },
 ): Readonly<ClientInfo> {
-  const client = parseClientInfo({
-    ...build,
+  if (
+    typeof build.application !== "string" ||
+    !/^[\x20-\x7e]{1,64}$/.test(build.application)
+  ) {
+    throw new TypeError("Invalid memory client build metadata");
+  }
+  return Object.freeze({
+    application: build.application,
     gitSha: build.gitSha !== null && /^[a-fA-F0-9]{40}$/.test(build.gitSha)
       ? build.gitSha.toLowerCase()
       : null,
     instanceId: crypto.randomUUID(),
     generation: MEMORY_CLIENT_GENERATION,
-    startedAt: Date.now(),
+    startedAt: Math.floor(Date.now()),
   });
-  if (client === null) {
-    throw new TypeError("Invalid memory client build metadata");
-  }
-  return Object.freeze(client);
 }

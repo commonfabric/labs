@@ -176,9 +176,6 @@ import { throwOnSpaceAuthorizationError } from "./utils.ts";
 import { startVersionCheck } from "./version-check.ts";
 import { noteWroteTo } from "./write-receipt.ts";
 
-/** Commit captured when this CLI module loads, retained across runtime opens. */
-const clientGitSha = await resolveCliGitSha();
-
 export interface EntryConfig {
   mainPath: string;
   mainExport?: string;
@@ -665,17 +662,19 @@ export async function loadPieces(
   // it drifts (docs/development/EXPERIMENTAL_OPTIONS.md). The same document
   // names the memory URL, where the deployment has one. Fetched alongside
   // the session rather than before it — neither needs the other.
-  const [session, { experimental, memoryHost }] = await Promise.all([
-    timeCliPhase("loadPieces.makeSession", () => makeSession(config)),
-    timeCliPhase(
-      "loadPieces.serverExperimental",
-      () =>
-        settingsForDeployedClient({
-          apiUrl: new URL(config.apiUrl),
-          env: Deno.env.get,
-        }),
-    ),
-  ]);
+  const [session, { experimental, memoryHost }, clientGitSha] = await Promise
+    .all([
+      timeCliPhase("loadPieces.makeSession", () => makeSession(config)),
+      timeCliPhase(
+        "loadPieces.serverExperimental",
+        () =>
+          settingsForDeployedClient({
+            apiUrl: new URL(config.apiUrl),
+            env: Deno.env.get,
+          }),
+      ),
+      resolveCliGitSha(),
+    ]);
   // A `--space` given as a name has only now resolved to a DID; this is the
   // deferred half of the embedded-space check `normalizeLLMFriendlyRef`
   // performs at parse time when the two spaces are written the same way. A

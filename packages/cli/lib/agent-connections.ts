@@ -9,9 +9,6 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { resolveCliGitSha } from "./build-info.ts";
 import { loadIdentity } from "./identity.ts";
 
-/** Build of the CLI modules loaded by this process. */
-const clientGitSha = await resolveCliGitSha();
-
 /**
  * Opens a record host without changing the process's home deployment. Memory
  * opens on the memory URL the record host's own deployment publishes, where
@@ -22,15 +19,17 @@ export async function openAgentStorageHost(
   origin: string,
 ): Promise<Runtime> {
   const apiUrl = new URL(origin);
-  const { experimental, memoryHost } = await settingsForDeployedClient({
-    apiUrl,
-    env: Deno.env.get,
-  });
+  const [{ experimental, memoryHost }, identity, clientGitSha] = await Promise
+    .all([
+      settingsForDeployedClient({ apiUrl, env: Deno.env.get }),
+      loadIdentity(identityPath),
+      resolveCliGitSha(),
+    ]);
   const options = runtimePresets.remoteClient({
     apiUrl,
     memoryHost,
     storageManager: StorageManager.open({
-      as: await loadIdentity(identityPath),
+      as: identity,
       clientBuild: { application: "cf", gitSha: clientGitSha },
       memoryHost,
     }),

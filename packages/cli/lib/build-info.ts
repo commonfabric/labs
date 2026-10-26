@@ -84,8 +84,16 @@ export async function resolveCliVersion(): Promise<CliVersion> {
   return { sha, checkoutDir: sha === null ? null : dir };
 }
 
-export async function resolveCliGitSha(): Promise<string | null> {
-  return (await resolveCliVersion()).sha;
+/** One attribution snapshot shared by this process's runtime connections. */
+let clientGitSha: Promise<string | null> | undefined;
+
+/**
+ * Captures the build SHA on first use and shares it across later runtime opens.
+ * A source checkout moving while this process runs cannot relabel its loaded
+ * code. Changes before first use and uncommitted edits remain unobservable.
+ */
+export function resolveCliGitSha(): Promise<string | null> {
+  return clientGitSha ??= resolveCliVersion().then(({ sha }) => sha);
 }
 
 /** How two differing commits relate in a checkout's history. `cli-ahead` and

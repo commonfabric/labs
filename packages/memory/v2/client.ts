@@ -242,7 +242,10 @@ export type ConnectionState =
   | "closed";
 
 export type MountOptions = {
-  /** Runtime identity supplied by the connection before signing the open. */
+  /**
+   * Runtime identity supplied by the connection before signing the open.
+   * Caller-supplied values are ignored; configure `ConnectOptions.client`.
+   */
   client?: ClientInfo;
 
   /** Require the space's complete persisted custom-root intent. */
