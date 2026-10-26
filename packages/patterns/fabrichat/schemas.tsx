@@ -448,14 +448,13 @@ export const reactionTalliesOf = (
  * messages alone, and its roster, which the room stores. It leaves out the
  * rest of the room's data face. Its `participants` lists every author beside
  * those the roster holds, so deriving it reads every message. A room's
- * `canSend` is decided per reader, from their own profile, and its
- * `messages.windows` are each session's own, so both reach per-user or
- * per-session instances, as the room's rendering does. Its `messages.latest`
- * is space-scoped, but holds up to `maxWindowCount` messages and their
- * reactions, which every manager handler would then load for every room; a
- * reader that wants the messages reads them through the room. The rendering
- * is not part of the link either, and `cf-render` still draws the room through
- * it, since a render reads the rendering whatever the link declares.
+ * `canSend` is decided per reader, from their own profile, as the room's
+ * rendering is. Its `messages.latest` is space-scoped, but holds up to
+ * `maxWindowCount` messages and their reactions, which every manager handler
+ * would then load for every room; a reader that wants the messages reads them
+ * through the room. The rendering is not part of the link either, and
+ * `cf-render` still draws the room through it, since a render reads the
+ * rendering whatever the link declares.
  */
 export interface ChatRoomLink {
   /** What the room says about itself. */
