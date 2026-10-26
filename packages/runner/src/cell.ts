@@ -6,6 +6,7 @@ import type {
   GroupIndex,
   KeyIndex,
   ReadonlyCell,
+  TextChange,
 } from "@commonfabric/api";
 import {
   assertValidFabricValueLayer,
@@ -964,6 +965,7 @@ const cellMethods = new Set<
   "pushAll",
   "addUnique",
   "increment",
+  "applyChanges",
   "remove",
   "removeAll",
   "removeByValue",
@@ -1008,6 +1010,11 @@ const cellMethods = new Set<
   "keys",
   "keyEntries",
 ]);
+
+/** Whether `changes` is a list of text changes rather than a single one. */
+const isTextChangeList = (
+  changes: TextChange | readonly TextChange[],
+): changes is readonly TextChange[] => Array.isArray(changes);
 
 /** Whether `schema` admits `value` and nothing else. */
 function schemaPinsLiteral(
@@ -3273,6 +3280,67 @@ export class CellImpl<T extends FabricValue>
     // server resolves against durable state instead of a value diffed against a
     // possibly-stale read.
     this.#tx.recordMergeableOp?.(resolvedLink, { op: "increment", by });
+  }
+
+  /**
+   * Applies `changes` to this string cell, each position referring to the
+   * value this transaction read. The commit carries them as an edit, which a
+   * collaborative editor merges with its own typing, and which applies only
+   * while the field still holds the value read here: a field that moved on
+   * refuses the commit, and the transaction runs again against the new value.
+   *
+   * @throws when called outside a transaction, when the cell holds no string,
+   *   when a change does not fit the string, or when the transaction already
+   *   wrote the field another way.
+   */
+  applyChanges(changes: TextChange | readonly TextChange[]): void {
+    if (!this.#tx) {
+      throw new Error(
+        "Cell.applyChanges() requires a transaction and a string value\n" +
+          "help: use in handlers only, ensure cell is typed as string",
+      );
+    }
+    if (!this.#tx.recordTextChanges) {
+      throw new Error(
+        "Cell.applyChanges() requires a transaction that records text changes",
+      );
+    }
+    if (!this.#synced) this.#startLoad();
+
+    const resolvedLink = resolveLink(
+      this.#runtime,
+      this.#tx,
+      this.#link,
+      "value",
+      {
+        markIfcCrossings: true,
+      },
+    );
+    recordRelevantSchemaWritePolicyInput(
+      this.#tx,
+      resolvedLink,
+      resolvedLink.schema ?? this.schema,
+    );
+    // An ordinary read, so that it reaches the commit as a confirmed read of
+    // the field: the precondition that refuses the edit once the field moves.
+    const currentValue = this.#tx.readValueOrThrow(resolvedLink);
+    if (typeof currentValue !== "string") {
+      throw new Error(
+        "Cell.applyChanges() requires a transaction and a string value\n" +
+          "help: use in handlers only, ensure cell is typed as string",
+      );
+    }
+    const list: readonly TextChange[] = isTextChangeList(changes)
+      ? changes
+      : [changes];
+    const next = this.#tx.recordTextChanges(resolvedLink, list);
+    diffAndUpdate(
+      this.#runtime,
+      this.#tx,
+      resolvedLink,
+      next,
+      this.#frame?.cause,
+    );
   }
 
   /**

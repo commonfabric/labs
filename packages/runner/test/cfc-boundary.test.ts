@@ -2856,10 +2856,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     // item write's input lands at the array, and the next item write, at the
     // array the document then holds, merges with it. Each annotation is one
     // `cfcSchemaGivesNoShape()` sets aside, among them the Common Fabric
-    // extensions the schema generator emits.
+    // extensions stored schemas carry.
+    const legacyTags: JSONSchema & { tags: string[] } = { tags: ["list"] };
     const annotations: Record<string, JSONSchema> = {
       description: { description: "labeled, shapeless" },
-      tags: { tags: ["list"] },
+      tags: legacyTags,
       tier: { tier: "wrapper" },
       $schema: { $schema: "https://json-schema.org/draft/2020-12/schema" },
     };

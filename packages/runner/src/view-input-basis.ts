@@ -55,24 +55,43 @@ export class ViewInputBasisCache {
     depth: number;
     value: FabricValue | undefined;
     fingerprint: string;
+
+    /** The document the value was observed in, when it is deep-frozen. */
+    document?: EntityDocument;
   }>();
 
-  /** Reobserves path reachability and value on every currency check. */
+  /**
+   * Reobserves path reachability and value on every currency check, except
+   * in the deep-frozen document the basis was last observed in, which can
+   * only observe the same again.
+   */
   matches(
     document: EntityDocument | undefined,
     basis: ViewValueBasis,
   ): boolean {
-    const observed = observeViewInput(document, basis.path);
     const previous = this.#values.get(basis);
+    if (previous?.document !== undefined && previous.document === document) {
+      return previous.fingerprint === basis.fingerprint;
+    }
+    const observed = observeViewInput(document, basis.path);
+    const frozen = document !== undefined && isDeepFrozen(document)
+      ? document
+      : undefined;
     if (
       previous !== undefined && previous.depth === observed.depth &&
       Object.is(previous.value, observed.value)
     ) {
+      if (frozen === undefined) delete previous.document;
+      else previous.document = frozen;
       return previous.fingerprint === basis.fingerprint;
     }
     const fingerprint = hashStringOf(observed);
     if (isDeepFrozen(observed.value)) {
-      this.#values.set(basis, { ...observed, fingerprint });
+      this.#values.set(basis, {
+        ...observed,
+        fingerprint,
+        ...(frozen !== undefined && { document: frozen }),
+      });
     } else {
       this.#values.delete(basis);
     }

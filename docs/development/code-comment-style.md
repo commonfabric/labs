@@ -655,8 +655,8 @@ explains local mechanics; the doc comment says what a caller can rely on.
 
 A doc comment on a type that reaches the schema generator does not stay
 documentation. It attaches to the generated schema as its `description`, and
-any `#hashtag` in that text is mirrored into a `tags` array, lowercased and
-deduped. Where two declarations of the same thing carry conflicting docs, the
+discovery extracts any `#hashtag` in that text at runtime, lowercased and
+deduplicated. Where two declarations of the same thing carry conflicting docs, the
 first wins and the conflict is recorded in `$comment`.
 
 On such a type, then, a doc comment is program output, and a `#hashtag` written

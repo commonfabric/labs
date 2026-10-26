@@ -41,8 +41,31 @@ content supplied to the collaborative editor; Loom's Markdown importer converts
 CRLF and CR line endings to LF while leaving the source file untouched.
 Frontmatter and relative links stay in the body. Import does not upload
 referenced files or synchronize changes back to a local Markdown file. Once
-editors open the note, change its body through the collaborative editor rather
-than replacing it with an ordinary whole-value write.
+editors open the note, change its body through the collaborative editor or the
+verbs below rather than replacing it with an ordinary whole-value write.
+
+## Editing from a handler or an agent
+
+Three verbs edit the body while people are typing in it, so an agent or another
+pattern can add to a note without the editor:
+
+| Verb          | Event          | Effect                                                                                                                  |
+| ------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `appendLine`  | `{ text }`     | Adds `text` at the end, on a line of its own.                                                                           |
+| `prependLine` | `{ text }`     | Adds `text` at the start, on a line of its own.                                                                         |
+| `replaceText` | `{ old, new }` | Replaces the one occurrence of `old` with `new`; refuses when `old` is empty, occurs nowhere, or occurs more than once. |
+
+```sh
+cf piece call --cell <piece> appendLine '{"text": "- [ ] Send the summary"}'
+```
+
+Each verb reads the body and edits it through `applyChanges()`, by position in
+the text it read. The edit reaches the open editors as an edit they merge with
+their own typing, and lands only while the body still holds the text the verb
+read: if someone typed in the meantime, the commit is refused and the verb runs
+again against the new text. `replaceText` matches `old` exactly, code unit for
+code unit, so an anchor someone has since edited refuses rather than landing
+somewhere else; read the note again and anchor on what it holds.
 
 The pattern includes no notebook, note registry, or automatic backlink creation.
 Space membership controls access through the host's ordinary sharing flow.
@@ -68,5 +91,5 @@ deno run --no-lock -A packages/cli/mod.ts test packages/patterns/shared-note/mai
 ```
 
 The pattern test covers initial text, compact views, profile setup, editor
-bindings, error display, recovery, and the live-cursor notice. Browser
-integration covers multiple identities and the actual editor protocol.
+bindings, error display, recovery, the live-cursor notice, and the verbs.
+Browser integration covers multiple identities and the actual editor protocol.

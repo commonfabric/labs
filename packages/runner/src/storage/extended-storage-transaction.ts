@@ -1,3 +1,4 @@
+import type { TextChange } from "@commonfabric/api";
 import {
   deepFreeze,
   type FabricPlainObject,
@@ -3766,6 +3767,30 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.tx.poisonMergeableOp?.(toMemorySpaceAddress(link));
   }
 
+  recordTextChanges(
+    link: NormalizedFullLink,
+    changes: readonly TextChange[],
+  ): string {
+    this.#assertWritable("recordTextChanges");
+    if (!this.tx.recordTextChanges) {
+      throw new Error(
+        "storage transaction does not support recordTextChanges()",
+      );
+    }
+    const address = toMemorySpaceAddress(link);
+    // The same S18 chokepoint a write takes: the changes become a write of
+    // this address, which the caller then makes through `writeOrThrow()`.
+    this.#noteSystemWrite(address);
+    this.#noteCfcActivity();
+    // The intent is held outside the journal the prepared digest is derived
+    // from, and decides how the commit carries the field. One recorded after a
+    // preparation invalidates it, as a write does.
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("text-changes-after-prepare");
+    }
+    return this.tx.recordTextChanges(address, changes);
+  }
+
   recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void {
     // A folded SQLite write is a write — honor the wrapper's read-only mode the
     // same way cell writes do, instead of silently recording it.
@@ -5072,6 +5097,18 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   poisonMergeableOp(link: NormalizedFullLink): void {
     this.#wrapped.poisonMergeableOp?.(link);
+  }
+
+  recordTextChanges(
+    link: NormalizedFullLink,
+    changes: readonly TextChange[],
+  ): string {
+    if (!this.#wrapped.recordTextChanges) {
+      throw new Error(
+        "storage transaction does not support recordTextChanges()",
+      );
+    }
+    return this.#wrapped.recordTextChanges(link, changes);
   }
 
   recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void {

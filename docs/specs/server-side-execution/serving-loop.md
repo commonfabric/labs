@@ -325,8 +325,9 @@ SpaceServer outbox ──(e)──► network; results re-enter via (a)
   the store holds nothing at leaves no record, as a pull that delivered
   nothing leaves none: a transaction's read of it stays an unexamined
   absence for commit to reconcile, and the store is asked again only
-  when the feed reports a write to it. Counted: `storeReads`,
-  `storeRefreshes` (§7).
+  when the feed reports a write to it, or when a piece's start finds the
+  argument document reported absent while the result that links to it is
+  present. Counted: `storeReads`, `storeRefreshes` (§7).
 - **(b) memory server → ExecutorHost**, in-process: the
   admission-hook activation feed — an authored admission into a
   space with no live lease NOTIFIES the host, and activation then
