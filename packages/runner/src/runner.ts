@@ -5093,6 +5093,8 @@ export class Runner {
    * wave, the commit settles with the wave, so an action feeding that wave
    * cannot wait for it here.
    *
+   * @throws PieceStateMovedError where the start refused the piece, on the
+   * commit's first round or a retry's.
    * @throws Error naming the failed piece-start commit, with storage's
    * verdict, or whatever else cut the commit short, as its `cause`.
    */
@@ -5102,6 +5104,8 @@ export class Runner {
     const commits = attempt.instantiationCommits ?? [];
     for (const failure of await Promise.all(commits)) {
       if (failure === undefined) continue;
+      // A refusal is the start's verdict, not a failure of its commit.
+      if (failure.error instanceof PieceStateMovedError) throw failure.error;
       throw new Error(
         `piece-start commit ${failure.actionId} failed, so the started ` +
           "graph's setup writes did not land: " +

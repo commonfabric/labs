@@ -39,6 +39,7 @@ import {
   preparePieceSourceTransitionBaseline,
 } from "../src/runner.ts";
 import { Runtime } from "../src/runtime.ts";
+import type { CommitError } from "../src/storage/interface.ts";
 import {
   PieceStateMovedError,
   readStoredSetupBuild,
@@ -46,6 +47,8 @@ import {
   type StoredSetupBuild,
   storedSetupBuildOf,
 } from "../src/stored-setup-build.ts";
+
+import { interceptPieceStartCommit } from "./support/intercept-piece-start-commit.ts";
 
 const signer = await Identity.fromPassphrase("stored-setup-build-repair");
 const space = signer.did();
@@ -645,6 +648,40 @@ describe("stored-setup-build-repair", () => {
     }]);
     expect(refused.ambiguous).toEqual([]);
     expect(refused.pattern).toEqual(ref);
+  });
+
+  it("rejects `startWithCommit()` with the refusal a retry of its commit reaches", async () => {
+    // The start's first commit is lost to a stale basis, and the piece's
+    // record of another build lands before the retry, whose judgment
+    // refuses the piece.
+    const { cell, pattern, ref } = await setUpAndStop(
+      "refused-on-retry",
+      STATEFUL,
+    );
+    const staleBasis = {
+      name: "StorageTransactionInconsistent",
+      message: "injected stale basis",
+    } as CommitError;
+    const commit = interceptPieceStartCommit(rt, {
+      refusal: staleBasis,
+      held: true,
+    });
+    try {
+      const started = rt.runner.startWithCommit(cell).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await commit.intercepted;
+      await storeAsBuild(cell, pattern, ref, (n) => n + 1);
+      commit.release();
+
+      const refused = await started;
+      expect(refused).toBeInstanceOf(PieceStateMovedError);
+      expect((refused as PieceStateMovedError).pattern).toEqual(ref);
+      expect(rt.runner.isRunning(cell)).toBe(false);
+    } finally {
+      commit.restore();
+    }
   });
 
   it("refuses each later start of a refused piece in turn, rather than finding it already running", async () => {
