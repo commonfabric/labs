@@ -280,9 +280,10 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   link, body or title change they summarize, so no writer has to run the topic
   afterwards for the board to be right. A topic stored before they were kept
   gets them from the `activity-scalars` upgrade step (`state-upgrades.md`),
-  which computes both from the topic's own complete arrays. That step runs once:
-  a value it computed from incomplete arrays would stay wrong, which is why a
-  handler defers it to the lift when either array is unread.
+  which computes both from the topic's own records. That step runs once, so a
+  value it computed from incomplete reads would stay wrong: only the lift
+  completes it, reading each stamp through its own key, which waits for an
+  unresolved link rather than reading it as absent.
 - Verified by `multi-user.test.tsx` (two isolated runtimes, one shared board).
 
 ## Headless / agent use

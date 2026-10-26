@@ -34,9 +34,10 @@ open the author UI for the lift to write. Each headless content verb and browser
 handler also calls the shared runner after validating the request and before its
 first durable write. A handler can complete an upgrade when its reads satisfy
 that step's readiness guard. For the author step, legacy records with no
-structured author object defer to the lift. Incomplete reads leave the version
-unchanged; the author upgrade is additive, so content mutations can still
-operate on version-zero state when their own inputs are available.
+structured author object defer to the lift. The activity step has no such guard:
+only the lift completes it. Incomplete reads leave the version unchanged; the
+author upgrade is additive, so content mutations can still operate on
+version-zero state when their own inputs are available.
 
 The guarded entry points include comment creation, editing and retraction; link
 creation and retraction; title and body saves; and adding or removing mentions.
@@ -145,11 +146,15 @@ time to that stamp when it is newer, so it never moves back. A topic the board
 creates starts at the current version with a count of zero and its creation time
 as its activity, and never runs this step.
 
-The step runs once, so a value it computed from incomplete arrays would stay
-wrong. A handler therefore completes it only when both the comment and link
-arrays read as defined, and defers to the lift otherwise; the lift's reads
-suspend on an unresolved array rather than read it as empty. The scalar stamps
-it reads live in the same document as the arrays and read as zero when absent.
+The step runs once, so a value it computed from incomplete reads would stay
+wrong. Only the lift completes it, reading each comment's and link's stamps
+through their own keys: a read through a key suspends on an unresolved link,
+where reading the whole array drops the stamp as though it were absent. A
+handler's eager reads cannot tell an unresolved link from an absent optional
+stamp, so a handler always defers the step to the lift, and a verb's
+`noteActivity()` on a topic still at version one is overwritten when the step
+runs. The creation, body and title times are inputs with a default of zero,
+which an absent value reads as.
 
 ## Rollout and rollback
 
@@ -199,5 +204,8 @@ mutation while creator names, comment names, whole comments, structured authors,
 and author subfields are unresolved, then verify migration recovers without
 losing the title or overwriting arriving structured attribution. Cases with
 explicitly undefined and partially populated authors check object initialization
-and preservation of existing properties. New entry points must receive the
-upgrade binding and join this coverage.
+and preservation of existing properties. For the activity step, integration
+cases leave a comment's or link's stamp unresolved while a verb saves the title,
+then check that the step completes only once the stamp arrives, and counts and
+dates from it. New entry points must receive the upgrade binding and join this
+coverage.

@@ -1340,23 +1340,37 @@ const activityOf = (
  * writes that change them (`noteActivity`).
  *
  * The computation is whole, so it also corrects anything a verb noted before
- * this step ran. A handler defers to the lift when either array is unread,
- * since an eager read cannot tell an unresolved link from an absent one; the
- * scalar stamps live in the same document as the arrays and read as zero when
- * absent.
+ * this step ran. Only the lift completes it. Each stamp is read through its own
+ * key, which suspends the lift on an unresolved link, whereas reading the whole
+ * array drops such a stamp as though it were absent and would complete the
+ * step on a wrong count or time. A handler's eager reads cannot tell an
+ * unresolved link from an absent optional stamp, and most stamps are optional,
+ * so a handler always defers. The creation, body and title times are inputs
+ * with a default of zero, which an absent value reads as.
  */
 const upgradeActivityScalars = (
   input: TopicUpgradeState,
   fromHandler: boolean,
 ): boolean => {
-  const comments = input.comments.get();
-  const links = input.links.get();
-  if (fromHandler && (comments === undefined || links === undefined)) {
-    return false;
-  }
+  if (fromHandler) return false;
+  const comments = (input.comments.get() ?? []).map((_, index) => {
+    const comment = input.comments.key(index);
+    return {
+      sentAt: comment.key("sentAt").get(),
+      editedAt: comment.key("editedAt").get(),
+      removedAt: comment.key("removedAt").get(),
+    };
+  });
+  const links = (input.links.get() ?? []).map((_, index) => {
+    const link = input.links.key(index);
+    return {
+      addedAt: link.key("addedAt").get(),
+      removedAt: link.key("removedAt").get(),
+    };
+  });
   const { commentCount, lastActivityAt } = activityOf(
-    comments ?? [],
-    links ?? [],
+    comments,
+    links,
     input.createdAt.get() ?? 0,
     input.bodyUpdatedAt.get() ?? 0,
     input.titleUpdatedAt.get() ?? 0,

@@ -186,6 +186,9 @@ export default pattern(() => {
     version.get() === Number.MAX_SAFE_INTEGER + 1
   );
 
+  // A handler completes the author step and leaves the activity step to the
+  // lift, so the upgrade a handler runs stops at version one.
+  const AUTHOR_STEP_VERSION = 1;
   const oldVersion = new Writable(0);
   const oldCreator = new Writable<TopicAuthor | undefined>({
     name: "",
@@ -223,7 +226,7 @@ export default pattern(() => {
   );
   const action_upgrade_and_submit = action(() => upgradeAndSubmit.send());
   const assert_handler_upgraded_before_appending = assert(() =>
-    oldVersion.get() === TOPIC_STATE_VERSION &&
+    oldVersion.get() === AUTHOR_STEP_VERSION &&
     oldCreator.get()?.name === "Old creator" &&
     oldComments.get().length === 2 &&
     oldComments.get()[0].author?.name === "Old commenter" &&
@@ -266,7 +269,7 @@ export default pattern(() => {
     deferredName.set("Arrived creator")
   );
   const assert_handler_completes_available_upgrade = assert(() =>
-    deferredVersion.get() === TOPIC_STATE_VERSION &&
+    deferredVersion.get() === AUTHOR_STEP_VERSION &&
     deferredCreator.get().name === "Arrived creator"
   );
 
