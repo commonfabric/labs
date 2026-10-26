@@ -24,7 +24,7 @@ import {
   readValue,
   textContent,
 } from "../test/vnode-helpers.ts";
-import { type MessagesValue } from "./room-records.tsx";
+import { type MessageRecord, type MessagesValue } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
 import {
   CHAT_SEND_ACTION,
@@ -96,6 +96,12 @@ const threadLinkText = (root: unknown, text: string): string => {
 const controlDisplay = (root: unknown, text: string, label: string) =>
   displayOf(findNode(rowIn(root, MAIN, text), isButton(label)));
 
+/** A message, as an event names it. */
+function messageOf(cell: unknown): Writable<MessageRecord>;
+function messageOf(cell: unknown): unknown {
+  return cell;
+}
+
 const ALL = ["Root", "Other", "First reply", "Second reply"];
 
 export default pattern(() => {
@@ -109,6 +115,8 @@ export default pattern(() => {
   const alice = FabriChatRoomCore(
     { myProfile: aliceProfile, ...records } as RoomArg,
   );
+  // The first message, as an event names it.
+  const root = messageOf(messages.key(0));
   const bob = FabriChatRoomCore(
     { myProfile: bobProfile, ...records } as RoomArg,
   );
@@ -198,6 +206,36 @@ export default pattern(() => {
           controlDisplay(alice[UI], "Other", "Edit") === "none" &&
           controlDisplay(alice[UI], "Other", "Remove entirely") ===
             "inline-flex"
+        ),
+      },
+
+      // A post sent to both shows in the main conversation marked as in its
+      // thread, with no control starting a thread of its own, and the marker
+      // opens the thread it is in.
+      {
+        action: bob.sendMessage,
+        event: {
+          body: "Both ways",
+          replyTo: { thread: root, shownIn: "both" },
+        },
+        trustedUi: sendGesture,
+      },
+      {
+        assertion: assert(() =>
+          controlDisplay(alice[UI], "Both ways", "In a thread") ===
+            "inline-flex" &&
+          findNode(rowIn(alice[UI], MAIN, "Both ways"), isButton("Thread")) ===
+            undefined &&
+          controlDisplay(alice[UI], "Root", "In a thread") === "none"
+        ),
+      },
+      {
+        action: action(() => clickInRow(alice[UI], "Both ways", "In a thread")),
+      },
+      {
+        assertion: assert(() =>
+          rowsIn(alice[UI], THREAD, [...ALL, "Both ways"]) ===
+            "row missing row row row"
         ),
       },
     ],

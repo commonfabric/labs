@@ -3,7 +3,10 @@ import { describe, it } from "@std/testing/bdd";
 
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 
-import { ViewReadCache } from "../src/executor/view-read-cache.ts";
+import {
+  ViewReadCache,
+  type ViewReadPart,
+} from "../src/executor/view-read-cache.ts";
 import type {
   IMemoryChange,
   IMemorySpaceAddress,
@@ -126,6 +129,71 @@ describe("view read cache", () => {
     });
     expect(cache.value).toBe("second");
     cache.notify({ type: "reset", space });
+    expect(cache.value).toBeUndefined();
+  });
+
+  it("invalidates through a part kept from the result before", () => {
+    const cache = new ViewReadCache<string>(identity);
+    const kept = [read];
+    const added: IMemorySpaceAddress = { ...read, id: "of:added" };
+    cache.setParts(
+      "first",
+      new Map<string, ViewReadPart>([["kept", {
+        reads: [kept],
+        shallowReads: [],
+      }]]),
+    );
+    cache.setParts(
+      "second",
+      new Map<string, ViewReadPart>([
+        ["kept", { reads: [kept], shallowReads: [] }],
+        ["added", { reads: [[added]], shallowReads: [] }],
+      ]),
+    );
+    cache.notify({
+      type: "integrate",
+      space,
+      changes: [{ address: read, before: { value: 1 }, after: { value: 2 } }],
+    });
+    expect(cache.value).toBeUndefined();
+  });
+
+  it("stops observing a part a later result leaves out or replaces", () => {
+    const cache = new ViewReadCache<string>(identity);
+    const replaced: IMemorySpaceAddress = { ...read, id: "of:replaced" };
+    const replacement: IMemorySpaceAddress = { ...read, id: "of:replacement" };
+    cache.setParts(
+      "first",
+      new Map<string, ViewReadPart>([
+        ["dropped", { reads: [[read]], shallowReads: [] }],
+        ["changed", { reads: [[replaced]], shallowReads: [] }],
+      ]),
+    );
+    cache.setParts(
+      "second",
+      new Map<string, ViewReadPart>([["changed", {
+        reads: [[replacement]],
+        shallowReads: [],
+      }]]),
+    );
+    cache.notify({
+      type: "integrate",
+      space,
+      changes: [
+        { address: read, before: { value: 1 }, after: { value: 2 } },
+        { address: replaced, before: { value: 1 }, after: { value: 2 } },
+      ],
+    });
+    expect(cache.value).toBe("second");
+    cache.notify({
+      type: "integrate",
+      space,
+      changes: [{
+        address: replacement,
+        before: { value: 1 },
+        after: { value: 2 },
+      }],
+    });
     expect(cache.value).toBeUndefined();
   });
 });

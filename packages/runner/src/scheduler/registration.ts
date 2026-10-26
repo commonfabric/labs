@@ -221,6 +221,7 @@ export function subscribePullSchedulerAction(
 
   if (initialViewState !== undefined && record !== undefined) {
     record.adoptedViewIdentity = initialViewState.identity;
+    record.adoptedViewDependencies = initialViewState.dependencies;
     record.hasCommittedResult = true;
     state.subscriptionState.nodes.setStatus(action, "clean");
     state.pending.delete(action);

@@ -1,7 +1,8 @@
 /**
- * FabriChat's rules that need no runtime: what counts as a single emoji, and
- * how the two views of a conversation are derived from replies. The room
- * applies them to its records; `logic.test.ts` states them directly.
+ * FabriChat's rules that need no runtime: what counts as a single emoji, how
+ * the two views of a conversation are derived from replies, and how a
+ * thread's title reads when no member has set one. The room applies them to
+ * its records; `logic.test.ts` states them directly.
  */
 
 /**
@@ -19,8 +20,8 @@ export const isSingleEmoji = (text: unknown): text is string =>
 export type ShownIn = "main" | "thread" | "both";
 
 /**
- * A message as the views see it: its identity, its time, and what it replies
- * to, by identity.
+ * A message as the views see it: its identity, its time, and the thread it
+ * joins and the message it quotes, by identity.
  */
 export interface ViewItem {
   /** The message's identity, unique in the room. */
@@ -29,8 +30,11 @@ export interface ViewItem {
   /** The message's `sentAt`, which another message can share. */
   sentAt: bigint;
 
-  /** The message this one replies to, and where it is shown. */
-  replyTo?: { key: string; shownIn: ShownIn };
+  /**
+   * The root of the thread the message joins and the message it quotes, each
+   * where it names one, and where the message is shown.
+   */
+  replyTo?: { thread?: string; quotes?: string; shownIn: ShownIn };
 }
 
 /**
@@ -39,54 +43,6 @@ export interface ViewItem {
  */
 export const isInMain = (item: ViewItem): boolean =>
   item.replyTo === undefined || item.replyTo.shownIn !== "thread";
-
-/**
- * Each message's thread root, by the message's key, for every message in a
- * thread. Threads are flat: a reply to a message already in a thread joins
- * that thread. Each reply chain is walked once, iteratively, so a long chain
- * costs its length and no stack: a message whose target's root is known takes
- * it, one whose target is in no thread takes the target, and a chain that
- * returns to a message it has already visited stops there.
- */
-export const threadRoots = (
-  items: readonly ViewItem[],
-): Map<string, string> => {
-  const byKey = new Map<string, ViewItem>(
-    items.map((item) => [item.key, item]),
-  );
-  const roots = new Map<string, string>();
-  for (const item of items) {
-    const chain: string[] = [];
-    const inChain = new Set<string>();
-    let current: ViewItem | undefined = item;
-    let root: string | undefined;
-    while (current !== undefined) {
-      const known = roots.get(current.key);
-      if (known !== undefined) {
-        root = known;
-        break;
-      }
-      const reply: ViewItem["replyTo"] = current.replyTo;
-      if (reply === undefined || reply.shownIn === "main") {
-        // In no thread: it roots the chain that led here, if any did.
-        root = chain.length === 0 ? undefined : current.key;
-        break;
-      }
-      if (inChain.has(current.key)) {
-        root = reply.key;
-        break;
-      }
-      inChain.add(current.key);
-      chain.push(current.key);
-      current = byKey.get(reply.key);
-      if (current === undefined) root = reply.key;
-    }
-    if (root !== undefined) {
-      for (const key of chain) roots.set(key, root);
-    }
-  }
-  return roots;
-};
 
 /** A message's place in the two views of a conversation. */
 export interface ViewPlace {
@@ -110,16 +66,16 @@ export interface ViewPlace {
 }
 
 /**
- * Every message's place in the views, by the message's key. The reply chains
- * are walked once for the whole list, as `threadRoots()` walks them.
+ * Every message's place in the views, by the message's key. Each message
+ * names the root of the thread it joins, so threads are flat by what is
+ * stored, and one pass over the list finds every thread's messages.
  */
 export const viewPlaces = (
   items: readonly ViewItem[],
 ): Record<string, ViewPlace> => {
-  const roots = threadRoots(items);
   const replies = new Map<string, { count: number; latestAt: bigint }>();
   for (const item of items) {
-    const root = roots.get(item.key);
+    const root = item.replyTo?.thread;
     if (root === undefined) continue;
     const known = replies.get(root);
     replies.set(root, {
@@ -131,7 +87,7 @@ export const viewPlaces = (
   }
   return Object.fromEntries(
     items.map((item): [string, ViewPlace] => {
-      const thread = roots.get(item.key);
+      const thread = item.replyTo?.thread;
       const own = replies.get(item.key);
       return [item.key, {
         inMain: isInMain(item),
@@ -141,4 +97,28 @@ export const viewPlaces = (
       }];
     }),
   );
+};
+
+/** The most characters a thread's title has when no member has set one. */
+export const THREAD_EXCERPT_LENGTH = 50;
+
+/**
+ * A thread's title when no member has set one: the start of its root's text,
+ * `text`, as a reader sees it. Each run of whitespace reads as one space, and
+ * none leads or trails. Text of at most `THREAD_EXCERPT_LENGTH` characters is
+ * the title as it stands; longer text is cut to the words that fit before an
+ * ellipsis (`…`) within that length, or, for a first word longer than that,
+ * to as much of the word as fits. A character is a Unicode code point, so a
+ * cut never splits one.
+ */
+export const threadExcerpt = (text: string): string => {
+  const plain = Array.from(text.replace(/\s+/gu, " ").trim());
+  if (plain.length <= THREAD_EXCERPT_LENGTH) return plain.join("");
+  // Room for the ellipsis, and whether the text breaks between words right
+  // where that room ends.
+  const room = plain.slice(0, THREAD_EXCERPT_LENGTH - 1);
+  const atBreak = plain[THREAD_EXCERPT_LENGTH - 1] === " ";
+  const space = room.lastIndexOf(" ");
+  const kept = atBreak || space <= 0 ? room : room.slice(0, space);
+  return `${kept.join("").trimEnd()}…`;
 };

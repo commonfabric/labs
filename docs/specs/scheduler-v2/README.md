@@ -730,7 +730,10 @@ another session, or on another stream, is a different one. The receipt
 address a caller can be handed is therefore a function of the pair, which is
 what makes it safe to publish before the outcome exists.
 
-Per pass, for each lane's head event:
+Per pass, for each lane's head event (and, under the serving posture, for
+each ready event behind it in turn, the handlers running back to back ahead
+of the pass's one settle, so that derivations several events invalidate run
+once; an event the gate below holds ends that run, and the settle serves it):
 
 1. **Preflight.** Compute the handler's read closure in a read-only,
    commit-as-no-op transaction (CFC-inert, as today): declared writable-input

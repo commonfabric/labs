@@ -166,6 +166,28 @@ describe("view plan publisher", () => {
       .toEqual(previous);
   });
 
+  it("indexes a producer's basis again from the log its next run reports", async () => {
+    // The publisher keeps each producer's sorted surfaces by the log they
+    // were taken from. A node that runs again reports a new log, here one
+    // that reads another cell, and its basis must name that cell alone.
+    await publish();
+    const basisReadIds = () =>
+      fixture.publications.calls.at(-1)!.args[2].producers?.[0].basis?.reads
+        .map((read) => read.id);
+    expect(basisReadIds()).toEqual([
+      fixture.input.getAsNormalizedFullLink().id,
+    ]);
+    fixture.nodes[0].log = {
+      reads: [toMemorySpaceAddress(fixture.hidden.getAsNormalizedFullLink())],
+      shallowReads: [],
+      writes: [toMemorySpaceAddress(fixture.output.getAsNormalizedFullLink())],
+    };
+    await publish();
+    expect(basisReadIds()).toEqual([
+      fixture.hidden.getAsNormalizedFullLink().id,
+    ]);
+  });
+
   it("incorporates a handler's new observations without repeating the UI walk", async () => {
     const stream = fixture.runtime.getCell<unknown>(space, "click", {
       asCell: ["stream"],
@@ -262,6 +284,123 @@ describe("view plan publisher", () => {
     expect(fixture.publications.calls).toHaveLength(2);
     await publish();
     expect(fixture.publications.calls).toHaveLength(2);
+  });
+
+  it("keeps a planned view's selection through a cut wave and plans it at the quiescent one", async () => {
+    await publish();
+    await fixture.runtime.editWithRetry((tx) =>
+      fixture.output.withTx(tx).set(6)
+    );
+    // The visible value changed; a wave the deadline cut leaves the published
+    // selection standing, reading nothing.
+    const cut = fixture.reads.calls.length;
+    await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+      quiescent: false,
+    });
+    expect(fixture.reads.calls.length - cut).toBe(0);
+    expect(fixture.publications.calls).toHaveLength(1);
+    const quiet = fixture.reads.calls.length;
+    await publish();
+    expect(fixture.reads.calls.length - quiet).toBeGreaterThan(1);
+    expect(fixture.publications.calls).toHaveLength(2);
+  });
+
+  it("plans a view with no selection yet after a cut wave", async () => {
+    await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+      quiescent: false,
+    });
+    expect(fixture.publications.calls).toHaveLength(1);
+    expect(fixture.publications.calls[0].args[2].producers?.[0].basis)
+      .toBeDefined();
+  });
+
+  it("publishes the same selection to two sessions viewing the same snapshot", async () => {
+    await publish();
+    const one = fixture.reads.calls.length;
+    const second: SessionViewInterest = {
+      ...fixture.interest,
+      handle: {
+        ...fixture.interest.handle,
+        sessionId: "other",
+        sessionEpoch: "other-session",
+      },
+    };
+    fixture.interests.restore();
+    const interests = stub(
+      fixture.server,
+      "viewInterestsForSpace",
+      () => [fixture.interest, second],
+    );
+    const publisher = new ViewPlanPublisher();
+    try {
+      await publisher.publish(fixture.runtime, fixture.server, space);
+    } finally {
+      publisher.dispose();
+      interests.restore();
+      fixture.interests = stub(
+        fixture.server,
+        "viewInterestsForSpace",
+        () => [fixture.interest],
+      );
+    }
+    // The second session adds its registration metadata read and no UI walk:
+    // the walk read no scoped document, so the first session's serves it.
+    expect(fixture.reads.calls.length - one).toBe(one + 1);
+    expect(fixture.publications.calls).toHaveLength(3);
+    const [first, other] = fixture.publications.calls.slice(1).map((call) =>
+      call.args[2]
+    );
+    expect(other.inputs).toEqual(first.inputs);
+    expect(other.eligibleActions).toEqual(first.eligibleActions);
+    expect(other.producers).toEqual(first.producers);
+    expect(fixture.publications.calls[2].args[1].sessionId).toBe("other");
+  });
+
+  it("walks the UI again for a second session once publishing the first one's selection changed what the walk read", async () => {
+    // Publishing a selection yields to the runtime, and a walk shared with
+    // another session serves only while nothing it read has changed.
+    const second: SessionViewInterest = {
+      ...fixture.interest,
+      handle: {
+        ...fixture.interest.handle,
+        sessionId: "other",
+        sessionEpoch: "other-session",
+      },
+    };
+    fixture.interests.restore();
+    fixture.interests = stub(
+      fixture.server,
+      "viewInterestsForSpace",
+      () => [fixture.interest, second],
+    );
+    fixture.publications.restore();
+    let published = 0;
+    fixture.publications = stub(
+      fixture.server,
+      "setViewSelection",
+      async () => {
+        if (published++ === 0) {
+          await fixture.runtime.editWithRetry((tx) =>
+            fixture.root.withTx(tx).set({
+              $UI: {
+                type: "vnode",
+                name: "div",
+                props: {},
+                children: [fixture.hidden],
+              },
+            })
+          );
+        }
+        return true;
+      },
+    );
+    await publish();
+    const hidden = fixture.hidden.getAsNormalizedFullLink().id;
+    const [first, other] = fixture.publications.calls.map((call) =>
+      call.args[2].inputs?.map((input) => input.id)
+    );
+    expect(first).not.toContain(hidden);
+    expect(other).toContain(hidden);
   });
 
   it("re-walks changed visible values and new view lifetimes", async () => {

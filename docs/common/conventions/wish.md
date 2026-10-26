@@ -260,10 +260,14 @@ const wishResult = wish<Array<Favorite>>({ query: "#favorites" });
 ```
 
 The `tags` field holds the discovery tags of the piece pointed to by `cell` —
-the hashtags from its schema's doc comment, lowercased and without the leading
-`#`. The favorites client derives them from the piece's schema when the
-favorite is added (the schema is not reachable from inside the home pattern's
-handler), and the wish system matches against them.
+the hashtags from descriptions across its schema tree, lowercased and without
+the leading `#`. The favorites client derives them from the piece's schema
+when the favorite is added (the schema is not reachable from inside the home
+pattern's handler), and the wish system matches against them. Description text
+is the source even when a stored schema also carries a `tags` annotation. A
+schema with only that annotation and no description hashtags contributes no
+tags. Explicit favorite-tag overrides take precedence; stored favorite tags
+remain the values searched by wish.
 
 Favorites created before the `tags` field instead carry a `tag` field holding
 the piece's serialized result schema; the wish system still reads it,

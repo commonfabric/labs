@@ -1,6 +1,7 @@
 import type { FabricValue, SchemaPathSelector } from "@commonfabric/api";
 import {
   cloneIfNecessary,
+  debugStr,
   hashStringOf,
   isDeepFrozen,
   isKeyableObjectOrArray,
@@ -176,6 +177,7 @@ import {
   IStorageTransactionInconsistent,
   NativeCommitOptions,
   NativeStorageCommit,
+  NativeTextEdit,
   PullError,
   PushError,
   ReplicaLoadFailureError,
@@ -190,8 +192,10 @@ import {
   toReplicaLoadFailureError,
   UnexaminedAbsence,
   Unit,
+  UnreportedAuthoredBoundaryError,
   type ViewInterestLease,
 } from "./interface.ts";
+import { endLocalReadValidationStretch } from "./local-read-policy.ts";
 import {
   getBlindStructuralTarget,
   isDurableReadTx,
@@ -551,11 +555,13 @@ const documentOperationsOf = (
 
 /**
  * The operations a commit hands the store: cell operations first, a patch
- * carrying its patches alone, and folded SQLite operations last.
+ * carrying its patches alone, then folded SQLite operations, and the
+ * collaborative-field edits last, after every write to their documents.
  */
 const storeOperationsOf = (
   operations: readonly NativeCommitOperation[],
   sqliteOps: readonly SqliteOperation[],
+  applyOps: readonly NativeTextEdit[] = [],
 ): ClientCommit["operations"] => [
   ...operations.map((operation) => {
     switch (operation.op) {
@@ -578,7 +584,56 @@ const storeOperationsOf = (
     }
   }),
   ...sqliteOps,
+  ...applyOps,
 ];
+
+/**
+ * `operation` as its document's pending layer holds it: each field that one of
+ * `applyOps` edits is replaced by the text `operation.value` holds there. The
+ * wire patch leaves that field to the edit, and the edit lands only on the
+ * value its transaction read, so the store's result is that text, and the
+ * layer replays to it. That holds only for the edits
+ * {@link NativeStorageCommit.applyOps} admits, one per field and generated
+ * with the write that `value` records; a rebased or blind edit, or a second
+ * one on the field, has no result to show ahead of the verdict.
+ */
+const withTextEditsShown = (
+  operation: NativeCommitOperation,
+  applyOps: readonly NativeTextEdit[],
+): NativeCommitOperation => {
+  if (operation.op !== "patch" || applyOps.length === 0) return operation;
+  const scope = normalizeCellScope(operation.scope);
+  const shown: PatchOp[] = applyOps
+    .filter((edit) =>
+      edit.id === operation.id && normalizeCellScope(edit.scope) === scope
+    )
+    .map((edit) => {
+      const path = ["value", ...edit.path];
+      const text = readValueAtPath(operation.value, path);
+      if (typeof text !== "string") {
+        throw new Error(
+          debugStr`an edited field holds no text at $quote${path}`,
+        );
+      }
+      return { op: "replace", path: encodePointer(path), value: text };
+    });
+  return shown.length === 0
+    ? operation
+    : { ...operation, patches: [...operation.patches, ...shown] };
+};
+
+/**
+ * Throws when `transaction` carries collaborative-field edits, which a commit
+ * built ahead of its seal does not carry: `what` names the path refusing them.
+ */
+const refuseApplyOps = (transaction: NativeStorageCommit, what: string) => {
+  if (transaction.applyOps?.length) {
+    throw new Error(
+      `${what} cannot carry collaborative-field edits; commit the ` +
+        "transaction instead",
+    );
+  }
+};
 
 type CachedTransactionValue =
   | FabricValue
@@ -4278,6 +4333,22 @@ class Provider
     return this.replica.presentCount(absences);
   }
 
+  /** See {@link SpaceReplica.storeReportedAbsent}. */
+  storeReportedAbsent(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean {
+    return this.replica.storeReportedAbsent(address, identity);
+  }
+
+  /** See {@link SpaceReplica.readStoreAbsenceAgain}. */
+  readStoreAbsenceAgain(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean | undefined {
+    return this.replica.readStoreAbsenceAgain(address, identity);
+  }
+
   async #replaySync(
     replica: SpaceReplica,
     uri: URI,
@@ -4658,6 +4729,18 @@ class Provider
 
   pullToServerHead(): Promise<void> {
     return this.#followReplacement((replica) => replica.pullToServerHead());
+  }
+
+  /** @inheritDoc */
+  serverHeadSeq(): Promise<number> {
+    return this.#followReplacement((replica) => replica.serverHeadSeq());
+  }
+
+  /** @inheritDoc */
+  serverAuthoredSeq(head: number): Promise<number | undefined> {
+    return this.#followReplacement((replica) =>
+      replica.serverAuthoredSeq(head)
+    );
   }
 
   sqliteQuery(
@@ -5583,9 +5666,9 @@ export class SpaceReplica
    * Re-reads every listed instance this replica holds a record for
    * through the installed store read-through and integrates the results
    * as one inbound frame (see IStorageManager.integrateStoreWrites).
-   * Returns how many were refreshed. An instance the replica has never
-   * read is left alone: nothing depends on it, and its first read serves
-   * it from the store anyway.
+   * Returns how many the read-through answered for, a read finding nothing
+   * included. An instance the replica has never read is left alone: nothing
+   * depends on it, and its first read serves it from the store anyway.
    */
   integrateStoreWrites(
     writes: readonly { id: string; scopeKey: ScopeKey }[],
@@ -6188,6 +6271,11 @@ export class SpaceReplica
   }
 
   async pullToServerHead(): Promise<void> {
+    await this.serverHeadSeq();
+  }
+
+  /** @inheritDoc */
+  async serverHeadSeq(): Promise<number> {
     const { session } = await this.#activeSessionHandle();
     // An empty-root graph query fetches no document but still crosses the wire
     // and returns the server's current sequence. Because a WebSocket delivers a
@@ -6197,7 +6285,20 @@ export class SpaceReplica
     // caught up to everything the server had sent" barrier. `graph.query` is an
     // unconditional round trip (it cannot be answered from the local replica),
     // unlike the entity-id listing calls, which a server may decline by flag.
-    await session.queryGraph({ roots: [] });
+    return (await session.queryGraph({ roots: [] })).serverSeq;
+  }
+
+  /** @inheritDoc */
+  async serverAuthoredSeq(head: number): Promise<number | undefined> {
+    const { client, session } = await this.#activeSessionHandle();
+    if (client.serverFlags?.serverExecution !== true) return undefined;
+    const { authoredSeq } = await session.queryGraph({
+      roots: [],
+      atSeq: head,
+      includeAuthoredSeq: true,
+    });
+    if (authoredSeq === undefined) throw new UnreportedAuthoredBoundaryError();
+    return authoredSeq;
   }
 
   /**
@@ -7467,11 +7568,13 @@ export class SpaceReplica
     );
 
     const sqliteOps = transaction.sqliteOps ?? [];
+    const applyOps = transaction.applyOps ?? [];
 
     if (
       operations.length === 0 &&
       !preconditions?.length &&
-      sqliteOps.length === 0
+      sqliteOps.length === 0 &&
+      applyOps.length === 0
     ) {
       return { ok: {} };
     }
@@ -7485,6 +7588,7 @@ export class SpaceReplica
           preconditions,
           sqliteOps,
           options,
+          applyOps,
         ),
     );
   }
@@ -7527,6 +7631,7 @@ export class SpaceReplica
       transaction.sqliteOps ?? [],
       verdict,
       options,
+      transaction.applyOps ?? [],
     );
   }
 
@@ -7551,6 +7656,7 @@ export class SpaceReplica
     preconditions: readonly CommitPrecondition[];
     reads: ClientCommit["reads"];
   } {
+    refuseApplyOps(transaction, "a store commit built ahead of its seal");
     const operations = this.#wholeOverLocalFolds(
       documentOperationsOf(transaction),
       identity,
@@ -7577,6 +7683,7 @@ export class SpaceReplica
       readonly identity?: ScopeKeyIdentity;
       readonly reads?: ClientCommit["reads"];
     },
+    applyOps: readonly NativeTextEdit[] = [],
   ): SealedNativeCommit {
     // The tx→replica identity seam (server-execution v2 stage A, OW17): a
     // served per-instance run seals under ITS identity — its ops apply to
@@ -7596,10 +7703,10 @@ export class SpaceReplica
         options?.reads ?? this.#buildReads(source, localSeq, identity),
         identity,
       ),
-      // Cell ops first, folded SQLite ops last — the same commit shape
-      // commitOperations builds, so the wave batch is made of ordinary
-      // client commits.
-      operations: storeOperationsOf(operations, sqliteOps),
+      // Cell ops first, then folded SQLite ops, then collaborative-field
+      // edits — the same commit shape commitOperations builds, so the wave
+      // batch is made of ordinary client commits.
+      operations: storeOperationsOf(operations, sqliteOps, applyOps),
       ...(preconditions.length > 0
         ? { preconditions: [...preconditions] }
         : {}),
@@ -7630,7 +7737,12 @@ export class SpaceReplica
     }
 
     for (const operation of operations) {
-      this.#applyPending(operation, localSeq, commit.reads, identity);
+      this.#applyPending(
+        withTextEditsShown(operation, applyOps),
+        localSeq,
+        commit.reads,
+        identity,
+      );
     }
 
     if (before !== undefined) {
@@ -8310,6 +8422,7 @@ export class SpaceReplica
     preconditions: readonly CommitPrecondition[] = [],
     sqliteOps: readonly SqliteOperation[] = [],
     commitOptions?: NativeCommitOptions,
+    applyOps: readonly NativeTextEdit[] = [],
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     const activePreconditions = activeCommitPreconditions(preconditions);
     for (const pin of activePreconditions) {
@@ -8344,7 +8457,7 @@ export class SpaceReplica
     }
     if (
       operations.length === 0 && sqliteOps.length === 0 &&
-      activePreconditions.length === 0
+      applyOps.length === 0 && activePreconditions.length === 0
     ) {
       return { ok: {} };
     }
@@ -8361,9 +8474,10 @@ export class SpaceReplica
           operations,
           this.#buildReads(source, localSeq, undefined, activePreconditions),
         ),
-        // Cell ops first, folded SQLite ops last (applied in array order by the
-        // engine; sqlite ops are not entity revisions and carry no id/scope).
-        operations: storeOperationsOf(operations, sqliteOps),
+        // Cell ops first, then folded SQLite ops, which are not entity
+        // revisions and carry no id/scope, then the collaborative-field edits,
+        // which the engine applies after the writes to their documents.
+        operations: storeOperationsOf(operations, sqliteOps, applyOps),
         ...(activePreconditions.length > 0
           ? { preconditions: [...activePreconditions] }
           : {}),
@@ -8432,7 +8546,11 @@ export class SpaceReplica
 
     withCommitTiming(["commitOperations", "applyPending"], () => {
       for (const operation of operations) {
-        this.#applyPending(operation, localSeq, commit.reads);
+        this.#applyPending(
+          withTextEditsShown(operation, applyOps),
+          localSeq,
+          commit.reads,
+        );
       }
     });
 
@@ -9545,6 +9663,49 @@ export class SpaceReplica
     return present;
   }
 
+  /**
+   * Whether the store read-through, asked for the instance `address` names
+   * under `identity`, reported holding nothing there, with no write to it
+   * reported since (see `#storeAbsences`). Without a read-through installed
+   * it never has.
+   */
+  storeReportedAbsent(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean {
+    const instance = this.instanceKey(address.scope, identity);
+    return isScopeKey(instance) &&
+      this.#storeAbsences.has(docKey(address.id, instance));
+  }
+
+  /**
+   * Asks the store read-through again for an instance it reported holding
+   * nothing at, through `integrateStoreWrites()` as the feed's report of a
+   * write does, and returns whether the store holds the document now. An
+   * instance with no such report is not asked, nor is one while a frame is
+   * being applied, as a read-through on a miss is not; either returns
+   * `undefined`, as does a read the store gives no answer to, which leaves
+   * the report standing. A re-read the store answers is a frame like any
+   * other: its storage notification reaches the subscribers before this
+   * returns, and the scheduler's subscriber marks the readers of what changed
+   * and queues a pass, so none of them runs inside the caller.
+   */
+  readStoreAbsenceAgain(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean | undefined {
+    if (this.#frameApplyDepth > 0) return undefined;
+    const instance = this.instanceKey(address.scope, identity);
+    if (!isScopeKey(instance)) return undefined;
+    const key = docKey(address.id, instance);
+    if (!this.#storeAbsences.has(key)) return undefined;
+    const answered = this.integrateStoreWrites([
+      { id: address.id, scopeKey: instance },
+    ]);
+    if (answered === 0) return undefined;
+    return !this.#storeAbsences.has(key);
+  }
+
   #buildReads(
     source: IStorageTransaction | undefined,
     localSeq: number,
@@ -10027,6 +10188,12 @@ export class SpaceReplica
     } finally {
       this.#frameApplyDepth -= 1;
       this.#frameTouchedKeys = undefined;
+      // What the frame brought can change what a commit's validations
+      // before it proved, so none after it stands on them. That holds for a
+      // frame a read applies itself through the store read-through as well:
+      // such a read between a pre-commit pass and its commit makes the
+      // commit's validations check again, which is the safe direction.
+      endLocalReadValidationStretch();
     }
     if (pushed) {
       this.#completeThroughSeq = Math.max(this.#completeThroughSeq, sync.toSeq);

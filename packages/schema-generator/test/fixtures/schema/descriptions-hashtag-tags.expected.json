@@ -6,9 +6,6 @@
       "items": {
         "type": "string"
       },
-      "tags": [
-        "annotation"
-      ],
       "type": "array"
     },
     "content": {
@@ -19,10 +16,6 @@
   "required": [
     "annotations",
     "content"
-  ],
-  "tags": [
-    "note",
-    "quickcapture"
   ],
   "type": "object"
 }

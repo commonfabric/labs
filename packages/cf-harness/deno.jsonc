@@ -75,7 +75,6 @@
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
-    "@node/http": "node:http",
     "entities": "npm:entities@^8.0.0",
     "marked": "npm:marked@^18.0.6"
   }

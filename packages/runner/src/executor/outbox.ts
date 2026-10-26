@@ -31,7 +31,6 @@
 // effects" table (the effect half never touches the store), no delivery
 // of a withdrawn contribution's appends (the wave folds survivors only).
 
-import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import type { Engine } from "@commonfabric/memory/v2/engine";
 import * as EngineModule from "@commonfabric/memory/v2/engine";
 import {
@@ -46,6 +45,7 @@ import {
   type PostCommitSideEffect,
 } from "../cfc/types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import type { HostMemoryServer } from "./host-memory-server.ts";
 import type { WaveRunContext } from "./wave.ts";
 import type { ServingLoopStats } from "./stats.ts";
 import { RUNNER_ACCEPTANCE_EFFECT_KIND } from "./runner-acceptance.ts";
@@ -110,7 +110,7 @@ const LOCAL_EFFECT_KINDS = new Set([
 
 export class SpaceOutbox {
   readonly #stats: ServingLoopStats;
-  readonly #server: MemoryServer;
+  readonly #server: HostMemoryServer;
   readonly #engine: Engine;
   readonly #sessionId: string;
   readonly #space?: string;
@@ -180,7 +180,7 @@ export class SpaceOutbox {
 
   constructor(options: {
     stats: ServingLoopStats;
-    server: MemoryServer;
+    server: HostMemoryServer;
 
     /** The HOME space's engine — where the durable append rows live. */
     engine: Engine;

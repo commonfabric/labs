@@ -15,6 +15,7 @@ import {
   noteDerivedCopy,
 } from "../src/builder/pattern-metadata.ts";
 import type { NodePlan } from "../src/runner.ts";
+import { engineReadThrough } from "../src/executor/engine-read-through.ts";
 import { getDerivedInternalCellLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { CooperativeYield } from "../src/scheduler/cooperative-yield.ts";
@@ -210,6 +211,33 @@ const SESSION_CELL_TREE_PROGRAM: RuntimeProgram = {
       "});",
       "export default pattern<{ items: Item[] }, {",
       "  rows: { value: number; note?: string; draft?: string }[];",
+      "}>(({ items }) => ({",
+      "  rows: items.map((item) => row({ item })),",
+      "}));",
+    ].join("\n"),
+  }],
+};
+
+// The plain tree, each row owning a per-session writable with a default, as
+// a row's open-or-closed state is: the row's result is the space's, so every
+// session's start owes its own instance of the cell that default. No store
+// holds a document for a session that has not run the rows.
+const SESSION_DEFAULT_TREE_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern, Writable } from 'commonfabric';",
+      "type Item = { n: number };",
+      "export const row = pattern<{ item: Item }, {",
+      "  value: number;",
+      "  open: boolean;",
+      "}>(({ item }) => {",
+      "  const open = new Writable.perSession(false);",
+      "  return { value: computed(() => item.n * 2), open };",
+      "});",
+      "export default pattern<{ items: Item[] }, {",
+      "  rows: { value: number; open: boolean }[];",
       "}>(({ items }) => ({",
       "  rows: items.map((item) => row({ item })),",
       "}));",
@@ -944,6 +972,70 @@ describe("resume-presync-plan-count", () => {
       ownedDescriptor(rowPattern, "note"),
     );
     expect(resumed.nameSyncs).toBe(1);
+  });
+
+  it("seeds a row's per-session default with no name-sync of its own once the store read-through reported holding nothing for it", async () => {
+    const cellId = "resume-presync-plan-count-session-default-root";
+    const compiled = await authorTree(cellId, SESSION_DEFAULT_TREE_PROGRAM);
+    const wrapperPattern = compiled.nodes
+      .map((node) => (node.inputs as { op?: unknown }).op)
+      .find(isPattern)!;
+    const rowPattern = wrapperPattern.nodes
+      .map(childPatternOf)
+      .find((pattern) => pattern !== undefined)!;
+    const openDescriptor = ownedDescriptor(rowPattern, "open");
+    expect(openDescriptor).toMatchObject({
+      scope: "session",
+      schema: { default: false },
+    });
+    const seededBy = (seeded: string[]) => (runtime: Runtime) => {
+      const stamp = runtime.stampServerRun.bind(runtime);
+      return stub(runtime, "stampServerRun", (tx, info) => {
+        if (info.actionId.startsWith("scoped-default/")) {
+          seeded.push(info.actionId.slice("scoped-default/".length));
+        }
+        stamp(tx, info);
+      });
+    };
+
+    // A synced run in a caller's transaction names the tree without
+    // preparing its defaults, so each row's own start is held for the default
+    // the row owes this session's instance of the cell. A replica that loads
+    // over its session alone cannot tell whether the store holds a value for
+    // it, so the start names the row before seeding it.
+    const overSession: string[] = [];
+    const unread = await resumeTree(
+      SESSION_DEFAULT_TREE_PROGRAM,
+      cellId,
+      openDescriptor,
+      "synced run in a caller's transaction",
+      seededBy(overSession),
+    );
+    expect(overSession.toSorted()).toEqual([...unread.cells.keys()].toSorted());
+
+    // One that reads the store directly is told the store holds nothing for
+    // this session's instance, which no name-sync could deliver either, so
+    // each row's start seeds the default and names nothing. The root is named
+    // as it is over the session alone.
+    const engine = await server.engineForSpace(space);
+    const throughStore: string[] = [];
+    const read = await resumeTree(
+      SESSION_DEFAULT_TREE_PROGRAM,
+      cellId,
+      openDescriptor,
+      "synced run in a caller's transaction",
+      (runtime) => {
+        managers.at(-1)!.installStoreReadThrough(
+          space,
+          engineReadThrough(engine),
+        );
+        return seededBy(throughStore)(runtime);
+      },
+    );
+    expect(unread.nameSyncs - read.nameSyncs).toBe(ITEMS.length);
+    expect(throughStore.toSorted()).toEqual([...read.cells.keys()].toSorted());
+    expect([...read.cells.values()].map((document) => document.value))
+      .toEqual([false, false, false]);
   });
 
   it("yields to the event loop between the syncs of a resume wave", async () => {

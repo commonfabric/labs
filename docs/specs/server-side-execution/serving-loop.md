@@ -42,6 +42,25 @@ toolshed process
    └─ activation policy (which spaces are active)
 ```
 
+*(AMENDED 2026-10-11: under `SERVER_EXECUTION_WORKER` the `ExecutorHost`
+and everything under it run in a Web Worker of the toolshed process, and
+the memory server, the HTTP routes and the commits the server fans out
+stay on the main thread. The worker reads the store through SQLite
+connections of its own and reaches the memory server over a port: its wave
+commits cross to a sink on the main thread (plane (a)'s commits, applied
+where the server sees each one land), its serving runtimes' storage
+sessions cross as frames, the server's observer crosses as events, and the
+three session questions the loop asks synchronously are answered from a
+mirror the server's session lifecycle keeps current. The lease rows (plane
+(c)) and the outbox's own bookkeeping, its retirement of a delivered row
+and its notice of a refused append, stay the worker's own writes. The
+lease holder's process component is minted by the main thread per worker
+start, so a worker started in place of one that died never shares its
+predecessor's holder.
+[`docs/plans/serving-loop-worker.md`](../../plans/serving-loop-worker.md)
+places each crossing; the in-process arrangement, the default, is
+unchanged.)*
+
 A space is ACTIVE when it has ≥1 live client session or undelivered
 events; otherwise it MAY be parked (lease released, loop stopped, and
 the runtime disposed or kept for the space's next tenure — Parking
@@ -325,8 +344,9 @@ SpaceServer outbox ──(e)──► network; results re-enter via (a)
   the store holds nothing at leaves no record, as a pull that delivered
   nothing leaves none: a transaction's read of it stays an unexamined
   absence for commit to reconcile, and the store is asked again only
-  when the feed reports a write to it. Counted: `storeReads`,
-  `storeRefreshes` (§7).
+  when the feed reports a write to it, or when a piece's start finds the
+  argument document reported absent while the result that links to it is
+  present. Counted: `storeReads`, `storeRefreshes` (§7).
 - **(b) memory server → ExecutorHost**, in-process: the
   admission-hook activation feed — an authored admission into a
   space with no live lease NOTIFIES the host, and activation then
@@ -362,12 +382,14 @@ processes* (deploy overlap, partition) it holds via the lease:
   exactly these three fields — prior art, not substrate.
 - **`holder` is a PER-PROCESS identity (DR1, RULED 2026-08-03):**
   the SpaceServer's service identity plus a process-instance
-  component minted at PROCESS START — stable across every renew and
-  reacquire within one process lifetime (it stays a nameable,
+  component minted at process start, or at each serving-worker generation
+  when the loop runs in a worker. Both realms adopt that component before
+  leases are acquired. A replacement worker waits for its predecessor's
+  teardown and lease release and adopts a fresh component. Within a serving
+  generation it is stable across every renew and reacquire (it stays a nameable,
   attestable identity, so protocol.md §1's "the envelope principal
-  IS the lease holder" reads literally), fresh whenever the process
-  is genuinely new. The equality check below thereby fences every
-  CROSS-process succession (deploy overlap, a successor host) for
+  IS the lease holder" reads literally). The equality check below fences
+  worker-generation succession as well as every CROSS-process succession (deploy overlap, a successor host) for
   free. The one residue — a same-process reacquire after a pause
   that outlived the TTL (a runtime GC pause is the canonical cause;
   nothing to do with the deferred session-data GC of scopes.md §8) —
@@ -498,9 +520,19 @@ mid-wave belong to the NEXT wave — natural double-buffering, no timers):
   // recomputes a dirty computed input ON DEMAND before the handler
   // that reads it runs, and only then (anchor:
   // scheduler/event-preflight-dependencies.ts). Pull-based laziness
-  // therefore still skips derived work nothing demands — which is
-  // where rapid-fire coalescing comes from: superseded intermediates
-  // are skipped by laziness, not by an explicit drain phase.
+  // therefore still skips derived work nothing demands. Under the
+  // serving posture a scheduler pass takes every READY event behind
+  // the head as well, each through the same preflight, before the one
+  // settle that follows (anchor: facade.ts #processExecuteEventPhases):
+  // the demanded derivations several events invalidate run once over
+  // all of them, which is where a wave of several events coalesces;
+  // a head the preflight parks on its loads behind events the pass
+  // ran ends the pass without its settle, which the pass the park's
+  // end queues runs behind it (the park ends on its loads' release, on
+  // a failed load, or on a drop of the parked head; events.md §2 says
+  // what a deadline that comes first commits), and an event the
+  // preflight holds for an invalid input ends the run of handlers, so
+  // the settle runs that input first.
   run scheduler to QUIESCENCE — scheduler.idle()
   (Scheduler.idle() in packages/runner/src/scheduler/facade.ts)
   resolves; it
@@ -534,15 +566,23 @@ index re-marks the truncated dirty frontier (§3b, §6) and memo hits
 suppress effect re-fires.
 
 PREFIX COVERAGE — how an exhausted cycle still moves W: input arriving
-while a settle runs lands through the settle's own frame barrier, so under
+while a settle runs lands through the settle's own input barrier, so under
 sustained input every exit probe can find the scheduler busy with the
 NEWER input and the settle reaches T_flush without observing quiescence,
 although the batch it drained was long done. The loop therefore records a
-batch head H once a settle's frame barrier has completed with every frame
+batch head H once a settle's input barrier has completed with every input
 at or below H applied — the moment at which an idle scheduler would have
 ended the settle — and carries H across cycles until W covers it,
 lowering it to a later cycle's batch head when that drain holds a record
-back. Any later moment at which the scheduler is idle and the
+back. The barrier is the one the posture gives the home space: with its
+reads on the session, it is the settle's frame barrier, which drains the
+co-hosted server's refresh queue and waits for the loopback transport to
+hand every frame over; under the store read-through posture (§1 plane
+(a)) it is the drain itself, which re-reads each record's writes into the
+replica as it consumes the record, so H is the batch head at the drain,
+and the settle waits on neither the server's idle nor a home-space frame.
+A foreign space's session still delivers that space's writes as frames,
+and the settle keeps waiting for the frames it has handed over. Any later moment at which the scheduler is idle and the
 demanded-structure load the settle awaits has completed proves H covered:
 everything the scheduler ran after the barrier, it ran to completion. The
 proof is clamped by the shadow floor, the event-visibility floor and the
@@ -621,7 +661,15 @@ Light waves never reach the deadline and stay single-commit — the
 zero-delta case, which is why this is a trigger on the EXISTING
 exhaustion machinery rather than a new commit topology. T_flush is
 a policy knob (order 50–100 ms), tuned in Phase 6 with the other
-budgets. The configured default is 100 ms. `wavesBudgetExhausted` counts
+budgets. The configured default is 100 ms. A settle the deadline cut hands
+the next cycle a deadline twice as long, up to the policy's
+`flushDeadlineMaxMs` (`SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`); a settle that
+reaches quiescence, or a loop that finds no work, hands it the base again. So
+a burst's first consequence is visible within the base, the cascade behind it
+is cut less often as it goes, and the events arriving while a longer settle
+runs wait for the next cycle's drain and share the wave it opens, which is
+what spares the sessions a flush pass, a walk and a frame per event. With no
+cap set, every settle takes the base. `wavesBudgetExhausted` counts
 exhausted cycles, including those with no wave closure or durable commit;
 `waves` counts closures, including vacuous or aborted outcomes. Their ratio
 is not a committed-wave exhaustion fraction. The amplification budget's
@@ -1202,7 +1250,16 @@ the 2026-08-24 ruling; the owner may re-rule it).
   commit is in flight (a read probe against the serving runtime) would
   otherwise leave a wave whose basis the loop's own commit has already
   passed, and the next cycle's writes to the documents it touched — the
-  watermark advance among them — would be dropped against it. That input
+  watermark advance among them — would be dropped against it. A wave a
+  seal did open while the commit was in flight keeps that basis, and the
+  commit is noted to it as it lands (AMENDED 2026-10-11): a document the
+  wave writes that sits exactly at the commit's seq is rebased to that
+  head, which the sink re-verifies, rather than counted as conflicting.
+  The wave's contributions read the replica with the commit's writes
+  applied, since a run that read them stale is refused at its own commit
+  and never seals. With the loop on another thread from the store's
+  writer, a commit is in flight for a round trip and seals arrive during
+  it as a matter of course. That input
   seq is what the wave CLAIMS its view covers, and the view its
   runs read is the replica's, which can sit below it: a commit admitted
   between a run's reads and the seal that opens the wave is counted in
@@ -1761,7 +1818,8 @@ the durable rows of §5 carry APPENDS, never effect state).
   can never disable the production bound — FAIL-CLOSED;
   `SERVER_EXECUTION_EGRESS_RATE_PER_S`, default unpaced;
   `SERVER_EXECUTION_FLUSH_DEADLINE_MS` tunes §3's T_flush the same
-  way). The gate holds DISPATCH only: the in-flight dedupe entry exists
+  way, and `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` the cap it grows to
+  after a cut settle). The gate holds DISPATCH only: the in-flight dedupe entry exists
   from admission, so a re-admit during a hold attaches instead of
   double-firing. LOCAL kinds (sqlite-query — no egress) bypass the
   gate. On park/close, held dispatches DROP — the crash-equivalent
@@ -1810,10 +1868,11 @@ escalate.
 
 ## 7. Counters (implement with the loop, not after)
 
-`events.visibilityBarriers` counts ordered publication/response attempts for
-lagging event views. `visibilityRecoveries` counts matching identities after
-those attempts, and `visibilityDeferrals` counts scans that still stop at a
-mismatched identity. `deferredRescansArmed` and `deferredRescansFired` count
+`events.visibilityBarriers` counts attempts to bring a lagging event view
+current: an ordered publication/response, or under the store read-through a read
+of the entries document from the store. `visibilityRecoveries` counts matching
+identities after those attempts, and `visibilityDeferrals` counts scans that
+still stop at a mismatched identity. `deferredRescansArmed` and `deferredRescansFired` count
 the backstops an active tenure scheduled and the callbacks that ran, across all
 transient drain outcomes. Only a serving tenure arms one: a park clears the
 armed backstop, and a deferral reaching a parked tenure arms none, so the

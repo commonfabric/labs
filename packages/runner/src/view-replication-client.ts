@@ -34,6 +34,51 @@ import { hasInlineCellScheme } from "./immutable-cell.ts";
 
 type ViewProducer = NonNullable<ViewPlan["producers"]>[number];
 
+/** A producer's server proof, without local outcomes. */
+type ServerProof = {
+  current: boolean;
+
+  /**
+   * The producers whose bases a current proof observed, the proven one
+   * first and each of its ancestors once, in the order a walk reaches them.
+   */
+  closure: readonly string[];
+};
+
+const UNPROVEN: ServerProof = { current: false, closure: [] };
+
+/**
+ * What one synchronous pass over adopted computations learns of the replica
+ * and the accepted plans, shared by every proof the pass makes. A pass
+ * changes neither, so a producer's proof, a basis value's match, and a
+ * piece's source check are the same for every computation that reaches
+ * them, and each is made once.
+ *
+ * A pass lives for one synchronous wake and no longer. Its maps are cleared
+ * when a newer plan is accepted, but nothing clears them when the replica
+ * changes, as it can across any await, so a pass held across one would
+ * answer from documents the replica no longer holds.
+ */
+export type ViewProofPass = {
+  /** The plan version the pass's proofs were made under. */
+  version?: number;
+
+  readonly proofs: Map<string, ServerProof>;
+  readonly matched: Map<ViewValueBasis, boolean>;
+  readonly ancestors: Map<ViewValueBasis, ReadonlySet<string>>;
+  readonly sources: Map<string, boolean>;
+};
+
+/** Starts a pass with nothing proven. */
+export function createViewProofPass(): ViewProofPass {
+  return {
+    proofs: new Map(),
+    matched: new Map(),
+    ancestors: new Map(),
+    sources: new Map(),
+  };
+}
+
 const logger = getLogger("view-replication", { enabled: true, level: "warn" });
 
 type SpaceViews = {
@@ -235,6 +280,11 @@ export class ViewReplicationClient {
     return result;
   }
 
+  /** Starts a pass of proofs that share what they prove. */
+  createProofPass(): ViewProofPass {
+    return createViewProofPass();
+  }
+
   /** Accepts an unchanged authoritative output, including its producer ancestors. */
   producerCurrent(
     space: MemorySpace,
@@ -254,21 +304,13 @@ export class ViewReplicationClient {
     const state = this.#spaces.get(space);
     if (state === undefined || !this.active(space)) return () => false;
     const producers = state.producers;
-    // A proof is synchronous. Its memo belongs to this pass so a later read
-    // or commit rechecks both replica values and local producer state.
+    // The memo lasts as long as the checker. A transaction's reads share one,
+    // and each validation pass makes its own, so a commit rechecks both
+    // replica values and local producer state.
     const checked = new Map<string, boolean>();
     const visiting = new Set<string>();
-    const matches = (basis: ViewValueBasis) => {
-      const uri = basis.id as IMemorySpaceAddress["id"];
-      if (state.replica.hasLocalDocumentCoverage?.(uri, basis.scope) !== true) {
-        return state.replica.speculationRetirementView?.(uri, basis.scope)
-          .pendingLocalSeqs.length === 0;
-      }
-      return this.#inputBasis.matches(
-        state.replica.getDocument(uri, basis.scope),
-        basis,
-      );
-    };
+    const writersOf = new Map<ViewValueBasis, Set<string>>();
+    const matches = (basis: ViewValueBasis) => this.#matches(state, basis);
     const current = (producerId: string): boolean => {
       const known = checked.get(producerId);
       if (known !== undefined) return known;
@@ -299,13 +341,17 @@ export class ViewReplicationClient {
           !producer.basis.reads.every(matches)
         ) return false;
         for (const read of producer.basis.reads) {
-          const address = {
-            ...read,
-            id: read.id as IMemorySpaceAddress["id"],
-            space,
-            type: "application/json" as const,
-          };
-          for (const ancestor of this.producers(address)) {
+          let writers = writersOf.get(read);
+          if (writers === undefined) {
+            writers = this.producers({
+              ...read,
+              id: read.id as IMemorySpaceAddress["id"],
+              space,
+              type: "application/json",
+            });
+            writersOf.set(read, writers);
+          }
+          for (const ancestor of writers) {
             if (ancestor !== producerId && !current(ancestor)) return false;
           }
         }
@@ -320,11 +366,14 @@ export class ViewReplicationClient {
   /**
    * Collects the complete wake basis for an initially current computation.
    * Its own values must be resident; omitted ancestors use the server proof.
+   * A caller proving several computations in one synchronous pass hands each
+   * call the same `pass`, so that what the proofs share is proved once.
    */
   initialViewDependencies(
     piece: NormalizedFullLink,
     id: string,
     expectedIdentity: string,
+    pass: ViewProofPass = createViewProofPass(),
   ): ReactivityLog | undefined {
     const state = this.#spaces.get(piece.space);
     const basis = state?.producers.get(id)?.basis;
@@ -333,9 +382,25 @@ export class ViewReplicationClient {
       !this.eligible(piece.space, id)
     ) return undefined;
     const generation = state.version;
-    const reads: IMemorySpaceAddress[] = [];
-    const observe = (address: IMemorySpaceAddress) => reads.push(address);
-    if (!this.pieceCurrent(piece, expectedIdentity, observe)) return undefined;
+    // A plan accepted while the pass ran replaced what its proofs proved.
+    if (pass.version !== generation) {
+      pass.proofs.clear();
+      pass.matched.clear();
+      pass.ancestors.clear();
+      pass.sources.clear();
+      pass.version = generation;
+    }
+    const sourceKey = `${piece.scope}\0${piece.id}\0${expectedIdentity}`;
+    let sourceCurrent = pass.sources.get(sourceKey);
+    if (sourceCurrent === undefined) {
+      sourceCurrent = this.pieceCurrent(piece, expectedIdentity);
+      pass.sources.set(sourceKey, sourceCurrent);
+    }
+    if (!sourceCurrent) return undefined;
+    const reads: IMemorySpaceAddress[] = [{
+      ...toMemorySpaceAddress(piece),
+      path: ["patternIdentity"],
+    }];
     if (
       basis.reads.some((value) =>
         !this.permits({
@@ -357,15 +422,113 @@ export class ViewReplicationClient {
     }
     // Server provenance must remain independent of successful local outcomes.
     // Each node collects its own closure, including shared ancestors.
+    const proof = this.#serverProof(state, piece.space, id, pass, new Set());
     if (
-      !this.producerCurrent(piece.space, id, () => false, observe) ||
-      state.version !== generation || !this.active(piece.space)
+      !proof.current || state.version !== generation ||
+      !this.active(piece.space)
     ) return undefined;
+    for (const producerId of proof.closure) {
+      const proven = state.producers.get(producerId)!.basis!;
+      for (const value of [...proven.reads, ...proven.outputs]) {
+        reads.push({
+          ...value,
+          id: value.id as IMemorySpaceAddress["id"],
+          space: piece.space,
+          type: "application/json",
+        });
+      }
+    }
     return {
       reads,
       shallowReads: [],
       writes: [...(state.producerWrites.get(id) ?? [])],
     };
+  }
+
+  /**
+   * Proves `producerId` current from server provenance alone, as
+   * `createProducerCheck` does with no producer current locally, and records
+   * the proof in `pass`. A walk that reaches a producer it is still proving
+   * has found a cycle, which no member of proves current, so a proof made
+   * from any producer holds for every walk that reaches it.
+   */
+  #serverProof(
+    state: SpaceViews,
+    space: MemorySpace,
+    producerId: string,
+    pass: ViewProofPass,
+    proving: Set<string>,
+  ): ServerProof {
+    const known = pass.proofs.get(producerId);
+    if (known !== undefined) return known;
+    const basis = state.producers.get(producerId)?.basis;
+    if (basis === undefined || proving.has(producerId)) return UNPROVEN;
+    const matches = (value: ViewValueBasis) => {
+      let matched = pass.matched.get(value);
+      if (matched === undefined) {
+        matched = this.#matches(state, value);
+        pass.matched.set(value, matched);
+      }
+      return matched;
+    };
+    proving.add(producerId);
+    try {
+      let proof: ServerProof = UNPROVEN;
+      if (basis.outputs.every(matches) && basis.reads.every(matches)) {
+        const closure = [producerId];
+        const included = new Set(closure);
+        let current = true;
+        reads: for (const read of basis.reads) {
+          let ancestors = pass.ancestors.get(read);
+          if (ancestors === undefined) {
+            ancestors = this.producers({
+              ...read,
+              id: read.id as IMemorySpaceAddress["id"],
+              space,
+              type: "application/json",
+            });
+            pass.ancestors.set(read, ancestors);
+          }
+          for (const ancestor of ancestors) {
+            if (ancestor === producerId) continue;
+            const ancestry = this.#serverProof(
+              state,
+              space,
+              ancestor,
+              pass,
+              proving,
+            );
+            if (!ancestry.current) {
+              current = false;
+              break reads;
+            }
+            for (const member of ancestry.closure) {
+              if (included.has(member)) continue;
+              included.add(member);
+              closure.push(member);
+            }
+          }
+        }
+        if (current) proof = { current, closure };
+      }
+      pass.proofs.set(producerId, proof);
+      return proof;
+    } finally {
+      proving.delete(producerId);
+    }
+  }
+
+  /** Whether one basis value matches what the replica holds. */
+  #matches(state: SpaceViews, basis: ViewValueBasis): boolean {
+    const uri = basis.id as IMemorySpaceAddress["id"];
+    if (state.replica.hasLocalDocumentCoverage?.(uri, basis.scope) !== true) {
+      return state.replica.speculationRetirementView?.(uri, basis.scope)
+        .pendingLocalSeqs.length === 0;
+    }
+    return this.#inputBasis.matches(
+      state.replica.getDocument(uri, basis.scope),
+      basis,
+    );
   }
 
   /** Checks the stored source against the manifest without acquiring a watch. */

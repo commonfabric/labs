@@ -9,6 +9,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/api";
+import type { FabricValue } from "@commonfabric/data-model";
+import {
+  fabricFromJsonValue,
+  jsonFromFabricValue,
+} from "@commonfabric/data-model/codecs";
 import {
   dedupedObservedOutputs,
   type ObservedOutput,
@@ -133,7 +138,26 @@ describe("run-pattern-output-concerns", () => {
           }),
           READER_SCHEMA,
         )),
-      ).toEqual(["rows:no-rows", "errorMessage:error-branch"]);
+      ).toEqual(["errorMessage:error-branch", "rows:no-rows"]);
+    });
+
+    it("names a result's outputs in the same order whether or not it was read back from storage", () => {
+      // The JSON codec writes a record's keys in its own order, so a result
+      // read back from storage holds them in that order, while the same
+      // result read in this realm holds them in the order they were written.
+      const written = readerResult({
+        rows: [],
+        rowCount: 0,
+        errorMessage: "sqlite: param is undefined",
+      });
+      const stored = fabricFromJsonValue(
+        jsonFromFabricValue(written as FabricValue),
+      );
+
+      expect(positions(observedOutputsIn(written, READER_SCHEMA)))
+        .toEqual(["errorMessage:error-branch", "rows:no-rows"]);
+      expect(positions(observedOutputsIn(stored, READER_SCHEMA)))
+        .toEqual(["errorMessage:error-branch", "rows:no-rows"]);
     });
 
     it("marks an in-flight read as pending rather than empty data", () => {
@@ -155,7 +179,7 @@ describe("run-pattern-output-concerns", () => {
           }),
           READER_SCHEMA,
         )),
-      ).toEqual(["pending:pending", "errorMessage:error-branch"]);
+      ).toEqual(["errorMessage:error-branch", "pending:pending"]);
     });
 
     it("passes over an empty list on a result that reports no read", () => {
@@ -241,7 +265,7 @@ describe("run-pattern-output-concerns", () => {
           declaring("rows", "errorMessage"),
           "reader",
         ))),
-      ).toEqual(["rows:no-rows", "errorMessage:error-branch"]);
+      ).toEqual(["errorMessage:error-branch", "rows:no-rows"]);
     });
   });
 
@@ -277,8 +301,8 @@ describe("run-pattern-output-concerns", () => {
           "reader",
         ))?.split("\n"),
       ).toEqual([
-        "reader rows (no-rows)",
         "reader errorMessage (error-branch): broke",
+        "reader rows (no-rows)",
       ]);
     });
   });

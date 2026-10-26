@@ -12,6 +12,9 @@ same role. Everything in this document binds every implementation.
 interface ChatRoomOutput {
   about: ChatRoomAbout;
 
+  /** The shape of `replyTo` the room reads and stores. */
+  replyShape: "thread-quotes";
+
   /** The room's participants, plus any author it doesn't list. */
   participants: Cell<ChatProfile>[];
 
@@ -50,7 +53,11 @@ interface ChatRoomOutput {
     canObliterate: boolean;
   }[];
 
-  sendMessage: Stream<{ body: string; replyTo?: ChatReply }>;
+  sendMessage: Stream<{
+    body: string;
+    replyTo?: ChatReply;
+    threadTitle?: string;
+  }>;
   editMessage: Stream<{ message: Cell<ChatMessage>; body: string }>;
   deleteMessage: Stream<{ message: Cell<ChatMessage> }>;
   obliterateMessage: Stream<{ message: Cell<ChatMessage> }>;
@@ -92,6 +99,24 @@ interface ChatRoomOutput {
       status: "refused";
       reason: string;
       code: "not-member" | "invalid-title" | "fixed-title";
+    }
+  >;
+
+  /** Sets the title of one of the room's threads, which every member shares. */
+  setThreadTitle: Stream<{
+    requestId: string;
+    root: Cell<ChatMessage>;
+    title: string;
+  }>;
+
+  /** The outcome of each of this reader's thread retitles, by `requestId`. */
+  threadTitleRequests: Record<
+    string,
+    | { status: "done" }
+    | {
+      status: "refused";
+      reason: string;
+      code: "not-member" | "invalid-title" | "not-a-root";
     }
   >;
   [UI]: VNode;
@@ -160,6 +185,14 @@ space.
   created. Its `title` changes through
   [`setTitle`](#settitlerequestid-string-title-string), and the rest of it
   never does.
+- **`replyShape`** names the shape of `replyTo` the room reads and stores, by
+  the fields it holds beside `shownIn`, which is the shape a client sends a
+  reply in. `"thread-quotes"`: a reply names the thread it joins as `thread`
+  and the message it answers as `quotes` (see [`ChatReply`](ChatReply.md)). It
+  never changes for a room that offers it, and a room that takes another shape
+  names it with another value. A room whose view offers no `replyShape` takes
+  a reply that names one `message`, both the message it answers and, for a
+  reply in a thread, the message whose thread it joins.
 - **Messages.** The room holds its [`ChatMessage`](ChatMessage.md)s, in the
   order it recorded them, each identified by its cell. A client reads the
   newest of them from `messages`, and the rest from the stored messages
@@ -241,6 +274,9 @@ space.
 - **`titleRequests`** holds the outcome of each of the reader's
   [`setTitle`](#settitlerequestid-string-title-string) requests, by its
   `requestId`. Like `addRequests`, it is the reader's alone.
+- **`threadTitleRequests`** holds the outcome of each of the reader's
+  [`setThreadTitle`](#setthreadtitlerequestid-string-root-cellchatmessage-title-string)
+  requests, by its `requestId`, and is the reader's alone.
 - **`fileStore`** links the store of the files of the room's space (see
   [`FileStore`](../fabrifile/FileStore.md#where-it-lives)): for a room that is
   its space's root, the store the room names itself, and for any other, the
@@ -266,11 +302,11 @@ plus values computed for each reader, and the difference matters to a client:
   the room.
 - **`PerUser`**: one instance per user, which follows them across sessions.
   That is `participantEntries` and `participantPrincipals`, which each user
-  derives under their own access, and `addRequests` and `titleRequests`, the
-  outcomes of the reader's own adds and retitles. Read access is a property of
-  the principal, so every session of one user derives the same entries and
-  principals. Passing the room's link to someone else passes none of these:
-  they read their own.
+  derives under their own access, and `addRequests`, `titleRequests` and
+  `threadTitleRequests`, the outcomes of the reader's own adds and retitles.
+  Read access is a property of the principal, so every session of one user
+  derives the same entries and principals. Passing the room's link to someone
+  else passes none of these: they read their own.
 - **Computed for each reader**: `canSend`, `canAdd`, `viewer`, and
   `messageRights`. Each is derived when it's read, from the reader's own access
   and profile, so each reader sees their own answer, and it needs no instance
@@ -351,31 +387,37 @@ These rules hold for every stream:
   how a client learns that an event it sent broke the stream's rules, a
   payload of the wrong shape included. An act that would change nothing, such
   as adding a reaction that is already there, is no refusal: it succeeds and
-  writes nothing. An add's outcome is recorded in `addRequests`, and a
-  retitle's in `titleRequests`, each `refused` with a reason and a code. A
+  writes nothing. An add's outcome is recorded in `addRequests`, a retitle's in
+  `titleRequests`, and a thread's retitle's in `threadTitleRequests`, each
+  `refused` with a reason and a code. A
   client checks an event against the stream's rules before sending it (see
   [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)).
 - A refused event is spent: it is not retried.
 
 | Stream | Reviewed surface | Effect |
 | --- | --- | --- |
-| [`sendMessage`](#sendmessagebody-string-replyto-chatreply-attachments-cellfileentry) | `ChatSendSurface` | appends a message from the sender, once |
+| [`sendMessage`](#sendmessagebody-string-replyto-chatreply-threadtitle-string-attachments-cellfileentry) | `ChatSendSurface` | appends a message from the sender, once |
 | [`editMessage`](#editmessagemessage-cellchatmessage-body-string) | `ChatEditSurface` | records a new version of the sender's message, once |
 | [`deleteMessage`](#deletemessagemessage-cellchatmessage) | `ChatDeleteSurface` | records the sender's message as deleted |
 | [`obliterateMessage`](#obliteratemessagemessage-cellchatmessage) | `ChatObliterateSurface` | removes a message and its history, leaving a tombstone |
 | [`sendReaction`](#sendreactionmessage-cellchatmessage-emoji-string) | `ChatReactSurface` | adds the sender's reaction, if it isn't there |
 | [`deleteReaction`](#deletereactionmessage-cellchatmessage-reaction-cellchatreaction) | `ChatReactSurface` | removes the sender's reaction, the one named |
 
-### `sendMessage(body: string, replyTo?: ChatReply, attachments?: Cell<FileEntry>[])`
+### `sendMessage(body: string, replyTo?: ChatReply, threadTitle?: string, attachments?: Cell<FileEntry>[])`
 
 - `body: string` — The message's text, exactly as the person saw it when they
   sent it. It must be a string, not empty or only whitespace unless the
   message has attachments.
-- `replyTo?: ChatReply` — What the message replies to, and where it is shown
-  (see [`ChatReply`](ChatReply.md)). Absent for a message that isn't a reply,
-  which is shown in the main conversation. `replyTo.message` must be a message
-  in this room, and a `"main"` reply must be to a message the main conversation
-  shows.
+- `replyTo?: ChatReply` — The thread the message joins, the message it quotes,
+  and where it is shown (see [`ChatReply`](ChatReply.md)). Absent for a
+  message that does neither, which is shown in the main conversation. Its
+  `thread` must be a message of this room in no thread, its `quotes` a message
+  of this room, in that thread where `thread` is set, and a `"main"` reply's
+  `quotes` must be a message the main conversation shows.
+- `threadTitle?: string` — A title for the thread the message joins, which the
+  thread takes when it has none yet (see
+  [titles](ChatThreadSummary.md#titles)). It must have some text in it, and the
+  message must join a thread.
 - `attachments?: Cell<FileEntry>[]` — The files sent with the message, in
   order: entries of the store of the room's space (see
   [`FileEntry`](../fabrifile/FileEntry.md)), none of them removed, and no more
@@ -393,14 +435,26 @@ Sends a message from the sender.
   `sentAt` (see [times](ChatMessage.md#times)), and no reactions. The room
   reads each attachment's entry, and nothing else of the store.
 - **Refused:** a `body` that isn't a string, or is empty in a send with no
-  attachments; a sender whose profile hasn't resolved; a `replyTo` whose
-  `message` is outside the room's space; more attachments than the room's
+  attachments; a sender whose profile hasn't resolved; a `replyTo` naming
+  neither a `thread` nor a message it `quotes`, one with a `thread` and a
+  `"main"` `shownIn`, or one with no `thread` and another `shownIn`; a
+  `replyTo` whose `thread` or `quotes` is outside the room's space, whose
+  `thread` is in a thread itself, or whose `quotes` beside a `thread` is
+  neither that thread's root nor one of its messages; a `threadTitle` on a
+  message that joins no thread, with no text in it, or for a thread that has a
+  title already; more attachments
+  than the room's
   `maxAttachments`; or an attachment that names no entry, an entry outside the
   room's space, one whose blob is in another space's blob store, or one removed
   from its store.
-  Otherwise the room takes `replyTo` as sent: a client sends a reply only to a
-  message of the room that is not deleted, with a `shownIn` its target allows
+  Otherwise the room takes `replyTo` as sent: a client quotes only a message of
+  the room that is not deleted, and in the main conversation only one it shows
   (see [`ChatReply`](ChatReply.md)).
+- **Effect on the thread:** a message with a `threadTitle` also records it,
+  trimmed of the whitespace around it, as the title of the thread it joins,
+  labeled `authored-by` the sender, as
+  [`setThreadTitle`](#setthreadtitlerequestid-string-root-cellchatmessage-title-string)
+  records one.
 
 Two messages with the same text are two sends, so sending "YES!" three times
 makes three messages.
@@ -648,6 +702,37 @@ gesture of its own, records its outcome, and is in `[VIEWS]`.
   same whatever the `reason` says. A refusal changes nothing else. A retitle the
   stream doesn't admit, as one without the gesture, records nothing.
 
+### `setThreadTitle(requestId: string, root: Cell<ChatMessage>, title: string)`
+
+- `requestId: string` — Chosen by the sender, and unique among its thread
+  retitles. The outcome is recorded under it in `threadTitleRequests`, and
+  sending the same event again with it changes nothing. The rendered control's
+  click carries none, and is given one of its own.
+- `root: Cell<ChatMessage>` — The root of the thread retitled: a message of the
+  room in no thread. It needn't hold a reply yet. The rendered control names
+  the session's open thread, and its click carries none.
+- `title: string` — The new title, exactly as the person saw it when they set
+  it. It must have some text in it: a string, not empty or only whitespace.
+
+Sets the title of one of the room's threads, which every member shares: the
+`title` the thread's summary shows (see
+[`ChatThreadSummary`](ChatThreadSummary.md#titles)). Like `setTitle`, it takes
+a gesture of its own, records its outcome, and is in `[VIEWS]`.
+
+- **Admitted:** as a trusted gesture on `ChatRetitleSurface`, from the thread's
+  rendered retitle control, or from a client's own control through the
+  sanctioned issuing path, from any member who can write in the room, in a room
+  of any kind.
+- **Effect:** records the title, trimmed of the whitespace around it, labeled
+  `authored-by` the sender, as the thread's title. It replaces any title set
+  before.
+- **Refused:** a sender who can't write in the room, or isn't signed in
+  (`not-member`); a `root` that isn't a message of the room in no thread
+  (`not-a-root`); and a `title` with no text in it (`invalid-title`).
+- **Outcome:** recorded in `threadTitleRequests`: `done`, or `refused` with a
+  `reason` for a person to read and a `code` a client acts on. A refusal
+  changes nothing else.
+
 ### `ensureFileStore()`
 
 Creates the store of the room's space's files, unless the space names one
@@ -670,9 +755,10 @@ it takes no `requestId`, since a repeat changes nothing, and it is in
 - **`[UI]`** is the room's own rendering, with its reviewed surfaces. An
   adapter's rendering embeds it, so a composer is always the room's own surface.
 - **`[VIEWS]`** holds a `room` group with the facts and streams above, for hosts
-  that draw natively. It includes `messages`, `canSend`, `viewer`,
+  that draw natively. It includes `replyShape`, `messages`, `canSend`, `viewer`,
   `messageRights`, `addMember` with `canAdd` and
-  `addRequests`, `setTitle` with `titleRequests`, and `ensureFileStore` with
+  `addRequests`, `setTitle` with `titleRequests`, `setThreadTitle` with
+  `threadTitleRequests`, and `ensureFileStore` with
   `fileStore`. A client uses it to show
   a room outside any container. Inside a container, it reads the placement's
   `chat` group instead

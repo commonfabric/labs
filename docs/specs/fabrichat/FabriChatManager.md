@@ -152,9 +152,13 @@ create a space for the conversation, with the room as its root, in four steps:
    points at no inbox.
 4. Record the entry in `rooms`, and in `direct` for a direct room, register the
    room's space in the user's catalog, and mark the request `done`. The
-   registration waits for the space's name to resolve, and adding this user to
-   the room's participants follows then: the run that sees the name pending is
-   discarded and run again, and its sends could still be delivered.
+   registration, like adding this user to the room's participants, is an
+   event of its own that follows the room's creation, so the catalog is read
+   apart from it: a transaction's writes are held to the labels of everything
+   it reads, and the catalog can carry its owner's `PersonalSpace` label,
+   which the room's space doesn't admit. Both wait for the space's name to
+   resolve: the run that sees the name pending is discarded and run again, and
+   its sends could still be delivered.
 
 Each step is recorded under the request's `requestId` as it completes, which is
 how a repeated request resumes where the last attempt stopped instead of

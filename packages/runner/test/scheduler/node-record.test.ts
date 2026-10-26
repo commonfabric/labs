@@ -89,5 +89,37 @@ describe("NodeRegistry", () => {
         expect(nodes.getRegistrationOrdinal(first)).toBe(ordinal);
       });
     });
+
+    describe("membership", () => {
+      it("advances when a node joins the active set and when it leaves", () => {
+        const nodes = new NodeRegistry();
+        const action: Action = function member() {};
+        const before = nodes.membership;
+
+        nodes.register(action, "computation");
+        const joined = nodes.membership;
+        nodes.remove(action);
+        const left = nodes.membership;
+        nodes.register(action, "computation");
+
+        expect([joined, left, nodes.membership]).toEqual([
+          before + 1,
+          before + 2,
+          before + 3,
+        ]);
+      });
+
+      it("stays put for a registration of an active node and a removal of an unknown one", () => {
+        const nodes = new NodeRegistry();
+        const action: Action = function active() {};
+        nodes.register(action, "computation");
+        const membership = nodes.membership;
+
+        nodes.register(action, "effect");
+        nodes.remove(function unknown() {});
+
+        expect(nodes.membership).toBe(membership);
+      });
+    });
   });
 });

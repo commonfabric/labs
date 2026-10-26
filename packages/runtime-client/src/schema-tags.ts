@@ -3,6 +3,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { extractHashtags } from "@commonfabric/utils/hashtags";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
@@ -32,7 +33,7 @@ const RECORD_VALUED_KEYWORDS = new Set<string>([
 /**
  * Collect the discovery tags of a schema.
  *
- * Reads the structured `tags` fields emitted by the schema generator,
+ * Extracts hashtags from schema descriptions,
  * aggregated across the schema tree (root and nested schemas), lowercased
  * and deduplicated.
  */
@@ -52,11 +53,9 @@ export function tagsFromSchema(
     visited.add(node);
 
     const record = node as Record<string, unknown>;
-    if (Array.isArray(record.tags)) {
-      for (const tag of record.tags) {
-        if (typeof tag !== "string") continue;
-        const lowered = tag.toLowerCase();
-        if (!tags.includes(lowered)) tags.push(lowered);
+    if (typeof record.description === "string") {
+      for (const tag of extractHashtags(record.description)) {
+        if (!tags.includes(tag)) tags.push(tag);
       }
     }
 

@@ -94,6 +94,35 @@ export type SessionState = {
    * evaluation to re-diff them out. Self-clearing. */
   forceFullResync: boolean;
 
+  /**
+   * Set when a planner selection changed what the session's views may run
+   * or adopt without changing what they are delivered: the next frame
+   * carries the new plans, over the incremental refresh, and a session
+   * nothing dirtied gets a frame of plans alone. Cleared as that frame is
+   * built. A changed delivery takes `viewSupportGrown` or
+   * `viewSupportReplaced` as well.
+   */
+  viewPlansPending: boolean;
+
+  /**
+   * Set when a planner selection added delivery roots to a view and took
+   * none away: the next pass extends the view's support graph by the added
+   * roots, inside the incremental refresh, instead of re-evaluating the
+   * whole watch set. Cleared as that pass commits. A selection that removes
+   * a root takes `viewSupportReplaced`.
+   */
+  viewSupportGrown: boolean;
+
+  /**
+   * Set when a planner selection took a delivery root away from a view of
+   * the same revision: the next pass refreshes the demand graphs by its
+   * dirty batch, rebuilds the support graphs from the current selections
+   * over them, and diffs the session's delivery against the result, as a
+   * full evaluation does, so the departed documents are removed without
+   * the demand being walked again. Cleared as that pass begins.
+   */
+  viewSupportReplaced: boolean;
+
   /** Set once this session was admitted an explicit `entity_scope_key`
    * read (protocol.md §2's read row — lease holders only), and STICKY
    * for the session's life: it selects the session's WIRE VOCABULARY
@@ -143,6 +172,32 @@ export type SessionState = {
   elidedVerdicts?: boolean;
 };
 
+/**
+ * A change to the sessions a {@link SessionRegistry} holds, as its observer
+ * sees it. `opened` reports a session opened or resumed, with what the open
+ * declared; `detached` reports its connection gone; `removed` reports the
+ * session deleted, either explicitly or after its detach expiry lapses.
+ */
+export type SessionLifecycleEvent =
+  | {
+    readonly kind: "opened";
+    readonly space: string;
+    readonly sessionId: string;
+    readonly principal?: string;
+    readonly readCeiling?: SessionReadCeiling;
+  }
+  | {
+    readonly kind: "detached";
+    readonly space: string;
+    readonly sessionId: string;
+    readonly expiresAt: number;
+  }
+  | {
+    readonly kind: "removed";
+    readonly space: string;
+    readonly sessionId: string;
+  };
+
 type OpenSessionState = {
   sessionId: string;
   sessionToken: SessionToken;
@@ -164,9 +219,21 @@ const revokedError = (message: string): Error =>
 const nextSessionToken = (): SessionToken =>
   crypto.randomUUID() as SessionToken;
 
+/** The `opened` event describing `session` as it stands. */
+const openedEvent = (session: SessionState): SessionLifecycleEvent => ({
+  kind: "opened",
+  space: session.space,
+  sessionId: session.id,
+  ...(session.principal === undefined ? {} : { principal: session.principal }),
+  ...(session.readCeiling === undefined
+    ? {}
+    : { readCeiling: session.readCeiling }),
+});
+
 export class SessionRegistry {
   readonly #ttlMs: number;
   #sessions = new Map<string, SessionState>();
+  #observer: ((event: SessionLifecycleEvent) => void) | undefined;
 
   constructor(options: { ttlMs?: number } = {}) {
     this.#ttlMs = options.ttlMs ?? 30_000;
@@ -176,8 +243,48 @@ export class SessionRegistry {
     for (const [key, session] of this.#sessions) {
       if (session.expiresAt !== null && session.expiresAt <= now) {
         this.#sessions.delete(key);
+        this.#observer?.({
+          kind: "removed",
+          space: session.space,
+          sessionId: session.id,
+        });
       }
     }
+  }
+
+  /**
+   * Installs the one observer of this registry's changes, replacing any
+   * installed before, so a registry two servers share reports to the one
+   * that installed last; `undefined` removes it. It is called as each change
+   * is made, with the registry already reflecting it, and a detached
+   * session that lapses is reported when a read prunes it.
+   */
+  setObserver(
+    observer: ((event: SessionLifecycleEvent) => void) | undefined,
+  ): void {
+    this.#observer = observer;
+  }
+
+  /**
+   * The events that would bring an observer installed now up to date: an
+   * `opened` for every session held, followed by a `detached` for each one
+   * whose connection is gone.
+   */
+  snapshot(): SessionLifecycleEvent[] {
+    this.#prune();
+    const events: SessionLifecycleEvent[] = [];
+    for (const session of this.#sessions.values()) {
+      events.push(openedEvent(session));
+      if (session.expiresAt !== null) {
+        events.push({
+          kind: "detached",
+          space: session.space,
+          sessionId: session.id,
+          expiresAt: session.expiresAt,
+        });
+      }
+    }
+    return events;
   }
 
   open(
@@ -278,6 +385,9 @@ export class SessionRegistry {
       caughtUpLocalSeq: existing?.caughtUpLocalSeq ?? 0,
       pendingCaughtUpLocalSeq: existing?.pendingCaughtUpLocalSeq ?? 0,
       forceFullResync: existing?.forceFullResync ?? false,
+      viewPlansPending: existing?.viewPlansPending ?? false,
+      viewSupportGrown: existing?.viewSupportGrown ?? false,
+      viewSupportReplaced: existing?.viewSupportReplaced ?? false,
       ...(existing?.leaseHolderReads === true
         ? { leaseHolderReads: true }
         : {}),
@@ -306,6 +416,7 @@ export class SessionRegistry {
       ...(actingPrincipal !== undefined ? { actingPrincipal } : {}),
       ...(elidedVerdicts ? { elidedVerdicts: true } : {}),
     });
+    this.#observer?.(openedEvent(this.#sessions.get(key)!));
     return {
       sessionId,
       sessionToken,
@@ -377,7 +488,9 @@ export class SessionRegistry {
 
   /** Remove a session outright (e.g. its principal lost access). */
   remove(space: string, sessionId: string): void {
-    this.#sessions.delete(sessionKey(space, sessionId));
+    if (this.#sessions.delete(sessionKey(space, sessionId))) {
+      this.#observer?.({ kind: "removed", space, sessionId });
+    }
   }
 
   updateSeenSeq(
@@ -412,6 +525,9 @@ export class SessionRegistry {
     session.viewDemandGraphs = new Map();
     session.viewDemandEntities = new Map();
     session.forceFullResync = true;
+    session.viewPlansPending = false;
+    session.viewSupportGrown = false;
+    session.viewSupportReplaced = false;
   }
 
   detach(space: string, sessionId: string, ownerConnectionId: string): void {
@@ -419,6 +535,12 @@ export class SessionRegistry {
     if (session?.ownerConnectionId === ownerConnectionId) {
       session.ownerConnectionId = null;
       session.expiresAt = Date.now() + this.#ttlMs;
+      this.#observer?.({
+        kind: "detached",
+        space,
+        sessionId,
+        expiresAt: session.expiresAt,
+      });
     }
   }
 }

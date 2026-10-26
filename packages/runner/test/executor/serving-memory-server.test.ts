@@ -195,6 +195,7 @@ describe("serving-memory-server", () => {
       });
       await using serving = await startServingMemoryServer({
         apiUrl: new URL(import.meta.url),
+        worker: false,
         prepareStorageManager: (manager) => {
           activations.push(inServingContext());
           manager.subscribe(recordIntegrations(servingIntegrations));
@@ -272,8 +273,9 @@ describe("serving-memory-server", () => {
     it("runs a lifecycle verb in the serving context, whatever asked for it", async () => {
       await using serving = await startServingMemoryServer({
         apiUrl: new URL(import.meta.url),
+        worker: false,
       });
-      const receipt = await serving.host.runLifecycleVerb(
+      const receipt = await serving.host.host!.runLifecycleVerb(
         alice.did() as MemorySpace,
         { name: "probe", run: () => Promise.resolve(inServingContext()) },
       );
@@ -288,7 +290,13 @@ describe("serving-memory-server", () => {
       expect(serving.close()).toBe(first);
       await first;
       await serving[Symbol.asyncDispose]();
-      expect(serving.host.stats().activeSpaces).toBe(0);
+      // The in-process host reports its counters after it closes; a worker
+      // is gone with its counters.
+      if (serving.host.host === undefined) {
+        expect(serving.host.stats()).toBeUndefined();
+      } else {
+        expect(serving.host.stats()?.activeSpaces).toBe(0);
+      }
     });
   });
 

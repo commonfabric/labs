@@ -6,8 +6,10 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { getLogger } from "@commonfabric/utils/logger";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
@@ -241,6 +243,89 @@ describe("ExecutorHost.runLifecycleVerb", () => {
       "second:start",
       "second:end",
     ]);
+  });
+
+  it("finishes the wave commit an overlapped cycle left in flight before it runs a verb queued meanwhile", async () => {
+    // An overlapped cycle leaves its commit in flight when other work has
+    // arrived, and a queued verb is such work. The verb is queued while the
+    // wave's commit reads the store's heads, so the cycle that committed
+    // sees it and leaves the commit to the next cycle. That cycle finishes
+    // the commit, recording `executor/wave/commit-wait`, before the verb
+    // reads the replica.
+    const order: string[] = [];
+    const timing = getLogger("executor");
+    const time = timing.time.bind(timing);
+    using _time = stub(
+      timing,
+      "time",
+      (...args: Parameters<typeof time>) => {
+        if (args.slice(1).join("/") === "executor/wave/commit-wait") {
+          order.push("commit finished");
+        }
+        return time(...args);
+      },
+    );
+    let armed = false;
+    let second: Promise<string> | undefined;
+    host = new ExecutorHost({
+      server,
+      serviceIdentity: serviceSigner.did(),
+      createRuntime: servingRuntime,
+      policy: {
+        flushDeadlineMs: 5_000,
+        idleParkMs: 600_000,
+        overlapWaveCommit: true,
+      },
+      decorateWaveCommitSink: (sink) => ({
+        currentHeads: (headsSpace, docs) => {
+          if (armed) {
+            armed = false;
+            second = host!.runLifecycleVerb(space, {
+              name: "second",
+              run: async (runtime) => {
+                order.push("second verb ran");
+                await writeMarker(runtime, "second");
+                return "second";
+              },
+            });
+          }
+          return sink.currentHeads(headsSpace, docs);
+        },
+        concurrentWritePaths: (pathsSpace, doc, sinceSeq) =>
+          sink.concurrentWritePaths(pathsSpace, doc, sinceSeq),
+        commitWave: (batch) => sink.commitWave(batch),
+      }),
+    });
+    const first = await host.runLifecycleVerb(space, {
+      name: "first",
+      run: async (runtime) => {
+        await writeMarker(runtime, "first");
+        return "first";
+      },
+    });
+    expect(first).toBe("first");
+
+    armed = true;
+    const writer = clientRuntime();
+    const input = writer.getCell<{ n: number }>(
+      space,
+      "overlapped-verb-input",
+      undefined,
+    );
+    await input.sync();
+    const tx = writer.edit();
+    input.withTx(tx).set({ n: 1 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await waitUntil(
+      () => second !== undefined,
+      "the verb to be queued from the wave's commit",
+    );
+
+    expect(await second).toBe("second");
+    expect(order).toContain("commit finished");
+    expect(order.indexOf("commit finished")).toBeLessThan(
+      order.indexOf("second verb ran"),
+    );
   });
 
   describe("a transaction stamped `directCommit`", () => {

@@ -1,6 +1,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { isInMain, isSingleEmoji, type ViewItem, viewPlaces } from "./logic.ts";
+import {
+  isInMain,
+  isSingleEmoji,
+  THREAD_EXCERPT_LENGTH,
+  threadExcerpt,
+  type ViewItem,
+  viewPlaces,
+} from "./logic.ts";
 
 describe("logic", () => {
   describe("isSingleEmoji()", () => {
@@ -34,15 +41,19 @@ describe("logic", () => {
   });
 
   describe("views", () => {
-    // `a` roots a thread holding `b` and `c`; `c` also shows in the main
-    // conversation; `d` quotes `a` in the main conversation; `e` replies to
-    // `b`, which is in `a`'s thread, so it joins that thread.
+    // `a` roots a thread holding `b`, `c` and `e`; `c` also shows in the main
+    // conversation; `d` quotes `a` in the main conversation; `e` quotes `b`
+    // in `a`'s thread.
     const items: ViewItem[] = [
-      { key: "c", sentAt: 30n, replyTo: { key: "a", shownIn: "both" } },
+      { key: "c", sentAt: 30n, replyTo: { thread: "a", shownIn: "both" } },
       { key: "a", sentAt: 10n },
-      { key: "b", sentAt: 20n, replyTo: { key: "a", shownIn: "thread" } },
-      { key: "d", sentAt: 40n, replyTo: { key: "a", shownIn: "main" } },
-      { key: "e", sentAt: 50n, replyTo: { key: "b", shownIn: "thread" } },
+      { key: "b", sentAt: 20n, replyTo: { thread: "a", shownIn: "thread" } },
+      { key: "d", sentAt: 40n, replyTo: { quotes: "a", shownIn: "main" } },
+      {
+        key: "e",
+        sentAt: 50n,
+        replyTo: { thread: "a", quotes: "b", shownIn: "thread" },
+      },
     ];
 
     it("returns `false` from `isInMain()` for a thread-only reply", () => {
@@ -76,32 +87,54 @@ describe("logic", () => {
         e: { inMain: false, replies: 0, thread: "a" },
       });
     });
+  });
 
-    it("finds the root of a very long reply chain", () => {
-      const chain: ViewItem[] = [
-        { key: "0", sentAt: 0n },
-        ...Array.from(
-          { length: 20_000 },
-          (_, index): ViewItem => ({
-            key: String(index + 1),
-            sentAt: BigInt(index + 1),
-            replyTo: { key: String(index), shownIn: "thread" },
-          }),
-        ),
-      ];
-      const places = viewPlaces(chain);
-      expect(places["20000"].thread).toBe("0");
-      expect(places["0"].replies).toBe(20_000);
+  describe("threadExcerpt()", () => {
+    it("returns text within the length as it stands", () => {
+      const text = "x".repeat(THREAD_EXCERPT_LENGTH);
+      expect(threadExcerpt(text)).toBe(text);
     });
 
-    it("stops at a reply chain that loops", () => {
-      const loop: ViewItem[] = [
-        { key: "x", sentAt: 1n, replyTo: { key: "y", shownIn: "thread" } },
-        { key: "y", sentAt: 2n, replyTo: { key: "x", shownIn: "thread" } },
-      ];
-      const places = viewPlaces(loop);
-      expect(places.x.thread).toBeDefined();
-      expect(places.x.replies + places.y.replies).toBeGreaterThan(0);
+    it("returns each run of whitespace as one space, and none at either end", () => {
+      expect(threadExcerpt("  Lunch\n\non   Friday?\t")).toBe(
+        "Lunch on Friday?",
+      );
+    });
+
+    it("returns longer text cut after its last whole word, with an ellipsis", () => {
+      const text =
+        "Where should we go for the team lunch on Friday, and who is booking it?";
+      const excerpt = threadExcerpt(text);
+      expect(excerpt).toBe("Where should we go for the team lunch on Friday,…");
+      expect(Array.from(excerpt).length).toBeLessThanOrEqual(
+        THREAD_EXCERPT_LENGTH,
+      );
+    });
+
+    it("returns longer text cut before a word the cut falls within", () => {
+      // The cut falls within "afternoon", which is left out whole.
+      const text =
+        "Where should we go for the team lunch on Friday afternoon, and who books?";
+      expect(threadExcerpt(text)).toBe(
+        "Where should we go for the team lunch on Friday…",
+      );
+    });
+
+    it("returns a word that ends right at the cut whole", () => {
+      // 49 characters of whole words, then a space and more.
+      const words = "aaaa ".repeat(9) + "bbbb";
+      expect(Array.from(words).length).toBe(THREAD_EXCERPT_LENGTH - 1);
+      expect(threadExcerpt(`${words} cccc`)).toBe(`${words}…`);
+    });
+
+    it("returns a first word longer than the length cut within it", () => {
+      const excerpt = threadExcerpt("y".repeat(80));
+      expect(excerpt).toBe(`${"y".repeat(THREAD_EXCERPT_LENGTH - 1)}…`);
+    });
+
+    it("returns no code point split by the cut", () => {
+      const excerpt = threadExcerpt("😺".repeat(60));
+      expect(excerpt).toBe(`${"😺".repeat(THREAD_EXCERPT_LENGTH - 1)}…`);
     });
   });
 });
