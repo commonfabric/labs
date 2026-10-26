@@ -40,14 +40,16 @@ export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
 // node's cause; the per-event documents a builtin mints inside one
 // transaction; and the documents anchoring splits out of a value written into
 // any of those. `target` is that document; `sources` is the document the
-// runtime derived it from. The prepare gate reads it for the §8.12.5 runtime-owned-store
-// admission described in `docs/specs/cfc-enforcement-matrix.md` §4, and
+// runtime derived it from. The prepare gate reads it for the §8.12.5
+// runtime-owned-store admission described in
+// `docs/specs/cfc-enforcement-matrix.md` §4, and
 // takes it only where `target` names a whole document AND the input was
 // recorded under {@link runtimeWritePolicyAuthorization}.
 //
 // The marker names the store for one transaction. A store written outside the
 // transaction that minted it can be enrolled beside it
-// (`IExtendedStorageTransaction.enrollRuntimeOwnedStore`) until its piece stops.
+// (`IExtendedStorageTransaction.enrollRuntimeOwnedStore`) until its piece
+// stops.
 // Enrolled stores keep misfits solely in derived stamps; transaction-only
 // markers retain declarations for later authored clients.
 export const CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE =

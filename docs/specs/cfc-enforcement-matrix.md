@@ -531,7 +531,10 @@ The strict-only delta is:
   [specs#78](https://github.com/commonfabric/specs/pull/78), §8.12.5. The pinned
   specification still requires option 2's declaration on these stores; the
   strict default implements this slice ahead of its ruling. The specification
-  dependency remains open until the ruling and pin are reconciled. The proposal
+  dependency remains open until the ruling and pin are reconciled. There is no
+  `SPEC-PENDING` marker: the three-slot budget is full, and this entry and the
+  conformance statement record the authorized exception. The marker count is
+  therefore not a complete inventory of semantic gaps. The proposal
   admits more writes than this implementation: existing authored-declaration,
   read-failed and foreign-container refusals remain fail-closed residuals
   against the proposal.
@@ -543,8 +546,11 @@ The strict-only delta is:
   that creation label after an overwrite; derived admission is not an owner
   release. Stored declarations also remain unchanged and continue to taint
   reads. Lowering them requires §8.12.7's release routes. A path with no
-  recorded existence entry can also receive a legacy backfill on its first
-  labeled write; that entry remains frozen even if the value already existed.
+  recorded existence entry receives a legacy backfill on its first labeled
+  write. Clean creation records no empty existence entry, so this includes a
+  path created clean: its first labeled write's confidentiality stays frozen
+  after a clean overwrite. Derived admission can shed later distinct clauses
+  from the value stamp, but it cannot shed that first existence label.
 
   The route runs on every write while the runtime's ownership claim holds. At
   strict it records `writer-fit(runtime-owned-store-derived)` for an enrolled
@@ -554,12 +560,18 @@ The strict-only delta is:
   changes no sink ceiling: a builtin that stages an effect still needs its own
   sink gate, as described below.
 
-  Setup writes before enrollment, one-shot handoffs such as agent run records,
-  and marker-only anchored children retain the declaration route and its
-  ratchet. A child does not gain an enrollment merely because its parent has
-  one. The declared entries on these writes still pass through the cross-space
-  metadata protection used for flow-derived labels. Later authored clients of a
-  one-shot handoff continue to use its stored policy.
+  The choice follows live enrollment when writer-fit prepares the commit.
+  `Runtime.run(tx, ...)` instantiates and enrolls the piece's stores on the
+  caller's transaction before it commits, so its setup writes can take the
+  derived-only route. A setup committed while its stores have no live
+  enrollment retains the declaration route: for example,
+  [`PiecesController.setupPersistent()`](../../packages/piece/src/ops/pieces-controller.ts)
+  commits a new piece's setup without starting its nodes. One-shot handoffs
+  such as agent run records and marker-only anchored children also retain that
+  route and its ratchet. A child does not gain an enrollment merely because its
+  parent has one. The declared entries on these writes still pass through the
+  cross-space metadata protection used for flow-derived labels. Later authored
+  clients of a one-shot handoff continue to use its stored policy.
 
   What bounds the route:
 

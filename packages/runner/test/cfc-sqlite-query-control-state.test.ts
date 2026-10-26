@@ -752,6 +752,10 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     expect(hasClause(held, first)).toBe(true);
     expect(hasClause(held, second)).toBe(false);
     expect(hasClause(held, third)).toBe(true);
+    const existence = derivedAt(bodies, ["requestHash"], "shape");
+    expect(hasClause(existence, first)).toBe(true);
+    expect(hasClause(existence, second)).toBe(false);
+    expect(hasClause(existence, third)).toBe(false);
     expect(declaredAt(bodies, ["requestHash"])).toEqual([]);
   });
 

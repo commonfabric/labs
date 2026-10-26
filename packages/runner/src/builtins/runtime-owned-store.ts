@@ -27,9 +27,9 @@ import { scopedCell } from "./scope-policy.ts";
  * so no confidentiality declaration written into a schema covers it. CFC's
  * write-side fit check reads this marker and admits eligible writes. Without
  * lifetime enrollment, it also declares the misfit so later authored clients
- * can write the store; `docs/specs/cfc-enforcement-matrix.md` §4 states the boundary.
- * The runner records the same marker for a piece's own argument, result and
- * internal documents.
+ * can write the store; `docs/specs/cfc-enforcement-matrix.md` §4 states the
+ * boundary. The runner records the same marker for a piece's own argument,
+ * result and internal documents.
  *
  * Only a store keyed on this NODE belongs here. A document the runtime mints
  * from a constant or from the space's own principal — a space cell, a shared
@@ -73,8 +73,10 @@ export function recordRuntimeOwnedStore(
 /**
  * The store this node keeps under `cause`, at `scope` — minted in `owner`'s
  * space, named to the write-side fit check per {@link
- * recordRuntimeOwnedStore}, ENROLLED for the rest of this runtime's life, and
- * addressed at the instance scope the caller asked for.
+ * recordRuntimeOwnedStore}, enrolled until its owner's piece is cancelled,
+ * and addressed at the instance scope the caller asked for. Eligible misfits
+ * stay in derived stamps while that enrollment is live; the marker alone can
+ * add a declared policy.
  *
  * This is the shape every builtin holding its own state uses, so the mint, the
  * marker and the scoping stay together: a builtin that mints a store without

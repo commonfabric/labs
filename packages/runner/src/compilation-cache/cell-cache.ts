@@ -960,8 +960,9 @@ export function codeFieldVerifies(
  * A cache document has no piece owner for §8.12.5's runtime-owned-store
  * enrollment. It is keyed on module content: every piece in the space
  * running that module addresses it, and it outlives all of them. Its
- * per-transaction marker admits the write independently of piece enrollment,
- * while the derived component records the current value's flow label.
+ * undeclarable-policy marker exempts local-flow writes from writer-fit at
+ * every rung. It supplies no ownership claim, so neither ownership admission
+ * route applies. The flow stamps record the current value's label.
  *
  * The write stays a flow stamp target, which is where this stops short of
  * §18.6.2's write-side mirror — that section says the same addresses are not

@@ -354,9 +354,16 @@ dials.
   the ruling and pin are reconciled. Against the proposal, the
   authored-declaration, read-failed and foreign-container refusals remain
   fail-closed residuals. A transaction-local marker without a live enrollment
-  still takes the pinned declaration route: setup writes, one-shot handoffs and
-  marker-only anchored children retain that ratchet. Existing declarations and
-  frozen existence stamps remain; no automatic data repair is performed. See
+  still takes the pinned declaration route. This includes a setup committed
+  while its stores have no live enrollment, as in
+  `PiecesController.setupPersistent()`, which commits a new piece's setup
+  without starting its nodes. `Runtime.run(tx, ...)` enrolls the stores before
+  the caller's commit, so its setup writes can take the derived-only route.
+  One-shot handoffs and marker-only anchored children retain the declaration
+  ratchet. Existing declarations and frozen existence stamps remain. Clean
+  creation records no empty existence entry, so even a path created clean keeps
+  the first labeled write's existence label after a clean overwrite. No
+  automatic data repair is performed. See
   `cfc-enforcement-matrix.md` §4, "Runtime-owned-store derived admission".
   `isDeclarablePolicyStore` in `cfc/prepare.ts` exempts the raw meta seam,
   `computed:` cells, stream entry documents and compilation-cache documents

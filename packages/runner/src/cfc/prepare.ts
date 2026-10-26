@@ -13359,8 +13359,9 @@ export function* prepareBoundaryCommitSteps(
               runtimeWritePolicyAuthorization,
             );
             // A store enrolled for a running piece keeps this attempt's
-            // misfit solely in the derived stamps below (specs#78). A
-            // transaction-only marker can describe a handoff to authored
+            // misfit solely in the derived stamps below:
+            // https://github.com/commonfabric/specs/pull/78
+            // A transaction-only marker can describe a handoff to authored
             // clients, including an AgentRun record or an anchored child;
             // retain its declaration until those lifecycles are covered.
             if (!enrolled) {

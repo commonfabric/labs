@@ -462,10 +462,14 @@ option 2's declaration, so it does not conform to the pin on this point.
 
 An authorized transaction-local marker without a live enrollment still takes
 option 2: the write declares a covering policy, adding clauses and preserving
-every stored alternative. Setup writes before enrollment, one-shot handoffs such
-as agent run records, and marker-only anchored children retain that behavior.
-Those declarations retain the ratchet; this slice addresses later writes to
-enrolled stores, not every runtime-minted document.
+every stored alternative. The choice follows live enrollment when the commit is
+prepared: `Runtime.run(tx, ...)` enrolls before the caller's commit, so its setup
+writes can take the derived-only route. A setup committed while its stores have
+no live enrollment retains the declaration; `PiecesController.setupPersistent()`
+commits a new piece's setup without starting its nodes. One-shot handoffs such
+as agent run records and marker-only anchored children retain that behavior too.
+Those declarations retain the ratchet; this slice addresses writes to enrolled
+stores, not every runtime-minted document.
 
 The ownership claim covers a piece's argument, result and internal stores, a
 builtin's node-owned stores, and documents anchored out of them. It requires the
@@ -477,7 +481,10 @@ fail-closed residuals against the proposal.
 
 The derived stamp taints readers of the write. A later write to an enrolled
 store replaces the value stamp with its own derivation, while the existence
-stamp remains frozen at creation. Stored declarations remain unchanged; their
+stamp remains frozen. Clean creation records no empty existence entry, so a
+path created clean receives a frozen existence label from its first labeled
+write; a later clean overwrite still carries that label. Stored declarations
+remain unchanged; their
 repair is an explicit owner release under §8.12.7 route 2c when the owner has
 that authority. Nothing in this implementation repairs affected deployments.
 

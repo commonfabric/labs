@@ -310,6 +310,14 @@ on four things, each read against the committed snapshot:
   naming no `https://github.com/commonfabric/specs/pull/<n>`. A marker
   outside those files is not counted, and the rule does not reach there.
 
+The marker count is not a complete inventory of semantic gaps. The enrolled-store
+persistence change pending [specs#78](https://github.com/commonfabric/specs/pull/78)
+runs at the strict default under an authorized exception without a marker; the
+three marker slots are occupied. Its record is the "Runtime-owned-store derived
+admission" entry in
+[`cfc-enforcement-matrix.md`](../specs/cfc-enforcement-matrix.md) §4 and the
+[conformance statement](../specs/cfc-conformance-statement.md) §5.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `packages/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's
