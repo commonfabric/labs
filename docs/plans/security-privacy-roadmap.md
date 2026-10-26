@@ -137,7 +137,8 @@ fund the service. These must be developed alongside confidential hosting.
 - **Diagnostics:** the health surface is public today: `/api/health/stats`
   exposes per-space session IDs and principals without authentication.
   `/api/health/document-interests` also exposes delegated identities and
-  connection liveness.
+  connection liveness, application and build provenance, runtime instance IDs,
+  and client-reported start times.
   Restrict these surfaces to authenticated operators before claiming operator
   exclusion. The immediate follow-up is shared operator-diagnostics middleware
   based on the [memory-dump gate](../../packages/toolshed/routes/storage/memory/memory-dump.index.ts):

@@ -9,6 +9,7 @@
 // explicit toolshed override if present, otherwise the source-run COMMIT_SHA
 // fallback, so `/api/meta` presents the same field as a compiled binary.
 
+import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import {
   type BuildInfo,
   normalize,
@@ -93,4 +94,9 @@ export function resolveGitSha(): string | null {
     buildInfo.commitSha,
     env.COMMIT_SHA,
   );
+}
+
+/** Returns the application and loaded labs build for toolshed's runtimes. */
+export function toolshedClientBuild(): ClientBuild {
+  return { application: "toolshed", gitSha: resolveGitSha() };
 }

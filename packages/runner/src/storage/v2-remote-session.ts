@@ -5,6 +5,7 @@ import {
   encodeMemoryBoundary,
   MEMORY_PROTOCOL,
   type MemoryProtocolFlags,
+  type SessionDescriptor,
 } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import {
@@ -1031,7 +1032,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
 export async function createSignedSessionOpenAuth(
   signer: Signer,
   space: MemorySpace,
-  session: MemoryClient.MountOptions,
+  session: SessionDescriptor,
   context: MemoryClient.SessionOpenAuthContext,
 ): Promise<MemoryClient.SessionOpenAuth> {
   const iat = Math.floor(Date.now() / 1000);

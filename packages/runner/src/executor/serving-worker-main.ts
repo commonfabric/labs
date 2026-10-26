@@ -10,6 +10,7 @@
 
 import { Identity, keyPairFromRealmValue } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { adoptProcessInstanceId } from "@commonfabric/memory/v2/execution-lease";
 import {
   getLoggerCountsBreakdown,
@@ -29,6 +30,9 @@ import { servingRuntimeFactory } from "./serving-runtime.ts";
 
 /** What an entry module adds to the host the init request describes. */
 export type ServingWorkerMainOptions = {
+  /** Application and loaded labs build reported by each serving runtime. */
+  clientBuild?: ClientBuild;
+
   /**
    * Runs the verb a lifecycle descriptor names through `host`, on the
    * space's serving runtime as the service identity, timing its steps.
@@ -75,6 +79,7 @@ export function serveFromPort(
         server: plane.loopback,
         identity,
         apiUrl: new URL(init.apiUrl),
+        clientBuild: options.clientBuild,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
         ...(init.experimental === undefined
           ? {}

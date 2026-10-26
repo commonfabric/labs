@@ -1,9 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import * as MemoryClient from "@commonfabric/memory/v2/client";
-import { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import { Identity } from "@commonfabric/identity";
+import * as MemoryClient from "@commonfabric/memory/v2/client";
+import type { ClientInfo } from "@commonfabric/memory/v2/client-info";
+import { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   DEFAULT_MAX_OUTSTANDING_EFFECTS,
@@ -496,10 +497,17 @@ describe("startServerExecutionHost with the worker on", () => {
     const client = await Identity.fromPassphrase("serving worker client");
     const space = (await Identity.fromPassphrase("serving worker space")).did();
     const directory = await Deno.makeTempDir({ prefix: "serving-worker-" });
+    const servingReport = Promise.withResolvers<ClientInfo | undefined>();
     const server = new MemoryServer({
       store: toFileUrl(`${directory}/`),
       subscriptionRefreshDelayMs: 0,
-      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      authorizeSessionOpen: async (message, context) => {
+        const principal = await authorizeLoopbackSessionOpen(message, context);
+        if (principal === identity.did()) {
+          servingReport.resolve(message.session.client);
+        }
+        return principal;
+      },
       sessionOpenAuth: { audience: "did:key:z6Mk-serving-worker" },
     });
     const knobs: Record<string, string> = {
@@ -519,7 +527,7 @@ describe("startServerExecutionHost with the worker on", () => {
       transport: MemoryClient.loopback(server),
     });
     try {
-      await connection.mount(
+      const session = await connection.mount(
         space,
         {},
         (_space, _descriptor, context) => ({
@@ -534,6 +542,20 @@ describe("startServerExecutionHost with the worker on", () => {
         () => loop!.stats()?.activeSpaces === 1,
         "the worker to activate the space on the client's session",
       );
+      await session.watchAddSync([{
+        id: "worker-attribution-demand",
+        kind: "graph",
+        query: {
+          roots: [{
+            id: "of:worker-attribution-demanded",
+            scope: "space",
+            selector: { path: [], schema: false },
+          }],
+        },
+      }]);
+      expect(await servingReport.promise).toMatchObject({
+        application: "toolshed",
+      });
     } finally {
       await connection.close();
       await stopServerExecutionHost();

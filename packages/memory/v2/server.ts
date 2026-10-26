@@ -2623,9 +2623,6 @@ export class Server {
    */
   #serverExecutionObserver: ServerExecutionObserver | undefined;
 
-  /** Startup admission floor, unchanged for this server instance. */
-  readonly #minimumClientGeneration: number;
-
   /**
    * Additive watchers of the same admission hook, independent of the host's
    * observer above: any number attach, and each sees every notice.
@@ -2709,8 +2706,12 @@ export class Server {
     readonly options: {
       sessions?: SessionRegistry;
 
-      /** Minimum reported client generation; `0` admits unidentified clients. */
-      minimumClientGeneration?: number;
+      /**
+       * Client retirement is disabled. Only `0` is accepted; any other value
+       * throws during construction.
+       * @deprecated Client attribution does not control admission.
+       */
+      minimumClientGeneration?: 0;
 
       store?: URL;
       /** Synchronous authoritative fence, checked in protected engine turns. */
@@ -2855,13 +2856,14 @@ export class Server {
       };
     },
   ) {
-    const minimum = options.minimumClientGeneration ?? 0;
-    if (!Number.isSafeInteger(minimum) || minimum < 0) {
+    if (
+      options.minimumClientGeneration !== undefined &&
+      options.minimumClientGeneration !== 0
+    ) {
       throw new RangeError(
-        "Minimum client generation must be a nonnegative safe integer",
+        "Client retirement is disabled; `minimumClientGeneration` must be `0`",
       );
     }
-    this.#minimumClientGeneration = minimum;
     this.#sessions = options.sessions ?? new SessionRegistry();
     this.#sessions.setObserver((event) => this.#notifySessionChanged(event));
     this.#store = options.store;
@@ -5170,14 +5172,6 @@ export class Server {
         : await this.options.authorizeSessionOpen(message, authContext);
       if (authContext !== undefined) {
         connection.consumeSessionOpenChallenge(authContext.challenge);
-      }
-      const minimum = this.#minimumClientGeneration;
-      if ((message.session.client?.generation ?? 0) < minimum) {
-        throw authorizationError(
-          `Client update required: this deployment requires client generation ${minimum}. ` +
-            "Reload the browser tab or update and restart the application or CLI. " +
-            "Check any unconfirmed writes before restarting.",
-        );
       }
       // Mode A: a DID with no store here names a space nobody has created
       // here. Only its own key may create it, and only where `createsSpace`
@@ -11070,10 +11064,7 @@ const parseDecodedClientMessage = (
       parsed.session.spaceKind !== undefined &&
       !isSpaceKind(parsed.session.spaceKind)
     ) return null;
-    const client = parsed.session.client === undefined
-      ? undefined
-      : parseClientInfo(parsed.session.client);
-    if (client === null) return null;
+    const client = parseClientInfo(parsed.session.client) ?? undefined;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
     const readCeiling = parseSessionReadCeiling(parsed.session.readCeiling);

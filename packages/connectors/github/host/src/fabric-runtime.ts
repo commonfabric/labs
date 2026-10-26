@@ -58,6 +58,7 @@ export async function openGithubFabricRuntime(options: {
   const storageManager = StorageManager.open({
     as: session.as,
     memoryHost,
+    clientBuild: { application: "github-host", gitSha: null },
   });
   const runtime = new Runtime(runtimePresets.remoteClient({
     apiUrl,
