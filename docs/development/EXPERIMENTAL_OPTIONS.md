@@ -2527,21 +2527,6 @@ server](#clients-that-are-not-built-alongside-their-server).
 These are recorded so that references to them elsewhere in the tree do not send
 a future reader hunting for a flag that no longer exists.
 
-### `MEMORY_MINIMUM_CLIENT_GENERATION` (disabled)
-
-**Status (2026-10-26):** client retirement is disabled. The memory server has no
-admission decision based on client attribution. Its deprecated
-`minimumClientGeneration` option accepts only omission or `0`; Toolshed's
-`MEMORY_MINIMUM_CLIENT_GENERATION` accepts only unset or the exact string `0`.
-Other values refuse startup, so a configuration change cannot enable retirement.
-Attribution remains active. Producers retain a reserved `generation: 1` report
-field for compatible readers, without using it to control access.
-
-Any replacement retirement mechanism needs a runtime-wide update state that
-survives replacement sessions, user guidance for updates and unconfirmed writes,
-and tested behavior through reconnects, repeated reads, and navigation. See
-[client attribution](../../packages/memory/README.md#client-attribution).
-
 ### `INGEST_SELF_SERVE_ENABLED` (removed)
 
 Gated the ingest-channel control plane
@@ -2711,3 +2696,19 @@ server](#clients-that-are-not-built-alongside-their-server).
 - **Test controls**: `TEST_LLM`, `TEST_HTTP`, and the integration-test
   environment variables (`HEADLESS`, `PIPE_CONSOLE`,
   `CFC_BROWSER_PROFILE_COUNT`, `CF_WAITFOR_DELAY_MS`).
+
+### `MEMORY_MINIMUM_CLIENT_GENERATION` (disabled)
+
+**Status (2026-10-26):** client retirement is disabled. The memory server has no
+admission decision based on client attribution. Its deprecated
+`minimumClientGeneration` option accepts only omission or `0`; Toolshed's
+`MEMORY_MINIMUM_CLIENT_GENERATION` accepts only unset or the exact string `0`.
+Other values refuse startup, so a configuration change cannot enable retirement.
+Attribution remains active. Producers retain a reserved `generation: 1` report
+field for compatible readers; readers also accept reports that omit it. The
+field has no admission meaning.
+
+Any replacement retirement mechanism needs a runtime-wide update state that
+survives replacement sessions, user guidance for updates and unconfirmed writes,
+and tested behavior through reconnects, repeated reads, and navigation. See
+[client attribution](../../packages/memory/README.md#client-attribution).

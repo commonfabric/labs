@@ -140,6 +140,29 @@ describe("verifySessionOpenAuthorization", () => {
     ).rejects.toMatchObject({ name: "AuthorizationError" });
   });
 
+  it("binds client identity when the reserved generation field is absent", async () => {
+    const client = { ...createClientInfo({ application: "cf", gitSha: null }) };
+    delete client.generation;
+    const message = await buildOpen(signedFields(), alice, { client });
+    expect(await verifySessionOpenAuthorization(message, verifyOptions())).toBe(
+      alice.did(),
+    );
+    for (
+      const session of [
+        {},
+        { client: { ...client, generation: 1 } },
+        { client: { ...client, application: "shell" } },
+      ]
+    ) {
+      await expect(
+        verifySessionOpenAuthorization(
+          { ...message, session },
+          verifyOptions(),
+        ),
+      ).rejects.toMatchObject({ name: "AuthorizationError" });
+    }
+  });
+
   it("binds the complete custom-root expectation to the signed descriptor", async () => {
     const root = {
       source: "system:loom/main.tsx",

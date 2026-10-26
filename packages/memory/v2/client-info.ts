@@ -26,8 +26,8 @@ export type ClientInfo = ClientBuild & {
   /** Runtime instance identifier shared by its remote space connections. */
   instanceId: string;
 
-  /** Reserved diagnostic field; emitted as `1`, with no admission meaning. */
-  generation: number;
+  /** Optional diagnostic field; emitted as `1`, with no admission meaning. */
+  generation?: number;
 
   /** Client-reported instance creation time, in Unix milliseconds. */
   startedAt: number;
@@ -44,8 +44,9 @@ export function parseClientInfo(value: unknown): ClientInfo | null {
         !/^[a-f0-9]{40}$/.test(value.gitSha))) ||
     typeof value.instanceId !== "string" ||
     !/^[A-Za-z0-9_-]{1,128}$/.test(value.instanceId) ||
-    typeof value.generation !== "number" ||
-    !Number.isSafeInteger(value.generation) || value.generation < 1 ||
+    (value.generation !== undefined &&
+      (typeof value.generation !== "number" ||
+        !Number.isSafeInteger(value.generation) || value.generation < 1)) ||
     typeof value.startedAt !== "number" ||
     !Number.isSafeInteger(value.startedAt) || value.startedAt < 0
   ) return null;
@@ -53,7 +54,7 @@ export function parseClientInfo(value: unknown): ClientInfo | null {
     application: value.application,
     gitSha: value.gitSha,
     instanceId: value.instanceId,
-    generation: value.generation,
+    ...(value.generation === undefined ? {} : { generation: value.generation }),
     startedAt: value.startedAt,
   };
 }

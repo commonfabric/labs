@@ -53,12 +53,25 @@ describe("client-info", () => {
         { ...report, instanceId: "x".repeat(129) },
         { ...report, instanceId: "a/b" },
         { ...report, generation: 0 },
+        { ...report, generation: null },
+        { ...report, generation: "1" },
+        { ...report, generation: -1 },
         { ...report, generation: 1.5 },
+        { ...report, generation: NaN },
+        { ...report, generation: Infinity },
         { ...report, generation: Number.MAX_SAFE_INTEGER + 1 },
         { ...report, startedAt: -1 },
       ]
     ) expect(parseClientInfo(invalid)).toBeNull();
     expect(parseClientInfo({ ...report, gitSha: null })?.gitSha).toBeNull();
+  });
+
+  it("retains attribution without a reserved generation field", () => {
+    const report = { ...createClientInfo(BUILD) };
+    delete report.generation;
+    expect(parseClientInfo(report)).toStrictEqual(report);
+    expect(parseClientInfo({ ...report, generation: undefined }))
+      .toStrictEqual(report);
   });
 
   it("reports noncanonical host build labels as unknown without preventing connection", () => {
@@ -156,7 +169,12 @@ describe("client-info", () => {
   });
 
   it("rejects stripping or invalidating a valid signed report in transit", async () => {
-    for (const replacement of [undefined, { gitSha: "future" }]) {
+    const report = createClientInfo(BUILD);
+    const withoutGeneration = { ...report };
+    delete withoutGeneration.generation;
+    for (
+      const replacement of [undefined, { gitSha: "future" }, withoutGeneration]
+    ) {
       const server = new Server({
         store: new URL(`memory://client-info-tamper-${crypto.randomUUID()}`),
         authorizeSessionOpen: verifySessionOpenAuthorization,
@@ -165,6 +183,7 @@ describe("client-info", () => {
       const inner = new ServerTransport(server);
       const client = await connect({
         transport: wireReportTransport(inner, replacement, false),
+        client: report,
       });
       try {
         await expect(client.mount(SPACE, {}, principalOf(alice))).rejects
@@ -181,6 +200,8 @@ describe("client-info", () => {
 
   for (const connectionAuth of [false, true]) {
     const report = createClientInfo(BUILD);
+    const withoutGeneration = { ...report };
+    delete withoutGeneration.generation;
     for (
       const [name, wireReport, expected] of [
         ["absent", undefined, undefined],
@@ -193,6 +214,7 @@ describe("client-info", () => {
         ],
         ["future SHA", { ...report, gitSha: "b".repeat(64) }, undefined],
         ["invalid generation", { ...report, generation: "future" }, undefined],
+        ["absent generation", withoutGeneration, withoutGeneration],
         ["fractional start time", { ...report, startedAt: 1.5 }, undefined],
         ["future generation", { ...report, generation: 2 }, {
           ...report,

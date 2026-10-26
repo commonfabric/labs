@@ -277,7 +277,11 @@ agents host, and the GitHub host report their application names with an unknown
 SHA. Unconfigured runner embedders report `runner`, unconfigured `RuntimeClient`
 embedders report `runtime-client`, and raw memory clients report `memory`, all
 with unknown SHA. Producers emit the reserved `generation` field as `1` for
-readers that require it; it has no admission meaning.
+readers that require it; it has no admission meaning. Readers accept reports
+that omit it and preserve the other attribution fields.
+
+Each toolshed serving runtime serves one space, so each served space has its own
+toolshed runtime instance ID within a process or worker.
 
 The metadata-only `/api/health/document-interests?space=…&id=…` diagnostic
 includes each matching session's `client`, or `null` for an unidentified client,

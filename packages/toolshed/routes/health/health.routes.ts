@@ -220,7 +220,7 @@ export const documentInterests = createRoute({
             instanceId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
             generation: z.number().int().positive().max(
               Number.MAX_SAFE_INTEGER,
-            ),
+            ).optional(),
             startedAt: z.number().int().nonnegative().max(
               Number.MAX_SAFE_INTEGER,
             ),
