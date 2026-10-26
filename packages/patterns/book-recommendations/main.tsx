@@ -32,7 +32,10 @@ export interface BookRecommendationsOutput {
   recommendation: BuiltInAgentState<Recommendations>;
 }
 
-/** Each returned book position is a link; explanations are inline derived text. */
+/**
+ * Each pick is a book the reader has not finished, inline; `basedOn` links the
+ * finished book it builds on, where one does.
+ */
 export const RECOMMENDATION_SCHEMA = {
   type: "object",
   properties: {
@@ -44,7 +47,10 @@ export const RECOMMENDATION_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          book: {
+          title: { type: "string", minLength: 1 },
+          author: { type: "string", minLength: 1 },
+          why: { type: "string" },
+          basedOn: {
             type: "object",
             asCell: ["readonly"],
             properties: {
@@ -53,9 +59,8 @@ export const RECOMMENDATION_SCHEMA = {
             },
             required: ["title", "author"],
           },
-          why: { type: "string" },
         },
-        required: ["book", "why"],
+        required: ["title", "author", "why"],
         additionalProperties: false,
       },
     },
@@ -78,7 +83,7 @@ export default pattern<BookRecommendationsInput, BookRecommendationsOutput>(
     }));
     const recommendation = agent<Recommendations>({
       task:
-        "Recommend exactly five books using the reader's finished books and favorite authors. Use Loom search and page reads for supporting context. Each pick must reference a held book handle and explain why it fits the reader. Return the five picks with submit_result.",
+        "Recommend exactly five books the reader has not finished, drawing on their finished books and favorite authors; a finished book is never a pick. Use Loom search and page reads for supporting context. Give each pick its title and author, explain why it fits the reader, and where it builds on a finished book, link that held book handle under basedOn. Return the five picks with submit_result.",
       inputs,
       tools: ["loom_search", "loom_page_read"],
       resultSchema: RECOMMENDATION_SCHEMA,

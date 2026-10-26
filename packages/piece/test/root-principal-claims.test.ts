@@ -70,6 +70,7 @@ describe("represents-principal claims on space roots", () => {
     const tx = runtime.edit();
     try {
       return attestedPrincipalsAt(
+        runtime,
         tx,
         root.getAsNormalizedFullLink(),
         "represents-principal",

@@ -307,6 +307,17 @@ const receiptExists = {
   error: { name: "PreconditionFailedError", precondition: "receipt-exists" },
 };
 
+/** What the root says when an event's `as` is not a profile of its actor. */
+const notTheirs =
+  "A panel can be added under a profile only by the principal that profile represents";
+
+/**
+ * What the root says to a non-owner removing a panel whose label does not
+ * settle on one adder.
+ */
+const unsettled =
+  "A panel whose label does not settle on one adder can be removed only by an OWNER of the Loom";
+
 describe("loom-root", () => {
   let manager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
@@ -417,15 +428,13 @@ describe("loom-root", () => {
   });
 
   it("labels a panel's adder profile with the principal who added it", async () => {
-    const tx = runtime.edit();
-    const profile = runtime.getCell(
+    const profile = await writeOwnedProfile(
+      runtime,
       pieces.getSpace(),
       "loom-root-adder-profile",
-      profileSchema,
-      tx,
+      signer.did(),
+      false,
     );
-    profile.set({ name: "Adder" });
-    await tx.commit().settled;
     const target = runtime.getCell(pieces.getSpace(), "loom-root-adder-target");
     const output = root.asSchema(rootSchema);
     const addPiece = await output.key("addPiece").pull();
@@ -571,68 +580,78 @@ describe("loom-root", () => {
 
   for (const atRoot of [false, true]) {
     it(
-      `keeps the actor apart from the linked profile's owner when the profile is labeled ${
+      `refuses \`as\` naming another person's profile, and admits the caller's own, when the profile is labeled ${
         atRoot ? "at its root" : "on its fields"
       }`,
       async () => {
-        const owned = await writeOwnedProfile(
+        const theirs = await writeOwnedProfile(
           runtime,
           pieces.getSpace(),
           `loom-root-owned-profile-${atRoot}`,
           profileOwner.did(),
           atRoot,
         );
-        const target = runtime.getCell(
+        const own = await writeOwnedProfile(
+          runtime,
           pieces.getSpace(),
-          `loom-root-owned-target-${atRoot}`,
+          `loom-root-own-profile-${atRoot}`,
+          signer.did(),
+          atRoot,
         );
         const output = root.asSchema(rootSchema);
         const addPiece = await output.key("addPiece").pull();
-        await new Promise<void>((resolve, reject) =>
-          sendEvent(addPiece, { piece: target, as: owned }, (tx) => {
-            const status = tx.status();
-            if (status.status === "error") reject(status.error);
-            else resolve();
-          }, { eventId: `add-owned-${atRoot}`, session: signer.did() })
-        );
+        const errors: string[] = [];
+        runtime.scheduler.onError((error) => errors.push(String(error)));
+        const refusal = await sendAndSettle(addPiece, {
+          piece: runtime.getCell(
+            pieces.getSpace(),
+            `loom-root-owned-target-${atRoot}`,
+          ),
+          as: theirs,
+        }, `add-owned-${atRoot}`).then(() => undefined, (error) => error);
+        expect(refusal).toBeDefined();
+        expect(errors.some((error) => error.includes(notTheirs))).toBe(true);
+        expect((await output.key("panels").pull()).length).toBe(0);
+
+        await sendAndSettle(addPiece, {
+          piece: runtime.getCell(
+            pieces.getSpace(),
+            `loom-root-own-target-${atRoot}`,
+          ),
+          as: own,
+        }, `add-own-${atRoot}`);
         await runtime.idle();
         const panels = await output.key("panels").pull();
+        expect(panels.length).toBe(1);
         const panel = panels[0].resolveAsCell();
-        const link = panel.getAsNormalizedFullLink();
+        expect(panel.key("addedByProfile").resolveAsCell().equals(own))
+          .toBe(true);
         const read = runtime.edit();
-        const metadata = readStoredCfcMetadata(read, link);
+        const metadata = readStoredCfcMetadata(
+          read,
+          panel.getAsNormalizedFullLink(),
+        );
         read.abort();
-        const representations = (
-          entry: { label: { integrity?: readonly unknown[] } },
-        ) =>
-          (entry.label.integrity ?? []).filter((atom) =>
-            (atom as { kind?: unknown }).kind === "represents-principal"
-          );
-        const entries = metadata?.labelMap.entries ?? [];
-        const declared = entries.filter((entry) =>
-          entry.origin !== "link" &&
-          entry.path.length === 1 && entry.path[0] === "addedByProfile"
-        );
-        const atLink = entries.filter((entry) =>
-          entry.origin === "link" && entry.path[0] === "addedByProfile"
-        );
-        // The actor is the one declared entry at exactly the field.
-        expect(declared.flatMap(representations)).toEqual([
-          ownerRepresentation(signer.did()),
-        ]);
-        // The panel stores nothing of the linked profile's label: its owner
-        // is attested where the profile is stored.
-        expect(atLink.flatMap(representations)).toEqual([]);
-        // A label view of the field follows the link and joins the two, so
-        // it does not say which is which.
-        const merged = cfcLabelViewForCell(panel.key("addedByProfile"))
-          ?.entries.flatMap(representations) ?? [];
-        expect(merged).toEqual(
-          expect.arrayContaining([
-            ownerRepresentation(signer.did()),
-            ownerRepresentation(profileOwner.did()),
-          ]),
-        );
+        const entries = (metadata?.labelMap.entries ??
+          []) as readonly LabelEntry[];
+        // The actor is the one declared entry at exactly the field, and the
+        // panel stores nothing of the linked profile's label: its owner is
+        // attested where the profile is stored.
+        expect(
+          representedSubjects(
+            entries.filter((entry) =>
+              entry.origin !== "link" &&
+              entry.path.length === 1 && entry.path[0] === "addedByProfile"
+            ),
+          ),
+        ).toEqual([signer.did()]);
+        expect(
+          representedSubjects(
+            entries.filter((entry) =>
+              entry.origin === "link" && entry.path[0] === "addedByProfile"
+            ),
+          ),
+        ).toEqual([]);
       },
     );
   }
@@ -696,16 +715,28 @@ describe("loom-root", () => {
     );
   };
 
-  it("labels the adder whether `as` names a plain document or a profile-home profile, in the Loom's space or another", async () => {
+  it("refuses `as` naming a plain document, and labels the adder under a profile-home profile, in the Loom's space or another", async () => {
     const plain = await writePlainProfile("loom-root-plain-control");
     const home = await deployProfileHome("loom-root-profile-home");
     const elsewhere = await deployProfileHome(
       "loom-root-profile-home-elsewhere",
       homeSpace,
     );
-    const profiles = [plain, home, elsewhere];
     const output = root.asSchema(rootSchema);
     const addPiece = await output.key("addPiece").pull();
+    // A document labeled with integrity alone represents nobody, so nobody
+    // adds under it.
+    const errors: string[] = [];
+    runtime.scheduler.onError((error) => errors.push(String(error)));
+    const refusal = await sendAndSettle(addPiece, {
+      piece: runtime.getCell(pieces.getSpace(), "loom-root-as-target-plain"),
+      as: plain,
+    }, "add-as-plain").then(() => undefined, (error) => error);
+    expect(refusal).toBeDefined();
+    expect(errors.some((error) => error.includes(notTheirs))).toBe(true);
+    expect((await output.key("panels").pull()).length).toBe(0);
+
+    const profiles = [home, elsewhere];
     for (const [index, profile] of profiles.entries()) {
       await sendAndSettle(
         addPiece,
@@ -725,21 +756,21 @@ describe("loom-root", () => {
     );
     expect(panels.length).toBe(profiles.length);
     // Each panel links the profile it was added under, and its declared
-    // entry names whoever acted: the plain control, the profile-home profile
-    // in the Loom's space, and the one in another space, each on its own.
+    // entry names whoever acted: the profile-home profile in the Loom's
+    // space, and the one in another space, each on its own. Neither profile
+    // holds a written name, since `initialName` writes none.
     expect(
       panels.map((panel, index) =>
         panel.key("addedByProfile").resolveAsCell().equals(profiles[index])
       ),
-    ).toEqual([true, true, true]);
+    ).toEqual([true, true]);
     expect(panels.map(declaredAdders)).toEqual([
-      [signer.did()],
       [signer.did()],
       [signer.did()],
     ]);
   });
 
-  it("removes an occurrence for the principal its label attests as its adder, for anyone when it attests nobody, and for an OWNER when the adder has left", async () => {
+  it("removes an occurrence for the principal its label attests as its adder, for anyone when it records no adder, and for an OWNER when the adder has left or its label does not settle on one", async () => {
     const space = pieces.getSpace();
     const output = root.asSchema(rootSchema);
     const addPanel = await output.key("addPanel").pull();
@@ -810,18 +841,23 @@ describe("loom-root", () => {
     });
     const errors: string[] = [];
     runtime.scheduler.onError((error) => errors.push(String(error)));
-    /** Sends `event` to `stream` and returns whether it was refused with `message`. */
+    /**
+     * Sends `event` to `stream` and returns whether it was refused with one of
+     * `messages`.
+     */
     const refusedWith = async (
       stream: Readonly<Stream<unknown>>,
       event: unknown,
       eventId: string,
-      message: string,
+      ...messages: string[]
     ) => {
       errors.length = 0;
       const refusal = await sendAndSettle(stream, event, eventId)
         .then(() => undefined, (error: unknown) => error);
       return refusal !== undefined &&
-        errors.some((error) => error.includes(message));
+        errors.some((error) =>
+          messages.some((message) => error.includes(message))
+        );
     };
     const holds = async (cell: Cell<unknown>) =>
       (await output.key("panels").pull()).some((panel) =>
@@ -853,25 +889,10 @@ describe("loom-root", () => {
       at([], by(signer.did())),
     ]);
     const others = "Only the principal who added a panel can remove it";
-    const refusals: [string, unknown, unknown[], string][] = [
-      // A malformed field names nobody; the well-formed one still does.
-      ["malformed-beside-stamp", {
-        ...url("malformed-beside-stamp"),
-        addedByProfile: ownProfile.getAsLink(),
-      }, [
-        at(["addedBy"], `authored-by:${signer.did()}`),
-        at(["addedByProfile"], represents(foreignSigner.did())),
-      ], others],
+    const refusals: [string, unknown, unknown[], string[]][] = [
       ["stamped-other", url("stamped-other"), [
         at(["addedBy"], by(foreignSigner.did())),
-      ], others],
-      ["under-own-profile", {
-        ...url("under-own-profile"),
-        addedByProfile: ownProfile.getAsLink(),
-      }, [
-        at(["addedByProfile"], represents(foreignSigner.did())),
-        { ...at(["addedByProfile"], represents(signer.did())), origin: "link" },
-      ], others],
+      ], [others]],
       [
         "linked-addedby-other",
         {
@@ -879,14 +900,19 @@ describe("loom-root", () => {
           addedBy: didCell.getAsLink(),
         },
         [at(["addedBy"], by(foreignSigner.did()))],
-        others,
+        [others],
       ],
     ];
-    for (const [cause, value, entries, message] of refusals) {
+    for (const [cause, value, entries, messages] of refusals) {
       const cell = await linked(cause, value, entries);
       expect([
         cause,
-        await refusedWith(removePanel, { panel: cell }, `rm-${cause}`, message),
+        await refusedWith(
+          removePanel,
+          { panel: cell },
+          `rm-${cause}`,
+          ...messages,
+        ),
       ]).toEqual([cause, true]);
       expect([cause, await holds(cell)]).toEqual([cause, true]);
     }
@@ -902,18 +928,6 @@ describe("loom-root", () => {
         ...url("linked-addedby-own"),
         addedBy: didCell.getAsLink(),
       }, [at(["addedBy"], by(signer.did()))]],
-      // A label that settles on no single adder protects nobody: any writer
-      // removes the occurrence.
-      ["two-adders", url("two-adders"), [
-        at(["addedBy"], by(signer.did()), by(foreignSigner.did())),
-      ]],
-      ["both-fields", url("both-fields"), [
-        at(["addedBy"], by(signer.did())),
-        at(["addedByProfile"], represents(foreignSigner.did())),
-      ]],
-      ["misspelled", url("misspelled"), [
-        at(["addedBy"], `authored-by:${signer.did()}`),
-      ]],
       // An OWNER removes what a participant who has left added.
       ["stamped-departed", url("stamped-departed"), [
         at(["addedBy"], by(profileOwner.did())),
@@ -925,21 +939,97 @@ describe("loom-root", () => {
       expect([cause, await holds(cell)]).toEqual([cause, false]);
     }
 
-    // An occurrence the root admitted under another person's profile is its
-    // actor's to remove: the profile's owner is not who added it.
-    const borrowed = await stored("borrowed-profile", { name: "Theirs" }, [
-      at([], represents(profileOwner.did())),
+    // A label that does not settle on one adder protects its occurrence from
+    // every participant, a would-be adder included, and leaves it an OWNER's
+    // to clear up: two principals named, a claim in a form no runtime mints
+    // even beside a well-formed stamp, and a profile that no stamp says
+    // anyone acted under.
+    const unsettledCases: [string, unknown, unknown[]][] = [
+      ["two-adders", url("two-adders"), [
+        at(["addedBy"], by(signer.did()), by(foreignSigner.did())),
+      ]],
+      ["both-fields", url("both-fields"), [
+        at(["addedBy"], by(signer.did())),
+        at(["addedByProfile"], represents(foreignSigner.did())),
+      ]],
+      ["misspelled", url("misspelled"), [
+        at(["addedBy"], `authored-by:${signer.did()}`),
+      ]],
+      ["malformed-beside-stamp", {
+        ...url("malformed-beside-stamp"),
+        addedByProfile: ownProfile.getAsLink(),
+      }, [
+        at(["addedBy"], `authored-by:${signer.did()}`),
+        at(["addedByProfile"], represents(signer.did())),
+      ]],
+      ["unstamped-profile", {
+        ...url("unstamped-profile"),
+        addedByProfile: ownProfile.getAsLink(),
+      }, []],
+    ];
+    const unsettledCells: [string, Cell<unknown>][] = [];
+    for (const [cause, value, entries] of unsettledCases) {
+      unsettledCells.push([cause, await linked(cause, value, entries)]);
+    }
+    // Here the stamp names another principal. Whether the copy of the
+    // profile's label a link carried counts beside it depends on how a
+    // principal is read through a link, so it is either another's or
+    // unsettled, and either way a non-owner is refused.
+    const underOwnProfile = await linked("under-own-profile", {
+      ...url("under-own-profile"),
+      addedByProfile: ownProfile.getAsLink(),
+    }, [
+      at(["addedByProfile"], represents(foreignSigner.did())),
+      { ...at(["addedByProfile"], represents(signer.did())), origin: "link" },
+    ]);
+    await setAcl({
+      [thirdOwner.did()]: "OWNER",
+      [signer.did()]: "WRITE",
+      [foreignSigner.did()]: "WRITE",
+    });
+    for (const [cause, cell] of unsettledCells) {
+      expect([
+        cause,
+        await refusedWith(
+          removePanel,
+          { panel: cell },
+          `rm-writer-${cause}`,
+          unsettled,
+        ),
+      ]).toEqual([cause, true]);
+      expect([cause, await holds(cell)]).toEqual([cause, true]);
+    }
+    expect(
+      await refusedWith(
+        removePanel,
+        { panel: underOwnProfile },
+        "rm-writer-under-own-profile",
+        others,
+        unsettled,
+      ),
+    ).toBe(true);
+    expect(await holds(underOwnProfile)).toBe(true);
+    await setAcl({ [signer.did()]: "OWNER", [foreignSigner.did()]: "WRITE" });
+    for (const [cause, cell] of unsettledCells) {
+      await sendAndSettle(removePanel, { panel: cell }, `rm-owner-${cause}`);
+      expect([cause, await holds(cell)]).toEqual([cause, false]);
+    }
+
+    // An occurrence the root admitted under the caller's own profile is the
+    // caller's to remove.
+    const admittedProfile = await stored("admitted-profile", { name: "Mine" }, [
+      at([], represents(signer.did())),
     ]);
     await sendAndSettle(
       await output.key("addPiece").pull(),
-      { piece: runtime.getCell(space, "borrowed-target"), as: borrowed },
-      "add-as-borrowed",
+      { piece: runtime.getCell(space, "admitted-target"), as: admittedProfile },
+      "add-as-own",
     );
     await runtime.idle();
     const admitted = (await output.key("panels").pull()).map((panel) =>
       panel.resolveAsCell()
     ).find((panel) =>
-      panel.key("addedByProfile").resolveAsCell().equals(borrowed)
+      panel.key("addedByProfile").resolveAsCell().equals(admittedProfile)
     )!;
     expect(declaredAdders(admitted)).toEqual([signer.did()]);
     await sendAndSettle(removePanel, { panel: admitted }, "rm-admitted");
@@ -1014,7 +1104,7 @@ describe("loom-root", () => {
     expect(await holds(left)).toBe(false);
   });
 
-  it("names the actor, not the owner, when `as` names another person's profile whose fields are redirect links", async () => {
+  it("refuses `as` naming another person's profile whose fields are redirect links", async () => {
     // Shaped as another person's profile-home result: each field is a
     // redirect link to a cell its owner wrote through the trusted editor, so
     // the cell carries the owner's `represents-principal`.
@@ -1038,25 +1128,27 @@ describe("loom-root", () => {
     if (written.error) throw written.error;
 
     const output = root.asSchema(rootSchema);
-    await sendAndSettle(
+    const errors: string[] = [];
+    runtime.scheduler.onError((error) => errors.push(String(error)));
+    const refusal = await sendAndSettle(
       await output.key("addPiece").pull(),
       {
         piece: runtime.getCell(pieces.getSpace(), "loom-root-borrowed-target"),
         as: borrowed,
       },
       "add-as-borrowed",
-    );
-    await runtime.idle();
-    const panel = (await output.key("panels").pull())[0].resolveAsCell();
-    expect(panel.key("addedByProfile").resolveAsCell().equals(borrowed))
-      .toBe(true);
-    expect(declaredAdders(panel)).toEqual([signer.did()]);
+    ).then(() => undefined, (error) => error);
+    expect(refusal).toBeDefined();
+    expect(errors.some((error) => error.includes(notTheirs))).toBe(true);
+    expect((await output.key("panels").pull()).length).toBe(0);
   });
 
   it("keeps each panel's adder and profile owner with that panel when an earlier panel is removed or the list is reordered", async () => {
     // The middle panel is added under no profile, so a label that stayed with
-    // a list position instead of its element would show up on it.
-    const owners = [profileOwner, undefined, thirdOwner];
+    // a list position instead of its element would show up on it. A panel is
+    // added only under a profile of its actor's, so the others are the
+    // caller's.
+    const owners = [signer, undefined, signer];
     const profiles = await Promise.all(
       owners.map((owner, index) =>
         owner === undefined ? undefined : writeOwnedProfile(
@@ -1166,18 +1258,18 @@ describe("loom-root", () => {
     expect(atPosition(stagedList, 1)).toEqual([]);
     read.abort();
 
-    // The adder and the profile's owner are read through each panel, in
-    // whichever position either list now holds it.
-    const reached = (panel: Cell<unknown>) =>
-      representedSubjects(
+    // The adder and the profile's owner, one principal here, are read
+    // through each panel, in whichever position either list now holds it.
+    const reached = (panel: Cell<unknown>) => [
+      ...new Set(representedSubjects(
         (cfcLabelViewForCell(panel.key("addedByProfile"))?.entries ??
           []) as readonly LabelEntry[],
-      ).sort();
-    const both = [signer.did(), thirdOwner.did()].sort();
-    expect(reached(remaining[0])).toEqual(both);
+      )),
+    ];
+    expect(reached(remaining[0])).toEqual([signer.did()]);
     expect(reached(remaining[1])).toEqual([]);
     expect(reached(staged[0].resolveAsCell())).toEqual([]);
-    expect(reached(staged[1].resolveAsCell())).toEqual(both);
+    expect(reached(staged[1].resolveAsCell())).toEqual([signer.did()]);
   });
 
   it("creates its chat room as a piece in its own space that a fresh runtime starts, with no panel, and creates no second one", async () => {

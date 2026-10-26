@@ -192,8 +192,10 @@ its stored records and the handlers that write them, and `view.tsx` its
 rendering. `store.tsx` reaches no module that renders, which
 `store-imports.test.ts` checks, and `integration/fabrifile-store.test.ts`
 drives the store over blobs its space holds, as a pattern test cannot, since
-nothing a pattern runs can write a blob's first record. No root names a store
-yet.
+nothing a pattern runs can write a blob's first record. A FabriChat room that
+is its space's root and the Loom each keep their space's store, and a room in
+the Loom's space uses the Loom's (see
+[`FileStore.md`](FileStore.md#where-it-lives)).
 
 - **The store and its core.** `FileStore` resolves the viewer's profile with
   `#profile` and hands it to `FileStoreCore`, which takes it as an input, so a
@@ -217,4 +219,8 @@ yet.
   runtime for the URL its space's host serves it at.
 - **A root's store.** `FileStoreRecord`, `FileStoreRecordCell` and
   `ensureFileStore` are what a root keeps its store with
-  ([`FileStore.md`](FileStore.md#where-it-lives)); no root uses them yet.
+  ([`FileStore.md`](FileStore.md#where-it-lives)). A room offers its space's
+  store, and a FabriChat message's attachments link its entries
+  ([`ChatMessage`](../fabrichat/ChatMessage.md#fields)), which a room's
+  composer adds to the store as it attaches them
+  ([`FabriChatRoom`](../fabrichat/FabriChatRoom.md#state)).

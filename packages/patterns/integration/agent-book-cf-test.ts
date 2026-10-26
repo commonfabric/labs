@@ -97,7 +97,7 @@ export default pattern(() => {
       reader.recommendation.pending === false,
       reader.recommendation.error === undefined,
       reader.recommendation.result?.picks.length === 5,
-      reader.recommendation.result?.picks[0].book.get().title !== undefined,
+      reader.recommendation.result?.picks[0].title !== undefined,
     ].every(Boolean)) },
   ] };
 });

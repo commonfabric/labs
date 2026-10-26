@@ -15,10 +15,12 @@ export interface Book {
   author: string;
 }
 
-/** One recommendation keeps the selected book's live reference. */
+/** One recommended book, with a live reference to the finished book it builds on. */
 export interface BookPick {
-  book: ReadonlyCell<Book>;
+  title: string;
+  author: string;
   why: string;
+  basedOn?: ReadonlyCell<Book>;
 }
 
 /** The agent returns exactly five picks under the request's result schema. */
@@ -74,9 +76,17 @@ export default pattern<
           {picks.map((pick) => (
             <cf-card>
               <cf-vstack gap="2">
-                <strong>{computed(() => pick.book.get().title)}</strong>
-                <span>{computed(() => pick.book.get().author)}</span>
+                <strong>{pick.title}</strong>
+                <span>{pick.author}</span>
                 <p>{pick.why}</p>
+                <small>
+                  {computed(() => {
+                    const title = pick.basedOn?.get()?.title;
+                    return title === undefined
+                      ? ""
+                      : `Because you read ${title}`;
+                  })}
+                </small>
               </cf-vstack>
             </cf-card>
           ))}

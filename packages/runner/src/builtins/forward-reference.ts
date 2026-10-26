@@ -5,6 +5,7 @@
  */
 
 import { type Cell } from "../cell.ts";
+import { findAndInlineDataUriLinks } from "../data-uri.ts";
 import { resolveLink } from "../link-resolution.ts";
 import { parseLink } from "../link-utils.ts";
 import { type RawBuiltinResult, type RawNodeCause } from "../module.ts";
@@ -12,6 +13,10 @@ import { type Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import { readsTruthyAtRoot } from "../schema.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import {
+  ignoreReadForScheduling,
+  internalVerifierRead,
+} from "../storage/reactivity-log.ts";
 import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 import { ownedResultCause } from "./scope-policy.ts";
 
@@ -96,8 +101,15 @@ export function forwardReference(
     });
     // A run that selects the reference already written writes nothing, so a
     // condition changing between two truthy values does not re-trigger
-    // downstream work.
-    result.withTx(tx).setRawUntyped(serializedRef, true);
+    // downstream work. A selected input that holds nothing, such as an
+    // `undefined` branch, forwards nothing, which leaves the store empty, and
+    // a store that has never been written is written empty all the same: a
+    // reader reaching a store with no document through the node's output
+    // cannot tell it from one that has not arrived, and refuses to read it.
+    result.withTx(tx).setRawUntyped(
+      serializedRef,
+      !forwardsNothingToUnwrittenStore(tx, result, serializedRef),
+    );
   };
   return {
     action,
@@ -110,4 +122,24 @@ export function forwardReference(
       ])
       : [],
   };
+}
+
+/**
+ * Whether forwarding `ref` into `store` writes nothing into a store that has
+ * no document yet: `ref` names an input that holds no value, so it inlines to
+ * nothing, and the store has never been written. The store's document is read
+ * as `setRawUntyped()` reads it to elide a write, so the read neither
+ * subscribes the action to its own store nor labels the transaction.
+ */
+function forwardsNothingToUnwrittenStore(
+  tx: IExtendedStorageTransaction,
+  store: Cell<any>,
+  ref: unknown,
+): boolean {
+  if (findAndInlineDataUriLinks(ref) !== undefined) return false;
+  const { space, id, scope } = store.getAsNormalizedFullLink();
+  const document = tx.readOrThrow({ space, id, scope, path: [] }, {
+    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+  });
+  return document === undefined;
 }

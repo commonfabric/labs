@@ -97,7 +97,15 @@ function binarySuite(
               request.unit,
             ],
             cwd: context.root,
-            ...(options.env === undefined ? {} : { env: options.env }),
+            // A lane is packed to finish inside `LANE_BOUND_SECONDS`, which
+            // the corpus compile a shipped build pays for would take this
+            // build past, so it keeps the compiler-input fingerprint and
+            // stays a test of the compile itself: the import graph, the
+            // shell bundle, the included assets. That the corpus compiles
+            // under the current compiler is for
+            // `compile-cache-output-version.test.ts` to show, one entry at
+            // a time.
+            env: { CF_COMPILE_CACHE_VERSION: "inputs", ...options.env },
           })),
       );
     },

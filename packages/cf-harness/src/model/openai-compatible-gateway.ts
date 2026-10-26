@@ -32,12 +32,13 @@ import {
   toResponsesTools,
 } from "./responses-protocol.ts";
 import { materializeImageAttachmentContentPart } from "../image-attachments.ts";
-import type {
-  HarnessModelAttemptDiagnostic,
-  HarnessModelCatalogEntry,
-  HarnessModelClient,
-  HarnessModelTurnRequest,
-  HarnessModelTurnResult,
+import {
+  type HarnessModelAttemptDiagnostic,
+  type HarnessModelCatalogEntry,
+  type HarnessModelClient,
+  type HarnessModelTurnRequest,
+  type HarnessModelTurnResult,
+  observedModelId,
 } from "./client.ts";
 import {
   assertOpenAIReasoningEffortSupported,
@@ -410,6 +411,14 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
   async complete(
     request: HarnessModelTurnRequest,
   ): Promise<HarnessModelTurnResult> {
+    if (
+      request.maxInputBytes !== undefined ||
+      request.maxOutputTokens !== undefined
+    ) {
+      throw new Error(
+        "bounded model calls require the openai-codex provider; gateway limit enforcement is unavailable",
+      );
+    }
     toNativeModelTools(request.nativeModelToolIds);
     assertSupportedToolCombination(request.model, request.nativeModelToolIds);
     assertCompactThresholdSupported(
@@ -462,6 +471,7 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
     );
     return {
       assistant: createAssistantMessage(response),
+      observedModel: observedModelId(response.model),
       ...(usage !== undefined ? { usage } : {}),
     };
   }
@@ -551,6 +561,7 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
       normalizeOpenAIUsage(response.usage),
     );
     return {
+      observedModel: observedModelId(response.model),
       assistant: normalizeTerminalResponse(
         response as unknown as Record<string, unknown>,
         request.model,

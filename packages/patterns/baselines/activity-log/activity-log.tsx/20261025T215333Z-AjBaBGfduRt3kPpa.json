@@ -1,0 +1,117 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ActivityEvent": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "pieceName": {
+            "type": "string"
+          },
+          "pieceRef": {
+            "$ref": "#/$defs/MentionablePiece"
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "timestamp",
+          "agent",
+          "action"
+        ],
+        "type": "object"
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "mentioned": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "mentioned",
+          "backlinks"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "events": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/ActivityEvent"
+        },
+        "type": "array"
+      },
+      "mentioned": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "activity-log/activity-log.tsx",
+  "resultSchema": {
+    "description": "An #activityLog for recording structured agent events.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "clearLog": {
+        "type": "unknown"
+      },
+      "logEvent": {
+        "type": "unknown"
+      },
+      "summary": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "logEvent",
+      "clearLog",
+      "summary",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

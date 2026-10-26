@@ -182,7 +182,7 @@ read would bypass the CFC checks attached to the stored result.
 
 A detached caller knows the receipt address before the receipt exists, so the
 reader **subscribes and wakes when it appears**; it must not poll
-(AGENTS.md, "Avoid timeouts, retry loops, and sleeps";
+(AGENTS.md, "Avoid timeouts, retry loops, sleeps, and polling";
 [waiting-in-tests.md](../development/waiting-in-tests.md)). `--wait <seconds>`
 bounds a caller's own patience, as on `cf piece call`.
 

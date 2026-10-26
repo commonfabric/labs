@@ -9,41 +9,55 @@ import { resolveLink } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import {
   exactPrincipalAttestations,
+  isWrittenProfileName,
   PRINCIPAL_CLAIM_KINDS,
   type PrincipalClaimKind,
+  PROFILE_NAME_FIELD,
 } from "../cfc/represents-principal.ts";
+import type { Runtime } from "../runtime.ts";
 import { withdrawHandlerWhileLoading } from "../scheduler/handler-load-wait.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { topFrame } from "./frame-context.ts";
 import { cellOfTarget } from "./space-access.ts";
 
 /**
  * Returns the one principal that the label on `target`'s value attests with a
  * claim of `kind`: for `represents-principal`, whom the value stands for, as a
- * profile's label says; for `authored-by`, who wrote it. The claim is read at
+ * profile's label says; for `authored-by`, who wrote it, each as
+ * `exactPrincipalAttestations()` reads it. An `authored-by` claim is read at
  * the value's root and on its top-level fields, in exactly the form a runtime
- * mints, as `exactPrincipalAttestations()` reads it, and never from what a
- * link the value holds carries.
+ * mints, and never from what a link the value holds carries. A
+ * `represents-principal` claim is read as `representsPrincipalEntries()`
+ * chooses: on a value holding a name its owner wrote, from the root and the
+ * `name` field alone, since the written name says whose the value is and a
+ * field still at its default may carry another runtime's principal; on any
+ * other value, from every entry its label holds, deeper ones and those a link
+ * carries included; an atom not in `profileClaimSubject()`'s form is skipped.
  *
- * Returns `undefined` when the label names no verified single principal of
- * that kind: when it attests none, when it attests more than one, when a claim
- * there is in any form but the one a runtime mints, and for a `target` passed
- * as `undefined`. It never guesses. A label the caller cannot observe, one
- * whose read is refused by construction or by the storage manager, also
- * returns `undefined`, as missing metadata does, which is the normalization
- * of hidden cases that CFC spec §4.6.4.1 requires. A label still loading is
- * not one of them, in a handler: the handler is withdrawn and runs again once
- * its document arrives.
+ * Returns `undefined` when the label names no verified single principal of that
+ * kind: when it attests none, when it attests more than one, when a claim of
+ * `authored-by` there is in any form but the one a runtime mints, and for a
+ * `target` passed as `undefined`. It never guesses. A label the caller cannot
+ * observe, one whose read is refused by construction or by the storage manager,
+ * also returns `undefined`, as missing metadata does, which is the
+ * normalization of hidden cases that CFC spec §4.6.4.1 requires. A label still
+ * loading is not one of them, in a handler: the handler is withdrawn and runs
+ * again once its document arrives. So is a `name` still loading.
  *
  * The read is of `target`'s label: the value's cell is followed through any
- * links it holds, which reads the pointers along the way and no other value
- * contents, and then only its stored label is consulted, through the calling
- * code's own transaction, so a change to the label runs a reactive computation
- * that called this again. What a claim's `kind` and `subject` disclose is
- * public by the label-metadata classification
- * (`docs/specs/cfc-label-metadata-confidentiality.md` §2), so the observation
- * adds no confidentiality to the result. If that classification ever made the
- * subject protected, this throws, since no label could be carried for it.
+ * links it holds, which reads the pointers along the way, and then its stored
+ * label is consulted, through the calling code's own transaction, so a change
+ * to the label runs a reactive computation that called this again. For a
+ * `represents-principal` claim it also reads whether the value's `name` field,
+ * followed through its links, holds a written name. That read is a verifier
+ * read, so it adds no confidentiality to the transaction, and a change to the
+ * name runs the computation again too. Nothing else of the value is read. What
+ * a claim's `kind` and `subject` disclose is public by the label-metadata
+ * classification (`docs/specs/cfc-label-metadata-confidentiality.md` §2), so
+ * the observation adds no confidentiality to the result. If that
+ * classification ever made the subject protected, this throws, since no label
+ * could be carried for it.
  *
  * `options.label` says which label is read. `"resolved"`, the default, is the
  * label on the document `target`'s value resolves to. `"written"` is the label
@@ -52,7 +66,8 @@ import { cellOfTarget } from "./space-access.ts";
  * its value is not. That reads what the runtime stamped on a field holding a
  * link, such as who wrote the link, where `"resolved"` reads the document the
  * link leads to. The claims a link carries from that document are not counted
- * either way.
+ * for an `authored-by` claim; for a `represents-principal` one they count
+ * where every entry does.
  *
  * The DID returned is data. Written into a label as a claim's subject, it is a
  * literal like any other, which the runtime refuses from a pattern unless the
@@ -91,12 +106,11 @@ export function principalOf(
  *
  * Returns `[]` when the label attests none, and for a label the caller cannot
  * observe, as `principalOf()` normalizes one with missing metadata; and the
- * DIDs it attests, in the order they first appear, when it attests one or
- * more. Returns `undefined`
- * when a claim there is in any form but the one a runtime mints, since no
- * principal can then be read from it, and for a `target` passed as
- * `undefined`. The claims are read where, and as, `principalOf()` reads them,
- * `options.label` included.
+ * DIDs it attests, in the order they first appear, when it attests one or more.
+ * Returns `undefined` when an `authored-by` claim there is in any form but the
+ * one a runtime mints, since no principal can then be read from it, and for a
+ * `target` passed as `undefined`. The claims are read where, and as,
+ * `principalOf()` reads them, `options.label` included.
  *
  * @throws In every case `principalOf()` throws.
  */
@@ -179,7 +193,7 @@ function attestedPrincipals(
     : cell.resolveAsCell().getAsNormalizedFullLink();
   // The default read policy journals the read as a dependency, so a label
   // change runs the calling computation again.
-  const principals = attestedPrincipalsAt(tx, link, claimKind);
+  const principals = attestedPrincipalsAt(runtime, tx, link, claimKind);
   if (frame.frameKind === "handler") {
     withdrawHandlerWhileLoading(
       runtime,
@@ -187,6 +201,15 @@ function attestedPrincipals(
       link,
       `the label of \`${link.id}\` was read while its document was still loading`,
     );
+    if (claimKind === "represents-principal") {
+      const name = profileNameLink(runtime, tx, link);
+      withdrawHandlerWhileLoading(
+        runtime,
+        tx,
+        name,
+        `the name of \`${link.id}\` was read while its document was still loading`,
+      );
+    }
   }
   return principals;
 }
@@ -195,15 +218,19 @@ function attestedPrincipals(
  * Returns every principal the stored label at `link` attests with a claim of
  * `kind`, read through `tx` as `principalsOf()` reads a cell's: `[]` when it
  * attests none and for a label the caller cannot observe, and `undefined` when
- * a claim there is in any form but the one a runtime mints. `link` names the
- * document whose label is read; nothing is followed from it. This is the read
- * a host makes of a document it holds no frame for, so a label still loading
- * withdraws no handler here.
+ * an `authored-by` claim there is in any form but the one a runtime mints.
+ * `link` names the
+ * document whose label is read. For a `represents-principal` claim the value's
+ * `name` field is followed from there, through `runtime`, to see whether it
+ * holds a written name (`profileNameWrittenAt()`); nothing else is followed.
+ * This is the read a host makes of a document it holds no frame for, so a
+ * label still loading withdraws no handler here.
  *
  * @throws If the label is stored in a form this build cannot interpret
  *   (`StoredCfcMetadataError`), or the transaction's read of it fails.
  */
 export function attestedPrincipalsAt(
+  runtime: Runtime,
   tx: IExtendedStorageTransaction,
   link: NormalizedFullLink,
   kind: PrincipalClaimKind,
@@ -216,5 +243,46 @@ export function attestedPrincipalsAt(
   return exactPrincipalAttestations(
     cfcLabelViewFromMetadata(metadata, link.path.map(String)),
     kind,
+    kind === "represents-principal" && profileNameWrittenAt(runtime, tx, link),
+  );
+}
+
+/**
+ * Returns whether the value at `link` holds a name its owner wrote, as
+ * `isWrittenProfileName()` decides it: its `name` field, followed through any
+ * links it holds, read through `tx` as a verifier read. That adds no
+ * confidentiality to the transaction, and a change to the name runs a
+ * reactive computation that read it again. A name still loading reads as not
+ * written.
+ *
+ * @throws If the transaction's read fails.
+ */
+export function profileNameWrittenAt(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+): boolean {
+  return isWrittenProfileName(
+    tx.readValueOrThrow(profileNameLink(runtime, tx, link), {
+      meta: internalVerifierRead,
+    }),
+  );
+}
+
+/**
+ * Helper for `profileNameWrittenAt()`, which returns the link to where the
+ * `name` field of the value at `link` resolves, its links followed through
+ * `tx`.
+ */
+function profileNameLink(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  link: NormalizedFullLink,
+): NormalizedFullLink {
+  return resolveLink(
+    runtime,
+    runtime.readTx(tx),
+    { ...link, path: [...link.path, PROFILE_NAME_FIELD] },
+    "value",
   );
 }
