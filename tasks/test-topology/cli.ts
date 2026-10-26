@@ -18,6 +18,7 @@
  * that are its own.
  */
 
+import { walk } from "@std/fs";
 import * as path from "@std/path";
 import type { CapabilityId } from "../ci-capabilities.ts";
 import {
@@ -31,6 +32,9 @@ import {
 
 /** Where the scripts live, repository-relative. */
 const CLI_DIR = "runtime/cli/integration";
+
+/** The module `cf` runs, repository-relative. */
+const CLI_ENTRY = "runtime/cli/mod.ts";
 
 /** The one record surface all three suites share. */
 const SURFACE = [{ kind: "integration", scope: "cli" }] as const;
@@ -313,7 +317,8 @@ function cliFuseSuite(script: string): Suite {
     arms,
     unitOf: (arm) =>
       arm === WHOLE_SCRIPT_ARM ? undefined : `${FUSE_SCRIPT} ${arm}`,
-    sources: [`${CLI_DIR}/${FUSE_SCRIPT}`],
+    // The script runs the memory proxy beside it as well.
+    sources: [`${CLI_DIR}/${FUSE_SCRIPT}`, `${CLI_DIR}/fuse-memory-proxy.ts`],
   });
 }
 
@@ -337,11 +342,43 @@ function cliDenoSuite(): Suite {
 
 /** Every command-line suite, read from the working tree. */
 export async function loadCliSuites(root: string): Promise<Suite[]> {
+  const files = await cliFiles(root);
   return [
-    await cliCoreSuite(root),
-    cliFuseSuite(
-      await Deno.readTextFile(path.join(root, CLI_DIR, FUSE_SCRIPT)),
+    runningFiles(await cliCoreSuite(root), files),
+    runningFiles(
+      cliFuseSuite(
+        await Deno.readTextFile(path.join(root, CLI_DIR, FUSE_SCRIPT)),
+      ),
+      files,
     ),
     cliDenoSuite(),
   ];
+}
+
+/**
+ * Every file in the directory the shell scripts are in, repository-relative:
+ * the scripts, what they source, the patterns their steps deploy, and the
+ * programs they run.
+ */
+async function cliFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  for await (
+    const entry of walk(path.join(root, CLI_DIR), { includeDirs: false })
+  ) {
+    files.push(path.relative(root, entry.path));
+  }
+  return files.sort();
+}
+
+/**
+ * Like `suite`, except that each of its units runs `files` and the module
+ * `cf` runs. A step can reach any file beside the scripts, by sourcing,
+ * calling, or deploying it, and every step runs the command line.
+ */
+function runningFiles(suite: Suite, files: readonly string[]): Suite {
+  const known = new Set(suite.units);
+  return {
+    ...suite,
+    sourcesOf: (unit) => known.has(unit) ? [...files, CLI_ENTRY] : [],
+  };
 }

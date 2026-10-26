@@ -511,6 +511,46 @@ describe("running a member that cannot be handed a subset", () => {
     ]);
   });
 
+  it("returns the files its browser half runs, and none for a file unit", async () => {
+    const root = await workspace({
+      "./runtime/bakery": {
+        tasks: {
+          test: { dependencies: ["deno-test", "browser-test"] },
+          "deno-test": "deno test --allow-read --ignore='**/*.browser.test.ts'",
+          "browser-test":
+            "deno run -A ../deno-web-test/cli.ts **/*.browser.test.ts",
+        },
+        files: ["test/glaze.test.ts", "test/oven.browser.test.ts"],
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    expect(suite.sourcesOf?.("runtime/bakery#browser-test")).toEqual([
+      "runtime/bakery/test/oven.browser.test.ts",
+    ]);
+    expect(suite.sourcesOf?.("runtime/bakery/test/glaze.test.ts")).toEqual(
+      [],
+    );
+  });
+
+  it("returns the test files of a member that runs whole, and none of a member nested in it", async () => {
+    const root = await workspace({
+      "./runtime/bakery": {
+        tasks: { test: "deno run -A test/run-tests.ts" },
+        files: ["test/glaze.test.ts", "test/run-tests.ts", "src/glaze.ts"],
+      },
+      "./runtime/bakery/oven": {
+        tasks: { test: "deno test test/*.test.ts" },
+        files: ["test/heat.test.ts"],
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root, BAKERY_RUNS_WHOLE));
+    expect(suite.sourcesOf?.("runtime/bakery")).toEqual([
+      "runtime/bakery/test/glaze.test.ts",
+    ]);
+    expect(suite.sourcesOf?.("runtime/bakery/oven/test/heat.test.ts"))
+      .toEqual([]);
+  });
+
   it("leaves out a file neither half of a split member runs", async () => {
     // A task naming its own paths passes over everything outside them,
     // and what it passes over is not what the browser half runs, so a

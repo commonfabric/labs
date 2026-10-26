@@ -7,10 +7,11 @@ normative description of the contract, and [the archived
 plan](../history/plans/pull-request-test-selection.md) records the
 reasoning behind the design.
 
-Five things read a published manifest: the lanes that run every test in
+Six things read a published manifest: the lanes that run every test in
 continuous integration, the coverage gate, the comment a run on the default
-branch leaves, the dashboard, and the read-only commands in [The
-modes](#the-modes). [How continuous integration runs the
+branch leaves, the dashboard, the read-only commands in [The
+modes](#the-modes), and the command [running locally what a pull request
+leaves out](#running-locally-what-a-pull-request-leaves-out). [How continuous integration runs the
 lanes](#how-continuous-integration-runs-the-lanes) says which lanes a run takes.
 
 Every local query about test selection goes through one entry point:
@@ -439,6 +440,105 @@ binary as a test that it still compiles. The servers the full run's lanes start
 are built by the lanes, from the same sources and the same build task, without
 the commit and the shell endpoints the release binaries carry; the jobs that
 build the release binaries check what those add.
+
+## Running locally what a pull request leaves out
+
+```
+deno task test-gap [--dry-run] [--base <ref>] [--seconds <n>]
+```
+
+A pull request's lanes run the units the change edits, whatever the
+topology maps the change onto, and `DISCRETIONARY_SECONDS` of tests chosen by
+score. A test that imports a changed module is in none of those unless its
+score chose it, so the first run to try it can be the one on the default
+branch. This command runs such tests on a workstation, before the pull
+request exists. `--dry-run` prints what it would run and runs nothing.
+
+It works in three steps.
+
+1. **What the change reaches.** The change is every file the working tree
+   differs from its merge base with `--base` by, whether committed or not, and
+   every file that is new and not ignored, since the pull request will carry
+   all of them. The base is `upstream/main` where the checkout has one, which
+   is where a fork's pull request is based, and `origin/main` otherwise. Reach
+   is read by `changeReach` in `tasks/typecheck.ts`, the walk the type-check
+   groups map a change by, over the imports `deno info` resolves. A changed
+   path is reached at no steps, and a module importing a reached module is one
+   step further out. A reached member manifest reaches every module in its
+   member one step further out, and a declaration file a manifest names in
+   `compilerOptions.types` reaches that manifest. A change to the root
+   `deno.json`, `deno.jsonc` or `deno.lock` reaches everything. A unit is as
+   far from the change as the nearest file it runs: the file it is named for,
+   or, for a unit that is not one file, the files its suite's `sourcesOf`
+   declares, such as the test files of a member that runs whole or of a
+   browser half, every file beside a shell suite's scripts together with the
+   module `cf` runs, since a step can source, call or deploy any of them, or
+   the pattern a compatibility gate judges. A unit running no file, such as a
+   repository gate, is reached only by a change touching it; the units its
+   suite maps a change onto are mandatory in the lanes already.
+2. **What the pull request runs.** The plan is the one the lanes of a pull
+   request with no `ci:` label would pack, from `planOver` in
+   `tasks/ci-lane.ts`, against the manifest the checked-out commit
+   resolves. Every test that plan runs is taken away. A unit whose every
+   test is in the plan is counted as covered, and one whose plan runs some
+   of its tests keeps only the rest.
+3. **What runs.** The units left are chosen nearest the change first,
+   counted in steps, and among units equally near, the one holding the test
+   with the highest score first. Each is charged what a lane is charged for
+   it, and the setup of each capability it adds, by the manifest's cost
+   model. A unit that would take the run past `--seconds`, which is ten
+   minutes where not given, is left out and the next is tried. Each test
+   runs once.
+
+The units run through the lanes' own batches, so each is invoked as a lane
+invokes it, with the tests the pull request runs registered as skipped. A
+capability that prepares a continuous-integration runner, installing packages,
+relaxing a kernel setting, or deepening a shallow checkout, is not opened: a
+workstation and its checkout are as their owner set them up. Each such
+capability says instead what the machine lacks of what it would provide, and a
+unit whose suite needs something the machine lacks is set apart before the
+budget is charged, so that a failure the machine causes is not reported as the
+change's. A dry run lists such units, with what is missing, among those left
+out.
+
+A Toolshed binary is built afresh, since one found in the lanes' cache
+directory may have been built from other sources. The build runs in a snapshot
+of the working tree, a worktree on no branch removed when the run ends,
+because a build rewrites files of the tree it runs in while it runs. Such a
+capability is charged what a lane is charged for opening it and what the
+`binaries` suites' test of that build takes, since a lane mostly restores the
+binary where this run builds it. The cost model measures nothing that says how
+long making the snapshot takes, so the budget leaves it out. A Toolshed server
+a lane starts, here as in continuous integration, keeps its spaces and caches
+in a directory of its own in the lane's work directory, beside its log. The
+suites are told a store as `MEMORY_DIR`: the server run from source tells them
+its own, since the shell suites read it through `cf inspect`, and a baked
+server gives them one of their own beside it, since the integration tests
+beside it start servers of their own that read that name. A failing lane in
+continuous integration uploads each server's log and not its store. A suite
+whose capability shares the checkout with its owner's own servers, as the
+local development stack does, is not run here, and the run lists its units
+apart.
+
+Each batch is judged by `judgeBatch` in `tasks/ci-lane.ts`, as a pull
+request's lane judges it, with the tests a flake rate excuses on the default
+branch excused here too. Such a test is one the manifest holds back from pull
+requests as too flaky to judge a change by, so the run lists its failure apart
+and does not fail for it, unless the same pass has no record of tests it was
+asked to run. The run ends with the block `tasks/test-summary.ts` builds, as a
+lane's does. After it come anything the run could not clean up, the failures a
+flake rate excused, and the units left out, each with why. The run's
+directory, holding the servers' logs and stores and the runners' reports, is
+kept wherever the run did not pass, an error included, and the run says where
+it is.
+
+The run writes nothing the lanes' cost model is fitted from. Its tests'
+records go where a local `deno task test` sends them: to the store under a
+personal key where one is set up, which [test records](test-records.md)
+describes, and nowhere otherwise. A lane's measurements of its own batches,
+which a lane writes beside its records, are not written at all. The
+publisher reads a workstation's records for what a test did, and never for
+which tests exist or what one costs.
 
 ## The coverage gate
 
