@@ -973,6 +973,32 @@ describe("authorship", () => {
         expect(observation.state).toBe("verified");
       });
 
+      // A schema holding only a keyword the runtime reads for itself gives
+      // no shape, and is still kept: the keyword bears on the read.
+      const runtimeKeywordSchemas: [string, JSONSchema][] = [
+        ["`asCell`", { asCell: ["cell"] }],
+        ["a stream's `asCell`", { asCell: ["stream"] }],
+        ["`scope`", { scope: "user" }],
+        ["`ifc`", { ifc: { confidentiality: ["secret"] } }],
+      ];
+      for (const [keyword, schema] of runtimeKeywordSchemas) {
+        it(`reads a handle bound with ${keyword} alone as it is bound`, async () => {
+          const bound = valueHandle(schema);
+          using _asSchema = stub(bound, "asSchema", () => {
+            throw new Error("the value was narrowed");
+          });
+          using _subscribe = stub(
+            bound,
+            "subscribe",
+            labeledValue().subscribe as unknown as CellHandle["subscribe"],
+          );
+          const observation = observe(bound, "did:example:alice");
+          await settle();
+
+          expect(observation.state).toBe("verified");
+        });
+      }
+
       it("reads a handle bound with a shape as it is bound", async () => {
         const bound = valueHandle({ type: "string" });
         using _asSchema = stub(bound, "asSchema", () => {
