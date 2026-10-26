@@ -154,6 +154,7 @@ async () => {
     ...options,
     identity,
     onPatternInstantiated: recorder.observe,
+    clientBuild: { application: "cf-harness", gitSha: null },
   });
   if (!fabricSessionRuntimeBoundedAsConfigured(pieces.runtime, options)) {
     await pieces.runtime.dispose().catch(() => {});

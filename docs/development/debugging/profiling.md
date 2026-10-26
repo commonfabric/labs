@@ -822,11 +822,11 @@ tracks the operator gate and the longer-term private-operations boundary.
 Each matching row identifies the `sessionId`, authenticated `principal`,
 optional delegated `actingPrincipal`, and owning `connectionId`. Its `client`
 report identifies the application, loaded labs Git SHA (or `null`), runtime
-instance ID, support generation, and instance start time. The report is `null`
-when the client supplied none. This is self-reported attribution, not device or
+instance ID, reserved generation field, and instance start time. The report is
+`null` when the client supplied none or a malformed report. This is self-reported attribution, not device or
 code attestation; it names no browser or individual tab, and multiple runtime
 instances may belong to one process. See
-[client attribution and admission](../../../packages/memory/README.md#client-attribution-and-admission)
+[client attribution](../../../packages/memory/README.md#client-attribution)
 for host wiring and report lifetime.
 
 The row distinguishes direct watch declarations (`directWatchCount`) from

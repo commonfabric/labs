@@ -2,13 +2,11 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
-import {
-  decodeMemoryBoundary,
-  encodeMemoryBoundary,
-  getMemoryProtocolFlags,
-  MEMORY_PROTOCOL,
-  type ServerMessage,
-} from "../v2.ts";
+import type { FabricValue } from "@commonfabric/api";
+import { hashOf, isFabricPlainObject } from "@commonfabric/data-model";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+
+import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";
 import { connect, type Transport } from "../v2/client.ts";
 import { createClientInfo, parseClientInfo } from "../v2/client-info.ts";
 import { verifyConnectionAuthorization } from "../v2/connection-auth.ts";
@@ -17,10 +15,7 @@ import { verifySessionOpenAuthorization } from "../v2/session-open-auth.ts";
 import { alice, bob } from "./principal.ts";
 import { principalOf } from "./support/connection-auth.ts";
 import { ServerTransport } from "./support/server-transport.ts";
-import {
-  testSessionOpenAuthFactory,
-  testSessionOpenServerOptions,
-} from "./v2-auth-test-helpers.ts";
+import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
 
 const SPACE = "did:key:z6Mk-client-info";
 const BUILD = { application: "shell", gitSha: "a".repeat(40) };
@@ -88,7 +83,6 @@ describe("client-info", () => {
           ? { authorizeConnection: verifyConnectionAuthorization }
           : {}),
         sessionOpenAuth: { audience: bob.did() },
-        minimumClientGeneration: 1,
       });
       const transport = new ServerTransport(server);
       const report = createClientInfo(BUILD);
@@ -135,170 +129,158 @@ describe("client-info", () => {
     });
   }
 
-  for (
-    const [minimum, generation, admitted] of [
-      [0, undefined, true],
-      [1, undefined, false],
-      [2, 1, false],
-      [1, 1, true],
-      [1, 2, true],
-    ] as const
-  ) {
-    it(`admits generation ${generation} at floor ${minimum}: ${admitted}`, async () => {
-      const sessions = new SessionRegistry();
-      const options = {
-        ...testSessionOpenServerOptions,
-        store: new URL(
-          `memory://client-info-admission-${minimum}-${generation}`,
-        ),
-        sessions,
-        minimumClientGeneration: Number(minimum),
-      };
-      const server = new Server(options);
-      // Mutating the caller's options cannot change a running server's floor.
-      options.minimumClientGeneration = 100;
-      let engineOpened = false;
-      if (!admitted) {
-        server.accessForTestingOnly.engineOpener = () => {
-          engineOpened = true;
-          throw new Error("Rejected clients must not open storage");
-        };
-      }
-      const messages: ServerMessage[] = [];
-      const connection = server.connect((message) => messages.push(message));
-      const report = generation === undefined
-        ? undefined
-        : { ...createClientInfo(BUILD), generation };
-      try {
-        await connection.receive(encodeMemoryBoundary({
-          type: "hello",
-          protocol: MEMORY_PROTOCOL,
-          flags: getMemoryProtocolFlags(),
-        }));
-        const hello = messages.shift();
-        if (hello?.type !== "hello.ok") throw new Error("Expected hello.ok");
-        await connection.receive(encodeMemoryBoundary({
-          type: "session.open",
-          requestId: "open",
-          space: SPACE,
-          session: report === undefined ? {} : { client: report },
-          invocation: {
-            aud: hello.sessionOpen?.audience,
-            challenge: hello.sessionOpen?.challenge.value,
-          },
-          authorization: {},
-        }));
-        const response = messages.find((message) =>
-          message.type === "response"
-        );
-        if (admitted) {
-          expect(response).not.toHaveProperty("error");
-          expect(sessions.sessionsForSpace(SPACE)).toHaveLength(1);
-          expect(sessions.sessionsForSpace(SPACE)[0].client).toEqual(report);
-        } else {
-          expect(response).toMatchObject({
-            error: {
-              name: "AuthorizationError",
-              message: expect.stringContaining("Client update required"),
-            },
-          });
-          expect(engineOpened).toBe(false);
-          expect(sessions.sessionsForSpace(SPACE)).toEqual([]);
-        }
-      } finally {
-        connection.close();
-        await server.close();
-      }
-    });
-  }
-  it("terminates a refused resume without replaying commits or watches", async () => {
-    const before = new Server({
-      ...testSessionOpenServerOptions,
-      store: new URL("memory://client-generation-before"),
-    });
-    const after = new Server({
-      ...testSessionOpenServerOptions,
-      store: new URL("memory://client-generation-after"),
-      minimumClientGeneration: 2,
-    });
-    let receiver = (_payload: string) => {};
-    let closeReceiver = (_error?: Error) => {};
-    let connection = before.connect((message) =>
-      receiver(encodeMemoryBoundary(message))
-    );
-    let replaced = false;
-    let holdCommit = false;
-    const held = Promise.withResolvers<void>();
-    const afterMessages: string[] = [];
-    const transport: Transport = {
-      async send(payload) {
-        const message = decodeMemoryBoundary(payload) as { type: string };
-        if (replaced) {
-          afterMessages.push(message.type);
-        }
-        if (holdCommit && message.type === "transact") {
-          held.resolve();
-          return;
-        }
-        await connection.receive(payload);
-      },
-      close() {
-        connection.close();
-        return Promise.resolve();
-      },
-      setReceiver(next) {
-        receiver = next;
-      },
-      setCloseReceiver(next) {
-        closeReceiver = next;
-      },
-    };
-    const client = await connect({ transport });
-    try {
-      const session = await client.mount(SPACE, {}, testSessionOpenAuthFactory);
-      await session.watchSet([{
-        id: "root",
-        kind: "graph",
-        query: {
-          roots: [{
-            id: "of:fid1:expression-result",
-            selector: { path: [], schema: false },
-          }],
-        },
-      }]);
-      holdCommit = true;
-      const pending = session.transact({
-        localSeq: 1,
-        reads: { confirmed: [], pending: [] },
-        operations: [{
-          op: "set",
-          id: "of:fid1:expression-result",
-          value: { value: "stale result" },
-        }],
-      });
-      const refusal = expect(pending).rejects.toMatchObject({
-        name: "AuthorizationError",
-        message: expect.stringContaining("Client update required"),
-      });
-      await held.promise;
-      connection.close();
-      connection = after.connect((message) =>
-        receiver(encodeMemoryBoundary(message))
-      );
-      replaced = true;
-      holdCommit = false;
-      closeReceiver(new Error("backend replaced"));
-      await client.restoreConnection();
-      await refusal;
-      await expect(session.watchAdd([])).rejects.toMatchObject({
-        name: "AuthorizationError",
-        message: expect.stringContaining("Client update required"),
-      });
-      expect(afterMessages).toEqual(["hello", "session.open"]);
-    } finally {
-      await client.close();
-      await before.close();
-      await after.close();
+  it("refuses to construct a server with client retirement enabled", () => {
+    for (
+      const minimumClientGeneration of [
+        1,
+        2,
+        -1,
+        0.5,
+        NaN,
+        Infinity,
+        null,
+        "0",
+        "1",
+        {},
+      ]
+    ) {
+      expect(() =>
+        new Server({
+          ...testSessionOpenServerOptions,
+          store: new URL("memory://client-retirement-disabled"),
+          // An untyped host can still supply a nonzero setting.
+          minimumClientGeneration: minimumClientGeneration as 0,
+        })
+      ).toThrow("Client retirement is disabled");
     }
   });
+
+  it("rejects stripping or invalidating a valid signed report in transit", async () => {
+    for (const replacement of [undefined, { gitSha: "future" }]) {
+      const server = new Server({
+        store: new URL(`memory://client-info-tamper-${crypto.randomUUID()}`),
+        authorizeSessionOpen: verifySessionOpenAuthorization,
+        sessionOpenAuth: { audience: bob.did() },
+      });
+      const inner = new ServerTransport(server);
+      const client = await connect({
+        transport: wireReportTransport(inner, replacement, false),
+      });
+      try {
+        await expect(client.mount(SPACE, {}, principalOf(alice))).rejects
+          .toMatchObject({
+            name: "AuthorizationError",
+            message: "memory session.open authorization mismatch",
+          });
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    }
+  });
+
+  for (const connectionAuth of [false, true]) {
+    const report = createClientInfo(BUILD);
+    for (
+      const [name, wireReport, expected] of [
+        ["absent", undefined, undefined],
+        ["null", null, undefined],
+        ["non-record", [], undefined],
+        [
+          "long application",
+          { ...report, application: "a".repeat(65) },
+          undefined,
+        ],
+        ["future SHA", { ...report, gitSha: "b".repeat(64) }, undefined],
+        ["invalid generation", { ...report, generation: "future" }, undefined],
+        ["fractional start time", { ...report, startedAt: 1.5 }, undefined],
+        ["future generation", { ...report, generation: 2 }, {
+          ...report,
+          generation: 2,
+        }],
+        ["additional field", { ...report, futureField: "ignored" }, report],
+      ] as const
+    ) {
+      it(`opens and restores with ${name} attribution and connectionAuth=${connectionAuth}`, async () => {
+        const sessions = new SessionRegistry();
+        const server = new Server({
+          sessions,
+          store: new URL(
+            `memory://client-info-optional-${connectionAuth}-${
+              name.replaceAll(" ", "-")
+            }`,
+          ),
+          authorizeSessionOpen: verifySessionOpenAuthorization,
+          ...(connectionAuth
+            ? { authorizeConnection: verifyConnectionAuthorization }
+            : {}),
+          sessionOpenAuth: { audience: bob.did() },
+          minimumClientGeneration: 0,
+        });
+        const inner = new ServerTransport(server);
+        const client = await connect({
+          transport: wireReportTransport(inner, wireReport),
+        });
+        try {
+          const session = await client.mount(SPACE, {}, principalOf(alice));
+          for (const restore of [false, true]) {
+            if (restore) {
+              inner.drop();
+              await client.restoreConnection();
+            }
+            await session.queryGraph({ roots: [] });
+            const registered = sessions.sessionsForSpace(SPACE);
+            expect(registered).toHaveLength(1);
+            expect(registered[0].client).toEqual(expected);
+            expect(registered[0].principal).toBe(alice.did());
+          }
+          expect(inner.sentTypes.filter((type) => type === "session.open"))
+            .toHaveLength(2);
+        } finally {
+          await client.close();
+          await server.close();
+        }
+      });
+    }
+  }
 });
+
+/** Simulates a peer whose signed report uses another attribution shape. */
+function wireReportTransport(
+  inner: ServerTransport,
+  report: FabricValue,
+  resign = true,
+): Transport {
+  return {
+    async send(payload) {
+      const decoded = decodeMemoryBoundary(payload);
+      if (
+        isFabricPlainObject(decoded) && decoded.type === "session.open" &&
+        isFabricPlainObject(decoded.session)
+      ) {
+        const message = { ...decoded };
+        const session = { ...decoded.session };
+        if (report === undefined) delete session.client;
+        else session.client = report;
+        message.session = session;
+        if (
+          resign && isFabricPlainObject(message.invocation) &&
+          isFabricPlainObject(message.invocation.args)
+        ) {
+          message.invocation = {
+            ...message.invocation,
+            args: { ...message.invocation.args, session },
+          };
+          const signature = await alice.sign(hashOf(message.invocation).bytes);
+          if (signature.error) throw signature.error;
+          message.authorization = { signature: new FabricBytes(signature.ok) };
+        }
+        payload = encodeMemoryBoundary(message);
+      }
+      await inner.send(payload);
+    },
+    close: () => inner.close(),
+    setReceiver: (receiver) => inner.setReceiver(receiver),
+    setCloseReceiver: (receiver) => inner.setCloseReceiver(receiver),
+  };
+}

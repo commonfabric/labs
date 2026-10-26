@@ -41,6 +41,7 @@ import {
   type ServerMessage,
   SESSION_REPORT_TEXT_MAX,
   type SessionAdmissibleMessage,
+  type SessionDescriptor,
   type SessionEffectMessage,
   type SessionHolding,
   type SessionOpenAuthMetadata,
@@ -242,12 +243,6 @@ export type ConnectionState =
   | "closed";
 
 export type MountOptions = {
-  /**
-   * Runtime identity supplied by the connection before signing the open.
-   * Caller-supplied values are ignored; configure `ConnectOptions.client`.
-   */
-  client?: ClientInfo;
-
   /** Require the space's complete persisted custom-root intent. */
   genesisRoot?: GenesisRoot;
 
@@ -314,7 +309,7 @@ export type SessionOpenAuthContext = {
 
 export type SessionOpenAuthFactory = (
   space: string,
-  session: MountOptions,
+  session: SessionDescriptor,
   context: SessionOpenAuthContext,
 ) => Promise<SessionOpenAuth | undefined> | SessionOpenAuth | undefined;
 
@@ -1102,13 +1097,13 @@ export class Client {
    */
   async openSession(
     space: string,
-    session: MountOptions,
+    mount: MountOptions,
     auth?: SessionAuth,
     holdings?: SessionHolding[],
     options: { restoring?: boolean; signal?: AbortSignal } = {},
   ): Promise<SessionOpenResult> {
-    session = {
-      ...session,
+    const session: SessionDescriptor = {
+      ...mount,
       client: this.#clientInfo,
     };
     const whileConnected = options.restoring === true;

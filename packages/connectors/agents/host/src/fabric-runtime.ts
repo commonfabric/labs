@@ -78,6 +78,7 @@ export async function openAgentFabricRuntime(options: {
     const storageManager = StorageManager.open({
       as: session.as,
       memoryHost,
+      clientBuild: { application: "agents-host", gitSha: null },
     });
     const resourceIndex = allocatedResources.push(
       () => storageManager.close(),

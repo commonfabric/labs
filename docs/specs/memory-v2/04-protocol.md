@@ -496,18 +496,18 @@ application is 1–64 printable ASCII characters; the SHA is a full lowercase
 40-character hash or `null`; the instance ID is 1–128 ASCII letters, digits,
 underscores or hyphens. Generation is a positive safe integer and start time
 is a nonnegative safe integer in Unix milliseconds. Unknown fields are ignored;
-malformed known fields refuse the message. A signed open binds the report in
-its descriptor; a connection-authenticated open attributes it to the named
+malformed known fields make the optional report absent. A signed open binds the
+recognized report fields in its descriptor; both signed and received reports
+use the same normalization, so changing or stripping a valid report fails
+authentication; a connection-authenticated open attributes it to the named
 principal, without attesting the running code.
 
-A server's startup `minimumClientGeneration` defaults to zero, which admits
-unidentified clients. A positive floor rejects missing or older generations
-with a permanent `AuthorizationError` after authentication and before opening
-storage, for fresh opens and resumes alike. It does not change the wire format
-or require matching client/server commits. Existing connections must be ended
-by the host's restart for the new floor to apply. See
-[client attribution and admission](../../../packages/memory/README.md#client-attribution-and-admission)
-for host wiring and rollout semantics.
+Client attribution does not control session admission. Producers emit the
+reserved `generation` field as `1`; readers accept any positive safe integer
+as diagnostic data. Client retirement is disabled, and nonzero startup cutoff
+settings are rejected. See
+[client attribution](../../../packages/memory/README.md#client-attribution)
+for host wiring and configuration constraints.
 
 Rules:
 

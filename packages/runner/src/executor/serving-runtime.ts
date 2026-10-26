@@ -8,6 +8,7 @@
  */
 
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
+import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import {
   type ExperimentalOptions,
   type ModuleByteCache,
@@ -32,6 +33,9 @@ export const SERVING_RUNTIME_EXPERIMENTAL = {
 
 /** What {@link servingRuntimeFactory} builds each serving runtime from. */
 export type ServingRuntimeFactoryOptions = {
+  /** Application and loaded labs build reported by each serving runtime. */
+  clientBuild?: ClientBuild;
+
   /**
    * The co-hosted memory server the loopback storage plane connects to, or
    * the transports that reach it from another thread.
@@ -91,6 +95,7 @@ export function servingRuntimeFactory(
   return (space, context) => {
     const storageManager = LoopbackStorageManager.connect(options.server, {
       as: options.identity,
+      clientBuild: options.clientBuild,
       // Naming the home space makes the manager's foreign-space providers
       // refuse scoped reads, fail-closed (protocol.md §2's grant-scoped read
       // design).

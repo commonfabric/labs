@@ -10,6 +10,7 @@
  */
 
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { EnvSchema } from "@/env.ts";
 
 Deno.test("OTEL_ENABLED parses strictly: only 'true'/'1' enable telemetry", () => {
@@ -53,20 +54,40 @@ Deno.test("DISABLE_LOG_REQ_RES / PLAID_SYNC_ALL_TRANSACTIONS parse strictly", ()
   }
 });
 
-Deno.test("MEMORY_MINIMUM_CLIENT_GENERATION defaults off and rejects invalid floors", () => {
-  assertEquals(EnvSchema.parse({}).MEMORY_MINIMUM_CLIENT_GENERATION, 0);
-  assertEquals(
-    EnvSchema.parse({ MEMORY_MINIMUM_CLIENT_GENERATION: "1" })
+Deno.test("MEMORY_MINIMUM_CLIENT_GENERATION only accepts disabled configuration", () => {
+  expect(EnvSchema.parse({}).MEMORY_MINIMUM_CLIENT_GENERATION).toBe(0);
+  expect(
+    EnvSchema.parse({ MEMORY_MINIMUM_CLIENT_GENERATION: "0" })
       .MEMORY_MINIMUM_CLIENT_GENERATION,
-    1,
-  );
+  ).toBe(0);
   for (
-    const value of ["-1", "1.5", "unknown", "Infinity", "9007199254740992"]
+    const value of [
+      "1",
+      "2",
+      "-1",
+      "1.5",
+      "",
+      " ",
+      "0x2",
+      "1e1",
+      "00",
+      "0.0",
+      "0x0",
+      "0e0",
+      0,
+      null,
+      "unknown",
+      "Infinity",
+      "9007199254740992",
+    ]
   ) {
-    assert(
-      !EnvSchema.safeParse({ MEMORY_MINIMUM_CLIENT_GENERATION: value }).success,
-      value,
-    );
+    const result = EnvSchema.safeParse({
+      MEMORY_MINIMUM_CLIENT_GENERATION: value,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining("Client retirement is disabled"),
+    }));
   }
 });
 

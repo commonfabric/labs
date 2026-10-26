@@ -329,9 +329,11 @@ export const EnvSchema = z.object({
   // ACL state and fresh-space genesis violations still block. `enforce` also
   // denies access shortfalls. See packages/memory/v2/server.ts.
   MEMORY_ACL_MODE: z.enum(["off", "observe", "enforce"]).default("enforce"),
-  // Startup admission floor; zero admits clients without a runtime report.
-  MEMORY_MINIMUM_CLIENT_GENERATION: z.coerce.number().int().nonnegative()
-    .max(Number.MAX_SAFE_INTEGER).default(0),
+  // Client retirement is disabled; reject settings that would enable it.
+  MEMORY_MINIMUM_CLIENT_GENERATION: z.literal("0", {
+    error:
+      "Client retirement is disabled; leave `MEMORY_MINIMUM_CLIENT_GENERATION` unset or set it to `0`",
+  }).default("0").transform(() => 0 as const),
   // A tracked private Mode A policy file. Empty leaves the endpoint disabled.
   MEMORY_ROUTER_CONFIG_FILE: z.string().default(""),
 

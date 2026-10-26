@@ -245,62 +245,56 @@ scans, so a largest entry is largest among those inspected. `unavailable`
 preserves the original refusal when independent encoding fails. Queued bodies
 have source attribution only; size breakdowns describe the refused message.
 
-## Client attribution and admission
+## Client attribution
 
 Every client created by `connect` reports its application, loaded labs Git SHA
-(or `null`), runtime instance ID, operational generation, and instance start
-time in `session.open.session.client`. The report is included in signed opens
-and carried on resumes, including routed connections. A runner
-`RemoteSessionFactory` shares one report across its spaces and sockets.
+(or `null`), runtime instance ID, reserved generation field, and instance start
+time in `session.open.session.client`. A signed open binds the recognized report
+fields; a connection-authenticated open attributes them to its authenticated
+principal. Reports travel on fresh opens and resumes. Unknown fields are
+ignored. If a known field is malformed, the entire optional report is treated as
+absent; authentication and session access checks still apply.
+
 `StorageManager.open({ clientBuild: { application, gitSha }, ... })` supplies
-the host's provenance; `RuntimeClient` and lib-shell forward the same option.
+the host's provenance; `RuntimeClient`, lib-shell, and
+`PiecesController.initialize` forward the same option. Remote and loopback
+session factories share one report across a runtime's spaces and connections.
 The wire SHA is a full lowercase 40-character hash, or `null` when unknown.
 Report creation lowercases full host hashes and maps other build labels to
 `null`, so a development label does not prevent runtime startup. Embedders
-report the labs code they loaded, not their own repository's HEAD. A source
-checkout's HEAD cannot attest uncommitted changes or modules edited while a
-process is running.
+report the labs code they loaded. A source checkout's HEAD cannot attest
+uncommitted changes or modules edited while a process is running.
 
-The cf CLI resolves its SHA on first use and shares that report across later
-runtime opens. Source runs sample HEAD at that first call, which can be after
-the code loads: a commit made before the call is included in the reported SHA.
-Later commits leave the snapshot unchanged; uncommitted edits are omitted.
+The cf CLI resolves its SHA on first use and shares that SHA snapshot across
+later runtime opens, each with its own instance report. Source runs sample HEAD
+at that first call, which can be after the code loads: a commit made before the
+call is included in the reported SHA. Later commits leave the snapshot
+unchanged; uncommitted edits are omitted.
 
-Shell, cf, and toolshed supply their build identity. Unconfigured runner
-embedders report `runner` with unknown SHA; a raw memory client reports
-`memory`. Generation is defined by the loaded memory client, independently of
-the SHA. It is raised deliberately when deployments need to retire problematic
-client behavior, not on every commit or as a wire-format version.
+Shell, cf, and toolshed supply their build identity. Toolshed's serving runtimes
+receive it in both main-thread and worker execution. FUSE, cf-harness, the
+agents host, and the GitHub host report their application names with an unknown
+SHA. Unconfigured runner embedders report `runner`, unconfigured `RuntimeClient`
+embedders report `runtime-client`, and raw memory clients report `memory`, all
+with unknown SHA. Producers emit the reserved `generation` field as `1` for
+readers that require it; it has no admission meaning.
 
 The metadata-only `/api/health/document-interests?space=…&id=…` diagnostic
 includes each matching session's `client`, or `null` for an unidentified client,
 beside its authenticated principal and watch/cache interests. Detached sessions
-retain the report until they expire or reopen. A reopen replaces it; a legacy
-reopen clears it. Reports contain no hostname, filesystem path, or document
-contents. Identity and start time are self-reported, not device or code
+retain the report until they expire or reopen. A reopen replaces it; an absent
+or malformed report clears it. Reports contain no hostname, filesystem path, or
+document contents. Identity and start time are self-reported, not device or code
 attestation, and multiple runtime instances may belong to one process.
 
-The server's `minimumClientGeneration` defaults to zero. Toolshed configures it
-with `MEMORY_MINIMUM_CLIENT_GENERATION`. A positive floor refuses missing or
-older reports after authentication and before opening storage or restoring
-watches. Refusal is a permanent `AuthorizationError` with update guidance;
-current clients terminate the session, preserve received commit verdicts, and
-reject remaining pending work without replay. An unconfirmed write may already
-have committed before a disconnect: this error is not proof that it was rolled
-back. No browser reload is automatic.
-
-The refusal uses `AuthorizationError` so reconnecting clients retain the update
-guidance as the session's terminal error. Their `SessionRevokedError` recovery
-path replaces the supplied message with a generic takeover reason. Runner also
-exposes this permanent refusal through `authorizationError()`, so callers may
-present it as an access denial; the message identifies the required update.
-
-The floor is captured at startup. Apply it to every worker and restart the
-workers to disconnect existing sockets; changing configuration alone does not
-evict active sessions. Deploy with zero first, inspect attribution, and only
-then deliberately raise the floor. Returning to zero and restarting removes the
-cutoff. This controls client demand; it neither rewrites historical schemas nor
-clears schemas retained by server execution or other live clients.
+Client retirement is disabled. The server does not decide admission from client
+attribution. The deprecated `minimumClientGeneration` option accepts only `0` or
+omission and throws for any other value. Toolshed accepts only an unset
+`MEMORY_MINIMUM_CLIENT_GENERATION` or the exact string `0`; every other value
+refuses startup with an explicit configuration error. There is no setting that
+enables retirement. A future retirement feature requires a runtime-wide update
+state, appropriate user guidance, and tested recovery across reads, navigation,
+and replacement sessions before it can be enabled.
 
 ## Layout
 

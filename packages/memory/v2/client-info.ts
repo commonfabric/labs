@@ -1,5 +1,5 @@
 /**
- * Bounded, self-reported runtime identity for session attribution and admission.
+ * Bounded, self-reported runtime identity for session attribution.
  * Authentication identifies the reporting principal; it does not attest the
  * running code or the physical device.
  */
@@ -7,8 +7,8 @@
 import { isPlainObject } from "@commonfabric/utils/types";
 
 /**
- * Operational support generation of this client implementation. Raised when
- * deployments need to retire clients with known problematic behavior.
+ * Reserved report field emitted for readers that require it. Attribution does
+ * not use this value to decide whether a client may open a session.
  */
 export const MEMORY_CLIENT_GENERATION = 1;
 
@@ -26,7 +26,7 @@ export type ClientInfo = ClientBuild & {
   /** Runtime instance identifier shared by its remote space connections. */
   instanceId: string;
 
-  /** Operational support generation, independent of the wire format. */
+  /** Reserved diagnostic field; emitted as `1`, with no admission meaning. */
   generation: number;
 
   /** Client-reported instance creation time, in Unix milliseconds. */

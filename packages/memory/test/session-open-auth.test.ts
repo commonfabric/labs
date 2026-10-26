@@ -113,9 +113,16 @@ describe("verifySessionOpenAuthorization", () => {
       alice.did(),
     );
     for (
-      const session of [{}, { client: { ...client, generation: 2 } }, {
-        client: { ...client, application: "shell" },
-      }]
+      const session of [
+        {},
+        { client: { ...client, generation: 2 } },
+        {
+          client: { ...client, application: "shell" },
+        },
+        { client: { ...client, gitSha: "b".repeat(40) } },
+        { client: { ...client, instanceId: "another-runtime" } },
+        { client: { ...client, startedAt: client.startedAt + 1 } },
+      ]
     ) {
       await expect(
         verifySessionOpenAuthorization(
