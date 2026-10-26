@@ -103,10 +103,11 @@ where by comparing streams.
 
 Each case makes its value in TypeScript, and generating writes the text and mods
 from it. The value they decode to must be the one made: the same hash, and
-`valueEqual()` to it, or for a value whose hashing is refused, the same value in
-the notation of [`value-descriptors.md`](value-descriptors.md). Where this
-package's decoder refuses the text, that check is the divergence's to answer
-for, and the test hashes the value as the case made it instead.
+`valueEqual()` to it, or for a value whose hashing is refused, the same
+descriptor, the JSON by which `src/conformance-fixtures.ts` says everything
+about a value the formats carry. Where this package's decoder refuses the text,
+that check is the divergence's to answer for, and the test hashes the value as
+the case made it instead.
 
 Every two hashed cases hold to the spec's rule on equality: their hashes are the
 same exactly when their values are `valueEqual()`, and

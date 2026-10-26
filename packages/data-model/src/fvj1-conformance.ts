@@ -4,12 +4,13 @@
  * language, or of another wire format that has to agree with this one, tests
  * against the fixture rather than against this package's code.
  *
- * Each case is a value or a text, and the fixture records what this package's
- * default JSON codec does with it: the exact text a value encodes to, and the
- * value a text decodes to, or the refusal. Values are written in the
- * descriptor notation that `test/fixtures/value-descriptors.md` defines, which
- * says everything about a value that the format carries and nothing about how
- * the format carries it.
+ * Each case is a value or a text, and the fixture states it as a text, with
+ * the mods to decoding it that `test/fixtures/hash-conformance.md` defines,
+ * and records what decoding it does: the value it returns, stated by probes
+ * in the vocabulary `test/fixtures/value-probes.md` defines, or the refusal;
+ * then the text that value re-encodes to. Probes state a value without a
+ * reader having to build one, or to compare two by an equality that agrees
+ * with this package's.
  *
  * Where the formal spec says outright that this package falls short of it, the
  * case says so: the fixture records the spec's outcome, and this package's
@@ -22,7 +23,7 @@
  */
 
 import type { FabricValue } from "@/interface.ts";
-import { ProblematicStateError } from "@/codec-common";
+import { ProblematicStateError, ProblematicValue } from "@/codec-common";
 import { JsonCodecEngine } from "@/codec-json";
 import {
   FabricError,
@@ -35,19 +36,24 @@ import {
   FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
-import { fabricFromJsonValue, jsonFromFabricValue } from "./codecs.ts";
+import { jsonFromFabricValue, newDefaultJsonCodecEngine } from "./codecs.ts";
 import {
   assertDistinctCaseNames,
   type ClassCaseNotes,
   classCasesOf,
-  descriptorOf,
   type ExampleMakers,
-  fabricValueOfDescriptor,
+  fabricValueOfTextWithMods,
   fixtureTextOf,
   plainJsonTextOf,
+  probedPathsOf,
+  probesOf,
   sparseArrayOf,
   STUB_CODEC_EXCLUSION,
+  type TextWithMods,
+  textWithModsOf,
   type ValueDescriptor,
+  type ValuePath,
+  type ValueProbe,
 } from "./conformance-fixtures.ts";
 
 //
@@ -55,35 +61,36 @@ import {
 //
 
 /**
- * Why a decode is refused: the text lacks the `fvj1:` prefix, what follows
- * the prefix is not JSON, or the JSON is not a form the format allows. The
- * spec settles all three alike, so the kind says why and not how.
+ * Why a decode or an encode is refused. A decode is refused when the text
+ * lacks the `fvj1:` prefix, when what follows the prefix is not JSON, or when
+ * the JSON is not a form the format allows; the spec settles all three alike,
+ * so the kind says why and not how. An encode is refused when the format has
+ * no text for the value.
  */
-export type Fvj1DecodeRefusal = "not-fvj1" | "not-json" | "malformed";
-
-/** What encoding one value does: writes this text, or is refused. */
-export type Fvj1EncodeOutcome =
-  | { readonly text: string }
-  | { readonly refused: "unencodable" };
-
-/** What decoding one text does: returns this value, or is refused. */
-export type Fvj1DecodeOutcome =
-  | { readonly value: ValueDescriptor }
-  | { readonly refused: Fvj1DecodeRefusal };
+export type Fvj1Refusal = "not-fvj1" | "not-json" | "malformed" | "unencodable";
 
 /**
- * One conformance case: a value to encode, made fresh by `make`, or a text to
- * decode. A value whose text decodes back to it makes a round trip, and a
- * text that decodes makes an encode case of the value it decodes to, so most
- * cases check both directions.
+ * What decoding one text or encoding one value does: a decode returns the
+ * value these probes state, an encode writes this text, and either can be
+ * refused.
+ */
+export type Fvj1Outcome =
+  | { readonly probes: readonly ValueProbe[] }
+  | { readonly text: string }
+  | { readonly refused: Fvj1Refusal };
+
+/**
+ * One conformance case: a value, made fresh by `make`, or a text. The fixture
+ * states a value as the text the spec gives it and mods, so either way a case
+ * is decoded, and what it decodes to is re-encoded.
  *
  * `section` names the part of the formal spec the case exercises.
  * `divergence` is a note on what the format requires, for a case where this
  * package does not do it. The format's outcome is never typed here. For a
- * value, it is the text {@link plainJsonTextOf} computes, so a divergence can
- * only be declared for a value that function writes. For a text, it is that
- * the text is refused, the format refusing every text this package
- * over-accepts.
+ * value, it is the value's own probes, and the text {@link plainJsonTextOf}
+ * computes, so a divergence can only be declared for a value that function
+ * writes. For a text, it is that the text is refused, the format refusing
+ * every text this package over-accepts.
  */
 export type Fvj1ConformanceCase =
   & {
@@ -685,9 +692,11 @@ const FIXTURE_ABOUT = "Generated by `deno task regenerate-fvj1-conformance` " +
  * normalizes text.
  *
  * @throws If two cases share a name; if the codec fails other than by
- *   refusing; if a value case's text does not decode back to its value, or
- *   differs from what {@link plainJsonTextOf} writes for it, and no divergence
- *   says so; or if a divergence a case declares does not hold.
+ *   refusing; if a case's text decodes, or what it decodes to re-encodes,
+ *   other than as the spec has it and no divergence says so; if a value
+ *   encodes other than as what its text decodes to does; if a lenient decode
+ *   of a text the spec refuses yields other than one `ProblematicValue`; or if
+ *   a divergence a case declares does not hold.
  */
 export function fvj1ConformanceFixtureText(
   cases: readonly Fvj1ConformanceCase[],
@@ -704,7 +713,7 @@ export function fvj1ConformanceFixtureText(
  * @throws What the codec throws, when it is anything else: a `TypeError`,
  *   say, is a fault in the codec rather than an answer from it.
  */
-export function fvj1EncodeOutcomeOf(value: FabricValue): Fvj1EncodeOutcome {
+export function fvj1EncodeOutcomeOf(value: FabricValue): Fvj1Outcome {
   try {
     return { text: jsonFromFabricValue(value) };
   } catch (e) {
@@ -718,23 +727,41 @@ export function fvj1EncodeOutcomeOf(value: FabricValue): Fvj1EncodeOutcome {
 }
 
 /**
- * Returns what decoding `text` with this package's default JSON codec does,
- * the codec being strict, so that a malformation is refused rather than
- * returned as a `ProblematicValue`. A refusal is a throw of a
+ * Returns what decoding `stated` with this package's JSON codec does: the
+ * probes of what `fabricValueOfTextWithMods()` returns for it, or the refusal.
+ * The codec is strict, so that a malformation is refused rather than returned
+ * as a `ProblematicValue`, and a refusal is a throw of a
  * `ProblematicStateError`, which is what a strict codec refuses with.
  *
- * @throws What the codec throws, when it is anything else.
+ * @throws What decoding throws, when it is anything else: a fault in the
+ *   codec, or mods that break their rules.
  */
-export function fvj1DecodeOutcomeOf(text: string): Fvj1DecodeOutcome {
+export function fvj1DecodeOutcomeOf(stated: TextWithMods): Fvj1Outcome {
   let decoded: FabricValue;
   try {
-    decoded = fabricFromJsonValue(text);
+    decoded = fabricValueOfTextWithMods(stated);
   } catch (e) {
     return refusalOrRethrow(e, e instanceof ProblematicStateError, {
-      refused: decodeRefusalOf(text),
+      refused: decodeRefusalOf(stated.text),
     });
   }
-  return { value: descriptorOf(decoded) };
+  return { probes: probesOf(decoded, stated.patches) };
+}
+
+/**
+ * Returns the path of each `ProblematicValue` that decoding `text` with this
+ * package's default JSON codec, made lenient, returns in place of refusing.
+ * Section 9 of `3-json-encoding.md` has a lenient decoder return one for a
+ * text a strict one refuses, and does not say where; these are where this
+ * package puts them.
+ *
+ * @throws What the codec throws.
+ */
+export function fvj1ProblematicPathsOf(text: string): ValuePath[] {
+  return probedPathsOf(
+    newDefaultJsonCodecEngine({ lenient: true }).decode(text),
+    (node) => node instanceof ProblematicValue,
+  );
 }
 
 /**
@@ -757,66 +784,116 @@ function fixtureEntryOf(
   conformanceCase: Fvj1ConformanceCase,
 ): Record<string, ValueDescriptor> {
   const { name, section, divergence } = conformanceCase;
-  const entry: Record<string, ValueDescriptor> = { name, section };
   const implementation: Record<string, ValueDescriptor> = {};
+
+  // Records this package's outcome where it differs from the spec's, which
+  // only a divergence permits.
+  const compare = (
+    step: "decode" | "encode",
+    ours: Fvj1Outcome,
+    spec: Fvj1Outcome,
+  ) => {
+    if (isSameOutcome(ours, spec)) {
+      return;
+    } else if (divergence === undefined) {
+      throw new Error(
+        `${name}: the ${step} is ${JSON.stringify(ours)}, not ` +
+          `${JSON.stringify(spec)}, and no divergence says so.`,
+      );
+    }
+    implementation[step] = ours;
+  };
+
+  let stated: TextWithMods;
+  let specDecoded: Fvj1Outcome;
+  let specReencoded: Fvj1Outcome | undefined;
+  let canonical: string | undefined;
+  let reencode: () => Fvj1Outcome;
 
   if ("make" in conformanceCase) {
     const value = conformanceCase.make();
-    const described = descriptorOf(value);
-    const encoded = fvj1EncodeOutcomeOf(value);
-    const plainText = plainJsonTextOf(value);
-    if (divergence !== undefined && plainText === undefined) {
+    if (divergence !== undefined && plainJsonTextOf(value) === undefined) {
       throw new Error(
         `${name}: declares a divergence for a value whose spec text this ` +
           "module does not compute.",
       );
     }
-    const specEncoded = (plainText === undefined)
-      ? encoded
-      : { text: plainText };
-    entry.encode = { value: described, ...specEncoded };
-    if (!isSameOutcome(encoded, specEncoded)) {
-      if (divergence === undefined) {
+    stated = textWithModsOf(value);
+    specDecoded = { probes: probesOf(value, stated.patches) };
+
+    // What no text carries, a cycle or a symbol of no registry key, has no
+    // encoding either.
+    specReencoded = (stated.patches === undefined)
+      ? { text: stated.text }
+      : { refused: "unencodable" };
+
+    const encoded = fvj1EncodeOutcomeOf(value);
+    reencode = () => {
+      const reencoded = fvj1EncodeOutcomeOf(fabricValueOfTextWithMods(stated));
+      if (!isSameOutcome(reencoded, encoded)) {
         throw new Error(
-          `${name}: encodes to ${JSON.stringify(encoded)}, not to ` +
-            `\`${plainText}\`.`,
+          `${name}: encodes to ${JSON.stringify(encoded)}, but what its ` +
+            `text decodes to encodes to ${JSON.stringify(reencoded)}.`,
         );
       }
-      implementation.encode = encoded;
-    }
-
-    if ("text" in specEncoded) {
-      const decoded = fvj1DecodeOutcomeOf(specEncoded.text);
-      entry.decode = { text: specEncoded.text, value: described };
-      if (!isSameOutcome(decoded, { value: described })) {
-        if (divergence === undefined) {
-          throw new Error(
-            `${name}: \`${specEncoded.text}\` does not decode to the value ` +
-              "it was encoded from.",
-          );
-        }
-        implementation.decode = decoded;
-      }
-    }
+      return reencoded;
+    };
   } else {
     const { text } = conformanceCase;
-    const decoded = fvj1DecodeOutcomeOf(text);
-    const specDecoded: Fvj1DecodeOutcome = (divergence === undefined)
-      ? decoded
+    stated = { text };
+    specDecoded = (divergence === undefined)
+      ? fvj1DecodeOutcomeOf(stated)
       : { refused: decodeRefusalOf(text) };
-    entry.decode = { text, ...specDecoded };
-    if (!isSameOutcome(decoded, specDecoded)) {
-      implementation.decode = decoded;
+    reencode = () => fvj1EncodeOutcomeOf(fabricValueOfTextWithMods(stated));
+    if ("probes" in specDecoded) {
+      const restated = textWithModsOf(fabricValueOfTextWithMods(stated));
+      if (restated.unclaimed !== undefined || restated.patches !== undefined) {
+        throw new Error(`${name}: decodes to a value no text alone writes.`);
+      }
+      specReencoded = { text: restated.text };
+      if (restated.text !== text) {
+        canonical = restated.text;
+      }
     }
+  }
 
-    if ("value" in specDecoded) {
-      // Built from the descriptor, so that the value encoded is the one the
-      // fixture states rather than the one this decode happened to return.
-      entry.encode = {
-        value: specDecoded.value,
-        ...fvj1EncodeOutcomeOf(fabricValueOfDescriptor(specDecoded.value)),
-      };
+  const decoded = fvj1DecodeOutcomeOf(stated);
+  compare("decode", decoded, specDecoded);
+  if (specReencoded !== undefined) {
+    if (isSameOutcome(decoded, specDecoded)) {
+      compare("encode", reencode(), specReencoded);
+    } else if ("refused" in decoded && "make" in conformanceCase) {
+      // This package's decoder refuses the text, so what is re-encoded is
+      // the value the case makes.
+      compare(
+        "encode",
+        fvj1EncodeOutcomeOf(conformanceCase.make()),
+        specReencoded,
+      );
     }
+  }
+
+  const entry: Record<string, ValueDescriptor> = {
+    name,
+    section,
+    ...stated,
+    ...specDecoded,
+  };
+  if (canonical !== undefined) {
+    entry.canonical = canonical;
+  }
+  if (specReencoded !== undefined && "refused" in specReencoded) {
+    entry.reencode = specReencoded;
+  }
+  if ("refused" in specDecoded && implementation.decode === undefined) {
+    const paths = fvj1ProblematicPathsOf(stated.text);
+    if (paths.length !== 1) {
+      throw new Error(
+        `${name}: a lenient decode yields ${paths.length} problematic ` +
+          "values, not one.",
+      );
+    }
+    entry.problematicAt = paths[0]!;
   }
 
   if (divergence !== undefined) {
@@ -836,7 +913,7 @@ function fixtureEntryOf(
  * Returns why `text` is refused, read off the text: whether it has the
  * prefix, and whether what follows the prefix parses as JSON.
  */
-function decodeRefusalOf(text: string): Fvj1DecodeRefusal {
+function decodeRefusalOf(text: string): Fvj1Refusal {
   if (!JsonCodecEngine.seemsLikeEncoded(text)) {
     return "not-fvj1";
   }
@@ -848,10 +925,7 @@ function decodeRefusalOf(text: string): Fvj1DecodeRefusal {
   return "malformed";
 }
 
-/** Indicates whether two outcomes are the same, descriptors being JSON. */
-function isSameOutcome(
-  a: Fvj1EncodeOutcome | Fvj1DecodeOutcome,
-  b: Fvj1EncodeOutcome | Fvj1DecodeOutcome,
-): boolean {
+/** Indicates whether two outcomes are the same, outcomes being JSON. */
+function isSameOutcome(a: Fvj1Outcome, b: Fvj1Outcome): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }

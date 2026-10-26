@@ -24,10 +24,11 @@
  * among them. They are what `test/fixtures/fvj1-conformance.json` and
  * `test/fixtures/hash-conformance.json` are generated from: language-neutral
  * records of what this package's JSON codec and hasher do, against which an
- * implementation of either elsewhere tests itself. The JSON codec's fixture
- * writes its values in the notation `test/fixtures/value-descriptors.md`
- * defines, and the hasher's writes each as an `fvj1:` text with the mods to
- * decoding it, as `test/fixtures/hash-conformance.md` defines.
+ * implementation of either elsewhere tests itself. Both write each value as an
+ * `fvj1:` text with the mods to decoding it, as
+ * `test/fixtures/hash-conformance.md` defines, and the JSON codec's states
+ * what a decode returns by probes, in the vocabulary
+ * `test/fixtures/value-probes.md` defines.
  *
  * An internal is here when a test of the package's public surface cannot reach
  * it dependably. Each one's doc comment says why that is.
@@ -59,24 +60,26 @@ import {
 } from "@/fabric-primitives";
 import {
   descriptorOf,
-  fabricValueOfDescriptor,
   fabricValueOfTextWithMods,
   type PathStep,
+  probesOf,
   type StringDescriptor,
   type TextWithMods,
   textWithModsOf,
   type ValueDescriptor,
   type ValuePatch,
   type ValuePath,
+  type ValueProbe,
 } from "./conformance-fixtures.ts";
 import {
   type Fvj1ConformanceCase,
   fvj1ConformanceCases,
   fvj1ConformanceFixtureText,
-  type Fvj1DecodeOutcome,
   fvj1DecodeOutcomeOf,
-  type Fvj1EncodeOutcome,
   fvj1EncodeOutcomeOf,
+  type Fvj1Outcome,
+  fvj1ProblematicPathsOf,
+  type Fvj1Refusal,
 } from "./fvj1-conformance.ts";
 import {
   type HashConformanceCase,
@@ -282,8 +285,8 @@ export const FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
 
 export type {
   Fvj1ConformanceCase,
-  Fvj1DecodeOutcome,
-  Fvj1EncodeOutcome,
+  Fvj1Outcome,
+  Fvj1Refusal,
   HashConformanceCase,
   HashOutcome,
   PathStep,
@@ -292,23 +295,27 @@ export type {
   ValueDescriptor,
   ValuePatch,
   ValuePath,
+  ValueProbe,
 };
 
 /**
  * `descriptorOf()` from `conformance-fixtures.ts`, which returns a value's
- * descriptor in the notation `test/fixtures/value-descriptors.md` defines.
+ * descriptor, JSON by which two values the formats cannot tell apart compare
+ * equal.
  */
 export const descriptorOfForTestingOnly: (
   value: FabricValue,
 ) => ValueDescriptor = descriptorOf;
 
 /**
- * `fabricValueOfDescriptor()` from `conformance-fixtures.ts`, the inverse of
- * {@link descriptorOfForTestingOnly}.
+ * `probesOf()` from `conformance-fixtures.ts`, which returns a value's probes,
+ * in the vocabulary `test/fixtures/value-probes.md` defines, but none where a
+ * patch puts what no text carries.
  */
-export const fabricValueOfDescriptorForTestingOnly: (
-  descriptor: ValueDescriptor,
-) => FabricValue = fabricValueOfDescriptor;
+export const probesOfForTestingOnly: (
+  value: FabricValue,
+  patches?: readonly ValuePatch[],
+) => ValueProbe[] = probesOf;
 
 /**
  * `textWithModsOf()` from `conformance-fixtures.ts`, which returns a value
@@ -351,21 +358,30 @@ export const fvj1ConformanceFixtureTextForTestingOnly: (
 
 /**
  * `fvj1EncodeOutcomeOf()` from `fvj1-conformance.ts`, which returns what
- * encoding a value with this package's default JSON codec does, in the shape a
- * fixture entry's `encode` holds.
+ * encoding a value with this package's default JSON codec does: the text it
+ * writes, or the refusal.
  */
 export const fvj1EncodeOutcomeOfForTestingOnly: (
   value: FabricValue,
-) => Fvj1EncodeOutcome = fvj1EncodeOutcomeOf;
+) => Fvj1Outcome = fvj1EncodeOutcomeOf;
 
 /**
  * `fvj1DecodeOutcomeOf()` from `fvj1-conformance.ts`, which returns what
- * decoding a text with this package's default JSON codec does, in the shape a
- * fixture entry's `decode` holds.
+ * decoding a text with mods with this package's JSON codec does: the probes of
+ * the value it returns, or the refusal.
  */
 export const fvj1DecodeOutcomeOfForTestingOnly: (
+  stated: TextWithMods,
+) => Fvj1Outcome = fvj1DecodeOutcomeOf;
+
+/**
+ * `fvj1ProblematicPathsOf()` from `fvj1-conformance.ts`, which returns the
+ * path of each `ProblematicValue` a lenient decode of a text with this
+ * package's default JSON codec returns.
+ */
+export const fvj1ProblematicPathsOfForTestingOnly: (
   text: string,
-) => Fvj1DecodeOutcome = fvj1DecodeOutcomeOf;
+) => ValuePath[] = fvj1ProblematicPathsOf;
 
 /**
  * The conformance cases for the content hash, those in `hash-conformance.ts`

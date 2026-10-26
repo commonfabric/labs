@@ -54,10 +54,11 @@ language to test itself against:
 - `test/fixtures/hash-conformance.json`, the bytes `hashOf()` feeds SHA-256 and
   the digest it returns, described in `test/fixtures/hash-conformance.md`.
 
-The first writes its values in the notation `test/fixtures/value-descriptors.md`
-defines, and the second writes each as its `fvj1:` text, with the mods to
-decoding it that state what no text carries. Each is generated from its cases,
-in `src/fvj1-conformance.ts` and `src/hash-conformance.ts`, by
-`deno task regenerate-fvj1-conformance` and
+Both write each value as its `fvj1:` text, with the mods to decoding it that
+state what no text carries. The first states what decoding the text returns by
+probes, paths into the value paired with what is there, in the vocabulary
+`test/fixtures/value-probes.md` defines, and then what re-encoding it writes.
+Each is generated from its cases, in `src/fvj1-conformance.ts` and
+`src/hash-conformance.ts`, by `deno task regenerate-fvj1-conformance` and
 `deno task regenerate-hash-conformance`, and a test fails whenever a fixture and
 the code disagree.

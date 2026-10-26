@@ -1,13 +1,18 @@
 /**
- * What the language-neutral conformance fixtures have in common: the two ways
- * their values are written, the cases every concrete class contributes, and
- * the layout of a fixture file. An implementation in another language reads a
- * fixture through those ways of writing a value.
+ * What the language-neutral conformance fixtures have in common: how their
+ * values are written and checked, the cases every concrete class contributes,
+ * and the layout of a fixture file. An implementation in another language
+ * reads a fixture through those.
  *
- * One is a value's `fvj1:` text, with the mods to decoding it that state what
- * no text carries, which `test/fixtures/hash-conformance.md` defines. The
- * other is the descriptor notation `test/fixtures/value-descriptors.md`
- * defines.
+ * A value is written as its `fvj1:` text, with the mods to decoding it that
+ * state what no text carries, which `test/fixtures/hash-conformance.md`
+ * defines. What a decode returns is checked by probes, paths into the value
+ * paired with what a reader finds at each, in the vocabulary
+ * `test/fixtures/value-probes.md` defines.
+ *
+ * A value's descriptor is this package's own: JSON saying everything about the
+ * value that the formats carry, by which the generators compare two values.
+ * Its leaves are the probe vocabulary's leaves.
  *
  * This is reached through `for-testing-only.ts` and the modules that write the
  * fixtures, and has no place in any barrel.
@@ -42,11 +47,9 @@ import {
   type FabricPrimitiveClassesByName,
   FabricRegExp,
   FabricUnavailable,
-  UNAVAILABLE_ERROR_KINDS,
-  UNAVAILABLE_REASONS,
 } from "@/fabric-primitives";
 import { isFabricArray, isFabricPlainObject } from "@/types";
-import { jsonFromFabricValue } from "./codecs.ts";
+import { createDefaultJsonRegistry, jsonFromFabricValue } from "./codecs.ts";
 import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
 import { codecClasses as primitiveClasses } from "./fabric-primitives/impl.ts";
 
@@ -55,8 +58,8 @@ import { codecClasses as primitiveClasses } from "./fabric-primitives/impl.ts";
 //
 
 /**
- * A value in the descriptor notation `test/fixtures/value-descriptors.md`
- * defines. It is JSON, so that any language can read it.
+ * JSON, as a fixture holds it: a value's descriptor, what a probe expects, or
+ * any other part of an entry, so that any language can read it.
  */
 export type ValueDescriptor =
   | null
@@ -92,6 +95,13 @@ export type ValuePatch = {
     | { readonly cycle: ValuePath }
     | { readonly unregisteredSymbol: StringDescriptor | null };
 };
+
+/**
+ * One probe: a path into a value, and what a reader finds there, a leaf or the
+ * shape of an array, a record or an instance, in the vocabulary
+ * `test/fixtures/value-probes.md` defines.
+ */
+export type ValueProbe = readonly [ValuePath, ValueDescriptor];
 
 /** A value written as an `fvj1:` text, and the mods to decoding it. */
 export type TextWithMods = {
@@ -593,12 +603,237 @@ function defineOwn(target: object, key: PropertyKey, value: unknown): void {
 }
 
 //
+// Probes
+//
+
+/**
+ * Returns the probes of `value`: one for each node a reader walking it
+ * reaches, but none at or under the path of a patch in `patches`, the patch
+ * being what states that part. A node's probe comes before those of what it
+ * holds, in index order in an array, in UTF-8 order of key in a record, and in
+ * an instance in the order of its fields, which
+ * `test/fixtures/value-probes.md` gives.
+ *
+ * @throws If `value` holds a cycle or a symbol of no registry key at a path no
+ *   patch names, either of which no probe states; or a value no probe states:
+ *   a map or a set, whose codecs are stubs, or a key pair holding `CryptoKey`
+ *   handles.
+ */
+export function probesOf(
+  value: FabricValue,
+  patches: readonly ValuePatch[] = [],
+): ValueProbe[] {
+  const probes: ValueProbe[] = [];
+  walkProbed(value, patches, (path, _node, expected) => {
+    probes.push([path, expected]);
+  });
+  return probes;
+}
+
+/**
+ * Returns the path of each node of `value` that {@link probesOf} gives a
+ * probe when given no patches, and for which `test` returns `true`, in the
+ * order of the probes.
+ *
+ * @throws What {@link probesOf} throws.
+ */
+export function probedPathsOf(
+  value: FabricValue,
+  test: (node: FabricValue) => boolean,
+): ValuePath[] {
+  const paths: ValuePath[] = [];
+  walkProbed(value, [], (path, node) => {
+    if (test(node)) {
+      paths.push(path);
+    }
+  });
+  return paths;
+}
+
+/**
+ * Helper for {@link probesOf} and {@link probedPathsOf}, which calls `visit`
+ * with the path, the value and the probe's expectation of each node of
+ * `value` they give a probe, in their order.
+ */
+function walkProbed(
+  value: FabricValue,
+  patches: readonly ValuePatch[],
+  visit: (
+    path: ValuePath,
+    node: FabricValue,
+    expected: ValueDescriptor,
+  ) => void,
+): void {
+  const patched = new Set(
+    patches.map(({ at }) => JSON.stringify(at.map(stepKeyOf))),
+  );
+
+  const walk = (
+    node: FabricValue,
+    path: ValuePath,
+    enclosing: readonly FabricValue[],
+  ): void => {
+    if (patched.has(JSON.stringify(path.map(stepKeyOf)))) {
+      return;
+    } else if (enclosing.includes(node)) {
+      throw new Error(`No probe for a cycle at ${JSON.stringify(path)}`);
+    } else if (typeof node === "symbol" && Symbol.keyFor(node) === undefined) {
+      throw new Error(
+        `No probe for a symbol of no registry key at ${JSON.stringify(path)}`,
+      );
+    }
+
+    const inner = [...enclosing, node];
+    const walkAt = (step: PathStep, held: FabricValue) =>
+      walk(held, [...path, step], inner);
+    const fields = instanceFieldsOf(node);
+    if (isFabricArray(node)) {
+      visit(path, node, { array: node.length });
+      for (let index = 0; index < node.length; index++) {
+        if (index in node) {
+          walkAt(index, node[index]);
+        }
+      }
+    } else if (isFabricPlainObject(node)) {
+      const keys = Object.keys(node).sort(utf8Compare);
+      visit(path, node, { record: keys.map(stringDescriptorOf) });
+      for (const key of keys) {
+        walkAt(stringDescriptorOf(key), node[key]);
+      }
+    } else if (fields !== undefined) {
+      const tag = jsonTagOf(node);
+      visit(
+        path,
+        node,
+        (node instanceof UnknownValue) ? { unknown: tag } : { instance: tag },
+      );
+      for (const [field, held] of fields) {
+        walkAt(field, held);
+      }
+    } else {
+      visit(path, node, describe(node, []));
+    }
+  };
+
+  walk(value, [], []);
+}
+
+/** A field of an instance, as probes name it, and the value it holds. */
+type InstanceField = readonly [string, FabricValue];
+
+/**
+ * How the fields of one class's instances are found. `cls` is there for its
+ * type, which ties the entry to the class it is keyed under in
+ * {@link INSTANCE_FIELDS}.
+ */
+interface InstanceFields<Class> {
+  readonly cls: Class;
+
+  /**
+   * The fields of `value`, in the order their probes take, or `undefined` if
+   * it is not of this class.
+   */
+  readonly fieldsOf: (value: FabricValue) => InstanceField[] | undefined;
+}
+
+/**
+ * Returns how the fields of instances of `cls` are found, `fieldsOfInstance`
+ * returning those of one instance.
+ */
+function fielded<Class extends abstract new (...args: never) => object>(
+  cls: Class,
+  fieldsOfInstance: (value: InstanceType<Class>) => InstanceField[],
+): InstanceFields<Class> {
+  return {
+    cls,
+    fieldsOf: (value) =>
+      isInstanceOf(cls, value) ? fieldsOfInstance(value) : undefined,
+  };
+}
+
+/**
+ * The fields of every concrete instance class, keyed the way the instance
+ * class table keys the classes. Its type is what holds it complete. The
+ * open-ended part of an instance is always one field holding a record, so
+ * that its keys are probed as a record's are.
+ */
+const INSTANCE_FIELDS: {
+  readonly [Name in keyof FabricInstanceClassesByName]: InstanceFields<
+    FabricInstanceClassesByName[Name]
+  >;
+} = {
+  FabricError: fielded(FabricError, (value) => {
+    const extras = {};
+    for (const [key, extra] of value.extraEntries()) {
+      defineOwn(extras, key, extra);
+    }
+    return [
+      ["type", value.type],
+      ["name", value.name],
+      ["message", value.message],
+      ...(value.stack === undefined ? [] : [["stack", value.stack] as const]),
+      ...(value.cause === undefined ? [] : [["cause", value.cause] as const]),
+      ["extras", extras],
+    ];
+  }),
+  FabricLink: fielded(FabricLink, (value) => [["payload", value.payload]]),
+  FabricMap: fielded(FabricMap, () => {
+    throw new Error(`No probe for a map. ${STUB_CODEC_EXCLUSION}`);
+  }),
+  FabricSet: fielded(FabricSet, () => {
+    throw new Error(`No probe for a set. ${STUB_CODEC_EXCLUSION}`);
+  }),
+  ProblematicValue: fielded(ProblematicValue, (value) => [
+    ["tag", value.wireTypeTag],
+    ["state", value.state],
+    ["error", value.error],
+  ]),
+  UnknownValue: fielded(UnknownValue, (value) => [["state", value.state]]),
+};
+
+/**
+ * Returns the fields of `value`, in the order their probes take, or
+ * `undefined` if it is not an instance.
+ */
+function instanceFieldsOf(value: FabricValue): InstanceField[] | undefined {
+  for (const entry of Object.values(INSTANCE_FIELDS)) {
+    const fields = entry.fieldsOf(value);
+    if (fields !== undefined) {
+      return fields;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Returns the wire tag this package's JSON codec writes `value` under.
+ *
+ * @throws If no codec in this package's registry writes `value` under a tag.
+ */
+function jsonTagOf(value: FabricValue): string {
+  const codec = createDefaultJsonRegistry().codecFromValue(value);
+  if (codec === undefined || typeof codec !== "object") {
+    throw new Error("Shouldn't happen: no codec writes the value under a tag.");
+  }
+  return codec.tagForValue(value);
+}
+
+//
 // Descriptors
 //
 
 /**
- * Returns the descriptor of `value`, in the notation
- * `test/fixtures/value-descriptors.md` defines.
+ * Returns the descriptor of `value`: JSON saying everything about it that the
+ * formats carry, and nothing about how they carry it, so that two values with
+ * equal descriptors are ones no format tells apart. A value that is not an
+ * array, a record or an instance has the descriptor its probe has, in the
+ * vocabulary `test/fixtures/value-probes.md` defines, and so does a symbol of
+ * no registry key, as `{"unregisteredSymbol": description}`. An array is
+ * `{"array": [...]}`, holes as `{"hole": count}` in runs as long as possible;
+ * a record is `{"record": [[key, value], ...]}` in UTF-8 order of key; an
+ * instance is its class's name and what it holds; and a cycle closing at an
+ * array or record is `{"cycle": count}`, counting up from where it closes. A
+ * container reached twice other than by a cycle is written out each time.
  *
  * @throws If `value` is a key pair holding `CryptoKey` handles rather than
  *   key material, which no descriptor can write down, or holds a cycle that
@@ -684,89 +919,6 @@ function isPlainContainer(value: FabricValue): boolean {
   return isFabricArray(value) || isFabricPlainObject(value);
 }
 
-/**
- * Returns the value `descriptor` describes. The inverse of
- * {@link descriptorOf}: the descriptor of the result is `descriptor`.
- *
- * @throws If `descriptor` is not one the notation defines.
- */
-export function fabricValueOfDescriptor(
-  descriptor: ValueDescriptor,
-): FabricValue {
-  return make(descriptor, []);
-}
-
-/**
- * Helper for {@link fabricValueOfDescriptor}, which makes the value
- * `descriptor` describes where `building` holds the arrays and records being
- * made around it, outermost first. A cycle reference is to one of those.
- */
-function make(
-  descriptor: ValueDescriptor,
-  building: FabricValue[],
-): FabricValue {
-  if (typeof descriptor === "number") {
-    // The special numbers have descriptors of their own, `-0` among them.
-    if (!Number.isFinite(descriptor) || Object.is(descriptor, -0)) {
-      throw new Error(`Not a number descriptor: ${descriptor}`);
-    }
-    return descriptor;
-  } else if (
-    descriptor === null || typeof descriptor === "boolean" ||
-    typeof descriptor === "string"
-  ) {
-    return descriptor;
-  }
-
-  const [kind, payload] = soleEntryOf(descriptor);
-  switch (kind) {
-    case "undefined": {
-      return undefined;
-    }
-    case "number": {
-      const found = SPECIAL_NUMBER_NAMES.find(([name]) => name === payload);
-      if (found === undefined) {
-        throw new Error(`Not a special number: ${JSON.stringify(payload)}`);
-      }
-      return found[1];
-    }
-    case "utf16": {
-      return stringOf(descriptor);
-    }
-    case "bigint": {
-      return bigintOf(payload);
-    }
-    case "symbol": {
-      return Symbol.for(stringOf(payload));
-    }
-    case "unregisteredSymbol": {
-      return (payload === null) ? Symbol() : Symbol(stringOf(payload));
-    }
-    case "array": {
-      return arrayOf(payload, building);
-    }
-    case "record": {
-      return recordOf(payload, building);
-    }
-    case "cycle": {
-      if (
-        !(typeof payload === "number" && Number.isSafeInteger(payload) &&
-          payload >= 1 && payload <= building.length)
-      ) {
-        throw new Error(`Not a cycle distance: ${JSON.stringify(payload)}`);
-      }
-      return building[building.length - payload];
-    }
-  }
-
-  for (const notation of Object.values(CLASS_NOTATIONS)) {
-    if (notation.key === kind) {
-      return notation.make(payload);
-    }
-  }
-  throw new Error(`Not a descriptor kind: ${kind}`);
-}
-
 /** The special numbers, under the names their descriptors use. */
 const SPECIAL_NUMBER_NAMES: readonly (readonly [string, number])[] = [
   ["-0", -0],
@@ -776,13 +928,11 @@ const SPECIAL_NUMBER_NAMES: readonly (readonly [string, number])[] = [
 ];
 
 /**
- * How one class's instances are described, and made back from a descriptor.
- * `cls` is there for its type, which ties the entry to the class it is keyed
- * under in {@link CLASS_NOTATIONS}.
+ * How one class's instances are described. `cls` is there for its type, which
+ * ties the entry to the class it is keyed under in {@link CLASS_NOTATIONS}.
  */
 interface ClassNotation<Class> {
   readonly cls: Class;
-  readonly key: string;
 
   /**
    * The descriptor of `value`, where `path` holds what encloses it and
@@ -792,15 +942,13 @@ interface ClassNotation<Class> {
     value: FabricValue,
     path: readonly FabricValue[],
   ) => ValueDescriptor | undefined;
-
-  readonly make: (payload: ValueDescriptor) => FabricValue;
 }
 
 /**
  * Returns the notation for instances of `cls`, under the descriptor key `key`.
  * `describeInstance` returns the payload a descriptor holds under that key,
  * describing each value the instance holds with the `describeHeld` it is
- * passed, and `makeInstance` returns the instance a payload describes.
+ * passed.
  */
 function notate<Class extends abstract new (...args: never) => object>(
   cls: Class,
@@ -809,18 +957,15 @@ function notate<Class extends abstract new (...args: never) => object>(
     value: InstanceType<Class>,
     describeHeld: (held: FabricValue) => ValueDescriptor,
   ) => ValueDescriptor,
-  makeInstance: (payload: ValueDescriptor) => InstanceType<Class>,
 ): ClassNotation<Class> {
   return {
     cls,
-    key,
     describe: (value, path) =>
       isInstanceOf(cls, value)
         ? {
           [key]: describeInstance(value, (held) => describe(held, path)),
         }
         : undefined,
-    make: makeInstance,
   };
 }
 
@@ -847,177 +992,73 @@ const CLASS_NOTATIONS:
       FabricInstanceClassesByName[Name]
     >;
   } = {
-    FabricBytes: notate(
-      FabricBytes,
-      "Bytes",
-      (value) => hexOf(value.slice()),
-      (payload) => new FabricBytes(bytesOf(payload)),
-    ),
+    FabricBytes: notate(FabricBytes, "Bytes", (value) => hexOf(value.slice())),
     FabricDurationDay: notate(
       FabricDurationDay,
       "DurationDay",
       (value) => value.value.toString(),
-      (payload) => new FabricDurationDay(bigintOf(payload)),
     ),
     FabricDurationNsec: notate(
       FabricDurationNsec,
       "DurationNsec",
       (value) => value.value.toString(),
-      (payload) => new FabricDurationNsec(bigintOf(payload)),
     ),
     FabricEpochDay: notate(
       FabricEpochDay,
       "EpochDay",
       (value) => value.value.toString(),
-      (payload) => new FabricEpochDay(bigintOf(payload)),
     ),
     FabricEpochNsec: notate(
       FabricEpochNsec,
       "EpochNsec",
       (value) => value.value.toString(),
-      (payload) => new FabricEpochNsec(bigintOf(payload)),
     ),
-    FabricHash: notate(
-      FabricHash,
-      "Hash",
-      (value) => ({
-        tag: stringDescriptorOf(value.tag),
-        hash: hexOf(value.bytes),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new FabricHash(
-          bytesOf(fieldOf(fields, "hash")),
-          stringOf(fieldOf(fields, "tag")),
+    FabricHash: notate(FabricHash, "Hash", (value) => ({
+      tag: stringDescriptorOf(value.tag),
+      hash: hexOf(value.bytes),
+    })),
+    FabricKeyPair: notate(FabricKeyPair, "KeyPair", (value) => {
+      if (!value.hasMaterial) {
+        throw new Error(
+          "No descriptor for a key pair holding `CryptoKey` handles.",
         );
-      },
-    ),
-    FabricKeyPair: notate(
-      FabricKeyPair,
-      "KeyPair",
-      (value) => {
-        if (!value.hasMaterial) {
-          throw new Error(
-            "No descriptor for a key pair holding `CryptoKey` handles.",
-          );
-        }
-        return {
-          algorithm: stringDescriptorOf(value.algorithm),
-          publicKey: hexOf(value.publicKeyBytes.slice()),
-          privateKey: hexOf(value.privateKeyBytes.slice()),
-        };
-      },
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new FabricKeyPair(
-          stringOf(fieldOf(fields, "algorithm")),
-          bytesOf(fieldOf(fields, "publicKey")),
-          bytesOf(fieldOf(fields, "privateKey")),
-        );
-      },
-    ),
-    FabricRegExp: notate(
-      FabricRegExp,
-      "RegExp",
-      (value) => ({
-        flavor: stringDescriptorOf(value.flavor),
-        source: stringDescriptorOf(value.source),
-        flags: stringDescriptorOf(value.flags),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new FabricRegExp(
-          stringOf(fieldOf(fields, "flavor")),
-          stringOf(fieldOf(fields, "source")),
-          stringOf(fieldOf(fields, "flags")),
-        );
-      },
-    ),
-    FabricUnavailable: notate(
-      FabricUnavailable,
-      "Unavailable",
-      (value) => ({
-        reason: value.reason,
-        ...(value.errorKind === null ? {} : { errorKind: value.errorKind }),
-        ...(value.rawErrorMessage === null
-          ? {}
-          : { errorMessage: stringDescriptorOf(value.rawErrorMessage) }),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        const reasonName = stringOf(fieldOf(fields, "reason"));
-        const reason = Object.values(UNAVAILABLE_REASONS).find((r) =>
-          r === reasonName
-        );
-        if (reason === undefined) {
-          throw new Error(`Not an unavailable reason: ${reasonName}`);
-        }
-        const kindName = fields.errorKind;
-        const errorKind = (kindName === undefined)
-          ? null
-          : Object.values(UNAVAILABLE_ERROR_KINDS).find((k) =>
-            k === stringOf(kindName)
-          );
-        if (errorKind === undefined) {
-          throw new Error(`Not an error kind: ${JSON.stringify(kindName)}`);
-        }
-        const message = fields.errorMessage;
-        return new FabricUnavailable(
-          reason,
-          errorKind,
-          (message === undefined) ? null : stringOf(message),
-        );
-      },
-    ),
-    FabricError: notate(
-      FabricError,
-      "Error",
-      (value, describeHeld) => ({
-        type: stringDescriptorOf(value.type),
-        name: stringDescriptorOf(value.name),
-        message: stringDescriptorOf(value.message),
-        ...(value.stack === undefined
-          ? {}
-          : { stack: stringDescriptorOf(value.stack) }),
-        ...(value.cause === undefined
-          ? {}
-          : { cause: describeHeld(value.cause) }),
-        extras: [...value.extraEntries()]
-          .sort(([a], [b]) => utf8Compare(a, b))
-          .map(([key, extra]) => [
-            stringDescriptorOf(key),
-            describeHeld(extra),
-          ]),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        const { stack, cause } = fields;
-        return new FabricError({
-          type: stringOf(fieldOf(fields, "type")),
-          name: stringOf(fieldOf(fields, "name")),
-          message: stringOf(fieldOf(fields, "message")),
-          stack: (stack === undefined) ? undefined : stringOf(stack),
-          cause: (cause === undefined)
-            ? undefined
-            : fabricValueOfDescriptor(cause),
-          extras: listOf(fieldOf(fields, "extras")).map((pair) => {
-            const [key, extra] = pairOf(pair);
-            return [stringOf(key), fabricValueOfDescriptor(extra)] as const;
-          }),
-        });
-      },
-    ),
+      }
+      return {
+        algorithm: stringDescriptorOf(value.algorithm),
+        publicKey: hexOf(value.publicKeyBytes.slice()),
+        privateKey: hexOf(value.privateKeyBytes.slice()),
+      };
+    }),
+    FabricRegExp: notate(FabricRegExp, "RegExp", (value) => ({
+      flavor: stringDescriptorOf(value.flavor),
+      source: stringDescriptorOf(value.source),
+      flags: stringDescriptorOf(value.flags),
+    })),
+    FabricUnavailable: notate(FabricUnavailable, "Unavailable", (value) => ({
+      reason: value.reason,
+      ...(value.errorKind === null ? {} : { errorKind: value.errorKind }),
+      ...(value.rawErrorMessage === null
+        ? {}
+        : { errorMessage: stringDescriptorOf(value.rawErrorMessage) }),
+    })),
+    FabricError: notate(FabricError, "Error", (value, describeHeld) => ({
+      type: stringDescriptorOf(value.type),
+      name: stringDescriptorOf(value.name),
+      message: stringDescriptorOf(value.message),
+      ...(value.stack === undefined
+        ? {}
+        : { stack: stringDescriptorOf(value.stack) }),
+      ...(value.cause === undefined
+        ? {}
+        : { cause: describeHeld(value.cause) }),
+      extras: [...value.extraEntries()]
+        .sort(([a], [b]) => utf8Compare(a, b))
+        .map(([key, extra]) => [stringDescriptorOf(key), describeHeld(extra)]),
+    })),
     FabricLink: notate(
       FabricLink,
       "Link",
       (value, describeHeld) => describeHeld(value.payload),
-      (payload) => {
-        const linkPayload = fabricValueOfDescriptor(payload);
-        if (!isFabricPlainObject(linkPayload)) {
-          throw new Error("A link's payload must be a record.");
-        }
-        return new FabricLink(linkPayload);
-      },
     ),
     FabricMap: notate(
       FabricMap,
@@ -1027,27 +1068,11 @@ const CLASS_NOTATIONS:
           describeHeld(key),
           describeHeld(entry),
         ]),
-      (payload) =>
-        new FabricMap(
-          new Map(
-            listOf(payload).map((pair) => {
-              const [key, entry] = pairOf(pair);
-              return [
-                fabricValueOfDescriptor(key),
-                fabricValueOfDescriptor(entry),
-              ];
-            }),
-          ),
-        ),
     ),
     FabricSet: notate(
       FabricSet,
       "Set",
       (value, describeHeld) => [...value.set].map(describeHeld),
-      (payload) =>
-        new FabricSet(
-          new Set(listOf(payload).map(fabricValueOfDescriptor)),
-        ),
     ),
     ProblematicValue: notate(
       ProblematicValue,
@@ -1057,30 +1082,11 @@ const CLASS_NOTATIONS:
         state: describeHeld(value.state),
         error: stringDescriptorOf(value.error),
       }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new ProblematicValue(
-          stringOf(fieldOf(fields, "tag")),
-          fabricValueOfDescriptor(fieldOf(fields, "state")),
-          stringOf(fieldOf(fields, "error")),
-        );
-      },
     ),
-    UnknownValue: notate(
-      UnknownValue,
-      "Unknown",
-      (value, describeHeld) => ({
-        tag: value.wireTypeTag,
-        state: describeHeld(value.state),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new UnknownValue(
-          stringOf(fieldOf(fields, "tag")),
-          fabricValueOfDescriptor(fieldOf(fields, "state")),
-        );
-      },
-    ),
+    UnknownValue: notate(UnknownValue, "Unknown", (value, describeHeld) => ({
+      tag: value.wireTypeTag,
+      state: describeHeld(value.state),
+    })),
   };
 
 /**
@@ -1133,70 +1139,6 @@ function recordEntriesOf(
   ]);
 }
 
-/**
- * Returns the array an array descriptor's payload describes, where `building`
- * holds what is being made around it.
- */
-function arrayOf(
-  payload: ValueDescriptor,
-  building: FabricValue[],
-): FabricValue[] {
-  const result: FabricValue[] = [];
-  building.push(result);
-  let index = 0;
-  for (const entry of listOf(payload)) {
-    const hole = holeCountOf(entry);
-    if (hole === undefined) {
-      result[index] = make(entry, building);
-      index++;
-    } else {
-      index += hole;
-    }
-  }
-  building.pop();
-  result.length = index;
-  return result;
-}
-
-/**
- * Returns the record a record descriptor's payload describes, where `building`
- * holds what is being made around it.
- */
-function recordOf(
-  payload: ValueDescriptor,
-  building: FabricValue[],
-): FabricValue {
-  const result: { [key: string]: FabricValue } = {};
-  building.push(result);
-  for (const pair of listOf(payload)) {
-    const [key, value] = pairOf(pair);
-    defineOwn(result, stringOf(key), make(value, building));
-  }
-  building.pop();
-  return result;
-}
-
-/**
- * Returns the count of a `hole` entry, or `undefined` for any other entry.
- *
- * @throws If a `hole` entry's count is not an integer of at least one, the
- *   least run the wire format writes.
- */
-function holeCountOf(entry: ValueDescriptor): number | undefined {
-  if (entry === null || typeof entry !== "object" || isList(entry)) {
-    return undefined;
-  }
-  const [kind, count] = soleEntryOf(entry);
-  if (kind !== "hole") {
-    return undefined;
-  } else if (
-    !(typeof count === "number" && Number.isSafeInteger(count) && count >= 1)
-  ) {
-    throw new Error(`Not a hole count: ${JSON.stringify(count)}`);
-  }
-  return count;
-}
-
 /** Returns the string a string descriptor describes. */
 function stringOf(descriptor: ValueDescriptor): string {
   if (typeof descriptor === "string") {
@@ -1215,25 +1157,6 @@ function stringOf(descriptor: ValueDescriptor): string {
     }
     return String.fromCharCode(unit);
   }).join("");
-}
-
-/**
- * Returns the bigint a decimal string descriptor describes.
- *
- * @throws If the descriptor is not a decimal integer as `bigint.toString()`
- *   writes one: no sign but a leading `-`, no leading zeros, nothing else.
- */
-function bigintOf(descriptor: ValueDescriptor): bigint {
-  const decimal = stringOf(descriptor);
-  if (!/^(?:0|-?[1-9][0-9]*)$/.test(decimal)) {
-    throw new Error(`Not a decimal integer: ${decimal}`);
-  }
-  return BigInt(decimal);
-}
-
-/** Returns the bytes a lowercase hexadecimal string descriptor describes. */
-function bytesOf(descriptor: ValueDescriptor): Uint8Array {
-  return bytesOfHex(stringOf(descriptor));
 }
 
 /**
@@ -1275,17 +1198,6 @@ function isList(
   return Array.isArray(descriptor);
 }
 
-/** Returns `descriptor` as a two-element list, throwing if it is not one. */
-function pairOf(
-  descriptor: ValueDescriptor,
-): readonly [ValueDescriptor, ValueDescriptor] {
-  const [first, second, ...rest] = listOf(descriptor);
-  if (first === undefined || second === undefined || rest.length > 0) {
-    throw new Error(`Not a pair: ${JSON.stringify(descriptor)}`);
-  }
-  return [first, second];
-}
-
 /** Returns `descriptor` as a JSON object, throwing if it is not one. */
 function fieldsOf(
   descriptor: ValueDescriptor,
@@ -1296,18 +1208,6 @@ function fieldsOf(
     throw new Error(`Not an object: ${JSON.stringify(descriptor)}`);
   }
   return descriptor;
-}
-
-/** Returns the field `key` of `fields`, throwing if it is absent. */
-function fieldOf(
-  fields: { readonly [key: string]: ValueDescriptor },
-  key: string,
-): ValueDescriptor {
-  const field = fields[key];
-  if (field === undefined) {
-    throw new Error(`No field \`${key}\` in ${JSON.stringify(fields)}`);
-  }
-  return field;
 }
 
 /** Returns the one key and value of `descriptor`, throwing unless one. */
