@@ -4434,7 +4434,9 @@ export class SpaceServer implements TransactionSealDestination {
             // view check does for its entry. A doc the replica has taken
             // nothing of arrives by no frame and no re-read — the handler
             // wrote it without reading it, so its read stood at seq 0 — and
-            // is loaded instead, as the replay's own read would load it.
+            // is loaded instead, as the replay's own read would load it. A
+            // gate carrying no identity resolves its scopes against the
+            // runtime's, as the wave resolved the reads it gates on.
             try {
               if (readThrough) {
                 runtime.storageManager.integrateStoreWrites?.(
@@ -4443,7 +4445,7 @@ export class SpaceServer implements TransactionSealDestination {
                     id: target.id,
                     scopeKey: resolveScopeKey(
                       target.scope,
-                      catchUp.scopeKeyIdentity ?? {},
+                      catchUp.scopeKeyIdentity ?? runtime.scopeKeyIdentity,
                     ),
                   })),
                 );
