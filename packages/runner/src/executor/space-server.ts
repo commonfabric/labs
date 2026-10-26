@@ -4427,14 +4427,33 @@ export class SpaceServer implements TransactionSealDestination {
           if (lagging() !== undefined) {
             // The staling commit is admitted, so its frame is published or
             // queued: publish the space's queued frames and take them, as
-            // the view check above does. A doc the replica has taken nothing
-            // of arrives by no frame — the handler wrote it without reading
-            // it, so its read stood at seq 0 — and is loaded instead, as the
-            // replay's own read would load it.
+            // the view check above does. Under the store read-through the
+            // serving connection carries no frames for this space, and the
+            // replica learns of a commit by re-reading what it wrote, so the
+            // docs the replica holds are read from the store instead, as the
+            // view check does for its entry. A doc the replica has taken
+            // nothing of arrives by no frame and no re-read — the handler
+            // wrote it without reading it, so its read stood at seq 0 — and
+            // is loaded instead, as the replay's own read would load it.
             try {
-              await this.#options.server.flushSessions([space]);
-              if (!this.#active || this.#runtime !== runtime) return undefined;
-              await provider.pullToServerHead?.();
+              if (readThrough) {
+                runtime.storageManager.integrateStoreWrites?.(
+                  space,
+                  catchUp.docs.map((target) => ({
+                    id: target.id,
+                    scopeKey: resolveScopeKey(
+                      target.scope,
+                      catchUp.scopeKeyIdentity ?? {},
+                    ),
+                  })),
+                );
+              } else {
+                await this.#options.server.flushSessions([space]);
+                if (!this.#active || this.#runtime !== runtime) {
+                  return undefined;
+                }
+                await provider.pullToServerHead?.();
+              }
             } catch (error) {
               if (!this.#active || this.#runtime !== runtime) return undefined;
               logger.warn("event-catch-up-sync-failed", () => [

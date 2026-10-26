@@ -41,6 +41,7 @@ import {
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   streamEntriesDocId,
   type StreamEventsDocValue,
+  toDirtyKey,
 } from "@commonfabric/memory/v2";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -4224,6 +4225,12 @@ describe("Phase 3 events-down (serving side)", () => {
           }],
         },
       });
+      // A commit applied straight to the engine dirties nothing, and a
+      // flush naming a space nothing dirtied sends no batch. Mark the
+      // rival's doc as its admission would: P's retry waits behind the
+      // catch-up gate (serving-loop.md §3d) for the replica to take the
+      // rival's commit, and that take rides the flush the gate asks for.
+      server.markSpaceDirty(space, [toDirtyKey(parentArgId)]);
       gate.resolve();
     } finally {
       gate.resolve();

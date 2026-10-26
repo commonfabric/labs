@@ -4260,21 +4260,32 @@ ORDER BY r.seq, r.op_index
 };
 
 /**
- * Whether a commit after `sinceSeq` wrote this document instance that
- * `holder`'s own derived commits do not account for — serving-loop.md
- * §3d's INTRUSION on a document a serving tenure derives into. A client's
- * authored write is one; so is another holder's derived write, and a
- * system commit. The tenure's own derived commits are not, which is what
- * separates a document another writer moved under a run from one the
+ * The SQL that keeps a revision row `r`, joined to its commit row `c`,
+ * unless the commit is one of `:holder`'s own derived commits: the
+ * exemption serving-loop.md §3d grants a serving tenure on the documents
+ * it derives into and the reads its handlers record, which
+ * {@link hasIntrusionSince} and {@link findStaleReadSeq} share. A client's
+ * authored write is kept; so is another holder's derived write, and a
+ * system commit. The tenure's own derived commits are dropped, which is
+ * what separates a document another writer moved under a run from one the
  * tenure itself advanced while that run was in flight.
  *
- * `holder` absent (a wave driven outside a lease) makes every write an
- * intrusion: nothing identifies a commit as this tenure's. So does a
- * derived row carrying no holder, which the class is not supposed to
- * produce. Both are the exemption failing CLOSED, and the query says so
- * in SQL rather than leaning on three-valued logic to arrive there: `=`
- * against a NULL yields UNKNOWN, and a `NOT (...)` over UNKNOWN drops the
- * row — exempting exactly the writes these two cases must not exempt.
+ * `:holder` NULL (a wave driven outside a lease) keeps every write:
+ * nothing identifies a commit as this tenure's. So does a derived row
+ * carrying no holder, which the class is not supposed to produce. Both are
+ * the exemption failing CLOSED, and the predicate says so in SQL rather
+ * than leaning on three-valued logic to arrive there: `=` against a NULL
+ * yields UNKNOWN, and a `NOT (...)` over UNKNOWN drops the row — exempting
+ * exactly the writes these two cases must not exempt.
+ */
+const NOT_HOLDERS_OWN_DERIVED_COMMIT_SQL =
+  "NOT (:holder IS NOT NULL AND c.class = 'derived' AND c.holder IS :holder)";
+
+/**
+ * Whether a commit after `sinceSeq` wrote this document instance that
+ * `holder`'s own derived commits do not account for — serving-loop.md
+ * §3d's INTRUSION on a document a serving tenure derives into, under the
+ * exemption {@link NOT_HOLDERS_OWN_DERIVED_COMMIT_SQL} states.
  */
 export const hasIntrusionSince = (
   engine: Engine,
@@ -4290,7 +4301,7 @@ export const hasIntrusionSince = (
 SELECT 1 FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
 WHERE r.branch = :branch AND r.id = :id AND r.scope_key = :scope_key
   AND r.seq > :since_seq
-  AND NOT (:holder IS NOT NULL AND c.class = 'derived' AND c.holder IS :holder)
+  AND ${NOT_HOLDERS_OWN_DERIVED_COMMIT_SQL}
 LIMIT 1
 `).get({
       branch: options.branch ?? DEFAULT_BRANCH,
@@ -4309,8 +4320,8 @@ LIMIT 1
  * when `patchOverlapsRead()`, or `patchOverlapsNonRecursiveRead()` for a
  * shallow read, matches one of its patches that `commutes` does not except.
  * A write by `holder`'s own derived commits is no conflict, under the
- * exemption `hasIntrusionSince()` states and in the same NULL-safe shape, so
- * an absent `holder` exempts nothing.
+ * exemption {@link NOT_HOLDERS_OWN_DERIVED_COMMIT_SQL} states, so an absent
+ * `holder` exempts nothing.
  */
 export const findStaleReadSeq = (
   engine: Engine,
@@ -4332,7 +4343,7 @@ SELECT r.seq, r.op, r.data
 FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
 WHERE r.branch = :branch AND r.id = :id AND r.scope_key = :scope_key
   AND r.seq > :after_seq
-  AND NOT (:holder IS NOT NULL AND c.class = 'derived' AND c.holder IS :holder)
+  AND ${NOT_HOLDERS_OWN_DERIVED_COMMIT_SQL}
 ORDER BY r.seq DESC, r.op_index DESC
 `).all({
       branch: options.branch ?? DEFAULT_BRANCH,
