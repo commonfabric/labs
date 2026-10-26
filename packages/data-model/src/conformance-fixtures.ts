@@ -1,18 +1,29 @@
 /**
- * What the language-neutral conformance fixtures have in common: the
- * descriptor notation their values are written in, the cases every concrete
- * class contributes, and the layout of a fixture file. An implementation in
- * another language reads a fixture through the notation, which
- * `test/fixtures/value-descriptors.md` defines.
+ * What the language-neutral conformance fixtures have in common: the two ways
+ * their values are written, the cases every concrete class contributes, and
+ * the layout of a fixture file. An implementation in another language reads a
+ * fixture through those ways of writing a value.
+ *
+ * One is a value's `fvj1:` text, with the mods to decoding it that state what
+ * no text carries, which `test/fixtures/hash-conformance.md` defines. The
+ * other is the descriptor notation `test/fixtures/value-descriptors.md`
+ * defines.
  *
  * This is reached through `for-testing-only.ts` and the modules that write the
  * fixtures, and has no place in any barrel.
  */
 
+import type { Constructor } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
-import type { FabricValue } from "@/interface.ts";
+import type {
+  FabricArray,
+  FabricPlainObject,
+  FabricValue,
+} from "@/interface.ts";
 import { ProblematicValue, UnknownValue } from "@/codec-common";
+import { createBaseJsonRegistry, JsonCodecEngine } from "@/codec-json";
+import { deepFreeze } from "@/deep-freeze.ts";
 import {
   FabricError,
   type FabricInstanceClassesByName,
@@ -35,6 +46,9 @@ import {
   UNAVAILABLE_REASONS,
 } from "@/fabric-primitives";
 import { isFabricArray, isFabricPlainObject } from "@/types";
+import { jsonFromFabricValue } from "./codecs.ts";
+import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
+import { codecClasses as primitiveClasses } from "./fabric-primitives/impl.ts";
 
 //
 // Types
@@ -51,6 +65,45 @@ export type ValueDescriptor =
   | string
   | readonly ValueDescriptor[]
   | { readonly [key: string]: ValueDescriptor };
+
+/**
+ * A string as a descriptor writes it: the string itself, or its UTF-16 code
+ * units where it holds a lone surrogate.
+ */
+export type StringDescriptor = string | { readonly utf16: readonly number[] };
+
+/** One step of a path: an array index, or a record key. */
+export type PathStep = number | StringDescriptor;
+
+/** A path into a value, from its root. The empty path is the root itself. */
+export type ValuePath = readonly PathStep[];
+
+/** A change made to a decoded value, putting there what no text carries. */
+export type ValuePatch = {
+  /** Where the change is made, at a `null` of the decoded text. */
+  readonly at: ValuePath;
+
+  /**
+   * What is put there: the array or record at the path `cycle`, which closes
+   * a cycle, or a symbol of no registry key, under its description, `null`
+   * being none.
+   */
+  readonly put:
+    | { readonly cycle: ValuePath }
+    | { readonly unregisteredSymbol: StringDescriptor | null };
+};
+
+/** A value written as an `fvj1:` text, and the mods to decoding it. */
+export type TextWithMods = {
+  /** The text, `fvj1:` prefix and all. */
+  readonly text: string;
+
+  /** Wire tags to decode as though no codec claimed them. */
+  readonly unclaimed?: readonly string[];
+
+  /** Changes made to what decoding returns. */
+  readonly patches?: readonly ValuePatch[];
+};
 
 /** Makers of examples of each class in one of the class tables. */
 export type ExampleMakers<ClassesByName> = {
@@ -160,6 +213,383 @@ function asciiJsonOf(value: ValueDescriptor): string {
     /[\u007f-￿]/g,
     (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
+}
+
+//
+// Texts and mods
+//
+
+/**
+ * Returns `value` written as an `fvj1:` text and the mods to decoding it,
+ * which {@link fabricValueOfTextWithMods} reads back. The text is the one the
+ * spec gives, with record keys in the UTF-8 order section 10 of
+ * `3-json-encoding.md` requires: what {@link plainJsonTextOf} writes, for a
+ * value it writes a text for, and otherwise this package's encoding with its
+ * keys put in that order. The first of those covers a record holding a key
+ * this package's encoder reserves.
+ *
+ * What no text carries is written as `null`, with a patch putting it there: a
+ * cycle, where it closes, and a symbol of no registry key. An `UnknownValue`
+ * under a tag one of this package's classes claims has that tag in
+ * `unclaimed`. The walk finding these passes through arrays and records and
+ * stops at every instance, so whatever an instance holds is left for the
+ * encoder to write or to refuse. Nor does a text carry how a value was built:
+ * sharing, a `NaN`'s bits, bytes viewed through part of a larger buffer.
+ *
+ * @throws If the walk reaches an `UnknownValue` under one of the tags the
+ *   format itself decides, which no codec can be left out for, so that no text
+ *   and mods write it; or what this package's JSON encoder throws, refusing
+ *   `value` with those replaced.
+ */
+export function textWithModsOf(value: FabricValue): TextWithMods {
+  const patches: ValuePatch[] = [];
+  const unknownTags = new Set<string>();
+  const replaced = replaceUntextual(value, [], [], patches, unknownTags);
+  const formatOwn = createBaseJsonRegistry();
+  const unclaimed = [...unknownTags]
+    .filter((tag) => {
+      if (formatOwn.codecFromTag(tag) !== undefined) {
+        throw new Error(
+          `No text and mods write an unknown value under ${tag}, a tag the ` +
+            "format itself decides.",
+        );
+      }
+      return classesClaiming(tag).length > 0;
+    })
+    .sort(utf8Compare);
+  return {
+    text: plainJsonTextOf(replaced) ??
+      textInKeyOrderOf(jsonFromFabricValue(replaced)),
+    ...(unclaimed.length === 0 ? {} : { unclaimed }),
+    ...(patches.length === 0 ? {} : { patches }),
+  };
+}
+
+/**
+ * Helper for {@link textWithModsOf}, which returns `value` with what no text
+ * carries replaced by `null`, adding to `patches` one putting each back, and
+ * to `unknownTags` the tag of each `UnknownValue` reached. `path` leads to
+ * `value`, and `enclosing` holds the arrays and records along it, outermost
+ * first.
+ */
+function replaceUntextual(
+  value: FabricValue,
+  path: ValuePath,
+  enclosing: readonly FabricValue[],
+  patches: ValuePatch[],
+  unknownTags: Set<string>,
+): FabricValue {
+  if (typeof value === "symbol" && Symbol.keyFor(value) === undefined) {
+    const { description } = value;
+    patches.push({
+      at: path,
+      put: {
+        unregisteredSymbol: (description === undefined)
+          ? null
+          : stringDescriptorOf(description),
+      },
+    });
+    return null;
+  } else if (value instanceof UnknownValue) {
+    unknownTags.add(value.wireTypeTag);
+    return value;
+  }
+
+  const closes = enclosing.indexOf(value);
+  if (closes >= 0) {
+    patches.push({ at: path, put: { cycle: path.slice(0, closes) } });
+    return null;
+  }
+
+  const inner = [...enclosing, value];
+  const replaceAt = (step: PathStep, held: FabricValue) =>
+    replaceUntextual(held, [...path, step], inner, patches, unknownTags);
+  if (isFabricArray(value)) {
+    const result: FabricValue[] = new Array(value.length);
+    for (let index = 0; index < value.length; index++) {
+      if (index in value) {
+        result[index] = replaceAt(index, value[index]);
+      }
+    }
+    return result;
+  } else if (isFabricPlainObject(value)) {
+    const result = {};
+    for (const key of Object.keys(value).sort(utf8Compare)) {
+      defineOwn(result, key, replaceAt(stringDescriptorOf(key), value[key]));
+    }
+    return result;
+  }
+  return value;
+}
+
+/**
+ * Returns the `fvj1:` text the spec gives `value`, when `value` is plain JSON
+ * that needs no encoding: `null`, a boolean, a finite number other than
+ * negative zero, a string, or an array or record of these, holding no hole and
+ * no key starting with `/`. Returns `undefined` for anything else.
+ *
+ * This writes the text without the codec, sorting the value's own keys with
+ * `utf8Compare()`, the canonical comparator section 10 names, so that the
+ * codec's key order is held to a computation from the case rather than to
+ * the codec's output or to text typed by hand.
+ */
+export function plainJsonTextOf(value: FabricValue): string | undefined {
+  const body = plainJsonBodyOf(value, false);
+  return (body === undefined)
+    ? undefined
+    : JsonCodecEngine.wrapEncodedValueForTesting(body, true);
+}
+
+/**
+ * Returns `text`, an `fvj1:` text this package's encoder wrote, with every
+ * record's keys put in UTF-8 order.
+ */
+function textInKeyOrderOf(text: string): string {
+  const body = plainJsonBodyOf(
+    JSON.parse(JsonCodecEngine.unwrapEncodedValueForTesting(text, true)),
+    true,
+  );
+  if (body === undefined) {
+    throw new Error(`Shouldn't happen: encoded text not JSON: ${text}`);
+  }
+  return JsonCodecEngine.wrapEncodedValueForTesting(body, true);
+}
+
+/**
+ * Helper for {@link plainJsonTextOf} and {@link textInKeyOrderOf}, which
+ * writes the JSON alone, with record keys in UTF-8 order. A key starting with
+ * `/` makes the result `undefined`, the format escaping such a key, unless
+ * `isWire` says `value` was read off the wire, where those keys are the
+ * format's own.
+ */
+function plainJsonBodyOf(
+  value: FabricValue,
+  isWire: boolean,
+): string | undefined {
+  if (
+    value === null || typeof value === "boolean" || typeof value === "string" ||
+    (typeof value === "number" && Number.isFinite(value) &&
+      !Object.is(value, -0))
+  ) {
+    return JSON.stringify(value);
+  }
+
+  const parts: string[] = [];
+  if (isFabricArray(value)) {
+    for (let index = 0; index < value.length; index++) {
+      const part = (index in value)
+        ? plainJsonBodyOf(value[index], isWire)
+        : undefined;
+      if (part === undefined) return undefined;
+      parts.push(part);
+    }
+    return `[${parts.join(",")}]`;
+  } else if (isFabricPlainObject(value)) {
+    for (const key of Object.keys(value).sort(utf8Compare)) {
+      const part = plainJsonBodyOf(value[key], isWire);
+      if (part === undefined || (key.startsWith("/") && !isWire)) {
+        return undefined;
+      }
+      parts.push(`${JSON.stringify(key)}:${part}`);
+    }
+    return `{${parts.join(",")}}`;
+  }
+  return undefined;
+}
+
+/**
+ * Returns the value `stated` writes: its text decoded by this package's JSON
+ * codec, as though no codec claimed the tags in `unclaimed`, with `patches`
+ * made to the result, which is then deep-frozen. The inverse of
+ * {@link textWithModsOf}, up to what no text carries.
+ *
+ * `unclaimed` is in UTF-8 order, naming each tag once. Each patch's path leads
+ * through arrays and records of the decoded text to a `null`, and is followed
+ * before any patch is made, so that no path runs into what a patch put. A
+ * cycle's path is a proper prefix of the path it is put at.
+ *
+ * @throws What the codec throws, refusing the text; if a tag in `unclaimed` is
+ *   out of order, named twice, or claimed by no class this package registers
+ *   beyond the four the format itself decides; or if a patch breaks the rules
+ *   above, or two share a path.
+ */
+export function fabricValueOfTextWithMods(
+  { text, unclaimed = [], patches = [] }: TextWithMods,
+): FabricValue {
+  const decoded = mutableEngineUnclaiming(unclaimed).decode(text);
+
+  const patched = new Set<string>();
+  const puts = patches.map(({ at, put }) => {
+    const keys = at.map(stepKeyOf);
+    const patchedKey = JSON.stringify(keys);
+    if (patched.has(patchedKey)) {
+      throw new Error(`Two patches at ${JSON.stringify(at)}`);
+    }
+    patched.add(patchedKey);
+
+    const { containers, leaf } = followPath(decoded, keys);
+    if (leaf !== null) {
+      throw new Error(`No \`null\` to patch at ${JSON.stringify(at)}`);
+    }
+    return { keys, containers, value: patchValueOf(put, keys, containers) };
+  });
+
+  let result = decoded;
+  for (const { keys, containers, value } of puts) {
+    const last = keys.length - 1;
+    if (last < 0) {
+      result = value;
+    } else {
+      defineOwn(containers[last]!, keys[last]!, value);
+    }
+  }
+  return deepFreeze(result);
+}
+
+/**
+ * Returns a JSON codec engine whose decodes are left mutable, over this
+ * package's classes but those {@link classesClaiming} returns for a tag in
+ * `unclaimed`.
+ *
+ * @throws If `unclaimed` is out of UTF-8 order, names a tag twice, or names
+ *   one that no such class claims.
+ */
+function mutableEngineUnclaiming(
+  unclaimed: readonly string[],
+): JsonCodecEngine {
+  unclaimed.forEach((tag, index) => {
+    if (index > 0 && utf8Compare(unclaimed[index - 1]!, tag) >= 0) {
+      throw new Error(
+        `\`unclaimed\` not in order, each tag once: ${
+          JSON.stringify(unclaimed)
+        }`,
+      );
+    }
+  });
+
+  const leftOut = new Set<Constructor>();
+  for (const tag of unclaimed) {
+    const claiming = classesClaiming(tag);
+    if (claiming.length === 0) {
+      throw new Error(`No class to leave out claims ${tag}`);
+    }
+    for (const cls of claiming) leftOut.add(cls);
+  }
+  const kept = (cls: Constructor) => !leftOut.has(cls);
+  const registry = createBaseJsonRegistry().extend(
+    primitiveClasses().filter(kept),
+    instanceClasses().filter(kept),
+  );
+  return new JsonCodecEngine({ registry, mutable: true });
+}
+
+/**
+ * Returns the classes of this package's two rosters whose codecs claim `tag`
+ * beyond what `createBaseJsonRegistry()` claims, that registry holding the
+ * tags the format itself decides. Those are the classes a decode can leave
+ * out, so that a value under `tag` decodes as an `UnknownValue`.
+ */
+function classesClaiming(tag: string): Constructor[] {
+  const base = createBaseJsonRegistry();
+  return [...primitiveClasses(), ...instanceClasses()].filter((cls) =>
+    base.extend(cls).codecFromTag(tag) !== base.codecFromTag(tag)
+  );
+}
+
+/**
+ * Returns the property key a path step names: an array index as a number,
+ * and a record key as a string.
+ *
+ * @throws If `step` is neither a number nor a string descriptor.
+ */
+function stepKeyOf(step: ValueDescriptor): number | string {
+  return (typeof step === "number") ? step : stringOf(step);
+}
+
+/**
+ * Returns what following the property keys `keys` from `root` reaches: the
+ * arrays and records stepped through, outermost first, and the value at the
+ * end. A number steps into an array, and a string into a record.
+ *
+ * @throws If a step names nothing its array or record holds, or is taken from
+ *   anything else.
+ */
+function followPath(
+  root: FabricValue,
+  keys: readonly (number | string)[],
+): {
+  readonly containers: readonly (FabricArray | FabricPlainObject)[];
+  readonly leaf: FabricValue;
+} {
+  const containers: (FabricArray | FabricPlainObject)[] = [];
+  let leaf = root;
+  for (const key of keys) {
+    if (
+      typeof key === "number" && isFabricArray(leaf) && Object.hasOwn(leaf, key)
+    ) {
+      containers.push(leaf);
+      leaf = leaf[key];
+    } else if (
+      typeof key === "string" && isFabricPlainObject(leaf) &&
+      Object.hasOwn(leaf, key)
+    ) {
+      containers.push(leaf);
+      leaf = leaf[key];
+    } else {
+      throw new Error(
+        `No path ${JSON.stringify(keys)} through arrays and records`,
+      );
+    }
+  }
+  return { containers, leaf };
+}
+
+/**
+ * Returns the value `put` says a patch at the path `keys` puts there, where
+ * `containers` holds the arrays and records the path steps through.
+ *
+ * @throws If `put` is not a patch's `put`, or a cycle's path is not a proper
+ *   prefix of `keys`.
+ */
+function patchValueOf(
+  put: ValueDescriptor,
+  keys: readonly (number | string)[],
+  containers: readonly (FabricArray | FabricPlainObject)[],
+): FabricValue {
+  const [kind, payload] = soleEntryOf(put);
+  switch (kind) {
+    case "cycle": {
+      const cycleKeys = listOf(payload).map(stepKeyOf);
+      if (
+        !(cycleKeys.length < keys.length &&
+          cycleKeys.every((key, index) => key === keys[index]))
+      ) {
+        throw new Error(
+          `Not a proper prefix of the path a cycle is put at: ` +
+            JSON.stringify(payload),
+        );
+      }
+      return containers[cycleKeys.length]!;
+    }
+    case "unregisteredSymbol": {
+      return (payload === null) ? Symbol() : Symbol(stringOf(payload));
+    }
+  }
+  throw new Error(`Not a patch kind: ${kind}`);
+}
+
+/**
+ * Defines `key` on `target` as an ordinary property holding `value`, so that
+ * a key such as `__proto__` is an own property rather than a write to the
+ * prototype.
+ */
+function defineOwn(target: object, key: PropertyKey, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 //
@@ -658,7 +1088,7 @@ const CLASS_NOTATIONS:
  * formed, and its UTF-16 code units when it holds a lone surrogate, which not
  * every JSON reader keeps.
  */
-function stringDescriptorOf(value: string): ValueDescriptor {
+function stringDescriptorOf(value: string): StringDescriptor {
   return value.isWellFormed()
     ? value
     : { utf16: Array.from(value, (_, i) => value.charCodeAt(i)) };
@@ -740,14 +1170,7 @@ function recordOf(
   building.push(result);
   for (const pair of listOf(payload)) {
     const [key, value] = pairOf(pair);
-    // Defined rather than assigned, so that a key such as `__proto__` is an
-    // own property rather than a write to the prototype.
-    Object.defineProperty(result, stringOf(key), {
-      value: make(value, building),
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    });
+    defineOwn(result, stringOf(key), make(value, building));
   }
   building.pop();
   return result;

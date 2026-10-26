@@ -21,8 +21,6 @@
  * barrel.
  */
 
-import { utf8Compare } from "@commonfabric/utils/utf8";
-
 import type { FabricValue } from "@/interface.ts";
 import { ProblematicStateError } from "@/codec-common";
 import { JsonCodecEngine } from "@/codec-json";
@@ -37,7 +35,6 @@ import {
   FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
-import { isFabricArray, isFabricPlainObject } from "@/types";
 import { fabricFromJsonValue, jsonFromFabricValue } from "./codecs.ts";
 import {
   assertDistinctCaseNames,
@@ -47,6 +44,7 @@ import {
   type ExampleMakers,
   fabricValueOfDescriptor,
   fixtureTextOf,
+  plainJsonTextOf,
   sparseArrayOf,
   STUB_CODEC_EXCLUSION,
   type ValueDescriptor,
@@ -832,53 +830,6 @@ function fixtureEntryOf(
   }
 
   return entry;
-}
-
-/**
- * Returns the `fvj1:` text the spec gives `value`, when `value` is plain JSON
- * that needs no encoding: `null`, a boolean, a finite number other than
- * negative zero, a string, or an array or record of these, holding no hole and
- * no key starting with `/`. Returns `undefined` for anything else.
- *
- * This writes the text without the codec, sorting the value's own keys with
- * `utf8Compare()`, the canonical comparator section 10 names, so that the
- * codec's key order is held to a computation from the case rather than to
- * the codec's output or to text typed by hand.
- */
-function plainJsonTextOf(value: FabricValue): string | undefined {
-  const body = plainJsonBodyOf(value);
-  return (body === undefined)
-    ? undefined
-    : JsonCodecEngine.wrapEncodedValueForTesting(body, true);
-}
-
-/** Helper for {@link plainJsonTextOf}, which writes the JSON alone. */
-function plainJsonBodyOf(value: FabricValue): string | undefined {
-  if (
-    value === null || typeof value === "boolean" || typeof value === "string" ||
-    (typeof value === "number" && Number.isFinite(value) &&
-      !Object.is(value, -0))
-  ) {
-    return JSON.stringify(value);
-  }
-
-  const parts: string[] = [];
-  if (isFabricArray(value)) {
-    for (let index = 0; index < value.length; index++) {
-      const part = (index in value) ? plainJsonBodyOf(value[index]) : undefined;
-      if (part === undefined) return undefined;
-      parts.push(part);
-    }
-    return `[${parts.join(",")}]`;
-  } else if (isFabricPlainObject(value)) {
-    for (const key of Object.keys(value).sort(utf8Compare)) {
-      const part = plainJsonBodyOf(value[key]);
-      if (part === undefined || key.startsWith("/")) return undefined;
-      parts.push(`${JSON.stringify(key)}:${part}`);
-    }
-    return `{${parts.join(",")}}`;
-  }
-  return undefined;
 }
 
 /**

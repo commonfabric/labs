@@ -2,7 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricInstance, FabricValue } from "@";
-import { UnknownValue } from "@/codec-common";
+import { ProblematicStateError, UnknownValue } from "@/codec-common";
 import {
   BaseFabricInstance,
   DEEP_CLONE_CORE,
@@ -10,10 +10,13 @@ import {
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
 } from "@/fabric-bases";
-import { FabricKeyPair } from "@/fabric-primitives";
+import { FabricBytes, FabricKeyPair } from "@/fabric-primitives";
 import {
   descriptorOfForTestingOnly,
   fabricValueOfDescriptorForTestingOnly,
+  fabricValueOfTextWithModsForTestingOnly,
+  type TextWithMods,
+  textWithModsOfForTestingOnly,
   type ValueDescriptor,
 } from "@/for-testing-only.ts";
 
@@ -196,6 +199,227 @@ describe("conformance-fixtures", () => {
         enumerable: true,
         configurable: true,
       });
+    });
+  });
+
+  describe("textWithModsOfForTestingOnly()", () => {
+    it("returns the text with record keys in UTF-8 order, keys that read as integers among them", () => {
+      expect(textWithModsOfForTestingOnly({ "2": 2, "10": 10, a: [1n] }))
+        .toEqual({ text: 'fvj1:{"10":10,"2":2,"a":[{"/BigInt@1":"AQ"}]}' });
+    });
+
+    it("returns the text of a record holding a key the encoder reserves", () => {
+      expect(textWithModsOfForTestingOnly(JSON.parse('{"__proto__":1}')))
+        .toEqual({ text: 'fvj1:{"__proto__":1}' });
+    });
+
+    it("returns a patch at each place a cycle closes, naming the container it closes at", () => {
+      const inner: { x?: FabricValue } = {};
+      inner.x = [inner];
+      expect(textWithModsOfForTestingOnly({ a: inner })).toEqual({
+        text: 'fvj1:{"a":{"x":[null]}}',
+        patches: [{ at: ["a", "x", 0], put: { cycle: ["a"] } }],
+      });
+    });
+
+    it("returns a patch at each unregistered symbol, under its description", () => {
+      expect(textWithModsOfForTestingOnly([Symbol(), { "\ud800": Symbol("") }]))
+        .toEqual({
+          text: 'fvj1:[null,{"\\ud800":null}]',
+          patches: [
+            { at: [0], put: { unregisteredSymbol: null } },
+            {
+              at: [1, { utf16: [0xd800] }],
+              put: { unregisteredSymbol: "" },
+            },
+          ],
+        });
+    });
+
+    it("throws given an unknown value under a tag the format itself decides", () => {
+      for (
+        const tag of ["BigInt@1", "SpecialNumber@1", "Symbol@1", "Undefined@1"]
+      ) {
+        expect(() =>
+          textWithModsOfForTestingOnly([new UnknownValue(tag, null)])
+        ).toThrow(
+          `No text and mods write an unknown value under ${tag}, a tag the format itself decides.`,
+        );
+      }
+    });
+
+    it("returns as unclaimed the tag of each unknown value that a codec claims, and no other", () => {
+      expect(
+        textWithModsOfForTestingOnly([
+          new UnknownValue("Link@1", { id: "x" }),
+          new UnknownValue("Bytes@1", "AQ"),
+          new UnknownValue("Example@1", null),
+          new UnknownValue("Link@1", { id: "y" }),
+        ]).unclaimed,
+      ).toEqual(["Bytes@1", "Link@1"]);
+    });
+  });
+
+  describe("fabricValueOfTextWithModsForTestingOnly()", () => {
+    it("returns the value its text decodes to, deep-frozen", () => {
+      const value = fabricValueOfTextWithModsForTestingOnly({
+        text: 'fvj1:{"a":[{"/Bytes@1":"AQ"}]}',
+      }) as { a: FabricValue[] };
+      expect(value.a[0]).toBeInstanceOf(FabricBytes);
+      expect(Object.isFrozen(value)).toBe(true);
+      expect(Object.isFrozen(value.a)).toBe(true);
+    });
+
+    it("returns an unknown value for each value under an unclaimed tag, and a decoded one under any other", () => {
+      const value = fabricValueOfTextWithModsForTestingOnly({
+        text: 'fvj1:[{"/Link@1":{"id":"x"}},{"/Bytes@1":"AQ"}]',
+        unclaimed: ["Link@1"],
+      }) as FabricValue[];
+      expect(value[0]).toBeInstanceOf(UnknownValue);
+      expect((value[0] as UnknownValue).wireTypeTag).toBe("Link@1");
+      expect(value[1]).toBeInstanceOf(FabricBytes);
+    });
+
+    it("returns the container a cycle patch names, at the place it is put", () => {
+      const value = fabricValueOfTextWithModsForTestingOnly({
+        text: 'fvj1:{"a":{"x":[null]}}',
+        patches: [{ at: ["a", "x", 0], put: { cycle: ["a"] } }],
+      }) as { a: { x: FabricValue[] } };
+      expect(value.a.x[0]).toBe(value.a);
+      expect(Object.isFrozen(value.a)).toBe(true);
+    });
+
+    it("returns an unregistered symbol under its description where a patch puts one", () => {
+      const value = fabricValueOfTextWithModsForTestingOnly({
+        text: "fvj1:null",
+        patches: [{ at: [], put: { unregisteredSymbol: "local" } }],
+      });
+      expect(typeof value).toBe("symbol");
+      expect(Symbol.keyFor(value as symbol)).toBeUndefined();
+      expect((value as symbol).description).toBe("local");
+    });
+
+    it("returns a value equal to the one written, for each kind of mod", () => {
+      const record: { self?: FabricValue; u?: FabricValue } = {
+        u: [new UnknownValue("Link@1", { id: "x" }), Symbol("s")],
+      };
+      record.self = record;
+      const read = fabricValueOfTextWithModsForTestingOnly(
+        textWithModsOfForTestingOnly(record),
+      );
+      expect(descriptorOfForTestingOnly(read))
+        .toEqual(descriptorOfForTestingOnly(record));
+    });
+
+    it("throws what the codec throws refusing the text", () => {
+      expect(() =>
+        fabricValueOfTextWithModsForTestingOnly({
+          text: 'fvj1:{"__proto__":1}',
+        })
+      ).toThrow(ProblematicStateError);
+    });
+
+    it("throws given mods that break the rules", () => {
+      const cases: ReadonlyArray<readonly [TextWithMods, string]> = [
+        [
+          { text: "fvj1:1", unclaimed: ["Link@1", "Bytes@1"] },
+          "`unclaimed` not in order, each tag once",
+        ],
+        [
+          { text: "fvj1:1", unclaimed: ["Link@1", "Link@1"] },
+          "`unclaimed` not in order, each tag once",
+        ],
+        [
+          { text: "fvj1:1", unclaimed: ["BigInt@1"] },
+          "No class to leave out claims BigInt@1",
+        ],
+        [
+          { text: "fvj1:1", unclaimed: ["Example@1"] },
+          "No class to leave out claims Example@1",
+        ],
+        [
+          {
+            text: "fvj1:[1]",
+            patches: [{ at: [0], put: { unregisteredSymbol: null } }],
+          },
+          "No `null` to patch at [0]",
+        ],
+        [
+          {
+            text: "fvj1:[null]",
+            patches: [{ at: [1], put: { unregisteredSymbol: null } }],
+          },
+          "No path [1] through arrays and records",
+        ],
+        [
+          {
+            text: 'fvj1:{"0":null}',
+            patches: [{ at: [0], put: { unregisteredSymbol: null } }],
+          },
+          "No path [0] through arrays and records",
+        ],
+        [
+          {
+            text: 'fvj1:[{"/hole":1},null]',
+            patches: [{ at: [0], put: { unregisteredSymbol: null } }],
+          },
+          "No path [0] through arrays and records",
+        ],
+        [
+          {
+            text: 'fvj1:{"/Link@1":{"a":null}}',
+            patches: [{ at: ["a"], put: { unregisteredSymbol: null } }],
+          },
+          'No path ["a"] through arrays and records',
+        ],
+        [
+          {
+            text: "fvj1:[null]",
+            patches: [
+              { at: [0], put: { unregisteredSymbol: null } },
+              { at: [0], put: { unregisteredSymbol: "again" } },
+            ],
+          },
+          "Two patches at [0]",
+        ],
+        [
+          {
+            text: "fvj1:[null]",
+            patches: [{ at: [0], put: { cycle: [0] } }],
+          },
+          "Not a proper prefix of the path a cycle is put at: [0]",
+        ],
+        [
+          {
+            text: 'fvj1:{"a":[null]}',
+            patches: [{ at: ["a", 0], put: { cycle: ["b"] } }],
+          },
+          'Not a proper prefix of the path a cycle is put at: ["b"]',
+        ],
+        [
+          { text: "fvj1:null", patches: [{ at: [], put: { cycle: [] } }] },
+          "Not a proper prefix of the path a cycle is put at: []",
+        ],
+      ];
+      for (const [stated, message] of cases) {
+        expect(() => fabricValueOfTextWithModsForTestingOnly(stated))
+          .toThrow(message);
+      }
+    });
+
+    it("throws given a patch that runs into what another patch puts", () => {
+      // Every path is followed through the decoded text before any patch is
+      // made, so the second patch finds the `null` the first replaces.
+
+      expect(() =>
+        fabricValueOfTextWithModsForTestingOnly({
+          text: 'fvj1:{"a":null}',
+          patches: [
+            { at: ["a"], put: { cycle: [] } },
+            { at: ["a", "a"], put: { unregisteredSymbol: null } },
+          ],
+        })
+      ).toThrow('No path ["a","a"] through arrays and records');
     });
   });
 });

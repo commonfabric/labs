@@ -19,8 +19,10 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
 
 - `name`: unique among the cases.
 - `section`: the part of the spec the case exercises.
-- `value`: the value hashed, as a descriptor in the notation
-  [`value-descriptors.md`](value-descriptors.md) defines.
+- `text`: the value hashed, as its `fvj1:` text, which
+  [`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
+  specifies. A reader decodes it to get the value, applying the mods below.
+- `unclaimed` and `patches`: the mods, present where the case needs them.
 - `hash`: what hashing the value yields, or `refused: "unhashable"`. A hash is
   three strings: `stream`, the bytes fed to SHA-256, in lowercase hexadecimal;
   `digest`, the 32 bytes SHA-256 makes of them, likewise; and `string`, the
@@ -28,12 +30,70 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
   what a `FabricHash` of the digest writes.
 - `equals`: present where the case's value equals an earlier case's under
   `valueEqual()`, naming that case. The two hashes are then the same.
-- `divergence`: present where this package falls short of the spec. The `hash`
-  beside it is then the spec's outcome, and `divergence.hash` is this package's.
-  `divergence.note` says what the spec requires.
+- `divergence`: present where this package falls short of the spec, as described
+  below. `divergence.note` says what the spec requires.
 
 A refusal is recorded only where the hasher refused; a fault in the hasher fails
 generation instead.
+
+## Texts
+
+Each `text` is the one the spec gives the value, with record keys in the UTF-8
+order section 10 of `3-json-encoding.md` requires, so a decoder that holds a
+text to that order can read every one. That order is the spec's rather than this
+package's encoder's, which writes keys that read as array indices first: the
+case "record keys that read as integers" is `{"10":…,"2":…,"a":…}`.
+
+A text says nothing about how a value was built, so neither does an entry:
+sharing a container rather than copying it, the bits of a `NaN`, bytes viewed
+through part of a larger buffer, a deep-frozen value whose hash was cached. The
+cases that differ only in those ways have the same text.
+
+## Mods
+
+Some values have no text, or none that decodes to them unaided. Two mods state
+what the text cannot:
+
+- `unclaimed`: wire tags, in UTF-8 order and each once. Decode the text as
+  though no codec claimed them, so that a value under one decodes as an unknown
+  value preserving its tag and state, as it would for a reader that has no codec
+  for the tag. Only a tag a class claims is named here. The four that the format
+  itself decides, `BigInt@1`, `SpecialNumber@1`, `Symbol@1` and `Undefined@1`,
+  never are, so an unknown value under one of those has no text and mods, and
+  none of the cases holds one.
+- `patches`: changes made to the decoded value, each `{"at": path, "put": …}`. A
+  path is a list of steps from the root, `[]` being the root itself: a number
+  steps into an array at that index, and a string, or `{"utf16": [...]}` for one
+  holding a lone surrogate, steps into a record under that key. The path runs
+  through the arrays and records of the decoded text, and the text holds a
+  `null` where it ends, which the patch replaces. `put` is one of:
+  - `{"cycle": path}`: the array or record at that path, which closes a cycle.
+    The path is absolute, from the root, and is a proper prefix of `at`.
+  - `{"unregisteredSymbol": description}`: a symbol of no registry key, under
+    that description, a string, or `null` for none.
+
+  Follow every path before making any patch, so that no path runs into what a
+  patch put. No two patches share a path.
+
+The cycles and unregistered symbols among the cases are written with patches.
+Section 4.19 puts instances among what a cycle may pass through, and a patch can
+state such a cycle, but none of the cases holds one.
+
+## Divergences
+
+A `divergence` holds one or both of two kinds, beside its `note`:
+
+- `hash`: this package's outcome, where the spec gives the value's bytes
+  outright, in the examples of its section 7 or in a section 4 that states every
+  byte. The case quotes them, and the `hash` recorded beside the divergence is
+  computed from the quote rather than from this package.
+- `text: "refused"`: this package's decoder refuses `text`, which the spec
+  allows. The records with key `__proto__` and with key `constructor` carry it.
+  Their `hash` is still this package's, of the value the text states.
+
+A divergence that does not hold fails generation, so that a fix here retires the
+mark rather than leaving it to mislead. So does an outcome that departs from the
+spec where no divergence says so.
 
 ## What generating holds
 
@@ -41,22 +101,21 @@ The stream is the whole of what an implementation has to match. The digest and
 the string follow from it, and an implementation whose digest differs can find
 where by comparing streams.
 
-Where the spec gives a value's bytes outright, in the examples of its section 7
-or in a section 4 that states every byte, the case quotes them, and the `hash`
-recorded is computed from the quote rather than from this package. A case whose
-quote this package does not feed has to say so as a divergence, and a divergence
-that does not hold fails generation, so that a fix here retires the mark rather
-than leaving it to mislead.
+Each case makes its value in TypeScript, and generating writes the text and mods
+from it. The value they decode to must be the one made: the same hash, and
+`valueEqual()` to it, or for a value whose hashing is refused, the same value in
+the notation of [`value-descriptors.md`](value-descriptors.md). Where this
+package's decoder refuses the text, that check is the divergence's to answer
+for, and the test hashes the value as the case made it instead.
 
 Every two hashed cases hold to the spec's rule on equality: their hashes are the
 same exactly when their values are `valueEqual()`, and
-`test/hash-conformance.test.ts` fails otherwise. A pair may describe one value
-made in two ways the notation does not record — keys made in another order, a
-container shared rather than copied, a deep-frozen value whose hash was cached —
-and then has one descriptor. A pair whose descriptors differ, as a link and an
-unknown value preserving a link's tag and state do, has to be named under
-`equals`, and generating fails otherwise, so that an equal hash for two
-different descriptors is always one the cases expected.
+`test/hash-conformance.test.ts` fails otherwise. Two cases state the same value
+exactly when their `text`, `unclaimed` and `patches` are equal. A pair stating
+different values with equal hashes, as a link and an unknown value preserving a
+link's tag and state do, has to be named under `equals`, and generating fails
+otherwise, so that an equal hash for two different statements is always one the
+cases expected.
 
 The digest recorded is the one this package's hasher makes of the stream, and
 the test holds `hashOf()`, `hashStringOf()` and `taggedHashStringOf()` to it,
@@ -71,6 +130,6 @@ which this package does not yet produce: their codecs are stubs, pending general
 cases, and `test/hash-conformance.test.ts` fails once hashing one succeeds, so
 that their cases are added then.
 
-A key pair holding `CryptoKey` handles, which section 8 refuses, has no
-descriptor, nor does a value with a cycle through an instance. The refusals the
-file records are those of unregistered symbols, alone and inside containers.
+A key pair holding `CryptoKey` handles, which section 8 refuses, has no text.
+The refusals the file records are those of unregistered symbols, alone and
+inside containers.

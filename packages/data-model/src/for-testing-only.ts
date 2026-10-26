@@ -24,8 +24,10 @@
  * among them. They are what `test/fixtures/fvj1-conformance.json` and
  * `test/fixtures/hash-conformance.json` are generated from: language-neutral
  * records of what this package's JSON codec and hasher do, against which an
- * implementation of either elsewhere tests itself. Their values are written in
- * the notation `test/fixtures/value-descriptors.md` defines.
+ * implementation of either elsewhere tests itself. The JSON codec's fixture
+ * writes its values in the notation `test/fixtures/value-descriptors.md`
+ * defines, and the hasher's writes each as an `fvj1:` text with the mods to
+ * decoding it, as `test/fixtures/hash-conformance.md` defines.
  *
  * An internal is here when a test of the package's public surface cannot reach
  * it dependably. Each one's doc comment says why that is.
@@ -58,7 +60,14 @@ import {
 import {
   descriptorOf,
   fabricValueOfDescriptor,
+  fabricValueOfTextWithMods,
+  type PathStep,
+  type StringDescriptor,
+  type TextWithMods,
+  textWithModsOf,
   type ValueDescriptor,
+  type ValuePatch,
+  type ValuePath,
 } from "./conformance-fixtures.ts";
 import {
   type Fvj1ConformanceCase,
@@ -277,7 +286,12 @@ export type {
   Fvj1EncodeOutcome,
   HashConformanceCase,
   HashOutcome,
+  PathStep,
+  StringDescriptor,
+  TextWithMods,
   ValueDescriptor,
+  ValuePatch,
+  ValuePath,
 };
 
 /**
@@ -295,6 +309,23 @@ export const descriptorOfForTestingOnly: (
 export const fabricValueOfDescriptorForTestingOnly: (
   descriptor: ValueDescriptor,
 ) => FabricValue = fabricValueOfDescriptor;
+
+/**
+ * `textWithModsOf()` from `conformance-fixtures.ts`, which returns a value
+ * written as an `fvj1:` text and the mods to decoding it.
+ */
+export const textWithModsOfForTestingOnly: (
+  value: FabricValue,
+) => TextWithMods = textWithModsOf;
+
+/**
+ * `fabricValueOfTextWithMods()` from `conformance-fixtures.ts`, which returns
+ * the value an `fvj1:` text and the mods to decoding it write, the inverse of
+ * {@link textWithModsOfForTestingOnly}.
+ */
+export const fabricValueOfTextWithModsForTestingOnly: (
+  stated: TextWithMods,
+) => FabricValue = fabricValueOfTextWithMods;
 
 /**
  * The conformance cases for the `fvj1:` JSON encoding, those in
