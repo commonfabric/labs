@@ -1,8 +1,9 @@
 /**
- * Verifies that Piece result-stream edits reuse one caller identity across
- * transaction retries. Under server execution each attempt appends outside
- * the transaction it may later discard, so identity reuse prevents a duplicate
- * durable event.
+ * Verifies that a Piece result-stream edit retried across transaction attempts
+ * appends its event once, under the caller identity it started with. Under
+ * server execution an attempt's append waits for its transaction to commit, so
+ * the attempt a reconciliation runs again appends nothing and the attempt that
+ * commits appends once.
  */
 
 import { expect } from "@std/expect";
@@ -204,7 +205,7 @@ describe("piece-controller", () => {
 
       expect(result.sessionId).toBeDefined();
       expect(result.reconciliationCalls).toBe(2);
-      expect(result.eventIds).toHaveLength(2);
+      expect(result.eventIds).toHaveLength(1);
       expect(sentUnderOneCallerId(result, result.sessionId)).toBe(true);
       expect(sentUnderOneCallerId(result, "another-session")).toBe(false);
       expect(result.received).toEqual([7]);
@@ -215,7 +216,7 @@ describe("piece-controller", () => {
 
       expect(result.sessionId).toBeUndefined();
       expect(result.reconciliationCalls).toBe(2);
-      expect(result.eventIds).toHaveLength(2);
+      expect(result.eventIds).toHaveLength(1);
       expect(sentUnderOneCallerId(result, result.runtimeId)).toBe(true);
       expect(sentUnderOneCallerId(result, "another-session")).toBe(false);
       expect(result.received).toEqual([7]);
@@ -227,7 +228,7 @@ describe("piece-controller", () => {
       expect(result.initialSessionId).toBeDefined();
       expect(result.sessionId).not.toBe(result.initialSessionId);
       expect(result.reconciliationCalls).toBe(2);
-      expect(result.eventIds).toHaveLength(2);
+      expect(result.eventIds).toHaveLength(1);
       expect(sentUnderOneCallerId(result, result.initialSessionId)).toBe(true);
       expect(sentUnderOneCallerId(result, result.sessionId)).toBe(false);
       expect(result.received).toEqual([7]);

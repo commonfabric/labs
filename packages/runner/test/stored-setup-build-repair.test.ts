@@ -36,6 +36,7 @@ import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
   readStoredSetupBuild,
+  STORED_SETUP_BUILD_VERSION,
   type StoredSetupBuild,
   storedSetupBuildOf,
 } from "../src/stored-setup-build.ts";
@@ -107,6 +108,39 @@ const STATEFUL_PAIR: RuntimeProgram = {
       "    </div>",
       "  ),",
       "}));",
+      "",
+    ].join("\n"),
+  }],
+};
+
+// Two children of one pattern, which its module exports under three names:
+// sub-pattern children holding state that only their numbers tell apart.
+const ALIASED_CHILDREN: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { pattern, UI, Writable } from 'commonfabric';",
+      "import { Counter } from './counter.tsx';",
+      "export default pattern<{ input: Writable<number> }>(() => {",
+      "  const first = Counter({ label: 'first' });",
+      "  const second = Counter({ label: 'second' });",
+      "  return {",
+      "    [UI]: <div>{first.count}{second.count}</div>,",
+      "  };",
+      "});",
+      "",
+    ].join("\n"),
+  }, {
+    name: "/counter.tsx",
+    contents: [
+      "import { pattern, Writable } from 'commonfabric';",
+      "export const Counter = pattern<",
+      "  { label: string },",
+      "  { label: string; count: number }",
+      ">(({ label }) => ({ label, count: new Writable<number>(0).for('count') }));",
+      "export default Counter;",
+      "export const Tally = Counter;",
       "",
     ].join("\n"),
   }],
@@ -214,7 +248,7 @@ describe("stored-setup-build-repair", () => {
   };
 
   const entryRefOf = (artifact: object) =>
-    rt.patternManager.getArtifactEntryRef(artifact);
+    rt.patternManager.getLeastArtifactEntryRef(artifact);
 
   // Sets a piece up from `program`, lets its derived cells compute, and stops
   // it, so that a later start takes the plain start path and its decision.
@@ -233,6 +267,11 @@ describe("stored-setup-build-repair", () => {
     const ref = entryRefOf(pattern)!;
     return { cell, pattern, ref };
   };
+
+  // The sub-pattern a node of `parent` instantiates.
+  const childOf = (parent: Pattern): object =>
+    (parent.nodes as { module: { type: string; implementation: object } }[])
+      .find((node) => node.module.type === "pattern")!.module.implementation;
 
   const positionalDescriptors = (pattern: Pattern): PositionalDescriptor[] =>
     (pattern.derivedInternalCells ?? []).filter(isPositional);
@@ -400,7 +439,7 @@ describe("stored-setup-build-repair", () => {
     const { cell, ref } = await setUpAndStop("stamped");
     const record = stampOf(cell);
 
-    expect(record?.v).toBe(1);
+    expect(record?.v).toBe(STORED_SETUP_BUILD_VERSION);
     expect(record?.pattern).toEqual(ref);
     expect(record?.state).toEqual([]);
     const { cell: other } = await setUpAndStop("stamped-too");
@@ -607,6 +646,41 @@ describe("stored-setup-build-repair", () => {
     expect(stampOf(cell)).toEqual(record);
   });
 
+  it("reads a record of version 1 as none", async () => {
+    // Version 1 described a sub-pattern child by the first of its module's
+    // names for it that a load registered, and a cold reopen can register them
+    // in another order than setup did. This is the record of a setup whose
+    // load registered `Tally` first, which this build's description of the
+    // child does not match.
+    const { cell, pattern, ref } = await setUpAndStop(
+      "version-1",
+      ALIASED_CHILDREN,
+    );
+    const registeredFirst = (artifact: object) => {
+      const entry = entryRefOf(artifact);
+      return entry?.symbol === "Counter"
+        ? { ...entry, symbol: "Tally" }
+        : entry;
+    };
+    await stamp(
+      cell,
+      {
+        ...storedSetupBuildOf(pattern, ref, registeredFirst),
+        v: 1,
+      } as never,
+    );
+    expect(stampOf(cell)).toBeUndefined();
+    const stored = storedSetupOf(cell);
+    const holds = holdsLogged();
+
+    expect(await rt.start(cell)).toBe(true);
+    await cell.pull();
+    await settled();
+
+    expect(holdsLogged()).toBe(holds);
+    expect(storedSetupOf(cell)).toEqual(stored);
+  });
+
   it("leaves a piece alone whose stored setup agrees with the build", async () => {
     const { cell } = await setUpAndStop("agreeing");
     const stored = storedSetupOf(cell);
@@ -646,6 +720,65 @@ describe("stored-setup-build-repair", () => {
     expect(await startAndReadSlots(reopened)).toEqual(SLOT_VALUES);
 
     expect(storedSetupOf(reopened)).toEqual(stored);
+  });
+
+  it("leaves a piece alone on a cold reopen whose children's module exports them under several names", async () => {
+    // A load registers each of a module's names for a pattern, in an order
+    // that differs between setup and a reopen by identity. A child is
+    // described by the least of them, so the reopen describes the children
+    // as setup did, and finds nothing moved.
+    const { cell } = await setUpAndStop("cold-aliased", ALIASED_CHILDREN);
+    const stored = storedSetupOf(cell);
+    const described = stampOf(cell)!.state.map(([, description]) =>
+      description.replace(/ [^ ]+#/, " <child>#")
+    );
+    expect(described).toEqual([
+      "cell, computed, written by sub-pattern <child>#Counter",
+      "cell, computed, written by sub-pattern <child>#Counter",
+    ]);
+    await rt.patternManager.flushCompileCacheWrites();
+    await rt.storageManager.synced();
+    await rt.dispose();
+
+    rt = openRuntime(signer);
+    const reopened = rt.getCell<Result>(space, "cold-aliased");
+    const holds = holdsLogged();
+    expect(await rt.start(reopened)).toBe(true);
+    await reopened.pull();
+    await settled();
+
+    expect(holdsLogged()).toBe(holds);
+    expect(storedSetupOf(reopened)).toEqual(stored);
+  });
+
+  it("describes children alike on setup and on a cold reopen, which register their names in different orders", async () => {
+    // Each load registers all of a module's names before it returns a
+    // pattern, so the least of them is known by the time a description is
+    // computed, whatever order the load registered them in.
+    const { cell, pattern, ref } = await setUpAndStop(
+      "cold-described",
+      ALIASED_CHILDREN,
+    );
+    expect(rt.patternManager.getArtifactEntryRef(childOf(pattern))?.symbol)
+      .toBe("Counter");
+    const stamped = stampOf(cell);
+    await rt.patternManager.flushCompileCacheWrites();
+    await rt.storageManager.synced();
+    await rt.dispose();
+
+    rt = openRuntime(signer);
+    const reopened = rt.getCell<Result>(space, "cold-described");
+    expect(await rt.start(reopened)).toBe(true);
+    await reopened.pull();
+    await settled();
+    const loaded = rt.patternManager.artifactFromIdentitySync(
+      ref.identity,
+      ref.symbol,
+    ) as Pattern;
+
+    expect(rt.patternManager.getArtifactEntryRef(childOf(loaded))?.symbol)
+      .toBe("Tally");
+    expect(storedSetupBuildOf(loaded, ref, entryRefOf)).toEqual(stamped);
   });
 
   describe("for a principal with READ access to the space", () => {

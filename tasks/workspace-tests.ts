@@ -10,8 +10,8 @@ import { parse as parseJsonc } from "@std/jsonc";
 import { decode, encode } from "@commonfabric/utils/encoding";
 import {
   FragmentWriter,
-  ingestJUnit,
   readEnv,
+  readJUnit,
   readNameMaps,
   recordingArguments,
   RECORDS_DIR_VARIABLE,
@@ -19,6 +19,14 @@ import {
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
 import { DENO_TEST_TASK } from "./run-member-tests.ts";
+import {
+  type FailedCommand,
+  passed,
+  printSummary,
+  type TestResult,
+  testResults,
+  unitRerun,
+} from "./test-summary.ts";
 
 export function getPackageName(memberPath: string): string {
   const relativePath = memberPath.replace(/^\.\//, "");
@@ -43,116 +51,137 @@ export async function initializeDb(cwd: string = Deno.cwd()): Promise<boolean> {
   return true;
 }
 
+/** How one member's test task went. */
+export interface PackageResult {
+  memberPath: string;
+  packageName: string;
+  packagePath: string;
+  durationMs: number;
+  success: boolean;
+
+  /** The file holding everything the task printed. */
+  log: string;
+}
+
+/**
+ * Runs a member's `test` task with everything it prints written to `log`,
+ * standard output and standard error together in the order they arrive.
+ */
 export async function testPackage(
   memberPath: string,
   packageName: string,
   packagePath: string,
   coverageRoot: string | undefined,
+  log: string,
   extraEnv?: Record<string, string>,
   junitPath?: string,
   recording: readonly string[] = [],
-): Promise<{
-  memberPath: string;
-  packageName: string;
-  packagePath: string;
-  durationMs: number;
-  result: Deno.CommandOutput;
-}> {
+): Promise<PackageResult> {
   const startedAt = Date.now();
-  let result: Deno.CommandOutput;
-  try {
-    const env: Record<string, string> = { ENV: "test", ...extraEnv };
-    if (coverageRoot) {
-      env.DENO_COVERAGE_DIR = path.join(
-        coverageRoot,
-        packageName.replaceAll("/", "__"),
-      );
-    }
+  const env: Record<string, string> = { ENV: "test", ...extraEnv };
+  if (coverageRoot) {
+    env.DENO_COVERAGE_DIR = path.join(
+      coverageRoot,
+      packageName.replaceAll("/", "__"),
+    );
+  }
 
-    // Trailing arguments to `deno task` append to the task's command line,
-    // which is what threads the flags down to the leaf `deno test`. The
-    // recording arguments travel with the JUnit path because they reach
-    // the leaf the same way and the report is what the preload's map is
-    // joined onto; a member whose task cannot take one cannot take the
-    // other.
-    const args = ["task", "test"];
-    if (junitPath !== undefined) {
-      args.push(`--junit-path=${junitPath}`);
-      for (const argument of recording) args.push(argument);
+  // Trailing arguments to `deno task` append to the task's command line,
+  // which is what threads the flags down to the leaf `deno test`. The
+  // recording arguments travel with the JUnit path because they reach
+  // the leaf the same way and the report is what the preload's map is
+  // joined onto; a member whose task cannot take one cannot take the
+  // other.
+  const args = ["task", "test"];
+  if (junitPath !== undefined) {
+    args.push(`--junit-path=${junitPath}`);
+    for (const argument of recording) args.push(argument);
+  }
+  const file = await Deno.open(log, {
+    write: true,
+    create: true,
+    truncate: true,
+  });
+  const write = (bytes: Uint8Array) => {
+    for (let at = 0; at < bytes.length;) {
+      at += file.writeSync(bytes.subarray(at));
     }
-    result = await new Deno.Command(Deno.execPath(), {
+  };
+  const copy = async (stream: ReadableStream<Uint8Array>) => {
+    for await (const chunk of stream) write(chunk);
+  };
+  let success: boolean;
+  try {
+    const child = new Deno.Command(Deno.execPath(), {
       args,
       cwd: packagePath,
       env,
       stdout: "piped",
       stderr: "piped",
-    }).output();
-  } catch (e) {
-    result = {
-      success: false,
-      stdout: new Uint8Array(),
-      stderr: encode(`${e}`),
-      code: 1,
-      signal: null,
-    };
+    }).spawn();
+    const [status] = await Promise.all([
+      child.status,
+      copy(child.stdout),
+      copy(child.stderr),
+    ]);
+    success = status.success;
+  } catch (error) {
+    write(encode(`${error}\n`));
+    success = false;
+  } finally {
+    file.close();
   }
 
   const durationMs = Date.now() - startedAt;
   const duration = (durationMs / 1000).toFixed(1);
-  const status = result.success ? "ok" : "failed";
-  console.log(`Finished ${packageName} in ${duration}s (${status})`);
-
+  console.log(
+    `Finished ${packageName} in ${duration}s (${success ? "ok" : "failed"})`,
+  );
   return {
     memberPath,
     packageName,
     packagePath,
     durationMs,
-    result,
+    success,
+    log,
   };
 }
 
-type PackageResult = Awaited<ReturnType<typeof testPackage>>;
-
-function reportPackageFailure(result: PackageResult): void {
-  console.error(`Failed ${result.packageName} (${result.packagePath})`);
-  console.log(decode(result.result.stdout));
-  console.error(decode(result.result.stderr));
-}
-
-// Reads one leaf's JUnit XML and appends its cases to the spool. A leaf
-// that wrote no XML — it crashed before the end, since deno test writes
-// the file only at process exit — contributes nothing, and a malformed
-// file warns without failing anything. The name maps the leaf's preload
-// left in the spool are what give each case its file; they are read here
-// rather than once for the suite so that a run killed part way through
-// keeps the attribution of every package that finished.
-async function ingestLeafJUnit(
-  fragment: FragmentWriter,
-  spoolDir: string,
+/**
+ * The records of the JUnit report a member's leaf wrote, and the message
+ * each failing one failed with. A leaf that wrote no report, because it
+ * crashed before the end and `deno test` writes the file only at process
+ * exit, has none, and a malformed report warns and has none. The name
+ * maps a recording leaf's preload left in the spool are what give each
+ * case its file; they are read here rather than once for the suite so
+ * that a run killed part way through keeps the attribution of every
+ * package that finished.
+ */
+async function readLeafReport(
   junitPath: string,
   scope: string,
   memberPath: string,
-): Promise<void> {
+  spoolDir: string | undefined,
+): Promise<ReturnType<typeof readJUnit> | undefined> {
   let xml: string;
   try {
     xml = await Deno.readTextFile(junitPath);
   } catch {
-    return;
+    return undefined;
   }
   try {
     const prefix = memberPath.replace(/^\.\//, "");
-    for (
-      const record of ingestJUnit(xml, {
-        kind: "unit",
-        scope,
-        filePrefix: prefix,
-        fileByName: await readNameMaps(spoolDir, { ranIn: prefix }),
-      })
-    ) {
-      fragment.append(record);
-    }
+    return readJUnit(xml, {
+      kind: "unit",
+      scope,
+      filePrefix: prefix,
+      fileByName: spoolDir === undefined
+        ? new Map()
+        : await readNameMaps(spoolDir, { ranIn: prefix }),
+    });
   } catch (error) {
-    console.warn(`test records: ingesting ${junitPath} failed: ${error}`);
+    console.warn(`test summary: reading ${junitPath} failed: ${error}`);
+    return undefined;
   }
 }
 
@@ -530,37 +559,29 @@ export async function runTests(
     ? path.resolve(workspaceCwd, coverageRootRaw)
     : undefined;
 
-  // With recording on, junit-capable leaves get a --junit-path in a
-  // temporary directory, and each leaf's XML is ingested into the spool as
-  // unit-kind records under the package's own scope. The runner stays
-  // plumbing: it forwards the flag and moves the results; the reported
-  // names come from the leaves. A temporary directory that cannot be
-  // created turns recording off with a warning; it never fails the suite.
+  // Every package's output goes to a log file of its own in one directory,
+  // which a failing run keeps and names, and junit-capable leaves write
+  // their reports beside the logs. The summary is read from the reports.
+  // With recording on, each leaf is handed the recording preload as well,
+  // and its records are appended to the spool under the package's own
+  // scope; a fragment that cannot be opened turns recording off with a
+  // warning and never fails the suite.
+  const logDir = await Deno.makeTempDir({ prefix: "deno-task-test-" });
   const spoolDir = recordResults
     ? recordingSpool(recordsDir(), workspaceCwd)
     : undefined;
-  let junitRoot: string | undefined;
-  if (spoolDir !== undefined) {
-    try {
-      junitRoot = await Deno.makeTempDir({ prefix: "workspace-junit-" });
-    } catch (error) {
-      console.warn(`test records: no JUnit directory: ${error}`);
-    }
-  }
-  const fragment = spoolDir !== undefined && junitRoot !== undefined
+  const fragment = spoolDir !== undefined
     ? FragmentWriter.open(spoolDir)
     : undefined;
   const workspaceUrl = path.toFileUrl(`${path.resolve(workspaceCwd)}/`);
-  const capable = junitRoot !== undefined
-    ? await junitCapableMembers(members, workspaceUrl)
-    : new Set<string>();
+  const capable = await junitCapableMembers(members, workspaceUrl);
   // A skip list the run inherits reaches every member, each in a directory
   // of its own, so it is named to them by its absolute path.
   const inheritedSkipList = readEnv(SKIP_LIST_VARIABLE);
   const skipList = inheritedSkipList
     ? path.resolve(workspaceCwd, inheritedSkipList)
     : undefined;
-  const recording = junitRoot !== undefined && spoolDir !== undefined
+  const recording = spoolDir !== undefined
     ? await memberRecordingArguments(
       members,
       spoolDir,
@@ -569,7 +590,9 @@ export async function runTests(
     )
     : new Map<string, string[]>();
 
-  const results: PackageResult[] = [];
+  const tests: TestResult[] = [];
+  const commands: FailedCommand[] = [];
+  const unreported: string[] = [];
   let next = 0;
   let stopped = false;
   const workerCount = Math.min(testConcurrency(), members.length);
@@ -577,16 +600,17 @@ export async function runTests(
     while (!stopped && next < members.length) {
       const memberPath = members[next++]!;
       const packageName = getPackageName(memberPath);
-      console.log(`Testing ${packageName}...`);
       const packagePath = path.resolve(workspaceCwd, memberPath);
-      const junitPath = junitRoot !== undefined && capable.has(memberPath)
-        ? path.join(junitRoot, `${memberSlug(packageName)}.xml`)
+      const slug = memberSlug(packageName);
+      const junitPath = capable.has(memberPath)
+        ? path.join(logDir, `${slug}.xml`)
         : undefined;
       const result = await testPackage(
         memberPath,
         packageName,
         packagePath,
         coverageRoot,
+        path.join(logDir, `${slug}.log`),
         {
           [RECORDS_DIR_VARIABLE]: spoolDir ?? "",
           ...(skipList === undefined ? {} : { [SKIP_LIST_VARIABLE]: skipList }),
@@ -594,67 +618,48 @@ export async function runTests(
         junitPath,
         recording.get(memberPath),
       );
-      results.push(result);
-      if (
-        junitPath !== undefined && fragment !== undefined &&
-        spoolDir !== undefined
-      ) {
-        await ingestLeafJUnit(
-          fragment,
-          spoolDir,
-          junitPath,
-          packageName,
-          memberPath,
-        );
-      }
-      if (!result.result.success) {
+      const report = junitPath === undefined
+        ? undefined
+        : await readLeafReport(junitPath, packageName, memberPath, spoolDir);
+      for (const record of report?.records ?? []) fragment?.append(record);
+      const results = testResults(
+        report?.records ?? [],
+        report?.failures ?? new Map(),
+        (record) => unitRerun(memberPath, record.test.n),
+      );
+      for (const test of results) tests.push(test);
+      if (result.success && results.length === 0) unreported.push(packageName);
+      if (!result.success) {
         if (coverageRoot === undefined) stopped = true;
-        reportPackageFailure(result);
+        if (results.every(({ record }) => record.outcome !== "fail")) {
+          commands.push({
+            label: packageName,
+            output: await Deno.readTextFile(result.log),
+            log: result.log,
+          });
+        }
       }
     }
   });
   await Promise.all(workers);
   fragment?.close();
-  if (junitRoot !== undefined) {
-    await Deno.remove(junitRoot, { recursive: true }).catch(() => {});
-  }
   // Every member below `next` was handed to a worker; the members above it
   // are the ones a stop after a failure left unstarted.
   const unstarted = members.slice(next);
-
-  const durationResults = [...results].sort((a, b) =>
-    b.durationMs - a.durationMs
-  );
-  const failedPackages = results.filter((result) => !result.result.success);
-
-  console.log("Package timings:");
-  for (const result of durationResults) {
-    const duration = (result.durationMs / 1000).toFixed(1);
-    const status = result.result.success ? "ok" : "failed";
-    console.log(`- ${result.packageName}: ${duration}s (${status})`);
-  }
-  console.log(
-    `Total wall time: ${((Date.now() - suiteStartedAt) / 1000).toFixed(1)}s`,
-  );
-
-  if (failedPackages.length === 0) {
-    console.log("All tests passing!");
-  } else {
-    console.error("One or more tests failed.");
-    console.error("Failed packages:");
-    for (const result of failedPackages) {
-      console.error(`- ${result.packageName} (${result.packagePath})`);
-    }
-  }
-
-  if (unstarted.length > 0) {
-    console.error("Packages this run never started:");
-    for (const member of unstarted) {
-      console.error(`- ${member}`);
-    }
-  }
-
-  return failedPackages.length === 0;
+  const summary = {
+    tests,
+    commands,
+    unreported: unreported.sort(),
+    notes: unstarted.length === 0 ? [] : [
+      `Not started, because a package failed: ${unstarted.join(", ")}`,
+    ],
+    logs: logDir,
+    seconds: (Date.now() - suiteStartedAt) / 1000,
+  };
+  const ok = passed(summary);
+  if (ok) await Deno.remove(logDir, { recursive: true });
+  printSummary(ok ? { ...summary, logs: undefined } : summary);
+  return ok;
 }
 
 export async function main(): Promise<boolean> {

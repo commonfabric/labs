@@ -447,8 +447,9 @@ A test that needs a space of its own creates one with `createTestSpace` (or
 `@commonfabric/integration`, and addresses it by the DID that returns.
 
 Additionally, [`tasks/integration.ts`](../../tasks/integration.ts) sets
-`INTEGRATION_TEST_FLAGS` (default: unset; populated with `--junit-path=…` when
-`--junit-dir` is passed, or passed through from the environment otherwise).
+`INTEGRATION_TEST_FLAGS` to whatever the variable already held in the
+environment, followed by a `--junit-path=…` naming where each package's JUnit
+report goes and the registration preload. The run's closing summary is read from those reports.
 Per-package `deno.jsonc` `integration` scripts pick it up via `$INTEGRATION_TEST_FLAGS`
 shell expansion to forward extra `deno test` flags (e.g. `--filter`).
 

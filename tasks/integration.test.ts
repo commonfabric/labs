@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { fromFileUrl } from "@std/path";
 import { FakeTime } from "@std/testing/time";
 import ports from "@commonfabric/ports" with { type: "json" };
 import { preloadArgument } from "@commonfabric/test-support/records";
@@ -8,6 +9,7 @@ import {
   chooseGeneratedPortOffset,
   findIntegrationTestFiles,
   GENERATED_PORT_OFFSET_RANGE,
+  integrationRerun,
   integrationTestDir,
   offsetPorts,
   patternTestListLine,
@@ -220,11 +222,18 @@ Deno.test("findIntegrationTestFiles rethrows errors other than a missing directo
 
 Deno.test("buildFilteredTestArgs passes files as explicit paths under relDir", () => {
   assertEquals(
-    buildFilteredTestArgs("runner", "integration", ["a.test.ts", "b.test.ts"]),
+    buildFilteredTestArgs(
+      "runner",
+      "integration",
+      ["a.test.ts", "b.test.ts"],
+      "out/junit",
+    ),
     [
       "test",
       "--no-check",
       "-A",
+      "--junit-path=out/junit/runner.xml",
+      preloadArgument(),
       "./integration/a.test.ts",
       "./integration/b.test.ts",
     ],
@@ -233,13 +242,20 @@ Deno.test("buildFilteredTestArgs passes files as explicit paths under relDir", (
 
 Deno.test("buildFilteredTestArgs adds patterns memory and leak flags", () => {
   assertEquals(
-    buildFilteredTestArgs("patterns", "integration", ["home-profile.test.ts"]),
+    buildFilteredTestArgs(
+      "patterns",
+      "integration",
+      ["home-profile.test.ts"],
+      "out/junit",
+    ),
     [
       "test",
       "--no-check",
       "-A",
       "--v8-flags=--max-old-space-size=4096",
       "--trace-leaks",
+      "--junit-path=out/junit/patterns.xml",
+      preloadArgument(),
       "./integration/home-profile.test.ts",
     ],
   );
@@ -251,6 +267,7 @@ Deno.test("buildFilteredTestArgs uses the generated-patterns subdir and flags", 
       "generated-patterns",
       "integration/patterns",
       ["simple-counter.test.ts"],
+      "out/junit",
     ),
     [
       "test",
@@ -258,6 +275,8 @@ Deno.test("buildFilteredTestArgs uses the generated-patterns subdir and flags", 
       "-A",
       "--trace-leaks",
       "--parallel",
+      "--junit-path=out/junit/generated-patterns.xml",
+      preloadArgument(),
       "./integration/patterns/simple-counter.test.ts",
     ],
   );
@@ -288,7 +307,7 @@ Deno.test("runFilteredIntegration fails without running when no file matches", a
       pkgDir,
       {},
       "no-such-test",
-      undefined,
+      "/junit",
       () => {
         ran = true;
         return Promise.resolve({ success: true, code: 0 });
@@ -313,7 +332,7 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
       pkgDir,
       { LOG_LEVEL: "warn" },
       "home-profile",
-      undefined,
+      "/junit",
       (cmd, options) => {
         captured = { cmd, cwd: options?.cwd };
         return Promise.resolve({ success: true, code: 0 });
@@ -328,6 +347,8 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
       "-A",
       "--v8-flags=--max-old-space-size=4096",
       "--trace-leaks",
+      "--junit-path=/junit/patterns.xml",
+      preloadArgument(),
       "./integration/home-profile.test.ts",
     ]);
   } finally {
@@ -349,7 +370,7 @@ Deno.test("runFilteredIntegration uses the generated-patterns subdir", async () 
       pkgDir,
       {},
       "simple-counter",
-      undefined,
+      "/junit",
       (cmd) => {
         captured = cmd;
         return Promise.resolve({ success: true, code: 0 });
@@ -362,6 +383,8 @@ Deno.test("runFilteredIntegration uses the generated-patterns subdir", async () 
       "-A",
       "--trace-leaks",
       "--parallel",
+      "--junit-path=/junit/generated-patterns.xml",
+      preloadArgument(),
       "./integration/patterns/simple-counter.test.ts",
     ]);
   } finally {
@@ -379,16 +402,130 @@ Deno.test("runPackageIntegration returns false when a filtered run matches nothi
       `${rootDir}/packages/runner/integration/counter.test.ts`,
       "",
     );
-    const ok = await runPackageIntegration(
+    const outcome = await runPackageIntegration(
       "runner",
       "",
       rootDir,
+      `${rootDir}/junit`,
       "no-such-test",
     );
-    assertEquals(ok, false);
+    assertEquals(outcome.success, false);
+    assertEquals(outcome.tests, []);
   } finally {
     await Deno.remove(rootDir, { recursive: true });
   }
+});
+
+// A root directory whose `runner` package's integration task runs
+// `report.ts`, which writes `xml` where INTEGRATION_TEST_FLAGS says the
+// report goes, or writes nothing for no `xml`, and fails.
+async function makeReportingPackage(xml?: string): Promise<string> {
+  const rootDir = await Deno.makeTempDir();
+  const packageDir = `${rootDir}/packages/runner`;
+  await Deno.mkdir(packageDir, { recursive: true });
+  await Deno.writeTextFile(
+    `${packageDir}/deno.json`,
+    JSON.stringify({ tasks: { integration: "deno run -A report.ts" } }),
+  );
+  await Deno.writeTextFile(
+    `${packageDir}/report.ts`,
+    [
+      `const flags = Deno.env.get("INTEGRATION_TEST_FLAGS")!.split(" ");`,
+      `const at = flags.find((f) => f.startsWith("--junit-path="))!;`,
+      xml === undefined
+        ? ""
+        : `await Deno.writeTextFile(at.slice(13), ${JSON.stringify(xml)});`,
+      `Deno.exit(1);`,
+    ].join("\n"),
+  );
+  return rootDir;
+}
+
+Deno.test("runPackageIntegration reads each test, and how to rerun a failing one, from the report", async () => {
+  const rootDir = await makeReportingPackage(`<testsuites>
+  <testsuite name="./integration/counter.test.ts">
+    <testcase name="counts" classname="./integration/counter.test.ts"/>
+    <testcase name="resets" classname="./integration/counter.test.ts">
+      <failure message="Uncaught Error: still 3">stack</failure>
+    </testcase>
+  </testsuite>
+</testsuites>`);
+  try {
+    const outcome = await runPackageIntegration(
+      "runner",
+      "",
+      rootDir,
+      `${rootDir}/junit`,
+    );
+    assertEquals(outcome.success, false);
+    assertEquals(
+      outcome.tests.map(({ record, message, rerun }) => ({
+        name: record.test.n,
+        outcome: record.outcome,
+        file: record.file,
+        message,
+        rerun,
+      })),
+      [{
+        name: "counts",
+        outcome: "pass",
+        file: "packages/runner/integration/counter.test.ts",
+        message: undefined,
+        rerun: undefined,
+      }, {
+        name: "resets",
+        outcome: "fail",
+        file: "packages/runner/integration/counter.test.ts",
+        message: "Uncaught Error: still 3",
+        rerun: "deno task integration runner counter",
+      }],
+    );
+  } finally {
+    await Deno.remove(rootDir, { recursive: true });
+  }
+});
+
+Deno.test("runPackageIntegration does not read a report an earlier run left", async () => {
+  const rootDir = await makeReportingPackage();
+  try {
+    await Deno.mkdir(`${rootDir}/junit`);
+    await Deno.writeTextFile(
+      `${rootDir}/junit/runner.xml`,
+      `<testsuites><testsuite name="x"><testcase name="stale"/></testsuite></testsuites>`,
+    );
+    const outcome = await runPackageIntegration(
+      "runner",
+      "",
+      rootDir,
+      `${rootDir}/junit`,
+    );
+    assertEquals(outcome, { success: false, code: 1, tests: [] });
+  } finally {
+    await Deno.remove(rootDir, { recursive: true });
+  }
+});
+
+Deno.test("integrationRerun names the test file where it is known", () => {
+  assertEquals(
+    integrationRerun(
+      "patterns",
+      "packages/patterns/integration/cf-render.test.ts",
+    ),
+    "deno task integration patterns cf-render",
+  );
+  assertEquals(integrationRerun("cli"), "deno task integration cli");
+  // These run a script of their own, which a name would not reach.
+  assertEquals(
+    integrationRerun(
+      "patterns-reload",
+      "packages/patterns/integration/x.test.ts",
+    ),
+    "deno task integration patterns-reload",
+  );
+  assertEquals(
+    integrationRerun("pattern-tests", "packages/patterns/a b/c.test.tsx"),
+    "deno task integration pattern-tests 'packages/patterns/a b/c.test.tsx'",
+  );
 });
 
 Deno.test("startServers returns when the startup script completes", async () => {
@@ -593,4 +730,37 @@ Deno.test("precompilePatternTests treats a run that cannot spawn as that group's
     true,
   );
   assertEquals(logged.includes("   Error: no such binary"), true);
+});
+
+Deno.test("a run whose selection names no pattern test fails, and says so last", async () => {
+  // A spool of the test's own makes the run join it rather than record.
+  const spool = await Deno.makeTempDir();
+  try {
+    const { code, stdout } = await new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "-A",
+        fromFileUrl(new URL("./integration.ts", import.meta.url)),
+        "pattern-tests",
+        "no-such-pattern-test",
+      ],
+      cwd: fromFileUrl(new URL("..", import.meta.url)),
+      env: { CF_TEST_RECORDS_DIR: spool },
+      stdout: "piped",
+      stderr: "null",
+    }).output();
+    const lines = new TextDecoder().decode(stdout).split("\n");
+    const at = lines.findIndex((line) => line.includes("test summary"));
+    assertEquals(code, 1);
+    assert(at >= 0);
+    assert(
+      lines[at + 1]!.startsWith("FAILED: 0 failed, 0 passed, 0 skipped, "),
+    );
+    assertEquals(
+      lines[at + 3],
+      "FAIL pattern-tests (exit code 1): failed with no failing test",
+    );
+  } finally {
+    await Deno.remove(spool, { recursive: true });
+  }
 });

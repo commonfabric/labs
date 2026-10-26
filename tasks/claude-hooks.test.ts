@@ -174,41 +174,6 @@ describe("claude-hooks", () => {
     });
   });
 
-  describe("deno-test-filter.ts", () => {
-    const refuses = async (command: string) =>
-      expect((await onCommand("deno-test-filter", command)).code).toBe(REFUSED);
-    const allows = async (command: string) =>
-      expect((await onCommand("deno-test-filter", command)).code).toBe(ALLOWED);
-
-    it("refuses `--filter` on the root task", async () => {
-      await refuses('deno task test --filter "a name"');
-    });
-
-    it("allows the flag after a change of directory", async () => {
-      await allows('cd packages/html\ndeno task test --filter "a name"');
-    });
-
-    it("allows the flag after a change of directory on one line", async () => {
-      await allows('cd packages/html && deno task test --filter "a name"');
-    });
-
-    it("refuses a filter that precedes a change of directory", async () => {
-      await refuses("deno task test --filter a && cd packages/html");
-    });
-
-    it("allows the root task with no filter", async () => {
-      await allows("deno task test");
-    });
-
-    it("allows a filtered `deno test`", async () => {
-      await allows("deno test --filter a");
-    });
-
-    it("allows a `--filter` belonging to a later command", async () => {
-      await allows("deno task test && ls --filter");
-    });
-  });
-
   describe("pre-edit-reminders.ts", () => {
     const contextFor = async (filePath: string) => {
       const result = await onFilePath("pre-edit-reminders", filePath);

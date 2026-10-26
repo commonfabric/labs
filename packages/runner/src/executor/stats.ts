@@ -434,7 +434,11 @@ export type ServingLoopStats = {
      * register's owed follow-up on the OW45 row. */
     preQueueDeferralStuck: number;
 
-    /** Ordered publication/response barriers attempted for lagging event views. */
+    /**
+     * Attempts to bring a lagging event view current: an ordered
+     * publication/response, or under the store read-through a read of the
+     * entries document from the store.
+     */
     visibilityBarriers: number;
 
     /** Event identities visible at the recomputed index after a barrier. */

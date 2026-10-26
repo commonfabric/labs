@@ -59,7 +59,7 @@ export interface DumpRuntime {
       graph: unknown,
       mainSpecifier: string,
       program: Program,
-    ): { main?: Record<string, unknown> };
+    ): EvaluatedModules;
   };
   patternManager: {
     registerEvaluatedModules(evaluated: unknown): void;
@@ -67,6 +67,54 @@ export interface DumpRuntime {
       artifact: object,
     ): { identity: string; symbol: string } | undefined;
   };
+}
+
+/** What an evaluation of a program gives the dump. */
+export interface EvaluatedModules {
+  main?: Record<string, unknown>;
+
+  /** Each module's exports, by the module's identity. */
+  exportsByIdentity?: Map<string, Record<string, unknown>>;
+
+  /** Each module's `__cfReg` registrations, by the module's identity. */
+  registrationsByIdentity?: Map<string, Map<string, unknown>>;
+}
+
+/**
+ * The entry ref `runtime` gives `artifact`, with its symbol replaced by the
+ * least, in UTF-8 order, of the names `evaluated` gives the artifact under
+ * that identity: the runtime's description of a sub-pattern child
+ * (`getLeastArtifactEntryRef()`), taken from the evaluation, so that it is
+ * the same whether or not the checkout's runtime has that lookup. A name
+ * gives the artifact where the runtime gives the value under it the same
+ * entry ref, which a derived copy shares with its original.
+ */
+function leastEntryRef(
+  runtime: DumpRuntime,
+  evaluated: EvaluatedModules,
+  artifact: object,
+): { identity: string; symbol: string } | undefined {
+  const ref = runtime.patternManager.getArtifactEntryRef(artifact);
+  if (ref === undefined) return undefined;
+  const named = [
+    ...Object.entries(evaluated.exportsByIdentity?.get(ref.identity) ?? {}),
+    ...(evaluated.registrationsByIdentity?.get(ref.identity) ?? []),
+  ];
+  let symbol = ref.symbol;
+  for (const [name, value] of named) {
+    if (
+      utf8Compare(name, symbol) >= 0 ||
+      (typeof value !== "object" && typeof value !== "function") ||
+      value === null
+    ) {
+      continue;
+    }
+    const other = runtime.patternManager.getArtifactEntryRef(value);
+    if (other?.identity === ref.identity && other.symbol === ref.symbol) {
+      symbol = name;
+    }
+  }
+  return { identity: ref.identity, symbol };
 }
 
 /** A program to compile, as `resolveLocalProgram()` returns one. */
@@ -107,7 +155,7 @@ export async function buildAssignment(
   }
   const levels = assignmentLevels(
     entry,
-    (artifact) => runtime.patternManager.getArtifactEntryRef(artifact),
+    (artifact) => leastEntryRef(runtime, evaluated, artifact),
   );
   if (levels.length === 0) return undefined;
   return { pattern, source: sourceDigest(program.files), levels };

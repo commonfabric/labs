@@ -418,11 +418,18 @@ export function ingestJUnit(
  * leaves are steps, what its own body took around them, less what a
  * container recorded among the records already holds. They are not tests,
  * so nothing places them among the records.
+ *
+ * `failures` maps each failing record to the message its case failed
+ * with, where the case gave one.
  */
 export function readJUnit(
   xml: string,
   options: IngestJUnitOptions,
-): { records: TestRecord[]; hooks: TestRecord[] } {
+): {
+  records: TestRecord[];
+  hooks: TestRecord[];
+  failures: Map<TestRecord, string>;
+} {
   const cases = parseJUnit(xml);
   // Deno names a case's class after the module that registered the test,
   // so a container carries the file of every leaf beneath it and the
@@ -470,8 +477,17 @@ export function readJUnit(
     if (file !== undefined) record.file = file;
     return record;
   };
+  const failures = new Map<TestRecord, string>();
+  const records = leaves.map((leaf) => {
+    const record = recordOf(leaf, leaf.timeSeconds ?? 0);
+    if (record.outcome === "fail" && leaf.failure !== undefined) {
+      failures.set(record, leaf.failure);
+    }
+    return record;
+  });
   return {
-    records: leaves.map((leaf) => recordOf(leaf, leaf.timeSeconds ?? 0)),
+    records,
+    failures,
     hooks: unrecordedTime(cases, leaves).flatMap(({ container, seconds }) => {
       const record = recordOf(container, seconds);
       return record.file === undefined ? [] : [record];
