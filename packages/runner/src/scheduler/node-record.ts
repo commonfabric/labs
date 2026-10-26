@@ -1,6 +1,6 @@
 import type { IMemorySpaceAddress } from "../storage/interface.ts";
 import type { FanOutNodeState } from "./fan-out.ts";
-import type { Action } from "./types.ts";
+import type { Action, ReactivityLog } from "./types.ts";
 
 export type NodeKind = "computation" | "effect";
 export type NodeStatus = "never-ran" | "clean" | "invalid" | "unavailable";
@@ -68,6 +68,12 @@ export interface SchedulerNode {
 
   /** Bound source whose server proof justifies this initial clean state. */
   adoptedViewIdentity?: string;
+
+  /**
+   * The wake dependencies that proof installed, which a later proof of the
+   * same adoption is compared against.
+   */
+  adoptedViewDependencies?: ReactivityLog;
 
   /** Releases the residency wake of a parked local computation. */
   cancelLocalReadWake?: () => void;
@@ -217,6 +223,7 @@ export class NodeRegistry {
     delete record.gate.retryOwed;
     delete record.pendingWaveRun;
     record.adoptedViewIdentity = undefined;
+    record.adoptedViewDependencies = undefined;
     record.cancelLocalReadWake?.();
     record.cancelLocalReadWake = undefined;
     this.#all.delete(record);
@@ -262,7 +269,10 @@ export class NodeRegistry {
   setStatus(action: Action, status: NodeStatus): void {
     const record = this.#records.get(action);
     if (!record) return;
-    if (status !== "clean") record.adoptedViewIdentity = undefined;
+    if (status !== "clean") {
+      record.adoptedViewIdentity = undefined;
+      record.adoptedViewDependencies = undefined;
+    }
     record.status = status;
     this.#syncInvalidIndex(record);
   }
