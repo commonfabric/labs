@@ -73,11 +73,13 @@ reference edge and take no `agentName`.
   filing with `deno task cf piece step --cell "$TOPIC"`, or the board reads them
   as their defaults. Ordering is not at stake: the board falls back to
   `createdAt` for a topic that has never run.
-- Recommended, not required: the Body states the core issue for a first-time
-  reader and is replaced whole, with any critical update noted at its top; the
-  Thread (comments) holds updates, append-only; Links hold references to
-  resources the body or thread uses, every relevant pull request among them as
-  `kind: "pr"`; relationships between Topics are references, never pasted fids.
+- Recommended, not required: the Body states the core issue and what comes next
+  for a first-time reader, complete at filing, and is replaced whole, with any
+  critical update noted at its top; the Thread (comments) holds what happened
+  after the body was written, append-only, and the filing itself is not an
+  entry; Links hold references to resources the body or thread uses, every
+  relevant pull request among them as `kind: "pr"`; relationships between Topics
+  are references, never pasted fids.
 - Changing the board's or a Topic's pattern source is a production migration
   over team-critical data, held behind the rehearsal and authorization rules in
   `references/pattern-updates.md`.

@@ -75,11 +75,22 @@ stays, carrying what it always said, while readers stop showing it and
 retained deliberately.
 
 `editComment` and `removeComment` name their target by REFERENCE, and a comment
-is not a piece: it has no fid to write into an inline JSON event, so these are
-reachable from a reader that holds the row, not from a bare
-`deno task cf piece call`. `removeLink` is the exception and takes `url` for
-exactly that reason, retracting the most recently added link still present with
-that URL — so retracting twice retracts two rather than re-stamping one.
+is not a piece: it has no fid of its own. It does have a path, and the reference
+syntax reaches a path inside a piece, so a bare `deno task cf piece call` can
+name the stored element as the Topic's address followed by `/comments/<index>`,
+where the index is the comment's position in the `comments` array as `cell get`
+prints it (retracted comments keep their positions):
+
+```bash
+export CF_INVOCATION_SESSION="$(cat '<run session file>')"
+deno task cf piece call --cell "$TOPIC" --invocation '<unique-remove-comment-id>' removeComment \
+  --json "{\"comment\":\"$TOPIC/comments/<index>\",\"agentName\":\"Sol\"}"
+```
+
+A payload that is not a reference reads back `undefined` and is refused rather
+than matching nothing. `removeLink` takes `url` instead, retracting the most
+recently added link still present with that URL, so retracting twice retracts
+two rather than re-stamping one.
 
 If a deployed field or verb differs from this skill, trust `piece describe`,
 `piece verbs`, and verb help, then update this skill in the same change that

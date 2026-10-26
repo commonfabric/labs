@@ -170,17 +170,21 @@ each to its own job means a reader knows where to look, and later tooling can
 build on the distinction.
 
 - **Body** (`addTopic`'s `body`, then `setBody`): the core issue. What the Topic
-  is about, why it matters, and the current state of understanding and
-  decisions, written so that someone arriving for the first time can read the
-  body alone and know where things stand. Replace it whole when the picture
-  changes, preserving meaningful context and decisions. When an update is
-  critical for that first-time reader (a decision reversed, the work blocked or
-  superseded), put a short note about it at the top of the body as well as in
-  the thread. Fabric owns revision history, so the body does not need to record
-  how it got to its current state.
-- **Thread** (`addComment`): updates. Each comment is an append-only,
-  point-in-time record of progress: what changed, what was learned or decided,
-  and what comes next.
+  is about, why it matters, the current state of understanding and decisions,
+  and what comes next, written so that someone arriving for the first time can
+  read the body alone and know where things stand. A Topic is filed complete: at
+  creation the body already says all of this, so the filing itself is not an
+  update and leaves no comment. Replace the body whole when the picture changes,
+  preserving meaningful context and decisions. When an update is critical for
+  that first-time reader (a decision reversed, the work blocked or superseded),
+  put a short note about it at the top of the body as well as in the thread.
+  Fabric owns revision history, so the body does not need to record how it got
+  to its current state.
+- **Thread** (`addComment`): what happened after the body was last written. Each
+  comment is an append-only, point-in-time record: a result, a decision, a
+  blocker, a change of plan. A comment that announces the filing, restates the
+  body, or repeats the body's next step adds nothing a reader of the body lacks.
+  When a comment changes where things stand, the body changes too.
 - **Links** (`addLink`): references to resources the body or thread uses or
   refers to, such as pull requests, documents, dashboards, and agent sessions.
   The label names the resource. Add every relevant pull request with
