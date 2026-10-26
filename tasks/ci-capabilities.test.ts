@@ -1,5 +1,9 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import {
+  BACKGROUND_LOG_ENV,
+  READY_MARKER,
+} from "../runtime/toolshed/background.ts";
 import { BUILD_HOST_VARIABLES } from "./build-binaries.ts";
 import {
   BINARY_CACHE_DIR,
@@ -10,9 +14,11 @@ import {
   type CapabilityId,
   COMPILE_CACHE_FILE,
   type ExecOptions,
+  messageOf,
   openCapabilities,
-  pidOfBackgroundLaunch,
   resolveCapabilities,
+  type Spawn,
+  type SpawnedProcess,
   takeGithubToken,
 } from "./ci-capabilities.ts";
 import {
@@ -223,6 +229,34 @@ describe("ci capabilities", () => {
     expect(closed).toEqual(["cf"]);
   });
 
+  it("names both failures when an earlier capability fails to close after a later one fails to open", async () => {
+    // The failure to open is the answer the caller asked for, and the
+    // failure to close is still a failure the caller has to be told about.
+    const registry = new Map(CAPABILITIES);
+    registry.set("cf", {
+      id: "cf",
+      description: "a capability that cannot be closed",
+      open: () =>
+        Promise.resolve({
+          env: {},
+          close: () => Promise.reject(new Error("stuck")),
+        }),
+    });
+    registry.set("jq", {
+      id: "jq",
+      description: "a capability that cannot open",
+      open: () => Promise.reject(new Error("no jq here")),
+    });
+    const refused = openCapabilities(["cf", "jq"], {
+      root: Deno.cwd(),
+      dryRun: true,
+      workDir: "/nonexistent",
+    }, registry);
+    await expect(refused).rejects.toThrow(
+      "no jq here\ncf failed to close: stuck",
+    );
+  });
+
   it("keeps what it caches where the workflow's one cache step looks", () => {
     // The lane's own working directory is made fresh every run, so
     // anything kept there would be rebuilt every time however well the
@@ -366,7 +400,8 @@ describe("ci capabilities", () => {
       dryRun: true,
       workDir: "/nonexistent",
     }, registry);
-    await opened.close();
+    // The failure still reaches the caller, once the rest are closed.
+    await expect(opened.close()).rejects.toThrow("jq failed to close: stuck");
     expect(closed).toEqual(["deno"]);
   });
 
@@ -395,41 +430,69 @@ describe("ci capabilities", () => {
     await Deno.remove(repo, { recursive: true });
     await Deno.remove(empty, { recursive: true });
   });
-
-  it("reads the process a background launch detached", () => {
-    expect(
-      pidOfBackgroundLaunch(
-        "Toolshed is listening; the server is running in the background " +
-          "(pid 4213). Logs: /tmp/toolshed.log",
-      ),
-    ).toBe(4213);
-    expect(pidOfBackgroundLaunch("no process here")).toBeUndefined();
-  });
 });
 
 describe("opening a capability on a machine that answers", () => {
-  /** What a capability asked the machine, and what it was told. */
+  /** What a server half writes once it has bound its port. */
+  const LISTENING = `${READY_MARKER}\n`;
+
+  /**
+   * What a capability asked the machine, what it was told, and the signals
+   * the processes it started were sent.
+   *
+   * Each command is given the first answer whose key the command line
+   * contains. A command a capability runs to completion returns that
+   * answer, and fails where the answer starts with `!`. A process a
+   * capability starts writes the answer to its standard output. One that
+   * wrote `LISTENING` runs until it is sent a signal and then exits with
+   * code 0. Any other has already exited with code 1.
+   */
   function machine(answers: Record<string, string> = {}) {
     const asked: string[] = [];
     const given: Array<ExecOptions | undefined> = [];
+    const signaled: Deno.Signal[] = [];
+    const ask = (
+      command: string,
+      args: readonly string[],
+      options?: ExecOptions,
+    ): string => {
+      const line = [command, ...args].join(" ");
+      asked.push(line);
+      given.push(options);
+      return Object.entries(answers).find(([match]) => line.includes(match))
+        ?.[1] ?? "";
+    };
     const exec = (
       command: string,
       args: readonly string[],
       options?: ExecOptions,
     ): Promise<string> => {
-      const line = [command, ...args].join(" ");
-      asked.push(line);
-      given.push(options);
-      for (const [match, answer] of Object.entries(answers)) {
-        if (line.includes(match)) {
-          return answer.startsWith("!")
-            ? Promise.reject(new Error(answer.slice(1)))
-            : Promise.resolve(answer);
-        }
-      }
-      return Promise.resolve("");
+      const answer = ask(command, args, options);
+      return answer.startsWith("!")
+        ? Promise.reject(new Error(answer.slice(1)))
+        : Promise.resolve(answer);
     };
-    return { asked, given, exec };
+    const spawn = (
+      command: string,
+      args: readonly string[],
+      options?: ExecOptions,
+    ): SpawnedProcess => {
+      const answer = ask(command, args, options);
+      const exit = Promise.withResolvers<Deno.CommandStatus>();
+      let exited = answer !== LISTENING;
+      if (exited) exit.resolve({ success: false, code: 1, signal: null });
+      return {
+        stdout: ReadableStream.from([new TextEncoder().encode(answer)]),
+        status: exit.promise,
+        kill: (signal) => {
+          if (exited) throw new TypeError("the process has already exited");
+          exited = true;
+          signaled.push(signal);
+          exit.resolve({ success: true, code: 0, signal: null });
+        },
+      };
+    };
+    return { asked, given, signaled, exec, spawn };
   }
 
   /** The message `work` rejects with; fails the test if it resolves. */
@@ -437,7 +500,7 @@ describe("opening a capability on a machine that answers", () => {
     try {
       await work;
     } catch (error) {
-      return error instanceof Error ? error.message : String(error);
+      return messageOf(error);
     }
     throw new Error("Expected the call to throw, and it returned instead.");
   }
@@ -486,6 +549,7 @@ describe("opening a capability on a machine that answers", () => {
         dryRun: false,
         workDir: root,
         exec: m.exec,
+        spawn: m.spawn,
         fetch: serving(role),
       }, CAPABILITIES);
       await opened.close();
@@ -567,7 +631,7 @@ describe("opening a capability on a machine that answers", () => {
   });
 
   it("names the log its server writes, so a failed lane can print it", async () => {
-    const m = machine({ toolshed: "listening (pid 999999). Logs: x\n" });
+    const m = machine({ "index.ts": LISTENING });
     const root = await Deno.makeTempDir({ prefix: "capability-" });
     try {
       const opened = await openCapabilities(["toolshed"], {
@@ -575,14 +639,15 @@ describe("opening a capability on a machine that answers", () => {
         dryRun: false,
         workDir: root,
         exec: m.exec,
+        spawn: m.spawn,
         fetch: serving("default"),
       }, CAPABILITIES);
       await opened.close();
 
-      // The one the launch was told to write, and the one the lane would
+      // The one the server was told to write, and the one the lane would
       // have nothing of once its work directory goes.
-      const told = m.asked.find((line) => line.includes("--log-file="))!;
-      const wanted = /--log-file=(\S+)/.exec(told)![1];
+      const wanted = optionsOf(m, "index.ts")?.env?.[BACKGROUND_LOG_ENV];
+      expect(wanted?.startsWith(`${root}/`)).toBe(true);
       expect(opened.logs).toEqual([{ capability: "toolshed", path: wanted }]);
     } finally {
       await Deno.remove(root, { recursive: true }).catch(() => {});
@@ -593,7 +658,7 @@ describe("opening a capability on a machine that answers", () => {
     // The capability never opens, so nothing downstream is holding the
     // path: the log leaves in the throw or it goes with the work directory
     // unread. The probe is what fails, the server having started.
-    const m = machine({ toolshed: "listening (pid 999999). Logs: x\n" });
+    const m = machine({ "index.ts": LISTENING });
     const root = await Deno.makeTempDir({ prefix: "capability-" });
     try {
       const refused = await rejectionMessage(
@@ -601,22 +666,24 @@ describe("opening a capability on a machine that answers", () => {
           root,
           dryRun: false,
           workDir: root,
-          exec: async (command, args, options) => {
-            const line = [command, ...args].join(" ");
-            const wrote = /--log-file=(\S+)/.exec(line);
+          exec: m.exec,
+          spawn: (command, args, options) => {
             // What the server would have written before the posture went
-            // wrong, at the path the launch was told to write it to.
-            if (wrote) {
-              await Deno.writeTextFile(wrote[1], "a line the log holds\n");
-            }
-            return await m.exec(command, args, options);
+            // wrong, at the path it was told to write it to.
+            Deno.writeTextFileSync(
+              options!.env![BACKGROUND_LOG_ENV]!,
+              "a line the log holds\n",
+            );
+            return m.spawn(command, args, options);
           },
           // A server on the arm this lane did not ask for.
           fetch: serving("opposite"),
         }, CAPABILITIES),
       );
+      expect(refused).toContain("default lane publishes serverExecution");
       expect(refused).toContain("toolshed log:");
       expect(refused).toContain("a line the log holds");
+      expect(m.signaled).toEqual(["SIGTERM"]);
     } finally {
       await Deno.remove(root, { recursive: true }).catch(() => {});
     }
@@ -690,7 +757,7 @@ describe("opening a capability on a machine that answers", () => {
   });
 
   it("starts a server on a port of its own and kills what it started", async () => {
-    const m = machine({ "index.ts": "listening (pid 999999). Logs: x\n" });
+    const m = machine({ "index.ts": LISTENING });
     const { opened } = await open("toolshed", m);
     const served = opened.envFor(["toolshed"]);
     const port = Number(served.TOOLSHED_PORT);
@@ -699,17 +766,19 @@ describe("opening a capability on a machine that answers", () => {
     // the Deno suites add a slash of their own when they need one.
     expect(served.API_URL).toBe(`http://localhost:${port}`);
     expect(m.asked.some((line) => line.includes(`--port=${port}`))).toBe(true);
-    expect(m.asked.some((line) => line.includes("--background"))).toBe(true);
-    // Closing is what `open` already did; killing a process this test
-    // invented would be worse than not checking, and what matters is
-    // that it does not throw.
+    // Started as the server half itself, so that this process is the
+    // one its exit is reported to.
+    expect(envOf(m, "index.ts")?.[BACKGROUND_LOG_ENV]).toBeDefined();
+    expect(m.asked.some((line) => line.includes("--background"))).toBe(false);
+    // Closing is what `open` already did.
+    expect(m.signaled).toEqual(["SIGTERM"]);
   });
 
   it("holds a server it started to the arm it started it for", async () => {
     // A server on the other arm answers every request the suites make
     // and passes, so the run reports that the arm it named works when
     // nothing exercised it.
-    const answers = { "index.ts": "listening (pid 999999). Logs: x\n" };
+    const answers = { "index.ts": LISTENING };
     await open("toolshed", machine(answers), "default");
 
     const wrong = machine(answers);
@@ -738,7 +807,7 @@ describe("opening a capability on a machine that answers", () => {
     Deno.env.set("EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION", "false");
     try {
       const source = machine({
-        "index.ts": "listening (pid 999999). Logs: x\n",
+        "index.ts": LISTENING,
       });
       await open("toolshed", source);
       expect(envOf(source, "index.ts")?.EXPERIMENTAL_SERVER_EXECUTION)
@@ -834,11 +903,88 @@ describe("opening a capability on a machine that answers", () => {
     }
   });
 
-  it("refuses a launch that names no process to kill later", async () => {
-    // A server nobody can kill outlives the lane and holds its port
-    // against the next one.
+  it("rejects with the exit code and log of a server that exits before it binds its port", async () => {
     const m = machine({ "index.ts": "started somehow\n" });
-    await expect(open("toolshed", m)).rejects.toThrow("named no process");
+    const refused = await rejectionMessage(open("toolshed", m));
+    expect(refused).toContain(
+      "the toolshed server exited with code 1 before it bound its port",
+    );
+    expect(refused).toContain("toolshed log:");
+  });
+
+  describe("closing a server it started", () => {
+    /**
+     * Starts, in place of the server, a Deno process that does what a
+     * server half does at either end of its life: it writes the readiness
+     * marker once it is listening, and on SIGTERM it writes a line to its
+     * log and exits with `code`. It is given the environment the
+     * capability built, without the coverage directory, since it is not
+     * code under test.
+     */
+    function standIn(code: number): Spawn {
+      const script = `
+        const log = Deno.env.get(${JSON.stringify(BACKGROUND_LOG_ENV)});
+        const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+        Deno.addSignalListener("SIGTERM", async () => {
+          await Deno.writeTextFile(log, "shut down\\n", { append: true });
+          Deno.exit(${code});
+        });
+        console.log(${JSON.stringify(READY_MARKER)});
+        for await (const connection of listener) connection.close();
+      `;
+      return (_command, _args, options) => {
+        const env = { ...options?.env };
+        delete env.DENO_COVERAGE_DIR;
+        return new Deno.Command(Deno.execPath(), {
+          args: ["eval", script],
+          env,
+          clearEnv: true,
+          stdin: "null",
+          stdout: "piped",
+          stderr: "inherit",
+        }).spawn();
+      };
+    }
+
+    /** Opens `toolshed` on a stand-in that exits with `code`. */
+    function openStandIn(code: number, workDir: string) {
+      return openCapabilities(["toolshed"], {
+        root: workDir,
+        dryRun: false,
+        workDir,
+        spawn: standIn(code),
+        fetch: serving("default"),
+      });
+    }
+
+    it("settles once the server has exited, with its shutdown logged", async () => {
+      const workDir = await Deno.makeTempDir({ prefix: "capability-" });
+      try {
+        const opened = await openStandIn(0, workDir);
+        await opened.close();
+        // Written by the server after it was signaled and before it exited.
+        expect(await Deno.readTextFile(opened.logs[0]!.path)).toBe(
+          "shut down\n",
+        );
+      } finally {
+        // Nothing can still be writing into the directory, so its removal
+        // must succeed.
+        await Deno.remove(workDir, { recursive: true });
+      }
+    });
+
+    it("rejects with the exit code and log path of a server that exits uncleanly on SIGTERM", async () => {
+      const workDir = await Deno.makeTempDir({ prefix: "capability-" });
+      try {
+        const opened = await openStandIn(1, workDir);
+        await expect(opened.close()).rejects.toThrow(
+          "toolshed failed to close: the toolshed server exited with code 1; " +
+            `its log is \`${opened.logs[0]!.path}\``,
+        );
+      } finally {
+        await Deno.remove(workDir, { recursive: true });
+      }
+    });
   });
 
   /** Opens a baked capability against a root that has no binary yet. */
@@ -847,7 +993,7 @@ describe("opening a capability on a machine that answers", () => {
     binaryName: string,
     role: ServerExecutionCiRole,
   ) {
-    const m = machine({ [binaryName]: "listening (pid 999999). Logs: x\n" });
+    const m = machine({ [binaryName]: LISTENING });
     const root = await Deno.makeTempDir({ prefix: "capability-" });
     try {
       // What a build leaves behind, so the copy into the cache has
@@ -859,6 +1005,7 @@ describe("opening a capability on a machine that answers", () => {
         dryRun: false,
         workDir: root,
         exec: m.exec,
+        spawn: m.spawn,
         fetch: serving(role),
       }, CAPABILITIES);
       await opened.close();
@@ -871,7 +1018,7 @@ describe("opening a capability on a machine that answers", () => {
   it("builds the server-execution binary only when none was restored", async () => {
     const binaryName = "toolshed-baked-opposite";
     const answers = {
-      [binaryName]: "listening (pid 999999). Logs: x\n",
+      [binaryName]: LISTENING,
     };
     const openOpposite = async (restored: boolean) => {
       const m = machine(answers);
@@ -892,6 +1039,7 @@ describe("opening a capability on a machine that answers", () => {
         dryRun: false,
         workDir: root,
         exec: m.exec,
+        spawn: m.spawn,
         fetch: serving("opposite"),
       }, CAPABILITIES);
       await opened.close();
@@ -918,6 +1066,7 @@ describe("opening a capability on a machine that answers", () => {
           dryRun: false,
           workDir: root,
           exec: m.exec,
+          spawn: m.spawn,
         }, CAPABILITIES),
       ).rejects.toThrow(Deno.errors.NotADirectory);
       expect(m.asked.some((line) => line.includes("build-binaries")))

@@ -134,9 +134,7 @@ export const memoryServer = new MemoryServer.Server({
 });
 const routedListener = await routerPolicy?.start(memoryServer);
 export const memory = {
-  async close(): Promise<
-    { ok: Record<PropertyKey, never> } | { error: unknown }
-  > {
+  async close(): Promise<void> {
     try {
       await routedListener?.close();
     } catch (error) {
@@ -148,7 +146,6 @@ export const memory = {
       throw error;
     }
     await memoryServer.close();
-    return { ok: {} };
   },
 };
 console.log("Memory: Provider initialized successfully");

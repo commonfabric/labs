@@ -891,3 +891,16 @@ There is no deadline on this read either. A server that neither binds nor
 exits blocks the command, which is what a foreground start does too, and the
 outer job limit catches it. A per-command ceiling would instead fail a start
 that a loaded machine would have completed.
+
+A `--background` caller learns when the server is listening, but not when it
+stops, because the server is not its child. A CI lane needs both, since it
+removes a work directory that holds the server's log. So the lane's `toolshed`
+capability (`tasks/ci-capabilities.ts`) starts the child copy itself, passes the
+log path in the environment, and reads the same marker. The server is then the
+lane's own child. When the capability closes, it sends SIGTERM and waits for the
+child's exit status, so the lane removes the directory only after the server has
+exited. A server that exits with any status other than success makes the close
+fail. The server exits with a non-zero status when its shutdown fails or runs
+out of time, so the close reports those as well. There is no deadline on that
+wait either. The server puts its own limit on how long its shutdown takes, and
+then exits.
