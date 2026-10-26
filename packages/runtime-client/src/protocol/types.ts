@@ -4138,50 +4138,59 @@ export type ConnectionRestoredNotification = {
 
 /**
  * An error with no request to fail -- a renderer error, or one a pattern
- * raised between requests. Every field but `message` is context that the
- * raising site may or may not have had.
+ * raised between requests. Update-required reports include write uncertainty;
+ * other context is included when the raising site has it.
  */
-export type ErrorNotification = {
-  type: NotificationType.ErrorReport;
+export type ErrorNotification =
+  & {
+    type: NotificationType.ErrorReport;
 
-  /**
-   * What went wrong.
-   */
-  message: string;
+    /**
+     * What went wrong.
+     */
+    message: string;
 
-  /**
-   * Names the kind of failure where one is named.
-   */
-  code?: RuntimeErrorCode;
+    /**
+     * The piece it happened in, where that is known.
+     */
+    pieceId?: string;
 
-  /** Writes were unconfirmed at a client-update refusal or attempted afterward. */
-  unconfirmedWrites?: boolean;
+    /**
+     * The space it happened in, where that is known.
+     */
+    space?: string;
 
-  /**
-   * The piece it happened in, where that is known.
-   */
-  pieceId?: string;
+    /**
+     * The pattern it happened in, where that is known.
+     */
+    patternId?: string;
 
-  /**
-   * The space it happened in, where that is known.
-   */
-  space?: string;
+    /**
+     * The spell it happened in, where that is known.
+     */
+    spellId?: string;
 
-  /**
-   * The pattern it happened in, where that is known.
-   */
-  patternId?: string;
+    /**
+     * The stack as raised, where one survived.
+     */
+    stackTrace?: string;
+  }
+  & (
+    | {
+      /** Runtime replacement is required. */
+      code: RuntimeErrorCode.ClientUpdateRequired;
 
-  /**
-   * The spell it happened in, where that is known.
-   */
-  spellId?: string;
+      /** Writes were unconfirmed at refusal or attempted afterward. */
+      unconfirmedWrites: boolean;
+    }
+    | {
+      /** Names another kind of failure where one is named. */
+      code?: Exclude<RuntimeErrorCode, RuntimeErrorCode.ClientUpdateRequired>;
 
-  /**
-   * The stack as raised, where one survived.
-   */
-  stackTrace?: string;
-};
+      /** Write uncertainty belongs to update-required reports. */
+      unconfirmedWrites?: never;
+    }
+  );
 
 /** One telemetry marker. Sent only while telemetry is enabled. */
 export type TelemetryNotification = {
