@@ -434,53 +434,86 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
 const missingParentIsArray = (schema: JSONSchema | undefined): boolean =>
   cfcSchemaGivesNoShape(schema) || schemaDeclaresArray(schema);
 
+/** The kinds of value {@link schemaAdmitsLength} tells apart. */
+type ValueKind = "array" | "string" | "object" | "other";
+
+const allValueKinds: readonly ValueKind[] = [
+  "array",
+  "string",
+  "object",
+  "other",
+];
+
+const valueKindsOfType = (type: string): readonly ValueKind[] =>
+  type === "array" || type === "string" || type === "object"
+    ? [type]
+    : type === "unknown"
+    ? allValueKinds
+    : ["other"];
+
+const valueKindOf = (value: unknown): ValueKind =>
+  typeof value === "string"
+    ? "string"
+    : Array.isArray(value)
+    ? "array"
+    : isObjectOrArray(value)
+    ? "object"
+    : "other";
+
 /**
- * Whether `schema` admits an array or a string, the two values whose `length`
- * the store reads as a value rather than holding as a child. A schema
- * declaring no type admits both, and a `false` schema, however it is written,
- * admits neither. A union admits them where an arm does, a conjunction where
- * every part does, and an `enum` or `const` beside no `type` where a member is
- * one. A reference resolves against the document it sits in.
+ * Whether a `length` key the parent `schema` refuses reads with no schema: the
+ * schema admits an array or a string, the two values whose `length` the store
+ * reads as a value rather than holding as a child, and admits no object. An
+ * object it admits refuses `length` as a key, and a keyed cell cannot tell
+ * which value it will meet, so that refusal stands.
+ *
+ * A schema declaring no type admits every kind of value, and an `enum` or
+ * `const` beside no `type` admits the kinds of its members. A `false` schema,
+ * however it is written, admits none. A conjunction admits what every part
+ * does, and an `anyOf` or a `oneOf` what some arm does; `oneOf` is read as
+ * `anyOf`, so arms that overlap are not checked for exclusivity. A reference
+ * resolves against the document it sits in.
  */
 const schemaAdmitsLength = (schema: JSONSchema): boolean => {
   const visiting = new Set<JSONSchema>();
-  const admits = (schema: JSONSchema): boolean => {
-    if (typeof schema === "boolean") return schema;
+  const kindsOf = (schema: JSONSchema): readonly ValueKind[] => {
+    if (typeof schema === "boolean") return schema ? allValueKinds : [];
     const resolved = ContextualFlowControl.resolveSchemaRefsOrThrow(schema);
-    if (typeof resolved === "boolean") return resolved;
+    if (typeof resolved === "boolean") return resolved ? allValueKinds : [];
     // A reference cycle reaches the schema again before deciding anything.
     if (
       ContextualFlowControl.isFalseSchema(resolved) || visiting.has(resolved)
-    ) return false;
+    ) return [];
     visiting.add(resolved);
     try {
-      const admitsPart = (part: JSONSchema) =>
-        admits(cfcSchemaWithInheritedDefs(part, resolved.$defs));
-      if (resolved.allOf !== undefined && !resolved.allOf.every(admitsPart)) {
-        return false;
+      const kindsOfPart = (part: JSONSchema) =>
+        kindsOf(cfcSchemaWithInheritedDefs(part, resolved.$defs));
+      const members = Array.isArray(resolved.enum)
+        ? resolved.enum
+        : "const" in resolved
+        ? [resolved.const]
+        : undefined;
+      let kinds = resolved.type !== undefined
+        ? (Array.isArray(resolved.type) ? resolved.type : [resolved.type])
+          .flatMap(valueKindsOfType)
+        : members !== undefined
+        ? members.map(valueKindOf)
+        : allValueKinds;
+      const narrowTo = (admitted: readonly ValueKind[]) => {
+        kinds = kinds.filter((kind) => admitted.includes(kind));
+      };
+      for (const part of resolved.allOf ?? []) narrowTo(kindsOfPart(part));
+      for (const arms of [resolved.anyOf, resolved.oneOf]) {
+        if (arms !== undefined) narrowTo(arms.flatMap(kindsOfPart));
       }
-      const arms = [...(resolved.anyOf ?? []), ...(resolved.oneOf ?? [])];
-      if (arms.length > 0 && !arms.some(admitsPart)) return false;
-      if (resolved.type === undefined) {
-        const members = Array.isArray(resolved.enum)
-          ? resolved.enum
-          : "const" in resolved
-          ? [resolved.const]
-          : undefined;
-        return members === undefined ||
-          members.some((member) =>
-            typeof member === "string" || Array.isArray(member)
-          );
-      }
-      const types = Array.isArray(resolved.type)
-        ? resolved.type
-        : [resolved.type];
-      return types.includes("array") || types.includes("string");
+      return kinds;
     } finally {
       visiting.delete(resolved);
     }
   };
-  return admits(schema);
+  const kinds = kindsOf(schema);
+  return (kinds.includes("array") || kinds.includes("string")) &&
+    !kinds.includes("object");
 };
 
 /**
@@ -3650,8 +3683,9 @@ export class CellImpl<T extends FabricValue>
       // A position the parent schema refuses keeps `false`, so the child reads
       // nothing, the same as under `{ not: true }`. A child with no schema
       // would read the raw value instead, and adopt the schema of a link
-      // stored there. `length` on an array or a string is the exception: the
-      // store reads it as a value, so it reads with no schema.
+      // stored there. `length` under a parent admitting an array or a string
+      // and no object is the exception: the store reads it as a value, so it
+      // reads with no schema (`schemaAdmitsLength()`).
       // `getSchemaAtPath()` returns `undefined` for a schema only where
       // narrowing refuses the position.
       const parentSchema = currentLink.schema;

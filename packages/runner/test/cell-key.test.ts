@@ -168,6 +168,58 @@ describe("Cell", () => {
           expect(cell.key("length").get()).toBe(2);
         });
 
+        it("returns no schema on a conjunction whose parts admit only an array", () => {
+          const cell = cellHolding(
+            "conjunction length",
+            { allOf: [{ type: "array" }, { minItems: 1 }] },
+            [1, 2],
+          );
+
+          expect(linkSchemaOf(cell.key("length"))).toBeUndefined();
+          expect(cell.key("length").get()).toBe(2);
+        });
+
+        it("keeps `false` on a conjunction of an array and a string", () => {
+          const cell = cellHolding(
+            "unsatisfiable conjunction length",
+            { allOf: [{ type: "array" }, { type: "string" }] },
+            [1, 2],
+          );
+
+          expect(linkSchemaOf(cell.key("length"))).toBe(false);
+          expect(cell.key("length").get()).toBeUndefined();
+        });
+
+        it("keeps `false` on a closed object that declares no type", () => {
+          const cell = cellHolding(
+            "typeless closed object length",
+            {
+              properties: { a: { type: "number" } },
+              additionalProperties: false,
+            },
+            { length: 7 },
+          );
+
+          expect(linkSchemaOf(cell.key("length"))).toBe(false);
+          expect(cell.key("length").get()).toBeUndefined();
+        });
+
+        it("keeps `false` on a union of a string and a closed object", () => {
+          const cell = cellHolding(
+            "string or closed object length",
+            {
+              anyOf: [
+                { type: "string" },
+                { type: "object", additionalProperties: false },
+              ],
+            },
+            { length: 7 },
+          );
+
+          expect(linkSchemaOf(cell.key("length"))).toBe(false);
+          expect(cell.key("length").get()).toBeUndefined();
+        });
+
         it("keeps `false` on a closed object", () => {
           const cell = cellHolding(
             "closed object length",

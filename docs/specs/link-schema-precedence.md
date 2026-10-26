@@ -81,7 +81,12 @@ scalar — the keyed cell carries `false` and selects nothing, the same as one
 whose parent declares the child `{ "not": true }`. It is not left agnostic,
 which would read the raw value and adopt the stored schema at a link. The one
 refused key that reads with no schema is `length` under a schema admitting an
-array or a string, which the store reads as a value.
+array or a string and no object, since the store reads an array's or a
+string's `length` as a value. A schema that also admits an object refuses
+`length` as that object's key, and a keyed cell cannot tell which value it
+will meet, so the refusal stands: `key("length")` under
+`{ "anyOf": [{ "type": "string" }, { "type": "object", "additionalProperties": false }] }`,
+or under a closed object that declares no type, carries `false`.
 
 What the entry crossing compares against is the reader's own schema. An
 agnostic reader whose read passes through one link to reach a slot
