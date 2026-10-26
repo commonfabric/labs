@@ -20,6 +20,7 @@ import {
   handler,
   NAME,
   pattern,
+  type PerUser,
   type Stream,
   UI,
   type VNode,
@@ -206,7 +207,7 @@ export interface MainOutput {
   requests: Record<string, ChatRequestOutcome>;
 
   /** The notices the manager holds for a client to deliver. */
-  outgoingNotices: ChatManagerNotice[];
+  outgoingNotices: PerUser<ChatManagerNotice[]>;
 
   /** The person's shared-space catalog, as stored. */
   sharedSpaceCatalog: SharedSpaceCatalogStorage;
