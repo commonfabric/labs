@@ -236,6 +236,18 @@ describe("conformance-fixtures", () => {
         });
     });
 
+    it("throws given an unknown value under a tag the format itself decides", () => {
+      for (
+        const tag of ["BigInt@1", "SpecialNumber@1", "Symbol@1", "Undefined@1"]
+      ) {
+        expect(() =>
+          textWithModsOfForTestingOnly([new UnknownValue(tag, null)])
+        ).toThrow(
+          `No text and mods write an unknown value under ${tag}, a tag the format itself decides.`,
+        );
+      }
+    });
+
     it("returns as unclaimed the tag of each unknown value that a codec claims, and no other", () => {
       expect(
         textWithModsOfForTestingOnly([

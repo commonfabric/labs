@@ -46,7 +46,7 @@ import {
   UNAVAILABLE_REASONS,
 } from "@/fabric-primitives";
 import { isFabricArray, isFabricPlainObject } from "@/types";
-import { createDefaultJsonRegistry, jsonFromFabricValue } from "./codecs.ts";
+import { jsonFromFabricValue } from "./codecs.ts";
 import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
 import { codecClasses as primitiveClasses } from "./fabric-primitives/impl.ts";
 
@@ -230,22 +230,32 @@ function asciiJsonOf(value: ValueDescriptor): string {
  *
  * What no text carries is written as `null`, with a patch putting it there: a
  * cycle, where it closes, and a symbol of no registry key. An `UnknownValue`
- * under a tag a codec claims has that tag in `unclaimed`. The walk finding
- * these passes through arrays and records and stops at every instance, so
- * whatever an instance holds is left for the encoder to write or to refuse.
- * Nor does a text carry how a value was built: sharing, a `NaN`'s bits, bytes
- * viewed through part of a larger buffer.
+ * under a tag one of this package's classes claims has that tag in
+ * `unclaimed`. The walk finding these passes through arrays and records and
+ * stops at every instance, so whatever an instance holds is left for the
+ * encoder to write or to refuse. Nor does a text carry how a value was built:
+ * sharing, a `NaN`'s bits, bytes viewed through part of a larger buffer.
  *
- * @throws What this package's JSON encoder throws, refusing `value` with those
- *   replaced.
+ * @throws If the walk reaches an `UnknownValue` under one of the tags the
+ *   format itself decides, which no codec can be left out for, so that no text
+ *   and mods write it; or what this package's JSON encoder throws, refusing
+ *   `value` with those replaced.
  */
 export function textWithModsOf(value: FabricValue): TextWithMods {
   const patches: ValuePatch[] = [];
   const unknownTags = new Set<string>();
   const replaced = replaceUntextual(value, [], [], patches, unknownTags);
-  const registry = createDefaultJsonRegistry();
+  const formatOwn = createBaseJsonRegistry();
   const unclaimed = [...unknownTags]
-    .filter((tag) => registry.codecFromTag(tag) !== undefined)
+    .filter((tag) => {
+      if (formatOwn.codecFromTag(tag) !== undefined) {
+        throw new Error(
+          `No text and mods write an unknown value under ${tag}, a tag the ` +
+            "format itself decides.",
+        );
+      }
+      return classesClaiming(tag).length > 0;
+    })
     .sort(utf8Compare);
   return {
     text: plainJsonTextOf(replaced) ??
@@ -438,7 +448,8 @@ export function fabricValueOfTextWithMods(
 
 /**
  * Returns a JSON codec engine whose decodes are left mutable, over this
- * package's classes but those whose codecs claim a tag in `unclaimed`.
+ * package's classes but those {@link classesClaiming} returns for a tag in
+ * `unclaimed`.
  *
  * @throws If `unclaimed` is out of UTF-8 order, names a tag twice, or names
  *   one that no such class claims.
@@ -456,26 +467,33 @@ function mutableEngineUnclaiming(
     }
   });
 
-  const base = createBaseJsonRegistry();
-  const unclaimedBy = new Set<string>();
-  const claimsNone = (cls: Constructor): boolean => {
-    const claimed = unclaimed.filter((tag) =>
-      base.extend(cls).codecFromTag(tag) !== base.codecFromTag(tag)
-    );
-    for (const tag of claimed) unclaimedBy.add(tag);
-    return claimed.length === 0;
-  };
-  const registry = base.extend(
-    primitiveClasses().filter(claimsNone),
-    instanceClasses().filter(claimsNone),
-  );
-
+  const leftOut = new Set<Constructor>();
   for (const tag of unclaimed) {
-    if (!unclaimedBy.has(tag)) {
+    const claiming = classesClaiming(tag);
+    if (claiming.length === 0) {
       throw new Error(`No class to leave out claims ${tag}`);
     }
+    for (const cls of claiming) leftOut.add(cls);
   }
+  const kept = (cls: Constructor) => !leftOut.has(cls);
+  const registry = createBaseJsonRegistry().extend(
+    primitiveClasses().filter(kept),
+    instanceClasses().filter(kept),
+  );
   return new JsonCodecEngine({ registry, mutable: true });
+}
+
+/**
+ * Returns the classes of this package's two rosters whose codecs claim `tag`
+ * beyond what `createBaseJsonRegistry()` claims, that registry holding the
+ * tags the format itself decides. Those are the classes a decode can leave
+ * out, so that a value under `tag` decodes as an `UnknownValue`.
+ */
+function classesClaiming(tag: string): Constructor[] {
+  const base = createBaseJsonRegistry();
+  return [...primitiveClasses(), ...instanceClasses()].filter((cls) =>
+    base.extend(cls).codecFromTag(tag) !== base.codecFromTag(tag)
+  );
 }
 
 /**

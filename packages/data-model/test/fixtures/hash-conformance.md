@@ -57,9 +57,10 @@ what the text cannot:
 - `unclaimed`: wire tags, in UTF-8 order and each once. Decode the text as
   though no codec claimed them, so that a value under one decodes as an unknown
   value preserving its tag and state, as it would for a reader that has no codec
-  for the tag. Only a tag a class claims is named here; the four that the format
+  for the tag. Only a tag a class claims is named here. The four that the format
   itself decides, `BigInt@1`, `SpecialNumber@1`, `Symbol@1` and `Undefined@1`,
-  never are.
+  never are, so an unknown value under one of those has no text and mods, and
+  none of the cases holds one.
 - `patches`: changes made to the decoded value, each `{"at": path, "put": …}`. A
   path is a list of steps from the root, `[]` being the root itself: a number
   steps into an array at that index, and a string, or `{"utf16": [...]}` for one
