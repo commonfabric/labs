@@ -5454,16 +5454,10 @@ export class SpaceServer implements TransactionSealDestination {
                 this.#pendingStructureLoads.delete(key);
                 this.#structureLoadDeferralStreaks.delete(key);
               } else if (confirmed.reason === "no-pattern-meta") {
-                // The lowest input the verdict may have missed: a change
-                // admitted during the pass, or foreign novelty the replica
-                // still shadows, which lies at or above its floor.
-                const invalidatedAt = Math.min(
-                  minOf(
-                    [...verdict.observedDocIds, ...confirmed.observedDocIds]
-                      .map((id) => changedDocs.get(id) ?? Infinity),
-                  ),
-                  runtime.storageManager.open(this.#options.space)
-                    .replica.unappliedForeignSeqFloor?.() ?? Infinity,
+                const invalidatedAt = this.#lowestMissedInput(
+                  runtime,
+                  changedDocs,
+                  [...verdict.observedDocIds, ...confirmed.observedDocIds],
                 );
                 if (invalidatedAt !== Infinity) {
                   this.#pendingStructureLoads.delete(key);
@@ -5531,18 +5525,31 @@ export class SpaceServer implements TransactionSealDestination {
               // logged what moved.
               this.#pendingStructureLoads.delete(key);
               this.#structureLoadDeferralStreaks.delete(key);
+              stats.structureLoadRefused += 1;
               // The refused piece can be a child the demanded piece sets up,
               // whose own record a migration would change.
               const owningRoot = this.#pieceRootByDemandKey.get(key);
-              this.#terminalStructureLoads.set(
-                key,
-                new Set(
-                  [root.id, owningRoot, error.piece].filter((id) =>
-                    id !== undefined
-                  ),
-                ),
+              const watched = [root.id, owningRoot, error.piece].filter((
+                id,
+              ): id is string => id !== undefined);
+              // A commit to one of them that a wave drained while this pass
+              // ran found no parked root to re-arm, so it re-arms the root
+              // here instead of the park.
+              const invalidatedAt = this.#lowestMissedInput(
+                runtime,
+                changedDocs,
+                watched,
               );
-              stats.structureLoadRefused += 1;
+              if (invalidatedAt !== Infinity) {
+                this.#noteRearmed(key, invalidatedAt);
+                this.#pendingStructureRetryWake = true;
+                logger.info?.("structure-load-refused", () => [
+                  `demanded root ${root.id} was refused, its state having ` +
+                  "moved; re-armed by a commit during the refusing pass",
+                ]);
+                continue;
+              }
+              this.#terminalStructureLoads.set(key, new Set(watched));
               logger.info?.("structure-load-refused", () => [
                 `demanded root ${root.id} was refused, its state having ` +
                 "moved; parked until a commit touches it",
@@ -6016,6 +6023,25 @@ export class SpaceServer implements TransactionSealDestination {
     return this.#rearmedAwaitingSettle.size > 0 &&
       runtime.storageManager.open(this.#options.space).replica
           .unappliedForeignSeqFloor?.() === undefined;
+  }
+
+  /**
+   * Helper for `#loadDemandedStructure()`, which returns the lowest seq of an
+   * input a verdict reached over `observedDocIds` during the current pass may
+   * have missed: a change to one of them admitted during the pass, by
+   * `changedDocs`, or foreign novelty the replica still shadows, which lies at
+   * or above its floor. `Infinity` where there is none.
+   */
+  #lowestMissedInput(
+    runtime: Runtime,
+    changedDocs: ReadonlyMap<string, number>,
+    observedDocIds: readonly string[],
+  ): number {
+    return Math.min(
+      minOf(observedDocIds.map((id) => changedDocs.get(id) ?? Infinity)),
+      runtime.storageManager.open(this.#options.space).replica
+        .unappliedForeignSeqFloor?.() ?? Infinity,
+    );
   }
 
   /**
