@@ -128,6 +128,29 @@ data. Other handler fields retain their generated contracts. The structured
 creator remains plain in the outer Topic input; the internal upgrade binding
 supplies its writable destination.
 
+## Version one to two: kept count and activity time
+
+The second step stores `commentCount` and `lastActivityAt` on the topic, the two
+values the board's index reads, so that the index is right without the topic
+running after each write. It computes both from the topic's own records: the
+comments not retracted, and the newest of creation, the last body save, the last
+rename, and every comment's and link's stamps, retracted and edited ones
+included. It writes both whole, so it also corrects anything a verb kept before
+it ran.
+
+From version two on, the verbs keep both in the write that changes what they
+summarize (`noteActivity()` in `topic.tsx`): adding a comment counts it,
+retracting one uncounts it, and every verb that makes a stamp moves the activity
+time to that stamp when it is newer, so it never moves back. A topic the board
+creates starts at the current version with a count of zero and its creation time
+as its activity, and never runs this step.
+
+The step runs once, so a value it computed from incomplete arrays would stay
+wrong. A handler therefore completes it only when both the comment and link
+arrays read as defined, and defers to the lift otherwise; the lift's reads
+suspend on an unresolved array rather than read it as empty. The scalar stamps
+it reads live in the same document as the arrays and read as zero when absent.
+
 ## Rollout and rollback
 
 Retire legacy writers before applying the update. The first step covers the
@@ -139,6 +162,11 @@ can render supported portions of newer state while refusing its durable
 mutations. This is a write guard, not a guarantee that every future format will
 render correctly in old code. It cannot constrain code that predates the guard,
 already-running legacy clients, or writes made directly to stored cells.
+
+The second step changes what a running topic writes but not what it accepts: an
+older client keeps deriving the two values, and its writes do not keep the
+stored ones. Retire older writers before relying on the stored values, as for
+the first step.
 
 Use the space-clone rehearsal procedure before applying source to real data.
 Admission checks, tests of the exact packaged source, and observation of actual
@@ -161,12 +189,15 @@ so that ignoring the version would cause an observable unwanted copy.
 The version tests exercise all durable entry points against future state and
 check both rejection and unchanged data. They also cover invalid versions and a
 standalone browser handler upgrading version-zero state before appending,
-without a Topic lift to do the work for it. A standalone browser save also
-checks that ambiguous inputs preserve the version while allowing the title
-write, then completes the upgrade on another save after data arrives.
-Integration cases send a title mutation while creator names, comment names,
-whole comments, structured authors, and author subfields are unresolved, then
-verify migration recovers without losing the title or overwriting arriving
-structured attribution. Cases with explicitly undefined and partially populated
-authors check object initialization and preservation of existing properties. New
-entry points must receive the upgrade binding and join this coverage.
+without a Topic lift to do the work for it. `activity-scalars.test.tsx` covers
+the second step from version one, with retracted and edited records, and each
+verb keeping the two values in its own write, read from the stored input cells
+the board's index reads. A standalone browser save also checks that ambiguous
+inputs preserve the version while allowing the title write, then completes the
+upgrade on another save after data arrives. Integration cases send a title
+mutation while creator names, comment names, whole comments, structured authors,
+and author subfields are unresolved, then verify migration recovers without
+losing the title or overwriting arriving structured attribution. Cases with
+explicitly undefined and partially populated authors check object initialization
+and preservation of existing properties. New entry points must receive the
+upgrade binding and join this coverage.

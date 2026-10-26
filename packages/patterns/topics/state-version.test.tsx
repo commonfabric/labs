@@ -57,6 +57,12 @@ export default pattern(() => {
     createdByName: "Legacy creator",
     createdBy: creator,
     comments,
+    commentCount: new Writable(0),
+    lastActivityAt: new Writable(0),
+    links,
+    createdAt: 0,
+    bodyUpdatedAt: updatedAt,
+    titleUpdatedAt: updatedAt,
   };
   const subject = Topic({
     ...upgrade,
@@ -200,6 +206,12 @@ export default pattern(() => {
       createdByName: "Old creator",
       createdBy: oldCreator,
       comments: oldComments,
+      commentCount: new Writable(0),
+      lastActivityAt: new Writable(0),
+      links: new Writable<TopicLink[]>([]),
+      createdAt: 0,
+      bodyUpdatedAt: 0,
+      titleUpdatedAt: 0,
     },
     comments: oldComments,
     commentDraft: oldDraft,
@@ -235,6 +247,12 @@ export default pattern(() => {
       createdByName: deferredName,
       createdBy: deferredCreator,
       comments: new Writable<LegacyComment[]>([]),
+      commentCount: new Writable(0),
+      lastActivityAt: new Writable(0),
+      links: new Writable<TopicLink[]>([]),
+      createdAt: 0,
+      bodyUpdatedAt: 0,
+      titleUpdatedAt: 0,
     },
   });
   const action_save_with_incomplete_upgrade = action(() =>

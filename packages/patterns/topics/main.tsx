@@ -235,8 +235,9 @@ export interface TopicIndexRow {
    * `topicAuthorLabel()` renders as `someone`. */
   createdBy?: TopicAuthor | Default<{ kind: "person"; name: "" }> | undefined;
 
-  /** Coalesced to 0 for a cold or older topic whose derived path is absent,
-   * so the row itself never carries the mixed-version undefined. */
+  /** Coalesced to 0 for a topic that publishes none, such as one on an older
+   * pattern that has never run, so the row itself never carries the
+   * mixed-version undefined. */
   commentCount: number | Default<0> | undefined;
   lastActivityAt: number | Default<0> | undefined;
 
@@ -427,8 +428,9 @@ const crossrefTable = lift(
  * The instant a row sorts by: its published `lastActivityAt`, or its
  * `createdAt` when it has published none.
  *
- * `lastActivityAt` is DERIVED, so it exists only once the topic has run. A
- * topic filed headlessly and never opened publishes none, and
+ * A topic on the current pattern is created with `lastActivityAt` and keeps it
+ * stored. A topic on an older pattern derives it, so it exists only once that
+ * topic has run: one filed headlessly and never opened publishes none, and
  * {@link TopicIndexRow} coalesces that absence to `0`. Ordering on that `0`
  * puts the newest topic on the board beneath every topic that has ever run —
  * the opposite of what a board sorted by recency is for, and invisible,
@@ -690,11 +692,16 @@ export const submitProfileTopic = handler<void, {
   // in `addTopic`: no reader observes the topic without its number, and a
   // concurrent create serializes on the map's keys rather than taking the
   // same one.
+  const filedAt = Date.now();
   const { member: piece } = createNamed(names, (allocated) =>
     Topic({
       topicStateVersion: TOPIC_STATE_VERSION,
       title: trimmed,
-      createdAt: Date.now(),
+      createdAt: filedAt,
+      // Kept by the topic's verbs from here on; a new topic has no comment and
+      // no activity but its creation.
+      commentCount: 0,
+      lastActivityAt: filedAt,
       createdBy: author,
       // The number this create allocated, stored with the topic, which is
       // what lets the topic report it without reading the board.
@@ -759,6 +766,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     // topic without its number, and a concurrent create serializes on the
     // map's keys, re-running with the next number rather than taking the same
     // one.
+    const filedAt = Date.now();
     const { name, member: piece } = createNamed(names, (allocated) =>
       Topic({
         topicStateVersion: TOPIC_STATE_VERSION,
@@ -768,7 +776,11 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
         // Preserved verbatim, matching setBody and the UI save path — trimming
         // would corrupt whitespace-sensitive Markdown (indented code blocks).
         body: body ?? "",
-        createdAt: Date.now(),
+        createdAt: filedAt,
+        // Kept by the topic's verbs from here on; a new topic has no comment
+        // and no activity but its creation.
+        commentCount: 0,
+        lastActivityAt: filedAt,
         createdBy: author,
         // The number this create allocated, stored with the topic, which is
         // what lets the topic report it without reading the board.
