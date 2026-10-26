@@ -5480,6 +5480,15 @@ const declaredObservesClass = (
     : undefined;
 };
 
+/** The `ifc` keys the specification types as lists of atoms or clauses. */
+const LABEL_LIST_KEYS = [
+  "confidentiality",
+  "integrity",
+  "addIntegrity",
+  "requiredIntegrity",
+  "maxConfidentiality",
+] as const;
+
 const unsupportedTrustSensitiveReason = (
   schema: JSONSchema,
   path: readonly string[],
@@ -5511,6 +5520,23 @@ const unsupportedTrustSensitiveReason = (
     !isWellFormedWritePolicyAnyOf(ifc)
   ) {
     return `malformed writePolicyAnyOf at /${path.join("/")}`;
+  }
+  // A label list declared as anything but a list is malformed (§4.2.1, §8.8).
+  // Its readers skip what is not a list, so it would be enforced as no label,
+  // no floor, or no ceiling, or crash the commit; a malformed declaration
+  // fails here instead (§8.10.3).
+  for (const key of LABEL_LIST_KEYS) {
+    if (ifc[key] !== undefined && !Array.isArray(ifc[key])) {
+      return `malformed ${key} at /${path.join("/")}`;
+    }
+  }
+  const uiContract = ifc.uiContract;
+  if (
+    isObjectOrArray(uiContract) && !Array.isArray(uiContract) &&
+    uiContract.requiredEventIntegrity !== undefined &&
+    !Array.isArray(uiContract.requiredEventIntegrity)
+  ) {
+    return `malformed uiContract.requiredEventIntegrity at /${path.join("/")}`;
   }
   return undefined;
 };

@@ -2270,20 +2270,24 @@ function toolAllowsObservedConfidentiality(
   toolName: string,
   observedConfidentiality: readonly CfcConfClause[] | undefined,
 ): boolean {
-  if (!observedConfidentiality || observedConfidentiality.length === 0) {
-    return true;
-  }
-
   const toolSchema = toolCatalog.llmTools[toolName]?.inputSchema;
   const maxConfidentiality =
     isObjectOrArray(toolSchema) && isObjectOrArray(toolSchema.ifc)
       ? toolSchema.ifc.maxConfidentiality
       : undefined;
-  // A non-array ceiling means none was declared. A declared (even empty) ceiling
+  // An omitted ceiling means none was declared. A declared (even empty) ceiling
   // is enforced: an empty array is "public only". Delegate to
   // cfcObservationFitsCeiling rather than special-casing empty as allow-all,
   // which would skip the empty-ceiling protection (review follow-up to W0.7).
+  // A ceiling declared as anything but a list is malformed, and admits
+  // nothing, whatever the call observed (§8.10.3).
+  if (maxConfidentiality === undefined) {
+    return true;
+  }
   if (!Array.isArray(maxConfidentiality)) {
+    return false;
+  }
+  if (!observedConfidentiality || observedConfidentiality.length === 0) {
     return true;
   }
 
@@ -2371,6 +2375,15 @@ function toolInputRequiredIntegrityFailure(
   if (seen.has(structural)) return undefined;
   seen.add(structural);
   const ifc = structural.ifc;
+  // A floor declared as anything but a list is malformed, and refuses the
+  // call rather than read as no floor (§8.10.3).
+  if (
+    isObjectOrArray(ifc) && ifc.requiredIntegrity !== undefined &&
+    !Array.isArray(ifc.requiredIntegrity)
+  ) {
+    return `field "${path || "(root)"}" declares a requiredIntegrity that is ` +
+      `not a list; refusing the call (fail closed)`;
+  }
   if (isObjectOrArray(ifc) && Array.isArray(ifc.requiredIntegrity)) {
     const required = ifc.requiredIntegrity;
     if (required.length > 0) {

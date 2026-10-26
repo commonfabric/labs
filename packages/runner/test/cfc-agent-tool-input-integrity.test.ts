@@ -985,6 +985,38 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
   });
 });
 
+describe("CFC trusted agent: a floor declared as anything but a list", () => {
+  // A `requiredIntegrity` the specification types as a list (§8.8), declared
+  // as anything else, refuses the call rather than read as no floor
+  // (§8.10.3).
+
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+
+  it("refuses a literal under a requiredIntegrity declared as an object", () => {
+    expect(
+      llmToolExecutionHelpers.toolInputRequiredIntegrityFailure(
+        runtime,
+        space,
+        {
+          type: "object",
+          properties: {
+            recipient: { type: "string", ifc: { requiredIntegrity: {} } },
+          },
+        },
+        { recipient: "attacker@example.com" },
+        "",
+        {},
+      ),
+    ).toContain(
+      'field "recipient" declares a requiredIntegrity that is not a list',
+    );
+  });
+});
+
 describe("CFC trusted agent: floors behind reference-form schemas (D2)", () => {
   // The gate's schema walk, driven directly: a literal value carries no
   // integrity, so any reachable floor must refuse it. The runtime only
