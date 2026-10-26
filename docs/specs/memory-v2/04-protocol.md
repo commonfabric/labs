@@ -374,6 +374,14 @@ logical session per space rather than to one TCP connection.
 type SessionId = string;
 type SignatureBytes = Uint8Array;
 
+interface MemoryClientInfo {
+  application: string;
+  gitSha: string | null;
+  instanceId: string;
+  generation: number;
+  startedAt: number;
+}
+
 interface SessionOpenRequest {
   type: "session.open";
   requestId: string;
@@ -382,6 +390,7 @@ interface SessionOpenRequest {
   // naming one carries neither `invocation` nor `authorization`.
   principal?: DID;
   session: {
+    client?: MemoryClientInfo;
     sessionId?: SessionId;
     seenSeq?: number;
     sessionToken?: string;
@@ -445,6 +454,7 @@ interface SessionOpenInvocation {
     // The request's `session` descriptor, field for field: the server refuses
     // an open whose descriptor differs from the signed one.
     session: {
+      client?: MemoryClientInfo;
       sessionId?: SessionId;
       seenSeq?: number;
       sessionToken?: string;
@@ -480,6 +490,24 @@ interface SessionOpenResult {
   };
 }
 ```
+
+`session.client` is optional, bounded, self-reported runtime provenance. The
+application is 1–64 printable ASCII characters; the SHA is a full lowercase
+40-character hash or `null`; the instance ID is 1–128 ASCII letters, digits,
+underscores or hyphens. Generation is a positive safe integer and start time
+is a nonnegative safe integer in Unix milliseconds. Unknown fields are ignored;
+malformed known fields refuse the message. A signed open binds the report in
+its descriptor; a connection-authenticated open attributes it to the named
+principal, without attesting the running code.
+
+A server's startup `minimumClientGeneration` defaults to zero, which admits
+unidentified clients. A positive floor rejects missing or older generations
+with a permanent `AuthorizationError` after authentication and before opening
+storage, for fresh opens and resumes alike. It does not change the wire format
+or require matching client/server commits. Existing connections must be ended
+by the host's restart for the new floor to apply. See
+[client attribution and admission](../../../packages/memory/README.md#client-attribution-and-admission)
+for host wiring and rollout semantics.
 
 Rules:
 
@@ -1221,18 +1249,28 @@ interface GraphQueryRequest {
     roots: GraphQueryRoot[];
     branch?: BranchId;
     atSeq?: number;
+    includeAuthoredSeq?: boolean;
   };
 }
 
 interface GraphQueryResult {
   serverSeq: number;
   entities: EntitySnapshot[];
+  authoredSeq?: number;
 }
 ```
 
 The selector path is relative to `document.value`, not the full stored document
 root. The server converts it to a document path by prepending `"value"` before
 running shared traversal.
+
+When `includeAuthoredSeq` is true, `authoredSeq` is the highest authored commit
+sequence in the query's branch at or below `atSeq` (or `serverSeq` when omitted),
+and is zero when none exists. This metadata requires the same authenticated READ
+authority as the query and does not load document values. A client waiting for
+serving coverage through a captured head can request it with empty roots and
+wait for W to cover that authored sequence. A watermark document's revision
+alone is not evidence that intervening authored commits have been covered.
 
 ### 4.3.4 Entity Identifier Discovery and Lookup
 

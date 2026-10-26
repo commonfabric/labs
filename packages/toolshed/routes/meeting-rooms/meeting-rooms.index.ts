@@ -5,6 +5,7 @@ import { fromFileUrl } from "@std/path";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import env from "@/env.ts";
+import { resolveGitSha } from "@/lib/build-info.ts";
 import { identity } from "@/lib/identity.ts";
 import { MeetingRooms } from "@/lib/meeting-rooms.ts";
 import { memoryEngineStoreUrl, memoryServer } from "@/routes/storage/memory.ts";
@@ -18,6 +19,7 @@ export default createMeetingRoomRouter({
       const storage = StorageManager.open({
         memoryHost: new URL(env.MEMORY_URL),
         as: identity,
+        clientBuild: { application: "toolshed", gitSha: resolveGitSha() },
       });
       try {
         return await storage.createSpace({ [creator]: "OWNER" }, {

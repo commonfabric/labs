@@ -11,6 +11,7 @@ import {
   writeListeningMarker,
 } from "@/background.ts";
 import env from "@/env.ts";
+import { resolveGitSha } from "@/lib/build-info.ts";
 import { announceCloneIfServed } from "@/lib/clone-banner.ts";
 import { identity } from "@/lib/identity.ts";
 import {
@@ -42,6 +43,7 @@ const initializeRuntime = () => {
       StorageManager.open({
         memoryHost: new URL(env.MEMORY_URL),
         as: identity,
+        clientBuild: { application: "toolshed", gitSha: resolveGitSha() },
       }),
     );
     console.log("Runtime initialized successfully");

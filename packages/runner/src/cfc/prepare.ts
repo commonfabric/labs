@@ -13281,6 +13281,16 @@ export function* prepareBoundaryCommitSteps(
           id,
           runtimeWritePolicyAuthorization,
         );
+        // TODO(danfuzz): A stream's entries document in a person's home space
+        // is measured once the join also holds a clause from another space,
+        // and its ceiling is then `Space(<home>)` alone, which the home
+        // owner's own `PersonalSpace` label doesn't fit. So under server
+        // execution, a handler in the home that reads data stamped with that
+        // label beside data from another space, and sends an event, is
+        // refused for the event's bookkeeping alone, as
+        // `fabrichat-stamped-title-offers-multi-runtime.test.ts` pins. Settle
+        // with the CFC specification whether such a document admits its space
+        // owner's label, then follow it here and drop that pin.
         const measuredPaths = isDeclarablePolicyStore(
             id,
             flowJoinIsLocal,

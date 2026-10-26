@@ -1,6 +1,7 @@
 /**
  * Unit tests for the cell listing. The injected controller stub is what lets
- * the listing's body run with no runtime, no socket, and no server behind it.
+ * the listing's body run with no live runtime, no socket, and no server behind
+ * it.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -31,9 +32,11 @@ function valueAtPath(root: unknown, path: readonly (string | number)[]) {
 }
 
 /**
- * A controller stub covering exactly what a listing read touches: get the
- * piece, then read one of its two cells at a path. `read` collects the paths
- * the read asked for, which is what the embedded-path cases assert on.
+ * A controller stub covering exactly what a listing read touches: the
+ * runtime's server-execution posture, off here so the read waits for no
+ * serving runtime, then the piece, then one of its two cells read at a path.
+ * `read` collects the paths the read asked for, which is what the
+ * embedded-path cases assert on.
  */
 function stubController(
   cells: { result?: unknown; input?: unknown },
@@ -46,6 +49,7 @@ function stubController(
     },
   });
   return {
+    runtime: { experimental: { serverExecution: false } },
     get: () =>
       Promise.resolve({
         result: cell(cells.result),

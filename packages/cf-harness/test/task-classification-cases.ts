@@ -158,7 +158,7 @@ export const PLAYTEST_2026_10_13_TASKS: readonly TaskClassificationCase[] = [
 /**
  * Asks that reach past the pieces a job holds: the person's own data, the
  * public web, Common Fabric itself, and general knowledge, which is in no
- * domain. The shape eval runs the same asks live.
+ * domain.
  */
 export const DOMAIN_TASKS: readonly TaskClassificationCase[] = [
   { task: "thanks!", context: {}, expected: ["respond"], domains: [] },

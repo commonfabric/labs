@@ -43,7 +43,6 @@ const deps = (logger: LifecycleDeps["logger"]): LifecycleDeps => ({
       (await memoryServer.readDocument(space, aclDocId(space)))?.value,
   },
   host: serverExecutionHost,
-  serviceIdentity: identity,
   append: (entry) => memoryServer.commitDelegatedAppend(entry),
   readDocument: (space, id) => memoryServer.readDocument(space, id),
   watchAdmittedCommits: (watcher) => memoryServer.watchAdmittedCommits(watcher),

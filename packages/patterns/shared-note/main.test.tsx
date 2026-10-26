@@ -1,6 +1,7 @@
 /**
- * Tests imported text, editor bindings, recovery, the live-cursor notice, and
- * the profile-name sanitizer's co-presence bounds, without a notebook.
+ * Tests imported text, editor bindings, recovery, the live-cursor notice, the
+ * profile-name sanitizer's co-presence bounds, and the verbs that edit the
+ * body, without a notebook.
  */
 
 import {
@@ -121,6 +122,26 @@ export default pattern(() => {
       "click outside the note, then back into it to try again",
     )
   );
+  const action_append_line = action(() =>
+    subject.appendLine.send({ text: "- [ ] follow up" })
+  );
+  const assert_line_appended = assert(() =>
+    subject.content === MARKDOWN + "- [ ] follow up"
+  );
+  const action_replace_text = action(() =>
+    subject.replaceText.send({ old: "- [ ] task", new: "- [x] task" })
+  );
+  const assert_text_replaced = assert(() =>
+    subject.content ===
+      MARKDOWN.replace("- [ ] task", "- [x] task") + "- [ ] follow up"
+  );
+  const action_prepend_line_to_blank = action(() =>
+    blank.prependLine.send({ text: "# Agenda" })
+  );
+  const action_append_line_to_blank = action(() =>
+    blank.appendLine.send({ text: "- one" })
+  );
+  const assert_blank_lines = assert(() => blank.content === "# Agenda\n- one");
   return {
     [TESTS]: [
       { assertion: assert_imported_content },
@@ -138,6 +159,13 @@ export default pattern(() => {
       { assertion: assert_presence_notice_cleared },
       { action: action_presence_unsupported },
       { assertion: assert_presence_unsupported_notice },
+      { action: action_append_line },
+      { assertion: assert_line_appended },
+      { action: action_replace_text },
+      { assertion: assert_text_replaced },
+      { action: action_prepend_line_to_blank },
+      { action: action_append_line_to_blank },
+      { assertion: assert_blank_lines },
     ],
     subject,
   };

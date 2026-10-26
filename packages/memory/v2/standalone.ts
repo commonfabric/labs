@@ -137,9 +137,16 @@ export class StandaloneMemoryServer {
       serve?: (
         request: Request,
       ) => Response | undefined | Promise<Response | undefined>;
+
+      /**
+       * Where the server keeps its spaces, as `Server` takes it. Default: a
+       * non-persistent store, which only this thread can reach.
+       */
+      store?: URL;
     } = {},
   ): StandaloneMemoryServer {
     const memory = new MemoryServer.Server({
+      ...(options.store === undefined ? {} : { store: options.store }),
       authorizeSessionOpen,
       ...(options.connectionAuth === true
         ? { authorizeConnection: verifyConnectionAuthorization }

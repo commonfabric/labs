@@ -1,8 +1,10 @@
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
+import { LRUCache } from "@commonfabric/utils/cache";
 import { getLogger } from "@commonfabric/utils/logger";
 import { StagedMap } from "@commonfabric/utils/staged-map";
 import { hashStringOf } from "@commonfabric/data-model";
 import {
+  hashSchema,
   internPathSelector,
   internSchemaAsTaggedHashString,
   REJECTING_SELECTOR,
@@ -2070,7 +2072,8 @@ const forgetRetired = (
  * evaluation's walks did not make again (`GraphRecorders.fresh`). A
  * schema document's record is attributed by the closure assembly rather
  * than by a walk, so it is released by the assembly's own account of a
- * version's dropped refs, never here.
+ * version's dropped refs, never here. Returns how many selectors it walked
+ * the document under, each one root evaluation.
  */
 const rewalkDocument = (
   space: string,
@@ -2082,7 +2085,7 @@ const rewalkDocument = (
   stats: QueryTraversalStats,
   retirement: Retirement,
   changedMisses: Set<string>,
-): void => {
+): number => {
   const previous = new Set(state.tracksOf.get(docKey));
   const selectors = [...state.tracker.values(docKey)];
   state.tracker.delete(docKey);
@@ -2114,6 +2117,7 @@ const rewalkDocument = (
     state.tracksOf.get(docKey)?.delete(entry);
     dropAttribution(state, entry, docKey, retirement);
   }
+  return selectors.length;
 };
 
 /**
@@ -2906,7 +2910,7 @@ const refreshTiming = getLogger("memory", { enabled: false });
  * one most worth attributing, and it is skipped and requeued by its caller
  * rather than surfaced anywhere else.
  */
-const walkPhaseClock = (): {
+const walkPhaseClock = (detail: () => string): {
   enter(name: string): void;
   close(): void;
 } => {
@@ -2929,7 +2933,15 @@ const walkPhaseClock = (): {
       const now = performance.now();
       if (current !== undefined) record(current, now);
       current = undefined;
-      refreshTiming.time(startedAt, now, "memory", "refresh", "walk", "total");
+      refreshTiming.timeDetailed(
+        detail,
+        startedAt,
+        now,
+        "memory",
+        "refresh",
+        "walk",
+        "total",
+      );
     },
   };
 };
@@ -2957,7 +2969,25 @@ export const refreshTrackedGraph = (
   const affectedMisses = new Map<QueryDocKey, Set<SchemaPathSelector>>();
   const invalidations = new Map<CellScope, Set<string>>();
   const identity = identityOf(state.manager);
-  const phases = walkPhaseClock();
+  let outcome = "failed";
+  let rootEvaluations = 0;
+  let updateCount = 0;
+  let reads = 0;
+  let walked: EngineObjectManager | undefined;
+  let readCountBefore = 0;
+  const phases = walkPhaseClock(() =>
+    JSON.stringify({
+      space,
+      identity,
+      dirty: dirtyIds.size,
+      affected: [...affectedDocs.keys()],
+      missed: [...affectedMisses.keys()],
+      rootEvaluations,
+      updates: updateCount,
+      reads,
+      outcome,
+    })
+  );
   try {
     phases.enter("select");
     for (const dirtyId of dirtyIds) {
@@ -3004,11 +3034,12 @@ export const refreshTrackedGraph = (
       state.manager.invalidateIds(ids, scope);
     }
     if (affectedDocs.size === 0 && affectedMisses.size === 0) {
+      outcome = "untouched";
       return null;
     }
     phases.enter("rewalk");
 
-    const manager = new EngineObjectManager(
+    const manager = walked = new EngineObjectManager(
       engine,
       state.branch,
       state.manager.principal,
@@ -3016,13 +3047,13 @@ export const refreshTrackedGraph = (
     );
     const sharedMemo = createSchemaMemo();
     const stats = createQueryTraversalStats();
-    const readCountBefore = manager.readCount;
+    readCountBefore = manager.readCount;
 
     const changedMisses = new Set<string>();
     const recorders = recordersFor(state, changedMisses);
     const retirement = createRetirement();
     for (const key of affectedDocs.keys()) {
-      rewalkDocument(
+      rootEvaluations += rewalkDocument(
         space,
         manager,
         state,
@@ -3045,6 +3076,7 @@ export const refreshTrackedGraph = (
     for (const [key, selectors] of affectedMisses) {
       const { id, scope, scopeKey } = fromDocKey(key);
       for (const selector of selectors) {
+        rootEvaluations++;
         evaluateTrackedDocument(
           space,
           manager,
@@ -3137,6 +3169,8 @@ export const refreshTrackedGraph = (
     forgetRetiredFromManager(state.manager, state, retirement, changedMisses);
 
     stats.managerReads = manager.readCount - readCountBefore;
+    updateCount = delivered.updates.size;
+    outcome = "refreshed";
 
     return {
       serverSeq: Engine.serverSeq(engine),
@@ -3146,6 +3180,7 @@ export const refreshTrackedGraph = (
       stats,
     };
   } finally {
+    reads = (walked?.readCount ?? readCountBefore) - readCountBefore;
     phases.close();
   }
 };
@@ -3195,29 +3230,51 @@ const evaluateTrackedDocument = (
       address.scope ?? DEFAULT_SCOPE,
       identityOf(manager),
     );
-  const loaded = manager.load(address);
-  if (loaded === null || loaded.value === undefined) {
-    const interned = internPathSelector(selector);
-    absentSink.add(docKey, interned);
-    if (absentSink === schemaTracker) {
-      onTrackedDoc?.(docKey, interned, referrer, "walked");
+  const startedAt = performance.now();
+  const readsBefore = manager.readCount;
+  let outcome = "failed";
+  try {
+    const loaded = manager.load(address);
+    if (loaded === null || loaded.value === undefined) {
+      const interned = internPathSelector(selector);
+      absentSink.add(docKey, interned);
+      if (absentSink === schemaTracker) {
+        onTrackedDoc?.(docKey, interned, referrer, "walked");
+      }
+      outcome = "absent";
+      return;
     }
-    return;
+    // A fresh walk per document, so each starts with an empty pointer-cycle
+    // tracker while sharing the query's reach and its memoized schema results.
+    const walk = new GraphQueryWalk({
+      manager,
+      space: space as MemorySpace,
+      schemaTracker,
+      onMissedDoc,
+      onCrossing,
+      onTrackedDoc,
+      identity: identityOf(manager),
+      memo: sharedMemo,
+      stats,
+    });
+    walk.visit(loaded, selector, docKey, referrer, rewalk);
+    outcome = "present";
+  } finally {
+    refreshTiming.timeDetailed(
+      () =>
+        JSON.stringify({
+          doc: docKey,
+          path: selector.path,
+          schema: hashSchema(selector.schema),
+          reads: manager.readCount - readsBefore,
+          outcome,
+        }),
+      startedAt,
+      "memory",
+      "query",
+      "root",
+    );
   }
-  // A fresh walk per document, so each starts with an empty pointer-cycle
-  // tracker while sharing the query's reach and its memoized schema results.
-  const walk = new GraphQueryWalk({
-    manager,
-    space: space as MemorySpace,
-    schemaTracker,
-    onMissedDoc,
-    onCrossing,
-    onTrackedDoc,
-    identity: identityOf(manager),
-    memo: sharedMemo,
-    stats,
-  });
-  walk.visit(loaded, selector, docKey, referrer, rewalk);
 };
 
 export const toDocKey = (
@@ -3227,7 +3284,30 @@ export const toDocKey = (
   identity: ScopeKeyIdentity,
 ): QueryDocKey => schemaTrackerKey(space, id, scope, identity);
 
+/** The parts of a query doc key, by the key, up to the newest 100,000 keys. */
+const parsedDocKeys = new LRUCache<QueryDocKey, {
+  space: string;
+  id: string;
+  scope: CellScope;
+  scopeKey: ScopeKey;
+}>({ capacity: 100_000 });
+
 export const fromDocKey = (key: QueryDocKey): {
+  space: string;
+  id: string;
+  scope: CellScope;
+  scopeKey: ScopeKey;
+} => {
+  // A session's refresh parses every key its graphs hold, and the keys are
+  // the same from one refresh to the next, so the parse is kept by key.
+  const parsed = parsedDocKeys.get(key);
+  if (parsed !== undefined) return parsed;
+  const result = parseDocKey(key);
+  parsedDocKeys.put(key, result);
+  return result;
+};
+
+const parseDocKey = (key: QueryDocKey): {
   space: string;
   id: string;
   scope: CellScope;

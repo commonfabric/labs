@@ -7,6 +7,7 @@ import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
 import { MEMORY_PROTOCOL } from "../v2.ts";
+import { type ClientInfo, createClientInfo } from "../v2/client-info.ts";
 import {
   authorizeLoopbackSessionOpen,
   verifySessionOpenAuthorization,
@@ -46,6 +47,7 @@ const buildOpen = async (
   extra: { aud?: string; challenge?: string; iat?: number; exp?: number } = {},
   identity = alice,
   session: {
+    client?: ClientInfo;
     sessionId?: string;
     seenSeq?: number;
     sessionToken?: string;
@@ -101,6 +103,36 @@ describe("wireAuthorizationOf", () => {
 });
 
 describe("verifySessionOpenAuthorization", () => {
+  it("binds client identity to the signed session descriptor", async () => {
+    const client = createClientInfo({
+      application: "cf",
+      gitSha: "a".repeat(40),
+    });
+    const message = await buildOpen(signedFields(), alice, { client });
+    expect(await verifySessionOpenAuthorization(message, verifyOptions())).toBe(
+      alice.did(),
+    );
+    for (
+      const session of [{}, { client: { ...client, generation: 2 } }, {
+        client: { ...client, application: "shell" },
+      }]
+    ) {
+      await expect(
+        verifySessionOpenAuthorization(
+          { ...message, session },
+          verifyOptions(),
+        ),
+      ).rejects.toMatchObject({ name: "AuthorizationError" });
+    }
+    const unsigned = await buildOpen(signedFields());
+    await expect(
+      verifySessionOpenAuthorization(
+        { ...unsigned, session: { client } },
+        verifyOptions(),
+      ),
+    ).rejects.toMatchObject({ name: "AuthorizationError" });
+  });
+
   it("binds the complete custom-root expectation to the signed descriptor", async () => {
     const root = {
       source: "system:loom/main.tsx",

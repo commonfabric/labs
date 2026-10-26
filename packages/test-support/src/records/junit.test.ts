@@ -520,6 +520,19 @@ describe("junit", () => {
       );
     });
 
+    it("maps each failing record, and no other, to its failure message", () => {
+      const { records, failures } = readJUnit(DENO_SAMPLE, options);
+
+      expect(
+        [...failures].map(([record, message]) => [record.test.n, message]),
+      ).toEqual([[
+        "glaze > fails on purpose",
+        "Uncaught AssertionError: 1 < 2",
+      ]]);
+      expect(records.filter((record) => record.outcome === "fail"))
+        .toEqual([...failures.keys()]);
+    });
+
     it("gives each outermost describe the time it took beyond its leaves", () => {
       expect(
         readJUnit(HOOKS_SAMPLE, options).hooks.filter((record) =>

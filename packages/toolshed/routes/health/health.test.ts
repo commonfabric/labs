@@ -30,6 +30,18 @@ Deno.test("health routes", async (t) => {
   });
 
   await t.step(
+    "GET /api/health/serving-loop-realm answers 404 while no serving loop runs here",
+    async () => {
+      // No serving loop is started in this process, so the route has no
+      // realm to ask; it says so at once rather than wait for one.
+      const response = await app.request("/api/health/serving-loop-realm");
+      assertEquals(response.status, 404);
+      const json = await response.json();
+      assertEquals(typeof json.error, "string");
+    },
+  );
+
+  await t.step(
     "GET /api/health/stats reports the memory server's document caches",
     async () => {
       // The provider is registered by the Server constructor (newest live

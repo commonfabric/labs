@@ -1254,6 +1254,10 @@ export async function runTestPattern(
           experimental,
           fetch: mockFetch,
           moduleByteCache,
+          // The loop stays on this thread whatever the environment selects
+          // for a toolshed: the mock fetch and the module cache are closures,
+          // which a worker's port does not carry.
+          worker: false,
         });
         servingCleanup.defer(() =>
           serving.close().catch((error) => {

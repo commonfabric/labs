@@ -8,6 +8,11 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import {
+  type ClientBuild,
+  type ClientInfo,
+  createClientInfo,
+} from "@commonfabric/memory/v2/client-info";
+import {
   decodeCompressedMemoryMessage,
   encodeCompressedMemoryMessage,
   type EncodedMemoryMessage,
@@ -1181,6 +1186,7 @@ type SharedConnection = {
 export class RemoteSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
   #compressionEnabled = true;
+  readonly #clientInfo: Readonly<ClientInfo>;
   #transports = new Set<WebSocketTransport>();
   #sharedConnections = false;
 
@@ -1214,9 +1220,11 @@ export class RemoteSessionFactory implements SessionFactory {
     resolveAddress: (space: MemorySpace) => URL,
     defaultSigner: Signer,
     createSocket: MemorySocketFactory = createMemorySocket,
+    clientBuild?: ClientBuild,
   ) {
     this.#resolveAddress = resolveAddress;
     this.#defaultSigner = defaultSigner;
+    this.#clientInfo = createClientInfo(clientBuild);
     this.#createSocket = createSocket;
   }
 
@@ -1420,10 +1428,11 @@ export class RemoteSessionFactory implements SessionFactory {
     this.#transports.add(transport);
     const dialed: SharedConnection = {
       transport,
-      client: MemoryClient.connect({ transport }).then((client) => {
-        this.#relayNotices(client);
-        return client;
-      }),
+      client: MemoryClient.connect({ transport, client: this.#clientInfo })
+        .then((client) => {
+          this.#relayNotices(client);
+          return client;
+        }),
     };
     this.#shared.set(key, dialed);
     // A failed dial takes its entry with it, whoever is waiting on it.
@@ -1454,7 +1463,11 @@ export class RemoteSessionFactory implements SessionFactory {
     const transport = this.#dedicatedTransport(space);
     let client: MemoryClient.Client | undefined;
     try {
-      client = await MemoryClient.connect({ transport, signal });
+      client = await MemoryClient.connect({
+        transport,
+        signal,
+        client: this.#clientInfo,
+      });
       return client.serverFlags;
     } finally {
       await (client?.close() ?? transport.close()).catch(() => {});
@@ -1513,7 +1526,11 @@ export class RemoteSessionFactory implements SessionFactory {
       // `connect` and `mount` each refuse an aborted signal on entry, so the
       // only window this method has to check for itself is the one after the
       // mount resolves, below.
-      client = await MemoryClient.connect({ transport, signal });
+      client = await MemoryClient.connect({
+        transport,
+        signal,
+        client: this.#clientInfo,
+      });
       this.#relayNotices(client);
       const closeForAbort = (): void => {
         void client?.close().catch(() => {});

@@ -387,7 +387,10 @@ failed, and not in a run that was cancelled. It reads what every lane uploaded:
 
 1. It holds the run's records to the topology: `deno task check-test-topology
    --commit "$GITHUB_SHA" --records test-records-artifacts`, which fails a
-   recorded test that no suite of the topology claims.
+   recorded test that no suite of the topology claims. The download holds the
+   artifacts of every attempt at the run, and the check reads only each job's
+   latest attempt, so re-running a lane replaces what an earlier attempt at it
+   recorded.
 2. It judges [the coverage gates](#the-coverage-gate) the lanes' plan chose,
    over every lane's coverage reports, and records each one. On a pull request
    it reads the pull request's description as it stands, through the API, and

@@ -19,7 +19,9 @@
  * cell. Cells of one level with the same description are paired across two
  * builds by their order, so a cell added or removed among them moves the
  * pairing of each one after it, and two of them trading places reads as no
- * move. `renumberedCells()` says what that pairing reports.
+ * move. `renumberedCells()` says what that pairing reports, and
+ * `ambiguousDescriptions()` names the descriptions for which it cannot say
+ * which cell went where.
  */
 
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
@@ -42,7 +44,7 @@ export interface NumberedCell {
    * sub-pattern child, whose state is the child piece under its id, or a
    * cell that is not computed.
    */
-  holdsState: boolean;
+  hasState: boolean;
 }
 
 /** A numbered cell whose number differs between two builds of one source. */
@@ -51,7 +53,7 @@ export interface RenumberedCell {
   description: string;
 
   /** Whether it holds state, as {@link NumberedCell} says. */
-  holdsState: boolean;
+  hasState: boolean;
 
   /** Its number in the earlier build. */
   from: number;
@@ -60,7 +62,36 @@ export interface RenumberedCell {
   to: number;
 }
 
-/** The pattern identity of a builder artifact, where one is known. */
+/**
+ * A description of cells, in one pattern level built by two compilers, whose
+ * cells the pairing by order cannot match across the two, with the numbers
+ * its cells have in each build.
+ */
+export interface AmbiguousDescription {
+  /** What the cells are, as {@link NumberedCell} describes them. */
+  description: string;
+
+  /** The numbers of its cells in the earlier build, in number order. */
+  before: number[];
+
+  /** The numbers of its cells in the later build, in number order. */
+  after: number[];
+}
+
+/** Options for `ambiguousDescriptions()`. */
+export interface AmbiguousDescriptionsOptions {
+  /**
+   * Whether the cells considered are those that have state, as by default,
+   * or those that have none.
+   */
+  hasState?: boolean;
+}
+
+/**
+ * The pattern identity of a builder artifact, where one is known, with a
+ * symbol that is the same for every load of the artifact's module, whichever
+ * of the artifact's names the load registered first.
+ */
 export type EntryRefOf = (
   artifact: object,
 ) => { identity: string; symbol: string } | undefined;
@@ -185,7 +216,7 @@ export function numberedCells(
         computed ? "computed" : "not computed",
         writers.length === 0 ? "no writer" : `written by ${writers.join(", ")}`,
       ].join(", "),
-      holdsState: !stream && (!computed || child),
+      hasState: !stream && (!computed || child),
     });
   }
   return cells.sort((a, b) => a.number - b.number);
@@ -203,17 +234,20 @@ export function numberedCells(
  * where the two numbers agree, and where they differ, as when a cell of
  * another description sits between, it is reported with the neighbor's
  * number as `from`. Two cells of one description trading places are not
- * reported.
+ * reported. For cells holding state, `ambiguousDescriptions()` names the
+ * descriptions this pairing cannot be trusted for.
  */
 export function renumberedCells(
   before: readonly NumberedCell[],
   after: readonly NumberedCell[],
 ): RenumberedCell[] {
-  // TODO(danfuzz): Report a cell added or removed among cells of its
-  // description, and the shift it causes with each cell's own numbers, rather
-  // than pairing each cell after it with a neighbor's number, once how two
-  // builds' cells are to be matched is settled. `cause-assignment.test.ts`
-  // pins the pairing as it stands.
+  // TODO(danfuzz): For cells that hold no state, a cell added or removed
+  // among cells of one description shifts the ones after it, and this
+  // reports that shift with a neighbor's number as `from`, or not at all
+  // where the numbers agree. Report each such cell with its own numbers,
+  // once how those cells are to be matched is settled.
+  // `cause-assignment.test.ts` pins the pairing as it stands, and
+  // `check-cause-assignments.ts` passes the shift it does not report.
   const numbersBefore = new Map<string, number[]>();
   for (const cell of before) {
     numbersBefore.set(cell.description, [
@@ -230,10 +264,53 @@ export function renumberedCells(
     if (from === undefined || from === cell.number) continue;
     moved.push({
       description: cell.description,
-      holdsState: cell.holdsState,
+      hasState: cell.hasState,
       from,
       to: cell.number,
     });
   }
   return moved;
+}
+
+/**
+ * The descriptions of cells holding state, or, given `{ hasState: false }`,
+ * of cells holding none, in one pattern level built from one source by two
+ * compilers, for which the pairing by order that `renumberedCells()` makes
+ * cannot say which cell went where. Such a description is either one whose
+ * count of cells differs between `before` and `after`, since the pairing then
+ * leaves a cell out and pairs the ones after it with a neighbor's number, or
+ * one of two or more cells whose numbers changed, since a shift and a trade
+ * among them look alike. Each list is in number order, as `numberedCells()`
+ * returns it. A trade among cells of one description that leaves every number
+ * as it was is not found here: the descriptions cannot show it.
+ */
+export function ambiguousDescriptions(
+  before: readonly NumberedCell[],
+  after: readonly NumberedCell[],
+  { hasState = true }: AmbiguousDescriptionsOptions = {},
+): AmbiguousDescription[] {
+  const numbers = new Map<string, AmbiguousDescription>();
+  const entry = (description: string): AmbiguousDescription => {
+    let found = numbers.get(description);
+    if (found === undefined) {
+      found = { description, before: [], after: [] };
+      numbers.set(description, found);
+    }
+    return found;
+  };
+  for (const cell of after) {
+    if (cell.hasState === hasState) {
+      entry(cell.description).after.push(cell.number);
+    }
+  }
+  for (const cell of before) {
+    if (cell.hasState === hasState) {
+      entry(cell.description).before.push(cell.number);
+    }
+  }
+  return [...numbers.values()].filter((found) =>
+    found.before.length !== found.after.length ||
+    (found.before.length >= 2 &&
+      found.before.some((number, index) => number !== found.after[index]))
+  );
 }

@@ -68,11 +68,12 @@ reference edge and take no `agentName`.
   own, and is read back afterwards. An uncertain write is retried only under
   that same session and id, never as a new call, which is how one Topic becomes
   two.
-- A Topic's derived scalars — `lastActivityAt` and `commentCount` — materialize
-  only once the piece has RUN, and `addTopic` does not run it. Finish a headless
-  filing with `deno task cf piece step --cell "$TOPIC"`, or the board reads them
-  as their defaults. Ordering is not at stake: the board falls back to
-  `createdAt` for a topic that has never run.
+- A Topic's derived scalars — `lastActivityAt` and `commentCount` — are stored
+  only once a run of the piece completes, and a `cf piece call` returns before
+  the verb's write has re-derived them. Finish every headless write to a topic,
+  `addTopic` and each Topic verb alike, with
+  `deno task cf piece step --cell "$TOPIC"`, or the board's index keeps the
+  values from before the write.
 - Recommended, not required: the Body states the core issue for a first-time
   reader and is replaced whole, with any critical update noted at its top; the
   Thread (comments) holds updates, append-only; Links hold references to
@@ -84,10 +85,10 @@ reference edge and take no `agentName`.
 
 ## The detail, by task
 
-| Read                            | When you are                                                                                                                                                         |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `references/reading.md`         | surveying the board or reading a Topic: the index, addresses and how to compare them, durable inputs against stepped results                                         |
-| `references/verbs.md`           | discovering fields and operations, choosing a verb, identifying the deployed contract, retraction and by-reference verbs                                             |
-| `references/naming.md`          | citing or resolving a Topic by its number, `top/42`, and what the deployment carries                                                                                 |
-| `references/mutating.md`        | creating a Topic and recovering its address, the observation asymmetry, warming a filed Topic, the Topic verbs, references between Topics, what to put in each field |
-| `references/pattern-updates.md` | changing pattern source: `setsrc` rehearsal, `--root`, team authorization                                                                                            |
+| Read                            | When you are                                                                                                                                                                  |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `references/reading.md`         | surveying the board or reading a Topic: the index, addresses and how to compare them, durable inputs against stepped results                                                  |
+| `references/verbs.md`           | discovering fields and operations, choosing a verb, identifying the deployed contract, retraction and by-reference verbs                                                      |
+| `references/naming.md`          | citing or resolving a Topic by its number, `top/42`, and what the deployment carries                                                                                          |
+| `references/mutating.md`        | creating a Topic and recovering its address, the observation asymmetry, stepping a Topic after a write, the Topic verbs, references between Topics, what to put in each field |
+| `references/pattern-updates.md` | changing pattern source: `setsrc` rehearsal, `--root`, team authorization                                                                                                     |

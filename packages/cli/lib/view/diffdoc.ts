@@ -405,7 +405,7 @@ export interface DiffHunkInfo {
 /** Maps between diff-text offsets and workspace-file offsets, for semantics. */
 export interface DiffMaps {
   /**
-   * Absolute paths of the diff's files that exist in the workspace, in diff
+   * Absolute paths of the workspace files whose hunks the diff shows, in diff
    * order, each with the language its new side is read in.
    */
   readonly rootFiles: ReadonlyMap<string, Language>;
@@ -907,10 +907,10 @@ export interface DiffFileLanguages {
  * Decides the language of both sides of every file in a diff, aligned with
  * `model.files`. A language that claims a side's path settles that side.
  * Otherwise the side's content does: a hunk that starts at its first line,
- * which shows that side exactly, and then its complete file when `ws` has one
- * (the workspace file for the new side, the old Git blob for the old side). A
- * side that neither settles takes the other side's language, and plain text
- * when that is unsettled too.
+ * which shows that side exactly, and then, for a file with hunks, its complete
+ * file when `ws` has one (the workspace file for the new side, the old Git blob
+ * for the old side). A side that neither settles takes the other side's
+ * language, and plain text when that is unsettled too.
  */
 export function diffLanguages(
   text: string,
@@ -937,7 +937,9 @@ export function diffLanguages(
   };
   const newSources = function* (file: DiffFile) {
     yield* firstLines(file, "new");
-    const absPath = file.newPath ? ws.resolve(file.newPath) : null;
+    const absPath = file.hunks.length > 0 && file.newPath
+      ? ws.resolve(file.newPath)
+      : null;
     const fileText = absPath ? ws.read(absPath) : null;
     if (fileText !== null) yield fileText;
   };
@@ -1029,7 +1031,10 @@ export function buildDiffDocument(
     // fragments, projecting structure — dispatches through its language.
     const { oldLanguage, newLanguage } = languages[fileIndex];
     const absPath = file.newPath ? ws.resolve(file.newPath) : null;
-    const loaded = absPath && readOnlyReasonFor(newLanguage) === undefined
+    // A file's content serves only its hunks, so a section without hunks (a
+    // pure rename, say) reads nothing.
+    const loaded = absPath && file.hunks.length > 0 &&
+        readOnlyReasonFor(newLanguage) === undefined
       ? loadFile(absPath, newLanguage, ws, cache)
       : null;
     const fileText = loaded?.fileText ?? null;

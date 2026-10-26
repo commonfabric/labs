@@ -17,6 +17,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
+import type { ClientInfo } from "./v2/client-info.ts";
 import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 
 export const MEMORY_PROTOCOL = "memory" as const;
@@ -896,8 +897,23 @@ export type ApplyOpOperation = OperationFieldAddress & {
   op: "apply-op";
   codec: string;
   submissionId: string;
-  base: OpCursor | null;
+
+  /**
+   * What the payload was written against: a cursor in the field's epoch, or
+   * `null` for the field's baseline. Absent, the payload applies at the version
+   * the field holds: only while the field holds the value `baselineHash`
+   * names, where it carries one, and otherwise blind, guarded only by the reads
+   * its commit carries, as a `set` or `patch` is.
+   */
+  base?: OpCursor | null;
+
+  /**
+   * Hash of the value the payload was written against: the field's baseline,
+   * required when `base` is `null`, or the value it holds now, optional when
+   * `base` is absent. Not allowed with a cursor.
+   */
   baselineHash?: string;
+
   payload: FabricValue;
 };
 
@@ -1441,6 +1457,9 @@ export type SessionOpenAuthMetadata = {
 };
 
 export type SessionDescriptor = {
+  /** Self-reported runtime identity, declared afresh on every open. */
+  client?: ClientInfo;
+
   /** Assert the immutable custom-root reservation when mounting or resuming. */
   genesisRoot?: GenesisRoot;
 
@@ -1587,6 +1606,8 @@ export type GraphQuery = {
   atSeq?: number;
   branch?: BranchName;
   excludeSent?: boolean;
+  /** Include the highest authored commit at or below the query's sequence. */
+  includeAuthoredSeq?: boolean;
 };
 
 export type EntitySnapshot = {
@@ -1618,6 +1639,11 @@ export type EntitySnapshot = {
 export type GraphQueryResult = {
   serverSeq: number;
   entities: EntitySnapshot[];
+  /**
+   * Present when requested, bounded by `atSeq` and restricted to the
+   * branch.
+   */
+  authoredSeq?: number;
 };
 
 export type EntityIdListResult = {
@@ -2454,6 +2480,10 @@ export {
   SERVER_EXECUTION_DEFAULT_ENABLED,
 } from "./v2/server-execution-default.ts";
 export {
+  applyTextChanges,
+  codeMirrorTextChangesPayload,
+} from "./v2/text-changes.ts";
+export {
   parseSessionReadCeiling,
   type ReadCeilingClause,
   type ReadCeilingLabels,
@@ -3045,6 +3075,13 @@ export const encodeMemoryBoundary = (value: FabricValue): string =>
   jsonFromFabricValue(value);
 
 export const commitPreconditionValueHash = (value: FabricValue): string =>
+  hashStringOf(encodeMemoryBoundary(value));
+
+/**
+ * Hash of a collaborative field's value, as an `apply-op` with a `null` base
+ * carries it in `baselineHash`.
+ */
+export const operationBaselineHash = (value: FabricValue): string =>
   hashStringOf(encodeMemoryBoundary(value));
 
 /**

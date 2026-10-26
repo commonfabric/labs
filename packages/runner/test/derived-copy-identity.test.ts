@@ -4,6 +4,7 @@ import {
   brandTrustedBuilderArtifact,
   brandTrustedPattern,
   getArtifactEntryRef,
+  getLeastArtifactEntryRef,
   isTrustedBuilderArtifact,
   isTrustedPattern,
   noteDerivedCopy,
@@ -125,5 +126,60 @@ describe("entry-ref resolution through copies", () => {
       identity: "first",
       symbol: "a",
     });
+  });
+});
+
+describe("getLeastArtifactEntryRef()", () => {
+  it("returns the least symbol a value is registered under, whatever the order", () => {
+    const first = brandTrustedPattern(patternShape());
+    const second = brandTrustedPattern(patternShape());
+    for (const symbol of ["Tally", "Counter", "default"]) {
+      setArtifactEntryRef(first, { identity: "aliased", symbol });
+    }
+    for (const symbol of ["default", "Tally", "Counter"]) {
+      setArtifactEntryRef(second, { identity: "aliased", symbol });
+    }
+
+    expect(getArtifactEntryRef(first)?.symbol).toBe("Tally");
+    expect(getArtifactEntryRef(second)?.symbol).toBe("default");
+    expect(getLeastArtifactEntryRef(first)).toEqual({
+      identity: "aliased",
+      symbol: "Counter",
+    });
+    expect(getLeastArtifactEntryRef(second)).toEqual({
+      identity: "aliased",
+      symbol: "Counter",
+    });
+  });
+
+  it("returns a symbol registered under the identity `getArtifactEntryRef()` returns", () => {
+    const original = brandTrustedPattern(patternShape());
+    setArtifactEntryRef(original, { identity: "first", symbol: "b" });
+    setArtifactEntryRef(original, { identity: "second", symbol: "a" });
+
+    expect(getLeastArtifactEntryRef(original)).toEqual({
+      identity: "first",
+      symbol: "b",
+    });
+  });
+
+  it("returns the root original's least symbol for a copy holding a ref of its own", () => {
+    // A ref registered before the copy is made is pinned on the copy, and
+    // the names registered after it are the root original's.
+    const original = brandTrustedPattern(patternShape());
+    setArtifactEntryRef(original, { identity: "id-copy", symbol: "b" });
+    const copy = patternShape();
+    noteDerivedCopy(copy, original);
+    setArtifactEntryRef(original, { identity: "id-copy", symbol: "a" });
+
+    expect(getArtifactEntryRef(copy)?.symbol).toBe("b");
+    expect(getLeastArtifactEntryRef(copy)).toEqual({
+      identity: "id-copy",
+      symbol: "a",
+    });
+  });
+
+  it("returns `undefined` for a value with no ref", () => {
+    expect(getLeastArtifactEntryRef(patternShape())).toBeUndefined();
   });
 });

@@ -289,6 +289,7 @@ export class XRootView extends BaseView implements ShellApp {
           // Select the deployed shell's immutable worker asset graph. Source
           // runs keep the explicit mutable /scripts URL below.
           clientVersion: COMMIT_SHA,
+          clientBuild: { application: "shell", gitSha: COMMIT_SHA ?? null },
           // A source-run shell serves its worker graph from /scripts even when
           // COMMIT_SHA identifies the checkout. Only deployed builds use the
           // immutable /builds/<sha>/ namespace selected by RuntimeInternals.

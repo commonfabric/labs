@@ -6,23 +6,22 @@ import type { JSONSchema } from "@commonfabric/api";
 import { tagsFromSchema } from "@/schema-tags.ts";
 
 describe("tagsFromSchema", () => {
-  it("reads structured tags from the root", () => {
+  it("reads hashtags from the root description", () => {
     const schema: JSONSchema = {
       type: "object",
-      description: "A #note",
-      tags: ["note"],
+      description: "#Note",
     };
     expect(tagsFromSchema(schema)).toEqual(["note"]);
   });
 
-  it("aggregates structured tags across nested schemas", () => {
+  it("aggregates hashtags across nested schemas", () => {
     const schema: JSONSchema = {
       type: "object",
-      tags: ["note"],
+      description: "#Note",
       properties: {
         annotations: {
           type: "array",
-          tags: ["annotation"],
+          description: "#annotation #NOTE",
           items: { type: "string" },
         },
       },
@@ -33,53 +32,61 @@ describe("tagsFromSchema", () => {
   it("does not read tags from data positions like default", () => {
     const schema: JSONSchema = {
       type: "object",
-      tags: ["note"],
+      description: "#Note",
       properties: {
         config: {
           type: "object",
-          default: { tags: ["not-a-schema-tag"] },
+          default: { description: "#default", tags: ["ignored"] },
+          examples: [{ description: "#example" }],
         },
       },
     };
     expect(tagsFromSchema(schema)).toEqual(["note"]);
   });
 
-  it("reads only structured tags, ignoring hashtags in description text", () => {
-    const schema: JSONSchema = {
-      type: "object",
-      description: "A #stale-tag in prose",
-      tags: ["fresh-tag"],
+  it("uses descriptions when serialized schemas also carry tags metadata", () => {
+    const schema = {
+      type: "object" as const,
+      description: "A #NOTE",
+      tags: ["stale"],
       properties: {
-        content: { type: "string", description: "See #backlink." },
+        content: { type: "string" as const, description: "See #backlink." },
       },
     };
-    expect(tagsFromSchema(schema)).toEqual(["fresh-tag"]);
+    expect(tagsFromSchema(schema)).toEqual(["note", "backlink"]);
+    expect(tagsFromSchema({ ...schema, description: "", properties: {} }))
+      .toEqual([]);
   });
 
-  it("returns empty when a schema has hashtags only in its description", () => {
-    const schema: JSONSchema = {
-      type: "object",
-      description: "An #annotation with no structured tags.",
-    };
-    expect(tagsFromSchema(schema)).toEqual([]);
+  it("uses shared hashtag normalization and token boundaries", () => {
+    expect(tagsFromSchema({
+      description: "#CAFÉ #東京 #with_under #two-words #café",
+      properties: { child: { description: "#東京 #child" } },
+    })).toEqual(["café", "東京", "with_under", "two", "child"]);
+  });
+
+  it("returns empty for descriptions without hashtags", () => {
+    expect(tagsFromSchema({ description: "Plain prose" })).toEqual([]);
   });
 
   it("returns empty for boolean and missing schemas", () => {
     expect(tagsFromSchema(true)).toEqual([]);
+    expect(tagsFromSchema(false)).toEqual([]);
+    expect(tagsFromSchema(null)).toEqual([]);
     expect(tagsFromSchema(undefined)).toEqual([]);
   });
 
   it("collects tags from anyOf/allOf/oneOf branches", () => {
     const schema: JSONSchema = {
       type: "object",
-      anyOf: [{ type: "object", tags: ["from-anyof"] }],
-      allOf: [{ type: "object", tags: ["from-allof"] }],
-      oneOf: [{ type: "object", tags: ["from-oneof"] }],
+      anyOf: [{ type: "object", description: "#from_anyof" }],
+      allOf: [{ type: "object", description: "#from_allof" }],
+      oneOf: [{ type: "object", description: "#from_oneof" }],
     };
     expect(tagsFromSchema(schema)).toEqual([
-      "from-anyof",
-      "from-allof",
-      "from-oneof",
+      "from_anyof",
+      "from_allof",
+      "from_oneof",
     ]);
   });
 
@@ -88,21 +95,52 @@ describe("tagsFromSchema", () => {
       type: "object",
       // A boolean schema as an anyOf branch is a non-object node; the walk
       // must skip it without error and still collect the sibling's tags.
-      anyOf: [true, { type: "object", tags: ["real"] }],
+      anyOf: [true, { type: "object", description: "#real" }],
     };
     expect(tagsFromSchema(schema)).toEqual(["real"]);
   });
 
-  it("skips non-string entries in a tags array", () => {
+  it("skips non-string descriptions from external schemas", () => {
     const schema = {
-      type: "object",
-      tags: ["good", 42, "also-good"],
+      description: 42,
+      properties: { child: { description: "#good" } },
     } as unknown as JSONSchema;
-    expect(tagsFromSchema(schema)).toEqual(["good", "also-good"]);
+    expect(tagsFromSchema(schema)).toEqual(["good"]);
+  });
+
+  it("walks schema-valued keywords and ordinary properties named tags", () => {
+    expect(tagsFromSchema({
+      properties: { tags: { description: "#property" } },
+      items: { description: "#item" },
+      additionalProperties: { description: "#additional" },
+      not: { description: "#negation" },
+      contentSchema: { description: "#content" },
+      $defs: { named: { description: "#definition" } },
+      definitions: { named: { description: "#legacy" } },
+    })).toEqual([
+      "property",
+      "additional",
+      "item",
+      "negation",
+      "content",
+      "definition",
+      "legacy",
+    ]);
+  });
+
+  it("terminates on cyclic schemas", () => {
+    const schema: {
+      description: string;
+      properties?: Record<string, JSONSchema>;
+    } = {
+      description: "#cycle",
+    };
+    schema.properties = { self: schema };
+    expect(tagsFromSchema(schema)).toEqual(["cycle"]);
   });
 
   it("visits a shared schema node only once", () => {
-    const shared: JSONSchema = { type: "object", tags: ["shared"] };
+    const shared: JSONSchema = { type: "object", description: "#shared" };
     const schema: JSONSchema = {
       type: "object",
       anyOf: [shared],

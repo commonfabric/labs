@@ -25,7 +25,8 @@
  *
  * `deno-test` takes whatever flags were appended to the `test` task,
  * which is how a report path and the record preload reach the one
- * command that can use them. A failure stops the rest, as `&&` would.
+ * command that can use them. A failure stops the rest, as `&&` would. A
+ * run given `--filter` fails when the filter matched no test.
  *
  * The line says the whole of what runs and in what order, so a member
  * keeps whatever order it had, and both the readers of a member read one
@@ -115,21 +116,66 @@ export function plan(
   return [...invocation.tasks];
 }
 
+/** Whether `flags` select tests by name. */
+export function selectsByName(flags: readonly string[]): boolean {
+  return flags.some((flag) =>
+    flag === "--filter" || flag.startsWith("--filter=")
+  );
+}
+
+// Escape sequences that set colors and styles in a terminal.
+// deno-lint-ignore no-control-regex
+const STYLING = /\x1b\[[0-9;]*m/g;
+
+/** The line each `deno test` run ends with, and its counts. */
+const RUN_ENDING =
+  /^(?:ok|FAILED) \| (\d+) passed\b.*?\| (\d+) failed\b(?:.*?\| (\d+) ignored\b)?/;
+
+/**
+ * How many tests the `deno test` runs that printed `output` selected, ran
+ * or ignored, from the line each run ends with, or undefined where no run
+ * printed one.
+ */
+export function testsRun(output: string): number | undefined {
+  let total: number | undefined;
+  for (const line of output.replace(STYLING, "").split("\n")) {
+    const counts = RUN_ENDING.exec(line);
+    if (counts !== null) {
+      total = (total ?? 0) + Number(counts[1]) + Number(counts[2]) +
+        Number(counts[3] ?? 0);
+    }
+  }
+  return total;
+}
+
 /**
  * Runs one of the member's tasks, handing it the flags where it is the
- * one that takes them. Returns its exit code.
+ * one that takes them. Returns its exit code, and with `watch`, what it
+ * printed to standard output, which it still prints as it arrives.
  */
 async function runTask(
   task: string,
   forwarded: readonly string[],
-): Promise<number> {
-  const { code } = await new Deno.Command(Deno.execPath(), {
+  watch: boolean,
+): Promise<{ code: number; output: string }> {
+  const child = new Deno.Command(Deno.execPath(), {
     args: ["task", task, ...forwarded],
     stdin: "inherit",
-    stdout: "inherit",
+    stdout: watch ? "piped" : "inherit",
     stderr: "inherit",
-  }).spawn().status;
-  return code;
+  }).spawn();
+  let output = "";
+  if (watch) {
+    const decoder = new TextDecoder();
+    for await (const chunk of child.stdout) {
+      for (let at = 0; at < chunk.length;) {
+        at += Deno.stdout.writeSync(chunk.subarray(at));
+      }
+      output += decoder.decode(chunk, { stream: true });
+    }
+    output += decoder.decode();
+  }
+  return { code: (await child.status).code, output };
 }
 
 async function main(): Promise<void> {
@@ -138,12 +184,22 @@ async function main(): Promise<void> {
     // Only `deno-test` is given the appended flags. Every other task is
     // a command of its own, and a report path handed to one that writes
     // no report would end the run rather than be ignored.
-    const code = await runTask(
-      task,
-      task === DENO_TEST_TASK ? invocation.forwarded : [],
-    );
+    const forwarded = task === DENO_TEST_TASK ? invocation.forwarded : [];
+    // `deno test` passes a run whose filter matched no test, so a filtered
+    // run's output is read for how many tests it ran.
+    const watch = selectsByName(forwarded);
+    const { code, output } = await runTask(task, forwarded, watch);
     // A failure stops the rest, as `&&` would.
     if (code !== 0) Deno.exit(code);
+    if (watch && testsRun(output) === 0) {
+      console.error(
+        "run-member-tests: the filter matched no test. `deno test " +
+          "--filter` matches the names of top-level tests only, which for " +
+          "a test inside a `describe()` is the outermost `describe()`. See " +
+          '"Running one test by name" in docs/development/TESTING.md.',
+      );
+      Deno.exit(1);
+    }
   }
 }
 

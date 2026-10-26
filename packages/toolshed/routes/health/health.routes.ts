@@ -129,11 +129,43 @@ export const stats = createRoute({
           ),
         }).optional(),
         // The serving loop's counters (server-execution v2,
-        // serving-loop.md §7) — present only while an ExecutorHost runs
-        // in this process (the ON arm).
+        // serving-loop.md §7) — present only in a process that runs the
+        // loop (the ON arm), on this thread or in its worker. Between a
+        // worker that failed and its replacement they are the failed
+        // worker's last counters, and no worker is serving.
         servingLoop: z.any().optional(),
       }),
       "Logger counts and timing statistics",
+    ),
+  },
+});
+
+/**
+ * The serving loop's realm's own logger counts and timing statistics. With
+ * the loop in a worker, `/api/health/stats` reads this thread's loggers,
+ * which hold none of the loop's; this route asks the worker, so an answer
+ * waits for the worker's turn, which is why it is not part of `stats`.
+ */
+export const servingLoopRealm = createRoute({
+  path: "/api/health/serving-loop-realm",
+  method: "get",
+  tags,
+  responses: {
+    [HttpStatusCodes.OK]: jsonContent(
+      z.object({
+        timestamp: z.number(),
+        loggerCounts: z.any(),
+        timingStats: z.any(),
+      }),
+      "The serving loop's realm's logger counts and timing statistics",
+    ),
+    [HttpStatusCodes.NOT_FOUND]: jsonContent(
+      z.object({ error: z.string() }),
+      "No serving loop runs in this process",
+    ),
+    [HttpStatusCodes.SERVICE_UNAVAILABLE]: jsonContent(
+      z.object({ error: z.string() }),
+      "The serving loop's worker is not serving",
     ),
   },
 });
@@ -182,6 +214,17 @@ export const documentInterests = createRoute({
         truncated: z.boolean(),
         sessions: z.array(z.object({
           sessionId: z.string(),
+          client: z.object({
+            application: z.string().regex(/^[\x20-\x7e]{1,64}$/),
+            gitSha: z.string().regex(/^[a-f0-9]{40}$/).nullable(),
+            instanceId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+            generation: z.number().int().positive().max(
+              Number.MAX_SAFE_INTEGER,
+            ),
+            startedAt: z.number().int().nonnegative().max(
+              Number.MAX_SAFE_INTEGER,
+            ),
+          }).nullable(),
           principal: z.string().nullable(),
           actingPrincipal: z.string().nullable(),
           connectionId: z.string().nullable(),
@@ -206,6 +249,7 @@ export const documentInterests = createRoute({
 
 export type IndexRoute = typeof index;
 export type StatsRoute = typeof stats;
+export type ServingLoopRealmRoute = typeof servingLoopRealm;
 export type DashRoute = typeof dash;
 
 /** Handler contract for the document-interest diagnostic. */

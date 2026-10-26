@@ -23,7 +23,6 @@ import type { DID } from "@commonfabric/identity";
 import { Identity } from "@commonfabric/identity";
 import { env, type Page, waitForCondition } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { expect } from "@std/expect";
 import { beforeAll, describe, it } from "@std/testing/bdd";
 import {
@@ -53,12 +52,6 @@ const ADD_MEMBER_ACTION = "ChatAddMember";
 
 // What a direct room calls itself, which is also what a link to it shows.
 const DIRECT_ROOM_NAME = "Direct chat";
-
-// Whether this run's servers serve handlers from a serving loop.
-const SERVER_EXECUTION = (() => {
-  const raw = Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION");
-  return raw === undefined ? SERVER_EXECUTION_DEFAULT_ENABLED : raw === "true";
-})();
 
 // What a room with no messages shows in place of them.
 const EMPTY_ROOM_TEXT = "No messages yet";
@@ -282,15 +275,10 @@ describe("fabrichat-join", () => {
     // Added by their address alone, the person is offered the room through
     // the profile the adder's manager lists for them, which points at their
     // Home's private inbox, and the room's page, reading the manager's verdict
-    // from the adder's home, says so. A served handler can't read the
-    // manager's per-session `people`, so under server execution it finds no
-    // profile for them, and queues a notice instead.
-    // TODO(danfuzz): Expect `offered` under server execution too, and the
-    // room in the person's chats below, once a served handler can read a
-    // per-session instance of its user's.
-    const outcome = SERVER_EXECUTION
-      ? `Added ${addedAddress}. Your chats remind you to send them this chat's link.`
-      : `Added ${addedAddress}, and offered them this chat.`;
+    // from the adder's home, says so. Under server execution the served offer
+    // finds that profile in the manager's per-user `people`, which this page
+    // derived while it listed the person among the add control's candidates.
+    const outcome = `Added ${addedAddress}, and offered them this chat.`;
     await fillCfInput(adder, "#fabrichat-add-member-address", addedAddress);
     await clickTrustedAction(adder, ADD_MEMBER_ACTION);
     await waitForSettledText(adder, "#fabrichat-add-member-outcome", outcome);
@@ -309,18 +297,15 @@ describe("fabrichat-join", () => {
       Object.values(
         await addRequestsAs(adderIdentity, secondRoomView),
       ).map((outcome) => (outcome as { delivery?: string }).delivery),
-    ).toEqual([SERVER_EXECUTION ? "noticed" : "offered"]);
+    ).toEqual(["offered"]);
     expect(await addRequestsAs(addedIdentity, secondRoomView)).toEqual({});
 
     // The person opens their manager in a page that never asks for their
     // Home's root, and finds the room offered to them in their chats: the
     // shell brings their Home up there once the page has settled, which starts
     // the share intake that registers the offer for their manager to accept.
-    // A room that is only noticed has nothing to register.
-    if (!SERVER_EXECUTION) {
-      await openChatManager(secondShell, addedIdentity);
-      await waitForSettledText(added, "#fabrichat-rooms", secondTitle);
-    }
+    await openChatManager(secondShell, addedIdentity);
+    await waitForSettledText(added, "#fabrichat-rooms", secondTitle);
   });
   it("lists a group in the chats of someone who only opens its page", async () => {
     const owner = firstShell.page();

@@ -517,13 +517,21 @@ linked data:
    verified JS, keyed by `(runtimeVersion, identity)` ([`compiledDocKey`][c14]).
    `runtimeVersion` is the compile-cache version
    [`getCompileCacheRuntimeVersion()`][c14] resolves. A built artifact — a
-   binary, the worker bundle, loom's vendored copy of the runtime — carries a
-   version that is a hash of what its compiler emits for a fixed corpus (each
-   compiled document's body, stored fields and import edges), under every
-   persisted cache variant, computed by the build and baked in
-   (`compile-cache-output-version.deno.ts`); a Deno source run takes the
-   compiler-input fingerprint instead. A compiler change that compiles the
-   corpus to the same documents keeps a built artifact's `runtimeVersion`, and with it
+   binary or the worker bundle — carries a version that is a hash of what its
+   compiler emits for a fixed corpus (each compiled document's body, stored
+   fields and import edges), under every persisted cache variant, computed by
+   the build and baked in (`compile-cache-output-version.deno.ts`). A Deno
+   source run takes the compiler-input fingerprint instead, unless its tree
+   records the output version for itself: `deno task compile-cache-version
+   --memo` writes it to a file git ignores, beside a fingerprint of everything
+   it depends on, the compiler inputs and the corpus among them, and a source
+   run takes it only while that fingerprint still matches the tree
+   (`compile-cache-output-memo.deno.ts`). That is how a checkout that runs as
+   it stands, loom's vendored copy of the runtime among them, keeps the output
+   version without a tracked file that could outlive its compiler. A compiler
+   change that compiles the
+   corpus to the same documents keeps a built artifact's `runtimeVersion`, or a
+   memo's, and with it
    the compiled documents of every construct the corpus exercises; one that
    moves a byte, or an epoch bump, moves it, and the compiled set misses and
    recompiles from the source set. A construct the corpus lacks is the
@@ -856,13 +864,17 @@ cell's contents. The cache is designed around this:
   identity are all served from it never receives the compiled closure, and
   compiles cold in its next session. When the runner has written that
   closure into another space in the same session, such a load copies it
-  into its own space from there.
+  into its own space from there; when it compiled the closure in the same
+  session and the write-back was deferred by a preview or failed, the load
+  writes that compile back instead of compiling again.
   Chain-of-custody holds — compiled docs are read through the integrity-gated
   loader ([`loadCompiledClosure`][c14]; only docs already carrying the compiler
   stamp replicate) and re-stamped on the child-space write by a legitimate
   child-space writer. Module-update authority does not cross that boundary:
   `delegatedModuleIdentities` from the origin is omitted during replication,
-  while any entries already authenticated in the destination are preserved.
+  and a retained compile written back into a space other than the one whose
+  source closure authenticated its delegations carries none of them, while
+  any entries already authenticated in the destination are preserved.
   Note for the server-compilation end state: a client can then no longer stamp
   replicated compiled docs, so child spaces will need server-side replication
   or by-identity source recovery instead.

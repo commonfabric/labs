@@ -1,3 +1,5 @@
+import { utf8Compare } from "@commonfabric/utils/utf8";
+
 import type { RuntimeProgram } from "../harness/types.ts";
 import { isPattern, type Pattern } from "./types.ts";
 
@@ -106,6 +108,13 @@ const entryRefByValue = new WeakMap<
   { identity: string; symbol: string }
 >();
 
+// The least symbol each live builder artifact has been registered under, per
+// identity, by `setArtifactEntryRef()`. Unlike the first registration, which
+// `entryRefByValue` keeps, it does not depend on the order an artifact's
+// names are registered in, and two load paths of one module register them in
+// different orders.
+const leastSymbolByValue = new WeakMap<object, Map<string, string>>();
+
 /**
  * Resolve a (possibly derived) value to its root original. Identity for
  * values that were never copied. Bounded: the chain is a tree toward the
@@ -191,7 +200,9 @@ export function isKeylessPatternIdentity(identity: string): boolean {
  * one. The keyless mint can run before a module's post-evaluation indexing
  * ("refs are indexed only post-evaluation — AFTER build-time copies were
  * made"), and letting the mint win would permanently shadow the value's real,
- * loadable identity behind a pointer no other session can resolve.
+ * loadable identity behind a pointer no other session can resolve. Every
+ * registration, first or not, also counts toward the least symbol
+ * {@link getLeastArtifactEntryRef} gives.
  */
 export function setArtifactEntryRef(
   value: unknown,
@@ -199,6 +210,15 @@ export function setArtifactEntryRef(
 ): void {
   const key = asKey(value);
   if (!key) return;
+  let leastSymbols = leastSymbolByValue.get(key);
+  if (leastSymbols === undefined) {
+    leastSymbols = new Map();
+    leastSymbolByValue.set(key, leastSymbols);
+  }
+  const least = leastSymbols.get(ref.identity);
+  if (least === undefined || utf8Compare(ref.symbol, least) < 0) {
+    leastSymbols.set(ref.identity, ref.symbol);
+  }
   const existing = entryRefByValue.get(key);
   if (
     existing !== undefined &&
@@ -222,6 +242,30 @@ export function getArtifactEntryRef(
   if (!key) return undefined;
   return entryRefByValue.get(key) ??
     entryRefByValue.get(resolveOriginal(key) as object);
+}
+
+/**
+ * The entry ref {@link getArtifactEntryRef} gives `value`, with its symbol
+ * replaced by the least, in UTF-8 order, of the names the value, or its root
+ * original, has been registered under with that identity. A module that
+ * exports one artifact under several names gets the same ref this way
+ * whichever of them a load registered first, which is what a description of
+ * the artifact that has to hold across loads needs. A durable pointer
+ * carries {@link getArtifactEntryRef}'s ref instead, for which any of the
+ * names does.
+ */
+export function getLeastArtifactEntryRef(
+  value: unknown,
+): { identity: string; symbol: string } | undefined {
+  const ref = getArtifactEntryRef(value);
+  const key = asKey(value);
+  if (ref === undefined || key === undefined) return ref;
+  let symbol = ref.symbol;
+  for (const holder of [key, resolveOriginal(key)]) {
+    const least = leastSymbolByValue.get(holder)?.get(ref.identity);
+    if (least !== undefined && utf8Compare(least, symbol) < 0) symbol = least;
+  }
+  return symbol === ref.symbol ? ref : { identity: ref.identity, symbol };
 }
 
 /**

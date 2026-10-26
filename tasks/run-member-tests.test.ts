@@ -7,6 +7,8 @@ import {
   memberTasks,
   plan,
   readInvocation,
+  selectsByName,
+  testsRun,
 } from "./run-member-tests.ts";
 
 /** Every directory a case made, removed when the case is done. */
@@ -132,6 +134,41 @@ describe("run-member-tests", () => {
     });
   });
 
+  describe("selectsByName()", () => {
+    it("returns true for a filter in either spelling", () => {
+      expect(selectsByName(["--filter", "a"])).toBe(true);
+      expect(selectsByName(["--filter=a"])).toBe(true);
+    });
+
+    it("returns false for flags that select nothing by name", () => {
+      expect(selectsByName(["--junit-path=/x.xml", "--filtered"])).toBe(false);
+    });
+  });
+
+  describe("testsRun()", () => {
+    it("adds up what every run's closing line counts", () => {
+      expect(testsRun(
+        "a ... ok\n\x1b[0m\x1b[32mok\x1b[0m | 2 passed (3 steps) | 0 failed\n" +
+          "FAILED | 1 passed | 1 failed | 4 filtered out (5ms)\n",
+      )).toBe(4);
+    });
+
+    it("counts the tests a run ignored as selected", () => {
+      expect(testsRun(
+        "ok | 0 passed | 0 failed | 1 ignored | 1 filtered out (7ms)\n",
+      )).toBe(1);
+    });
+
+    it("returns zero for runs that filtered every test out", () => {
+      expect(testsRun("ok | 0 passed | 0 failed | 4 filtered out (7ms)\n"))
+        .toBe(0);
+    });
+
+    it("returns undefined for output holding no closing line", () => {
+      expect(testsRun("tests --filter a\n")).toBe(undefined);
+    });
+  });
+
   describe("memberTasks()", () => {
     it("returns the task names the member's manifest defines", async () => {
       const dir = await member({
@@ -186,6 +223,20 @@ describe("run-member-tests", () => {
       const dir = await member({ [DENO_TEST_TASK]: "echo $CF_TEST_SKIP_LIST" });
       expect(await run(dir, [DENO_TEST_TASK], { CF_TEST_SKIP_LIST: "/skips" }))
         .toEqual({ code: 0, stdout: "/skips\n" });
+    });
+
+    it("fails a filtered run that ran no test, and passes one that ran one", async () => {
+      const dir = await member({ [DENO_TEST_TASK]: "deno test" });
+      await Deno.writeTextFile(
+        `${dir}/a.test.ts`,
+        `Deno.test("outer", async (t) => { await t.step("inner", () => {}); });`,
+      );
+
+      expect((await run(dir, [DENO_TEST_TASK, "--filter", "inner"])).code)
+        .toBe(1);
+      const matched = await run(dir, [DENO_TEST_TASK, "--filter", "outer"]);
+      expect(matched.code).toBe(0);
+      expect(testsRun(matched.stdout)).toBe(1);
     });
 
     it("refuses a misconfigured line before running anything", async () => {

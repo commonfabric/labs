@@ -40,6 +40,10 @@ describe("strategy", () => {
     expect(quick).toContain(
       "Their words set the task; a quick run adds nothing beyond it.",
     );
+    // Quick narrows the gathering, not the deliverable the ask requires.
+    expect(quick).toContain(
+      "A quick run narrows how much you gather, never what you deliver: the shape of the result, such as a loom or page that they or your additional instructions call for, is part of the ask, so still make it.",
+    );
     expect(quick).toContain("Answer directly when you can, without research");
     expect(quick).toContain("take the shortest path that does what they asked");
     expect(quick).toContain("only the further calls the ask itself needs");
@@ -74,5 +78,6 @@ describe("strategy", () => {
     expect(general).toContain("worth opening on its own");
     expect(general).toContain("Before you finish, read your result");
     expect(general).not.toContain("the one tool call that best matches");
+    expect(general).not.toContain("never what you deliver");
   });
 });
