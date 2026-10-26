@@ -13,9 +13,36 @@ the seed and records the cell's complete schema for CFC preparation. The value,
 schema document, and CFC envelope commit together. Failure aborts the operation.
 The default a pattern's setup writes into an internal cell it materializes for
 the pattern is recorded as the same initialization, whether the pattern exports
-the cell, passes it to a sub-pattern, or keeps it to itself. The reference that
-exposes the cell requires its own protection: changing that reference must not
-provide an alternative way to replace the protected value.
+the cell, passes it to a sub-pattern, or keeps it to itself. An internal cell
+with no default whose schema says who may write it (`writeAuthorizedBy`,
+`writePolicyAnyOf` or `uiContract`, at any depth) has that schema declared
+instead: setup records it for CFC preparation as the cell's declaration and
+writes no value, so the cell's envelope commits with no value beside it and
+holds the cell to its writer, and to its UI contract, from the first write. A
+UI contract is otherwise stored only where a write brings a value; a
+declaration stores it at every position it guards. Without the declaration the document would store no
+policy, and any code holding a link to it could write it. With no value written,
+the first write finds the cell absent, as it would find a cell with no policy,
+and a write to one key of the cell creates the object around it. Nothing is
+initialized, so no claim about a principal is bound at setup: an owner policy
+(`ownerPrincipal`) and a `represents-principal` claim bind at the cell's first
+write, to that write's actor. Only the pattern's own state declares so: a cell
+no node of the pattern fills, which its handlers write. A cell a node fills, the
+node's output being the cell itself, such as a builtin's result, a lift's
+output or a sub-pattern's result, holds what that node produces, and the
+writers its schema names belong to the value it carries; a `wish` result's
+schema names the wished piece's writers, for one. Declaring it would store that
+policy as the cell's own, and the node's write would then have to reconcile
+with it. A node that fills only a position inside a cell, which the builder
+never emits, leaves the cell the pattern's state at its other positions: the
+cell declares its policy, and the node's write creates the cell around the
+position it fills. A cell whose schema makes it a link (`asCell`), such as the
+slot a lift fills with a cell it constructs, declares nothing either: the policy
+belongs to the constructed cell, which declares it. A later actor's instance of
+a per-user or per-session cell declares its policy when that actor's start
+prepares the instance. The reference that exposes the cell requires its own
+protection: changing that reference must not provide an alternative way to
+replace the protected value.
 
 A setup that creates a new piece's argument document records, the same way, the
 default it writes into each concrete protected field the caller leaves to that
