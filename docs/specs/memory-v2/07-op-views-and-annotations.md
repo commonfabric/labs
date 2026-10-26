@@ -198,11 +198,17 @@ request activates the epoch, another null-cursor request with the same codec and
 baseline hash is interpreted as version zero of that epoch and rebased over the
 operations already accepted there. A different codec or baseline is rejected.
 
+An `apply-op` with no base activates an inactive field from its current
+value (§7.7.1).
+
 Within an active epoch:
 
 - the codec id is immutable
 - `apply-op` may use an older version in the same epoch and is rebased over the
   intervening integrated suffix
+- `apply-op` may name no base, and then applies at the current version with
+  no suffix to rebase over: while the field holds the value its
+  `baselineHash` names, or blind without one
 - a future version or different epoch is rejected
 - a submission id is unique within the epoch
 
@@ -236,8 +242,9 @@ ApplyOpOperation {
   path: ValuePath
   codec: OpCodecId
   submissionId: string
-  base: OpCursor | null
-  baselineHash?: string       // required exactly when base is null
+  base?: OpCursor | null      // absent: the field's current version
+  baselineHash?: string       // required when base is null; optional when
+                              // absent; not allowed with a cursor
   payload: JSONValue          // codec-defined submitted batch
 }
 
@@ -278,6 +285,29 @@ cursor is the field-specific concurrency precondition, and stale bases are
 mergeable through the codec. Other reads in the commit retain normal Memory
 conflict semantics.
 
+An `apply-op` with no base applies at the field's current version, so step 5
+rebases over nothing:
+
+- **With a `baselineHash`**, it applies only while the field holds the value
+  the hash names. The engine compares the hash of the field's value, as it
+  stands at that point in the commit, with `baselineHash`, and rejects a
+  mismatch with `OpFieldBaselineMismatchError`. In a wave commit
+  (serving-loop.md §3d), the mismatch is a `WaveCommitConflictError` naming the
+  document, so that only the contributions writing it are requeued.
+- **Without one**, it is a blind write, as a `set` or `patch` is. What guards it
+  is whatever reads its commit carries: they are validated before any
+  operation applies, so a read of the field that went stale refuses the whole
+  commit as an ordinary `ConflictError` before the `apply-op` is considered. A
+  commit carrying neither a read of the field nor a hash has asked for the edit
+  to land on whatever the field holds.
+
+Pattern code's `applyChanges()` sends the hash form, beside its handler's read
+of the field. Outside server execution, that read refuses a stale edit first,
+and the handler runs again against the new value. A wave drops the reads of
+the transactions it seals, and the hash is then what refuses one. Ordinary
+writes in the same commit may change other paths of the document, as §7.6
+allows any write to.
+
 ### 7.7.2 Submission idempotency
 
 `submissionId` is durable across session replacement and reconnect:
@@ -286,7 +316,9 @@ conflict semantics.
   original resolution without integrating it again
 - reusing the id with a different codec, base, or payload is a protocol error
 - normal `(sessionId, localSeq)` replay remains the idempotency boundary for the
-  complete commit
+  complete commit, and is the only one for an `apply-op` without a base: its
+  base is stated when it lands, so its id in any later commit names a
+  different base
 
 ### 7.7.3 Resolution and receipt
 

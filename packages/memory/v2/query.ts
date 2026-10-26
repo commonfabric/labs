@@ -2022,6 +2022,7 @@ const forgetRetiredFromManager = (
   changedMisses: ReadonlySet<string>,
 ): void => {
   for (const docKey of retirement.retired) {
+    if (state.tracker.has(docKey)) continue;
     const { id, scopeKey } = fromDocKey(docKey);
     manager.forgetInstance(scopeKey, id);
   }
@@ -2044,13 +2045,13 @@ const forgetRetiredFromMemo = (
   state: TrackedGraphState,
   retirement: Retirement,
 ): void => {
-  if (retirement.retired.size === 0) return;
   const forgotten = new Set<string>();
   for (const docKey of retirement.retired) {
+    if (state.tracker.has(docKey)) continue;
     const { space, id, scope } = fromDocKey(docKey);
     forgotten.add(schemaMemoDocumentPrefix({ space, scope, id }));
   }
-  forgetSchemaMemoDocuments(state.memo, forgotten);
+  if (forgotten.size > 0) forgetSchemaMemoDocuments(state.memo, forgotten);
 };
 
 /** What a retired document or miss left cached in `state`, forgotten. */
@@ -2116,19 +2117,27 @@ const rewalkDocument = (
 };
 
 /**
- * The documents `retirement` retired that `space` delivers. A link into
- * another space records its target under that space's key, which this
- * space never delivers (`snapshotForDocKey`), and that key names the same
- * document as a key of this space would, so a retired foreign key is not
- * a retraction of anything delivered.
+ * The documents `retirement` retired that `space` delivers and that the
+ * pass did not admit again. A link into another space records its target
+ * under that space's key, which this space never delivers
+ * (`snapshotForDocKey`), and that key names the same document as a key of
+ * this space would, so a retired foreign key is not a retraction of
+ * anything delivered. A document retired and then reached again in the
+ * same pass, as a schema document is when the document that kept it goes
+ * and one that still refers to it is delivered after, is tracked at the
+ * end and delivered, not retracted: what the pass reports is the graph as
+ * it stands when the pass is done.
  */
 const retiredInSpace = (
   space: string,
+  state: TrackedGraphState,
   retirement: Retirement,
 ): ReadonlySet<QueryDocKey> => {
   const removed = new Set<QueryDocKey>();
   for (const key of retirement.retired) {
-    if (key.startsWith(`${space}/`)) removed.add(key);
+    if (key.startsWith(`${space}/`) && !state.tracker.has(key)) {
+      removed.add(key);
+    }
   }
   return removed;
 };
@@ -2475,7 +2484,7 @@ export const releaseTrackedRoots = (
   return {
     serverSeq: Engine.serverSeq(engine),
     updates: delivered.updates,
-    removed: retiredInSpace(space, retirement),
+    removed: retiredInSpace(space, state, retirement),
     changedMisses,
     stats,
   };
@@ -3132,7 +3141,7 @@ export const refreshTrackedGraph = (
     return {
       serverSeq: Engine.serverSeq(engine),
       updates: delivered.updates,
-      removed: retiredInSpace(space, retirement),
+      removed: retiredInSpace(space, state, retirement),
       changedMisses,
       stats,
     };

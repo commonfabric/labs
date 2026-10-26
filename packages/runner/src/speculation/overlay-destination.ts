@@ -265,6 +265,14 @@ type OverlayEntry = {
   parentEventId?: string;
 };
 
+type PendingSeal = {
+  settled: Promise<Result<Unit, CommitError>>;
+
+  /** Absent when a legacy/custom transaction exposes no exact target-space
+   * surface; those seals conservatively participate in every space's wait. */
+  spaces?: ReadonlySet<MemorySpace>;
+};
+
 /**
  * The overlay destination: one per non-serving Runtime under the flag,
  * created lazily by `Runtime.edit()` and consulted for every
@@ -430,6 +438,14 @@ export class SpeculationOverlayDestination
    * untrack step that empties the outstanding-intent set (and by close). */
   #intentQuiescenceWaiters: Array<() => void> = [];
 
+  /** Speculative seals that have started but have not finished collecting
+   * their entries. `#entries` alone has an empty window during `sealInto`,
+   * so diagnostic quiescence waits include these promises. */
+  readonly #pendingSeals = new Set<PendingSeal>();
+
+  /** Wakes a quiescence wait parked on an unfinished seal during close. */
+  readonly #closedForQuiescence = Promise.withResolvers<void>();
+
   #closed = false;
 
   constructor(runtime: Runtime) {
@@ -441,17 +457,25 @@ export class SpeculationOverlayDestination
     return this.#entries.get(space)?.size ?? 0;
   }
 
-  /** DIAGNOSTIC (tests): await every live overlay entry in `space`
-   * settling, including entries registered while the wait is in flight.
-   * Event-driven: each pass sleeps on the entries' own settlement
-   * promises and rechecks after they resolve, rather than polling
-   * `entryCount`. Resolves immediately when the space is already empty
-   * and when the overlay closes. */
+  /** DIAGNOSTIC (tests): await speculative seals already in flight, then
+   * every live overlay entry in `space` settling. A seal is included before
+   * `sealInto` can register its entries, closing the empty-map window.
+   * Event-driven: each pass sleeps on seals and entries, then rechecks.
+   * Resolves immediately when both are already empty or the overlay closes. */
   async waitForSpaceQuiescence(space: MemorySpace): Promise<void> {
     while (!this.#closed) {
       const entries = this.#entries.get(space);
-      if (entries === undefined || entries.size === 0) return;
-      await Promise.all([...entries.values()].map((entry) => entry.settled));
+      const pending = [
+        ...[...this.#pendingSeals]
+          .filter((seal) => seal.spaces?.has(space) !== false)
+          .map((seal) => seal.settled),
+        ...[...(entries?.values() ?? [])].map((entry) => entry.settled),
+      ];
+      if (pending.length === 0) return;
+      await Promise.race([
+        Promise.allSettled(pending),
+        this.#closedForQuiescence.promise,
+      ]);
     }
   }
 
@@ -573,7 +597,15 @@ export class SpeculationOverlayDestination
       // Ordinary writes use the store's verdict, coverage, and sync hold.
       return tx.tx.commit(options);
     }
-    return createTransactionCommitReceipt(this.#sealSpeculative(tx));
+    const targetSpaces = tx.tx.getWriteTargetSpaces?.();
+    const pending: PendingSeal = {
+      settled: this.#sealSpeculative(tx),
+      spaces: targetSpaces === undefined ? undefined : new Set(targetSpaces),
+    };
+    this.#pendingSeals.add(pending);
+    return createTransactionCommitReceipt(
+      pending.settled.finally(() => this.#pendingSeals.delete(pending)),
+    );
   }
 
   /**
@@ -2170,6 +2202,7 @@ export class SpeculationOverlayDestination
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#closedForQuiescence.resolve();
     for (const entries of this.#entries.values()) {
       for (const entry of entries.values()) {
         entry.resolveVerdict({

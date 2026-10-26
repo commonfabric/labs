@@ -73,6 +73,10 @@ export const SHELL_FLAG_SOURCES = {
   // connections turns it on, and one that routes each connection by the
   // space its address names cannot, while both serve one shell build.
   sharedMemoryConnection: "deployment",
+  // Whether a `const`-bound child is a named instance decides which document
+  // a parent binds it to, so the shell has to run the naming mode of the
+  // deployment whose spaces it opens.
+  instanceNames: "deployment",
 } as const satisfies Record<keyof ExperimentalOptions, ShellFlagSource>;
 
 /** The flags {@link SHELL_FLAG_SOURCES} gives the deployment. */

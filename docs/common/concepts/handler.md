@@ -166,6 +166,17 @@ export default pattern<{}, Output>(({ items }) => ({
 
 Other patterns can then link to this pattern and call `linkedPattern.addItem.send({ title: "New" })`.
 
+A stream belongs to the type that declares it, not to the data it is read
+from. Reading an object whose type has a `Stream<T>` field gives that field a
+stream whether or not anything bound a handler there, so `Object.keys()` of the
+value lists it and the field is never `undefined`. An event sent to a stream no
+handler is bound to is dropped, possibly after waiting for a handler to
+register. A runtime that delivers its own events, as one does without server
+execution, reports the drop as an `EventDroppedError` through the scheduler's
+error channel. Whether another piece offers a stream therefore can't be learned
+by reading the field: when that varies, have it offer a value that says so, and
+read the value.
+
 ## Event Data and Void Handlers
 
 The first type parameter is the event payload passed to `.send()`; use `void`

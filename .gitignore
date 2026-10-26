@@ -3,6 +3,9 @@ dist
 .ci-cache
 *.tsbuildinfo
 .DS_Store
+# The compile-cache output version a source checkout records for itself
+# (`deno task compile-cache-version --memo`), keyed by the tree it describes.
+/packages/runner/src/compilation-cache/.compile-cache-output-version.json*
 .vscode
 __pycache__
 cache

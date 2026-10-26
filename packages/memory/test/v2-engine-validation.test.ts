@@ -8,7 +8,14 @@
 
 import { assertEquals, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
-import { applyCommit, close, type Engine, open, read } from "../v2/engine.ts";
+import {
+  applyCommit,
+  close,
+  type Engine,
+  evictDocumentCacheEntries,
+  open,
+  read,
+} from "../v2/engine.ts";
 import {
   CODEMIRROR_CHANGESET_CODEC,
   encodeMemoryBoundary,
@@ -19,6 +26,7 @@ import {
   FabricRegExp,
 } from "@commonfabric/data-model/fabric-primitives";
 import { taggedHashStringOf } from "@commonfabric/data-model";
+import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 
 const withEngine = async (
@@ -1639,6 +1647,289 @@ Deno.test("walks a CFC envelope's schema-document closure transitively", async (
           setOp(`cid:${rootHash}`, rootSchema),
           setOp(`cid:${childHash}`, childSchema),
         ],
+      }),
+    });
+  });
+});
+
+Deno.test("refuses a document whose CFC label map holds a numeric whole-field label or path", async () => {
+  await withEngine((engine) => {
+    const id = "of:numeric-label-carrier";
+    const carrier = (entry: Record<string, unknown>) =>
+      ({
+        op: "set",
+        id,
+        value: {
+          value: { n: 3 },
+          cfc: { version: 1, labelMap: { version: 1, entries: [entry] } },
+        },
+      }) as never;
+    const inline = { confidentiality: ["secret"], integrity: [] };
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(1, {
+        operations: [carrier({ path: ["n"], label: inline })],
+      }),
+    });
+    let localSeq = 2;
+    const patch = (patches: unknown[]) =>
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: commit(localSeq++, {
+          operations: [{ op: "patch", id, patches }],
+        }),
+      });
+
+    // Request parsing cannot see the number a `move` or an `increment`
+    // produces at a label position: only the post-patch document shows it.
+    for (
+      const [field, patches] of [
+        ["label", [{
+          op: "move",
+          from: "/value/n",
+          path: "/cfc/labelMap/entries/0/label",
+        }]],
+        ["label", [
+          { op: "remove", path: "/cfc/labelMap/entries/0/label" },
+          { op: "increment", path: "/cfc/labelMap/entries/0/label", by: 2 },
+        ]],
+        ["path", [{
+          op: "move",
+          from: "/value/n",
+          path: "/cfc/labelMap/entries/0/path",
+        }]],
+        ["path", [
+          { op: "remove", path: "/cfc/labelMap/entries/0/path" },
+          { op: "increment", path: "/cfc/labelMap/entries/0/path", by: 1 },
+        ]],
+      ] as const
+    ) {
+      assertThrows(
+        () => patch([...patches]),
+        ProtocolError,
+        `numeric CFC label-map ${field}`,
+      );
+    }
+    // A set carrying the number is refused at the same point, whatever the
+    // request parser made of it.
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(localSeq++, {
+            operations: [carrier({ path: ["n"], label: 0 })],
+          }),
+        }),
+      ProtocolError,
+      "numeric CFC label-map label",
+    );
+    // Nothing a refused commit staged reached the store.
+    assertEquals(
+      (read(engine, { id } as never) as { cfc: unknown }).cfc,
+      {
+        version: 1,
+        labelMap: { version: 1, entries: [{ path: ["n"], label: inline }] },
+      },
+    );
+    // Rewriting the label with an object stays admitted, so a stored number
+    // can be repaired by the same patch path that is refused above.
+    patch([{
+      op: "replace",
+      path: "/cfc/labelMap/entries/0/label",
+      value: { confidentiality: ["repaired"], integrity: [] },
+    }]);
+  });
+});
+
+Deno.test("keeps a document stored with a numeric label writable while a write leaves its label map as stored", async () => {
+  await withEngine((engine) => {
+    const inline = { confidentiality: ["secret"], integrity: [] };
+    const document = (
+      version: number,
+      ...labels: (number | typeof inline)[]
+    ) => ({
+      value: { n: 1 },
+      cfc: {
+        version,
+        labelMap: {
+          version: 1,
+          entries: labels.map((label, i) => ({ path: [`f${i}`], label })),
+        },
+      },
+    });
+    let localSeq = 1;
+    const write = (operation: Record<string, unknown>) =>
+      applyCommit(engine, {
+        sessionId: "s:a",
+        commit: commit(localSeq++, { operations: [operation as never] }),
+      });
+    const id = "of:stored-numeric-label";
+    const cid = `cid:${taggedHashStringOf({ n: 1 })}`;
+    for (const target of [id, cid]) {
+      write({ op: "set", id: target, value: document(1, inline) });
+      // Rewritten in place to stand for a number stored before commit
+      // admission refused one.
+      engine.database.prepare(
+        `UPDATE revision SET data = :data WHERE id = :id`,
+      ).run({ data: encodeMemoryBoundary(document(1, 3)), id: target });
+    }
+    evictDocumentCacheEntries(engine, Number.MAX_SAFE_INTEGER);
+    // Writes that leave the label map as stored are admitted: a set of the
+    // content-addressed document as stored, a set that changes only other
+    // fields, and a metadata patch beside the label map.
+    write({ op: "set", id: cid, value: document(1, 3) });
+    write({ op: "set", id, value: document(2, 3) });
+    write({
+      op: "patch",
+      id,
+      patches: [{ op: "replace", path: "/cfc/version", value: 3 }],
+    });
+    // A write that changes the label map is checked whole, the stored
+    // number included.
+    for (
+      const operation of [
+        { op: "set", id, value: document(4, 3, inline) },
+        {
+          op: "patch",
+          id,
+          patches: [{
+            op: "add",
+            path: "/cfc/labelMap/entries/-",
+            value: { path: ["f1"], label: inline },
+          }],
+        },
+      ]
+    ) {
+      assertThrows(
+        () => write(operation),
+        ProtocolError,
+        "numeric CFC label-map label",
+      );
+    }
+    // Within one commit, a set is compared with what an earlier operation
+    // staged: here a repair, so the number the set restores is refused.
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(localSeq++, {
+            operations: [
+              {
+                op: "patch",
+                id,
+                patches: [{
+                  op: "replace",
+                  path: "/cfc/labelMap/entries/0/label",
+                  value: inline,
+                }],
+              },
+              { op: "set", id, value: document(5, 3) },
+            ] as never,
+          }),
+        }),
+      ProtocolError,
+      "numeric CFC label-map label",
+    );
+    // A write that replaces the number repairs the document.
+    write({ op: "set", id, value: document(6, inline) });
+  });
+});
+
+Deno.test("refuses a document whose CFC label carries a reserved schema reference, however the reference got there", async () => {
+  await withEngine((engine) => {
+    const id = "of:reserved-label-carrier";
+    const reserved = linkRefFrom({
+      id: "of:policy",
+      path: [],
+      schema: "schema-ref@2:missing",
+    });
+    const inline = linkRefFrom({ id: "of:policy", path: [], schema: true });
+    const carrier = (label: unknown, stash: unknown = undefined) =>
+      ({
+        op: "set",
+        id,
+        value: {
+          value: { stash },
+          cfc: {
+            version: 1,
+            labelMap: { version: 1, entries: [{ path: ["stash"], label }] },
+          },
+        },
+      }) as never;
+    // A set carrying the reference in a label is refused outright.
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(1, {
+            operations: [carrier({ evidence: reserved })],
+          }),
+        }),
+      ProtocolError,
+      "reserved wire schema reference",
+    );
+    // Nor can one be stashed in application data for a later move: the
+    // reference is refused at every position of the stored document, so no
+    // patch form can relocate one into a label.
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(2, {
+            operations: [carrier({ evidence: inline }, { evidence: reserved })],
+          }),
+        }),
+      ProtocolError,
+      "reserved wire schema reference",
+    );
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(3, {
+        operations: [carrier({ evidence: inline })],
+      }),
+    });
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(4, {
+            operations: [{
+              op: "patch",
+              id,
+              patches: [{
+                op: "replace",
+                path: "/cfc/labelMap/entries/0/label",
+                value: { evidence: reserved },
+              }],
+            }],
+          }),
+        }),
+      ProtocolError,
+      "reserved wire schema reference",
+    );
+    assertEquals(
+      (read(engine, { id } as never) as { cfc: unknown }).cfc,
+      {
+        version: 1,
+        labelMap: {
+          version: 1,
+          entries: [{ path: ["stash"], label: { evidence: inline } }],
+        },
+      },
+    );
+    // Rewriting a label with self-contained content stays admitted.
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(5, {
+        operations: [{
+          op: "patch",
+          id,
+          patches: [{
+            op: "replace",
+            path: "/cfc/labelMap/entries/0/label",
+            value: { confidentiality: ["repaired"], integrity: [] },
+          }],
+        }],
       }),
     });
   });

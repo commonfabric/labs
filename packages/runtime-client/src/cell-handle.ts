@@ -91,6 +91,13 @@ let writeClock = 0;
 export const $onCellUpdate = Symbol("$onCellUpdate");
 
 /**
+ * Tells a handle the worker delivered an update of its cell that the
+ * connection dropped: a value of `undefined`, which the handle cannot tell
+ * from a document not yet loaded, so it keeps the value it holds.
+ */
+export const $onCellUpdateDropped = Symbol("$onCellUpdateDropped");
+
+/**
  * Delivers to a handle a subscription update the worker refused, which
  * carries the refusal and nothing of the cell.
  */
@@ -122,7 +129,12 @@ export type CellDelivery = {
    * read with the value: it is for a delivery the worker made with its label,
    * and is not for a value-only delivery or a local write, which carry the
    * label the handle last received, nor once the handle has left the cell's
-   * subscription and joined it again, until the worker delivers a label.
+   * subscription and joined it again, until the worker delivers a label. Nor
+   * is it once the worker has sent an update the connection dropped, one
+   * holding nothing, since the handle then holds a value and label the worker
+   * has read past; a handle delivering labels tells its subscribers so with
+   * what it holds, and tells them again when the worker's next labeled update
+   * makes it current, whatever that update holds.
    */
   readonly cfcLabelCurrent: boolean;
 };
@@ -211,10 +223,13 @@ export class CellHandle<T = unknown> {
   #cfcLabel: CfcLabelView | undefined;
 
   /**
-   * Whether `#cfcLabel` is the label the worker read with `#value`: set by a
-   * delivery that carried a label, and cleared by a value that arrived
-   * without one, by a local write, by a refusal, and when the last
-   * subscriber leaves, since the handle then stops hearing of the label.
+   * Whether `#value` and `#cfcLabel` are the worker's latest read of the
+   * cell, the label being the one it read with that value: set by a delivery
+   * that carried a label, and cleared by a value that arrived without one, by
+   * a local write, by a refusal, by an update the connection dropped, and
+   * when the handle leaves the cell's subscription, as its last subscriber
+   * leaving and an upgrade to labels do, since it then stops hearing of the
+   * label.
    */
   #cfcLabelCurrent = false;
 
@@ -229,7 +244,8 @@ export class CellHandle<T = unknown> {
 
   /**
    * Whether any subscriber asked for the CFC label. Sticky: once a label-aware
-   * subscription exists on this handle, label changes also fire its callbacks.
+   * subscription exists on this handle, label changes, and changes in whether
+   * the label is current, also fire its callbacks.
    */
   #wantsCfcLabel = false;
 
@@ -1082,9 +1098,14 @@ export class CellHandle<T = unknown> {
    * worker sends one for a document it has not loaded too), so a handle on a
    * cell that holds nothing stays unread until a read answers it. After that,
    * `callback` is called whenever the value changes, and `onRefused` with
-   * each refusal. The callback's return value, if a Cancel function, is
-   * called before the next value, when a refusal drops the value it was
-   * given, and when the subscription is cancelled.
+   * each refusal. Once any subscriber has asked for the label, every
+   * subscriber of the handle is called again with the value it holds when the
+   * label changes, and when the label stops or starts being current, as an
+   * update the connection dropped and the worker's next labeled update make
+   * it ({@link CellDelivery}). The
+   * callback's return value, if a Cancel function, is called before the next
+   * value, when a refusal drops the value it was given, and when the
+   * subscription is cancelled.
    *
    * A change reaches `callback` through an update, or through what a read
    * finds, whether this handle made it or another on the same cell under the
@@ -1154,6 +1175,10 @@ export class CellHandle<T = unknown> {
     // The subscriber added here hears what the handle holds once, below.
     if (upgradeToCfcLabel) {
       // Tear down the label-less backend sub, then re-open it label-aware.
+      // Off the cell's subscription in between, the handle hears of no
+      // change, so the label it holds is current only once the worker
+      // delivers one again, as when its last subscriber leaves.
+      this.#cfcLabelCurrent = false;
       void this.#conn.unsubscribe(this).finally(() => {
         this.#conn.subscribe(this);
       });
@@ -1595,6 +1620,26 @@ export class CellHandle<T = unknown> {
   }
 
   /**
+   * Handles an update of the cell the connection dropped. The handle keeps
+   * the value and label it holds, but the worker has read the cell since, so
+   * the label is no longer the one the worker read with the cell's value. A
+   * handle delivering labels hands its subscribers what it holds again,
+   * saying so: one that took the label as the worker's read, as
+   * `observeAuthorship()` does, would otherwise hear nothing more, since no
+   * later update need come.
+   */
+  [$onCellUpdateDropped](): void {
+    if (!this.#cfcLabelCurrent) return;
+    this.#cfcLabelCurrent = false;
+    if (!this.#wantsCfcLabel) return;
+    for (const { onValue } of this.#callbacks.values()) {
+      onValue(this.#value as Readonly<T>, this.#cfcLabel, {
+        cfcLabelCurrent: false,
+      });
+    }
+  }
+
+  /**
    * Handles an update of the cell from the backend, whose raw value may
    * contain `CellRef`s.
    */
@@ -1622,11 +1667,14 @@ export class CellHandle<T = unknown> {
       this.#holdInQueue(queue, applied);
     }
     const valueChanged = !valuesOrCellsEqual(applied, this.#value);
-    // A label-only change (value identical) still fires label-aware subscribers.
-    // `labelUpdate` is present only on notifications that carried a label, so a
-    // value-only notification never spuriously churns the label.
+    // A label-only change (value identical) still fires label-aware
+    // subscribers, and so does a change in whether the label is current alone,
+    // as when the worker brings back the value and label a dropped update left
+    // stale. `labelUpdate` is present only on notifications that carried a
+    // label, so a value-only notification never spuriously churns the label.
     const labelChanged = labelUpdate !== undefined && this.#wantsCfcLabel &&
-      !cfcLabelViewsEqual(labelUpdate.cfcLabel, this.#cfcLabel);
+      (!cfcLabelViewsEqual(labelUpdate.cfcLabel, this.#cfcLabel) ||
+        labelUpdate.current !== this.#cfcLabelCurrent);
     // The label the handle holds follows every update that carries one,
     // whether or not a subscriber hears of it: a handle whose subscribers
     // never asked for labels still seeds a later handle on the cell with the

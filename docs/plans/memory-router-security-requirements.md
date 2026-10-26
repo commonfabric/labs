@@ -181,13 +181,29 @@ certificate private key, compromise exposes that key too.
    writes, watches, presence, and resume. The router's directory or routing
    decision is never evidence of authorization. Client-supplied `actingAs`,
    service identity, or router identity cannot enlarge a user's authority.
-8. **Preserve client negotiation.** The toolshed must admit a routed client
-   against that client's actual negotiated flags, including
-   `stableExpressionResultIds` and any future security-relevant capability. Mode
-   A's router-owned upstream `hello` cannot silently substitute the router's
-   flags for the client's. If the router translates a protocol feature, its
-   exact semantics and admission consequences need a verified mapping; otherwise
-   it rejects the client.
+8. **Preserve client negotiation.** Mode A's private `router.hello` retains the
+   original client flags as `memoryFlags` for ticket and proof binding and
+   carries the effective selection separately as `negotiatedMemoryFlags`.
+   The link agent computes that selection from the client and the frozen startup
+   public offer, then signs both canonical hashes in `rdb1`, original first.
+   The toolshed must verify the exact signed selection, its support by both
+   client and endpoint, and cell-mode agreement before binding the socket,
+   consuming the ticket or replacing a backend. A subset check alone cannot
+   establish which selection the agent authorized. The backend hello uses the
+   verified selection; `router.ready` acknowledges private negotiation support
+   and echoes it exactly. This preserves `stableExpressionResultIds` admission
+   and prevents an endpoint upgrade from enabling an encoding absent from the
+   public handshake. A client whose capabilities omit
+   `stableExpressionResultIds` is not refused by the router: it receives a
+   context, a ticket and a data socket, and the toolshed answers each of its
+   `session.open` requests with the final `SessionRevokedError` refusal. Private transport compatibility is independently versioned;
+   `routerEncodingNegotiation` and `routerRequestCredit` are required on
+   authenticated private peers and excluded from public and effective Memory
+   capabilities. The signed binary `rpc1` asserts request-admission support with
+   exactly one `0x01` byte after its nonce; the host requires it and end-of-record
+   before control-link registration. Unknown well-formed Memory capabilities
+   participate in the intersection; routing and authority capabilities follow
+   the [private contract](../specs/memory-v2/routed-mode-a.md).
 
 ## Routing and input handling
 
@@ -206,13 +222,19 @@ certificate private key, compromise exposes that key too.
     comparison applies to text frames and any transformed frames. No
     authorization decision may rely on a header the client can edit.
 11. **Validate at both boundaries.** Before allocating expensive state, the
-    client worker and toolshed reject invalid WebSocket framing, invalid UTF-8,
-    duplicate or ambiguous security fields, malformed DIDs, unsupported envelope
-    versions, impossible lengths, and frames with inconsistent `space`,
-    `sessionId`, `requestId`, or principal fields. Define one parser
+    client worker and toolshed reject invalid WebSocket framing, duplicate or
+    ambiguous routing-header fields, malformed routing DIDs, unsupported private
+    versions and impossible lengths. Routing and destination bindings must be
+    checked before forwarding any payload byte. The toolshed validates complete
+    application payloads and checks `space`, `sessionId`, `requestId` and principal
+    against their header and context before executing them. The client validates
+    complete responses. Opaque chunks may be forwarded incrementally, but the
+    router withholds message completion until exact declared length and valid
+    end framing. Truncation aborts the destination connection. Define one endpoint
     interpretation for JSON and binary envelopes, including compression. Unknown
-    security-critical flags fail closed. Errors to unauthenticated callers
-    should avoid disclosing whether a space exists.
+    private versions fail closed; application security capabilities are checked by
+    endpoints. Errors to unauthenticated callers should avoid disclosing whether
+    a space exists.
 12. **Bound work before and after authentication.** Set explicit limits for
     handshake state and duration, raw and decompressed frame sizes, expansion
     ratio, nesting depth, concurrent decompressions, principals, sessions,
@@ -224,11 +246,28 @@ certificate private key, compromise exposes that key too.
     and active workers at expected concurrency before public deployment.
     Dropping a slow or abusive client must release its upstream and backend
     state without blocking other clients.
+    Private request-body admission must reserve declared input bytes before the
+    router sends body or completion records, for streamed data, buffered controls
+    and legacy uploads alike. A consecutive safe-integer ordinal binds the grant
+    to one request on one socket, without wrap or reuse. The endpoint retains at
+    most one 4 KiB header without body allocation when its 4 MiB input budget is
+    full, and admits it on reservation release. Its successful grant-write
+    callback enables body reception. Wrong, duplicate, unsolicited or malformed
+    grants and premature body records fail closed. Cancellation releases owned
+    reservations exactly once. One bounded sender control slot permits admission
+    grants between response records without releasing logical output-body
+    counts. The router consumes grants before response assembly and public-output
+    ownership checks; an owned response can finish independently of a waiting
+    upload, while blocked downstream output may delay a grant. There is no
+    unbounded read-ahead or reliance on spare TCP buffering. Public upload credit
+    remains separate; public upload and private response headers cannot carry
+    private request ordinals. The exact records are specified in
+    [Mode A header admission](../specs/memory-v2/routed-mode-a.md#private-request-body-admission).
 
 ## Process isolation and operations
 
 13. **Isolate content inspection.** HTTP upgrade, `Origin` checks, WebSocket
-    framing, decompression, and Memory payload parsing run in a dedicated Rust
+    framing, and any required decompression or public control parsing run in a dedicated Rust
     worker process for one client connection. A worker is never reused for
     another client. No process with a router identity key, a long-term TLS key,
     or another client's application state parses those bytes. A narrow listener

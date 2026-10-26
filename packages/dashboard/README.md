@@ -727,7 +727,7 @@ installation with the same permissions; see [Credentials](#credentials).
 
 | tile | source | needs |
 |---|---|---|
-| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it, among the workflow's newest thousand runs of any branch. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions and Checks read across the organization |
+| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it, among the workflow's newest thousand runs of any branch. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization, and check runs read in private repositories (see [Credentials](#credentials)) |
 | CI jobs → `/ci` | every job the ci tile read, at full width: the repository, linked to its page, and the workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read, each linked to its page and to its actions on GitHub. A workflow with a run in progress on its default branch carries a blue dot after its name, which links to that run, and the summary above the table counts them. Only a run in progress carries one: a queued run, or one waiting for approval, does not. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows, running dots included: a run that starts or ends between collections shows at the next one. The page is live: an open copy shows each collection within a serving tick of the tile finishing it, without reloading, and in whatever order the reader sorted it | none |
 | labs ci trust, labs ci duration | GitHub Actions (`deno.yml` in `commonfabric/labs`), via the REST API. Trust reads the runs on main; duration reads the pull request runs. Each trust tile opens its repository's page, and each cell of its strip opens its run | `GH_TOKEN` (or `GITHUB_TOKEN`) |
 | loom ci trust, loom ci duration | the same two tiles for `commonfabric/loom` (`test-fast.yml`) | `GH_TOKEN` (read access to loom); optional `DASHBOARD_LOOM_REPO` |
@@ -1087,9 +1087,9 @@ requests an hour, where a personal access token is allowed 5,000.
    Give it any homepage URL and clear **Webhook** → **Active**.
 2. **Repository permissions**: **Actions**, **Checks**, **Contents**, and
    **Pull requests**, all **Read-only**. **Metadata** becomes read-only
-   automatically. **Checks** is for the annotations that say why a job was
-   cancelled, which the **ci** and **ci trust** tiles read. **Pull requests**
-   is for **recent commits**.
+   automatically. **Checks** is for the check run annotations that say why a
+   job was cancelled, which the **ci** and **ci trust** tiles read. **Pull
+   requests** is for **recent commits**.
 3. **Organization permissions**: **Members** **Read-only** for **github
    users**. GitHub refuses an app's tokens for an organization's billing
    ("Resource not accessible by integration"), so **github spend** reads
@@ -1115,9 +1115,13 @@ Powers **ci**, **labs ci trust**, **labs ci duration**, the **loom** and
 **github spend** when `GH_BILLING_TOKEN` is unset. It also powers the optional
 publisher-activity indicators on **flaky tests** and **test selection**; their
 public measurements need no token. Needs
-repo **Actions: read** and **Checks: read** on `commonfabric/labs`,
-`commonfabric/loom`, and `commonfabric/commonfabric-weaver`; **Checks** is for
-the annotations that say why a job was cancelled. When `GH_BILLING_ENTERPRISE` is unset,
+repo **Actions: read** on `commonfabric/labs`, `commonfabric/loom`, and
+`commonfabric/commonfabric-weaver`. The **ci** and **ci trust** tiles also read
+the check run annotations that say why a job was cancelled, which in a private
+repository takes the `repo` scope of a classic token; GitHub offers
+fine-grained tokens no permission for check runs. With a fine-grained token,
+those tiles report a private repository's run that had a job cancelled on a
+runner as unreadable. When `GH_BILLING_ENTERPRISE` is unset,
 the github-ci-spend tile additionally needs org **Administration: read** on
 `commonfabric`. When it is set, a fallback `GH_TOKEN` instead needs one of
 the enterprise credentials described under `GH_BILLING_TOKEN`; a separate
@@ -1127,7 +1131,7 @@ the enterprise credentials described under `GH_BILLING_TOKEN`; a separate
 so a token selecting only some repositories leaves the rest out of those tiles
 without saying so: give it **All repositories** for them to cover the
 organization. One fine-grained
-token can carry all of these permissions:
+token can carry every one of these permissions except check run access:
 
 The account that owns the token must be a member of the organization. GitHub's
 member endpoint returns both concealed and public members to an authenticated
@@ -1142,9 +1146,8 @@ organization member; other callers see only public memberships.
    repositories** with `commonfabric/labs`, `commonfabric/loom`, and
    `commonfabric/commonfabric-weaver` covers every other GitHub tile, and
    narrows **ci** and **recent commits** to those three.
-4. **Repository permissions**: set **Actions**, **Checks**, **Contents**, and
-   **Pull requests** to **Read-only**. **Checks** is for the **ci** and **ci
-   trust** tiles. **Pull requests** is for **recent commits**.
+4. **Repository permissions**: set **Actions**, **Contents**, and **Pull
+   requests** to **Read-only**. **Pull requests** is for **recent commits**.
 5. **Organization permissions**: set **Members** to **Read-only** for GitHub
    users. Set **Administration** to **Read-only** for github spend. Only an org
    owner or billing manager can grant the latter permission. Skip either
@@ -1152,9 +1155,10 @@ organization member; other callers see only public memberships.
 6. **Generate token** and copy it (`github_pat_…`, shown once).
 
 If you only need the labs CI tiles, keep `commonfabric` as the resource owner,
-select only `commonfabric/labs`, and grant Actions, Checks, and Contents read without any
-organization permissions. Classic PATs also work (use `read:org` for GitHub
-users and `admin:org` for github spend). If the org requires approval for
+select only `commonfabric/labs`, and grant Actions and Contents read without any
+organization permissions. Classic PATs also work, check run annotations
+included (use `repo` for private repositories, `read:org` for GitHub users,
+and `admin:org` for github spend). If the org requires approval for
 fine-grained tokens, yours stays pending until an owner approves it.
 
 ### `GH_BILLING_TOKEN`

@@ -35,6 +35,7 @@ import {
   type JSONSchema,
   KeepAsCell,
   parseLink,
+  profileNameWrittenAt,
   type SinkConsumedLabel,
   sinkProjected,
   type Stream,
@@ -1825,10 +1826,39 @@ export class WorkerReconciler {
   /**
    * The principals the label of `cell`'s value says it represents, as
    * `authorPrincipalCandidates()` reads them from the document that holds the
-   * value; none when that label cannot be read.
+   * value, given whether the value's `name` holds a name its owner wrote;
+   * none when that label cannot be read.
    */
   #representedPrincipalsForCell(cell: Cell<unknown>): string[] {
-    return authorPrincipalCandidates(cfcLabelViewForResolvedTarget(cell));
+    const nameWritten = this.#nameWrittenForCell(cell);
+    // A name whose read failed settles neither reading of the label, so the
+    // author represents no one here, and the boundary holds the text back.
+    return nameWritten === undefined ? [] : authorPrincipalCandidates(
+      cfcLabelViewForResolvedTarget(cell),
+      nameWritten,
+    );
+  }
+
+  /**
+   * Helper for `#representedPrincipalsForCell()`, which returns whether the
+   * `name` field of `cell`'s value, followed through its links, holds a name
+   * its owner wrote, read as `profileNameWrittenAt()` reads it, as a verifier
+   * read; `undefined` when that read fails.
+   */
+  #nameWrittenForCell(cell: Cell<unknown>): boolean | undefined {
+    const runtime = cellRuntime(cell);
+    const tx = runtime.edit();
+    try {
+      return profileNameWrittenAt(
+        runtime,
+        tx,
+        cell.withTx(tx).resolveAsCell().getAsNormalizedFullLink(),
+      );
+    } catch {
+      return undefined;
+    } finally {
+      tx.abort();
+    }
   }
 
   #staticCellProp(

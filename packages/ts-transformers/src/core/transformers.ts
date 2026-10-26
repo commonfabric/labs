@@ -251,6 +251,16 @@ export type TransformationOptions = {
    * there the author is present and can fix the shape.
    */
   readonly storedSource?: boolean;
+
+  /**
+   * Whether a pattern factory call bound to a `const` is wrapped in
+   * `__cfHelpers.nameInstance(<call>, "<name>")`, so that the pattern builder
+   * takes the binding's name as the instance's identity. Defaults to false:
+   * every sub-pattern instance then keeps its positional identity. The runner
+   * sets it from its `instanceNames` experimental flag
+   * (`docs/development/EXPERIMENTAL_OPTIONS.md`).
+   */
+  readonly instanceNames?: boolean;
 };
 
 export type DiagnosticSeverity = "error" | "warning";

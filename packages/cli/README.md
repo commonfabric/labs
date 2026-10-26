@@ -1813,12 +1813,14 @@ The door is HTTP on the Unix socket, mode 0600, with a bearer token in
 `<socket>.token`, also 0600 and minted at each start: reaching the socket is the
 authority. A caller enqueues
 `{caller, profile, idempotencyKey, task,
-instructions?, context?, resultSchema, tools?, maxModelTurns?, depth?, tags?,
-domains?, reasoningEffort?, browserHost?, inputs?, foreignSpaces?}`
-with `POST /jobs`, reads a job with `GET /jobs/<id>` or the newest with
-`GET /jobs?limit=n`, stops one with `POST /jobs/<id>/cancel`, and watches one
-with `GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that
-ends after the job's terminal state. A request's `depth` (`quick`, `standard` or
+instructions?, context?, resultSchema, tools?, maxModelTurns?, maxInputBytes?,
+maxOutputTokens?, imageAttachments?, depth?, tags?, domains?, reasoningEffort?,
+browserHost?, inputs?, foreignSpaces?}`
+with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
+with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n`, stops one with
+`POST /jobs/<id>/cancel`, and watches one with
+`GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that ends
+after the job's terminal state. A request's `depth` (`quick`, `standard` or
 `deep`), `tags` and `domains` say how far to take the task, what kind of work it
 is and where it happens, each of the last two in place of the harness's
 classification. `domains: []` states no domain; `tags` must name at least one
@@ -1849,11 +1851,11 @@ error.
 A profile, named in the host's file, is the authority a job runs with: its
 tools, its host Loom files, its model-turn cap, the prompt-slot role its task
 binds as, and whether a job may bring a browser host (`browserHost: true`). A
-request may name fewer tools and fewer turns, and, under a profile that admits
-one, declare a browser host (below); leaving it out declines the browser. Under
-a profile with a fabric session it may hand the job pieces as
-`inputs: {<name>: <address>}`: each becomes an input cell the model holds as a
-handle from its first turn. An address naming another space by DID
+request may name fewer tools and fewer turns, narrow its model limits, and,
+under a profile that admits one, declare a browser host (below); leaving it out
+declines the browser. Under a profile with a fabric session it may hand the job
+pieces as `inputs: {<name>: <address>}`: each becomes an input cell the model
+holds as a handle from its first turn. An address naming another space by DID
 (`//<did>/of:<id>`) needs that space's host in
 `foreignSpaces: {<did>: <origin>}`; the job's session is routed there for that
 space, under the profile's identity, and may call the verbs of the piece it was
@@ -1884,6 +1886,34 @@ including returns and command receipts; a returning child reveals its sibling's
 last step, and the parent's step resumes when no child remains. Children cannot
 delegate further; nested progress needs lineage in the harness's transcript
 contract before that restriction is widened.
+
+A host profile may bound each model call with `maxInputBytes` and
+`maxOutputTokens`; a caller may only narrow either ceiling. Bounded calls use
+`openai-codex`, make one provider attempt without transport retries, check the
+final UTF-8 request body before sending it, and set the provider's output-token
+ceiling, including reasoning tokens. The byte check includes instructions,
+history and tool schemas and rejects oversized context without discarding it.
+The same model client carries these limits into research and delegated calls. A
+run under the gateway provider refuses these limits as its model client is
+built, before any model call. An input-byte ceiling is not a token count;
+callers budgeting tokens must reserve separate provider framing headroom.
+Provider-added native-search context and image token expansion require separate
+accounting; the serialized byte check does not bound them. A response that
+reaches its output-token ceiling ends as a provider failure, with no partial
+structured result admitted.
+
+`imageAttachments` contains at most eight `{mediaType, base64}` objects, using
+PNG, JPEG, GIF or WebP bytes. Canonical base64 and the declared image signature
+are validated before enqueue; the whole request still fits the same 1 MiB body
+limit. The harness snapshots these bytes into the job's workspace and sends the
+images through its normal image attachment path. Attachments confer no authority
+to read a host path. Their exact bytes participate in the enqueue idempotency
+key.
+
+Enqueue commits its job and first event in a SQLite WAL transaction with
+`synchronous = FULL` before acknowledging it. Repeating a caller's idempotency
+key with the same request returns that job; a different request or profile
+returns a conflict.
 
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an

@@ -33,6 +33,9 @@ export interface TransformOptions {
 
   /** Compiles as a reload of durable stored source (`storedSource`). */
   storedSource?: boolean;
+
+  /** Names `const`-bound sub-pattern instances (`instanceNames`). */
+  instanceNames?: boolean;
 }
 
 export interface BatchTypeCheckResult {
@@ -577,6 +580,7 @@ export async function transformFiles(
     assertDiagnostics: options.assertDiagnostics,
     canonicalWriterIdentityFile: options.canonicalWriterIdentityFile,
     storedSource: options.storedSource,
+    instanceNames: options.instanceNames,
   });
 
   const out: Record<string, string> = {};
@@ -835,6 +839,7 @@ export async function validateFiles(
     assertDiagnostics: options.assertDiagnostics,
     canonicalWriterIdentityFile: options.canonicalWriterIdentityFile,
     storedSource: options.storedSource,
+    instanceNames: options.instanceNames,
   });
 
   const outputs: Record<string, string> = {};

@@ -410,6 +410,55 @@ describe("confirmed-read", () => {
       expect(read).toEqual({ value: true, confirmed: false });
     });
 
+    it("keeps a session-scoped document a pushed frame names in its removes, which no server holds", async () => {
+      // A frame says nothing about documents held only in this replica,
+      // and the drop of what the frame removes reads the frame the same
+      // way as its application does.
+      const storage = TestStorageManager.create({
+        as: signer,
+        memoryHost: new URL("http://localhost:65535"),
+      }, {
+        create() {
+          throw new Error("Session state stays local");
+        },
+      });
+      const local = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage,
+        experimental: { localSessionDocuments: true, serverExecution: false },
+      });
+      try {
+        const id: URI = "of:kept-locally";
+        const address = {
+          space,
+          id,
+          type: "application/json" as const,
+          path: [],
+          scope: "session" as const,
+        };
+        const tx = local.edit();
+        tx.writeValueOrThrow(address, 42);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const replica = storage.open(space).replica as SpaceReplica;
+        const frame: SessionSync = {
+          type: "sync",
+          fromSeq: 0,
+          toSeq: 0,
+          upserts: [],
+          removes: [{ branch: "", id, scope: "session" }],
+        };
+        await replica.accessForTestingOnly.consumeUpdates(
+          [frame][Symbol.iterator]() as unknown as AsyncIterator<SessionSync>,
+        );
+        const read = local.edit();
+        expect(read.read(address).ok?.value).toEqual({ value: 42 });
+        read.abort();
+      } finally {
+        await local.dispose();
+        await storage.close();
+      }
+    });
+
     it("returns an unconfirmed read of one written in session scope, which no server stores", async () => {
       const storage = TestStorageManager.create({
         as: signer,

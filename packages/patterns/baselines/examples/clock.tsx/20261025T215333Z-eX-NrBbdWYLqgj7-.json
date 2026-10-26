@@ -1,0 +1,33 @@
+{
+  "argumentSchema": {
+    "asCell": [
+      "opaque"
+    ]
+  },
+  "pattern": "examples/clock.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "date": {
+        "description": "\"Wed 9 Jul 2026\" once #now resolves, \"\" during the load window.",
+        "type": "string"
+      },
+      "time": {
+        "description": "\"HH:MM:SS\" once #now resolves, \"--:--:--\" during the load window.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "time",
+      "date",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

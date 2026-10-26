@@ -6,6 +6,7 @@ import type {
   GroupIndex,
   KeyIndex,
   ReadonlyCell,
+  TextChange,
 } from "@commonfabric/api";
 import {
   assertValidFabricValueLayer,
@@ -77,6 +78,7 @@ import {
   type HKT,
   type ICell,
   isReactiveMarker,
+  isStreamValue,
   type IsThisObject,
   type IStreamable,
   type JSONSchema,
@@ -100,6 +102,7 @@ import { checkSqliteRowLabelWrite } from "./builtins/sqlite/row-label-write.ts";
 import { checkSqliteWriteCeiling } from "./builtins/sqlite/write-ceiling.ts";
 import { type Cancel, isCancel, useCancelGroup } from "./cancel.ts";
 import { ContextualFlowControl, declaredSchemaScope } from "./cfc.ts";
+import { cfcSchemaGivesNoShape } from "./cfc/schema-primitives.ts";
 import {
   cfcAcquisitionViewForDereferenceTraces,
   type CfcLabelView,
@@ -137,8 +140,17 @@ import {
 import { actingForEmission, waveRunContextOf } from "./executor/wave.ts";
 import { immutableCellsFor, pinImmutableCell } from "./immutable-cell.ts";
 import { areLinksSame } from "./link-equality.ts";
-import { type LastNode, resolveLink } from "./link-resolution.ts";
-import { areNormalizedLinksSame, isPrimitiveCellLink } from "./link-types.ts";
+import {
+  type LastNode,
+  resolveLink,
+  resolveLinkTracingDereferences,
+} from "./link-resolution.ts";
+import {
+  addressKey,
+  areNormalizedLinksSame,
+  isPrimitiveCellLink,
+  isSigilLink,
+} from "./link-types.ts";
 import {
   createSigilLinkFromParsedLink,
   declareStreamSchema,
@@ -155,6 +167,8 @@ import {
   createQueryResultProxy,
   getCellOrThrow,
   isCellResultForDereferencing,
+  type ViewReadOut,
+  viewReadOut,
 } from "./query-result-proxy.ts";
 import type { Runtime } from "./runtime.ts";
 import { isRuntime } from "./runtime-brand.ts";
@@ -406,40 +420,11 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
     (Array.isArray(schema.type) && schema.type.includes("array")) ||
     schema.items !== undefined || schema.prefixItems !== undefined);
 
-/** Keywords that annotate a schema and constrain no value. */
-const SCHEMA_ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
-  "title",
-  "description",
-  "$comment",
-  "examples",
-  "deprecated",
-  "readOnly",
-  "writeOnly",
-]);
-
-/**
- * Whether `schema` gives a value no shape: it is absent, or admits every value
- * once its annotations are set aside, so it holds nothing but what the runtime
- * reads for itself (a label, a cell kind, a scope), a default and definitions
- * besides them (`ContextualFlowControl.isTrueSchema`).
- */
-const schemaGivesNoShape = (schema: JSONSchema | undefined): boolean =>
-  schema === undefined ||
-  ContextualFlowControl.isTrueSchema(
-    isObjectOrArray(schema)
-      ? Object.fromEntries(
-        Object.entries(schema).filter(([key]) =>
-          !SCHEMA_ANNOTATION_KEYWORDS.has(key)
-        ),
-      )
-      : schema,
-  );
-
 /**
  * Whether an item write under a missing parent, which the stored envelope
  * describes as `schema`, writes an item of an array. The storage write creates
  * an array for a missing container an index addresses, and that answers where
- * the envelope gives the parent no shape ({@link schemaGivesNoShape}): no
+ * the envelope gives the parent no shape (`cfcSchemaGivesNoShape()`): no
  * envelope, no declaration there, or one holding only a label and annotations.
  * Where the envelope declares an array, it agrees. Any other declaration is
  * taken as written, whether by type, by the members of an object, by a
@@ -447,7 +432,7 @@ const schemaGivesNoShape = (schema: JSONSchema | undefined): boolean =>
  * the envelope's checks of the member it declares there apply to the write.
  */
 const missingParentIsArray = (schema: JSONSchema | undefined): boolean =>
-  schemaGivesNoShape(schema) || schemaDeclaresArray(schema);
+  cfcSchemaGivesNoShape(schema) || schemaDeclaresArray(schema);
 
 /**
  * The schema write-policy input for a write landing at an item of an array:
@@ -980,6 +965,7 @@ const cellMethods = new Set<
   "pushAll",
   "addUnique",
   "increment",
+  "applyChanges",
   "remove",
   "removeAll",
   "removeByValue",
@@ -1024,6 +1010,11 @@ const cellMethods = new Set<
   "keys",
   "keyEntries",
 ]);
+
+/** Whether `changes` is a list of text changes rather than a single one. */
+const isTextChangeList = (
+  changes: TextChange | readonly TextChange[],
+): changes is readonly TextChange[] => Array.isArray(changes);
 
 /** Whether `schema` admits `value` and nothing else. */
 function schemaPinsLiteral(
@@ -3292,6 +3283,67 @@ export class CellImpl<T extends FabricValue>
   }
 
   /**
+   * Applies `changes` to this string cell, each position referring to the
+   * value this transaction read. The commit carries them as an edit, which a
+   * collaborative editor merges with its own typing, and which applies only
+   * while the field still holds the value read here: a field that moved on
+   * refuses the commit, and the transaction runs again against the new value.
+   *
+   * @throws when called outside a transaction, when the cell holds no string,
+   *   when a change does not fit the string, or when the transaction already
+   *   wrote the field another way.
+   */
+  applyChanges(changes: TextChange | readonly TextChange[]): void {
+    if (!this.#tx) {
+      throw new Error(
+        "Cell.applyChanges() requires a transaction and a string value\n" +
+          "help: use in handlers only, ensure cell is typed as string",
+      );
+    }
+    if (!this.#tx.recordTextChanges) {
+      throw new Error(
+        "Cell.applyChanges() requires a transaction that records text changes",
+      );
+    }
+    if (!this.#synced) this.#startLoad();
+
+    const resolvedLink = resolveLink(
+      this.#runtime,
+      this.#tx,
+      this.#link,
+      "value",
+      {
+        markIfcCrossings: true,
+      },
+    );
+    recordRelevantSchemaWritePolicyInput(
+      this.#tx,
+      resolvedLink,
+      resolvedLink.schema ?? this.schema,
+    );
+    // An ordinary read, so that it reaches the commit as a confirmed read of
+    // the field: the precondition that refuses the edit once the field moves.
+    const currentValue = this.#tx.readValueOrThrow(resolvedLink);
+    if (typeof currentValue !== "string") {
+      throw new Error(
+        "Cell.applyChanges() requires a transaction and a string value\n" +
+          "help: use in handlers only, ensure cell is typed as string",
+      );
+    }
+    const list: readonly TextChange[] = isTextChangeList(changes)
+      ? changes
+      : [changes];
+    const next = this.#tx.recordTextChanges(resolvedLink, list);
+    diffAndUpdate(
+      this.#runtime,
+      this.#tx,
+      resolvedLink,
+      next,
+      this.#frame?.cause,
+    );
+  }
+
+  /**
    * Removes every element of this array equal to `ref` by stored value. A cell
    * ref matches by its (deterministic) link, so the membership entry is removed
    * without depending on the list's prior contents — concurrent removes of
@@ -5033,7 +5085,13 @@ function subscribeToReferencedDocs<T>(
       const newValue = validateAndTransform(runtime, wrappedTx, ref, [], {
         synced: true,
       });
-      if (needsTraversal && newValue !== undefined && newValue !== null) {
+      // A projection reads what it delivers, and those reads are this sink's
+      // dependencies. A sink delivering the value itself hears every change
+      // under it, so the whole of the value is read.
+      if (
+        project === undefined && needsTraversal && newValue !== undefined &&
+        newValue !== null
+      ) {
         deepTraverse(newValue);
       }
       // Read the label on the SINK's transaction (`tx`), not the child `extraTx`,
@@ -5579,7 +5637,9 @@ export function readProjected<R>(
  * to the value: `callback` runs with the projection of each value, and the
  * labels of everything the read and the projection consumed, read on the
  * sink's own transaction so that a write to anything the projection reached,
- * labels included, runs it again. A stream holds no value to project, and is
+ * labels included, runs it again. What the projection reaches is what the
+ * subscription depends on: a part of the value it never reads is a part
+ * whose change does not run it. A stream holds no value to project, and is
  * refused.
  */
 export function sinkProjected<R>(
@@ -5714,12 +5774,17 @@ function convertOneToLinks(
         // subclass would return a subclass instance.
         container = value as unknown[] | Record<string, unknown>;
       } else {
-        // A query-result proxy serves the symbol from a trap rather than as
-        // an own property, and a subclass fails the prototype check. Either
-        // is read out into a plain copy first, which is a valid
-        // `FabricValueLayer` already and so wants no further conversion.
-        // Objects need this as much as arrays do -- the annotation goes on
-        // either (see `schema.ts`).
+        // A query-result view serves the symbol from a trap rather than as an
+        // own property. Its document is read out directly rather than member
+        // by member through its traps, each of which would build a view of
+        // its own, resolve its link and derive its label view for a member
+        // that is then only copied.
+        const readOut = viewReadOut(value);
+        if (readOut !== undefined) return readOutView(readOut, options, stack);
+        // A subclass fails the prototype check, and is read out into a plain
+        // copy first, which is a valid `FabricValueLayer` already and so wants
+        // no further conversion. Objects need this as much as arrays do -- the
+        // annotation goes on either (see `schema.ts`).
         container = (isArray
           ? shallowCleanArray(value, false)
           : shallowCleanPlainObject(value as object, false)) as
@@ -5819,6 +5884,133 @@ function convertOneToLinks(
     // elsewhere in the code.
     ancestors.popExpect(original);
   }
+}
+
+/**
+ * Reads the document a view describes out as the data the view reads, in
+ * place of walking the view member by member: the stored value is frozen,
+ * and copying it from there costs no view, link resolution or label view per
+ * member.
+ *
+ * The document is read once, whole, through the view's own checked read, so
+ * a document that no longer holds what the view was built over refuses as
+ * every access through the view does; the read registers every position
+ * under it, where reading through the view registers each as it is reached. A stored link is followed where it sits, as the view follows
+ * one on access, with the same resolution, so the dereference traces and
+ * labeled crossings it records are the ones the view's reads record. A link
+ * that returns to a position the walk is inside yields a back-link to it, as
+ * a cycle does elsewhere in the walk. A stream position yields the link to
+ * the stream, carrying the label view a view of it would carry.
+ *
+ * `stack` is the path to the view from the walk's root, pushed to and popped
+ * from as {@link convertOneToLinks} does, so a back-link made here names a
+ * path from that same root.
+ */
+function readOutView(
+  view: ViewReadOut,
+  options: CellLinkOptions,
+  stack: string[],
+): FabricValue {
+  const { runtime } = view;
+  return view.atEpoch(() => {
+    const tx = view.readTx();
+    // The depth the walk entered each container it is inside, keyed by the
+    // container's document position, so that a link back to one yields a
+    // back-link to that depth.
+    const entered = new Map<string, number>();
+
+    const streamLink = (
+      link: NormalizedFullLink,
+      cfcLabelView: CfcLabelView | undefined,
+    ): FabricValue =>
+      linkToCell(
+        createCell(runtime, link, view.tx, false, "stream", cfcLabelView),
+        options,
+      );
+
+    // What `stored` holds, which sits at `position` inside the document
+    // `document` names, under the label view `cfcLabelView` carries for that
+    // document position. `position` is pushed to and popped from in step with
+    // `stack`.
+    const walk = (
+      stored: unknown,
+      document: NormalizedFullLink,
+      position: string[],
+      cfcLabelView: CfcLabelView | undefined,
+    ): FabricValue => {
+      if (isSigilLink(stored)) {
+        const resolved = resolveLinkTracingDereferences(
+          runtime,
+          tx,
+          { ...document, path: [...document.path, ...position] },
+          "value",
+          { markIfcCrossings: true },
+        );
+        const target = resolved.link;
+        const targetView = mergeCfcLabelViews([
+          rebaseCfcLabelView(cfcLabelView, position),
+          cfcAcquisitionViewForDereferenceTraces(tx, resolved.traces),
+        ]);
+        if (ContextualFlowControl.declaresStream(target.schema)) {
+          return streamLink(target, targetView);
+        }
+        const depth = entered.get(addressKey(target));
+        if (depth !== undefined) {
+          return deepFreeze(linkRefFrom({ path: stack.slice(0, depth) }));
+        }
+        return walk(tx.readValueOrThrow(target), target, [], targetView);
+      }
+      if (isStreamValue(stored)) {
+        return streamLink(
+          { ...document, path: [...document.path, ...position] },
+          rebaseCfcLabelView(cfcLabelView, position),
+        );
+      }
+      if (!isObjectOrArray(stored) || stored instanceof FabricPrimitive) {
+        return stored as FabricValue;
+      }
+      if (stored instanceof FabricInstance) {
+        // A view over an instance reports no own keys, so what a copy of one
+        // holds is an empty record; the marker above the view construction in
+        // `query-result-proxy.ts` says what closes this.
+        return Object.freeze({});
+      }
+      const member = (key: string, value: unknown): FabricValue => {
+        stack.push(key);
+        position.push(key);
+        try {
+          return walk(value, document, position, cfcLabelView);
+        } finally {
+          position.pop();
+          stack.pop();
+        }
+      };
+      // The container is an ancestor of everything below it for as long as
+      // the walk is inside it, and nothing else: a value reached again on
+      // another branch is shared, and is read out again there.
+      const here = addressKey({
+        ...document,
+        path: [...document.path, ...position],
+      });
+      entered.set(here, stack.length);
+      try {
+        if (Array.isArray(stored)) {
+          return Object.freeze(
+            stored.map((element, index) => member(String(index), element)),
+          );
+        }
+        return Object.freeze(Object.fromEntries(
+          Object.entries(stored).map((
+            [key, value],
+          ) => [key, member(key, value)]),
+        ));
+      } finally {
+        entered.delete(here);
+      }
+    };
+
+    return walk(view.readDocument(), view.link, [], view.cfcLabelView);
+  });
 }
 
 /**

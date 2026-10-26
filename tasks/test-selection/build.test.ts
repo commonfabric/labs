@@ -331,8 +331,13 @@ describe("build", () => {
         ]),
         NO_ALIASES,
       );
-      const byDay = [...read.durations.values()][0]!;
-      expect(byDay.get("2026-08-20")).toEqual([10, 90]);
+      expect(read.observations.map((seen) => seen.durationMs)).toEqual([
+        10,
+        90,
+        undefined,
+        undefined,
+      ]);
+      expect([...read.durations.keys()]).toEqual([]);
     });
 
     it("keeps no duration from a workstation, and its observations all the same", () => {
@@ -345,7 +350,7 @@ describe("build", () => {
         NO_ALIASES,
       );
       expect(read.observations.map((seen) => seen.place)).toEqual(["local"]);
-      expect([...read.durations.keys()]).toEqual([]);
+      expect(read.observations[0]!.durationMs).toBeUndefined();
     });
 
     it("keeps a failed execution as an observation all the same", () => {
@@ -359,7 +364,7 @@ describe("build", () => {
         NO_ALIASES,
       );
       expect(read.observations.map((seen) => seen.outcome)).toEqual(["fail"]);
-      expect([...read.durations.keys()]).toEqual([]);
+      expect(read.observations[0]!.durationMs).toBeUndefined();
     });
 
     it("reads nothing from a group whose start time is not a time", () => {
@@ -416,7 +421,8 @@ describe("build", () => {
         "space > writes",
       ]);
       expect([...read.surfaces.keys()]).toEqual([KEY]);
-      expect([...read.durations.keys()]).toEqual([KEY]);
+      expect(read.observations[0]!.durationMs).toBe(40);
+      expect([...read.durations.keys()]).toEqual([]);
     });
 
     it("asks the alias file nothing about a lane measuring itself", () => {
@@ -1849,6 +1855,202 @@ describe("build", () => {
       // the tree has lost must not be done about one it holds.
       expect(unplaced.unclaimed).toEqual([]);
       expect(unplaced.contested).toEqual([KEY]);
+    });
+  });
+
+  describe("what records from off the default branch may change", () => {
+    /** Where a branch that reorganizes the tree puts the same test. */
+    const MOVED = "runtime/memory/test/space.test.ts";
+
+    /** A test only a branch holds. */
+    const ADDED = { k: "unit", s: "memory", n: "space > forgets" };
+
+    /** A workstation's run of a branch, the hour after `context()`. */
+    function workstation(): RunContext {
+      const local = context({
+        env: "local",
+        branch: "reorganize",
+        commit: "c9",
+        startedAt: "2026-08-20T01:00:00.000Z",
+      });
+      delete local.ci;
+      return local;
+    }
+
+    /** A pull request's run of a branch, the hour after `context()`. */
+    function pullRequest(): RunContext {
+      return context({
+        branch: "reorganize",
+        commit: "c9",
+        startedAt: "2026-08-20T01:00:00.000Z",
+      });
+    }
+
+    /** The aggregate holding the identity, under `UNIT`. */
+    function carrying() {
+      const aggregate = emptyAggregate("2026-08-20");
+      aggregate.states[KEY] = emptyState();
+      aggregate.files[KEY] = UNIT;
+      return aggregate;
+    }
+
+    const fold = (aggregate = carrying()) =>
+      new Fold(aggregate, NO_ALIASES, "2026-08-20");
+
+    for (
+      const { name, objectName, runContext } of [
+        {
+          name: "a workstation",
+          objectName: LOCAL_NAME,
+          runContext: workstation,
+        },
+        {
+          name: "a pull request",
+          objectName: `${CI_NAME}2`,
+          runContext: pullRequest,
+        },
+      ]
+    ) {
+      it(`keeps the file main named when ${name} names another`, () => {
+        const folding = fold();
+        folding.add([
+          stored(objectName, runContext(), [record({ file: MOVED })]),
+        ]);
+        const folded = folding.finish();
+        expect(folded.aggregate.files[KEY]).toBe(UNIT);
+        expect(folded.surfaces.get(KEY)?.unit).toBe(UNIT);
+        // The record is still evidence about the test.
+        expect(folded.states.get(KEY)?.runsByDay["2026-08-20"]).toBe(1);
+      });
+
+      it(`adds no identity that only ${name} recorded`, () => {
+        const folding = fold();
+        folding.add([
+          stored(objectName, runContext(), [
+            record({ test: ADDED, file: UNIT }),
+          ]),
+        ]);
+        const folded = folding.finish();
+        const added = testIdentityKey(ADDED);
+        expect(folded.states.has(added)).toBe(false);
+        expect(folded.surfaces.has(added)).toBe(false);
+        expect(folded.aggregate.files[added]).toBeUndefined();
+      });
+    }
+
+    it("takes the file main names once a move lands", () => {
+      const folding = fold();
+      folding.add([stored(CI_NAME, context(), [record({ file: MOVED })])]);
+      const folded = folding.finish();
+      expect(folded.aggregate.files[KEY]).toBe(MOVED);
+      expect(folded.surfaces.get(KEY)?.unit).toBe(MOVED);
+    });
+
+    /**
+     * A pull request's run of the added test, main's first record of it,
+     * and a pull request's run after that, an hour apart and in time
+     * order, each in an object of its own.
+     */
+    function landing() {
+      const at = (hour: number) => `2026-08-20T0${hour}:00:00.000Z`;
+      return [
+        stored(
+          `${CI_NAME}1`,
+          context({ branch: "feature", startedAt: at(0) }),
+          [record({ test: ADDED, durationMs: 90_000 })],
+        ),
+        stored(`${CI_NAME}2`, context({ startedAt: at(1) }), [
+          record({ test: ADDED, file: UNIT, durationMs: 40 }),
+        ]),
+        stored(
+          `${CI_NAME}3`,
+          context({ branch: "feature", startedAt: at(2) }),
+          [record({ test: ADDED, outcome: "fail" })],
+        ),
+      ];
+    }
+
+    it("folds what else said about an added test once main recorded it", () => {
+      const folding = fold(emptyAggregate("2026-08-20"));
+      folding.add(landing());
+      const state = folding.finish().states.get(testIdentityKey(ADDED));
+      // The first pull request's run came before main's record, and is
+      // not counted; the second came after it, and is.
+      expect(state?.runsByDay).toEqual({ "2026-08-20": 2 });
+      expect(state?.failuresByDay).toEqual({ "2026-08-20": 1 });
+    });
+
+    it("decides the same way however the records are batched", async () => {
+      const whole = fold(emptyAggregate("2026-08-20"));
+      whole.add(landing());
+      const expected = whole.finish().states.get(testIdentityKey(ADDED));
+
+      const apart = fold(emptyAggregate("2026-08-20"));
+      for (const object of landing()) apart.add([object]);
+      expect(apart.finish().states.get(testIdentityKey(ADDED)))
+        .toEqual(expected);
+
+      const aside = fold(emptyAggregate("2026-08-20"));
+      await aside.addUnordered(replaying(landing().reverse()));
+      expect(aside.finish().states.get(testIdentityKey(ADDED)))
+        .toEqual(expected);
+    });
+
+    it("costs an added test only by runs it counts", () => {
+      // The pull request's ninety seconds came before main recorded the
+      // test, earlier the same day, so they are not its cost.
+      const folding = fold(emptyAggregate("2026-08-20"));
+      folding.add([
+        stored(`${CI_NAME}1`, context({ branch: "feature" }), [
+          record({ test: ADDED, durationMs: 90_000 }),
+        ]),
+        stored(
+          `${CI_NAME}2`,
+          context({ startedAt: "2026-08-20T01:00:00.000Z" }),
+          [record({ test: ADDED, file: UNIT, durationMs: 40 })],
+        ),
+      ]);
+      const state = folding.finish().states.get(testIdentityKey(ADDED))!;
+      expect(costSeconds(state, "2026-08-20")).toBeLessThan(1);
+    });
+
+    it("costs an added test by a pull request's runs after main recorded it", async () => {
+      const objects = () => [
+        stored(`${CI_NAME}1`, context(), [
+          record({ test: ADDED, file: UNIT, durationMs: 40 }),
+        ]),
+        stored(
+          `${CI_NAME}2`,
+          context({
+            branch: "feature",
+            startedAt: "2026-08-20T01:00:00.000Z",
+          }),
+          [record({ test: ADDED, durationMs: 90_000 })],
+        ),
+      ];
+      const folding = fold(emptyAggregate("2026-08-20"));
+      folding.add(objects());
+      const state = folding.finish().states.get(testIdentityKey(ADDED))!;
+      expect(costSeconds(state, "2026-08-20")).toBeGreaterThan(80);
+      const aside = fold(emptyAggregate("2026-08-20"));
+      await aside.addUnordered(replaying(objects()));
+      expect(aside.finish().states.get(testIdentityKey(ADDED))?.costByDay)
+        .toEqual(state.costByDay);
+    });
+
+    it("keeps main's file, and adds no identity, for a batch read aside", async () => {
+      const added = testIdentityKey(ADDED);
+      const moved = fold();
+      await moved.addUnordered(replaying([
+        stored(LOCAL_NAME, workstation(), [
+          record({ file: MOVED }),
+          record({ test: ADDED, file: MOVED }),
+        ]),
+      ]));
+      const kept = moved.finish();
+      expect(kept.aggregate.files[KEY]).toBe(UNIT);
+      expect(kept.states.get(KEY)?.runsByDay["2026-08-20"]).toBe(1);
+      expect(kept.states.has(added)).toBe(false);
     });
   });
 
