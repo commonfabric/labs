@@ -962,8 +962,7 @@ export function sqliteQuery(
 
   // One owner signal covers query work and completion writebacks. Unsent
   // endings also observe it: cancellation releases the result store's
-  // runtime-owned enrollment, so a later write loses its transaction-derived
-  // policy.
+  // runtime-owned enrollment, so a later write must fit its declared policy.
   const cancelled = new AbortController();
   addCancel(() => cancelled.abort());
 
@@ -1064,11 +1063,10 @@ export function sqliteQuery(
       // request hash is a function of the parameters, so a parameter derived
       // from a labeled read is carried onto those paths, and no `ifc` an
       // author writes into a schema can declare which atoms a given
-      // transaction will bring. Naming the store here is what lets §8.12.5
-      // route 2 declare that policy from the transaction instead of refusing
-      // the write; `docs/specs/cfc-enforcement-matrix.md` §4 states the
-      // route, and the bound the store's own ceiling was carrying by
-      // accident is applied below, before the request is staged.
+      // transaction will bring. Naming the runtime-owned store here admits
+      // the write with the transaction's join in its derived component;
+      // `docs/specs/cfc-enforcement-matrix.md` §4 states the conditions. The
+      // request's egress bound is applied below, before it is staged.
       //
       // The marker names the store for THIS transaction; the enrollment is
       // what reaches the later ones, since a re-issue and a settled
@@ -1318,10 +1316,9 @@ export function sqliteQuery(
     // never meets it.
     if (crossSpace && requestConfidentiality().length > 0) {
       // On the issuing transaction, whose flow join is non-empty by
-      // construction — that is the condition this fires on — so route 2
-      // declares that clause on the control paths this writes. A pattern
-      // rendering "this query was refused" inherits it, as a reader of the
-      // flag a labeled claim raised does.
+      // construction — that is the condition this fires on — so the control
+      // paths this writes carry that join as their derived component. A
+      // pattern rendering "this query was refused" inherits it.
       //
       // `nonReactive`, like the claim below: the write machinery's read of
       // the region it is about to write must not make this action depend on

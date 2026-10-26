@@ -526,24 +526,21 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
       }
     });
 
-    it("commits the runtime-owned-store declaration built from that same join", async () => {
-      // The §8.12.5 route-2 declaration a store the runtime owns mints carries the
-      // flow join as its content, so it is the one `declared` entry the
-      // transform applies to. Leaving it verbatim beside the committed
-      // derived stamp of the same atoms would publish in one entry what the
-      // other protects.
+    it("commits the runtime-owned store's derived label from that same join", async () => {
+      // A runtime-owned store carries the flow join as a derived component.
+      // Cross-space label metadata protects the foreign identities in that
+      // component, while leaving the store's declared policy unchanged.
 
       const { storageManager, runtime } = makeRuntime("enforce", {
         // `persist` is the rung that writes the flow join into the stored
-        // label map. The declaration the assertions below read is minted
-        // from that join.
+        // label map, where the assertions below read the derived component.
         cfcFlowLabels: "persist",
       });
       try {
         await seedSource(runtime, spaceA, "substrate-source");
         const tx = runtime.edit();
-        // Route 2 runs at a rung that rejects a writer-fit misfit. The
-        // `declared` entry the assertions below read is minted there.
+        // Runtime ownership admits this write at the rung that rejects an
+        // ordinary store's writer-fit misfit.
         tx.setCfcEnforcementMode("enforce-strict");
         const source = runtime.getCell(
           spaceA,
@@ -586,9 +583,14 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
           spaceB,
           substrateLink.id,
         );
-        const declared = entries.find((e) => e.origin === "declared");
-        expect(declared).toBeDefined();
-        expect(declared!.label.confidentiality).toContainEqual({
+        expect(entries.some((entry) => entry.origin === "declared")).toBe(
+          false,
+        );
+        const derived = entries.find((entry) =>
+          entry.origin === "derived" && entry.observes === "value"
+        );
+        expect(derived).toBeDefined();
+        expect(derived!.label.confidentiality).toContainEqual({
           type: CFC_ATOM_TYPE.User,
           subject: commitCfcFieldValue("did:key:alice"),
         });

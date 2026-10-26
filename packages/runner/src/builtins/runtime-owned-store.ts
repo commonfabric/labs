@@ -1,11 +1,8 @@
-// The seam a builtin holding state goes through: mint the document, name it to
-// the write-side fit check, and enroll it for as long as the piece runs.
-//
-// A store the runtime owns holds whatever the transactions running a builtin
-// read, so no confidentiality an author writes into a schema covers it. Naming
-// it here is what lets CFC's fit check (spec §8.12.4) declare that policy from
-// the flow instead of refusing the write; `docs/specs/cfc-enforcement-matrix.md`
-// §4 states which stores qualify.
+/**
+ * Names and enrolls the stores a builtin owns for as long as its piece runs.
+ * CFC's fit check admits their labeled writes and records the flow join in
+ * derived stamps; `docs/specs/cfc-enforcement-matrix.md` §4 states the boundary.
+ */
 
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, cellRuntime } from "../cell.ts";
@@ -20,22 +17,22 @@ import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { scopedCell } from "./scope-policy.ts";
 
 /**
- * Name `store` as a store the runtime owns for `owner`'s piece: a document a
+ * Names `store` as a store the runtime owns for `owner`'s piece: a document a
  * builtin mints from its own node's cause to hold state, rather than data an
  * author named.
  *
  * A builtin's state store holds whatever the transactions running that builtin
  * read, and an author cannot know which atoms a given transaction will carry,
  * so no confidentiality declaration written into a schema covers it. CFC's
- * write-side fit check (spec §8.12.4) reads this marker and declares that
- * policy itself; `docs/specs/cfc-enforcement-matrix.md` §4 states the route.
+ * write-side fit check reads this marker and admits the write with its
+ * derived stamp; `docs/specs/cfc-enforcement-matrix.md` §4 states the boundary.
  * The runner records the same marker for a piece's own argument, result and
  * internal documents.
  *
  * Only a store keyed on this NODE belongs here. A document the runtime mints
  * from a constant or from the space's own principal — a space cell, a shared
  * clock, a per-space pinned-cell list — is shared by every piece in the space,
- * so one piece's flow join has no business becoming its declared policy.
+ * so a single piece cannot claim ownership of it.
  *
  * The marker names the store for THIS transaction, which is what a store the
  * runtime mints and fills in one go needs — a dialog message, say. A store the
@@ -121,7 +118,7 @@ export function ownedStoreLinks(
 }
 
 /**
- * Enroll `store` as a store the runtime owns for `owner`'s piece, so a
+ * Enrolls `store` as a store the runtime owns for `owner`'s piece, so a
  * transaction that neither minted it nor re-marked it still finds it, until
  * that piece's nodes are cancelled. Pairs with {@link
  * recordRuntimeOwnedStore}, which names it for one transaction; both are

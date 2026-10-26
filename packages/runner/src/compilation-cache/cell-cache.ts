@@ -957,14 +957,11 @@ export function codeFieldVerifies(
  * transition does by construction, because it stages a module's delegation
  * union on the same transaction that moves the piece's source pointer.
  *
- * A cache document is not on §8.12.5's route 2, whose declaration would be the
- * other answer. Route 2 declares one piece's flow join as the store's policy,
- * so it wants a store keyed on that piece's own nodes. A cache document is
- * keyed on module content: every piece in the space running that module
- * addresses it, and it outlives all of them. What route 2 leaves behind is
- * also permanent — a `declared` entry per measured path, which §8.12.1 does
- * not let back, on a document nothing collects — where the flow stamp this
- * keeps is a per-value component §8.12.8 replaces on overwrite.
+ * A cache document has no piece owner for §8.12.5's runtime-owned-store
+ * enrollment. It is keyed on module content: every piece in the space
+ * running that module addresses it, and it outlives all of them. Its
+ * per-transaction marker admits the write independently of piece enrollment,
+ * while the derived component records the current value's flow label.
  *
  * The write stays a flow stamp target, which is where this stops short of
  * §18.6.2's write-side mirror — that section says the same addresses are not

@@ -281,16 +281,11 @@ export type CfcPosture = "max-enforcement";
  * sink's absence from a ceiling list. Building the mechanism that retires the
  * gap is planned in `docs/plans/cfc-llm-sink-admission.md`.
  *
- * Until the §8.12.5 route-2 widening, one path was gated anyway, by accident:
- * a pattern calling `llm(...)` staged its request in the transaction that also
- * wrote the builtin's own result store, that store declared nothing, and the
- * writer-fit misfit refused the commit. It fired on every such call, so under
- * this posture an llm call over caveated content did not work at all — the
- * opposite of what the rationale above says the sink is for. The store now
- * declares what flows into it, so the ungoverned statement holds of the
- * builtin path too. `max-enforcement-posture.test.ts` pins the hand-staged
- * request and `builtin-abandoned-request.test.ts` the builtin one; both flip
- * to asserting the refusal when the admission mechanism lands.
+ * The builtin's runtime-owned result store admits the write and records
+ * its flow label in the derived component, so it supplies no sink admission
+ * gate. `max-enforcement-posture.test.ts` pins the hand-staged request and
+ * `builtin-abandoned-request.test.ts` the builtin one; both flip to asserting
+ * refusal when the admission mechanism lands.
  */
 export const MAX_ENFORCEMENT_SINK_GOVERNANCE: SinkGovernanceRegistry = Object
   .freeze({

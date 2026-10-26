@@ -40,8 +40,8 @@ export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
 // node's cause; the per-event documents a builtin mints inside one
 // transaction; and the documents anchoring splits out of a value written into
 // any of those. `target` is that document; `sources` is the document the
-// runtime derived it from. The prepare gate reads it for the §8.12.5 route-2
-// declaration described in `docs/specs/cfc-enforcement-matrix.md` §4, and
+// runtime derived it from. The prepare gate reads it for the §8.12.5 runtime-owned-store
+// admission described in `docs/specs/cfc-enforcement-matrix.md` §4, and
 // takes it only where `target` names a whole document AND the input was
 // recorded under {@link runtimeWritePolicyAuthorization}.
 //
@@ -77,7 +77,7 @@ export const CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE =
 // this claim needs: the measurement runs over documents the transaction taking
 // it wrote, so the transaction that asks is the transaction that recorded it.
 // {@link CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE} carries an enrollment
-// beside it because route 2 answers for stores a later transaction writes.
+// beside it because ownership admits writes in later transactions.
 //
 // Skipping the ceiling is not releasing the value. The write stays a flow stamp
 // target, so the join lands on it as the `derived` component, a later read of

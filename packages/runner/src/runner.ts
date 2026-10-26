@@ -4315,9 +4315,8 @@ export class Runner {
     // value the slot held is copied out first, in this same transaction: the
     // copy commits exactly when the write over it does. The refused-slot
     // store is minted from the piece's result cell and named as a store the
-    // runtime owns for it, so the fit check declares the confidentiality the
-    // copy carries rather than refusing a labeled value a fresh document does
-    // not declare.
+    // runtime owns for it, so the fit check admits the copy and its derived
+    // stamp carries the transaction's confidentiality.
     const kept = keepRefusedArgumentSlots(
       this.#runtime,
       tx,
