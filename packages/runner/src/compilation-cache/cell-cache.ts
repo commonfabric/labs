@@ -368,10 +368,12 @@ export function moduleDelegationsFromDocs(
  * at build time: a compiler change that compiles the corpus to the same
  * documents keeps the tag, and one that changes any of them (a body, a stored
  * field, an import edge), or an epoch bump, moves it. A Deno source run
- * resolves the checked-in source marker to a hash of the compiler inputs
- * (`compiler-fingerprint.deno.ts`) instead, which moves on any edit to them.
- * Runtimes without repository file access skip the compiled cache until a
- * build bakes a version into `compile-cache-version.ts` or defines one. See
+ * resolves the checked-in source marker instead: to the output version its
+ * tree has recorded for itself, while that memo still matches the tree, and
+ * otherwise to a hash of the compiler inputs, which moves on any edit to them
+ * (`compile-cache-output-memo.deno.ts`). Runtimes without repository file
+ * access skip the compiled cache until a build bakes a version into
+ * `compile-cache-version.ts` or defines one. See
  * `getCompileCacheRuntimeVersion()`.
  */
 export {
@@ -379,8 +381,8 @@ export {
   SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
 } from "./compile-cache-version.ts";
 
-type CompilerFingerprintModule = {
-  computeCurrentCompilerVersion(): Promise<string>;
+type SourceCompileCacheVersionModule = {
+  computeCurrentSourceCompileCacheVersion(): Promise<string>;
 };
 
 type CompileCacheVersionGlobal = typeof globalThis & {
@@ -436,12 +438,12 @@ async function resolveCompileCacheRuntimeVersion(
     return undefined;
   }
   const specifier = new URL(
-    "./compiler-fingerprint.deno.ts",
+    "./compile-cache-output-memo.deno.ts",
     import.meta.url,
   ).href;
   try {
-    const module = await import(specifier) as CompilerFingerprintModule;
-    return await module.computeCurrentCompilerVersion();
+    const module = await import(specifier) as SourceCompileCacheVersionModule;
+    return await module.computeCurrentSourceCompileCacheVersion();
   } catch (error) {
     if (isUnavailableSourceFingerprint(error)) {
       return undefined;

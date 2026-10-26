@@ -17,6 +17,7 @@ import {
 
 const CHILD = "cell, computed, written by sub-pattern child#Child";
 const LIFT = "cell, computed, written by function";
+const IF_ELSE = "cell, computed, written by builtin ifElse";
 
 /** One pattern's build, of one source, holding `cells` in number order. */
 const build = (
@@ -31,7 +32,7 @@ const build = (
     cells: cells.map((description, number) => ({
       number,
       description,
-      holdsState: description === CHILD,
+      hasState: description === CHILD,
     })),
   }],
 });
@@ -49,6 +50,11 @@ const NOTHING_UNEVALUABLE = {
 const NUMBERED = build("room.tsx", "s", [LIFT, CHILD]);
 const RENUMBERED = build("room.tsx", "s", [CHILD]);
 
+// Three children of one pattern, and the first removed: the pairing by order
+// reads the other two as unmoved.
+const THREE_CHILDREN = build("lobby.tsx", "s", [CHILD, CHILD, CHILD]);
+const TWO_CHILDREN = build("lobby.tsx", "s", [CHILD, CHILD]);
+
 describe("check-cause-assignments", () => {
   describe("compareDumps()", () => {
     it("returns a failure for a pattern whose child moves under the same source", () => {
@@ -64,10 +70,140 @@ describe("check-cause-assignments", () => {
         comparison.failing.map(({ pattern, moved }) => ({
           pattern,
           moved: moved.map((
-            { from, to, holdsState },
-          ) => [from, to, holdsState]),
+            { from, to, hasState },
+          ) => [from, to, hasState]),
         })),
       ).toEqual([{ pattern: "room.tsx", moved: [[1, 0, true]] }]);
+    });
+
+    it("returns a failure for a pattern whose count of children of one pattern differs, where the pairing reports no move", () => {
+      const comparison = compareDumps(
+        dump(THREE_CHILDREN),
+        dump(TWO_CHILDREN),
+        [],
+        NOTHING_UNEVALUABLE,
+      );
+
+      expect(
+        comparison.failing.map(({ pattern, moved, ambiguous }) => ({
+          pattern,
+          moved,
+          ambiguous: ambiguous.map(({ before, after }) => [before, after]),
+        })),
+      ).toEqual([{
+        pattern: "lobby.tsx",
+        moved: [],
+        ambiguous: [[[0, 1, 2], [0, 1]]],
+      }]);
+    });
+
+    it("returns no move for children of one pattern whose cells cannot be matched, only their numbers on each side", () => {
+      const comparison = compareDumps(
+        dump(build("lobby.tsx", "s", [LIFT, CHILD, CHILD])),
+        dump(TWO_CHILDREN),
+        [],
+        NOTHING_UNEVALUABLE,
+      );
+
+      expect(
+        comparison.failing.map(({ moved, ambiguous }) => ({
+          moved,
+          ambiguous: ambiguous.filter(({ hasState }) => hasState).map((
+            { before, after },
+          ) => [before, after]),
+        })),
+      ).toEqual([{ moved: [], ambiguous: [[[1, 2], [0, 1]]] }]);
+    });
+
+    it("returns as forgiven children of one pattern whose count differs, where an accepted entry names both builds' digests", () => {
+      const comparison = compareDumps(
+        dump(THREE_CHILDREN),
+        dump(TWO_CHILDREN),
+        [{
+          pattern: "lobby.tsx",
+          base: assignmentDigest(THREE_CHILDREN),
+          head: assignmentDigest(TWO_CHILDREN),
+          reason: "test",
+        }],
+        NOTHING_UNEVALUABLE,
+      );
+
+      expect(comparison.failing).toEqual([]);
+      expect(comparison.forgiven).toEqual(["lobby.tsx"]);
+    });
+
+    describe("for cells holding no state", () => {
+      it("returns a failure where the pairing reports a move, giving both builds' numbers for a description whose count differs in place of its moves", () => {
+        // A lift is added ahead of a lift and an `ifElse`: the pairing reads
+        // the later lift under its neighbor's number, and the `ifElse` as
+        // moved 1 to 2.
+        const comparison = compareDumps(
+          dump(build("note.tsx", "s", [LIFT, IF_ELSE, LIFT])),
+          dump(build("note.tsx", "s", [LIFT, LIFT, IF_ELSE, LIFT])),
+          [],
+          NOTHING_UNEVALUABLE,
+        );
+
+        expect(
+          comparison.failing.map(({ moved, ambiguous }) => ({
+            moved: moved.map(({ description, from, to }) => [
+              description,
+              from,
+              to,
+            ]),
+            ambiguous: ambiguous.map((
+              { description, before, after, hasState },
+            ) => [description, before, after, hasState]),
+          })),
+        ).toEqual([{
+          moved: [[IF_ELSE, 1, 2]],
+          ambiguous: [[LIFT, [0, 2], [0, 1, 3], false]],
+        }]);
+      });
+
+      it("returns a description whose count differs where the pattern fails for a move of another description", () => {
+        const comparison = compareDumps(
+          dump(build("note.tsx", "s", [LIFT, LIFT, LIFT, CHILD])),
+          dump(build("note.tsx", "s", [LIFT, LIFT, CHILD])),
+          [],
+          NOTHING_UNEVALUABLE,
+        );
+
+        expect(
+          comparison.failing.map(({ moved, ambiguous }) => ({
+            moved: moved.map(({ from, to, hasState }) => [
+              from,
+              to,
+              hasState,
+            ]),
+            ambiguous: ambiguous.map(({ before, after, hasState }) => [
+              before,
+              after,
+              hasState,
+            ]),
+          })),
+        ).toEqual([{
+          moved: [[3, 2, true]],
+          ambiguous: [[[0, 1, 2], [0, 1], false]],
+        }]);
+      });
+
+      it("returns no failure for a description whose count differs where the pairing reports no move", () => {
+        // TODO(danfuzz): This pins the gate as it stands, not as it should
+        // be: the first of three lifts is removed and the other two move, but
+        // the pairing by order reports no move and the gate passes. Invert it
+        // to a failure once how cells holding no state are to be matched is
+        // settled; `compareDumps()` carries the matching `TODO`.
+        const comparison = compareDumps(
+          dump(build("note.tsx", "s", [LIFT, LIFT, LIFT])),
+          dump(build("note.tsx", "s", [LIFT, LIFT])),
+          [],
+          NOTHING_UNEVALUABLE,
+        );
+
+        expect(comparison.compared).toBe(1);
+        expect(comparison.failing).toEqual([]);
+      });
     });
 
     it("returns no failure for a pattern numbered alike on both sides", () => {
@@ -243,6 +379,44 @@ describe("check-cause-assignments", () => {
   });
 
   describe("describeFailures()", () => {
+    it("returns a description only the base build has as removed, and one only this build has as added, with its numbers", () => {
+      // A lift and a child are removed, and an `ifElse` is added: the child's
+      // move fails the pattern, and each description one side lacks is named
+      // with the numbers the other side gives it.
+      const text = describeFailures(
+        compareDumps(
+          dump(build("note.tsx", "s", [LIFT, CHILD])),
+          dump(build("note.tsx", "s", [IF_ELSE])),
+          [],
+          NOTHING_UNEVALUABLE,
+        ),
+      );
+
+      expect(text).toContain(`  removed: [0]: ${LIFT} (entry pattern)`);
+      expect(text).toContain(
+        `  removed, holds state: [1]: ${CHILD} (entry pattern)`,
+      );
+      expect(text).toContain(`  added: [0]: ${IF_ELSE} (entry pattern)`);
+      expect(text).not.toContain("ambiguous");
+    });
+
+    it("returns a description of cells holding no state that cannot be matched, with both builds' numbers and no mention of state", () => {
+      const text = describeFailures(
+        compareDumps(
+          dump(build("note.tsx", "s", [LIFT, IF_ELSE, LIFT])),
+          dump(build("note.tsx", "s", [LIFT, LIFT, IF_ELSE, LIFT])),
+          [],
+          NOTHING_UNEVALUABLE,
+        ),
+      );
+
+      expect(text).toContain(
+        `  ambiguous: [0, 2] -> [0, 1, 3]: ${LIFT} (entry pattern)`,
+      );
+      expect(text).toContain(`  1 -> 2: ${IF_ELSE} (entry pattern)`);
+      expect(text).not.toContain(`2 -> 1: ${LIFT}`);
+    });
+
     it("returns each moved cell with its two numbers, whether it holds state, and both builds' digests", () => {
       const comparison = compareDumps(
         dump(NUMBERED),
@@ -260,6 +434,21 @@ describe("check-cause-assignments", () => {
         }, this build ${assignmentDigest(RENUMBERED)}):`,
       );
       expect(text).toContain(`  1 -> 0, holds state: ${CHILD} (entry pattern)`);
+    });
+
+    it("returns each description of cells holding state that cannot be matched, with both builds' numbers for it", () => {
+      const text = describeFailures(
+        compareDumps(
+          dump(THREE_CHILDREN),
+          dump(TWO_CHILDREN),
+          [],
+          NOTHING_UNEVALUABLE,
+        ),
+      );
+
+      expect(text).toContain(
+        `  ambiguous, holds state: [0, 1, 2] -> [0, 1]: ${CHILD} (entry pattern)`,
+      );
     });
   });
 });

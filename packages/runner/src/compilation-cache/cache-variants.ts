@@ -1,9 +1,10 @@
 /**
  * The variants of the compiled-code cache: one key suffix per compile mode
  * that emits different bytes for the same source, so that modes never share
- * compiled bytes. The compile-cache version is minted from the compiler's
- * output under every one of them (`tasks/compile-cache-version.ts`), which is
- * why the set is enumerated here rather than implied by the suffixes.
+ * compiled bytes. A built artifact's compile-cache version is computed from
+ * the compiler's output under every one of them
+ * (`compile-cache-output-version.deno.ts`), which is why the set is enumerated
+ * here rather than implied by the suffixes.
  *
  * Boot-safe: no compiler or runtime imports.
  */

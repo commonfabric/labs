@@ -106,8 +106,8 @@ export function classifyCallableProperty(
 }
 
 /**
- * Attach a property's JSDoc description (and its lowered tags) to the schema
- * about to be emitted for it. Both emission paths go through this — the
+ * Attach a property's JSDoc description to the schema about to be emitted
+ * for it. Both emission paths go through this — the
  * ordinary delegated path and the callable-wrapper early return — so a doc
  * written on a factory-typed verb property survives exactly like one on a
  * data property.

@@ -2805,9 +2805,6 @@ export type JSONSchemaObj = {
   // bindings + a void event). Hidden from the default `cf piece verbs`
   // listing; always callable; never consulted by `cf piece call`.
   readonly tier?: "wrapper";
-  // Discovery hashtags from the doc comment (lowercased, without the leading
-  // `#`). Populated by the schema generator; mirrors the description text.
-  readonly tags?: readonly string[];
   // makes it so that your handler gets a Cell object for that property. So you can call .set()/.update()/.push()/etc on it.
   readonly asCell?: readonly AsCellType[];
   // temporarily used to assign labels like "confidential"

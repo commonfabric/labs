@@ -12,6 +12,7 @@ import {
   type CacheVariantOptions,
   PERSISTED_CACHE_VARIANTS,
 } from "./cache-variants.ts";
+import { CORPUS_DIR } from "./compile-cache-output-memo.deno.ts";
 import {
   FINGERPRINT_LENGTH,
   versionOfFingerprint,
@@ -31,29 +32,24 @@ import {
  * exercises valid across it, in every space. A construct
  * the corpus lacks is the version's blind spot, which is what the corpus's
  * breadth and {@link COMPILE_CACHE_EPOCH} are for. A build computes this
- * version for the tree it builds from and bakes it
- * into the artifact (`tasks/build-binaries.ts` into a binary,
- * `packages/shell/felt.config.ts` into the worker bundle's define, loom into
- * its vendored `compile-cache-version.ts`), so the version always names the
- * compiler actually running. Source runs keep the compiler-input fingerprint
+ * version for the tree it builds from and bakes it into the artifact
+ * (`tasks/build-binaries.ts` into a binary, `packages/shell/felt.config.ts`
+ * into the worker bundle's define), so the version always names the compiler
+ * actually running. A source checkout is not baked, because it moves: it can
+ * record the version as a memo keyed by the tree instead
+ * (`compile-cache-output-memo.deno.ts`), which its source runs take while the
+ * key matches. Otherwise a source run takes the compiler-input fingerprint
  * (`compiler-fingerprint.deno.ts`), which costs nothing to compute and needs
  * no corpus.
  *
  * Deno-only: it compiles the corpus through the runtime harness, which takes
- * about two minutes.
+ * a minute or two.
  */
 
 /**
- * The corpus: a frozen copy of pattern sources, repository-relative. The
- * version names what the compiler emits for these, so what is here
- * decides which compiler changes the cache survives. A construct the corpus
- * lacks is one the version cannot see a change to; the corpus is wide for
- * that reason, and an edit to it, including refreshing a file from
- * `packages/patterns`, moves the version of the next build.
+ * The corpus entries compiled, each with its import closure, relative to
+ * `CORPUS_DIR`.
  */
-export const CORPUS_DIR = "packages/runner/test/fixtures/compile-cache-corpus";
-
-/** The corpus entries compiled, each with its import closure, corpus-relative. */
 export const CORPUS_ENTRIES: readonly string[] = [
   "annotation-manager.tsx",
   "cell-link.tsx",

@@ -27,8 +27,14 @@ import {
 import { epochNsecFromMsec, type FileEntry } from "../fabrifile/schemas.tsx";
 import {
   childNodes,
+  findNode,
+  findNodeById,
+  fireClick,
   hasExactText,
+  hasText,
+  isButton,
   propsOf,
+  propValue,
   readValue,
 } from "../test/vnode-helpers.ts";
 import { type MessageRecord, type MessagesValue } from "./room-records.tsx";
@@ -121,6 +127,53 @@ const isNote = (text: string) => (node: unknown): boolean =>
   isElement("cf-text")(node) && hasExactText(node, text);
 
 /** The room's messages, in the order they were recorded. */
+/** The message rows under `root`'s node `id`, in their order. */
+const rowsIn = (root: unknown, id: string): unknown[] => {
+  const rows: unknown[] = [];
+  const visit = (node: unknown): void => {
+    if (isElement("cf-hover-reveal")(node)) {
+      rows.push(node);
+      return;
+    }
+    for (const child of childNodes(node)) visit(child);
+  };
+  visit(findNodeById(root, id));
+  return rows;
+};
+
+/** Clicks the control labelled `label` in the row at `index` of list `id`. */
+const clickInRowAt = (
+  root: unknown,
+  id: string,
+  index: number,
+  label: string,
+): void =>
+  fireClick(
+    findNode(rowsIn(root, id)[index], isButton(label)),
+    `"${label}" in row ${index} of ${id}`,
+  );
+
+/** The thread panel's bar saying what its composer replies to. */
+const threadBar = (root: unknown): unknown =>
+  findNode(
+    findNodeById(root, "fabrichat-thread"),
+    (node) => isElement("cf-hstack")(node) && hasText(node, "Replying to:"),
+  );
+
+/**
+ * The thread panel's bar: its display, and whether it says it replies to
+ * attachments.
+ */
+const threadReplyBar = (root: unknown): string => {
+  const bar = threadBar(root);
+  return [
+    readValue(
+      (propValue(bar, "style") as { display?: unknown } | undefined)?.display,
+    ),
+    hasText(bar, "Replying to: Attachments"),
+  ].join(" ");
+};
+
 const all = (messages: Cell<MessagesValue>): MessageRecord[] =>
   (messages.get() ?? []) as MessageRecord[];
 
@@ -241,6 +294,41 @@ export default pattern(() => {
           all(messages).length === 2 &&
           holds(messages, 0, "Look", [photo, notes]) &&
           holds(messages, 1, "", [photo])
+        ),
+      },
+
+      // A reply in a thread quoting a message with no text, only attachments:
+      // the thread panel's bar shows, says it replies to the attachments, and
+      // its cancel ends the quote.
+      {
+        action: action(() =>
+          clickInRowAt(alice[UI], "fabrichat-messages", 1, "Thread")
+        ),
+      },
+      {
+        action: action(() =>
+          clickInRowAt(alice[UI], "fabrichat-thread", 0, "Reply")
+        ),
+      },
+      { assertion: assert(() => threadReplyBar(alice[UI]) === "flex true") },
+      {
+        action: action(() =>
+          fireClick(
+            findNode(threadBar(alice[UI]), isButton("Cancel")),
+            "the thread bar's cancel",
+          )
+        ),
+      },
+      { assertion: assert(() => threadReplyBar(alice[UI]).startsWith("none")) },
+      {
+        action: action(() =>
+          fireClick(
+            findNode(
+              findNodeById(alice[UI], "fabrichat-thread"),
+              isButton("Close"),
+            ),
+            "the thread's close",
+          )
         ),
       },
 

@@ -127,6 +127,7 @@ import {
   publishCustodyAnswer,
   readCustodyAnswer,
 } from "@commonfabric/runner/cfc/custody-seal";
+import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
 import {
@@ -146,11 +147,7 @@ import {
   resetAllTimingBaselines,
 } from "@commonfabric/utils/logger";
 import { backtickQuote } from "@commonfabric/utils/markdown";
-import {
-  isObjectNotArray,
-  isObjectOrArray,
-  isPlainObject,
-} from "@commonfabric/utils/types";
+import { isObjectNotArray, isPlainObject } from "@commonfabric/utils/types";
 
 import { HostReadGate } from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
@@ -760,11 +757,15 @@ export function toConsoleDebugValue(value: unknown): FabricValue {
   });
 }
 
-export const hasExplicitSubscriptionSchema = (schema: unknown): boolean =>
-  schema === true ||
-  (schema !== undefined && schema !== false &&
-    isObjectOrArray(schema) &&
-    Object.keys(schema).length > 0);
+/**
+ * Whether `schema`, the one a subscription reads its cell under, gives what it
+ * reads a shape. One that gives none (absent, `true`, `{}`, or nothing but
+ * annotations and the runtime's own keywords, `cfcSchemaGivesNoShape()`) reads
+ * a value through a query-result proxy that follows every link it holds and
+ * depends on all of it.
+ */
+export const subscriptionSchemaGivesShape = (schema: unknown): boolean =>
+  !cfcSchemaGivesNoShape(schema as JSONSchema | undefined);
 
 /**
  * Connects render boundaries to authoritative access verdict changes. Given
@@ -2376,16 +2377,21 @@ export class RuntimeProcessor {
 
     const cell = getCell(this.#runtime, request.cell);
 
+    // Whether this subscription has been reported as reading through a
+    // proxy, so that it is reported once rather than on every delivery.
+    let reported = false;
     const cancel = this.#hostReadGate.subscribe(cell, request.cell, {
       includeCfcLabel: request.includeCfcLabel,
     }, (value) => {
-      // Log empty-schema subscriptions that produce CellResult proxies.
-      // These are the call sites that need real schemas added. The schema
-      // checked is the one the cell reads under, which for a ref keyed from
-      // an ancestor is the one the worker narrowed to.
-      if (!isCellResult(value)) return;
+      // Log subscriptions whose schema gives no shape and that produce
+      // CellResult proxies, `true` and a schema of annotations alone among
+      // them. These are the call sites that need real schemas added. The
+      // schema checked is the one the cell reads under, which for a ref keyed
+      // from an ancestor is the one the worker narrowed to.
+      if (reported || !isCellResult(value)) return;
       const schema = cell.getAsNormalizedFullLink().schema;
-      if (!hasExplicitSubscriptionSchema(schema)) {
+      if (!subscriptionSchemaGivesShape(schema)) {
+        reported = true;
         console.error(
           `[handleCellSubscribe] EMPTY SCHEMA SUBSCRIPTION producing ` +
             `CellResult proxy. Add a schema to this subscription site!\n` +

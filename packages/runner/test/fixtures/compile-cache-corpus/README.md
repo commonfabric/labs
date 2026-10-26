@@ -11,9 +11,11 @@ documents of every construct these files exercise valid, in every space, and one
 that changes any of them recompiles them all once. A construct these files do
 not exercise is the version's blind spot, which is why the corpus is wide and
 why `COMPILE_CACHE_EPOCH` exists. `tasks/build-binaries.ts` bakes the version
-into a binary, the shell's production bundle defines it, and
-`deno task compile-cache-version --bake` writes it into a tree that runs from
-source but ships as it stands, as loom's vendored copy does.
+into a binary, and the shell's production bundle defines it. A checkout that
+runs from source as it stands, as loom's vendored copy does, records it with
+`deno task compile-cache-version --memo`: a memo beside a fingerprint of the
+tree, these files included, which the tree's source runs take only while the
+fingerprint still matches.
 
 The entries are named in that module (`CORPUS_ENTRIES`); the other files here
 are the modules those entries import. They are copies of files under
@@ -25,7 +27,9 @@ not reach earns a file here.
 
 Editing a file here, refreshing one from `packages/patterns`, or adding an entry
 changes the bytes the corpus compiles to, so it moves the version of every later
-build, and every compiled document recompiles once.
+build, and every compiled document recompiles once. The corpus's path is
+`CORPUS_DIR` in `compile-cache-output-memo.deno.ts`, since a memo's fingerprint
+covers it.
 
 These files are data for that build step: `deno task check` does not type-check
 them (`UNCHECKED_TREES` in `tasks/typecheck.ts`), and the pattern gates over
