@@ -55,6 +55,7 @@ const federatedHost = "http://federated.initialization-data-reach.test/";
  * rather than as what was sent.
  */
 const SENT = {
+  clientBuild: { application: "shell", gitSha: "a".repeat(40) },
   apiUrl,
   memoryUrl,
   spaceHostMap: { [federatedSpace]: federatedHost },
@@ -128,6 +129,10 @@ type FieldReach = {
 };
 
 const REACH = {
+  clientBuild: {
+    reads: (o) => o.storage.clientBuild,
+    expected: SENT.clientBuild,
+  },
   apiUrl: {
     reads: (o) => o.runtime.apiUrl.href,
     expected: apiUrl,

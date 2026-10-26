@@ -160,6 +160,7 @@ import {
   spentDeliveryFailureMs,
 } from "./delivery-failure.ts";
 import { setCfcTrustSnapshot } from "../storage/extended-storage-transaction.ts";
+import { PieceStateMovedError } from "../stored-setup-build.ts";
 
 const logger = getLogger("space-server", { enabled: true, level: "warn" });
 
@@ -1661,7 +1662,15 @@ export class SpaceServer implements TransactionSealDestination {
     // path is fire-and-forget by design). Count it where the demand
     // cycle's synchronous failures already count, so the swallowed-
     // refusal class is a health-stats fact, never a log grep.
-    runtime.pieceStartCommitFailureObserver = ({ actionId, error }) => {
+    runtime.pieceStartCommitFailureObserver = (
+      { actionId, error, refused },
+    ) => {
+      if (refused) {
+        // A refusal of a piece whose state moved, on a retry of its start's
+        // commit; the runner has logged what moved.
+        this.#options.stats.structureLoadRefused += 1;
+        return;
+      }
       this.#options.stats.structureLoadFailures += 1;
       logger.warn("piece-start-commit-failed", () => [
         `piece-start commit ${actionId} failed on the serving runtime; ` +
@@ -5445,16 +5454,10 @@ export class SpaceServer implements TransactionSealDestination {
                 this.#pendingStructureLoads.delete(key);
                 this.#structureLoadDeferralStreaks.delete(key);
               } else if (confirmed.reason === "no-pattern-meta") {
-                // The lowest input the verdict may have missed: a change
-                // admitted during the pass, or foreign novelty the replica
-                // still shadows, which lies at or above its floor.
-                const invalidatedAt = Math.min(
-                  minOf(
-                    [...verdict.observedDocIds, ...confirmed.observedDocIds]
-                      .map((id) => changedDocs.get(id) ?? Infinity),
-                  ),
-                  runtime.storageManager.open(this.#options.space)
-                    .replica.unappliedForeignSeqFloor?.() ?? Infinity,
+                const invalidatedAt = this.#lowestMissedInput(
+                  runtime,
+                  changedDocs,
+                  [...verdict.observedDocIds, ...confirmed.observedDocIds],
                 );
                 if (invalidatedAt !== Infinity) {
                   this.#pendingStructureLoads.delete(key);
@@ -5513,6 +5516,46 @@ export class SpaceServer implements TransactionSealDestination {
             }
           } catch (error) {
             if (!this.#active || this.#runtime !== runtime) return;
+            if (error instanceof PieceStateMovedError) {
+              // The piece's record says another build numbered its cells
+              // holding state differently, which no retry of this build
+              // changes. Park the root as a terminal one, until a commit to
+              // the demanded doc, the piece's own root or the refused
+              // piece's, such as a migration's, re-arms it. The runner has
+              // logged what moved.
+              this.#pendingStructureLoads.delete(key);
+              this.#structureLoadDeferralStreaks.delete(key);
+              stats.structureLoadRefused += 1;
+              // The refused piece can be a child the demanded piece sets up,
+              // whose own record a migration would change.
+              const owningRoot = this.#pieceRootByDemandKey.get(key);
+              const watched = [root.id, owningRoot, error.piece].filter((
+                id,
+              ): id is string => id !== undefined);
+              // A commit to one of them that a wave drained while this pass
+              // ran found no parked root to re-arm, so it re-arms the root
+              // here instead of the park.
+              const invalidatedAt = this.#lowestMissedInput(
+                runtime,
+                changedDocs,
+                watched,
+              );
+              if (invalidatedAt !== Infinity) {
+                this.#noteRearmed(key, invalidatedAt);
+                this.#pendingStructureRetryWake = true;
+                logger.info?.("structure-load-refused", () => [
+                  `demanded root ${root.id} was refused, its state having ` +
+                  "moved; re-armed by a commit during the refusing pass",
+                ]);
+                continue;
+              }
+              this.#terminalStructureLoads.set(key, new Set(watched));
+              logger.info?.("structure-load-refused", () => [
+                `demanded root ${root.id} was refused, its state having ` +
+                "moved; parked until a commit touches it",
+              ]);
+              continue;
+            }
             this.#pendingStructureLoads.add(key);
             stats.structureLoadFailures += 1;
             logger.warn("structure-load-failed", () => [
@@ -5980,6 +6023,25 @@ export class SpaceServer implements TransactionSealDestination {
     return this.#rearmedAwaitingSettle.size > 0 &&
       runtime.storageManager.open(this.#options.space).replica
           .unappliedForeignSeqFloor?.() === undefined;
+  }
+
+  /**
+   * Helper for `#loadDemandedStructure()`, which returns the lowest seq of an
+   * input a verdict reached over `observedDocIds` during the current pass may
+   * have missed: a change to one of them admitted during the pass, by
+   * `changedDocs`, or foreign novelty the replica still shadows, which lies at
+   * or above its floor. `Infinity` where there is none.
+   */
+  #lowestMissedInput(
+    runtime: Runtime,
+    changedDocs: ReadonlyMap<string, number>,
+    observedDocIds: readonly string[],
+  ): number {
+    return Math.min(
+      minOf(observedDocIds.map((id) => changedDocs.get(id) ?? Infinity)),
+      runtime.storageManager.open(this.#options.space).replica
+        .unappliedForeignSeqFloor?.() ?? Infinity,
+    );
   }
 
   /**

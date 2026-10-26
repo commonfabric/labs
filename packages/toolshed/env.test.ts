@@ -53,6 +53,23 @@ Deno.test("DISABLE_LOG_REQ_RES / PLAID_SYNC_ALL_TRANSACTIONS parse strictly", ()
   }
 });
 
+Deno.test("MEMORY_MINIMUM_CLIENT_GENERATION defaults off and rejects invalid floors", () => {
+  assertEquals(EnvSchema.parse({}).MEMORY_MINIMUM_CLIENT_GENERATION, 0);
+  assertEquals(
+    EnvSchema.parse({ MEMORY_MINIMUM_CLIENT_GENERATION: "1" })
+      .MEMORY_MINIMUM_CLIENT_GENERATION,
+    1,
+  );
+  for (
+    const value of ["-1", "1.5", "unknown", "Infinity", "9007199254740992"]
+  ) {
+    assert(
+      !EnvSchema.safeParse({ MEMORY_MINIMUM_CLIENT_GENERATION: value }).success,
+      value,
+    );
+  }
+});
+
 Deno.test("MEMORY_ACL_MODE defaults to enforce and accepts rollout overrides", () => {
   const aclMode = (value: string | undefined) =>
     EnvSchema.parse(

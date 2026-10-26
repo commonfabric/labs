@@ -373,7 +373,9 @@ jobs:
       # run's records and holds them to this run's commit. No lane can run it:
       # a lane's records have not shipped when its gates run. It is handed the
       # directory rather than a list of files, so a run whose records it cannot
-      # find fails rather than checking nothing.
+      # find fails rather than checking nothing. The download holds every
+      # attempt's artifacts, and it reads only each job's latest attempt, so a
+      # lane re-run after it was stopped part way is judged by the re-run.
       - name: 🔎 Check the topology against this run's records
         if: ${{ !cancelled() }}
         timeout-minutes: *work-timeout

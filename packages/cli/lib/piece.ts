@@ -119,6 +119,7 @@ import {
 import { caseFold } from "unicode-case-folding";
 
 import { isHandlerCell } from "../../fuse/callables.ts";
+import { resolveCliGitSha } from "./build-info.ts";
 import { executeCallableCommand } from "./callable-command.ts";
 import {
   buildPieceDescription,
@@ -661,17 +662,19 @@ export async function loadPieces(
   // it drifts (docs/development/EXPERIMENTAL_OPTIONS.md). The same document
   // names the memory URL, where the deployment has one. Fetched alongside
   // the session rather than before it — neither needs the other.
-  const [session, { experimental, memoryHost }] = await Promise.all([
-    timeCliPhase("loadPieces.makeSession", () => makeSession(config)),
-    timeCliPhase(
-      "loadPieces.serverExperimental",
-      () =>
-        settingsForDeployedClient({
-          apiUrl: new URL(config.apiUrl),
-          env: Deno.env.get,
-        }),
-    ),
-  ]);
+  const [session, { experimental, memoryHost }, clientGitSha] = await Promise
+    .all([
+      timeCliPhase("loadPieces.makeSession", () => makeSession(config)),
+      timeCliPhase(
+        "loadPieces.serverExperimental",
+        () =>
+          settingsForDeployedClient({
+            apiUrl: new URL(config.apiUrl),
+            env: Deno.env.get,
+          }),
+      ),
+      resolveCliGitSha(),
+    ]);
   // A `--space` given as a name has only now resolved to a DID; this is the
   // deferred half of the embedded-space check `normalizeLLMFriendlyRef`
   // performs at parse time when the two spaces are written the same way. A
@@ -692,6 +695,7 @@ export async function loadPieces(
           memoryHost,
           storageManager: StorageManager.open({
             as: session.as,
+            clientBuild: { application: "cf", gitSha: clientGitSha },
             memoryHost,
           }),
           experimental,

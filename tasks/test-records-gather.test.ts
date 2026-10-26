@@ -344,6 +344,36 @@ describe("test-records-gather", () => {
         await Deno.remove(dir, { recursive: true });
       }
     });
+
+    it("returns the message each failing record failed with, in the declared variant", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "test-records-gather-" });
+      try {
+        await Deno.writeTextFile(
+          join(dir, "results.xml"),
+          `<testsuites>
+  <testsuite name="./oven.test.ts">
+    <testcase name="bakes" classname="./oven.test.ts" time="1.000"/>
+    <testcase name="burns" classname="./oven.test.ts" time="1.000">
+      <failure message="Uncaught Error: smoke">stack</failure>
+    </testcase>
+  </testsuite>
+</testsuites>`,
+        );
+        const { records, failures } = await collectRecords({
+          junit: [{
+            kind: "unit",
+            scope: "bakery",
+            glob: join(dir, "*.xml"),
+          }],
+          variant: "wood-fired",
+        });
+        const burns = records.find((record) => record.test.n === "burns")!;
+        expect(burns.test.v).toBe("wood-fired");
+        expect([...failures]).toEqual([[burns, "Uncaught Error: smoke"]]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
   });
 
   describe("the command line continuous integration runs", () => {

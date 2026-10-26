@@ -67,6 +67,11 @@ import {
   expandServerMessageCommitLabels,
   hasServerMessageCommitLabelMetadata,
 } from "./commit-label-table.ts";
+import {
+  type ClientInfo,
+  createClientInfo,
+  parseClientInfo,
+} from "./client-info.ts";
 import type { AppliedCommit } from "./engine.ts";
 import { logIncomingFrame, logOutgoingFrame } from "./frame-log.ts";
 import { memoryMessageFrameBytes } from "./message-compression.ts";
@@ -217,6 +222,9 @@ export function isPushedSync(sync: SessionSync): boolean {
 }
 
 export type ConnectOptions = {
+  /** Runtime identity attached to every session mounted on this client. */
+  client?: ClientInfo;
+
   transport: Transport;
   signal?: AbortSignal;
 };
@@ -234,6 +242,12 @@ export type ConnectionState =
   | "closed";
 
 export type MountOptions = {
+  /**
+   * Runtime identity supplied by the connection before signing the open.
+   * Caller-supplied values are ignored; configure `ConnectOptions.client`.
+   */
+  client?: ClientInfo;
+
   /** Require the space's complete persisted custom-root intent. */
   genesisRoot?: GenesisRoot;
 
@@ -640,6 +654,7 @@ export class Client {
     | null = null;
   #sessionOpenAuthContext: SessionOpenAuthContext | null = null;
   #serverFlags: MemoryProtocolFlags | null = null;
+  readonly #clientInfo: Readonly<ClientInfo>;
   #syncLabelTable = false;
   #commitLabelTable = false;
 
@@ -741,14 +756,20 @@ export class Client {
 
   private constructor(
     transport: Transport,
+    clientInfo: Readonly<ClientInfo>,
   ) {
+    this.#clientInfo = clientInfo;
     this.#transport = transport;
     this.#transport.setReceiver((payload) => this.#onMessage(payload));
     this.#transport.setCloseReceiver?.((error) => this.#onClose(error));
   }
 
   static async connect(options: ConnectOptions): Promise<Client> {
-    const client = new Client(options.transport);
+    const info = options.client === undefined
+      ? createClientInfo({ application: "memory", gitSha: null })
+      : parseClientInfo(options.client);
+    if (info === null) throw new TypeError("Invalid memory client metadata");
+    const client = new Client(options.transport, Object.freeze(info));
     const abortError = (): Error =>
       options.signal?.reason instanceof Error
         ? options.signal.reason
@@ -1086,6 +1107,10 @@ export class Client {
     holdings?: SessionHolding[],
     options: { restoring?: boolean; signal?: AbortSignal } = {},
   ): Promise<SessionOpenResult> {
+    session = {
+      ...session,
+      client: this.#clientInfo,
+    };
     const whileConnected = options.restoring === true;
     // A mount made while the connection is down waits for the reconnect to
     // finish, restores included, before it joins the key's authentication

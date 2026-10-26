@@ -1892,7 +1892,7 @@ timer interval or each cycle with a durable commit.
 Exposed via the existing `/api/health/stats` shape, replacing v1's pool block:
 `servingLoop: { activeSpaces, waves, wavesBudgetExhausted, exhaustedAdvances,
 supersededWrites, authoredSeen, effectAcks, derivedCommits, structureLoadFailures,
-structureLoadDeferred, structureLoadStuck, structureLoadTerminal,
+structureLoadRefused, structureLoadDeferred, structureLoadStuck, structureLoadTerminal,
 structureLoadConfirmationsSkipped, structureLoadRearmed, watermarkClamped,
 storeReads, storeRefreshes, unstampedSealRefusals, foreignWriteRefusals,
 foreignEngineFailures, warmRequests, watermarkLag, demandArrivals,
@@ -1924,6 +1924,12 @@ that threw / could not land yet — never-a-piece id classes are EXCLUDED from
 piece demand and count nothing, RULED 2026-08-07; `structureLoadFailures` also
 counts a piece-start commit that failed AFTER its start resolved (the §3d
 piece-start site's surfaced fire-and-forget failure, stage P2-F);
+`structureLoadRefused` counts the loads a start refused because the piece's
+stored setup is a record of another build that numbered its cells holding state
+differently (`PieceStateMovedError`, `docs/specs/computed-cell-identity.md`), on
+the start's first commit or a retry. A root the demand cycle refused parks as a
+terminal one does, until a commit to it re-arms it, and is re-armed at once
+where such a commit landed while the refusing pass ran;
 `structureLoadStuck` counts roots whose CONSECUTIVE-deferral streak crossed the
 space server's stuck threshold — once per crossing, with a WARN naming the space
 and root at the crossing and at each doubling of the streak — so a

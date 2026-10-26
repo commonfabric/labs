@@ -104,6 +104,7 @@ describe("initialize-init-data", () => {
       const identity = await Identity.fromPassphrase("init-data forwarding");
       const transport = new CapturingTransport();
       const options = {
+        clientBuild: { application: "shell", gitSha: "a".repeat(40) },
         apiUrl: new URL("http://toolshed.test"),
         memoryUrl: new URL("https://router.test"),
         spaceHostMap: { "did:key:zSpace": "https://shard.test" },

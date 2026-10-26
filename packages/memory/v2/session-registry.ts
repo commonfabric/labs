@@ -9,6 +9,7 @@ import type {
   ViewQuery,
   WatchSpec,
 } from "../v2.ts";
+import type { ClientInfo } from "./client-info.ts";
 import {
   type DocumentInterestQuery,
   type DocumentInterestsReport,
@@ -145,6 +146,9 @@ export type SessionState = {
    * a renewal blip the SpaceServer survives in-process must not leave
    * its serving replica silently stale. Cleared by that pass. */
   leaseHolderReadsLapsed?: boolean;
+
+  /** Client report supplied by the latest admitted open. */
+  client?: ClientInfo;
 
   expiresAt: number | null;
   ownerConnectionId: string | null;
@@ -394,6 +398,9 @@ export class SessionRegistry {
       ...(existing?.leaseHolderReadsLapsed === true
         ? { leaseHolderReadsLapsed: true }
         : {}),
+      ...(session.client === undefined
+        ? {}
+        : { client: { ...session.client } }),
       expiresAt: null,
       ownerConnectionId,
       routedAuthority: existing?.routedAuthority,

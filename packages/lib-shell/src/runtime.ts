@@ -148,6 +148,9 @@ export type RuntimeInternalsCreateOptions = RuntimeInternalsCallbacks & {
    */
   clientVersion?: string;
 
+  /** Loaded labs build used for remote session attribution. */
+  clientBuild?: RuntimeClientOptions["clientBuild"];
+
   /**
    * When true, forward the worker runtime's console output to the main
    * thread so it reaches devtools and integration-test console capture.
@@ -305,6 +308,7 @@ export async function resolveWorkerUrl(
 
 export function createRuntimeClientOptions({
   session,
+  clientBuild,
   apiUrl,
   memoryUrl,
   spaceHostMap,
@@ -337,6 +341,7 @@ export function createRuntimeClientOptions({
   iframeOuterFrameUrl,
 }: {
   session: Session;
+  clientBuild?: RuntimeClientOptions["clientBuild"];
   apiUrl: URL;
   memoryUrl?: URL;
   spaceHostMap?: Record<string, string>;
@@ -361,6 +366,7 @@ export function createRuntimeClientOptions({
     : trustSnapshot ?? undefined;
 
   return {
+    clientBuild,
     apiUrl,
     memoryUrl,
     spaceHostMap,
@@ -1089,6 +1095,7 @@ export class RuntimeInternals extends EventTarget {
     cfcRenderCeiling,
     trustSnapshot,
     clientVersion,
+    clientBuild,
     forwardWorkerConsole,
     patternCoverage,
     concurrentWatchRefresh,
@@ -1126,6 +1133,7 @@ export class RuntimeInternals extends EventTarget {
 
     const clientOptions = createRuntimeClientOptions({
       session,
+      clientBuild,
       apiUrl,
       memoryUrl,
       spaceHostMap,

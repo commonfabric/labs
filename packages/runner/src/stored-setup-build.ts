@@ -12,7 +12,8 @@
  * all it takes to put the piece right: it is, when every cell that moved is
  * one recomputing restores, and it is not when a cell holding state moved,
  * since re-staging would then read one cell's state as another's and record
- * that as the agreed setup.
+ * that as the agreed setup. Where a cell holding state moved, a start or a
+ * setup refuses the piece with `PieceStateMovedError`.
  *
  * The record describes cells in words the compiler does not change for an
  * unchanged source, and leaves schemas out: the schema generator reshapes
@@ -279,4 +280,74 @@ export function describeHold(
       `[${before.join(", ")}] before, [${after.join(", ")}] now`
     ),
   ].join("; ");
+}
+
+/**
+ * Refuses to start or set up a piece whose stored setup is a record of
+ * another build of its pattern, where that build numbered a cell holding
+ * state differently from the build being run, or numbered cells holding
+ * state of one description so that which went where cannot be told. Running
+ * the piece would instantiate its children, and read its other cells holding
+ * state, at the numbers the running build gives them, where another cell's
+ * state sits. Nothing is written: the stored setup and its record stay as
+ * they are, so a later start judges the piece the same way, until a build
+ * that numbers those cells as the record does, or a migration, lets it run.
+ */
+export class PieceStateMovedError extends Error {
+  #piece: string;
+  #pattern: PatternRef;
+  #moved: readonly RenumberedCell[];
+  #ambiguous: readonly AmbiguousDescription[];
+
+  /**
+   * Constructs an instance for the piece whose result document is `piece`,
+   * set up by another build of `pattern`, naming the cells holding state
+   * that `moved` and the descriptions whose cells are `ambiguous`.
+   */
+  constructor(
+    piece: string,
+    pattern: PatternRef,
+    moved: readonly RenumberedCell[],
+    ambiguous: readonly AmbiguousDescription[],
+  ) {
+    super(
+      `Piece \`${piece}\` was set up by another build of ` +
+        `\`${pattern.identity}#${pattern.symbol}\`, which numbers its ` +
+        "cells holding state differently from this build: " +
+        `${describeHold(moved, ambiguous)}. It is not run, and nothing is ` +
+        "written; a build that numbers these cells as the piece's record " +
+        "does, or a migration of the piece, lets it run.",
+    );
+    this.name = "PieceStateMovedError";
+    this.#piece = piece;
+    this.#pattern = { identity: pattern.identity, symbol: pattern.symbol };
+    this.#moved = moved;
+    this.#ambiguous = ambiguous;
+  }
+
+  /**
+   * The id of the refused piece's result document: the piece a start or
+   * setup was asked for, or a child of it set up as part of it.
+   */
+  get piece(): string {
+    return this.#piece;
+  }
+
+  /** The pattern whose other build set the piece up. */
+  get pattern(): PatternRef {
+    return this.#pattern;
+  }
+
+  /** The cells holding state that the two builds number differently. */
+  get moved(): readonly RenumberedCell[] {
+    return this.#moved;
+  }
+
+  /**
+   * The descriptions of cells holding state whose cells cannot be matched
+   * across the two builds.
+   */
+  get ambiguous(): readonly AmbiguousDescription[] {
+    return this.#ambiguous;
+  }
 }

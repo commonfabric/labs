@@ -107,6 +107,15 @@ describe("health document interests", () => {
         .content["application/json"]
         .schema.parse(JSON.parse(text));
       expect(report.totalMatches).toBe(2);
+      for (const row of report.sessions) {
+        expect(row.client).toMatchObject({
+          application: "memory",
+          gitSha: null,
+          generation: 1,
+        });
+      }
+      expect(report.sessions[0].client).toEqual(report.sessions[1].client);
+
       expect(report.sessions.map((row) => ({
         sessionId: row.sessionId,
         principal: row.principal,

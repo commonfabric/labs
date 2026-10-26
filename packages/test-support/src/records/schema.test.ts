@@ -13,6 +13,7 @@ import {
   type RunContext,
   serializeContextLine,
   serializeRecordLine,
+  shippedArtifact,
   testIdentityKey,
   testIdentityOfKey,
   type TestRecord,
@@ -385,6 +386,33 @@ describe("schema", () => {
         workflowRunId: "456",
         artifactName: "test-records-test-3-a2",
       })).toBe("v1/2026/08/17/run-456-test-records-test-3-a2.ndjson");
+    });
+  });
+
+  describe("shippedArtifact()", () => {
+    it("returns the suffix a job named its artifact for, and its attempt", () => {
+      expect(shippedArtifact("test-records-tests-11-a2")).toEqual({
+        artifact: "tests-11",
+        attempt: 2,
+      });
+      expect(shippedArtifact("test-records-coverage-a12")).toEqual({
+        artifact: "coverage",
+        attempt: 12,
+      });
+    });
+
+    it("returns `undefined` for a name the shipping action does not give", () => {
+      for (
+        const name of [
+          "test-records-tests-11",
+          "test-records-tests-11-a",
+          "test-records--a1",
+          "lane-coverage-tests-11-a1",
+          "tests-11-a1",
+        ]
+      ) {
+        expect(shippedArtifact(name)).toBeUndefined();
+      }
     });
   });
 });

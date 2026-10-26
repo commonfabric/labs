@@ -17,6 +17,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
+import type { ClientInfo } from "./v2/client-info.ts";
 import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 
 export const MEMORY_PROTOCOL = "memory" as const;
@@ -1456,6 +1457,9 @@ export type SessionOpenAuthMetadata = {
 };
 
 export type SessionDescriptor = {
+  /** Self-reported runtime identity, declared afresh on every open. */
+  client?: ClientInfo;
+
   /** Assert the immutable custom-root reservation when mounting or resuming. */
   genesisRoot?: GenesisRoot;
 

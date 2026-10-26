@@ -73,6 +73,7 @@ import {
   type ViewPlan,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
 import { BoundedKeyMap, LRUCache } from "@commonfabric/utils/cache";
@@ -1116,6 +1117,9 @@ const dropMaterializedSuffix = (
 
 export interface Options {
   as: Signer;
+
+  /** Loaded runtime provenance; omitted builds report `runner` with no SHA. */
+  clientBuild?: ClientBuild;
 
   /**
    * Base URL of the default memory host. The storage endpoint path
@@ -4025,6 +4029,8 @@ export class StorageManager implements IStorageManager {
           dynamicHosts,
         ),
         options.as,
+        undefined,
+        options.clientBuild,
       ),
     );
     manager.#dynamicHosts = dynamicHosts;

@@ -900,6 +900,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     // field added to that type is a type error here until this literal names
     // it. `initialize()` checks the values.
     const data = {
+      clientBuild: options.clientBuild,
       apiUrl: options.apiUrl.toString(),
       memoryUrl: options.memoryUrl?.toString(),
       spaceHostMap: options.spaceHostMap,

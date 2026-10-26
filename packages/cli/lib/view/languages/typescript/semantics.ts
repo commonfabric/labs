@@ -166,10 +166,10 @@ export function createSemantics(
 
 /**
  * Build a semantic service for a DIFF view: the program's root files are the
- * real, current workspace files the diff names, and every query translates
- * diff-text offsets to file offsets (and back) through {@link DiffMaps}. So
- * "what type is this?" and "where is this defined?" are answered against the
- * workspace as it is now — not the old side of the diff.
+ * real, current workspace files whose hunks the diff shows, and every query
+ * translates diff-text offsets to file offsets (and back) through
+ * {@link DiffMaps}. So "what type is this?" and "where is this defined?" are
+ * answered against the workspace as it is now — not the old side of the diff.
  */
 export function createDiffSemantics(
   diffText: string,

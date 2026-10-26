@@ -32,6 +32,7 @@ import {
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { fromDID } from "../util.ts";
 import { MEMORY_PROTOCOL, type SessionOpenChallenge } from "../v2.ts";
+import { type ClientInfo, parseClientInfo } from "./client-info.ts";
 
 /**
  * Build an `AuthorizationError`. Pass `retriable: true` for the anti-replay
@@ -55,6 +56,7 @@ export const authorizationError = (
 const sameSessionDescriptor = (
   left: FabricPlainObject,
   right: {
+    client?: ClientInfo;
     sessionId?: string;
     seenSeq?: number;
     sessionToken?: string;
@@ -65,6 +67,10 @@ const sameSessionDescriptor = (
     spaceKind?: string;
   },
 ): boolean =>
+  valueEqual(
+    left.client === undefined ? undefined : parseClientInfo(left.client),
+    right.client,
+  ) &&
   (typeof left.sessionId === "string" ? left.sessionId : undefined) ===
     right.sessionId &&
   (typeof left.seenSeq === "number" ? left.seenSeq : undefined) ===
@@ -90,6 +96,7 @@ const sameSessionDescriptor = (
 export type SessionOpenMessage = {
   space: string;
   session: {
+    client?: ClientInfo;
     sessionId?: string;
     seenSeq?: number;
     sessionToken?: string;

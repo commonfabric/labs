@@ -29,11 +29,28 @@ files, which is useful while working inside one package and is not a
 substitute: the root check is the one continuous integration runs, and it
 covers trees no package's own check reaches.
 
+### What a run ends with
+
+The root `deno task test`, `deno task integration`, and every
+continuous-integration lane end with a block headed `test summary`, built by
+`tasks/test-summary.ts`. A passing run's block is one line of counts. A failing
+run's block gives, for each of its first twenty failing tests, its name, its
+file, a command that runs it again where its kind of test has one, and the first
+lines of its error, and counts the rest. For a command that failed
+without a failing test to explain it, the block quotes the end of that
+command's output. The block ends with where the full logs are, so reading the
+end of the output is enough to know what failed and what to run next.
+
+The root `deno task test` writes each package's output to a log file rather
+than to the console. A failing run keeps the directory of logs and names it in
+the block; a passing run deletes it. A lane also writes the block into the
+job's step summary, and raises an error annotation for each of its first ten
+failing tests, which the pull request's checks and `gh run view` show.
+
 ### Running one test by name
 
 Use `--filter` on a package's `test` task, not on the root one. The root task
-runs `tasks/test.ts`, which reads no arguments. A flag passed to it is ignored,
-and the whole workspace suite runs.
+runs `tasks/test.ts`, which takes no arguments and refuses a run given any.
 
 ```bash
 cd packages/runner
@@ -44,9 +61,8 @@ deno task test --filter "test name"
 only. In a file written with `describe()` and `it()`, the top-level test is the
 `describe()`, and each `it()` inside it runs as a step of that test. So the
 pattern has to match the `describe()` name, and the whole block runs. A pattern
-that matches only an `it()` description matches nothing. The run then reports
-`0 passed | 0 failed`, with every test filtered out, and exits successfully, so
-check the passed count.
+that matches only an `it()` description matches nothing, and the package's
+`test` task then fails, saying the filter matched no test.
 
 The flag is passed to the `deno test` that the package's own task invokes, so
 the preload, the permissions, and the file globs that package's tests need are
@@ -155,13 +171,12 @@ written as its full describe chain:
 ```
 
 Reading that file is the registration preload's job, and `tasks/integration.ts`
-hands `deno test` that preload only for a run that writes a JUnit report. So
-the run needs `--junit-dir` as well. The name after the package selects test
-files rather than tests:
+hands `deno test` that preload on every run. The name after the package selects
+test files rather than tests:
 
 ```bash
 HEADLESS=1 CF_TEST_SKIP_LIST=/tmp/skip.json \
-  deno task integration --junit-dir=/tmp/junit patterns cf-render
+  deno task integration patterns cf-render
 ```
 
 A name in the list that is the title of a file's outermost `describe()`,
