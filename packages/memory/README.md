@@ -262,8 +262,9 @@ checkout's HEAD cannot attest uncommitted changes or modules edited while a
 process is running.
 
 The cf CLI resolves its SHA on first use and shares that report across later
-runtime opens. Updating the checkout cannot change the report of an already
-identified process; checkout changes before first use remain unobservable.
+runtime opens. Source runs sample HEAD at that first call, which can be after
+the code loads: a commit made before the call is included in the reported SHA.
+Later commits leave the snapshot unchanged; uncommitted edits are omitted.
 
 Shell, cf, and toolshed supply their build identity. Unconfigured runner
 embedders report `runner` with unknown SHA; a raw memory client reports

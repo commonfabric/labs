@@ -89,8 +89,8 @@ let clientGitSha: Promise<string | null> | undefined;
 
 /**
  * Captures the build SHA on first use and shares it across later runtime opens.
- * A source checkout moving while this process runs cannot relabel its loaded
- * code. Changes before first use and uncommitted edits remain unobservable.
+ * Source runs sample HEAD at that first call, which can be after code loads.
+ * Later commits leave this snapshot unchanged; uncommitted edits are omitted.
  */
 export function resolveCliGitSha(): Promise<string | null> {
   return clientGitSha ??= resolveCliVersion().then(({ sha }) => sha);
