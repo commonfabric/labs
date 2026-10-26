@@ -15,7 +15,10 @@ import { normalize } from "@std/path/posix";
 import { createCfHarnessCliCapabilities } from "../src/cli.ts";
 import { parseCfHarnessCliArgs, runCfHarnessCli } from "./support/on-linux.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
-import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
+import {
+  CfHarnessPromptLoop,
+  promptLoopModelTurnsFromError,
+} from "../src/prompt-loop.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
 import {
   CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
@@ -185,6 +188,7 @@ describe("submit_result", () => {
     options: {
       schema?: boolean;
       allowedToolIds?: string[];
+      stopOnStructuredResult?: boolean;
       maxModelTurns?: number;
       finalizeOnTurnLimit?: boolean;
     } = {},
@@ -201,6 +205,9 @@ describe("submit_result", () => {
     const loop = new CfHarnessPromptLoop({
       apiKey: "test-key",
       engine,
+      ...(options.stopOnStructuredResult !== undefined
+        ? { stopOnStructuredResult: options.stopOnStructuredResult }
+        : {}),
       ...(options.allowedToolIds !== undefined
         // deno-lint-ignore no-explicit-any
         ? { allowedToolIds: options.allowedToolIds as any }
@@ -223,6 +230,79 @@ describe("submit_result", () => {
 
   const submit = (id: string, result: unknown) =>
     toolCallTurn(id, "submit_result", JSON.stringify({ result }));
+
+  it("ends a host-configured job on a valid final-turn submission without another model call", async () => {
+    const { result, offeredTools } = await run("last-turn-submit", [
+      submit("call-1", { answer: "Hyperion" }),
+    ], { stopOnStructuredResult: true, maxModelTurns: 1 });
+    expect(result.modelTurns).toBe(1);
+    expect(offeredTools).toHaveLength(1);
+    expect(result.runState.status).toBe("completed");
+    expect(JSON.parse(await Deno.readTextFile(resultPath))).toEqual({
+      answer: "Hyperion",
+    });
+  });
+
+  it("does not end a job on an invalid final-turn submission", async () => {
+    let failure: unknown;
+    try {
+      await run("last-turn-invalid", [submit("call-1", { invalid: true })], {
+        stopOnStructuredResult: true,
+        maxModelTurns: 1,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect(promptLoopModelTurnsFromError(failure)).toBe(1);
+    await expect(Deno.stat(resultPath)).rejects.toThrow(Deno.errors.NotFound);
+  });
+
+  for (const stopOnStructuredResult of [false, true]) {
+    it(`requires a standalone submission only for a job that stops on its result (${stopOnStructuredResult})`, async () => {
+      const mixed = submit("call-1", { answer: "Premature" });
+      mixed.choices[0].message.tool_calls.push({
+        id: "call-other",
+        type: "function",
+        function: { name: "describe_handle", arguments: "{}" },
+      });
+      const { result } = await run("mixed-submit", [
+        mixed,
+        submit("call-2", { answer: "Complete" }),
+        finalTurn("Done."),
+      ], { stopOnStructuredResult });
+      // Without the rule, the accepted submission ends the run on its turn.
+      expect(result.modelTurns).toBe(stopOnStructuredResult ? 2 : 1);
+      expect(JSON.parse(await Deno.readTextFile(resultPath))).toEqual({
+        answer: stopOnStructuredResult ? "Complete" : "Premature",
+      });
+      const first = toolOutputs(result.transcript)[0];
+      if (stopOnStructuredResult) {
+        expect(first).toMatchObject({
+          reason: "invalid-argument",
+          toolId: "submit_result",
+          field: "toolCalls",
+          expected: "submit_result as the only tool call in this model turn",
+        });
+      } else {
+        expect(first).toMatchObject({ status: "ok", replaced: false });
+      }
+    });
+  }
+
+  it("does not persist a final-turn result that shares its turn with another tool", async () => {
+    const mixed = submit("call-1", { answer: "Premature" });
+    mixed.choices[0].message.tool_calls.push({
+      id: "call-other",
+      type: "function",
+      function: { name: "describe_handle", arguments: "{}" },
+    });
+    await expect(run("mixed-last-turn", [mixed], {
+      stopOnStructuredResult: true,
+      maxModelTurns: 1,
+    })).rejects.toThrow("exceeded max model turns");
+    await expect(Deno.stat(resultPath)).rejects.toThrow(Deno.errors.NotFound);
+  });
 
   /** One `submit_result` call, as an assistant turn carries it. */
   const submitCall = (id: string, result: unknown) => ({

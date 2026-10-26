@@ -746,6 +746,7 @@ export class PiecesController<T = unknown> {
     const tx = this.runtime.edit();
     try {
       return (attestedPrincipalsAt(
+        this.runtime,
         tx,
         root.getAsNormalizedFullLink(),
         "represents-principal",

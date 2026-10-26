@@ -48,6 +48,44 @@ export const cfcSchemaIsTrue = (schema: JSONSchema): boolean => {
     );
 };
 
+/**
+ * Keywords that annotate a schema and constrain no value: JSON Schema's own
+ * annotations, the legacy discovery `tags` stored schemas can carry, and
+ * the Common Fabric `tier` verb listing mark.
+ */
+export const CFC_SCHEMA_ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
+  "title",
+  "description",
+  "$comment",
+  "$schema",
+  "examples",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+  "tags",
+  "tier",
+]);
+
+/**
+ * Whether `schema` gives a value no shape: it is absent, or admits every value
+ * once its annotations are set aside, so it holds nothing but what the runtime
+ * reads for itself (a label, a cell kind, a scope), a default and definitions
+ * besides them ({@link cfcSchemaIsTrue}).
+ */
+export const cfcSchemaGivesNoShape = (
+  schema: JSONSchema | undefined,
+): boolean =>
+  schema === undefined ||
+  cfcSchemaIsTrue(
+    isObjectOrArray(schema)
+      ? Object.fromEntries(
+        Object.entries(schema).filter(([key]) =>
+          !CFC_SCHEMA_ANNOTATION_KEYWORDS.has(key)
+        ),
+      )
+      : schema,
+  );
+
 /** Whether `schema` admits no value: `false`, or the negation of a true one. */
 export const cfcSchemaIsFalse = (schema: JSONSchema): boolean =>
   schema === false ||

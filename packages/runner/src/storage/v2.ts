@@ -1,6 +1,7 @@
 import type { FabricValue, SchemaPathSelector } from "@commonfabric/api";
 import {
   cloneIfNecessary,
+  debugStr,
   hashStringOf,
   isDeepFrozen,
   isKeyableObjectOrArray,
@@ -176,6 +177,7 @@ import {
   IStorageTransactionInconsistent,
   NativeCommitOptions,
   NativeStorageCommit,
+  NativeTextEdit,
   PullError,
   PushError,
   ReplicaLoadFailureError,
@@ -552,11 +554,13 @@ const documentOperationsOf = (
 
 /**
  * The operations a commit hands the store: cell operations first, a patch
- * carrying its patches alone, and folded SQLite operations last.
+ * carrying its patches alone, then folded SQLite operations, and the
+ * collaborative-field edits last, after every write to their documents.
  */
 const storeOperationsOf = (
   operations: readonly NativeCommitOperation[],
   sqliteOps: readonly SqliteOperation[],
+  applyOps: readonly NativeTextEdit[] = [],
 ): ClientCommit["operations"] => [
   ...operations.map((operation) => {
     switch (operation.op) {
@@ -579,7 +583,56 @@ const storeOperationsOf = (
     }
   }),
   ...sqliteOps,
+  ...applyOps,
 ];
+
+/**
+ * `operation` as its document's pending layer holds it: each field that one of
+ * `applyOps` edits is replaced by the text `operation.value` holds there. The
+ * wire patch leaves that field to the edit, and the edit lands only on the
+ * value its transaction read, so the store's result is that text, and the
+ * layer replays to it. That holds only for the edits
+ * {@link NativeStorageCommit.applyOps} admits, one per field and generated
+ * with the write that `value` records; a rebased or blind edit, or a second
+ * one on the field, has no result to show ahead of the verdict.
+ */
+const withTextEditsShown = (
+  operation: NativeCommitOperation,
+  applyOps: readonly NativeTextEdit[],
+): NativeCommitOperation => {
+  if (operation.op !== "patch" || applyOps.length === 0) return operation;
+  const scope = normalizeCellScope(operation.scope);
+  const shown: PatchOp[] = applyOps
+    .filter((edit) =>
+      edit.id === operation.id && normalizeCellScope(edit.scope) === scope
+    )
+    .map((edit) => {
+      const path = ["value", ...edit.path];
+      const text = readValueAtPath(operation.value, path);
+      if (typeof text !== "string") {
+        throw new Error(
+          debugStr`an edited field holds no text at $quote${path}`,
+        );
+      }
+      return { op: "replace", path: encodePointer(path), value: text };
+    });
+  return shown.length === 0
+    ? operation
+    : { ...operation, patches: [...operation.patches, ...shown] };
+};
+
+/**
+ * Throws when `transaction` carries collaborative-field edits, which a commit
+ * built ahead of its seal does not carry: `what` names the path refusing them.
+ */
+const refuseApplyOps = (transaction: NativeStorageCommit, what: string) => {
+  if (transaction.applyOps?.length) {
+    throw new Error(
+      `${what} cannot carry collaborative-field edits; commit the ` +
+        "transaction instead",
+    );
+  }
+};
 
 type CachedTransactionValue =
   | FabricValue
@@ -1592,6 +1645,7 @@ export class StorageManager implements IStorageManager {
   #spaceSessionErrorObservers = new Set<
     (space: MemorySpace, error: Error) => void
   >();
+  #connectionRestoredObservers = new Set<() => void>();
   #subscription = SubscriptionManager.create();
   #crossSpacePromises = new Set<Promise<void>>();
 
@@ -1858,6 +1912,15 @@ export class StorageManager implements IStorageManager {
           error,
         ])
       );
+    });
+    sessionFactory.subscribeReconnected?.(() => {
+      for (const observer of [...this.#connectionRestoredObservers]) {
+        try {
+          observer();
+        } catch (cause) {
+          console.error("connection-restored subscriber threw:", cause);
+        }
+      }
     });
   }
 
@@ -2774,6 +2837,12 @@ export class StorageManager implements IStorageManager {
   ): Cancel {
     this.#spaceSessionErrorObservers.add(observer);
     return () => this.#spaceSessionErrorObservers.delete(observer);
+  }
+
+  /** @inheritDoc */
+  subscribeConnectionRestored(observer: () => void): Cancel {
+    this.#connectionRestoredObservers.add(observer);
+    return () => this.#connectionRestoredObservers.delete(observer);
   }
 
   trackPendingCommit(
@@ -4258,6 +4327,22 @@ class Provider
     return this.replica.presentCount(absences);
   }
 
+  /** See {@link SpaceReplica.storeReportedAbsent}. */
+  storeReportedAbsent(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean {
+    return this.replica.storeReportedAbsent(address, identity);
+  }
+
+  /** See {@link SpaceReplica.readStoreAbsenceAgain}. */
+  readStoreAbsenceAgain(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean | undefined {
+    return this.replica.readStoreAbsenceAgain(address, identity);
+  }
+
   async #replaySync(
     replica: SpaceReplica,
     uri: URI,
@@ -4990,6 +5075,18 @@ export class SpaceReplica
    */
   readonly #owedWatches = new Map<string, SessionSync["removes"][number]>();
 
+  /**
+   * The documents a pushed frame retracted while something held them, by
+   * doc key. The server no longer delivers them, and nothing asks it to
+   * again: each keeps its value, unwatched, for the holder that read it,
+   * and the first pass that finds it held by nothing drops it, unless a
+   * frame for it arrives first.
+   */
+  readonly #retractedHeld = new Map<
+    string,
+    SessionSync["removes"][number]
+  >();
+
   readonly #isRead: (address: LocalDocAddress) => boolean;
   readonly #onDocumentsDropped:
     | ((addresses: readonly LocalDocAddress[]) => void)
@@ -5551,9 +5648,9 @@ export class SpaceReplica
    * Re-reads every listed instance this replica holds a record for
    * through the installed store read-through and integrates the results
    * as one inbound frame (see IStorageManager.integrateStoreWrites).
-   * Returns how many were refreshed. An instance the replica has never
-   * read is left alone: nothing depends on it, and its first read serves
-   * it from the store anyway.
+   * Returns how many the read-through answered for, a read finding nothing
+   * included. An instance the replica has never read is left alone: nothing
+   * depends on it, and its first read serves it from the store anyway.
    */
   integrateStoreWrites(
     writes: readonly { id: string; scopeKey: ScopeKey }[],
@@ -7194,6 +7291,11 @@ export class SpaceReplica
       if (this.#holds(removedAddress(remove))) this.#watchAgain(remove);
       else this.#dropReleased(remove);
     }
+    for (const [key, remove] of this.#retractedHeld) {
+      if (this.#holds(removedAddress(remove))) continue;
+      this.#retractedHeld.delete(key);
+      this.#dropReleased(remove);
+    }
     if (this.#sessionClient === undefined) return [];
     const releasable = (root: RootWatches) =>
       root.pulledInPass < pass &&
@@ -7267,30 +7369,12 @@ export class SpaceReplica
       // A document something began to hold while the removal was on its way
       // keeps its value and is watched again on its own; the answer to that
       // watch brings it up to date.
-      const heldSince = new Set(
-        sync.removes.filter((remove) => this.#holds(removedAddress(remove))),
+      const { sync: applied, held } = this.#keepHeld(
+        this.#withoutLocalSessionDocuments(sync),
       );
-      for (const remove of heldSince) {
-        const key = this.#docKeyOf(removedAddress(remove));
-        // The session no longer keeps it current, so nothing may count it
-        // as delivered until the answer to its own watch arrives.
-        this.#delivered.delete(key);
-        this.#watchedIds.delete(key);
-        if ((this.#docs.get(key)?.pending.length ?? 0) === 0) continue;
-        // The session reports nothing about the document until it is
-        // watched again, so a foreign change in between is hidden: the
-        // sentinel 1 holds W until the shadow clears.
-        let seqs = this.#shadowedForeignSeqs.get(key);
-        if (seqs === undefined) {
-          seqs = new Set();
-          this.#shadowedForeignSeqs.set(key, seqs);
-        }
-        seqs.add(1);
-      }
-      const removes = sync.removes.filter((remove) => !heldSince.has(remove));
-      this.#integrateWatchMutation(view, precedingSyncs, { ...sync, removes });
-      this.#forgetRemoved(removes);
-      for (const remove of heldSince) this.#watchAgain(remove);
+      this.#integrateWatchMutation(view, precedingSyncs, applied);
+      this.#forgetRemoved(applied.removes);
+      for (const remove of held) this.#watchAgain(remove);
     } catch (error) {
       if (!this.#closed) {
         logger.warn("release-watches-failed", () => [
@@ -7331,6 +7415,47 @@ export class SpaceReplica
   }
 
   /**
+   * Splits a frame's removals into the ones to apply and the ones of
+   * documents the replica holds (`#holds()`), which keep their value for the
+   * caller to settle: watched again on their own when the frame answers a
+   * removal of this replica's (`#watchAgain()`), or kept unwatched until
+   * nothing holds them when the server pushed it (`#retractedHeld`). A held
+   * document loses its delivery record and its watched mark here: the
+   * session no longer keeps it current, so nothing may count it as
+   * delivered. One with a local write pending is shadowed, since the
+   * session reports nothing about it from here on: the sentinel 1 holds W
+   * until the shadow clears.
+   */
+  #keepHeld(
+    sync: SessionSync,
+  ): { sync: SessionSync; held: SessionSync["removes"][number][] } {
+    const held = sync.removes.filter((remove) =>
+      this.#holds(removedAddress(remove))
+    );
+    if (held.length === 0) return { sync, held };
+    for (const remove of held) {
+      const key = this.#docKeyOf(removedAddress(remove));
+      this.#delivered.delete(key);
+      this.#watchedIds.delete(key);
+      if ((this.#docs.get(key)?.pending.length ?? 0) === 0) continue;
+      let seqs = this.#shadowedForeignSeqs.get(key);
+      if (seqs === undefined) {
+        seqs = new Set();
+        this.#shadowedForeignSeqs.set(key, seqs);
+      }
+      seqs.add(1);
+    }
+    const kept = new Set(held);
+    return {
+      sync: {
+        ...sync,
+        removes: sync.removes.filter((remove) => !kept.has(remove)),
+      },
+      held,
+    };
+  }
+
+  /**
    * Watches on its own a document a release removed after something began to
    * hold it. If that fails, the document keeps its value and the next pass
    * tries again (`#owedWatches`), since a reader of it need not load it
@@ -7354,7 +7479,12 @@ export class SpaceReplica
         error,
       ]);
       if (isPermanentAuthorizationFailure(error)) this.#dropReleased(remove);
-      else this.#owedWatches.set(key, remove);
+      // A retraction pushed meanwhile has settled the document: it stays
+      // unwatched for its holder, and the pass that finds it held by
+      // nothing drops it.
+      else if (!this.#retractedHeld.has(key)) {
+        this.#owedWatches.set(key, remove);
+      }
     });
   }
 
@@ -7402,11 +7532,13 @@ export class SpaceReplica
     );
 
     const sqliteOps = transaction.sqliteOps ?? [];
+    const applyOps = transaction.applyOps ?? [];
 
     if (
       operations.length === 0 &&
       !preconditions?.length &&
-      sqliteOps.length === 0
+      sqliteOps.length === 0 &&
+      applyOps.length === 0
     ) {
       return { ok: {} };
     }
@@ -7420,6 +7552,7 @@ export class SpaceReplica
           preconditions,
           sqliteOps,
           options,
+          applyOps,
         ),
     );
   }
@@ -7462,6 +7595,7 @@ export class SpaceReplica
       transaction.sqliteOps ?? [],
       verdict,
       options,
+      transaction.applyOps ?? [],
     );
   }
 
@@ -7486,6 +7620,7 @@ export class SpaceReplica
     preconditions: readonly CommitPrecondition[];
     reads: ClientCommit["reads"];
   } {
+    refuseApplyOps(transaction, "a store commit built ahead of its seal");
     const operations = this.#wholeOverLocalFolds(
       documentOperationsOf(transaction),
       identity,
@@ -7512,6 +7647,7 @@ export class SpaceReplica
       readonly identity?: ScopeKeyIdentity;
       readonly reads?: ClientCommit["reads"];
     },
+    applyOps: readonly NativeTextEdit[] = [],
   ): SealedNativeCommit {
     // The tx→replica identity seam (server-execution v2 stage A, OW17): a
     // served per-instance run seals under ITS identity — its ops apply to
@@ -7531,10 +7667,10 @@ export class SpaceReplica
         options?.reads ?? this.#buildReads(source, localSeq, identity),
         identity,
       ),
-      // Cell ops first, folded SQLite ops last — the same commit shape
-      // commitOperations builds, so the wave batch is made of ordinary
-      // client commits.
-      operations: storeOperationsOf(operations, sqliteOps),
+      // Cell ops first, then folded SQLite ops, then collaborative-field
+      // edits — the same commit shape commitOperations builds, so the wave
+      // batch is made of ordinary client commits.
+      operations: storeOperationsOf(operations, sqliteOps, applyOps),
       ...(preconditions.length > 0
         ? { preconditions: [...preconditions] }
         : {}),
@@ -7565,7 +7701,12 @@ export class SpaceReplica
     }
 
     for (const operation of operations) {
-      this.#applyPending(operation, localSeq, commit.reads, identity);
+      this.#applyPending(
+        withTextEditsShown(operation, applyOps),
+        localSeq,
+        commit.reads,
+        identity,
+      );
     }
 
     if (before !== undefined) {
@@ -8163,7 +8304,25 @@ export class SpaceReplica
       }
       const applyStart = performance.now();
       try {
-        this.#applySessionSync(next.value, "integrate");
+        // A pushed frame retracts what a re-walk stopped reaching, and
+        // the retraction stands: the document leaves the watch list. One
+        // the replica holds keeps its value for its holder until the pass
+        // after the holder lets go; the rest are emptied and dropped, so a
+        // later read loads them again.
+        const { sync, held } = this.#keepHeld(
+          this.#withoutLocalSessionDocuments(next.value),
+        );
+        // Recorded before the frame applies, so a frame that fails to
+        // apply leaves no held document kept without the pass that drops
+        // it. The retraction supersedes a re-watch a release still owes
+        // the document.
+        for (const remove of held) {
+          const key = this.#docKeyOf(removedAddress(remove));
+          this.#owedWatches.delete(key);
+          this.#retractedHeld.set(key, remove);
+        }
+        this.#applySessionSync(sync, "integrate");
+        if (sync.removes.length > 0) this.#forgetRemoved(sync.removes);
       } catch (error) {
         // The background consumer must never die wholesale on one bad
         // frame (OW61: a validation throw here was an unhandled rejection
@@ -8189,6 +8348,28 @@ export class SpaceReplica
     }
   }
 
+  /**
+   * `sync` without the entries for documents held only in this replica,
+   * which a server frame has nothing to say about: a frame is read through
+   * this before anything acts on its entries, the application of it and the
+   * drop or keeping of what it removes alike.
+   */
+  #withoutLocalSessionDocuments(sync: SessionSync): SessionSync {
+    if (!this.#localSessionDocuments()) return sync;
+    return {
+      ...sync,
+      upserts: sync.upserts.filter((entry) =>
+        !this.#isLocalSessionDocument(entry)
+      ),
+      removes: sync.removes.filter((entry) =>
+        !this.#isLocalSessionDocument(entry)
+      ),
+      crossings: sync.crossings?.filter((entry) =>
+        !this.#isLocalSessionDocument(entry)
+      ),
+    };
+  }
+
   /** Returns whether an address is held only in this replica. */
   #isLocalSessionDocument(
     address: { scope?: CellScope; scopeKey?: ScopeKey },
@@ -8205,6 +8386,7 @@ export class SpaceReplica
     preconditions: readonly CommitPrecondition[] = [],
     sqliteOps: readonly SqliteOperation[] = [],
     commitOptions?: NativeCommitOptions,
+    applyOps: readonly NativeTextEdit[] = [],
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     const activePreconditions = activeCommitPreconditions(preconditions);
     for (const pin of activePreconditions) {
@@ -8239,7 +8421,7 @@ export class SpaceReplica
     }
     if (
       operations.length === 0 && sqliteOps.length === 0 &&
-      activePreconditions.length === 0
+      applyOps.length === 0 && activePreconditions.length === 0
     ) {
       return { ok: {} };
     }
@@ -8256,9 +8438,10 @@ export class SpaceReplica
           operations,
           this.#buildReads(source, localSeq, undefined, activePreconditions),
         ),
-        // Cell ops first, folded SQLite ops last (applied in array order by the
-        // engine; sqlite ops are not entity revisions and carry no id/scope).
-        operations: storeOperationsOf(operations, sqliteOps),
+        // Cell ops first, then folded SQLite ops, which are not entity
+        // revisions and carry no id/scope, then the collaborative-field edits,
+        // which the engine applies after the writes to their documents.
+        operations: storeOperationsOf(operations, sqliteOps, applyOps),
         ...(activePreconditions.length > 0
           ? { preconditions: [...activePreconditions] }
           : {}),
@@ -8327,7 +8510,11 @@ export class SpaceReplica
 
     withCommitTiming(["commitOperations", "applyPending"], () => {
       for (const operation of operations) {
-        this.#applyPending(operation, localSeq, commit.reads);
+        this.#applyPending(
+          withTextEditsShown(operation, applyOps),
+          localSeq,
+          commit.reads,
+        );
       }
     });
 
@@ -9440,6 +9627,49 @@ export class SpaceReplica
     return present;
   }
 
+  /**
+   * Whether the store read-through, asked for the instance `address` names
+   * under `identity`, reported holding nothing there, with no write to it
+   * reported since (see `#storeAbsences`). Without a read-through installed
+   * it never has.
+   */
+  storeReportedAbsent(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean {
+    const instance = this.instanceKey(address.scope, identity);
+    return isScopeKey(instance) &&
+      this.#storeAbsences.has(docKey(address.id, instance));
+  }
+
+  /**
+   * Asks the store read-through again for an instance it reported holding
+   * nothing at, through `integrateStoreWrites()` as the feed's report of a
+   * write does, and returns whether the store holds the document now. An
+   * instance with no such report is not asked, nor is one while a frame is
+   * being applied, as a read-through on a miss is not; either returns
+   * `undefined`, as does a read the store gives no answer to, which leaves
+   * the report standing. A re-read the store answers is a frame like any
+   * other: its storage notification reaches the subscribers before this
+   * returns, and the scheduler's subscriber marks the readers of what changed
+   * and queues a pass, so none of them runs inside the caller.
+   */
+  readStoreAbsenceAgain(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean | undefined {
+    if (this.#frameApplyDepth > 0) return undefined;
+    const instance = this.instanceKey(address.scope, identity);
+    if (!isScopeKey(instance)) return undefined;
+    const key = docKey(address.id, instance);
+    if (!this.#storeAbsences.has(key)) return undefined;
+    const answered = this.integrateStoreWrites([
+      { id: address.id, scopeKey: instance },
+    ]);
+    if (answered === 0) return undefined;
+    return !this.#storeAbsences.has(key);
+  }
+
   #buildReads(
     source: IStorageTransaction | undefined,
     localSeq: number,
@@ -9912,21 +10142,10 @@ export class SpaceReplica
     // that would integrate a second frame from inside this one.
     this.#frameApplyDepth += 1;
     try {
-      if (this.#localSessionDocuments()) {
-        sync = {
-          ...sync,
-          upserts: sync.upserts.filter((entry) =>
-            !this.#isLocalSessionDocument(entry)
-          ),
-          removes: sync.removes.filter((entry) =>
-            !this.#isLocalSessionDocument(entry)
-          ),
-          crossings: sync.crossings?.filter((entry) =>
-            !this.#isLocalSessionDocument(entry)
-          ),
-        };
-      }
-      this.#applySessionSyncFrame(sync, type);
+      this.#applySessionSyncFrame(
+        this.#withoutLocalSessionDocuments(sync),
+        type,
+      );
     } catch (error) {
       this.#completeThroughLost = true;
       throw error;
@@ -10116,6 +10335,7 @@ export class SpaceReplica
       this.#watchedIds.add(key);
       // A frame for the document means a watch covers it again.
       this.#owedWatches.delete(key);
+      this.#retractedHeld.delete(key);
       this.#delivered.set(key, {
         id: upsert.id as URI,
         scope: upsert.scope,
@@ -10179,8 +10399,10 @@ export class SpaceReplica
       this.#watchedIds.delete(key);
       this.#delivered.delete(key);
       // A removal settles what the session keeps of the document, so a
-      // watch a release owes it is not asked for again.
+      // watch a release owes it is not asked for again, and a document kept
+      // for its holder is settled by the drop this removal is.
       this.#owedWatches.delete(key);
+      this.#retractedHeld.delete(key);
       if (record.pending.length > 0) {
         // A shadowed remove carries no seq on the wire: the sentinel 1
         // holds W entirely until the shadow clears (see the field doc).

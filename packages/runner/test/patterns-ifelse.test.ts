@@ -10,7 +10,7 @@ import { type JSONSchema, type Schema } from "../src/builder/types.ts";
 import { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";
-import { isCell, isStream } from "../src/cell.ts";
+import { type Cell, isCell, isStream } from "../src/cell.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
@@ -514,6 +514,70 @@ describe("Pattern Runner - ifElse", () => {
       expect(secondWrites.filter((w) => w.id === ifElseResultId).length)
         .toEqual(0);
       expect(secondWrites.filter((w) => w.id === bindingId).length).toEqual(0);
+    },
+  );
+
+  it(
+    "lets a cell-typed reader of an absent branch read `undefined`, and " +
+      "the branch again once it is selected",
+    async () => {
+      // An `undefined` branch holds no value, so selecting it forwards
+      // nothing. The reader takes the selection as a cell, which is the read
+      // that refuses a link chain dead-ending at a document that has not
+      // arrived, so it reads `"none"` only if the forwarded nothing is a
+      // document it can tell has arrived.
+      const RecSchema = {
+        type: "object",
+        properties: { n: { type: "number" } },
+      } as const satisfies JSONSchema;
+      const describeSelection = lift(
+        ({ src }: { src?: Cell<{ n?: number }> }) =>
+          "read:" + JSON.stringify(src?.get() ?? "none"),
+        {
+          type: "object",
+          properties: { src: { ...RecSchema, asCell: ["cell"] } },
+        } as const satisfies JSONSchema,
+        { type: "string" } as const satisfies JSONSchema,
+      );
+      const absentBranchPattern = pattern<
+        { condition: boolean; rec: { n: number } }
+      >(({ condition, rec }) => ({
+        condition,
+        seen: describeSelection({ src: ifElse(condition, rec, undefined) }),
+      }));
+
+      const pieceCell = runtime.getCell<
+        { condition: boolean; seen: string }
+      >(
+        space,
+        "ifElse absent branch reads undefined",
+        absentBranchPattern.resultSchema,
+        tx,
+      );
+      const piece = runtime.run(
+        tx,
+        absentBranchPattern,
+        { condition: false, rec: { n: 1 } },
+        pieceCell,
+      );
+      tx.commit();
+      await piece.pull();
+
+      expect(piece.key("seen").get()).toEqual('read:"none"');
+
+      tx = runtime.edit();
+      piece.withTx(tx).key("condition").set(true);
+      tx.commit();
+      await piece.pull();
+
+      expect(piece.key("seen").get()).toEqual('read:{"n":1}');
+
+      tx = runtime.edit();
+      piece.withTx(tx).key("condition").set(false);
+      tx.commit();
+      await piece.pull();
+
+      expect(piece.key("seen").get()).toEqual('read:"none"');
     },
   );
 });

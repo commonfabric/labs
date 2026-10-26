@@ -772,9 +772,8 @@ therefore does not activate selective replication in this benchmark. Use the
 browser Topics benchmarks to measure that mode, and hold server execution
 constant when comparing replication flags.
 
-Each burst waits for every writer's event consequences to arrive before the
-replica barriers. The harness's budgeted `settle()` alone can return with pending
-consequences, so it cannot define a successful measurement. Outside the timed
+Each burst ends with the harness's `settle()`, which waits for every writer's
+event consequences to arrive before the replica barriers. Outside the timed
 interval, every replica must contain the expected vote count and color
 distribution for every option; a mismatch fails the run.
 

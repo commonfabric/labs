@@ -24,12 +24,14 @@ import {
 import type {
   IExtendedStorageTransaction,
   INotFoundError,
+  MemorySpace,
 } from "./storage/interface.ts";
 import {
   dereferenceResolutionProbe,
   linkResolutionProbe,
 } from "./storage/reactivity-log.ts";
 import { ContextualFlowControl } from "./cfc.ts";
+import { cfcSchemaGivesNoShape } from "./cfc/schema-primitives.ts";
 import type { Runtime } from "./runtime.ts";
 import type { CfcAddress, CfcDereferenceTrace } from "./cfc/types.ts";
 import {
@@ -37,7 +39,11 @@ import {
   narrowerScopeCap,
   noteDeclaredReadScope,
 } from "./scope.ts";
-import type { JSONSchema, SchemaScope } from "./builder/types.ts";
+import type {
+  JSONSchema,
+  JSONSchemaObj,
+  SchemaScope,
+} from "./builder/types.ts";
 
 const logger = getLogger("link-resolution");
 
@@ -55,23 +61,61 @@ export type ResolvedFullLink = NormalizedFullLink & {
 };
 
 /**
- * Whether `schema` constrains nothing at all: absent, or a TRUE schema in
- * the canonical sense (`ContextualFlowControl.isTrueSchema`) — JSON Schema
- * `true`, `{}`, or an object carrying only internal flags, `default`, or
- * `$defs`. Such a schema selects every value, so it says nothing the
- * schema a resolution is already carrying does not, and a hop onto a link
- * bearing one keeps carrying rather than adopting it. `false` is not one
- * of these — it selects nothing, which is information. Nor is a schema
- * that declares a stream: it selects every value too, but the document behind
- * a stream holds nothing, so the declaration is the only thing that says what
- * the position is, and a carried schema that lacks it cannot say so. Any
- * other `asCell` entry keeps carrying: its document holds a value, which the
- * carried schema is there to read.
+ * Whether `schema` constrains nothing at all: it gives a value no shape
+ * (`cfcSchemaGivesNoShape()`) — absent, JSON Schema `true`, `{}`, or an
+ * object carrying only annotations, internal flags, `default`, or `$defs`.
+ * Such a schema selects every value, so it says nothing the schema a
+ * resolution is already carrying does not, and a hop onto a link bearing one
+ * keeps carrying rather than adopting it. `false` is not one of these — it
+ * selects nothing, which is information. Nor is a schema that declares a
+ * stream: it selects every value too, but the document behind a stream holds
+ * nothing, so the declaration is the only thing that says what the position
+ * is, and a carried schema that lacks it cannot say so. Any other `asCell`
+ * entry keeps carrying: its document holds a value, which the carried schema
+ * is there to read.
  */
 const schemaConstrainsNothing = (schema: JSONSchema | undefined): boolean =>
-  schema === undefined ||
-  (ContextualFlowControl.isTrueSchema(schema) &&
-    !ContextualFlowControl.declaresStream(schema));
+  cfcSchemaGivesNoShape(schema) &&
+  !ContextualFlowControl.declaresStream(schema);
+
+/**
+ * `schema` with its references resolved against the documents `space` holds,
+ * or `false` where a document it names is missing or a reference does not
+ * resolve. A schema whose root is not a reference is itself.
+ */
+const resolveDeclaration = (
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+  schema: JSONSchema | undefined,
+): JSONSchema | undefined =>
+  isObjectOrArray(schema) && typeof schema.$ref === "string"
+    ? ensureExternalSchemaClosure(tx, space, schema)
+      ? ContextualFlowControl.resolveSchemaRefs(schema) ?? false
+      : false
+    : schema;
+
+/**
+ * The top-level `default` a resolved `schema` declares, if any. A schema that
+ * selects nothing declares none: no default stands in where nothing is
+ * selected.
+ */
+const declaredDefault = (
+  schema: JSONSchema | undefined,
+): JSONSchemaObj["default"] =>
+  isObjectOrArray(schema) && !ContextualFlowControl.isFalseSchema(schema)
+    ? schema.default
+    : undefined;
+
+/** `schema` with `value` as its top-level `default`. */
+const withDefault = (
+  schema: JSONSchema | undefined,
+  value: Exclude<JSONSchemaObj["default"], undefined>,
+): JSONSchema =>
+  internSchema(
+    isObjectOrArray(schema)
+      ? { ...schema, default: value }
+      : { default: value },
+  );
 
 export const MAX_PATH_RESOLUTION_LENGTH = 100;
 
@@ -444,7 +488,9 @@ const resolutionMemoVariant = (
  * describes the value at its target, where the caller's describes the value at
  * the source, so the stored one replaces what the resolution carried in. One
  * that constrains nothing describes nothing, so the caller's schema keeps
- * traveling instead; see `schemaConstrainsNothing()`.
+ * traveling instead; see `schemaConstrainsNothing()`. Either way the deepest
+ * declared `default` wins: a stored schema's own, and otherwise the one the
+ * resolution carried in.
  *
  * A cycle is detected if the exact (document, path) pair is visited more than
  * once. This detects cycles like:
@@ -863,18 +909,11 @@ export function resolveLinkTracingDereferences(
       // Precedence and defaults depend on what a reference declares, in
       // either space. The traveling schema keeps its reference form until
       // a space boundary requires a self-contained representation.
-      let declaration = nextLink.schema;
-      if (
-        isObjectOrArray(declaration) && typeof declaration.$ref === "string"
-      ) {
-        declaration = ensureExternalSchemaClosure(
-            tx,
-            nextHop.source.space,
-            declaration,
-          )
-          ? ContextualFlowControl.resolveSchemaRefs(declaration) ?? false
-          : false;
-      }
+      const declaration = resolveDeclaration(
+        tx,
+        nextHop.source.space,
+        nextLink.schema,
+      );
       // The hop consumed `nextHop.depth` of our path and re-rooted the rest
       // under the target. Caps recorded for the consumed prefix have done
       // their job; caps for the REMAINING segments still have to travel, or a
@@ -894,37 +933,44 @@ export function resolveLinkTracingDereferences(
       // a carried schema that already declares the stream, and that one can
       // also type the event, so it keeps carrying.
       const carriedDeclaresStoredStream = declaration !== undefined &&
-        ContextualFlowControl.isTrueSchema(declaration) &&
+        cfcSchemaGivesNoShape(declaration) &&
         ContextualFlowControl.declaresStream(link.schema);
+      // Whichever schema travels on, the deepest declared `default` wins:
+      // the stored schema's where it declares one, and the carried schema's
+      // otherwise. A top-level `default` constrains nothing, and narrowing
+      // can reduce a stored schema to one, so a stored schema that keeps the
+      // carried one traveling can still supply the default. No default
+      // crosses to or from a false schema: one that selects nothing neither
+      // supplies a default nor takes one. A stored schema that replaces a
+      // false carried one brings its own, as any adopted schema does.
+      const storedDefault = declaredDefault(declaration);
       if (
         link.schema !== undefined &&
         (schemaConstrainsNothing(declaration) || carriedDeclaresStoredStream)
       ) {
-        // `default` still inherits from the last declaration even when the
-        // stored schema is otherwise unconstrained — a top-level `default`
-        // is trivially true, and narrowing can reduce a stored schema to
-        // one. A false carried schema stays false: the reader selected
-        // nothing, so no default stands in.
-        const storedDefault = isObjectOrArray(declaration)
-          ? declaration.default
-          : undefined;
-        const carriedSchema = storedDefault !== undefined &&
-            !ContextualFlowControl.isFalseSchema(link.schema)
-          ? internSchema(
-            isObjectOrArray(link.schema)
-              ? { ...link.schema, default: storedDefault }
-              : { default: storedDefault },
-          )
-          : link.schema;
         link = {
           ...nextLink,
-          schema: carriedSchema,
+          schema: storedDefault !== undefined &&
+              !ContextualFlowControl.isFalseSchema(link.schema)
+            ? withDefault(link.schema, storedDefault)
+            : link.schema,
           ...(carriedCaps !== undefined && { scopeCaps: carriedCaps }),
         };
       } else {
+        const carriedDefault = storedDefault === undefined &&
+            declaration !== undefined &&
+            !ContextualFlowControl.isFalseSchema(declaration)
+          ? declaredDefault(
+            resolveDeclaration(tx, nextHop.source.space, link.schema),
+          )
+          : undefined;
+        const adopted = carriedDefault === undefined ? nextLink : {
+          ...nextLink,
+          schema: withDefault(nextLink.schema, carriedDefault),
+        };
         link = carriedCaps === undefined
-          ? nextLink
-          : { ...nextLink, scopeCaps: carriedCaps };
+          ? adopted
+          : { ...adopted, scopeCaps: carriedCaps };
       }
       if (crossSpace) {
         link = {

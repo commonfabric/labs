@@ -6,7 +6,7 @@ import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
 
-import { attachDocTags, extractDocFromType } from "../doc-utils.ts";
+import { extractDocFromType } from "../doc-utils.ts";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import { cloneSchemaDefinition, getNativeTypeSchema } from "../type-utils.ts";
@@ -302,9 +302,6 @@ export class IntersectionFormatter implements TypeFormatter {
       (schema as Record<string, unknown>).description = uniqueDocTexts.join(
         "\n\n",
       );
-    }
-    if (typeof schema.description === "string") {
-      attachDocTags(schema as Record<string, unknown>, schema.description);
     }
 
     const commentParts: string[] = [];

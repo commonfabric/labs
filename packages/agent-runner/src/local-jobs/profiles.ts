@@ -16,6 +16,7 @@
 import { isAbsolute } from "@std/path";
 
 import { parseCfHarnessCliToolId } from "@commonfabric/cf-harness/cli";
+import type { HarnessModelLimits } from "@commonfabric/cf-harness/model/client";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
 import {
   BROWSER_SUBAGENT_PROFILE,
@@ -39,7 +40,7 @@ import type { MemorySpace } from "@commonfabric/runner";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 /** One profile, as the host file states it. */
-export interface LocalJobProfile {
+export interface LocalJobProfile extends HarnessModelLimits {
   /** The tools a job may use; `submit_result` is always added. */
   tools: string[];
 
@@ -127,7 +128,7 @@ export interface LocalJobFabric {
 export type LocalJobProfiles = ReadonlyMap<string, LocalJobProfile>;
 
 /** What a caller may ask of a profile. */
-export interface LocalJobNarrowing {
+export interface LocalJobNarrowing extends HarnessModelLimits {
   tools?: readonly string[];
   maxModelTurns?: number;
   reasoningEffort?: ReasoningEffort;
@@ -217,6 +218,8 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
   const {
     tools,
     maxModelTurns,
+    maxInputBytes,
+    maxOutputTokens,
     taskRole,
     retry,
     loomRetrievalConfig,
@@ -244,6 +247,21 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
     maxModelTurns < 1
   ) {
     fail("`maxModelTurns` must be a whole number of 1 or more");
+  }
+  for (
+    const [field, limit] of [["maxInputBytes", maxInputBytes], [
+      "maxOutputTokens",
+      maxOutputTokens,
+    ]]
+  ) {
+    const minimum = field === "maxOutputTokens" ? 16 : 1;
+    if (
+      limit !== undefined &&
+      (typeof limit !== "number" || !Number.isSafeInteger(limit) ||
+        limit < minimum)
+    ) {
+      fail(`\`${field}\` must be a safe whole number of ${minimum} or more`);
+    }
   }
   if (!ROLES.includes(taskRole as PromptSlotRole)) {
     fail(`\`taskRole\` must be one of ${ROLES.join(", ")}`);
@@ -334,6 +352,8 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
   return {
     tools: [...(tools as string[])],
     maxModelTurns: maxModelTurns as number,
+    ...(typeof maxInputBytes === "number" ? { maxInputBytes } : {}),
+    ...(typeof maxOutputTokens === "number" ? { maxOutputTokens } : {}),
     taskRole: taskRole as PromptSlotRole,
     retry: "never",
     ...(loomRetrievalConfig !== undefined
@@ -541,7 +561,29 @@ export const narrowLocalJobProfile = (
   profile: LocalJobProfile,
   narrowing: LocalJobNarrowing,
 ): { profile: LocalJobProfile } | { refusal: string } => {
-  const { tools, maxModelTurns, reasoningEffort, browserHost } = narrowing;
+  const {
+    tools,
+    maxModelTurns,
+    reasoningEffort,
+    browserHost,
+    maxInputBytes,
+    maxOutputTokens,
+  } = narrowing;
+  for (const name of ["maxInputBytes", "maxOutputTokens"] as const) {
+    const value = narrowing[name];
+    const maximum = profile[name];
+    if (
+      value !== undefined &&
+      (!Number.isSafeInteger(value) ||
+        value < (name === "maxOutputTokens" ? 16 : 1) ||
+        (maximum !== undefined && value > maximum))
+    ) {
+      return {
+        refusal:
+          `The request exceeds or invalidates the profile ${name} bound.`,
+      };
+    }
+  }
   const beyond = tools?.filter((tool) => !profile.tools.includes(tool)) ?? [];
   if (beyond.length > 0) {
     return {
@@ -596,6 +638,8 @@ export const narrowLocalJobProfile = (
         : {}),
       ...(tools !== undefined ? { tools: [...tools] } : {}),
       ...(maxModelTurns !== undefined ? { maxModelTurns } : {}),
+      ...(maxInputBytes !== undefined ? { maxInputBytes } : {}),
+      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
       ...(browserHost !== undefined ? { browserHost: true } : {}),
     },

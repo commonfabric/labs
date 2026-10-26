@@ -19,7 +19,30 @@ describe("ownerPrincipalFromLabel", () => {
         label: { integrity: [{ kind: "represents-principal", subject: DID }] },
       },
     ]);
-    expect(ownerPrincipalFromLabel(label)).toBe(DID);
+    expect(ownerPrincipalFromLabel(label, false)).toBe(DID);
+  });
+
+  it("names the owner a written name attests, though another field also names someone else", () => {
+    // A default the runtime that set the profile up stamped with its own
+    // principal, beside the owner's.
+    const OTHER = "did:key:z6MkoTHERoTHERoTHERoTHERoTHERoTHERoTHERoTHERoT";
+    const label = view([
+      {
+        path: ["name"],
+        label: { integrity: [{ kind: "represents-principal", subject: DID }] },
+      },
+      {
+        path: ["avatar"],
+        label: {
+          integrity: [
+            { kind: "represents-principal", subject: DID },
+            { kind: "represents-principal", subject: OTHER },
+          ],
+        },
+      },
+    ]);
+    expect(ownerPrincipalFromLabel(label, true)).toBe(DID);
+    expect(ownerPrincipalFromLabel(label, false)).toBeUndefined();
   });
 
   it("names no owner for a subject with surrounding whitespace", () => {
@@ -31,7 +54,7 @@ describe("ownerPrincipalFromLabel", () => {
         },
       },
     ]);
-    expect(ownerPrincipalFromLabel(label)).toBeUndefined();
+    expect(ownerPrincipalFromLabel(label, false)).toBeUndefined();
   });
 
   it("names no owner for a string-form atom", () => {
@@ -41,22 +64,25 @@ describe("ownerPrincipalFromLabel", () => {
         label: { integrity: [`represents-principal:${DID}`] },
       },
     ]);
-    expect(ownerPrincipalFromLabel(label)).toBeUndefined();
+    expect(ownerPrincipalFromLabel(label, false)).toBeUndefined();
   });
 
-  it("names no owner from an atom below the top-level fields", () => {
+  it("names the owner an atom below the top-level fields names, only when no name is written", () => {
     // A document holding a link to Bob's profile deeper down carries that
-    // profile's label there; it is not the owner of this document.
+    // profile's label there. With no written name every entry counts, so a
+    // value whose own fields name no one represents whoever that names; a
+    // written name says whose the value is instead.
     const label = view([
       {
         path: ["elements", "0", "cell"],
         label: { integrity: [{ kind: "represents-principal", subject: DID }] },
       },
     ]);
-    expect(ownerPrincipalFromLabel(label)).toBeUndefined();
+    expect(ownerPrincipalFromLabel(label, false)).toBe(DID);
+    expect(ownerPrincipalFromLabel(label, true)).toBeUndefined();
   });
 
-  it("names no owner from an entry a link carries", () => {
+  it("names the owner an entry a link carries names, only when no name is written", () => {
     const label = view([
       {
         path: ["friend"],
@@ -64,7 +90,8 @@ describe("ownerPrincipalFromLabel", () => {
         observes: "followRef",
       },
     ]);
-    expect(ownerPrincipalFromLabel(label)).toBeUndefined();
+    expect(ownerPrincipalFromLabel(label, false)).toBe(DID);
+    expect(ownerPrincipalFromLabel(label, true)).toBeUndefined();
   });
 
   it("names no owner when top-level atoms name two principals", () => {
@@ -83,7 +110,7 @@ describe("ownerPrincipalFromLabel", () => {
         },
       },
     ]);
-    expect(ownerPrincipalFromLabel(label)).toBeUndefined();
+    expect(ownerPrincipalFromLabel(label, false)).toBeUndefined();
   });
 
   it("ignores unrelated integrity atoms", () => {
@@ -97,12 +124,12 @@ describe("ownerPrincipalFromLabel", () => {
         label: { integrity: [{ kind: "owned-by", subject: DID }] },
       },
     ]);
-    expect(ownerPrincipalFromLabel(label)).toBeUndefined();
+    expect(ownerPrincipalFromLabel(label, false)).toBeUndefined();
   });
 
   it("returns undefined for an empty or missing label", () => {
-    expect(ownerPrincipalFromLabel(undefined)).toBeUndefined();
-    expect(ownerPrincipalFromLabel(view([]))).toBeUndefined();
+    expect(ownerPrincipalFromLabel(undefined, false)).toBeUndefined();
+    expect(ownerPrincipalFromLabel(view([]), false)).toBeUndefined();
   });
 });
 

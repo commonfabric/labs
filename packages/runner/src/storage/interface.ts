@@ -2,6 +2,7 @@ import type {
   CellScope,
   FabricValue,
   SchemaPathSelector,
+  TextChange,
 } from "@commonfabric/api";
 import {
   type ACL,
@@ -323,8 +324,9 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * Re-read every listed document instance that SPACE's replica holds
    * through its installed read-through and integrate the result as an
    * inbound frame, so a store commit the replica has no watch for still
-   * reaches its subscribers. Returns how many documents were refreshed;
-   * zero when no read-through is installed or the replica holds none of
+   * reaches its subscribers. Returns how many documents were refreshed, a
+   * read finding nothing included; zero when no read-through is installed,
+   * the replica holds none of them, or the read-through gives no answer for
    * them.
    */
   integrateStoreWrites?(
@@ -579,6 +581,18 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   subscribeSpaceSessionError?(
     observer: (space: MemorySpace, error: Error) => void,
   ): Cancel;
+
+  /**
+   * Observes a connection to a memory server coming back after it was lost:
+   * the connection is up again and the sessions it carries are restored, apart
+   * from any that a retriable denial holds, which restore on their own later.
+   * Called once per restored connection, so a manager holding several calls
+   * it once for each that comes back. The first connection to a server, and a
+   * reconnect attempt that fails, do not emit. A load that failed while the
+   * connection was down may succeed once this is called, and nothing else
+   * says when to ask again.
+   */
+  subscribeConnectionRestored?(observer: () => void): Cancel;
 
   /**
    * Register an in-flight commit so the durability barrier
@@ -982,6 +996,33 @@ export interface IStorageProvider {
    * {@link unexaminedAbsences}.
    */
   presentCount?(absences: readonly UnexaminedAbsence[]): number;
+
+  /**
+   * Whether the store read-through, asked for the instance `address` names
+   * under `identity`, reported holding nothing there, with no write to it
+   * reported since. Such an absence stays unexamined for commit to
+   * reconcile ({@link unexaminedAbsences}), but the replica does not ask the
+   * store for the document again until the feed reports a write to it, or
+   * `readStoreAbsenceAgain()` asks. Optional: a provider with no
+   * read-through may leave it out, which a caller reads as no such report.
+   */
+  storeReportedAbsent?(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean;
+
+  /**
+   * Asks the store read-through again for an instance it reported holding
+   * nothing at (`storeReportedAbsent()`), as the feed's report of a write
+   * would, and integrates what it holds now. Returns whether the store holds
+   * the document now, or `undefined` when it was not asked, because no such
+   * report stands or a frame is being applied, or gave no answer. Optional,
+   * as `storeReportedAbsent()` is.
+   */
+  readStoreAbsenceAgain?(
+    address: { id: URI; scope?: CellScope },
+    identity?: ScopeKeyIdentity,
+  ): boolean | undefined;
 
   /** INBOUND settlement only (server-execution v2 stage F): outstanding
    * watch refreshes/pulls, EXCLUDING commit settlement AND update
@@ -1729,6 +1770,26 @@ export interface IStorageTransaction {
   recordSqliteWrite?(space: MemorySpace, op: SqliteOperation): void;
 
   /**
+   * Optional: record `changes` to the string at `address`, so that the commit
+   * carries them as an `apply-op` without a base (memory-v2 §7.7.1), which
+   * applies only while the field holds the value this transaction read there:
+   * the commit's read of the field says so, and so does the hash of that value
+   * the operation carries. Returns the
+   * changed string, which the caller writes to `address` through the ordinary
+   * write path: the transaction's later reads, its CFC checks, and the local
+   * view all see that write, and the commit sends the field's change as the
+   * `apply-op` instead of inside the document's patch.
+   *
+   * Calls at one address accumulate, each against the value the one before it
+   * left. Throws when `address` does not hold a string, when a change does not
+   * fit it, or when this transaction wrote the field by other means first.
+   */
+  recordTextChanges?(
+    address: IMemorySpaceAddress,
+    changes: readonly TextChange[],
+  ): string;
+
+  /**
    * Optional: whether this transaction has replaced any document root.
    *
    * Read by materialization as a fast path — before the first write every read
@@ -1785,6 +1846,14 @@ export interface IStorageTransaction {
    * (docs/specs/cfc-write-prefix-provenance.md §4/§6).
    */
   getWriteAttemptLog?(): readonly IWriteAttempt[];
+
+  /**
+   * Optional exact write-target spaces in commit order. Unlike the
+   * write-attempt log, this includes targets claimed only by commit
+   * preconditions, create marks, folded SQLite operations, or an otherwise
+   * elided write.
+   */
+  getWriteTargetSpaces?(): readonly MemorySpace[];
 
   /**
    * Optional write details for the given space.
@@ -2246,6 +2315,16 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * resolving the link to a memory address.
    */
   recordMergeableOp?(link: NormalizedFullLink, delta: MergeableOpDelta): void;
+
+  /**
+   * Record text changes to the string addressed by `link`, forwarded to the
+   * underlying transaction after resolving the link to a memory address. See
+   * {@link IStorageTransaction.recordTextChanges}.
+   */
+  recordTextChanges?(
+    link: NormalizedFullLink,
+    changes: readonly TextChange[],
+  ): string;
 
   /**
    * Abandon the mergeable fast path for the array addressed by `link`, forwarded
@@ -3883,7 +3962,35 @@ export interface NativeStorageCommit {
    * doc-pending / touched / notify machinery.
    */
   sqliteOps?: readonly SqliteOperation[];
+
+  /**
+   * Collaborative-field edits recorded with `recordTextChanges()`, applied in
+   * the same wire commit after every other operation. The field changes they
+   * carry are left out of the patch in `operations`, whose `value` still holds
+   * them, so the local view shows the edited text while the store integrates
+   * it.
+   *
+   * The replica shows that text ahead of the verdict, which is sound only for
+   * what the list holds: edits this transaction generated, one per field, each
+   * with no base and a hash of the value the transaction read, combining every
+   * change the transaction made to the field, and producing exactly the text
+   * its ordinary write left there. An accepted edit then yields that text and
+   * nothing else. A cursor-based edit, which the store rebases, a blind one, or
+   * a second operation on the same field would make the result unpredictable,
+   * and none of them belongs here; {@link NativeTextEdit} keeps out the first
+   * two.
+   */
+  applyOps?: readonly NativeTextEdit[];
 }
+
+/**
+ * An `apply-op` as a transaction's native commit carries it in
+ * {@link NativeStorageCommit.applyOps}: no base, and a hash of the value the
+ * transaction read.
+ */
+export type NativeTextEdit =
+  & Omit<ApplyOpOperation, "base" | "baselineHash">
+  & { base?: never; baselineHash: string };
 
 export type Activity = Variant<{
   read: IReadActivity;

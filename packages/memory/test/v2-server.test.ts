@@ -348,7 +348,7 @@ Deno.test("memory v2 server parses a watch removal naming watch ids, and refuses
       ...request,
       watchIds: ["watch-a", 7],
     })),
-    null,
+    { type: "invalid", requestId: "remove-1" },
   );
 });
 
@@ -393,7 +393,7 @@ Deno.test("memory v2 server parses entity identifier listing requests", () => {
       requestId: "entity-list-2",
       space: "did:key:z6Mk-space",
     })),
-    null,
+    { type: "invalid", requestId: "entity-list-2" },
   );
   assertEquals(
     parseClientMessage(encodeMemoryBoundary({

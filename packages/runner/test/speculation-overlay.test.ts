@@ -3234,6 +3234,83 @@ describe("Phase 2 speculation overlay", () => {
     destination.close();
   });
 
+  it("space quiescence includes seals before entry registration without waiting on other spaces", async () => {
+    const otherSpace = (await Identity.fromPassphrase(
+      "speculation overlay other space",
+    )).did() as MemorySpace;
+    const replica = {
+      sealNative: (
+        _native: unknown,
+        _source: unknown,
+        verdict: Promise<unknown>,
+      ) => ({
+        localSeq: 7,
+        commit: {
+          localSeq: 7,
+          reads: { confirmed: [], pending: [] },
+          operations: [],
+        },
+        settled: verdict.then(() => undefined, () => undefined),
+      }),
+      speculationRetirementView: () => ({
+        confirmedSeq: 0,
+        pendingLocalSeqs: [7],
+      }),
+      ackedSeqOf: () => undefined,
+      speculationAckObserver: undefined as (() => void) | undefined,
+    };
+    const runtime = {
+      storageManager: { open: () => ({ replica }) },
+      getCellFromLink: () => ({ sink: () => () => {} }),
+    } as unknown as Runtime;
+    const destination = new SpeculationOverlayDestination(runtime);
+    const gate = Promise.withResolvers<void>();
+    const sealTx = {
+      tx: {
+        getWriteTargetSpaces: () => [otherSpace],
+        markWholeDocumentWrites: () => {},
+        sealInto: async (collector: {
+          sealSpaceCommit: (
+            space: MemorySpace,
+            native: unknown,
+            source: unknown,
+          ) => Promise<unknown>;
+        }) => {
+          await collector.sealSpaceCommit(otherSpace, {
+            operations: [],
+            preconditions: [],
+          }, undefined);
+          await gate.promise;
+          return { ok: {} };
+        },
+      },
+    } as unknown as IExtendedStorageTransaction;
+    stampSpeculationRunContext(sealTx, {
+      actionId: "quiescence-space",
+      kind: "derivation",
+    });
+
+    const sealResult = destination.seal(sealTx).settled;
+    let quiescent = false;
+    const quiescence = destination.waitForSpaceQuiescence(otherSpace).then(
+      () => {
+        quiescent = true;
+      },
+    );
+    await destination.waitForSpaceQuiescence(space);
+    await flushMicrotasks();
+    expect(quiescent).toBe(false);
+
+    gate.resolve();
+    expect((await sealResult).ok).toBeDefined();
+    expect(destination.entryCount(otherSpace)).toBe(1);
+    await flushMicrotasks();
+    expect(quiescent).toBe(false);
+
+    destination.close();
+    await quiescence;
+  });
+
   it("a close() racing the seal neither resurrects entries nor enacts navigateTo; a REJECTED sealInto withdraws collected entries (threads r3739139501, r3739139536)", async () => {
     // Destination-level, scripted: hold sealInto mid-flight, close()
     // the overlay, then let the seal complete. The continuation must not
@@ -3274,6 +3351,7 @@ describe("Phase 2 speculation overlay", () => {
     const gate = Promise.withResolvers<void>();
     const sealTx = {
       tx: {
+        getWriteAttemptLog: () => [],
         markWholeDocumentWrites: () => {},
         sealInto: async (collector: {
           sealSpaceCommit: (
@@ -3296,8 +3374,15 @@ describe("Phase 2 speculation overlay", () => {
       kind: "derivation",
     });
     const sealResult = destination.seal(sealTx).settled;
+    let quiescent = false;
+    const quiescence = destination.waitForSpaceQuiescence(space).then(() => {
+      quiescent = true;
+    });
+    await flushMicrotasks();
+    expect(quiescent).toBe(false);
     // close() lands while sealInto is parked on the gate.
     destination.close();
+    await quiescence;
     gate.resolve();
     expect((await sealResult).ok).toBeDefined();
     // NOT resurrected — and the entry's verdict was resolved (a

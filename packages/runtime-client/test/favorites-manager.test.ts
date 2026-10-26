@@ -92,8 +92,7 @@ describe("FavoritesManager", () => {
       const stub = makeStub({
         schema: {
           type: "object",
-          description: "A #note",
-          tags: ["search", "go"],
+          description: "A #Search tool to #go",
         },
       });
       await new FavoritesManager(stub.rt).addFavorite(pieceAt("piece-1"));
@@ -108,7 +107,7 @@ describe("FavoritesManager", () => {
 
     it("prefers an explicit tag and skips the schema read", async () => {
       const stub = makeStub({
-        schema: { type: "object", tags: ["schema-tag"] },
+        schema: { type: "object", description: "#schema_tag" },
       });
       await new FavoritesManager(stub.rt).addFavorite(
         pieceAt("p"),
@@ -131,7 +130,9 @@ describe("FavoritesManager", () => {
     });
 
     it("reads the schema in the scope the piece's address names", async () => {
-      const stub = makeStub({ schema: { type: "object", tags: ["deep"] } });
+      const stub = makeStub({
+        schema: { type: "object", description: "#deep" },
+      });
       await new FavoritesManager(stub.rt).addFavorite(pieceAt("p", "user"));
       // The id and the scope together say which document to read: the same id
       // in the space scope is a different one, whose tags are not this

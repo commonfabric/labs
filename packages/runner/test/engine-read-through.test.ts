@@ -34,6 +34,7 @@ import { decomposeSchema } from "../src/schema-decompose.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { type Options, SpaceReplica } from "../src/storage/v2.ts";
 import { Runtime } from "../src/runtime.ts";
+import type { Action } from "../src/scheduler/types.ts";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
 import { engineReadThrough } from "../src/executor/engine-read-through.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
@@ -642,6 +643,216 @@ describe("engine-read-through", () => {
       });
       expect(reads).toEqual(["of:held", "of:held"]);
     } finally {
+      await manager.close();
+    }
+  });
+
+  it("reports an address the store had nothing at as store-reported absent until the feed reports a write to it", async () => {
+    const store = new Map<
+      string,
+      { seq: number; doc: { value: FabricValue } }
+    >();
+    const manager = SharedServerStorageManager.connectTo(server, {
+      as: serviceSigner,
+    });
+    try {
+      manager.installStoreReadThrough(space, ({ id, scopeKey }) => {
+        const entry = store.get(id);
+        return {
+          branch: "",
+          id,
+          scope: "space",
+          scopeKey,
+          ...(entry === undefined
+            ? { seq: 0, deleted: true as const }
+            : { seq: entry.seq, doc: entry.doc }),
+        };
+      });
+      const provider = manager.open(space);
+      const id = "of:reported-absent" as URI;
+      // Nothing is reported before the store has been asked.
+      expect(provider.storeReportedAbsent?.({ id })).toBe(false);
+      expect(provider.replica.getDocument(id)).toBeUndefined();
+      expect(provider.storeReportedAbsent?.({ id })).toBe(true);
+      // The feed's refresh asks again, and a document now there clears it.
+      store.set(id, { seq: 1, doc: { value: { made: true } } });
+      expect(
+        manager.integrateStoreWrites(space, [{ id, scopeKey: "space" }]),
+      ).toBe(1);
+      expect(provider.storeReportedAbsent?.({ id })).toBe(false);
+      expect(provider.replica.getDocument(id)?.value).toEqual({ made: true });
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("asks the store again on request for an address it reported absent, and reads what it holds now", async () => {
+    const store = new Map<
+      string,
+      { seq: number; doc: { value: FabricValue } }
+    >();
+    let reads = 0;
+    let answering = true;
+    const manager = SharedServerStorageManager.connectTo(server, {
+      as: serviceSigner,
+    });
+    try {
+      manager.installStoreReadThrough(space, ({ id, scopeKey }) => {
+        reads += 1;
+        if (!answering) return undefined;
+        const entry = store.get(id);
+        return {
+          branch: "",
+          id,
+          scope: "space",
+          scopeKey,
+          ...(entry === undefined
+            ? { seq: 0, deleted: true as const }
+            : { seq: entry.seq, doc: entry.doc }),
+        };
+      });
+      const provider = manager.open(space);
+      const id = "of:asked-again" as URI;
+      // An address nothing reported absent is not asked.
+      expect(provider.readStoreAbsenceAgain?.({ id })).toBeUndefined();
+      expect(reads).toBe(0);
+      expect(provider.replica.getDocument(id)).toBeUndefined();
+      expect(reads).toBe(1);
+      // Asked again while the store still holds nothing, it stays reported.
+      expect(provider.readStoreAbsenceAgain?.({ id })).toBe(false);
+      expect(reads).toBe(2);
+      expect(provider.storeReportedAbsent?.({ id })).toBe(true);
+      store.set(id, { seq: 1, doc: { value: { made: true } } });
+      // A read the store gives no answer to, as one with its lease
+      // unconfirmed gives none, says nothing of what it holds, and the report
+      // stands.
+      answering = false;
+      expect(provider.readStoreAbsenceAgain?.({ id })).toBeUndefined();
+      expect(reads).toBe(3);
+      expect(provider.storeReportedAbsent?.({ id })).toBe(true);
+      answering = true;
+      expect(provider.readStoreAbsenceAgain?.({ id })).toBe(true);
+      expect(reads).toBe(4);
+      expect(provider.storeReportedAbsent?.({ id })).toBe(false);
+      expect(provider.replica.getDocument(id)?.value).toEqual({ made: true });
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("marks a re-read document's readers before the re-read returns, and runs none of them until the scheduler's next pass", async () => {
+    // A re-read applies a frame, and the frame's application notifies the
+    // storage subscribers in line, so a start gate that asks the store again
+    // has the scheduler mark the documents' readers before it reads on. The
+    // scheduler only marks them and queues a pass, so none of them runs
+    // inside the gate.
+    const engine = await server.engineForSpace(space);
+    const manager = SharedServerStorageManager.connectTo(server, {
+      as: serviceSigner,
+    });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: manager,
+    });
+    try {
+      manager.installStoreReadThrough(space, engineReadThrough(engine));
+      const provider = manager.open(space);
+      const id = "of:re-read-reader" as URI;
+      const target = runtime.getCellFromLink<unknown>({ id, space, path: [] });
+      const seen: unknown[] = [];
+      const reader: Action = (tx) => {
+        seen.push(target.withTx(tx).get());
+      };
+      const cancel = runtime.scheduler.subscribe(reader, { isEffect: true });
+      try {
+        await runtime.idle();
+        expect(seen).toEqual([undefined]);
+        expect(provider.storeReportedAbsent?.({ id })).toBe(true);
+        const creating = clientRuntime.edit();
+        clientRuntime.getCellFromLink<{ made: boolean }>({
+          id,
+          space,
+          path: [],
+        })
+          .withTx(creating).set({ made: true });
+        expect((await creating.commit().settled).error).toBeUndefined();
+        expect(runtime.scheduler.isDirty(reader)).toBe(false);
+
+        expect(provider.readStoreAbsenceAgain?.({ id })).toBe(true);
+        expect(runtime.scheduler.isDirty(reader)).toBe(true);
+        expect(seen).toEqual([undefined]);
+        await runtime.idle();
+        expect(seen).toEqual([undefined, { made: true }]);
+      } finally {
+        cancel();
+      }
+    } finally {
+      await runtime.dispose();
+      await manager.close();
+    }
+  });
+
+  it("refuses a commit that read an absence the store has since filled, and commits one that reads the document again once the feed reports the write", async () => {
+    // The window the feed's lag leaves: the store holds the document while
+    // this replica still reports it absent, so a run that was not held for
+    // it reads it as missing. The read goes out as a claim that no such
+    // document exists, and the server refuses it. The serving loop runs a
+    // refused run again; here the test makes the attempt twice, either side
+    // of the feed's report.
+    const engine = await server.engineForSpace(space);
+    const manager = SharedServerStorageManager.connectTo(server, {
+      as: serviceSigner,
+    });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: manager,
+    });
+    try {
+      manager.installStoreReadThrough(space, engineReadThrough(engine));
+      const provider = manager.open(space);
+      const id = "of:filled-late" as URI;
+      expect(provider.replica.getDocument(id)).toBeUndefined();
+      expect(provider.storeReportedAbsent?.({ id })).toBe(true);
+      const creating = clientRuntime.edit();
+      clientRuntime.getCellFromLink<{ made: boolean }>({ id, space, path: [] })
+        .withTx(creating).set({ made: true });
+      expect((await creating.commit().settled).error).toBeUndefined();
+      expect(provider.storeReportedAbsent?.({ id })).toBe(true);
+
+      // Each attempt writes a document of its own, so the second is not a
+      // dependent of the first's refused layer, which a rejection repair
+      // drops only once the frame it waits for arrives.
+      const attempt = async (name: string) => {
+        const verdict = runtime.getCell<string>(space, name, {
+          type: "string",
+        });
+        const tx = runtime.edit();
+        const value = runtime.getCellFromLink<unknown>({ id, space, path: [] })
+          .withTx(tx).get();
+        verdict.withTx(tx).set(value === undefined ? "absent" : "present");
+        return { value, verdict, result: await tx.commit().verdict };
+      };
+      const refused = await attempt("filled-late verdict 1");
+      expect(refused.value).toBeUndefined();
+      expect(refused.result.error?.name).toBe("ConflictError");
+      expect(
+        (refused.result.error as { conflict?: { of?: string } }).conflict?.of,
+      ).toBe(id);
+
+      expect(
+        manager.integrateStoreWrites(space, [{ id, scopeKey: "space" }]),
+      ).toBe(1);
+      expect(provider.storeReportedAbsent?.({ id })).toBe(false);
+      const repeated = await attempt("filled-late verdict 2");
+      expect(repeated.value).toEqual({ made: true });
+      expect(repeated.result.error).toBeUndefined();
+      expect(
+        provider.replica.getDocument(
+          repeated.verdict.getAsNormalizedFullLink().id,
+        )?.value,
+      ).toBe("present");
+    } finally {
+      await runtime.dispose();
       await manager.close();
     }
   });
