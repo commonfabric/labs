@@ -144,7 +144,9 @@ its children, and read its other cells holding state, at the loaded build's
 numbers, where another cell's state sits. The refusal comes before any of the
 piece's nodes are installed and before any transaction is opened, so no child
 runs and nothing is written, and it leaves no in-memory registration, so the
-next start judges the piece again. A setup of the version the record names
+next start judges the piece again. The start rejects with the refusal, and
+`startWithCommit()` does so whether the first round of its setup commit or a
+retry's reached it. A setup of the version the record names
 refuses the same way, before staging anything. A child's record is judged when
 the child is set up, as part of instantiating its parent's graph, and a refused
 child stops its parent's start, naming the child (`PieceStateMovedError`'s
