@@ -4,9 +4,11 @@
  * two naming modes. The second reproduces what a runtime with naming off does
  * to a parent a runtime with naming on carried over: it is the regression
  * coverage for the boundary that has to be in place before the flag turns on
- * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`). Each runtime sits
- * on a storage manager of its own over one memory server, so it starts from
- * what it syncs, as a runtime in another process does.
+ * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`). The third holds
+ * that a cold start in either naming mode starts a parent the other set up,
+ * since both modes stamp the same setup record. Each runtime sits on a
+ * storage manager of its own over one memory server, so it starts from what
+ * it syncs, as a runtime in another process does.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -422,14 +424,16 @@ describe("instance-naming-modes", () => {
         A: { label: after.A.label },
         O: { setUp: after.O.setUp, label: after.O.label },
       }).toEqual({
-        // What the parent shows still follows the links the naming runtime's
-        // setup wrote, but the write to `a` was handled with `s`'s arguments.
+        // The parent's manifest names its children by instance name, which
+        // the positional build lacks, so the start re-stages the projection
+        // by position: what the parent shows as `s` is `A`, holding `a`'s
+        // count, and what it shows as `a` is the fresh child `O`.
         shown: {
-          a: { countDoc: before.A.countDoc, count: 308, owner: "s" },
-          s: { countDoc: before.S.countDoc, count: 4020, owner: "s" },
+          a: { countDoc: after.O.countDoc, count: 300, owner: "a" },
+          s: { countDoc: before.A.countDoc, count: 4008, owner: "s" },
         },
         // `s` runs on `A` and has written its arguments there, and `a` runs
-        // on a child nothing shows.
+        // on `O`.
         A: { label: "s" },
         O: { setUp: true, label: "a" },
       });
@@ -452,8 +456,10 @@ describe("instance-naming-modes", () => {
         shown: await shown(naming),
         A: { label: after.A.label },
       }).toEqual({
+        // `A` lacks the 300 the runtime with naming off wrote to `a`, which
+        // landed on the fresh child `O` that runtime ran `a` on.
         shown: {
-          a: { countDoc: before.A.countDoc, count: 50308, owner: "a" },
+          a: { countDoc: before.A.countDoc, count: 50008, owner: "a" },
           s: { countDoc: before.S.countDoc, count: 600020, owner: "s" },
         },
         A: { label: "a" },
@@ -475,6 +481,99 @@ describe("instance-naming-modes", () => {
       expect(await shown(positional)).toEqual({
         a: { countDoc: after.O.countDoc, count: 300, owner: "a" },
         s: { countDoc: before.A.countDoc, count: 4008, owner: "s" },
+      });
+    });
+  });
+
+  describe("a parent with two children of one pattern, started cold", () => {
+    // The setup record a start holds the stored setup against describes a
+    // named instance at its legacy number, so the record one naming mode
+    // stamps is the record the other builds. A start in either mode, of a
+    // parent the other mode set up, therefore never takes the change of mode
+    // for a move of the children's state, and starts the parent.
+
+    const PARENT = "parent";
+
+    const bump = async (runtime: Runtime, key: string, by: number) => {
+      const parent = runtime.getCell(space, PARENT);
+      await parent.sync();
+      parent.key(key).send({ by });
+      await runtime.idle();
+    };
+
+    // Sets the parent up as `WITH_SIBLING` in a runtime with naming
+    // `setUpNaming`, with a count of 7 written to `a` and 20 to `s`, then
+    // starts it cold in a runtime with naming `startNaming`. Returns what the
+    // start resolved to and the counts the parent then shows.
+    const setUpThenStart = async (
+      setUpNaming: boolean,
+      startNaming: boolean,
+    ) => {
+      const first = runtimeNaming(setUpNaming);
+      const pattern = await first.patternManager.compilePattern(
+        WITH_SIBLING,
+        { space },
+      );
+      const tx = first.edit();
+      const running = first.run(
+        tx,
+        pattern,
+        {},
+        first.getCell(space, PARENT, undefined, tx),
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await running.pull();
+      await first.idle();
+      await bump(first, "aBump", 7);
+      await bump(first, "sBump", 20);
+      await retire(first);
+
+      const second = runtimeNaming(startNaming);
+      const parent = second.getCell<Record<string, unknown>>(space, PARENT);
+      await parent.sync();
+      const started = await second.runner.start(parent);
+      await second.idle();
+      await parent.pull();
+      const value = parent.get() as Record<string, unknown>;
+      return { started, aCount: value.aCount, sCount: value.sCount };
+    };
+
+    it("starts it and shows its children's counts, when a runtime with naming on reopens a parent one with naming off set up", async () => {
+      expect(await setUpThenStart(false, true)).toEqual({
+        started: true,
+        aCount: 7,
+        sCount: 20,
+      });
+    });
+
+    it("starts it and shows its children's counts, when a runtime with naming on reopens a parent one with naming on set up", async () => {
+      expect(await setUpThenStart(true, true)).toEqual({
+        started: true,
+        aCount: 7,
+        sCount: 20,
+      });
+    });
+
+    it("starts it and shows its children's counts, when a runtime with naming off reopens a parent one with naming off set up", async () => {
+      expect(await setUpThenStart(false, false)).toEqual({
+        started: true,
+        aCount: 7,
+        sCount: 20,
+      });
+    });
+
+    it("starts it and shows fresh children's counts, when a runtime with naming off reopens a parent one with naming on set up", async () => {
+      // TODO(danfuzz): This pins the hazard the activation boundary exists to
+      // exclude. The parent's manifest names its children by instance name,
+      // which the positional build lacks, so the start re-stages the result
+      // projection onto children at positional spots, which the setup never
+      // ran. Once a runtime whose naming mode differs from the parent's is
+      // kept away from it, this case becomes a refusal.
+
+      expect(await setUpThenStart(true, false)).toEqual({
+        started: true,
+        aCount: 0,
+        sCount: 0,
       });
     });
   });

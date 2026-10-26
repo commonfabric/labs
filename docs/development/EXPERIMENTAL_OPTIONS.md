@@ -1022,10 +1022,11 @@ holds the measurements and the conditions for revisiting.
   guard reads is not enough on its own: an older runtime's plain reopen of a
   parent is never judged by its guard. What a runtime with naming off does to a
   parent a naming runtime carried over is pinned by
-  `packages/runner/test/instance-naming-modes.test.ts`: its reopen runs the
-  inserted sibling on the carried child's document and the named instance on a
-  fresh one, and its update shows the carried child's state under the sibling,
-  with no refusal in either.
+  `packages/runner/test/instance-naming-modes.test.ts`: its reopen and its
+  update alike run the inserted sibling on the carried child's document and the
+  named instance on a fresh one, and show the carried child's state under the
+  sibling, with no refusal in either. Its reopen of a parent a naming runtime
+  set up shows fresh children in place of the named ones.
 - **Status on 2026-10-23.** The carry-over and naming cases in
   `packages/runner/test/instance-carry-over.test.ts` and the Home upgrade case
   in `packages/patterns/integration/home-interface-upgrade.test.ts` run with
