@@ -1927,8 +1927,9 @@ piece-start site's surfaced fire-and-forget failure, stage P2-F);
 `structureLoadRefused` counts the loads a start refused because the piece's
 stored setup is a record of another build that numbered its cells holding state
 differently (`PieceStateMovedError`, `docs/specs/computed-cell-identity.md`), on
-the start's first commit or a retry, and a root refused on its first commit
-parks as a terminal one does, until a commit to it re-arms it;
+the start's first commit or a retry. A root the demand cycle refused parks as a
+terminal one does, until a commit to it re-arms it, and is re-armed at once
+where such a commit landed while the refusing pass ran;
 `structureLoadStuck` counts roots whose CONSECUTIVE-deferral streak crossed the
 space server's stuck threshold — once per crossing, with a WARN naming the space
 and root at the crossing and at each doubling of the streak — so a

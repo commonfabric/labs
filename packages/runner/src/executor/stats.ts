@@ -80,9 +80,13 @@ export type ServingLoopStats = {
   /** Demanded-structure loads REFUSED because the piece's stored setup is
    * a record of another build that numbered its cells holding state
    * differently (`PieceStateMovedError`): the start runs no part of the
-   * piece and writes nothing. Counted per refusal; the demand cycle parks
-   * the root as it parks a terminal one, until a commit touching it
-   * re-arms it, so a refused root does not churn every cycle. */
+   * piece and writes nothing. Counted per refusal, from two sources: the
+   * demand cycle's start of a root, and the retry of a piece start's
+   * commit (`pieceStartCommitFailureObserver`). The demand cycle parks a
+   * root it refused as it parks a terminal one, until a commit touching it
+   * re-arms it, so a refused root does not churn every cycle; one such
+   * commit landing while the refusing pass ran re-arms the root in place of
+   * the park. A refusal on a commit's retry parks nothing. */
   structureLoadRefused: number;
 
   /** Demanded-structure ensure attempts that returned FALSE — the root

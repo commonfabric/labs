@@ -2308,8 +2308,9 @@ export class Runtime {
    * SpaceServer installs the observer at activation and counts the
    * failure into §7's `structureLoadFailures` (a demanded-structure
    * load that failed, asynchronously), or a refusal of a piece whose
-   * state moved into `structureLoadRefused`; the runner's loud log
-   * rides the same reporting call in every arm.
+   * state moved into `structureLoadRefused`. The runner logs a failure
+   * loudly in the same reporting call, and a refusal where it decides
+   * it.
    */
   pieceStartCommitFailureObserver:
     | ((failure: {
