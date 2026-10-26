@@ -663,6 +663,9 @@ describe("space-access-change", () => {
         gesture({ principal: bob.did(), level: "WRITE" }),
       );
       await syncAcl(member.runtime, space);
+      expect(levelOf()).toBe("none");
+      await member.runtime.retrySpaceAccess(space);
+      await syncAcl(member.runtime, space);
 
       expect(levelOf()).toBe("WRITE");
       const tx = member.runtime.edit();

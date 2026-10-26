@@ -82,7 +82,7 @@ describe("expression-result-compatibility", () => {
         expect(messages.shift()).toMatchObject({
           type: "response",
           requestId: "open",
-          error: { name: "SessionRevokedError" },
+          error: { name: "SessionRevokedError", clientUpdateRequired: true },
         });
         expect(authorizationCalls).toBe(0);
         expect(sessions.sessionsForSpace(SPACE)).toEqual([]);
@@ -92,6 +92,52 @@ describe("expression-result-compatibility", () => {
       }
     });
   }
+
+  it("retains an initial update refusal across repeated and concurrent mounts", async () => {
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://expression-result-initial-refusal"),
+    });
+    const transport = loopback(server);
+    let opens = 0;
+    const client = await connect({
+      transport: {
+        ...transport,
+        send(payload) {
+          const message = decodeMemoryBoundary(payload) as { type: string };
+          if (message.type === "session.open") opens++;
+          if (message.type === "hello") {
+            const hello = decodeMemoryBoundary(payload) as HelloMessage;
+            payload = encodeMemoryBoundary({
+              ...hello,
+              flags: { ...hello.flags, stableExpressionResultIds: false },
+            });
+          }
+          return transport.send(payload);
+        },
+      },
+    });
+    try {
+      const mount = () => client.mount(SPACE, {}, testSessionOpenAuthFactory);
+      const results = await Promise.allSettled([mount(), mount(), mount()]);
+      for (const result of results) {
+        expect(result.status).toBe("rejected");
+        if (result.status !== "rejected") throw new Error("Expected refusal");
+        expect(result.reason).toMatchObject({
+          name: "SessionRevokedError",
+          clientUpdateRequired: true,
+          message: expect.stringContaining("Reload the browser tab"),
+        });
+      }
+      await expect(mount()).rejects.toMatchObject({
+        clientUpdateRequired: true,
+      });
+      expect(opens).toBe(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 
   it("reads and writes through a matching client and server", async () => {
     const server = new Server({
@@ -238,6 +284,12 @@ describe("expression-result-compatibility", () => {
       await expect(session.watchAdd([])).rejects.toMatchObject({
         name: "SessionRevokedError",
       });
+      expect(session.closeError).toMatchObject({
+        clientUpdateRequired: true,
+        message: expect.stringContaining("Reload the browser tab"),
+      });
+      await expect(client.mount(SPACE, {}, testSessionOpenAuthFactory))
+        .rejects.toBe(session.closeError);
       expect(afterMessages).toEqual(["hello", "session.open"]);
     } finally {
       await client.close();

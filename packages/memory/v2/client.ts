@@ -642,6 +642,7 @@ type PendingRequest = PromiseWithResolvers<unknown> & {
 
 export class Client {
   #pending = new Map<string, PendingRequest>();
+  #clientUpdateError: Error | undefined;
   #spaces = new Set<SpaceSession>();
   #nextRequest = 1;
   #helloPending:
@@ -962,6 +963,11 @@ export class Client {
         "Memory connection changed before request encoding",
       );
     }
+    if (
+      message.type === "session.open" && this.#clientUpdateError !== undefined
+    ) {
+      throw this.#clientUpdateError;
+    }
     const requestId = message.requestId as string;
     // Retained requests stay inline so replay uses the next connection's
     // negotiation. Compact only the value handed to the transport encoder.
@@ -997,6 +1003,10 @@ export class Client {
     if (result.error) {
       const error = new Error(result.error.message);
       error.name = result.error.name;
+      if (result.error.clientUpdateRequired === true) {
+        Object.assign(error, { clientUpdateRequired: true });
+        this.#clientUpdateError ??= error;
+      }
       if (result.error.precondition !== undefined) {
         (error as Error & { precondition?: string }).precondition =
           result.error.precondition;
@@ -1102,6 +1112,7 @@ export class Client {
     holdings?: SessionHolding[],
     options: { restoring?: boolean; signal?: AbortSignal } = {},
   ): Promise<SessionOpenResult> {
+    if (this.#clientUpdateError !== undefined) throw this.#clientUpdateError;
     const session: SessionDescriptor = {
       ...mount,
       client: this.#clientInfo,
@@ -3397,7 +3408,7 @@ export class SpaceSession {
         restored = await this.#reopen();
       } catch (error) {
         if (isSessionRevokedError(error)) {
-          this.handleRevoked("taken-over");
+          this.#terminateSession(error as Error);
           return;
         }
         throw error;
@@ -3488,14 +3499,17 @@ export class SpaceSession {
       this.#heldRestores = 0;
       if (wasHeld) this.#client.noteHoldEnded();
     } catch (error) {
-      // A permanent authorization denial ANYWHERE in the reopen — the initial
+      // A permanent authorization denial or explicit update requirement in the reopen — the initial
       // session.open OR the watch re-establishment (watchSetSync) that follows a
       // fresh, non-resumed session — terminates just this session with the real
       // error: its pending commits and waiters reject with it, and its next watch
       // or transact rethrows it. It must NOT propagate to the client-wide
       // reconnect loop, which would then fail sessions for other spaces on the
-      // same client. Every other error propagates so the loop retries it.
-      if (isPermanentAuthorizationError(error)) {
+      // same client. Recoverable failures propagate to the reconnect loop.
+      if (
+        isPermanentAuthorizationError(error) ||
+        isClientUpdateRequiredError(error)
+      ) {
         this.#terminateSession(error as Error);
         return;
       }
@@ -5019,6 +5033,15 @@ const isRetriableAuthorizationError = (error: unknown): boolean =>
 export function isPermanentAuthorizationError(error: unknown): boolean {
   return error instanceof Error && error.name === "AuthorizationError" &&
     (error as { retriable?: unknown }).retriable !== true;
+}
+
+/** Recognizes a server refusal whose recovery requires replacing the runtime. */
+export function isClientUpdateRequiredError(error: unknown): error is Error & {
+  /** Explicit recovery instruction, independent of the refusal's error name. */
+  clientUpdateRequired: true;
+} {
+  return error instanceof Error &&
+    (error as { clientUpdateRequired?: unknown }).clientUpdateRequired === true;
 }
 
 // A reconnect handshake failure the whole client must give up on rather than

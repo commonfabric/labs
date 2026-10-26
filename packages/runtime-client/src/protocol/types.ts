@@ -704,6 +704,9 @@ export type IPCClientMessage = {
  * only by its message.
  */
 export enum RuntimeErrorCode {
+  /** The memory server requires replacing this runtime before it can mount. */
+  ClientUpdateRequired = "client-update-required",
+
   /**
    * The worker could not load its compiler stack, so nothing it was asked to
    * compile can run. Distinguished because the client's remedy is a reload
@@ -4150,6 +4153,9 @@ export type ErrorNotification = {
    * Names the kind of failure where one is named.
    */
   code?: RuntimeErrorCode;
+
+  /** Writes were unconfirmed at a client-update refusal or attempted afterward. */
+  unconfirmedWrites?: boolean;
 
   /**
    * The piece it happened in, where that is known.
