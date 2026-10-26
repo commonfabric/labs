@@ -652,13 +652,13 @@ describe("link-resolution", () => {
 
       it("keeps the carried schema across one of annotations alone", () => {
         const carried = { type: "number", default: 1 } as const;
+        // A stored schema can still carry the legacy discovery `tags`, which
+        // `JSONSchemaObj` no longer declares.
+        const stored = { description: "d", tags: ["t"] };
 
-        expect(
-          resolveAcross("annotations-only", {
-            description: "d",
-            tags: ["t"],
-          }, carried),
-        ).toEqual(carried);
+        expect(resolveAcross("annotations-only", stored, carried)).toEqual(
+          carried,
+        );
       });
 
       it("adds the carried default to an adopted schema that declares none", () => {
