@@ -985,6 +985,31 @@ describe("stored-setup-build-repair", () => {
     expect(refusalsLogged()).toBe(refusalsBefore);
   });
 
+  it("holds rather than refuses a piece whose version-1 record says a cell holding state moved", async () => {
+    // A record of version 1 may describe a child by a name another load
+    // gives it differently, so it reads as none, and a hold it would have
+    // decided is one with no record: the piece runs over its stored setup.
+    const { cell, pattern, ref } = await setUpAndStop(
+      "version-1-moved",
+      STATEFUL,
+    );
+    await storeAsBuild(cell, pattern, ref, (n) => n + 1);
+    await stamp(cell, { ...stampOf(cell)!, v: 1 } as never);
+    expect(stampOf(cell)).toBeUndefined();
+    const stored = storedSetupOf(cell);
+    const holdsBefore = holdsLogged();
+    const refusalsBefore = refusalsLogged();
+
+    expect(await rt.start(cell)).toBe(true);
+    await cell.pull();
+    await settled();
+
+    expect(rt.runner.isRunning(cell)).toBe(true);
+    expect(storedSetupOf(cell)).toEqual(stored);
+    expect(holdsLogged()).toBe(holdsBefore + 1);
+    expect(refusalsLogged()).toBe(refusalsBefore);
+  });
+
   it("reads a record of another version as none", async () => {
     const { cell, pattern, ref } = await setUpAndStop("other-version");
     const expected = projectionLinkIds(cell);
