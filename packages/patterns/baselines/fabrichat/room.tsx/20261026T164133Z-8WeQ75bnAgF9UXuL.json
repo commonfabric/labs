@@ -572,10 +572,16 @@
             "description": "The current text, or the marker of a deleted message."
           },
           "replyTo": {
-            "description": "Where the message's own reply is shown; absent for none.",
+            "description": "Where the message is shown, and the thread it joins, as a link that\nnames the root and carries none of its schema; absent for a message that\njoins no thread and quotes nothing.",
             "properties": {
               "shownIn": {
                 "$ref": "#/$defs/ShownIn"
+              },
+              "thread": {
+                "asCell": [
+                  "cell"
+                ],
+                "type": "unknown"
               }
             },
             "required": [
@@ -618,7 +624,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
                   "path": [
                     "commitSend"
                   ]
@@ -637,7 +643,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
                   "path": [
                     "commitComposerSend"
                   ]
@@ -656,7 +662,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
                   "path": [
                     "commitThreadSend"
                   ]
@@ -675,7 +681,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
                   "path": [
                     "commitReply"
                   ]
@@ -694,7 +700,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
                   "path": [
                     "commitEdit"
                   ]
@@ -713,7 +719,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
                   "path": [
                     "commitDelete"
                   ]
@@ -732,7 +738,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
                   "path": [
                     "commitObliterate"
                   ]
@@ -766,7 +772,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -785,7 +791,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
                   "path": [
                     "commitDeleteReaction"
                   ]
@@ -824,7 +830,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/manager.tsx",
-              "moduleIdentity": "z9-nSeNbMmy9CDnO6Vp9nw_qfoiyIIrpE4aUwx8NpZk",
+              "moduleIdentity": "5HkTnIjQr4wIoCS2XiYVojNoipcUa6h0fYbZrYIUFiA",
               "path": [
                 "commitStart"
               ]
@@ -834,23 +840,101 @@
       },
       "StoredReply": {
         "properties": {
-          "message": {
+          "quotes": {
             "$ref": "#/$defs/RepliedMessage",
             "asCell": [
               "cell"
             ],
-            "description": "The message replied to, in the same room, read as `RepliedMessage`. The\nlink carries no more of the message's schema than that, so a message's\nschema nests no message: a reply typed as the message it replies to would\nnest without end, the generator would cut the nesting at a depth that\nvaries with the type a writer addresses the message by, and a write cut\nshallower than the stored schema would drop the policies stored below\nthe cut and be refused."
+            "description": "The message this one answers; absent for a plain post."
           },
           "shownIn": {
             "$ref": "#/$defs/ShownIn",
-            "description": "Where the reply is shown."
+            "description": "Where the message is shown."
+          },
+          "thread": {
+            "$ref": "#/$defs/RepliedMessage",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The root of the thread the message joins; absent for none."
           }
         },
         "required": [
-          "message",
           "shownIn"
         ],
         "type": "object"
+      },
+      "StoredThreadInfo": {
+        "$ref": "#/$defs/ThreadInfoRecord",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writePolicyAnyOf": [
+            {
+              "uiContract": {
+                "action": "ChatSend",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatSendSurface"
+                ],
+                "trustedPattern": "ChatSendSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
+                  "path": [
+                    "commitSend"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatSend",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatSendSurface"
+                ],
+                "trustedPattern": "ChatSendSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
+                  "path": [
+                    "commitThreadSend"
+                  ]
+                }
+              }
+            },
+            {
+              "uiContract": {
+                "action": "ChatRetitle",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "ChatRetitleSurface"
+                ],
+                "trustedPattern": "ChatRetitleSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/fabrichat/room-records.tsx",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
+                  "path": [
+                    "commitSetThreadTitle"
+                  ]
+                }
+              }
+            }
+          ]
+        }
       },
       "StoredTitle": {
         "$ref": "#/$defs/TitleRecord",
@@ -874,13 +958,33 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/fabrichat/room-records.tsx",
-              "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
+              "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
               "path": [
                 "commitSetTitle"
               ]
             }
           }
         }
+      },
+      "ThreadInfoRecord": {
+        "properties": {
+          "root": {
+            "asCell": [
+              "cell"
+            ],
+            "description": "The thread's root, by the root's own cell.",
+            "type": "unknown"
+          },
+          "title": {
+            "description": "The thread's title.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "title"
+        ],
+        "type": "object"
       },
       "TitleRecord": {
         "properties": {
@@ -923,6 +1027,17 @@
         ],
         "default": {},
         "description": "Those who joined the room. It changes only through `addParticipant`, the\none writer its write contract admits."
+      },
+      "threadInfo": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "What the room keeps about each of its threads. It changes only through\n`setThreadTitle`, and a send that titles the thread it starts.",
+        "items": {
+          "$ref": "#/$defs/StoredThreadInfo"
+        },
+        "type": "array"
       },
       "titles": {
         "asCell": [
@@ -1132,6 +1247,10 @@
             ],
             "type": "object"
           },
+          "legacyReplies": {
+            "description": "How many of the room's messages were stored before a message named the\nthread it joins and the message it quotes apart, so the room can't say\nwhat they replied to: shown in the conversation, where they were shown\nthere, as messages in no thread, and not shown where they were shown only\nin a thread. A room shows how many there are; 0 in a room with none.",
+            "type": "number"
+          },
           "newestAt": {
             "description": "The newest message's `sentAt`; absent while there are none.",
             "type": "FabricEpochNsec"
@@ -1151,7 +1270,8 @@
         "required": [
           "count",
           "latest",
-          "threads"
+          "threads",
+          "legacyReplies"
         ],
         "type": "object"
       },
@@ -1416,6 +1536,13 @@
             },
             "type": "array"
           },
+          "replyShape": {
+            "description": "The shape of `replyTo` the room reads and stores, which a client sends a\nreply in. A room offering none takes a reply that names one `message`.",
+            "enum": [
+              "thread-quotes"
+            ],
+            "type": "string"
+          },
           "roster": {
             "description": "Those who joined the room itself, each added once through\n`addParticipant`, in the order they were added. Unlike `participants`, it\nlists no author it doesn't hold, and no participant of another space, so\nit is read from the roster alone. Like `participants`, it is a claim, not\nproof of access.",
             "items": {
@@ -1437,12 +1564,27 @@
             ],
             "description": "Adds the sender's reaction to a message."
           },
+          "setThreadTitle": {
+            "$ref": "#/$defs/SetThreadTitleEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Sets the title of the thread its event's `root` roots, which every member\nshares, from a trusted gesture on the rendering's `ChatRetitleSurface`,\nor from a client's own control through the sanctioned issuing path. Any\nmember who can write in the room may."
+          },
           "setTitle": {
             "$ref": "#/$defs/SetTitleEvent",
             "asCell": [
               "stream"
             ],
             "description": "Sets the room's title, which every member shares, from a trusted gesture\non the rendering's `ChatRetitleSurface`, or from a client's own control\nthrough the sanctioned issuing path. Any member who can write in the room\nmay, in a group room or a direct one."
+          },
+          "threadTitleRequests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/SetThreadTitleOutcome"
+            },
+            "description": "The outcome of each of this reader's thread retitles, by its `requestId`.",
+            "properties": {},
+            "type": "object"
           },
           "titleRequests": {
             "additionalProperties": {
@@ -1459,6 +1601,7 @@
         },
         "required": [
           "about",
+          "replyShape",
           "participants",
           "roster",
           "participantEntries",
@@ -1479,6 +1622,8 @@
           "addRequests",
           "setTitle",
           "titleRequests",
+          "setThreadTitle",
+          "threadTitleRequests",
           "ensureFileStore"
         ],
         "type": "object"
@@ -1502,9 +1647,20 @@
       },
       "ChatThreadSummary": {
         "properties": {
+          "hasOlder": {
+            "description": "Whether the thread holds older messages than those `messages` holds.",
+            "type": "boolean"
+          },
           "latestReplyAt": {
             "description": "The newest `sentAt` among those messages.",
             "type": "FabricEpochNsec"
+          },
+          "messages": {
+            "description": "The thread's root, then up to `maxWindowCount` of its newest other\nmessages, oldest first.",
+            "items": {
+              "$ref": "#/$defs/MessageRecord"
+            },
+            "type": "array"
           },
           "replyCount": {
             "description": "How many messages the thread holds besides its root; never 0.",
@@ -1513,12 +1669,19 @@
           "root": {
             "$ref": "#/$defs/MessageRecord",
             "description": "The thread's root, a message the main conversation shows."
+          },
+          "title": {
+            "description": "The thread's title, as a member last set it, or else the start of its\nroot's text (see `threadTitleOf()`).",
+            "type": "string"
           }
         },
         "required": [
           "root",
+          "title",
           "replyCount",
-          "latestReplyAt"
+          "latestReplyAt",
+          "messages",
+          "hasOlder"
         ],
         "type": "object"
       },
@@ -1914,10 +2077,13 @@
             "description": "The current text, or the marker of a deleted message."
           },
           "replyTo": {
-            "description": "Where the message's own reply is shown; absent for none.",
+            "description": "Where the message is shown, and the thread it joins, as a link that\nnames the root and carries none of its schema; absent for a message that\njoins no thread and quotes nothing.",
             "properties": {
               "shownIn": {
                 "$ref": "#/$defs/ShownIn"
+              },
+              "thread": {
+                "type": "unknown"
               }
             },
             "required": [
@@ -1963,7 +2129,7 @@
           },
           "replyTo": {
             "$ref": "#/$defs/StoredReply",
-            "description": "What a sent message replies to."
+            "description": "The thread a sent message joins, and what it quotes."
           },
           "target": {
             "description": "A rendered control's text.",
@@ -1973,6 +2139,10 @@
               }
             },
             "type": "object"
+          },
+          "threadTitle": {
+            "description": "The title a sent message gives the thread it joins, which the thread\ntakes when it has none yet.",
+            "type": "string"
           }
         },
         "type": "object"
@@ -2001,7 +2171,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -2020,7 +2190,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/fabrichat/room-records.tsx",
-                  "moduleIdentity": "IOgQkfxAX_QD7l1XvIy9oXOWR_TdBMvAHX587PjeA6Q",
+                  "moduleIdentity": "8AXdm_P-nyUNtu2VQiHOPganXiAMOojmdgX_43rz-qM",
                   "path": [
                     "commitDeleteReaction"
                   ]
@@ -2029,6 +2199,83 @@
             }
           ]
         }
+      },
+      "SetThreadTitleEvent": {
+        "properties": {
+          "requestId": {
+            "description": "Chosen by the sender, and unique among its thread retitles. The outcome\nis recorded under it, and sending the same event again with it changes\nnothing.",
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/MessageRecord",
+            "description": "The root of the thread retitled."
+          },
+          "target": {
+            "description": "A rendered control's text.",
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "title": {
+            "description": "The new title.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SetThreadTitleOutcome": {
+        "anyOf": [
+          {
+            "properties": {
+              "status": {
+                "description": "The request set the thread's title.",
+                "enum": [
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SetThreadTitleRefusalCode",
+                "description": "Which refusal it is, for a client to act on."
+              },
+              "reason": {
+                "description": "Why, for a person to read.",
+                "type": "string"
+              },
+              "status": {
+                "description": "The retitle was refused, and the title is as it was.",
+                "enum": [
+                  "refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "code"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SetThreadTitleRefusalCode": {
+        "enum": [
+          "not-member",
+          "invalid-title",
+          "not-a-root"
+        ]
       },
       "SetTitleEvent": {
         "properties": {
@@ -2120,17 +2367,20 @@
       },
       "StoredReply": {
         "properties": {
-          "message": {
+          "quotes": {
             "$ref": "#/$defs/RepliedMessage",
-            "description": "The message replied to, in the same room, read as `RepliedMessage`. The\nlink carries no more of the message's schema than that, so a message's\nschema nests no message: a reply typed as the message it replies to would\nnest without end, the generator would cut the nesting at a depth that\nvaries with the type a writer addresses the message by, and a write cut\nshallower than the stored schema would drop the policies stored below\nthe cut and be refused."
+            "description": "The message this one answers; absent for a plain post."
           },
           "shownIn": {
             "$ref": "#/$defs/ShownIn",
-            "description": "Where the reply is shown."
+            "description": "Where the message is shown."
+          },
+          "thread": {
+            "$ref": "#/$defs/RepliedMessage",
+            "description": "The root of the thread the message joins; absent for none."
           }
         },
         "required": [
-          "message",
           "shownIn"
         ],
         "type": "object"
@@ -2269,6 +2519,13 @@
         },
         "type": "array"
       },
+      "replyShape": {
+        "description": "The shape of `replyTo` the room reads and stores, which a client sends a\nreply in. A room offering none takes a reply that names one `message`.",
+        "enum": [
+          "thread-quotes"
+        ],
+        "type": "string"
+      },
       "roster": {
         "description": "Those who joined the room itself, each added once through\n`addParticipant`, in the order they were added. Unlike `participants`, it\nlists no author it doesn't hold, and no participant of another space, so\nit is read from the roster alone. Like `participants`, it is a claim, not\nproof of access.",
         "items": {
@@ -2290,12 +2547,27 @@
         ],
         "description": "Adds the sender's reaction to a message."
       },
+      "setThreadTitle": {
+        "$ref": "#/$defs/SetThreadTitleEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Sets the title of the thread its event's `root` roots, which every member\nshares, from a trusted gesture on the rendering's `ChatRetitleSurface`,\nor from a client's own control through the sanctioned issuing path. Any\nmember who can write in the room may."
+      },
       "setTitle": {
         "$ref": "#/$defs/SetTitleEvent",
         "asCell": [
           "stream"
         ],
         "description": "Sets the room's title, which every member shares, from a trusted gesture\non the rendering's `ChatRetitleSurface`, or from a client's own control\nthrough the sanctioned issuing path. Any member who can write in the room\nmay, in a group room or a direct one."
+      },
+      "threadTitleRequests": {
+        "additionalProperties": {
+          "$ref": "#/$defs/SetThreadTitleOutcome"
+        },
+        "description": "The outcome of each of this reader's thread retitles, by its `requestId`.",
+        "properties": {},
+        "type": "object"
       },
       "titleRequests": {
         "additionalProperties": {
@@ -2315,6 +2587,7 @@
       "$UI",
       "$VIEWS",
       "about",
+      "replyShape",
       "participants",
       "roster",
       "participantEntries",
@@ -2335,6 +2608,8 @@
       "addRequests",
       "setTitle",
       "titleRequests",
+      "setThreadTitle",
+      "threadTitleRequests",
       "ensureFileStore"
     ],
     "type": "object"
