@@ -5964,8 +5964,13 @@ export class Server {
                 duplicate: resolution.duplicate,
               };
               operationApplyCount.add(1, attributes);
+              // An `apply-op` without a base lands at the field's current
+              // version, so it is rebased over nothing.
+              const baseVersion = operation.base === undefined
+                ? resolution.from.version
+                : operation.base?.version ?? 0;
               operationTransformSuffix.record(
-                resolution.from.version - (operation.base?.version ?? 0),
+                resolution.from.version - baseVersion,
                 attributes,
               );
             }

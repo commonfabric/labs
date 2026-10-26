@@ -13,15 +13,28 @@ import { runtimeContext } from "../../runtime-context.ts";
 import { attestedOwnerPrincipal } from "./owner-predicate.ts";
 
 /**
- * The schema the element subscribes to its origin under. It accepts any value,
- * and the element reads none. A schema of its own gives the element a
- * subscription of its own: the client shares one subscription among the
- * handles on one cell and schema, and the first of them decides whether it
+ * The schema the element subscribes to its origin under. It accepts any JSON
+ * value, and the element reads none: an object is read at its shape, an array
+ * at its elements' shapes, and nothing an object holds is read or followed. It
+ * has to accept every value, since a read that matched nothing would deliver
+ * nothing, and the label rides the delivery. A schema of its own gives the
+ * element a subscription of its own: the client shares one subscription among
+ * the handles on one cell and schema, and the first of them decides whether it
  * carries labels, so a handle that subscribed first for the value alone would
  * keep label-only changes from this element.
  */
 const ORIGIN_LABEL_SCHEMA = {
   description: "The origin whose label cf-owner-view follows.",
+  $ref: "#/$defs/Shallow",
+  $defs: {
+    Shallow: {
+      anyOf: [
+        { type: "object", properties: {} },
+        { type: "array", items: { $ref: "#/$defs/Shallow" } },
+        { type: ["string", "number", "integer", "boolean", "null"] },
+      ],
+    },
+  },
 } as const satisfies JSONSchema;
 
 /** Publishes a presentation predicate after checking a runtime-attested owner. */

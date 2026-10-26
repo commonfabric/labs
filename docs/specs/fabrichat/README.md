@@ -20,9 +20,10 @@ departs from this design.
   - [`ChatMessage`](ChatMessage.md)
   - [`ChatMessageList`](ChatMessageList.md): a room's messages: facts, the
     newest, and its threads.
-  - [`ChatReply`](ChatReply.md): what a reply replies to, and where it's shown.
-  - [`ChatThreadSummary`](ChatThreadSummary.md): a thread's reply count and
-    latest reply time.
+  - [`ChatReply`](ChatReply.md): the thread a message joins, the message it
+    quotes, and where it's shown.
+  - [`ChatThreadSummary`](ChatThreadSummary.md): a thread's title, reply count,
+    latest reply time, and newest messages.
   - [`ChatReaction`](ChatReaction.md)
   - [`ChatRoomAbout`](ChatRoomAbout.md)
   - [`ChatRoomPolicy`](ChatRoomPolicy.md): a room's policy, stated correctly.
@@ -365,8 +366,9 @@ design, as below.
   guarantees, so the room keeps no memory of the events it has acted on, and
   a rendered control sends no `requestId`.
 - **Thread summaries.** `messages.threads` is derived in the pass that places
-  each message in the views, which walks each reply chain once for the whole
-  room. So the summaries together cost one walk of the messages rather than one
+  each message in the views, which groups the messages by the thread each one
+  names, once for the whole room. So the summaries together, with each one's
+  newest messages and title, cost one pass over the messages rather than one
   per message, and no stored counter can drift from the threads it counts. A
   change to the messages derives them again, as it does `latest`.
 - **Notices and offers.** A manager's notice id is `[recipient, requestId]` as

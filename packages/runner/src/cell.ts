@@ -6,6 +6,7 @@ import type {
   GroupIndex,
   KeyIndex,
   ReadonlyCell,
+  TextChange,
 } from "@commonfabric/api";
 import {
   assertValidFabricValueLayer,
@@ -101,6 +102,7 @@ import { checkSqliteRowLabelWrite } from "./builtins/sqlite/row-label-write.ts";
 import { checkSqliteWriteCeiling } from "./builtins/sqlite/write-ceiling.ts";
 import { type Cancel, isCancel, useCancelGroup } from "./cancel.ts";
 import { ContextualFlowControl, declaredSchemaScope } from "./cfc.ts";
+import { cfcSchemaGivesNoShape } from "./cfc/schema-primitives.ts";
 import {
   cfcAcquisitionViewForDereferenceTraces,
   type CfcLabelView,
@@ -418,40 +420,11 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
     (Array.isArray(schema.type) && schema.type.includes("array")) ||
     schema.items !== undefined || schema.prefixItems !== undefined);
 
-/** Keywords that annotate a schema and constrain no value. */
-const SCHEMA_ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
-  "title",
-  "description",
-  "$comment",
-  "examples",
-  "deprecated",
-  "readOnly",
-  "writeOnly",
-]);
-
-/**
- * Whether `schema` gives a value no shape: it is absent, or admits every value
- * once its annotations are set aside, so it holds nothing but what the runtime
- * reads for itself (a label, a cell kind, a scope), a default and definitions
- * besides them (`ContextualFlowControl.isTrueSchema`).
- */
-const schemaGivesNoShape = (schema: JSONSchema | undefined): boolean =>
-  schema === undefined ||
-  ContextualFlowControl.isTrueSchema(
-    isObjectOrArray(schema)
-      ? Object.fromEntries(
-        Object.entries(schema).filter(([key]) =>
-          !SCHEMA_ANNOTATION_KEYWORDS.has(key)
-        ),
-      )
-      : schema,
-  );
-
 /**
  * Whether an item write under a missing parent, which the stored envelope
  * describes as `schema`, writes an item of an array. The storage write creates
  * an array for a missing container an index addresses, and that answers where
- * the envelope gives the parent no shape ({@link schemaGivesNoShape}): no
+ * the envelope gives the parent no shape (`cfcSchemaGivesNoShape()`): no
  * envelope, no declaration there, or one holding only a label and annotations.
  * Where the envelope declares an array, it agrees. Any other declaration is
  * taken as written, whether by type, by the members of an object, by a
@@ -459,7 +432,7 @@ const schemaGivesNoShape = (schema: JSONSchema | undefined): boolean =>
  * the envelope's checks of the member it declares there apply to the write.
  */
 const missingParentIsArray = (schema: JSONSchema | undefined): boolean =>
-  schemaGivesNoShape(schema) || schemaDeclaresArray(schema);
+  cfcSchemaGivesNoShape(schema) || schemaDeclaresArray(schema);
 
 /**
  * The schema write-policy input for a write landing at an item of an array:
@@ -992,6 +965,7 @@ const cellMethods = new Set<
   "pushAll",
   "addUnique",
   "increment",
+  "applyChanges",
   "remove",
   "removeAll",
   "removeByValue",
@@ -1036,6 +1010,11 @@ const cellMethods = new Set<
   "keys",
   "keyEntries",
 ]);
+
+/** Whether `changes` is a list of text changes rather than a single one. */
+const isTextChangeList = (
+  changes: TextChange | readonly TextChange[],
+): changes is readonly TextChange[] => Array.isArray(changes);
 
 /** Whether `schema` admits `value` and nothing else. */
 function schemaPinsLiteral(
@@ -3301,6 +3280,67 @@ export class CellImpl<T extends FabricValue>
     // server resolves against durable state instead of a value diffed against a
     // possibly-stale read.
     this.#tx.recordMergeableOp?.(resolvedLink, { op: "increment", by });
+  }
+
+  /**
+   * Applies `changes` to this string cell, each position referring to the
+   * value this transaction read. The commit carries them as an edit, which a
+   * collaborative editor merges with its own typing, and which applies only
+   * while the field still holds the value read here: a field that moved on
+   * refuses the commit, and the transaction runs again against the new value.
+   *
+   * @throws when called outside a transaction, when the cell holds no string,
+   *   when a change does not fit the string, or when the transaction already
+   *   wrote the field another way.
+   */
+  applyChanges(changes: TextChange | readonly TextChange[]): void {
+    if (!this.#tx) {
+      throw new Error(
+        "Cell.applyChanges() requires a transaction and a string value\n" +
+          "help: use in handlers only, ensure cell is typed as string",
+      );
+    }
+    if (!this.#tx.recordTextChanges) {
+      throw new Error(
+        "Cell.applyChanges() requires a transaction that records text changes",
+      );
+    }
+    if (!this.#synced) this.#startLoad();
+
+    const resolvedLink = resolveLink(
+      this.#runtime,
+      this.#tx,
+      this.#link,
+      "value",
+      {
+        markIfcCrossings: true,
+      },
+    );
+    recordRelevantSchemaWritePolicyInput(
+      this.#tx,
+      resolvedLink,
+      resolvedLink.schema ?? this.schema,
+    );
+    // An ordinary read, so that it reaches the commit as a confirmed read of
+    // the field: the precondition that refuses the edit once the field moves.
+    const currentValue = this.#tx.readValueOrThrow(resolvedLink);
+    if (typeof currentValue !== "string") {
+      throw new Error(
+        "Cell.applyChanges() requires a transaction and a string value\n" +
+          "help: use in handlers only, ensure cell is typed as string",
+      );
+    }
+    const list: readonly TextChange[] = isTextChangeList(changes)
+      ? changes
+      : [changes];
+    const next = this.#tx.recordTextChanges(resolvedLink, list);
+    diffAndUpdate(
+      this.#runtime,
+      this.#tx,
+      resolvedLink,
+      next,
+      this.#frame?.cause,
+    );
   }
 
   /**

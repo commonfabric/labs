@@ -82,6 +82,7 @@ describe("the repository's gate suites", () => {
     }
     expect(reading.toSorted()).toEqual([
       "check-baselines-append-only",
+      "check-cause-assignments",
       "check-test-aliases",
     ]);
     expect(declared.toSorted()).toEqual(reading.toSorted());
@@ -159,6 +160,17 @@ describe("the repository's gate suites", () => {
     ]);
     expect(reached("mise.toml")).toEqual(["check-deno-pins"]);
     expect(reached("deno.lock")).toEqual(["check-single-copy-deps"]);
+    // The compiler a pattern's numbering is built by reaches the gate
+    // comparing it with the base revision's, and the patterns it builds do
+    // not: an edited pattern is never compared.
+    expect(
+      reached("packages/ts-transformers/src/transformers/opaque-roots.ts"),
+    ).toEqual(["check-cause-assignments"]);
+    expect(reached("packages/runner/src/builder/pattern.ts")).toEqual([
+      "check-cause-assignments",
+    ]);
+    expect(reached("packages/runner/src/builtins/sqlite/query-node.ts"))
+      .toEqual(["check-cause-assignments"]);
     // An ordinary source file reaches no gate. What runs for it is what
     // the score chose, which is what keeps this feature a fraction of a
     // lane rather than the bulk of one.

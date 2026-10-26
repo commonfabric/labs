@@ -1,7 +1,9 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import {
+  AUTHOR_CLAIM_SCHEMA,
   authorClaimLabel,
   type AuthorshipObservation,
   authorshipStateForLabel,
@@ -9,7 +11,9 @@ import {
   observeAuthorship,
   type ObserveAuthorshipOptions,
 } from "@/authorship.ts";
-import { CellReadRefusedError } from "@/cell-handle.ts";
+import { CellHandle, CellReadRefusedError } from "@/cell-handle.ts";
+import type { CellRef } from "@/protocol/mod.ts";
+import { $conn, type RuntimeClient } from "@/runtime-client.ts";
 
 /** A label whose root says its value was written by `sender`. */
 const authoredByLabel = (sender: string) => ({
@@ -862,6 +866,61 @@ describe("authorship", () => {
         subject: "did:example:alice",
         name: "Alice Updated",
       });
+    });
+
+    it("reads an author cell handle under the claim schema, and nothing through the handle as bound", async () => {
+      const schemas: unknown[] = [];
+      let notify: (() => void) | undefined;
+      // What the cell holds under the claim schema: the name, and none of
+      // the rest of the profile.
+      const narrowed = {
+        get: () => ({ name: "Alice Nguyen" }),
+        getCfcLabel: () =>
+          Promise.resolve(representsLabel("did:example:alice")),
+        subscribe: (callback: () => void) => {
+          notify = callback;
+          callback();
+          return () => {};
+        },
+      };
+      const bound = new CellHandle(
+        { [$conn]: () => ({}) } as unknown as RuntimeClient,
+        {
+          id: "of:authorship-bound-author" as CellRef["id"],
+          space: "did:key:test" as CellRef["space"],
+          scope: "space",
+          path: [],
+        },
+      );
+      using _asSchema = stub(bound, "asSchema", (schema) => {
+        schemas.push(schema);
+        return narrowed as unknown as CellHandle;
+      });
+      using _get = stub(bound, "get", () => {
+        throw new Error("the author was read as bound");
+      });
+      using _getCfcLabel = stub(bound, "getCfcLabel", () => {
+        throw new Error("the author's label was read as bound");
+      });
+      using _subscribe = stub(bound, "subscribe", () => {
+        throw new Error("the author was subscribed to as bound");
+      });
+      const observation = observe(
+        {
+          getCfcLabel: () =>
+            Promise.resolve(authoredByLabel("did:example:alice")),
+        },
+        bound,
+      );
+      await settle();
+
+      expect(schemas).toEqual([AUTHOR_CLAIM_SCHEMA]);
+      expect(observation.state).toBe("verified");
+      expect(observation.authorClaim).toEqual({
+        subject: "did:example:alice",
+        name: "Alice Nguyen",
+      });
+      expect(notify).toBeDefined();
     });
 
     it("names a principal claim by `authorName` when the author cell holds no name", async () => {

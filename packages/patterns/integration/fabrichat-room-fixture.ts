@@ -693,7 +693,7 @@ export async function seedFabrichatRoom(
         await writeAs(author, `reply ${reply + 1} in thread ${thread + 1}`, {
           target: { value: replyBody(thread, reply) },
           replyTo: {
-            message: await mainMessage(author, root, messageCount),
+            thread: await mainMessage(author, root, messageCount),
             shownIn: "thread",
           },
         }, ++written);
