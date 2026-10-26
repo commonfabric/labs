@@ -896,8 +896,23 @@ export type ApplyOpOperation = OperationFieldAddress & {
   op: "apply-op";
   codec: string;
   submissionId: string;
-  base: OpCursor | null;
+
+  /**
+   * What the payload was written against: a cursor in the field's epoch, or
+   * `null` for the field's baseline. Absent, the payload applies at the version
+   * the field holds: only while the field holds the value `baselineHash`
+   * names, where it carries one, and otherwise blind, guarded only by the reads
+   * its commit carries, as a `set` or `patch` is.
+   */
+  base?: OpCursor | null;
+
+  /**
+   * Hash of the value the payload was written against: the field's baseline,
+   * required when `base` is `null`, or the value it holds now, optional when
+   * `base` is absent. Not allowed with a cursor.
+   */
   baselineHash?: string;
+
   payload: FabricValue;
 };
 
@@ -2454,6 +2469,10 @@ export {
   SERVER_EXECUTION_DEFAULT_ENABLED,
 } from "./v2/server-execution-default.ts";
 export {
+  applyTextChanges,
+  codeMirrorTextChangesPayload,
+} from "./v2/text-changes.ts";
+export {
   parseSessionReadCeiling,
   type ReadCeilingClause,
   type ReadCeilingLabels,
@@ -3045,6 +3064,13 @@ export const encodeMemoryBoundary = (value: FabricValue): string =>
   jsonFromFabricValue(value);
 
 export const commitPreconditionValueHash = (value: FabricValue): string =>
+  hashStringOf(encodeMemoryBoundary(value));
+
+/**
+ * Hash of a collaborative field's value, as an `apply-op` with a `null` base
+ * carries it in `baselineHash`.
+ */
+export const operationBaselineHash = (value: FabricValue): string =>
   hashStringOf(encodeMemoryBoundary(value));
 
 /**

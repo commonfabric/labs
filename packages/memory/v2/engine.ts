@@ -4523,7 +4523,17 @@ export const applyWaveCommit = (
       if (failedPreconditions.length > 0) {
         throw new WavePreconditionError(failedPreconditions, firstDetail);
       }
-      const applied = applyCommitTransaction(txEngine, applyOptions);
+      let applied: AppliedCommit;
+      try {
+        applied = applyCommitTransaction(txEngine, applyOptions);
+      } catch (error) {
+        // A stale edit is a conflict on its document, so that the wave
+        // requeues the contributions writing it rather than all of them.
+        if (error instanceof StaleOperationBaselineError) {
+          throw new WaveCommitConflictError([error.doc]);
+        }
+        throw error;
+      }
       for (const instance of basisInstances ?? []) {
         replaceSchedulerBasisRows(txEngine, {
           branch,
@@ -4738,7 +4748,7 @@ const validateCursor = (cursor: unknown): cursor is OpCursor =>
   Number.isSafeInteger((cursor as { version?: unknown }).version) &&
   (cursor as { version: number }).version >= 0;
 
-const validateApplyOperation = (operation: ApplyOpOperation): void => {
+const validateApplyOperation = (operation: BasedApplyOpOperation): void => {
   validateOperationPath(operation.path);
   if (
     typeof operation.id !== "string" || operation.id.length === 0 ||
@@ -4773,6 +4783,83 @@ const validateApplyOperation = (operation: ApplyOpOperation): void => {
   if (Array.isArray(updates) && updates.length > MAX_OPERATION_BATCH_UPDATES) {
     throw new OpCodecError("operation payload exceeds the update-count limit");
   }
+};
+
+/** An `apply-op` whose base is stated, as the engine applies one. */
+type BasedApplyOpOperation = ApplyOpOperation & { base: OpCursor | null };
+
+/**
+ * An `apply-op` without a base whose `baselineHash` names a value the field no
+ * longer holds. `doc` is the document's instance key, `${id} ${scopeKey}`, so
+ * that a wave commit can name the conflict (`WaveCommitConflictError`).
+ */
+class StaleOperationBaselineError extends OpFieldBaselineMismatchError {
+  readonly doc: string;
+
+  /** Constructs an instance naming the document instance `doc`. */
+  constructor(doc: string) {
+    super("operation field value no longer matches its baseline hash");
+    this.doc = doc;
+  }
+}
+
+/**
+ * Returns `operation` with its base stated. One that names none applies at the
+ * field's current version with nothing to rebase over: its base is the current
+ * cursor, or, for a field with no active epoch, `null` with the hash of the
+ * value the field holds. Its `baselineHash`, when it carries one, names the
+ * value it was computed from, and it applies only while the field holds that
+ * value. Without one it is a blind write, as a `set` or `patch` is, and what
+ * guards it is whatever reads its commit carries, which are validated before
+ * any operation applies.
+ *
+ * @throws StaleOperationBaselineError when the field no longer holds the value
+ *   the hash names.
+ */
+const withStatedBase = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    operation: ApplyOpOperation;
+    scopeKey: string;
+  },
+): BasedApplyOpOperation => {
+  const { branch, operation, scopeKey } = options;
+  if (operation.base !== undefined) {
+    return { ...operation, base: operation.base };
+  }
+  validateOperationPath(operation.path);
+  const { baselineHash, ...unhashed } = operation;
+  const document = readStateForScopeKey(engine, {
+    branch,
+    id: operation.id,
+    scope: normalizeScope(operation.scope),
+    scopeKey,
+  })?.document ?? null;
+  const currentHash = operationBaselineHash(
+    valueAtOperationPath(document, operation.path),
+  );
+  // TODO(ubik2): Drop the hash form once a served handler's reads reach its
+  // wave commit, so that the commit's read guards the edit on every path. A
+  // wave drops the reads of what it seals, and the hash is what still says
+  // which value the edit was computed from.
+  if (baselineHash !== undefined) {
+    if (typeof baselineHash !== "string" || baselineHash.length === 0) {
+      throw new OpFieldBaselineMismatchError(
+        "apply-op baselineHash is malformed",
+      );
+    }
+    if (baselineHash !== currentHash) {
+      throw new StaleOperationBaselineError(`${operation.id} ${scopeKey}`);
+    }
+  }
+  const field = selectOperationField(
+    engine,
+    operationFieldParams(branch, operation.id, scopeKey, operation.path),
+  );
+  return field?.active === 1
+    ? { ...unhashed, base: { epoch: field.epoch, version: field.version } }
+    : { ...unhashed, base: null, baselineHash: currentHash };
 };
 
 const storedOperationResolution = (
@@ -4811,7 +4898,7 @@ const applyOperation = (
     branch: BranchName;
     seq: number;
     opIndex: number;
-    operation: ApplyOpOperation;
+    operation: BasedApplyOpOperation;
     principal?: string;
     sessionId: SessionId;
     scopeKeyOverride?: string;
@@ -6556,14 +6643,23 @@ const applyCommitTransaction = (
       continue;
     }
     if (operation.op === "apply-op") {
+      const scopeKeyOverride = scopeKeyByOpIndex.get(opIndex);
       const applied = applyOperation(engine, {
         branch,
         seq,
         opIndex,
-        operation,
+        operation: withStatedBase(engine, {
+          branch,
+          operation,
+          scopeKey: scopeKeyOverride ??
+            resolveScopeKey(operation.scope, {
+              principal: scanPrincipal,
+              sessionId: scanSession,
+            }),
+        }),
         principal: scanPrincipal,
         sessionId: scanSession,
-        scopeKeyOverride: scopeKeyByOpIndex.get(opIndex),
+        scopeKeyOverride,
       });
       operationResolutions.push(applied.resolution);
       if (applied.revision) revisions.push(applied.revision);

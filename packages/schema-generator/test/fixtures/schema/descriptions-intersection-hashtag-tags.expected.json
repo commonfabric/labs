@@ -16,9 +16,5 @@
     "ingredients",
     "plannedFor"
   ],
-  "tags": [
-    "recipe",
-    "mealplan"
-  ],
   "type": "object"
 }

@@ -302,7 +302,7 @@ by any repo test.
 | Object with a numeric index signature and no `length` | an object map (`additionalProperties`), not an array, with or without a string index or declared numeric keys such as `0` | `type-utils.ts` | record-mapped-types.test.ts |
 | Index signatures on objects | `additionalProperties: <value schema>`; string index takes precedence over number; JSDoc from index-signature declarations propagates (conflicts → keep first + `$comment`) | `object-formatter.ts`; node path `schema-generator.ts` (no JSDoc) | descriptions-index* fixtures |
 | `Record<K,V>` with finite literal-union `K` | expands to concrete `properties`, in the order `K` is written (a mapped type's properties follow its written key union, numeric keys by the property names they make, `-1` and `1.0` naming `"-1"` and `"1"`, else their declarations; JavaScript lists integer-like keys of `properties` in ascending order whatever order they are added in, so for those the order shows in `required`: `Omit<T, K>` lists `T`'s in `T`'s order; §8 says why the checker's order is not used) | via `ObjectFormatter`; `propertiesInSourceOrder()` in `source-order.ts`; fixture `record-union-keys` | record-mapped-types.test.ts; schema-order.test.ts |
-| Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description and lowered tags (`deprecated` included) exactly like a kept data property. Generic members, including nested type literals, union/intersection arms and array elements, use their instantiated type or bound argument to classify callability | classification: `object-formatter.ts`; member paths: `object-formatter.ts`, `schema-generator.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
+| Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description. Stream-valued properties also carry the `deprecated` annotation. Generic members, including nested type literals, union/intersection arms and array elements, use their instantiated type or bound argument to classify callability | classification: `object-formatter.ts`; member paths: `object-formatter.ts`, `schema-generator.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
 | `FabricPrimitive` class (`FabricBytes`, `FabricDurationDay`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
 | `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
@@ -1817,7 +1817,7 @@ The emitted key set aligns with the api's `JSONSchemaObj.ifc` member
 `observes`, and `uiContract`. `ownerPrincipal` and `observes` have no direct
 producing alias in this package as of this writing.
 
-## 12. Doc Comments → `description` / `tags` / `$comment`
+## 12. Doc Comments → `description` / `$comment`
 
 - Root: JSDoc from the type's alias and/or direct symbol attaches as
   `description` when the schema lacks one (`attachRootDescription`,
@@ -1833,11 +1833,12 @@ producing alias in this package as of this writing.
   (`doc-utils.ts`) — lib docs do not leak into schemas.
 - Index signatures and intersection constituents have their own attachment
   points (§4 table; §9).
-- Hashtags in any attached description mirror into a `tags` array —
-  lowercased, deduped, first-seen order (`attachDocTags`, `doc-utils.ts`
-  → `extractHashtags`, `packages/data-model/src/schema-tags.ts`; api
-  field `index.ts`). Fixtures: descriptions-hashtag-tags,
-  descriptions-index-signature-tags, descriptions-root-with-tags.
+- Hashtags remain in attached descriptions. Discovery extracts them at runtime
+  with `tagsFromSchema` in `packages/runtime-client/src/schema-tags.ts`,
+  using `extractHashtags` from `@commonfabric/utils/hashtags`. Tags are
+  lowercased and deduplicated in first-seen order across nested schemas.
+  Fixtures: descriptions-hashtag-tags, descriptions-index-signature-tags,
+  descriptions-root-with-tags.
 
 - **`@deprecated` on a stream-valued property → `deprecated: true`** (verb
   listing marks, producer 2 — verb contract WS-F): the standard JSON Schema
