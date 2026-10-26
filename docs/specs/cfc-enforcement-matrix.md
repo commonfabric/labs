@@ -220,13 +220,22 @@ The strict-only delta is:
   are the empty "public" ceiling, fail-closed) joined with the target's
   RESIDENCY clause at each path where the component lands, with the shared
   clause-subsumption predicate of the egress gates (`atomsOutsideCeiling`).
-  The residency clause is `Space(<the space the document lives in>)`. That
+  Residency includes `Space(<the space the document lives in>)`. That
   atom's audience is the space's reader set — §4.9.3 resolves it by
   dereferencing its id against the space's ACL, the same document that decides
   who receives a replica — so every principal holding the bytes is inside the
   audience it names, and a flow clause listing the target's own space among
   its alternatives fits a document there whatever that document declares. A
-  `user` or `session` document is one principal's instance: its scope key is
+  space-scoped document also carries `PersonalSpace(<that same space>)` in
+  its residency ceiling. This is the own-space case proposed in
+  [specs#71](https://github.com/commonfabric/specs/pull/71): §4.9.4 reads both
+  spellings against that space's ACL. It uses the target's space, not the
+  acting principal or an ownership lookup, and adds no clause for another
+  space. The proposal is closed without merging; this implementation follows
+  its proposed rule ahead of a ruling and a reconciled pin. The existing
+  residency marker names specs#68; this addition has no separate marker.
+  The conformance statement records the semantic gap at the strict default.
+  A `user` or `session` document is one principal's instance: its scope key is
   built from that principal, and the memory server serves it only to that
   principal's sessions, so its residency clause also carries
   `User(<that principal>)`, as strong as the deployment's binding of instances
@@ -257,13 +266,13 @@ The strict-only delta is:
   <clauses>`. Scope note (v1): link-covered writes carry per-slot link labels
   instead of the join and are outside the check, as is the pure-link-structure
   shape channel; grown existence atoms (SC-4) are historical and deliberately
-  never measured — only the current join is; `Space` is the only form a
-  space's own residency clause takes, because `User` and the bare DID-string
+  never measured — only the current join is. `User` and the bare DID-string
   spelling gate by equality against one acting reader, making their audience
-  narrower than the set of principals a space grants reader roles to, while
-  `PersonalSpace(<owner>)` names a space whose clause the measurement cannot
-  build from a target address (SC-39), and `User` joins it only as a scoped
-  instance's own principal; and the ungrantable
+  narrower than the set of principals a space grants reader roles to. They
+  therefore supply no space-scoped residency; `User` joins the ceiling only
+  as a scoped instance's own principal. A `user` or `session` document gets
+  no own-space `PersonalSpace` clause, including when its scoped principal
+  is unavailable. The ungrantable
   read-failed marker sits outside every ceiling, the residency clause
   included, so a poisoned measurement never proves fit. The reserved policy
   namespaces are outside the check too: the durable policy manifests
@@ -294,8 +303,8 @@ The strict-only delta is:
   reasoned tx whose reads never tripped an eager relevance mark cannot slip the
   ladder ([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts)).
 
-  One of the forms residency excludes is readable in the DECLARED half of the
-  ceiling, in one direction. A `PersonalSpace(owner)` LABEL clause answers a
+  The DECLARED half of the ceiling also admits an owner case, in one
+  direction. A `PersonalSpace(owner)` LABEL clause answers a
   declared ceiling naming that owner, because §3.6.2's role order makes an
   owner a reader and §3.6.4 makes that principal the space's sole owner, and
   the fit test asks only that everyone the ceiling admits is entitled to the

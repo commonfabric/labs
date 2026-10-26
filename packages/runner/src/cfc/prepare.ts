@@ -12596,8 +12596,8 @@ export function* prepareBoundaryCommitSteps(
     // each path's declared ceiling: the whole-value destination fit and the
     // per-path fit of the join. `Space(<this space>)` is one clause, so a
     // flow clause listing the target's own space among its alternatives fits
-    // a document stored there, and a clause without such an alternative
-    // measures against the declared policy alone. The atom's audience is the
+    // a document stored there. The other residency clauses below join the
+    // same ceiling beside its declared policy. The atom's audience is the
     // space's reader set — §4.9.3 resolves it against the space's ACL, the
     // same document that decides who receives a replica — so it already
     // contains every principal the stored bytes reach, and the guarantee is
@@ -12605,12 +12605,12 @@ export function* prepareBoundaryCommitSteps(
     // persists the full join, leaving the egress and display gates the
     // unchanged label.
     //
-    // The space's clause takes the `Space` form alone. The bare DID-string
-    // spelling gates by equality against one acting reader, so it reaches a
-    // narrower audience than the space's readers. `PersonalSpace(<owner>)`
-    // names a space rather than a person (SC-39), and nothing in an address
-    // names a space's owner or marks the space as personal, so that atom
-    // cannot be built from the target's address.
+    // An unbound document also admits `PersonalSpace(<this space>)`, whose
+    // readers are resolved from the same ACL. This is the own-space rule
+    // proposed in https://github.com/commonfabric/specs/pull/71; its gap from
+    // the pinned specification is recorded in the CFC enforcement matrix.
+    // Bound instances do not gain that clause, even when the serving
+    // context cannot identify their principal.
     //
     // A `user` or `session` document is one principal's instance, and
     // `User(<that principal>)` joins the space's clause there: they are the
@@ -12630,6 +12630,7 @@ export function* prepareBoundaryCommitSteps(
       : undefined;
     const residencyCeiling: readonly CfcConfClause[] = [
       cfcAtom.space(space),
+      ...(scope === "space" ? [cfcAtom.personalSpace(space)] : []),
       ...(scopedReader === undefined ? [] : [cfcAtom.user(scopedReader)]),
     ];
     // Whole-value write destinations stamped as written
@@ -13273,16 +13274,6 @@ export function* prepareBoundaryCommitSteps(
           id,
           runtimeWritePolicyAuthorization,
         );
-        // TODO(danfuzz): A stream's entries document in a person's home space
-        // is measured once the join also holds a clause from another space,
-        // and its ceiling is then `Space(<home>)` alone, which the home
-        // owner's own `PersonalSpace` label doesn't fit. So under server
-        // execution, a handler in the home that reads data stamped with that
-        // label beside data from another space, and sends an event, is
-        // refused for the event's bookkeeping alone, as
-        // `fabrichat-stamped-title-offers-multi-runtime.test.ts` pins. Settle
-        // with the CFC specification whether such a document admits its space
-        // owner's label, then follow it here and drop that pin.
         const measuredPaths = isDeclarablePolicyStore(
             id,
             flowJoinIsLocal,
