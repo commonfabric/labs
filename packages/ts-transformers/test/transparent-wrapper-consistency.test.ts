@@ -75,34 +75,6 @@ describe("transparent wrapper consistency", () => {
     });
   });
 
-  describe("verb tier marking", () => {
-    const source = (verb: string) =>
-      `      import { action, pattern, type PerSession, Stream, type Writable } from "commonfabric";
-      interface Out {
-        draft: PerSession<Writable<string>>;
-        openComposer: Stream<void>;
-      }
-      export default pattern<Record<string, never>, Out>(() => {
-        const draft = new Writable("");
-        const openComposer = ${verb};
-        return { draft, openComposer };
-      });
-    `;
-
-    for (const [name, wrap] of Object.entries(TSX_SPELLINGS)) {
-      it(`marks the verb wrapper-tier when the action is ${name}`, async () => {
-        const output = await transformSource(
-          source(wrap(`action(() => { draft.set(""); })`)),
-          { types: COMMONFABRIC_TYPES },
-        );
-        const start = output.indexOf("openComposer: {");
-
-        expect(start).toBeGreaterThanOrEqual(0);
-        expect(output.slice(start, start + 400)).toContain('tier: "wrapper"');
-      });
-    }
-  });
-
   describe("verb return validation", () => {
     const errorsIn = async (body: string) => {
       const { diagnostics } = await validateSource(

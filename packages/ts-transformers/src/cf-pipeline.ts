@@ -35,7 +35,6 @@ import {
   SchemaGeneratorTransformer,
   SchemaInjectionTransformer,
   VerbReturnValidationTransformer,
-  VerbTierMarkTransformer,
   WriteAuthorizedByValidationTransformer,
 } from "./transformers/mod.ts";
 
@@ -66,10 +65,6 @@ const CFC_TRANSFORMER_STAGES: readonly TransformerStage[] = [
   SchemaInjectionTransformer,
   BuilderCallHoistingTransformer,
   SchemaGeneratorTransformer,
-  // After SchemaGenerator (state + result schemas are literals) and before
-  // ReactiveVariableFor (returned identifiers not yet `.for(...)`-wrapped):
-  // the one window where session-scope inference is pure syntax.
-  VerbTierMarkTransformer,
   ReactiveVariableForTransformer,
   ModuleScopeShadowingTransformer,
   ModuleScopeCfDataTransformer,

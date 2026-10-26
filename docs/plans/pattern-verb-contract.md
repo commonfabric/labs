@@ -773,13 +773,11 @@ distinction is instead rule 6's two tiers, which `topics` already exhibits:
 contract verbs (`addComment`, `setBody`, `addLink`) versus UI-convenience
 wrappers (`submitComment`, `startEditBody`, `saveBody`, `cancelEditBody`,
 `submitLink`) that read session-local drafts and therefore silently no-op in a
-headless replica — listing them unmarked hands an agent five trap verbs. A pattern may mark that
-wrapper tier (a schema annotation, plausibly a type-level marker in the
-`PerSession` family — apt, since reading per-session state is very nearly the
-tier's definition); the default view shows the contract tier, and `--all`
-always shows everything. The marker can ship after the listing; these
-semantics are settled now so the unmarked v1 does not harden into the
-contract.
+headless replica — listing them unmarked hands an agent five trap verbs. The
+listing reads that wrapper tier off the compiled handler graph: a verb whose
+handler takes a void event and binds a session-scoped cell, since reading
+per-session state is very nearly the tier's definition. The default view
+shows the contract tier, and `--all` always shows everything.
 
 ### Client surface
 
