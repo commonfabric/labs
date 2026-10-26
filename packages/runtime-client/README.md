@@ -93,6 +93,18 @@ have loaded, so a verdict never passes through `unknown` on its way to
 `verified`, and is called again after each later read of either label.
 `observeAuthorship()` returns a function that ends the observation.
 
+The observation reads each cell no further than its verdict needs. An author
+handle is read under `AUTHOR_CLAIM_SCHEMA`, the fields a claim is read from,
+whatever schema it was bound with. A value handle bound with no shape (no
+schema, `true`, `{}`, or annotations alone, its own or the ancestor's it was
+keyed from) is read under `VALUE_LABEL_SCHEMA`: a primitive as it is, a record
+as one holding none of its fields, a list as references to its elements. Its
+label is the one the handle as bound reads, since a schema with no shape
+declares nothing about following links. A value handle bound with a shape is
+read as it is bound. Without the narrowing, a value or author bound with no
+shape reads whole, following every link it holds, and the observation runs again
+on a change anywhere in that closure.
+
 Each label is read from the subscription's update when the update says its label
 is the worker's current read (`CellDelivery`), and from the worker otherwise. An
 update holding nothing, which the connection drops, leaves the label a handle
