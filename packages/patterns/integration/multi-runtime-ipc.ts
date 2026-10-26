@@ -64,6 +64,13 @@ export type RuntimeDiagnosticsSnapshot = {
   graph: SchedulerGraphSnapshot;
   settleStatsHistory: FabricValue[];
   actionRunTrace: FabricValue[];
+
+  /**
+   * The scheduler's bounded trigger history: each notification it decided
+   * on, with the actions it matched. Its bound is the scheduler's, so a
+   * window longer than that holds only the newest entries.
+   */
+  triggerTrace: FabricValue[];
 };
 
 /**

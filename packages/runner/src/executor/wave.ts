@@ -632,6 +632,15 @@ export interface WaveCommitRejection {
 }
 
 /**
+ * A served access-list change together with the list of changes its
+ * `change` function applies, so that a host whose memory server is on
+ * another thread can send the list and rebuild the function there.
+ */
+export type ListedServedAclChange = ServedAclChange & {
+  readonly changes: readonly SpaceAccessChange[];
+};
+
+/**
  * Where the wave commit step commits to. Stage F implements this on the
  * loopback plane (serving-loop.md §1 plane (a)) with the derived-class
  * admission of protocol.md §2; tests implement it directly against an
@@ -654,6 +663,15 @@ export interface WaveCommitRejection {
  *   advanced — each re-attempt observes strictly newer store state.
  */
 export interface WaveCommitSink {
+  /**
+   * Whether the sink reports each batch it commits to the memory server
+   * itself, as `Server.noteExecutorCommit()` takes it, before `commitWave`
+   * returns; the loop then reports nothing for the batch. A sink on the
+   * memory server's own thread does, so that the fan-out of a wave's rows
+   * is under way before the loop, on another thread, does anything next.
+   */
+  readonly reportsCommits?: boolean;
+
   /** Current head seq per doc-instance key (`${id} ${scopeKey}`),
    * 0 for a doc never written. */
   currentHeads(
@@ -1030,6 +1048,19 @@ export class WaveAccumulator
     keys: Set<string>;
     sealedBefore: number;
   }> = [];
+
+  /**
+   * The predecessor's home commit where it landed after this wave took its
+   * basis ({@link noteOwnWaveCommit}), with the doc instances it wrote.
+   * Every contribution here read the replica with those writes applied,
+   * since the serving runtime's own optimistic layer held them before the
+   * commit was in flight, so a doc one writes that sits exactly at the
+   * commit's seq is rebased to that head rather than conflicting.
+   */
+  readonly #ownWaveCommits: Array<{ seq: number; keys: Set<string> }> = [];
+
+  /** The doc instances the home commit wrote, empty until it has landed. */
+  #committedHomeKeys: ReadonlySet<string> = new Set();
   readonly #scopeKeyIdentity: ScopeKeyIdentity;
   readonly #replicaFor: (space: MemorySpace) => ISpaceReplica;
   readonly #lease: WaveLease | undefined;
@@ -1228,6 +1259,15 @@ export class WaveAccumulator
     return this.#basisSeq;
   }
 
+  /**
+   * The doc instances (`${id} ${scopeKey}`) the home commit wrote as the
+   * replica holds them, which leaves out the docs it field-merged against a
+   * concurrent commit; empty until it has landed.
+   */
+  get committedHomeKeys(): ReadonlySet<string> {
+    return this.#committedHomeKeys;
+  }
+
   get contributionCount(): number {
     return this.#contributions.length;
   }
@@ -1253,6 +1293,23 @@ export class WaveAccumulator
       keys: new Set(docs.map((doc) => docInstanceKey(doc.id, doc.scopeKey))),
       sealedBefore: this.#contributions.length,
     });
+  }
+
+  /**
+   * Notes that the predecessor wave's home commit landed at `seq`, writing
+   * the doc instances `keys`, after this wave took its basis: the shape a
+   * seal leaves when it opens this wave while that commit is in flight to
+   * the store. A doc in `keys` that sits exactly at `seq` is not a conflict
+   * for any contribution here, each of which read the replica with the
+   * commit's writes applied: the replica's claim check refuses a run that
+   * read them stale at its own commit (`StorageTransactionInconsistent`),
+   * so no such run seals. The sink still re-verifies that the doc sits
+   * there. A commit at or below the basis is covered by the basis itself and
+   * leaves no note.
+   */
+  noteOwnWaveCommit(seq: number, keys: ReadonlySet<string>): void {
+    if (seq <= this.#basisSeq) return;
+    this.#ownWaveCommits.push({ seq, keys: new Set(keys) });
   }
 
   /** Contributions whose run kind is anything but the loop's own
@@ -2133,11 +2190,33 @@ export class WaveAccumulator
      * doc still sits exactly there inside its store transaction). */
     const rebasedHeads = new Map<string, number>();
 
+    /** Rebased docs whose write was field-merged against a concurrent
+     * commit: the store then holds a merge the replica never did, which
+     * is why the successor wave is not told of these. A doc rebased with
+     * its write standing whole is not among them. */
+    const mergedDocs = new Set<string>();
+
     const heads = new Map(
       await sink.currentHeads(this.#space, [...allDocs.values()]),
     );
     for (const [key] of allDocs) {
-      if ((heads.get(key) ?? 0) > this.#basisSeq) conflicted.add(key);
+      const head = heads.get(key) ?? 0;
+      if (head <= this.#basisSeq) continue;
+      // A doc sitting exactly at the predecessor's commit that landed after
+      // the basis (noteOwnWaveCommit) is rebased to that head for every
+      // contribution writing it, and the sink re-verifies it there.
+      if (
+        this.#ownWaveCommits.some((own) =>
+          own.seq === head && own.keys.has(key)
+        )
+      ) {
+        rebasedHeads.set(key, head);
+        for (const [index, docs] of homeWrites.entries()) {
+          if (docs.has(key)) rebasedDocs[index].add(key);
+        }
+        continue;
+      }
+      conflicted.add(key);
     }
 
     /** Whether `key` conflicts FOR this contribution: the doc moved past
@@ -2376,6 +2455,7 @@ export class WaveAccumulator
             ) {
               rebasedDocs[contribution.index].add(key);
               rebasedHeads.set(key, heads.get(key) ?? 0);
+              mergedDocs.add(key);
             } else if (contribution.context.kind === "event-handler") {
               requeued.add(contribution.index);
               break;
@@ -2775,6 +2855,19 @@ export class WaveAccumulator
           foreignSeqs,
           orphanRefused,
         );
+        // A doc this wave field-merged sits at a merge the replica never
+        // held, so it is left out: a successor's write to it conflicts.
+        const committed = new Set<string>();
+        for (const contribution of this.#survivors(requeued, droppedWhole)) {
+          for (const key of homeWrites[contribution.index].keys()) {
+            if (
+              !droppedDocs[contribution.index].has(key) && !mergedDocs.has(key)
+            ) {
+              committed.add(key);
+            }
+          }
+        }
+        this.#committedHomeKeys = committed;
         outcome.seq = result.ok.seq;
         return outcome;
       }
@@ -2806,6 +2899,7 @@ export class WaveAccumulator
           // this doc so the next resolve pass re-decides against the
           // new head (§3d's re-CAS).
           rebasedHeads.delete(key);
+          mergedDocs.delete(key);
           for (const perContribution of rebasedDocs) {
             perContribution.delete(key);
           }
@@ -2946,7 +3040,7 @@ export class WaveAccumulator
     context: WaveRunContext,
     space: MemorySpace,
     changes: readonly SpaceAccessChange[],
-  ): ServedAclChange | undefined {
+  ): ListedServedAclChange | undefined {
     const carriage = delegatedCarriageOf(context);
     const { eventId, streamEntry } = context;
     if (
@@ -2970,6 +3064,7 @@ export class WaveAccumulator
       },
       change: (stored) =>
         applyAccessListChanges(space, validateStoredAcl(stored), changes),
+      changes,
     };
   }
 

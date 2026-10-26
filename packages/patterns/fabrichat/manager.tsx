@@ -137,13 +137,19 @@ export interface RoomMembership extends ChatIndexEntry {
 /** Explicit membership choices, compared by resolved room identity. */
 export type RoomMembershipCell = Writable<RoomMembership[] | Default<[]>>;
 
+/** The validated catalog fields used to discover and list rooms. */
+type RoomCatalogEntry = Pick<
+  SharedSpaceEntry,
+  "space" | "kind" | "state" | "revision" | "since"
+>;
+
 /**
  * Applies standalone catalog choices to room records, including a removed
  * catalog entry. Container membership keeps its own state and revision.
  */
 const effectiveMemberships = (
   memberships: readonly RoomMembership[],
-  entries: Record<string, SharedSpaceEntry>,
+  entries: Record<string, RoomCatalogEntry>,
 ): RoomMembership[] =>
   memberships.map((membership): RoomMembership => {
     const entry = entries[spaceOf(membership.room) ?? ""];
@@ -337,6 +343,9 @@ export interface ManagerActState {
 
   /** Adds this user's profile to a room's participants. */
   joinRooms: Stream<JoinRoomsEvent>;
+
+  /** Lists a newly created room in the user's catalog. */
+  listRooms: Stream<ListRoomsEvent>;
 
   /**
    * The people this user's rooms list, through whose profiles `offerRoom`
@@ -710,6 +719,37 @@ const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
   },
 );
 
+/** What listing a new room asks: the room, and what to register with it. */
+export interface ListRoomsEvent {
+  /** The room to list. */
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // event's schema marks a reference position only where the wrapper is
+  // written in the event type.
+  room: Cell<ChatRoomLink>;
+
+  /** A group room's title; absent for a direct room. */
+  title?: string;
+
+  /** When the room was created, in milliseconds since the epoch. */
+  since: number;
+}
+
+/**
+ * Lists a room this user created in their catalog, as `listRoom()` does. It
+ * runs as an event of its own, queued by the one that creates the room, so
+ * that the catalog is read apart from that creation: a transaction's writes
+ * are held to the labels of everything it reads, and the catalog can carry a
+ * label, such as its owner's `PersonalSpace`, that the room's space doesn't
+ * admit. While the room's space is not known, nothing is listed.
+ */
+const listRooms = handler<ListRoomsEvent, { catalog: CatalogCell }>(
+  (event, { catalog }) => {
+    const space = spaceOf(event?.room);
+    if (!isWellFormedDID(space)) return;
+    listRoom(catalog, space, { title: event.title, since: event.since });
+  },
+);
+
 /**
  * A room's result, as the link an index entry holds. The room is created
  * where the link can't be typed as a cell, and stored as a link to it.
@@ -749,16 +789,16 @@ interface RoomOptions {
 
 /**
  * Creates a room in a space of its own, as the space's root, and its notices,
- * records its entry, and registers its space in the user's catalog, all in one
- * transaction: the space's grants and its declared kind are part of creating
- * it, so nothing has to commit apart. A notice for each other member not in
- * `offerTo` is queued for a client to deliver, and adding this user to the
- * room's participants, and offering the room to each member in `offerTo`, are
- * queued to follow.
+ * and records its entry, all in one transaction: the space's grants and its
+ * declared kind are part of creating it, so nothing has to commit apart. A
+ * notice for each other member not in `offerTo` is queued for a client to
+ * deliver, and registering the room's space in the user's catalog, adding this
+ * user to the room's participants, and offering the room to each member in
+ * `offerTo`, are queued to follow.
  *
  * The space's name is pending on the first run, which the runtime discards and
- * runs again with the name resolved. Nothing is registered or sent until the
- * name resolves, since a discarded run's sends may still be delivered.
+ * runs again with the name resolved. Nothing is sent until the name resolves,
+ * since a discarded run's sends may still be delivered.
  */
 const createRoom = (
   state: ManagerActState,
@@ -800,7 +840,11 @@ const createRoom = (
   );
   const space = spaceOf(room);
   if (isWellFormedDID(space)) {
-    listRoom(state.catalog, space, { title, since: now });
+    state.listRooms.send({
+      room,
+      ...(title === undefined ? {} : { title }),
+      since: now,
+    });
     if (state.myProfile !== undefined) {
       state.joinRooms.send({ room, profile: state.myProfile });
     }
@@ -1662,7 +1706,7 @@ export interface FabriChatManagerOutput {
    * other than those whose room's roster lists a profile attesting their
    * recipient.
    */
-  outgoingNotices: ChatManagerNotice[];
+  outgoingNotices: PerUser<ChatManagerNotice[]>;
 
   /**
    * The people this user's rooms list, other than this user: by the principal
@@ -1732,7 +1776,7 @@ interface ShownPerson {
 
 /** The opaque revision of a conversation discovered through a catalog entry. */
 const chatRevision = (
-  entry: SharedSpaceEntry,
+  entry: RoomCatalogEntry,
   room: Cell<ChatRoomLink>,
 ): string => {
   const resolved = room.resolveAsCell();
@@ -1845,19 +1889,30 @@ export const FabriChatManagerCore = pattern<
     const roomMembership = new Writable<RoomMembership[]>([]);
     const draft = new Writable.perSession<GroupDraft>(EMPTY_DRAFT);
     const startRefusal = new Writable.perSession<string>("");
+    // Validation depends only on the catalog; room discovery can settle one
+    // source at a time without validating every entry and offer again.
+    const catalogEntries = computed((): Record<string, RoomCatalogEntry> => {
+      const catalog = sharedSpaceCatalog.get();
+      if (!isSharedSpaceCatalog(catalog)) return {};
+      return Object.fromEntries(
+        Object.entries(catalog.entries).map(([key, entry]) => [key, {
+          space: entry.space,
+          kind: entry.kind,
+          state: entry.state,
+          revision: entry.revision,
+          ...(entry.since === undefined ? {} : { since: entry.since }),
+        }]),
+      );
+    });
     // Saved catalog entries are discovery sources; standalone rooms come first.
     // A catalog that doesn't read as one supplies no sources.
-    const savedRooms = computed((): SharedSpaceEntry[] => {
-      const catalog = sharedSpaceCatalog.get();
-      return isSharedSpaceCatalog(catalog)
-        ? Object.values(catalog.entries).filter((entry) =>
-          entry.state === "saved"
-        ).sort((a, b) =>
+    const savedRooms = computed((): RoomCatalogEntry[] =>
+      Object.values(catalogEntries).filter((entry) => entry.state === "saved")
+        .sort((a, b) =>
           Number(b.kind === CHAT_ROOM_OFFER_KIND) -
           Number(a.kind === CHAT_ROOM_OFFER_KIND)
         )
-        : [];
-    });
+    );
     // A room's space is read under the reader's own access, so a principal it
     // refuses finds nothing there that the others find. That access is the
     // principal's, so each room is found, and everything read from it
@@ -1875,10 +1930,6 @@ export const FabriChatManagerCore = pattern<
     const roomsForUser = computed((): PerUser<ChatIndexEntry[]> => {
       const self = principalOf(myProfile, "represents-principal");
       const stored = direct.get() ?? {};
-      const catalogValue = sharedSpaceCatalog.get();
-      const catalogEntries = isSharedSpaceCatalog(catalogValue)
-        ? catalogValue.entries
-        : {};
       const memberships = effectiveMemberships(
         roomMembership.get() ?? [],
         catalogEntries,
@@ -1965,6 +2016,7 @@ export const FabriChatManagerCore = pattern<
       outgoingNotices,
       offerRooms: offerRooms({ outgoingNotices, joinRooms: joining }),
       joinRooms: joining,
+      listRooms: listRooms({ catalog: sharedSpaceCatalog }),
       draft,
       startRefusal,
     };

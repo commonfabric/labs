@@ -4394,25 +4394,44 @@ export class SchemaObjectTraverser<V extends FabricValue>
     this.schemaTracker.deepEqualCalls = 0;
     this.schemaTracker.deepEqualMs = 0;
 
-    logger.timeStart("traverse");
-    {
-      const key = getTrackerKey(doc.address, this.context.scopeKeyIdentity);
-      const interned = internPathSelector(this.selector);
-      this.schemaTracker.add(key, interned);
-      this.context.onTrackedDoc?.(
-        key,
-        interned,
-        this.context.trackedReferrer,
-        "walked",
+    const startedAt = performance.now();
+    let outcome = "threw";
+    let rv: TraverseResult<FabricValue>;
+    let elapsed: number;
+    try {
+      {
+        const key = getTrackerKey(doc.address, this.context.scopeKeyIdentity);
+        const interned = internPathSelector(this.selector);
+        this.schemaTracker.add(key, interned);
+        this.context.onTrackedDoc?.(
+          key,
+          interned,
+          this.context.trackedReferrer,
+          "walked",
+        );
+      }
+      // Flag the top level read of doc for the scheduler.
+      this.tx.readOrThrow(doc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
+      rv = selectorCollected
+        ? this.traverseWithSelector(doc, this.selector, link)
+        : fail<FabricValue>(TRAVERSE_FAILURES.schemaRefResolution);
+      outcome = rv.error === undefined ? "ok" : "failed";
+    } finally {
+      elapsed = logger.timeDetailed(
+        () =>
+          JSON.stringify({
+            doc: getTrackerKey(doc.address, this.context.scopeKeyIdentity),
+            path: this.selector.path,
+            schema: hashSchema(this.selector.schema),
+            schemaCalls: this.traverseWithSchemaCalls,
+            memoHits: this.schemaMemoHits,
+            outcome,
+          }),
+        startedAt,
+        "traverse",
       );
     }
-    // Flag the top level read of doc for the scheduler
-    this.tx.readOrThrow(doc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
-    const rv: TraverseResult<FabricValue> = selectorCollected
-      ? this.traverseWithSelector(doc, this.selector, link)
-      : fail<FabricValue>(TRAVERSE_FAILURES.schemaRefResolution);
     const { error } = rv;
-    const elapsed = logger.timeEnd("traverse") ?? 0;
     this.maybeReportSlowTraverse(elapsed, doc);
     if (error !== undefined) {
       // This helps track down mismatched schemas, but may be fine

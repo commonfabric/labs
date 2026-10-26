@@ -357,10 +357,20 @@ export const FabriChatMessageRow = pattern<
     const record = message.get();
     return record?.editedAt !== undefined && typeof record.body === "string";
   });
+  // The message this one answers, in whichever list shows it.
   const quote = computed(() => {
-    const reply = message.get()?.replyTo;
-    return reply?.shownIn === "main" ? bodyText(reply.message.get()) : "";
+    const quoted = message.get()?.replyTo?.quotes;
+    return quoted === undefined ? "" : bodyText(quoted.get());
   });
+  // Whether the message is in a thread: shown in the conversation only when
+  // it was sent to both, where it is marked as in its thread, and opens that
+  // thread rather than starting one of its own.
+  const inAThread = computed(() =>
+    message.get()?.replyTo?.thread?.get() !== undefined
+  );
+  const inThreadMarkerDisplay = computed((): ChatDisplay =>
+    !inThread && inAThread ? "inline-flex" : "none"
+  );
   // How many replies the thread the message roots holds. The room derives
   // every message's place at once, from its messages alone, so whichever
   // runtime runs the room computes them for every viewer. The row reads its
@@ -406,7 +416,19 @@ export const FabriChatMessageRow = pattern<
   );
   const pickerLabel = computed(() => (pickerOpen.get() === true ? "✕" : "☺+"));
   const startReply = action(() => composer.key("replyTo").set(message));
-  const openThread = action(() => composer.key("thread").set(message));
+  const startThreadReply = action(() =>
+    composer.key("threadQuotes").set(message)
+  );
+  const openThread = action(() => {
+    composer.key("thread").set(message);
+    composer.key("threadQuotes").set(undefined);
+  });
+  const openOwnThread = action(() => {
+    const root = message.get()?.replyTo?.thread;
+    if (root?.get() === undefined) return;
+    composer.key("thread").set(root.resolveAsCell());
+    composer.key("threadQuotes").set(undefined);
+  });
   const startEdit = action(() => composer.key("editing").set(message));
   const stopEdit = action(() => composer.key("editing").set(undefined));
 
@@ -607,6 +629,15 @@ export const FabriChatMessageRow = pattern<
               >
                 {threadLabel}
               </cf-button>
+              <cf-button
+                size="sm"
+                variant="link"
+                hidden
+                style={{ display: inThreadMarkerDisplay }}
+                onClick={openOwnThread}
+              >
+                In a thread
+              </cf-button>
             </cf-vstack>
           </div>
           <cf-hstack slot="actions" gap="1" align="center">
@@ -666,7 +697,14 @@ export const FabriChatMessageRow = pattern<
                   Reply
                 </cf-button>
               )}
-            {isDeletedNow || inThread
+            {isDeletedNow || !inThread
+              ? null
+              : (
+                <cf-button size="sm" variant="ghost" onClick={startThreadReply}>
+                  Reply
+                </cf-button>
+              )}
+            {isDeletedNow || inThread || inAThread
               ? null
               : (
                 <cf-button size="sm" variant="ghost" onClick={openThread}>

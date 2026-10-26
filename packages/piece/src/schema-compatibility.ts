@@ -158,6 +158,7 @@ const DESCRIPTIVE_ANNOTATION_KEYS: ReadonlySet<string> = new Set([
   "deprecated",
   "description",
   "examples",
+  // Persisted schemas can carry discovery tags as annotation metadata.
   "tags",
   // Listing-tier extension (`tier: "wrapper"`): a UI affordance outside the
   // headless contract, inferred from session-scoped handler bindings.

@@ -311,6 +311,30 @@ export type IsThisNumber =
   | AnyBrandedCell<unknown>
   | AnyBrandedCell<any>;
 
+// To constrain methods that only exist on string cells
+export type IsThisString =
+  | AnyBrandedCell<string>
+  | AnyBrandedCell<unknown>
+  | AnyBrandedCell<any>;
+
+/**
+ * One change to a string, in the shape of a CodeMirror change spec: the text
+ * from `from` up to `to` is replaced by `insert`. Positions count UTF-16 code
+ * units, as string indexes do. `to` defaults to `from`, which makes the change
+ * an insertion, and `insert` defaults to the empty string, which makes it a
+ * deletion.
+ */
+export interface TextChange {
+  /** Start of the replaced range. */
+  readonly from: number;
+
+  /** End of the replaced range, exclusive; `from` when absent. */
+  readonly to?: number;
+
+  /** Text that replaces the range; empty when absent. */
+  readonly insert?: string;
+}
+
 /*
  * IAnyCell is an interface that is used by all calls and to which the runner
  * attaches the internal methods..
@@ -415,6 +439,24 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
    * concurrent increments sum against durable state rather than clobber.
    */
   increment(this: IsThisNumber, by?: number): void;
+
+  /**
+   * Applies `changes` to a string cell. The positions in one call refer to
+   * the value the cell holds when the call is made: the value this transaction
+   * read, or the value an earlier call in the transaction left. A list of
+   * changes runs in ascending order without overlap, all against that one
+   * value. On a field a collaborative editor has opened, the changes reach the
+   * store as an edit the editors merge with their own, and land only while the
+   * field still holds the value this transaction read; a field that moved on
+   * refuses the commit, and the transaction runs again against the new value.
+   * The first edit to a field no editor has opened opens it for
+   * collaboration, after which a `set()` of it is refused. A `get()` after
+   * this call returns the changed value.
+   */
+  applyChanges(
+    this: IsThisString,
+    changes: TextChange | readonly TextChange[],
+  ): void;
 
   remove(
     this: IsThisArray,
@@ -1963,9 +2005,6 @@ export type JSONSchemaObj = {
   // bindings + a void event). Hidden from the default `cf piece verbs`
   // listing; always callable; never consulted by `cf piece call`.
   readonly tier?: "wrapper";
-  // Discovery hashtags from the doc comment (lowercased, without the leading
-  // `#`). Populated by the schema generator; mirrors the description text.
-  readonly tags?: readonly string[];
   // makes it so that your handler gets a Cell object for that property. So you can call .set()/.update()/.push()/etc on it.
   readonly asCell?: readonly AsCellType[];
   // temporarily used to assign labels like "confidential"

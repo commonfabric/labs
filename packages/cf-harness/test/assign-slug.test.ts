@@ -180,6 +180,9 @@ describe("assign-slug", () => {
     let queries = 0;
     const serving = await startServingMemoryServer({
       apiUrl: new URL("http://toolshed.test"),
+      // The stub below reaches into the serving runtime's storage manager,
+      // which a loop in a worker does not hand out.
+      worker: false,
       prepareStorageManager: (manager, space) => {
         const rpc = stub(manager.open(space), "sqliteQuery", () => {
           queries++;

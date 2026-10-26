@@ -560,6 +560,13 @@ function samplesThisTime(name: string): boolean {
  * measures the operation from the state every timed iteration starts in. Its
  * elapsed time carries the accounting's overhead, which is why it is reported
  * as reads rather than charted as a series of its own.
+ *
+ * Under server execution no sample is taken, and a line saying so is written
+ * instead. The sample attributes the browser's reads to the Topics
+ * derivations, which the serving runtime computes there; what the browser
+ * runs is its echo of them, or nothing under web view-scoped replication,
+ * whose page shows what the server delivers without running the derivations'
+ * module at all.
  */
 async function recordReadsOnce(
   name: string,
@@ -567,6 +574,14 @@ async function recordReadsOnce(
   reach: (navigation: BoardSession) => Promise<() => Promise<unknown>>,
 ): Promise<void> {
   if (!samplesThisTime(name)) return;
+  const posture = await benchPosture();
+  if (posture.mode === "server-execution-on") {
+    report(
+      `${name}: no read-accounted sample under server execution, whose ` +
+        "serving runtime computes the derivations it attributes reads to",
+    );
+    return;
+  }
   const navigation = await BoardSession.open({
     fixture: await board(),
     identity,
@@ -575,7 +590,7 @@ async function recordReadsOnce(
     const operation = await reach(navigation);
     const sample = await measureTopicsReads(navigation.page, {
       label: name,
-      posture: await benchPosture(),
+      posture,
       program: await topicsProgram(),
       operation,
     });
@@ -685,14 +700,33 @@ function measuredSegment(
       return await reach(navigation);
     },
     async (navigation, operation, b) => {
+      const posture = await benchPosture();
       await timeTopicsOperation(navigation.page, {
         label: name,
-        posture: await benchPosture(),
+        posture,
         operation,
         interval: b,
+        mayRunNothing: mayRunNothingUnder(posture),
       });
     },
   );
+}
+
+/**
+ * Whether a measured segment's timed sample may record no run in the
+ * browser's worker.
+ *
+ * With server execution off the browser computes the Topics derivations a
+ * segment measures, and an operation that completes none of them measured
+ * nothing, so the guard stays. Under server execution the serving runtime
+ * computes them, and with web view-scoped replication on the page shows
+ * what it delivers without running any of them, so a worker that completes
+ * no run is what a served sample of `comment` or `backlink` records. The
+ * declaration permits that zero rather than asserting it, so a served
+ * sample whose worker does run counts those runs as usual.
+ */
+function mayRunNothingUnder(posture: DeclaredTopicsBrowserPosture): boolean {
+  return posture.mode === "server-execution-on";
 }
 
 segment(

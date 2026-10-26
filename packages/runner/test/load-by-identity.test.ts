@@ -1309,6 +1309,338 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       }
     });
 
+    it("persists a cold compile whose write-back failed on a later load, without compiling again", async () => {
+      // The cold load in `spaceB` compiles and evaluates, and its write-back
+      // fails, as does the next load's. The pattern is live, so those loads
+      // are served from memory, and the one that finds the space writable
+      // again writes the compiled closure back from that compile; nothing
+      // recompiles.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, [spaceB]);
+      const manager = runtime.patternManager.accessForTestingOnly;
+      const compiles = countColdCompiles();
+      let refuse = true;
+      let writes = 0;
+      // The manager's write, refused while `refuse` holds.
+      manager.compileCacheWriter = async (
+        target,
+        modules,
+        entry,
+        opts,
+        moduleDelegations,
+      ) => {
+        writes++;
+        if (refuse) throw new Error("the space refuses the write");
+        const writeTx = runtime.edit();
+        writeSourceAndCompiledDocs(
+          runtime,
+          target,
+          modules,
+          entry,
+          { ...opts, moduleDelegations },
+          writeTx,
+        );
+        runtime.prepareTxForCommit(writeTx);
+        expect((await writeTx.commit().settled).error).toBeUndefined();
+      };
+      try {
+        const loaded = await load(entryIdentity, spaceB);
+        expect(typeof loaded).toBe("function");
+        await flushed();
+        expect(compiles()).toBe(1);
+        expect(writes).toBe(1);
+        expect(await holdsClosure(spaceB, entryIdentity)).toBe(false);
+
+        const second = await load(entryIdentity, spaceB);
+        await flushed();
+        expect(compiles()).toBe(1);
+        expect(second).toBe(loaded);
+        expect(writes).toBe(2);
+        expect(await holdsClosure(spaceB, entryIdentity)).toBe(false);
+
+        refuse = false;
+        const repaired = await load(entryIdentity, spaceB);
+        await flushed();
+        expect(compiles()).toBe(1);
+        expect(repaired).toBe(loaded);
+        expect(writes).toBe(3);
+        expect(await holdsClosure(spaceB, entryIdentity)).toBe(true);
+      } finally {
+        manager.compileCacheWriter = undefined;
+      }
+    });
+
+    it("persists a preview's compile on the ordinary load that follows, without compiling again", async () => {
+      // A preview load (`repairCache: false`) compiles and evaluates in
+      // `spaceB` and persists nothing. The ordinary load that follows there
+      // is served from memory and writes that compile's closure back.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, [spaceB]);
+      const compiles = countColdCompiles();
+
+      const previewed = await load(entryIdentity, spaceB, {
+        repairCache: false,
+      });
+      expect(typeof previewed).toBe("function");
+      await flushed();
+      expect(compiles()).toBe(1);
+      expect(await holdsClosure(spaceB, entryIdentity)).toBe(false);
+
+      const adopted = await load(entryIdentity, spaceB);
+      await flushed();
+      expect(compiles()).toBe(1);
+      expect(adopted).toBe(previewed);
+      expect(await holdsClosure(spaceB, entryIdentity)).toBe(true);
+    });
+
+    it("writes the retained compile into a space served from memory when no space holds the closure", async () => {
+      // The one space that compiled the closure refuses its write-back, so
+      // no space holds it and nothing is recorded as writing it. A load
+      // served from memory in a third space still receives the closure, from
+      // the compile retained for the refusing space's repair.
+      const spaceC = (await Identity.fromPassphrase("load-by-identity space C"))
+        .did();
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, [spaceB]);
+      const manager = runtime.patternManager.accessForTestingOnly;
+      const compiles = countColdCompiles();
+      // The manager's write, refused for `spaceB` alone.
+      manager.compileCacheWriter = async (
+        target,
+        modules,
+        entry,
+        opts,
+        moduleDelegations,
+      ) => {
+        if (target === spaceB) throw new Error("the space refuses the write");
+        const writeTx = runtime.edit();
+        writeSourceAndCompiledDocs(
+          runtime,
+          target,
+          modules,
+          entry,
+          { ...opts, moduleDelegations },
+          writeTx,
+        );
+        runtime.prepareTxForCommit(writeTx);
+        expect((await writeTx.commit().settled).error).toBeUndefined();
+      };
+      try {
+        const loaded = await load(entryIdentity, spaceB);
+        await flushed();
+        expect(typeof loaded).toBe("function");
+        expect(await holdsClosure(spaceB, entryIdentity)).toBe(false);
+
+        expect(await load(entryIdentity, spaceC)).toBe(loaded);
+        await flushed();
+        expect(compiles()).toBe(1);
+        expect(await holdsClosure(spaceC, entryIdentity)).toBe(true);
+      } finally {
+        manager.compileCacheWriter = undefined;
+      }
+    });
+
+    it("stops writing back into a space that refuses the write after three failures", async () => {
+      // A refusal that recurs on every load is a write the session cannot
+      // make; after the third failure the loads there are served from memory
+      // with no further attempt, and nothing recompiles at any point.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, [spaceB]);
+      const manager = runtime.patternManager.accessForTestingOnly;
+      const compiles = countColdCompiles();
+      let writes = 0;
+      manager.compileCacheWriter = () => {
+        writes++;
+        return Promise.reject(new Error("the space refuses the write"));
+      };
+      try {
+        const loaded = await load(entryIdentity, spaceB);
+        await flushed();
+        for (let attempt = 0; attempt < 4; attempt++) {
+          expect(await load(entryIdentity, spaceB)).toBe(loaded);
+          await flushed();
+        }
+        expect(writes).toBe(3);
+        expect(compiles()).toBe(1);
+      } finally {
+        manager.compileCacheWriter = undefined;
+      }
+    });
+
+    it("counts a refused write-back once, however many loads awaited it", async () => {
+      // Loads served from memory while a write-back into their space is in
+      // flight issue none of their own, so the one refusal they all awaited
+      // uses one of the session's attempts, and two attempts remain.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, [spaceB]);
+      const manager = runtime.patternManager.accessForTestingOnly;
+      const compiles = countColdCompiles();
+      let writes = 0;
+      manager.compileCacheWriter = () => {
+        writes++;
+        return Promise.reject(new Error("the space refuses the write"));
+      };
+      try {
+        const loaded = await load(entryIdentity, spaceB);
+        await flushed();
+        expect(writes).toBe(1);
+
+        const concurrent = await Promise.all([
+          load(entryIdentity, spaceB),
+          load(entryIdentity, spaceB),
+          load(entryIdentity, spaceB),
+        ]);
+        await flushed();
+        for (const pattern of concurrent) expect(pattern).toBe(loaded);
+        expect(writes).toBe(2);
+
+        expect(await load(entryIdentity, spaceB)).toBe(loaded);
+        await flushed();
+        expect(writes).toBe(3);
+        expect(await load(entryIdentity, spaceB)).toBe(loaded);
+        await flushed();
+        expect(writes).toBe(3);
+        expect(compiles()).toBe(1);
+      } finally {
+        manager.compileCacheWriter = undefined;
+      }
+    });
+
+    it("neither recompiles nor writes into an exhausted space once its retained compile is evicted", async () => {
+      // A preview compiled in `spaceB`, and the three ordinary loads after it
+      // had their write-backs refused. The preview's mark alone no longer
+      // makes the space owed a repair, so a load there with the retained
+      // compile gone is served from memory, with no cold compile and no
+      // fourth write.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, [spaceB]);
+      const manager = runtime.patternManager.accessForTestingOnly;
+      const compiles = countColdCompiles();
+      let writes = 0;
+      manager.compileCacheWriter = () => {
+        writes++;
+        return Promise.reject(new Error("the space refuses the write"));
+      };
+      try {
+        const previewed = await load(entryIdentity, spaceB, {
+          repairCache: false,
+        });
+        await flushed();
+        for (let attempt = 0; attempt < 3; attempt++) {
+          expect(await load(entryIdentity, spaceB)).toBe(previewed);
+          await flushed();
+        }
+        expect(writes).toBe(3);
+        expect(compiles()).toBe(1);
+
+        manager.retainedCompiles.clear();
+        expect(await load(entryIdentity, spaceB)).toBe(previewed);
+        await flushed();
+        expect(writes).toBe(3);
+        expect(compiles()).toBe(1);
+      } finally {
+        manager.compileCacheWriter = undefined;
+      }
+    });
+
+    it("writes a retained compile into another space without the delegations its origin authenticated", async () => {
+      // A retained compile's delegations are writer authority the origin
+      // space's source closure authenticated. Written into another space they
+      // would grant that authority where no source update did, so that space
+      // receives the modules alone and keeps whatever grants it already holds,
+      // as a replication leaves them.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      const predecessor = "retained-origin-only-predecessor";
+      const writeTx = runtime.edit();
+      writeSourceDocs(
+        runtime,
+        space,
+        fixture.modules,
+        entryIdentity,
+        writeTx,
+        new Map([[entryIdentity, new Set([predecessor])]]),
+      );
+      runtime.prepareTxForCommit(writeTx);
+      expect((await writeTx.commit().settled).error).toBeUndefined();
+      await runtime.storageManager.synced();
+      const compiles = countColdCompiles();
+
+      // A preview in `space` retains the compile with the delegations its
+      // source carried, and persists nothing.
+      const previewed = await load(entryIdentity, space, {
+        repairCache: false,
+      });
+      expect(typeof previewed).toBe("function");
+      await flushed();
+      expect(runtime.grantsModuleDelegation(spaceB, entryIdentity, predecessor))
+        .toBe(false);
+
+      // A load served from memory in `spaceB`, which no space holds the
+      // closure for, writes the retained compile there.
+      expect(await load(entryIdentity, spaceB)).toBe(previewed);
+      await flushed();
+      expect(compiles()).toBe(1);
+      expect(await holdsClosure(spaceB, entryIdentity)).toBe(true);
+      const readTx = runtime.edit();
+      try {
+        const sourceInB = await loadVerifiedSourceClosure(
+          runtime,
+          spaceB,
+          entryIdentity,
+          readTx,
+        );
+        expect(sourceInB?.has(entryIdentity)).toBe(true);
+        expect(sourceInB?.get(entryIdentity)?.delegatedModuleIdentities)
+          .toBeUndefined();
+      } finally {
+        readTx.abort?.("delegation assertion read complete");
+      }
+      expect(runtime.grantsModuleDelegation(spaceB, entryIdentity, predecessor))
+        .toBe(false);
+    });
+
+    it("writes once into a space that refuses the write-back for want of a grant", async () => {
+      // A refusal the store marks permanent is one no attempt can write past,
+      // so it spends the session's attempts at once: the loads after it are
+      // served from memory with no further write and no recompile.
+      const fixture = await engine.compileToRecordGraph(PROGRAM);
+      const { entryIdentity } = fixture;
+      await storeSourceIn(fixture, [spaceB]);
+      const manager = runtime.patternManager.accessForTestingOnly;
+      const compiles = countColdCompiles();
+      let writes = 0;
+      manager.compileCacheWriter = () => {
+        writes++;
+        return Promise.reject(
+          Object.assign(new Error("no grant to write the space"), {
+            name: "AuthorizationError",
+            permanentEvidence: true,
+            aclRevision: 1,
+          }),
+        );
+      };
+      try {
+        const loaded = await load(entryIdentity, spaceB);
+        await flushed();
+        expect(writes).toBe(1);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          expect(await load(entryIdentity, spaceB)).toBe(loaded);
+          await flushed();
+        }
+        expect(writes).toBe(1);
+        expect(compiles()).toBe(1);
+      } finally {
+        manager.compileCacheWriter = undefined;
+      }
+    });
+
     it("copies once into a space, however many loads it serves there", async () => {
       const { entryIdentity, loaded } = await coldLoadedInSpace();
       const { compileCacheWrites } =

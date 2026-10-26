@@ -61,7 +61,9 @@ registration event to take effect. The request's trace span carries the same
 durations as `cf.lifecycle.<phase>_ms` attributes, together with the request
 key as `cf.request_key` — the receipt's, which the server generates when the
 caller sends none, or for a refusal the caller's own — so a creation a caller
-reports by its key can be found among the traces.
+reports by its key can be found among the traces. If a verb fails, its completed
+phases still reach the request span; phases never reached are absent. The
+failure keeps its refusal code and response status across the worker port.
 
 A refusal is a JSON body `{ error, code }`. `code` is stable and is what a
 client branches on; `error` is prose for a person.

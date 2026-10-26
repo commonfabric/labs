@@ -150,7 +150,7 @@ export default pattern(() => {
         action: alice.sendMessage,
         event: {
           body: "A reply to elsewhere",
-          replyTo: { message: messageOf(foreign), shownIn: "main" },
+          replyTo: { quotes: messageOf(foreign), shownIn: "main" },
         },
         trustedUi: sendGesture,
       },

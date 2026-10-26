@@ -69,9 +69,21 @@ import type {
   CfcConfClause,
   CfcWriteFloorMode,
 } from "@commonfabric/runner/cfc";
-import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
+import {
+  listenServingMemoryServer,
+  runsInWorker,
+} from "@commonfabric/runner/executor/serving-memory-server.deno";
+import type {
+  ServingLoopDiagnostics,
+  ServingLoopHandle,
+} from "@commonfabric/runner/executor/serving-worker-host";
+import type { ServingLoopStats } from "@commonfabric/runner/executor/stats";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import {
+  getLoggerCountsBreakdown,
+  getTimingStatsBreakdown,
+} from "@commonfabric/utils/logger";
 import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 import {
   type CommitRejection,
@@ -135,6 +147,27 @@ export interface MultiRuntimeSessionSpec {
 
   /** Routes this session through a test relay backed by the same storage server. */
   apiUrl?: URL;
+
+  /**
+   * Hold a rendered view of the piece for the session's life, as a mounted
+   * browser does: the worker reconciler's recursive demand over `$UI`, its
+   * operations discarded. Without it a session derives only what its watched
+   * paths read, so the view's own derivations never run on the client and a
+   * measurement of "the view is current" measures the data alone.
+   */
+  renderView?: boolean;
+
+  /**
+   * Declare this session's runtime a web client, as a browser tab's worker
+   * is. The runtime then follows the web client's flags: under
+   * `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION` it opens the piece by its
+   * name and UI tip alone, registers its rendered view (`renderView`) as a
+   * view interest the server selects documents for, and runs locally only
+   * the actions that selection admits. Unset, the session is an unclassed
+   * remote client, which replicates what it watches.
+   */
+  clientClass?: "web";
+
   /**
    * Write-side `requiredIntegrity` floor for this session's runtime,
    * overriding the harness-wide setting. Set it per session to model a fleet
@@ -217,8 +250,9 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 
 /**
  * The execution-lease TTL of the serving loop the harness hosts. That loop
- * shares the test's thread, and a pattern compile there does not yield, so on
- * a slow runner one compile can hold the thread past the production TTL. Every
+ * runs on the test's thread, or on a worker's when the environment selects
+ * one, and a pattern compile does not yield either, so on a slow runner one
+ * compile can hold the loop's thread past the production TTL. Every
  * space the loop serves then loses its lease at once, any wave in flight
  * aborts, and a space that parks over it compiles again when it reactivates.
  * Two minutes is well clear of the longest stall between renewals seen (22 s
@@ -672,6 +706,32 @@ export class MultiRuntimeSession {
   }
 
   /**
+   * Resolve once this replica's list at `path`, read as a map from each
+   * element's values at the `keys` paths to its value at the `valueKey` path,
+   * equals `expected`: the same keys and no others, each at its expected
+   * value. A path descends through a cell where an element holds one, so a
+   * key may name a field of the row's author; build `expected` with
+   * `rowKeyOf` from `@commonfabric/integration/row-key`. Read at this
+   * runtime's quiescence and woken by the list's own changes, so it is the
+   * moment this session's view of the list is current, on either arm.
+   */
+  async waitForRows(
+    path: (string | number)[],
+    keys: (string | number)[][],
+    valueKey: (string | number)[],
+    expected: Record<string, string>,
+    opts: { piece?: PieceAddress } = {},
+  ): Promise<void> {
+    await this.#client.call("waitForRows", {
+      path,
+      keys,
+      valueKey,
+      expected,
+      piece: opts.piece,
+    });
+  }
+
+  /**
    * How many events this session fired whose consequence has yet to arrive
    * back here, or `null` on the OFF arm, which does not track them.
    */
@@ -694,6 +754,32 @@ export class MultiRuntimeSession {
    */
   async barrier(): Promise<void> {
     await this.#client.call("barrier");
+  }
+
+  /**
+   * The rendered view's reconciliation errors since the last call, as
+   * messages; empty when the view, if the session holds one, mounted and
+   * reconciled cleanly. A test that measures a rendered view reads this
+   * outside its measured interval and fails on anything here, since a view
+   * that failed to mount derives nothing and would pass as a fast one.
+   */
+  async renderErrors(): Promise<string[]> {
+    return await this.#client.call("renderErrors") as string[];
+  }
+
+  /**
+   * The timing measures this session's loggers emitted since the last call,
+   * in the shape the perf-investigation scripts read; empty unless the worker
+   * runs with `CF_TIMING_MEASURES=1` in its environment. Drained on each call.
+   */
+  async timingMeasures(): Promise<
+    { name: string; startTime: number; duration: number }[]
+  > {
+    return await this.#client.call("timingMeasures") as {
+      name: string;
+      startTime: number;
+      duration: number;
+    }[];
   }
 
   /** Capture scheduler graph, settle stats history, and action run trace. */
@@ -775,6 +861,9 @@ type HostedServer = {
   /** The memory server, whose admitted commits include the serving loop's. */
   readonly server: Pick<MemoryServer, "watchAdmittedCommits">;
 
+  /** The serving loop, when the server has one. */
+  readonly host?: Pick<ServingLoopHandle, "diagnostics" | "stats">;
+
   /** The server's `idle()`, which covers storage and not a serving loop. */
   idle(): Promise<void>;
 
@@ -846,8 +935,9 @@ export class MultiRuntimeHarness {
         // The suite's compile byte cache, the one `pieces-controller.ts`
         // holds for this realm, shared by every serving runtime: a space that
         // reactivates, or another space serving the same program, skips the
-        // transform-and-emit step on this thread.
-        moduleByteCache,
+        // transform-and-emit step on this thread. A loop the environment puts
+        // in a worker takes no closure, so its runtimes compile without it.
+        ...(runsInWorker() ? {} : { moduleByteCache }),
         policy: { leaseTtlMs: SERVED_LEASE_TTL_MS },
       })
       : StandaloneMemoryServer.start({
@@ -856,11 +946,12 @@ export class MultiRuntimeHarness {
       });
     const targetUrl = options.apiUrl ?? server!.url;
     const apiUrl = targetUrl.href;
-    // A served handler reads the pattern environment of the process its
+    // A served handler reads the pattern environment of the realm its
     // serving loop runs in, which a toolshed sets to its own address. The
-    // serving loop hosted here runs in this process, so this process's is set
-    // to the address the harness hosts, as a handler run by a session's own
-    // runtime sees it, until the harness is disposed or terminated.
+    // loop hosted here runs in this process, or in a worker that sets its
+    // own, so this process's is set to the address the harness hosts, as a
+    // handler run by a session's own runtime sees it, until the harness is
+    // disposed or terminated.
     const releasePatternEnvironment = serverExecutionOn && server !== undefined
       ? claimPatternEnvironment(targetUrl)
       : () => {};
@@ -900,6 +991,10 @@ export class MultiRuntimeHarness {
           recordRejections: options.recordRejections === true,
           cfc: cfcFor(started),
           watchPaths: options.watchPaths as FabricValue,
+          ...(started.renderView === true ? { renderView: true } : {}),
+          ...(started.clientClass !== undefined
+            ? { clientClass: started.clientClass }
+            : {}),
           ...(started.wsDelayMs !== undefined
             ? { wsDelayMs: started.wsDelayMs }
             : {}),
@@ -1016,6 +1111,27 @@ export class MultiRuntimeHarness {
     const session = this.session(label);
     this.sessions.splice(this.sessions.indexOf(session), 1);
     await session.disposeSession();
+  }
+
+  /**
+   * The serving loop's counters as it last reported them, from the loop the
+   * harness hosts; none when the harness hosts no loop.
+   */
+  servingStats(): ServingLoopStats | undefined {
+    return this.#server?.host?.stats();
+  }
+
+  /**
+   * What the serving loop's realm logged: the loop the harness hosts, where
+   * it runs, which is this process when the loop runs on its main thread and
+   * the worker when it runs there, and this process when the harness hosts
+   * no loop.
+   */
+  servingDiagnostics(): Promise<ServingLoopDiagnostics> {
+    return this.#server?.host?.diagnostics() ?? Promise.resolve({
+      loggerCounts: getLoggerCountsBreakdown(),
+      timingStats: getTimingStatsBreakdown(),
+    });
   }
 
   /**
