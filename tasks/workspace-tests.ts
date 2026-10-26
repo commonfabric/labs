@@ -18,6 +18,7 @@ import {
   recordsDir,
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
+import { batchQosArgv } from "./batch-qos.ts";
 import { DENO_TEST_TASK } from "./run-member-tests.ts";
 
 export function getPackageName(memberPath: string): string {
@@ -80,8 +81,9 @@ export async function testPackage(
       args.push(`--junit-path=${junitPath}`);
       for (const argument of recording) args.push(argument);
     }
-    result = await new Deno.Command(Deno.execPath(), {
-      args,
+    const [program, ...programArgs] = batchQosArgv([Deno.execPath(), ...args]);
+    result = await new Deno.Command(program, {
+      args: programArgs,
       cwd: packagePath,
       env,
       stdout: "piped",
