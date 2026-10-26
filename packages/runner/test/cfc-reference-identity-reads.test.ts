@@ -563,7 +563,9 @@ describe("cfc-reference-identity-reads", () => {
     // What the classification above must not cost: the confidentiality a
     // reference position declares still reaches a transaction that
     // dereferences the reference and reads the value, on a target document
-    // whose own label map is empty.
+    // whose own label map is empty. A read that crosses several references
+    // consumes the labels at every hop and on the document it ends at, since
+    // no slot stores what its reference reaches.
 
     it("joins a content label declared at the reference position into the flow join", async () => {
       const rt = makeRuntime();
@@ -600,6 +602,123 @@ describe("cfc-reference-identity-reads", () => {
         expect(tx.readValueOrThrow(resolved)).toEqual("s3cr3t");
       });
       expect(join).toEqual(["declared-on-target"]);
+    });
+
+    it("joins a middle hop's label and the target's into the flow join through a chain of four references", async () => {
+      const rt = makeRuntime();
+      const seed = seeding(rt);
+      const target = seed.write("rir-chain-target", "s3cr3t", [
+        contentEntry([], "on-target"),
+      ]);
+      const third = seed.write("rir-chain-third", {
+        next: createSigilLinkFromParsedLink(target),
+      });
+      const second = seed.write(
+        "rir-chain-second",
+        { next: createSigilLinkFromParsedLink({ ...third, path: ["next"] }) },
+        [contentEntry(["next"], "at-middle-hop")],
+      );
+      const first = seed.write("rir-chain-first", {
+        next: createSigilLinkFromParsedLink({ ...second, path: ["next"] }),
+      });
+      const holder = seed.write("rir-chain-holder", {
+        ref: createSigilLinkFromParsedLink({ ...first, path: ["next"] }),
+      });
+      await seed.commit();
+
+      const join = await flowJoinOf(rt, "rir-chain-out", (tx) => {
+        const resolved = resolveLink(rt, tx, { ...holder, path: ["ref"] });
+        expect(tx.readValueOrThrow(resolved)).toEqual("s3cr3t");
+      });
+      expect(join?.toSorted()).toEqual(["at-middle-hop", "on-target"]);
+    });
+
+    it("joins the target's label into the flow join through references two documents hold of each other", async () => {
+      const rt = makeRuntime();
+      const seed = seeding(rt);
+      const target = seed.write("rir-mutual-target", "s3cr3t", [
+        contentEntry([], "on-target"),
+      ]);
+      const first = rt.getCell(space, "rir-mutual-first")
+        .getAsNormalizedFullLink();
+      const second = seed.write("rir-mutual-second", {
+        toFirst: createSigilLinkFromParsedLink(first),
+      });
+      seed.write("rir-mutual-first", {
+        toSecond: createSigilLinkFromParsedLink(second),
+        data: createSigilLinkFromParsedLink(target),
+      });
+      const holder = seed.write("rir-mutual-holder", {
+        ref: createSigilLinkFromParsedLink(first),
+      });
+      await seed.commit();
+
+      const join = await flowJoinOf(rt, "rir-mutual-out", (tx) => {
+        const resolved = resolveLink(rt, tx, {
+          ...holder,
+          path: ["ref", "toSecond", "toFirst", "toSecond", "toFirst", "data"],
+        });
+        expect(tx.readValueOrThrow(resolved)).toEqual("s3cr3t");
+      });
+      expect(join).toEqual(["on-target"]);
+    });
+
+    it("joins the target's label into the flow join at the far end of a ten-level reference diamond", async () => {
+      const rt = makeRuntime();
+      const seed = seeding(rt);
+      let next = seed.write("rir-diamond-target", "s3cr3t", [
+        contentEntry([], "on-target"),
+      ]);
+      for (let level = 9; level >= 0; level--) {
+        next = seed.write(`rir-diamond-level-${level}`, {
+          left: createSigilLinkFromParsedLink(next),
+          right: createSigilLinkFromParsedLink(next),
+        });
+      }
+      const holder = seed.write("rir-diamond-holder", {
+        ref: createSigilLinkFromParsedLink(next),
+      });
+      await seed.commit();
+
+      const join = await flowJoinOf(rt, "rir-diamond-out", (tx) => {
+        const resolved = resolveLink(rt, tx, {
+          ...holder,
+          path: [
+            "ref",
+            ...Array.from(
+              { length: 10 },
+              (_, level) => level % 2 === 0 ? "left" : "right",
+            ),
+          ],
+        });
+        expect(tx.readValueOrThrow(resolved)).toEqual("s3cr3t");
+      });
+      expect(join).toEqual(["on-target"]);
+    });
+
+    it("joins nothing into the flow join through a chain of four references to an unlabeled target", async () => {
+      const rt = makeRuntime();
+      const seed = seeding(rt);
+      const target = seed.write("rir-plain-target", "in the open");
+      const third = seed.write("rir-plain-third", {
+        next: createSigilLinkFromParsedLink(target),
+      });
+      const second = seed.write("rir-plain-second", {
+        next: createSigilLinkFromParsedLink({ ...third, path: ["next"] }),
+      });
+      const first = seed.write("rir-plain-first", {
+        next: createSigilLinkFromParsedLink({ ...second, path: ["next"] }),
+      });
+      const holder = seed.write("rir-plain-holder", {
+        ref: createSigilLinkFromParsedLink({ ...first, path: ["next"] }),
+      });
+      await seed.commit();
+
+      const join = await flowJoinOf(rt, "rir-plain-out", (tx) => {
+        const resolved = resolveLink(rt, tx, { ...holder, path: ["ref"] });
+        expect(tx.readValueOrThrow(resolved)).toEqual("in the open");
+      });
+      expect(join).toBeUndefined();
     });
   });
 });
