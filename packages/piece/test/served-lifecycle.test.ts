@@ -20,6 +20,7 @@ import {
   type RuntimeProgram,
 } from "@commonfabric/runner";
 import type { ExecutorHost } from "@commonfabric/runner/executor/host";
+import { LifecycleVerbFailure } from "@commonfabric/runner/executor/lifecycle-verb";
 import {
   type ServingMemoryServer,
   startServingMemoryServer,
@@ -27,6 +28,10 @@ import {
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { loadVerifiedSourceClosure } from "../../runner/src/compilation-cache/cell-cache.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
+import {
+  buildServedLifecycleVerb,
+  servedLifecycleRunner,
+} from "../src/ops/served-lifecycle-verbs.ts";
 import { pieceId } from "../src/piece-id.ts";
 import { resolveSlugTargetCell } from "../src/slugs.ts";
 import {
@@ -37,8 +42,10 @@ import {
   finishServedRegistration,
   prepareServedRegistration,
   servedInstantiatePiece,
+  type ServedInstantiateReceipt,
   ServedLifecycleRefusal,
   type ServedPatternSource,
+  type ServedRegistrationPreparation,
   servedSetPieceSource,
   type ServedSetSourceRequest,
   servedUploadPattern,
@@ -139,8 +146,12 @@ describe("served lifecycle verbs", () => {
       apiUrl: new URL(import.meta.url),
       serviceIdentity: serviceSigner,
       policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+      // The verbs below are closures over the host, which a loop in a
+      // worker cannot take.
+      worker: false,
     });
-    ({ server, host } = serving);
+    server = serving.server;
+    host = serving.host.host!;
     session = createSession({
       identity: serviceSigner,
       spaceDid: space as DID,
@@ -853,6 +864,122 @@ export default pattern(() => {
       expect(refusal.code).toBe("compile-failed");
       expect(refusal.message).toContain("undefinedName");
       expect(host.stats().lifecycleVerbs).toEqual({ runs: 1, failures: 1 });
+    });
+  });
+
+  describe("descriptors", () => {
+    it("retains completed timings and refusal identity when compilation fails", async () => {
+      const runner = servedLifecycleRunner(host, serviceSigner);
+      const failure = await runner.runLifecycleVerb(space, {
+        name: "upload",
+        request: { program: BROKEN_PROGRAM },
+      }).then(() => {
+        throw new Error("expected compilation to fail");
+      }, (error) => error);
+      expect(failure).toBeInstanceOf(LifecycleVerbFailure);
+      expect(failure.code).toBe("compile-failed");
+      expect(failure.name).toBe("ServedLifecycleRefusal");
+      expect(failure.timings.map((timing: { phase: string }) => timing.phase))
+        .toEqual([
+          "upload.session",
+          "upload.queue",
+          "upload.run",
+        ]);
+    });
+
+    it("runs the verbs their descriptors name through the host, and demands the piece's root when asked", async () => {
+      const runner = servedLifecycleRunner(host, serviceSigner);
+      const uploaded = await runner.runLifecycleVerb(space, {
+        name: "upload",
+        request: { program: authorizedWriterProgram("v1") },
+      });
+      const ref = uploaded.receipt as { identity: string; symbol: string };
+      expect(ref.symbol).toBe("default");
+      // A verb without a confirm times its commit from the end of its run.
+      expect(uploaded.timings.map((timing) => timing.phase)).toEqual([
+        "upload.session",
+        "upload.queue",
+        "upload.run",
+        "upload.commit",
+      ]);
+      const creation = await runner.runLifecycleVerb(space, {
+        name: "instantiate",
+        request: {
+          source: { pattern: ref },
+          actingUser: aliceSigner.did(),
+          start: true,
+        },
+      });
+      const created = creation.receipt as {
+        pieceId: string;
+        pattern: { identity: string };
+      };
+      expect(created.pattern).toEqual(ref);
+      // Asked to start, the verb names the piece's root as warm demand.
+      const root = `of:${created.pieceId.replace(/^of:/, "")}`;
+      expect(host.spaceServer(space)?.warmDemandIds.has(root)).toBe(true);
+      expect(creation.timings.map((timing) => timing.phase)).toEqual([
+        "instantiate.session",
+        "instantiate.queue",
+        "instantiate.run",
+        "instantiate.commit",
+        "instantiate.confirm",
+      ]);
+      for (const { ms } of creation.timings) {
+        expect(Number.isInteger(ms) && ms >= 0).toBe(true);
+      }
+      const successor = (await runner.runLifecycleVerb(space, {
+        name: "upload",
+        request: { program: authorizedWriterProgram("v2") },
+      })).receipt as { identity: string; symbol: string };
+      const replaced = (await runner.runLifecycleVerb(space, {
+        name: "setsrc",
+        request: {
+          pieceId: created.pieceId,
+          pattern: successor,
+          actingUser: aliceSigner.did(),
+          start: false,
+        },
+      })).receipt as { pieceId: string; pattern: { identity: string } };
+      expect(replaced.pieceId).toBe(created.pieceId);
+      expect(replaced.pattern.identity).toBe(successor.identity);
+      const pieces = await clientPieces();
+      const piece = await pieces.get(created.pieceId);
+      expect(getPatternIdentityRef(piece.getCell())).toEqual(successor);
+    });
+
+    it("prepares and finishes a registration from descriptors, carrying the preparation's error into the receipt", async () => {
+      const runner = servedLifecycleRunner(host, serviceSigner);
+      const root = await instantiate({ program: BASE_PROGRAM });
+      const pending = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        register: true,
+      });
+      const pieces = await clientPieces();
+      await pieces.linkDefaultPattern(
+        (await pieces.get(root.pieceId)).getCell(),
+      );
+      const prepared = (await runner.runLifecycleVerb(space, {
+        name: "registration-prepare",
+        request: { receipt: pending, actingUser: aliceSigner.did() },
+      })).receipt as ServedRegistrationPreparation;
+      expect(prepared.error).toBe(
+        "The default pattern has no addPiece handler",
+      );
+      const finished = (await runner.runLifecycleVerb(space, {
+        name: "registration-finish",
+        request: { prepared, actingUser: aliceSigner.did(), outcome: {} },
+      })).receipt as ServedInstantiateReceipt;
+      expect(finished.registration.status).toBe("failed");
+    });
+
+    it("refuses to build a verb from a descriptor it does not know", () => {
+      expect(() =>
+        buildServedLifecycleVerb(
+          space,
+          { name: "frobnicate", request: {} } as never,
+          createSession({ identity: serviceSigner, spaceDid: space as DID }),
+        )
+      ).toThrow('no served lifecycle verb is named "frobnicate"');
     });
   });
 

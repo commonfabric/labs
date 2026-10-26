@@ -44,6 +44,7 @@ import {
   eventAttentionEntryKey,
   eventAttentionIndexKey,
   identityOfScopeKey,
+  type Operation,
   resolveScopeKey,
   type ScopeKey,
   scopeKeyApplicableTo,
@@ -60,11 +61,9 @@ import {
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
-import {
-  type AdmittedCommitNotice,
-  type Server as MemoryServer,
-} from "@commonfabric/memory/v2/server";
+import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 
+import type { HostMemoryServer } from "./host-memory-server.ts";
 import type {
   ParkedRuntimeHandle,
   ParkedServingRuntime,
@@ -239,6 +238,22 @@ export type SpaceServerPolicy = {
    */
   flushDeadlineNow?: () => number;
 
+  /**
+   * The longest deadline a settle may grow to. A cycle whose settle the
+   * deadline cut hands the next cycle a deadline twice as long, up to this,
+   * and a cycle whose settle reached quiescence, or a loop that found no
+   * work, hands it `flushDeadlineMs` again. Unset, or no longer than
+   * `flushDeadlineMs`, every settle takes `flushDeadlineMs`. The toolshed
+   * bootstrap reads SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS.
+   */
+  flushDeadlineMaxMs?: number;
+
+  /** DIAGNOSTIC (tests): the deadline each settle takes, as it begins. */
+  onFlushDeadline?: (deadlineMs: number) => void;
+
+  /** DIAGNOSTIC (tests): whether the deadline cut each settle, as it ends. */
+  onSettleEnded?: (exhausted: boolean) => void;
+
   /** Phase 6 (serving-loop.md §5's per-space budgets; README §3.8):
    * cap on dispatched-but-unsettled NETWORK effects per space —
    * "outstanding LLM calls". Undefined = unbounded. */
@@ -324,6 +339,66 @@ export type SpaceServerPolicy = {
    * bootstrap reads SERVER_EXECUTION_STORE_READ_THROUGH.
    */
   storeReadThrough?: boolean;
+
+  /**
+   * Leave a wave's commit in flight to the sink while the next cycle drains
+   * and settles, and finish it there, ahead of that cycle's own commit
+   * decision. The wave machinery already lets a cycle's seals open a wave
+   * over the predecessor's commit (`noteOwnWaveCommit`); this makes that
+   * the cycle's shape rather than its exception, so a commit that crosses
+   * a thread boundary costs the loop only what the next drain and settle
+   * do not cover. A cycle that ran a lifecycle verb commits inline, since
+   * the verb's receipt reads the outcome. The toolshed bootstrap reads
+   * SERVER_EXECUTION_OVERLAP_COMMIT.
+   */
+  overlapWaveCommit?: boolean;
+};
+
+/**
+ * What finishing a wave needs of the cycle that closed it: the settle's
+ * verdict and the advance it computed, read after the commit's outcome.
+ */
+type WaveFinishContext = {
+  exhausted: boolean;
+  batchHead: number;
+  drainedEvents: number;
+  advanceTo: number;
+  advanceSealed: boolean;
+  settleAdvanceFrom: number | undefined;
+  settleAdvanceGeneration: number | undefined;
+};
+
+/**
+ * One drained copy of an event, from its queuing to the wave outcome that
+ * speaks for it: `queued` until its seal is accepted, `marked` once its
+ * consequence mark rides a wave, `wave` being that wave where it is known.
+ */
+type DrainGuard = {
+  phase: "queued" | "marked";
+  wave: WaveAccumulator | undefined;
+};
+
+/** A wave commit a cycle started and left for a later step to finish. */
+type CommitInFlight = {
+  closing: WaveAccumulator;
+  outcome: Promise<WaveCommitOutcome>;
+  finish: WaveFinishContext;
+};
+
+/**
+ * What a SpaceServer hands `SpaceServerOptions.createWaveCommitSink`: the
+ * tenure's identity for its commits and the engines it reads.
+ */
+export type WaveCommitSinkDeps = {
+  space: MemorySpace;
+  engine: Engine.Engine;
+  /** The resolved engine of a foreign space a wave crossed into. */
+  foreignEngineFor: (space: MemorySpace) => Engine.Engine;
+  /** The tenure's holder, the session its derived commits are keyed under. */
+  sessionId: string;
+  localSeqRef: { value: number };
+  /** Called when the store refuses a home batch (serving-loop.md §2). */
+  onHomeRefused: () => void;
 };
 
 /** What a SpaceServer hands its runtime factory (see
@@ -337,7 +412,7 @@ export type RuntimeFactoryContext = {
 
 export type SpaceServerOptions = {
   space: MemorySpace;
-  server: MemoryServer;
+  server: HostMemoryServer;
   engine: Engine.Engine;
 
   /** The service identity (DID) the DR1 holder is minted from — also the
@@ -397,6 +472,13 @@ export type SpaceServerOptions = {
     sink: WaveCommitSink,
     space: MemorySpace,
   ) => WaveCommitSink;
+  /**
+   * Builds the tenure's wave commit sink in place of the engine-direct one,
+   * for a host whose store writer is elsewhere: the sink it returns carries
+   * each commit to that writer. Omitted, the tenure commits through
+   * `EngineWaveCommitSink` against its own engine.
+   */
+  createWaveCommitSink?: (deps: WaveCommitSinkDeps) => WaveCommitSink;
 
   /** Fired on each successfully committed wave — the host's
    * failure-streak reset signal (real served progress, as opposed to an
@@ -446,7 +528,8 @@ export type SpaceServerOptions = {
   ) => void;
 };
 
-const DEFAULT_FLUSH_DEADLINE_MS = 100;
+/** The flush deadline a policy that names none takes (serving-loop.md §3). */
+export const DEFAULT_FLUSH_DEADLINE_MS = 100;
 const DEFAULT_IDLE_PARK_MS = 30_000;
 const DEFAULT_PARK_DISPOSE_TIMEOUT_MS = 5_000;
 
@@ -686,6 +769,12 @@ export class SpaceServer implements TransactionSealDestination {
   readonly #options: SpaceServerOptions;
   readonly #holder: string;
   #lease: ExecutionLeaseCycle | undefined;
+  /**
+   * The deadline the next settle takes where the one before it was cut,
+   * under `flushDeadlineMaxMs`; unset where the last settle reached
+   * quiescence or the loop found no work.
+   */
+  #grownFlushDeadlineMs: number | undefined;
   #initializing = false;
   #runtime: Runtime | undefined;
   #viewPlanPublisher = new ViewPlanPublisher();
@@ -731,8 +820,16 @@ export class SpaceServer implements TransactionSealDestination {
    * its `streamEntry` (the mark path), which is #5969's stated safety
    * condition for skipping a re-drain on the strength of another copy;
    * the LT1 in-process cascade copy (no streamEntry) is a different
-   * producer and is deliberately NOT tracked here. */
-  readonly #drainInFlight = new Map<string, "queued" | "marked">();
+   * producer and is deliberately NOT tracked here. A `marked` copy whose
+   * seal was accepted records the wave it sealed into, and only that
+   * wave's outcome releases it: another wave can name the same event
+   * through a sibling contribution, and with a commit left in flight
+   * that wave can finish after the copy was queued, so a release on the
+   * id alone would let the next drain queue the copy a second time. A
+   * notice staged for a wave not yet known, or a `queued` copy that has
+   * not sealed, records no wave; a `queued` copy is released by no
+   * outcome at all. */
+  readonly #drainInFlight = new Map<string, DrainGuard>();
 
   #currentWave: WaveAccumulator | undefined;
   #sealChain: Promise<unknown> = Promise.resolve();
@@ -1161,6 +1258,18 @@ export class SpaceServer implements TransactionSealDestination {
     | { wave: WaveAccumulator; outcome: WaveCommitOutcome }
     | undefined;
 
+  /**
+   * The wave whose commit a cycle started under
+   * `SpaceServerPolicy.overlapWaveCommit` and no cycle has finished yet.
+   * The cycle that started it finishes it before it ends when nothing but
+   * the loop's own echoes arrived meanwhile; otherwise the next cycle
+   * finishes it inside its settle, after the settle's first completed step,
+   * or after the deadline cuts the settle, and in either case before the
+   * cycle computes its own advance, so a wave's post-commit bookkeeping
+   * always precedes its successor's commit decision.
+   */
+  #commitInFlight: CommitInFlight | undefined;
+
   /** F6 (log hygiene): the no-owner WARN fires once per tenure — a
    * permanently-ownerless space whose ACL doc keeps getting written
    * would otherwise warn 1:1 with the re-arm; the counter carries the
@@ -1251,8 +1360,10 @@ export class SpaceServer implements TransactionSealDestination {
   #eventVisibilityFloor: number | undefined;
 
   /**
-   * The batch head whose frames a completed settle barrier has applied to
-   * the serving replica, carried across cycles until W covers it. The
+   * The batch head whose input a completed settle barrier has applied to
+   * the serving replica — its frames, or under the store read-through
+   * posture the records the drain re-read into the replica, which makes
+   * the drain the barrier — carried across cycles until W covers it. The
    * settle's PREFIX COVERAGE (serving-loop.md §3) rests on it: input that
    * keeps arriving keeps the scheduler busy at every exit probe, so a
    * settle can reach the flush deadline without observing quiescence even
@@ -1346,6 +1457,11 @@ export class SpaceServer implements TransactionSealDestination {
    * less each one whose every key an earlier one names. */
   get warmNotices(): readonly AdmittedCommitNotice[] {
     return this.#warmNotices;
+  }
+
+  /** DIAGNOSTIC (tests): the documents this tenure holds as warm demand. */
+  get warmDemandIds(): ReadonlySet<string> {
+    return new Set([...this.#warmDemandKeys.values()].map(({ id }) => id));
   }
 
   /** Store head minus W — the per-space input to §7's watermarkLag. */
@@ -1450,31 +1566,52 @@ export class SpaceServer implements TransactionSealDestination {
     const demandRootCounters = runtime.scheduler.demandRootCounters;
     this.#lastFoldedDemandEnters = demandRootCounters.enters;
     this.#lastFoldedDemandLeaves = demandRootCounters.leaves;
-    const sink = new EngineWaveCommitSink({
-      engineFor: (s) => s === space ? engine : this.#foreignEngineFor(s),
+    const attachSqliteDbs = this.#options.server.attachWaveCommitSqliteDbs
+      ?.bind(this.#options.server);
+    const sinkDeps: WaveCommitSinkDeps = {
+      space,
+      engine,
+      foreignEngineFor: (s) => this.#foreignEngineFor(s),
       sessionId: this.#holder,
       localSeqRef: this.#options.localSeqRef,
-      // The stage-G sqlite discharge: folded sqlite ops in wave batches
-      // attach their cell-db file(s) through the memory server's own
-      // machinery (same validations as the transact path), keyed by the
-      // accumulator's per-run scope keys.
-      sqliteAttachmentsFor: (s, operations, scopeKeyByOpIndex) =>
-        this.#options.server.attachWaveCommitSqliteDbs(
-          s === space ? engine : this.#foreignEngineFor(s),
-          s,
-          operations,
-          scopeKeyByOpIndex,
-        ),
       // A lapse the renewal drivers have not reached yet shows first as the
       // memory server refusing a derived commit (serving-loop.md §2).
       onHomeRefused: () => {
         this.#confirmLease(engine);
       },
-      // A served run's access-list change is admitted and committed by the
-      // memory server itself, through the check its sessions' commits pass.
-      commitServedAclChange: (change, envelope) =>
-        this.#options.server.commitServedAclChange({ ...change, ...envelope }),
-    });
+    };
+    const sink = this.#options.createWaveCommitSink?.(sinkDeps) ??
+      new EngineWaveCommitSink({
+        engineFor: (s) => s === space ? engine : this.#foreignEngineFor(s),
+        sessionId: this.#holder,
+        localSeqRef: this.#options.localSeqRef,
+        // The stage-G sqlite discharge: folded sqlite ops in wave batches
+        // attach their cell-db file(s) through the memory server's own
+        // machinery (same validations as the transact path), keyed by the
+        // accumulator's per-run scope keys. A server that cannot attach them
+        // from here leaves the sink to refuse such a batch.
+        ...(attachSqliteDbs === undefined ? {} : {
+          sqliteAttachmentsFor: (
+            s: MemorySpace,
+            operations: readonly Operation[],
+            scopeKeyByOpIndex: ReadonlyMap<number, string>,
+          ) =>
+            attachSqliteDbs(
+              s === space ? engine : this.#foreignEngineFor(s),
+              s,
+              operations,
+              scopeKeyByOpIndex,
+            ),
+        }),
+        onHomeRefused: sinkDeps.onHomeRefused,
+        // A served run's access-list change is admitted and committed by the
+        // memory server itself, through the check its sessions' commits pass.
+        commitServedAclChange: (change, envelope) =>
+          this.#options.server.commitServedAclChange({
+            ...change,
+            ...envelope,
+          }),
+      });
     this.#sink = this.#options.decorateWaveCommitSink?.(sink, space) ?? sink;
     // The effect channel (stage G, serving-loop.md §4–§5). Phase 6
     // threads the per-space egress budgets (§5's outstanding-effect cap
@@ -2159,14 +2296,21 @@ export class SpaceServer implements TransactionSealDestination {
           // for a drained copy means its consequence mark now rides an
           // open wave — the copy stays in flight until the wave outcome
           // says the store committed or requeued it (never released at
-          // seal; see #drainInFlight).
+          // seal; see #drainInFlight). The mark rides the transaction
+          // stamped with the entry (`streamEntry`); a sibling transaction
+          // of the same event, an intent a handler issues, carries none
+          // and says nothing about the copy.
           const context = waveRunContextOf(tx);
           if (
             context?.kind === "event-handler" &&
             context.eventId !== undefined &&
+            context.streamEntry !== undefined &&
             this.#drainInFlight.has(context.eventId)
           ) {
-            this.#drainInFlight.set(context.eventId, "marked");
+            this.#drainInFlight.set(context.eventId, {
+              phase: "marked",
+              wave,
+            });
           }
         }
         return result;
@@ -2299,6 +2443,14 @@ export class SpaceServer implements TransactionSealDestination {
       for (const identity of demanders.values()) identities.push(identity);
     }
     return identities;
+  }
+
+  /**
+   * The wave open at the call, if a seal has opened one: what the cycle
+   * asks after awaiting a commit, having closed the wave it committed.
+   */
+  #waveOpenNow(): WaveAccumulator | undefined {
+    return this.#currentWave;
   }
 
   #openWave(): WaveAccumulator {
@@ -2916,7 +3068,8 @@ export class SpaceServer implements TransactionSealDestination {
       limit: 1,
     });
     const record = records.find((entry) => entry.seq === outcome.ok.seq);
-    if (record !== undefined) {
+    // A sink that reports its commits itself has reported this one.
+    if (record !== undefined && sink.reportsCommits !== true) {
       this.#options.server.noteExecutorCommit({
         space: this.#options.space,
         seq: record.seq,
@@ -3103,7 +3256,8 @@ export class SpaceServer implements TransactionSealDestination {
       limit: 1,
     });
     const record = records.find((entry) => entry.seq === committedSeq);
-    if (record !== undefined) {
+    // A sink that reports its commits itself has reported this one.
+    if (record !== undefined && sink.reportsCommits !== true) {
       this.#options.server.noteExecutorCommit({
         space: this.#options.space,
         seq: record.seq,
@@ -3276,6 +3430,9 @@ export class SpaceServer implements TransactionSealDestination {
         }
         if (!this.#active || this.#parkRequested) break;
         if (!this.#hasWork()) {
+          // The next input starts a burst, whose first consequence the base
+          // deadline bounds, however long the settles before the quiet grew.
+          this.#grownFlushDeadlineMs = undefined;
           const idleParkMs = this.#options.policy?.idleParkMs ??
             DEFAULT_IDLE_PARK_MS;
           this.#idleSince ??= Date.now();
@@ -3320,8 +3477,29 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   #hasWork(): boolean {
-    return this.#feed.length > 0 ||
-      this.#lifecycleVerbs.length > 0 ||
+    return this.#feed.length > 0 || this.#hasWorkBesidesFeed();
+  }
+
+  /**
+   * `#hasWork()` with the feed read for input alone: the loop's own echoes
+   * advance the input head when drained and mark nothing, so a feed holding
+   * nothing else is no reason to leave a commit in flight.
+   */
+  #hasWorkBesidesOwnEchoes(): boolean {
+    return this.#feed.some((record) => !this.#isOwnEcho(record)) ||
+      this.#hasWorkBesidesFeed();
+  }
+
+  /**
+   * Whether `record` is this loop's own derived commit coming back through
+   * the feed, which the drain skips (serving-loop.md §3).
+   */
+  #isOwnEcho(record: { class: string; holder?: string }): boolean {
+    return record.class === "derived" && record.holder === this.#holder;
+  }
+
+  #hasWorkBesidesFeed(): boolean {
+    return this.#lifecycleVerbs.length > 0 ||
       (this.#currentWave?.contributionCount ?? 0) > 0 ||
       // Chained-not-yet-applied wave seals (the F4 fix): real work the
       // contribution count cannot see yet.
@@ -3520,7 +3698,12 @@ export class SpaceServer implements TransactionSealDestination {
       ...streamEntry,
       checkpoint,
     });
-    if (holdGuard) this.#drainInFlight.set(entry.eventId, "marked");
+    if (holdGuard) {
+      this.#drainInFlight.set(entry.eventId, {
+        phase: "marked",
+        wave: undefined,
+      });
+    }
     try {
       const tx = runtime.edit();
       runtime.stampServerRun(tx, {
@@ -3831,9 +4014,7 @@ export class SpaceServer implements TransactionSealDestination {
       // (`runner.run` always starts locally), and FOREIGN derived
       // commits (holder ≠ self) do re-arm. If a start-less server-side
       // creation path ever appears, move this skip below the re-arm.
-      const selfEcho = record.class === "derived" &&
-        record.holder === this.#holder;
-      if (selfEcho) continue;
+      if (this.#isOwnEcho(record)) continue;
       if (
         this.#deliveryCheckpoints.size > 0 ||
         this.#deliveryCheckpointWriteBlocked.size > 0 ||
@@ -4020,6 +4201,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#eventScanOwed = false;
     this.#eventVisibilityFloor = undefined;
     const { engine, space } = this.#options;
+    const readThrough = this.#options.policy?.storeReadThrough === true;
     const pendingDocs = Engine.selectPendingStreamEventDocs(engine);
     if (pendingDocs.length === 0) {
       // A scan was owed and this is it: the pass ended, having queued
@@ -4136,20 +4318,43 @@ export class SpaceServer implements TransactionSealDestination {
           let viewEntry = readViewEntry();
           const provider = runtime.storageManager.open(space);
           if (
-            !matches(viewEntry) && !visibilityFlushed &&
-            provider.pullToServerHead !== undefined
+            !matches(viewEntry) &&
+            (readThrough ||
+              (!visibilityFlushed && provider.pullToServerHead !== undefined))
           ) {
             visibilityFlushed = true;
             this.#options.stats.events.visibilityBarriers += 1;
             try {
-              // Admission precedes loopback delivery. Publish this space's
-              // queued frames, then use their ordered response boundary to
-              // await application. Pending wave writes need not promote here.
-              await this.#options.server.flushSessions([space]);
-              if (!this.#active || this.#runtime !== runtime) return undefined;
-              await provider.pullToServerHead();
+              if (readThrough) {
+                // Under the store read-through the replica learns of a
+                // commit when the feed's refresh re-reads what it wrote
+                // (`#refreshHeldDocuments`), and the serving connection
+                // carries no frames for this space, so an ordered response
+                // would bring nothing. The store already holds the entry:
+                // read the entries document from it. A view still hidden by
+                // a pending local write defers below, as it does after a
+                // response.
+                runtime.storageManager.integrateStoreWrites?.(space, [{
+                  id: doc.id,
+                  scopeKey: "space",
+                }]);
+              } else {
+                // Admission precedes loopback delivery. Publish this space's
+                // queued frames, then use their ordered response boundary to
+                // await application. Pending wave writes need not promote
+                // here.
+                await this.#options.server.flushSessions([space]);
+                if (!this.#active || this.#runtime !== runtime) {
+                  return undefined;
+                }
+                await provider.pullToServerHead!();
+              }
             } catch (error) {
-              if (!this.#active || this.#runtime !== runtime) return undefined;
+              // A failed read or response leaves the view as it was, and
+              // the entry defers below to the rescan that tries again.
+              if (!this.#active || this.#runtime !== runtime) {
+                return undefined;
+              }
               logger.warn("event-visibility-sync-failed", () => [
                 `Could not synchronize event ${entry.eventId}'s replica view`,
                 error,
@@ -4253,7 +4458,7 @@ export class SpaceServer implements TransactionSealDestination {
           let checkpoint = durableCheckpoint;
           if (
             this.#pendingAttentionNotices.has(entry.eventId) ||
-            this.#drainInFlight.get(entry.eventId) === "marked"
+            this.#drainInFlight.get(entry.eventId)?.phase === "marked"
           ) {
             this.#loadParkDeferredInPass = true;
             break;
@@ -4305,7 +4510,10 @@ export class SpaceServer implements TransactionSealDestination {
               break;
             }
             this.#loadParkDeferredInPass = true;
-            this.#drainInFlight.set(entry.eventId, "marked");
+            this.#drainInFlight.set(entry.eventId, {
+              phase: "marked",
+              wave: undefined,
+            });
             this.#sealEventConsequenceNotice(
               runtime,
               entry,
@@ -4414,7 +4622,10 @@ export class SpaceServer implements TransactionSealDestination {
           if (entry.rendererTrusted === true) {
             markRendererTrustedEvent(entry.payload);
           }
-          this.#drainInFlight.set(entry.eventId, "queued");
+          this.#drainInFlight.set(entry.eventId, {
+            phase: "queued",
+            wave: undefined,
+          });
           const eventId = entry.eventId;
           const tenure = runtime;
           const aheadCount = ahead.length;
@@ -4434,7 +4645,7 @@ export class SpaceServer implements TransactionSealDestination {
             // tenure's copy.
             () => {
               if (this.#runtime !== tenure) return;
-              if (this.#drainInFlight.get(eventId) === "queued") {
+              if (this.#drainInFlight.get(eventId)?.phase === "queued") {
                 this.#drainInFlight.delete(eventId);
               }
             },
@@ -4594,7 +4805,10 @@ export class SpaceServer implements TransactionSealDestination {
                     // cold-view shape keeps §5's no-runnable-handler
                     // drop predicate wording.
                     this.#eventDeferrals.delete(entry.eventId);
-                    this.#drainInFlight.set(eventId, "marked");
+                    this.#drainInFlight.set(eventId, {
+                      phase: "marked",
+                      wave: undefined,
+                    });
                     this.#sealEventConsequenceNotice(
                       runtime,
                       entry,
@@ -4614,7 +4828,10 @@ export class SpaceServer implements TransactionSealDestination {
                   }
                   // The error/drop notice is a mark on its way to a wave.
                   this.#eventDeferrals.delete(entry.eventId);
-                  this.#drainInFlight.set(eventId, "marked");
+                  this.#drainInFlight.set(eventId, {
+                    phase: "marked",
+                    wave: undefined,
+                  });
                   this.#sealEventConsequenceNotice(
                     runtime,
                     entry,
@@ -4989,12 +5206,15 @@ export class SpaceServer implements TransactionSealDestination {
     // note landing after this point is invisible to `demand` and must
     // re-latch a fresh pass (below, in the loadPass `.finally`).
     this.#passDemandNoteGen = this.#demandNoteGeneration;
-    const demand = this.#options.server.demandForSpace(
+    const demand = await this.#options.server.demandForSpace(
       this.#options.space,
       // The serving session's own watches are its graph's reads, not
       // client demand.
       { excludePrincipal: this.#options.serviceIdentity },
     );
+    // A park while the request was out cleared the registry this pass
+    // reconciles into and disposed the runtime whose writers it marks.
+    if (!this.#active || this.#runtime !== runtime) return;
     const changed = this.#demandMirror.update(demand);
     // WARM DEMAND KEYS (the explicit warm request's demand half — see
     // #warmDemandKeys): the staged instances enter the key set
@@ -5360,6 +5580,7 @@ export class SpaceServer implements TransactionSealDestination {
     d.notCurrentRearms += notCurrentRearms;
     d.demandPasses += 1;
     d.demandPassMs += performance.now() - passStart;
+    timing.time(passStart, "executor", "wave", "demand-pass");
   }
 
   /**
@@ -5780,6 +6001,47 @@ export class SpaceServer implements TransactionSealDestination {
     return this.#options.policy?.flushDeadlineNow?.() ?? Date.now();
   }
 
+  /** The base deadline and, where one is set, the cap the deadline grows to. */
+  #flushDeadlineBounds(): { base: number; max: number | undefined } {
+    const base = this.#options.policy?.flushDeadlineMs ??
+      DEFAULT_FLUSH_DEADLINE_MS;
+    const max = this.#options.policy?.flushDeadlineMaxMs;
+    return { base, max: max === undefined || max <= base ? undefined : max };
+  }
+
+  /**
+   * The deadline this settle takes: the base, or the length the cut settles
+   * before it grew it to, under the cap. A burst's first consequence is
+   * visible within the base; the cascade behind it is cut less often as it
+   * goes, so fewer partial waves fan out to the sessions, and an event that
+   * arrives while a longer settle runs is drained into the same wave.
+   */
+  #settleDeadlineMs(): number {
+    const { base, max } = this.#flushDeadlineBounds();
+    const grown = this.#grownFlushDeadlineMs;
+    if (max === undefined || grown === undefined) return base;
+    return Math.min(grown, max);
+  }
+
+  /**
+   * Doubles the next settle's deadline, under the cap, after a settle the
+   * deadline cut, and returns it to the base after one that reached
+   * quiescence.
+   */
+  #noteSettleEnded(exhausted: boolean): void {
+    this.#options.policy?.onSettleEnded?.(exhausted);
+    if (!exhausted) {
+      this.#grownFlushDeadlineMs = undefined;
+      return;
+    }
+    const { base, max } = this.#flushDeadlineBounds();
+    if (max === undefined) return;
+    this.#grownFlushDeadlineMs = Math.min(
+      max,
+      (this.#grownFlushDeadlineMs ?? base) * 2,
+    );
+  }
+
   /**
    * The tenure's space-root ensure (OW45 arm-B server-ensure stage 1;
    * design PR #6209 §1/§4): make sure the space's default pattern
@@ -5941,17 +6203,41 @@ export class SpaceServer implements TransactionSealDestination {
     // outcome is what `#settleLifecycleVerbs` reads through `confirm`).
     // A verb that ran is settled either way: with its receipt or its
     // error after the wave commits, or with the cycle's own error if the
-    // wave never gets that far.
+    // wave never gets that far. A verb reads the replica as the previous
+    // wave's commit leaves it, so a commit an overlapped cycle left in
+    // flight is finished before the first verb runs: a write of it the
+    // sink refused rolls back before any verb can read it.
+    if (this.#lifecycleVerbs.length > 0 && this.#commitInFlight !== undefined) {
+      await this.#finishCommitInFlight(runtime);
+      if (!this.#active || this.#runtime !== runtime) return;
+    }
     const verbs = await this.#runQueuedLifecycleVerbs(runtime);
     this.#servedWave = undefined;
+    // A verb's receipt reads this cycle's commit outcome, so a cycle that
+    // ran one commits inline; any other cycle may leave its commit in
+    // flight for the next cycle to finish.
+    const overlapCommit = this.#options.policy?.overlapWaveCommit === true &&
+      verbs.length === 0;
     try {
-      await this.#serveWave(runtime);
+      await this.#serveWave(runtime, overlapCommit);
     } catch (error) {
       // A cycle that throws parks the space without committing its wave,
       // so nothing the verbs sealed is durable; their `confirm` reads
       // would see the replica the wave never withdrew from.
       for (const entry of verbs) entry.reject(error);
       throw error;
+    }
+    // A commit left in flight with nothing arrived to overlap it is
+    // finished before the cycle ends, so the cycle's edge means what it
+    // means with the commit inline: the wave's post-commit work is done.
+    // What the finish arms, a re-drain or a quiescence advance, is the
+    // next cycle's work. The loop's own echoes are not input to overlap
+    // with: a feed holding nothing else is drained by the next cycle as
+    // it is after an inline commit, whose finish put its echo there too.
+    if (
+      this.#commitInFlight !== undefined && !this.#hasWorkBesidesOwnEchoes()
+    ) {
+      await this.#finishCommitInFlight(runtime);
     }
     await this.#settleLifecycleVerbs(runtime, verbs);
   }
@@ -6157,15 +6443,26 @@ export class SpaceServer implements TransactionSealDestination {
    * scheduler run the affected graph to quiescence — or to the
    * consequence-flush deadline (the second exhaustion trigger, RULED
    * 2026-08-04) — then commit ONE derived transaction carrying the wave's
-   * writes, the watermark doc write, and `derivedThrough`.
+   * writes, the watermark doc write, and `derivedThrough`. With
+   * `overlapCommit`, the commit is left in flight and the step ends at the
+   * publish; `#waveCycle` finishes it at once when nothing arrived to
+   * overlap it with, and the next cycle's settle otherwise
+   * (`#finishCommitInFlight`). Either way a commit the previous cycle left
+   * in flight is finished here, inside the settle.
    */
-  async #serveWave(runtime: Runtime): Promise<void> {
+  async #serveWave(runtime: Runtime, overlapCommit: boolean): Promise<void> {
     const { batchHead } = this.#drainFeed(runtime);
-    // A record the drain holds back stops this batch short of it. An
-    // exhausted cycle's proof is clamped to this batch head in any case;
-    // lowering the carried head too keeps it naming only frames that have
-    // been applied.
-    if (this.#barrierHead !== undefined) {
+    // Under the store read-through posture the drain is the barrier: it
+    // integrated every record it consumed into the replica before returning,
+    // so every input at or below the batch head has been applied here, with
+    // no frame to wait for. Otherwise a record the drain holds back stops
+    // this batch short of it. An exhausted cycle's proof is clamped to this
+    // batch head in any case; lowering the carried head too keeps it naming
+    // only frames that have been applied.
+    const readThrough = this.#options.policy?.storeReadThrough === true;
+    if (readThrough) {
+      this.#barrierHead = batchHead;
+    } else if (this.#barrierHead !== undefined) {
       this.#barrierHead = Math.min(this.#barrierHead, batchHead);
     }
     // The event drain stays a fully-awaited, single-flight step AHEAD
@@ -6180,7 +6477,7 @@ export class SpaceServer implements TransactionSealDestination {
     // the race and fully awaited is also why the drain is timed: it is
     // wave duration that no deadline bounds and no counter reports.
     const drainStart = performance.now();
-    const drainedEvents = await this.#drainStreamEvents(runtime);
+    let drainedEvents = await this.#drainStreamEvents(runtime);
     timing.time(drainStart, "executor", "wave", "drain");
     if (drainedEvents === undefined) return;
     this.#retireAckedEffects(runtime);
@@ -6190,8 +6487,8 @@ export class SpaceServer implements TransactionSealDestination {
     // scheduler saw every input ≤ batchHead before we call the wave
     // quiescent (snapshot discipline: records arriving after the drain
     // belong to the NEXT wave).
-    const deadlineMs = this.#options.policy?.flushDeadlineMs ??
-      DEFAULT_FLUSH_DEADLINE_MS;
+    const deadlineMs = this.#settleDeadlineMs();
+    this.#options.policy?.onFlushDeadline?.(deadlineMs);
     const deadline = this.#flushDeadlineNow() + deadlineMs;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     const deadlinePromise = new Promise<"deadline">((resolve) => {
@@ -6252,6 +6549,14 @@ export class SpaceServer implements TransactionSealDestination {
     // cycle means the wave's cost is the seal and the commit, not the
     // derivations, and the two are fixed in different places.
     const settleStart = performance.now();
+    // A probe segment is a phase of this settle only while the settle is
+    // still open: the probe keeps running after the deadline cuts the race,
+    // and a segment that resolves then measures what the loop waited out,
+    // not what the settle cost.
+    const probeRow = (start: number, phase: string) => {
+      if (exhausted) return;
+      timing.time(start, "executor", "wave", phase);
+    };
     try {
       while (true) {
         // RACE the deadline (serving-loop.md §3's second exhaustion
@@ -6262,7 +6567,9 @@ export class SpaceServer implements TransactionSealDestination {
         const step = await Promise.race([
           (async () => {
             await loadPass;
+            const runtimeIdleStart = performance.now();
             await runtime.idle();
+            probeRow(runtimeIdleStart, "settle-runtime-idle");
             // The probe and the floors that clamp the proof are read in one
             // synchronous stretch, as the exit probe below and the floors the
             // advance reads are, so no shadow promotion falls between them.
@@ -6285,15 +6592,29 @@ export class SpaceServer implements TransactionSealDestination {
             // SENT before this pass can declare quiescence — without
             // it, a wave could advance W past an authored commit whose
             // demanded derivation never ran (the frame was still in
-            // the flush queue).
-            await this.#options.server.idle();
+            // the flush queue). Under the store read-through posture the
+            // home space's dirtiness arrived with the drain, which
+            // re-read each record's writes into the replica, and the
+            // session carries no frame for the space; the server's idle
+            // is then every other client's work, and the settle does not
+            // wait on it.
+            if (!readThrough) {
+              const serverIdleStart = performance.now();
+              await this.#options.server.idle();
+              probeRow(serverIdleStart, "settle-server-idle");
+            }
             // The INPUT barrier, not the durability barrier: sealed
             // commits settle at the wave commit BELOW, so the full
             // synced() would deadlock here (see
             // StorageManager.inputSynced). It also waits for the
             // loopback transport to hand over every frame the drain
             // above sent, which it does one frame per event-loop turn.
+            // Kept under the read-through too: a foreign space's provider
+            // still reads over its session, and this is where its
+            // in-flight pulls and handed-over frames are waited for.
+            const barrierStart = performance.now();
             await runtime.storageManager.inputSynced?.();
+            probeRow(barrierStart, "settle-input-barrier");
             // One macrotask yield: a handed-over frame's application
             // schedules work; the yield lets it register dirtiness so
             // the isIdle() probe below sees it. (An application parked
@@ -6311,6 +6632,25 @@ export class SpaceServer implements TransactionSealDestination {
           break;
         }
         if (!this.#active || this.#runtime !== runtime) break;
+        // The predecessor's commit is finished here, where its outcome is
+        // the next thing this cycle needs: the wave this settle sealed into
+        // read the replica with the predecessor's writes applied, and a
+        // write of them the sink refused rolls back now, re-running what
+        // read it, so the settle is probed again rather than ended.
+        if (this.#commitInFlight !== undefined) {
+          await this.#finishCommitInFlight(runtime);
+          if (!this.#active || this.#runtime !== runtime) break;
+          // An event the finish requeued re-runs in this wave, beside the
+          // runs its rollback re-armed, as it would after an inline commit
+          // whose successor drains it first; the drain stays single-flight,
+          // since the settle step above has completed.
+          if (this.#eventScanOwed) {
+            const redrained = await this.#drainStreamEvents(runtime);
+            if (redrained === undefined) break;
+            drainedEvents += redrained;
+          }
+          continue;
+        }
         // The barrier above has applied every frame at or below the batch
         // head, whatever the probes below find.
         this.#barrierHead = batchHead;
@@ -6354,7 +6694,16 @@ export class SpaceServer implements TransactionSealDestination {
     // the cycle span is: a settle that threw is a failed wave, not a slow
     // one, and folding its duration in would blunt the measurement.
     timing.time(settleStart, "executor", "wave", "settle");
+    this.#noteSettleEnded(exhausted);
     if (!this.#active || this.#runtime !== runtime) return;
+    // A settle the deadline cut leaves the predecessor's commit to finish
+    // here: the advance below reads the watermark and the derived tail that
+    // commit moves, and the wave this cycle closes rebases on the commit it
+    // was noted.
+    if (this.#commitInFlight !== undefined) {
+      await this.#finishCommitInFlight(runtime);
+      if (!this.#active || this.#runtime !== runtime) return;
+    }
     // Read once: a settle step the deadline cut keeps running detached, and
     // a proof it reaches after this point belongs to no wave.
     const proven = exhausted ? provenHead : undefined;
@@ -6499,11 +6848,7 @@ export class SpaceServer implements TransactionSealDestination {
       // The owed re-drain rides quiet cycles too (round-2 thread 9): a
       // transport-failed delivery must retry on the NEXT loop cycle,
       // not wait for a new input wave or a re-activation.
-      await this.#viewPlanPublisher.publish(
-        runtime,
-        this.#options.server,
-        this.#options.space,
-      );
+      await this.#publishViewPlan(runtime, !exhausted);
       await this.#drainOutboxAppends(false);
       return;
     }
@@ -6589,10 +6934,159 @@ export class SpaceServer implements TransactionSealDestination {
     await this.#resolveForeignEngines(closing);
 
     const derivedThrough = advanceSealed ? advanceTo : this.#watermark;
-    const outcome = await closing.commitWave(this.#sink!, { derivedThrough });
+    const finish: WaveFinishContext = {
+      exhausted,
+      batchHead,
+      drainedEvents,
+      advanceTo,
+      advanceSealed,
+      settleAdvanceFrom,
+      settleAdvanceGeneration,
+    };
+    const commitStart = performance.now();
+    const pending = closing.commitWave(this.#sink!, { derivedThrough });
+    if (overlapCommit) {
+      // The commit crosses to the sink while the next cycle drains and
+      // settles, and `#finishCommitInFlight` picks its outcome up there.
+      // `executor/wave/commit` keeps naming the whole round trip; the part
+      // of it the next cycle's own work did not cover is
+      // `executor/wave/commit-wait`. The publish runs now, over the state
+      // the settle above left, as it does after an inline commit; a commit
+      // the sink refuses is published over again by the next cycle.
+      const timeCommit = () =>
+        timing.time(commitStart, "executor", "wave", "commit");
+      pending.then(timeCommit, timeCommit);
+      this.#commitInFlight = { closing, outcome: pending, finish };
+      await this.#publishViewPlan(runtime, !exhausted);
+      return;
+    }
+    const outcome = await pending;
+    timing.time(commitStart, "executor", "wave", "commit");
     this.#servedWave = { wave: closing, outcome };
+    await this.#finishWave(runtime, closing, outcome, finish, true);
+  }
+
+  /**
+   * Finishes the wave whose commit is in flight: waits for its outcome and
+   * runs the wave's post-commit step. A commit that failed outright
+   * surfaces here as the cycle's own failure, as an inline one does at its
+   * await. The wait is timed as `executor/wave/commit-wait`, the part of the
+   * commit's round trip the cycle's drain and settle did not cover.
+   */
+  async #finishCommitInFlight(runtime: Runtime): Promise<void> {
+    const pending = this.#commitInFlight;
+    if (pending === undefined) return;
+    const waitStart = performance.now();
+    // The handle stays registered through the wait: a park that runs
+    // meanwhile takes the commit over (`#parkResources`), and this finish
+    // then stands down to it rather than running the wave's bookkeeping
+    // against a runtime the park is disposing.
+    let outcome: WaveCommitOutcome;
+    try {
+      outcome = await pending.outcome;
+    } catch (error) {
+      if (this.#commitInFlight !== pending) return;
+      this.#commitInFlight = undefined;
+      throw error;
+    }
+    timing.time(waitStart, "executor", "wave", "commit-wait");
+    if (this.#commitInFlight !== pending) return;
+    this.#commitInFlight = undefined;
+    if (!this.#active || this.#runtime !== runtime) return;
+    await this.#finishWave(
+      runtime,
+      pending.closing,
+      outcome,
+      pending.finish,
+      false,
+    );
+  }
+
+  /**
+   * Reports each foreign provisioning batch a wave durably committed as a
+   * warm-marked authored admission, whatever the wave's outcome: §2b never
+   * rolls a landed foreign commit back, and the host activates a parked,
+   * sessionless target on the notice so the staged setup derives
+   * (serving-loop.md §1's third activation trigger). A sink that reports
+   * its commits itself has reported them.
+   */
+  #reportForeignCommits(outcome: WaveCommitOutcome): void {
+    for (const foreign of outcome.foreignCommits) {
+      this.#options.stats.warmRequests += 1;
+      if (this.#sink?.reportsCommits === true) continue;
+      this.#options.server.noteExecutorCommit({
+        space: foreign.space,
+        seq: foreign.seq,
+        class: "authored",
+        sessionId: this.#holder,
+        writes: foreign.writes,
+        warm: true,
+      });
+    }
+  }
+
+  /**
+   * Reports the wave's home commit at `seq` to the memory server: it
+   * entered the store on the co-hosted engine plane, not through any
+   * session, and the notice is what makes push fire (M4, derived commits
+   * reach subscribers) and the feed carry it (the loop skips its own echo
+   * by class and holder). A sink that reports its commits itself has
+   * reported it.
+   */
+  #reportHomeCommit(seq: number): void {
+    if (this.#sink?.reportsCommits === true) return;
+    const records = Engine.selectCommitsSince(this.#options.engine, {
+      fromSeq: seq - 1,
+      limit: 1,
+    });
+    const record = records.find((entry) => entry.seq === seq);
+    if (record === undefined) return;
+    this.#options.server.noteExecutorCommit({
+      space: this.#options.space,
+      seq: record.seq,
+      class: "derived",
+      holder: this.#holder,
+      sessionId: record.sessionId,
+      writes: record.writes as AdmittedCommitNotice["writes"],
+    });
+  }
+
+  /**
+   * The wave's post-commit step: the open wave is told of the landed
+   * commit, foreign commits are reported as warm requests, the seals
+   * settle, the events the wave carried are released, the effects it sealed
+   * reach the outbox, the watermark and the counters move, the view plan is
+   * published when `publish` asks for it, and the outbox drains. A lease
+   * lost at the commit parks the space here.
+   */
+  async #finishWave(
+    runtime: Runtime,
+    closing: WaveAccumulator,
+    outcome: WaveCommitOutcome,
+    finish: WaveFinishContext,
+    publish: boolean,
+  ): Promise<void> {
+    const {
+      exhausted,
+      batchHead,
+      drainedEvents,
+      advanceTo,
+      advanceSealed,
+      settleAdvanceFrom,
+      settleAdvanceGeneration,
+    } = finish;
     if (outcome.aborted !== undefined) this.#barrierHead = undefined;
-    if (outcome.seq !== undefined) this.#lastCommittedWaveSeq = outcome.seq;
+    if (outcome.seq !== undefined) {
+      this.#lastCommittedWaveSeq = outcome.seq;
+      // A wave a seal opened while this commit was in flight took a basis
+      // the commit has passed: the commit is noted to it, so the next
+      // cycle's writes to the documents it wrote as the replica holds them
+      // rebase rather than drop.
+      this.#waveOpenNow()?.noteOwnWaveCommit(
+        outcome.seq,
+        closing.committedHomeKeys,
+      );
+    }
     // The EXPLICIT WARM REQUEST (serving-loop.md §1's third activation
     // trigger; RULED 2026-08-21): every foreign provisioning batch this
     // wave durably committed is reported to the co-hosted memory server
@@ -6607,18 +7101,10 @@ export class SpaceServer implements TransactionSealDestination {
     // Reported on EVERY outcome shape: a wave that aborted AFTER some
     // foreign batches landed still staged that setup durably (§2b never
     // rolls a landed foreign commit back).
-    for (const foreign of outcome.foreignCommits) {
-      this.#options.stats.warmRequests += 1;
-      this.#options.server.noteExecutorCommit({
-        space: foreign.space,
-        seq: foreign.seq,
-        class: "authored",
-        sessionId: this.#holder,
-        writes: foreign.writes,
-        warm: true,
-      });
-    }
+    this.#reportForeignCommits(outcome);
+    const settledStart = performance.now();
     await closing.settled();
+    timing.time(settledStart, "executor", "wave", "settled");
     this.#reconcileDeliveryWritesAfterWave(closing);
     // A normal handler consequence clears `deliveryDeferral` in the same
     // accepted contribution that marks the entry. Retire the lease-local
@@ -6637,12 +7123,20 @@ export class SpaceServer implements TransactionSealDestination {
     // (its contributions withdrawn: lease-lost, rejected, foreign-failed,
     // raced — every abort arm reports its event-handler contributions as
     // requeued). Either way a later drain may queue the entry again if it
-    // is still pending.
+    // is still pending. Released is the copy that sealed into THIS wave,
+    // or a notice staged for a wave not yet known; a copy sealed into a
+    // later wave, or one still queued, is another wave's to release
+    // (see #drainInFlight).
+    const releasedBy = (eventId: string) => {
+      const guard = this.#drainInFlight.get(eventId);
+      return guard !== undefined && guard.phase === "marked" &&
+        (guard.wave === undefined || guard.wave === closing);
+    };
     for (const eventId of outcome.committedEventIds) {
-      this.#drainInFlight.delete(eventId);
+      if (releasedBy(eventId)) this.#drainInFlight.delete(eventId);
     }
     for (const eventId of outcome.requeuedEventIds) {
-      this.#drainInFlight.delete(eventId);
+      if (releasedBy(eventId)) this.#drainInFlight.delete(eventId);
     }
     // A row-label refusal is raised by the store transaction itself, after
     // the handler transaction has sealed into this wave. The accumulator
@@ -6812,33 +7306,32 @@ export class SpaceServer implements TransactionSealDestination {
           ]);
         }
       }
-      // The wave commit entered the store on the co-hosted engine plane,
-      // not through any session: report it so push fires (M4 — derived
-      // commits reach subscribers) and the feed carries it (the loop
-      // skips its own echo by class + holder).
-      const records = Engine.selectCommitsSince(this.#options.engine, {
-        fromSeq: outcome.seq - 1,
-        limit: 1,
-      });
-      const record = records.find((entry) => entry.seq === outcome.seq);
-      if (record !== undefined) {
-        this.#options.server.noteExecutorCommit({
-          space: this.#options.space,
-          seq: record.seq,
-          class: "derived",
-          holder: this.#holder,
-          sessionId: record.sessionId,
-          writes: record.writes as AdmittedCommitNotice["writes"],
-        });
-      }
+      this.#reportHomeCommit(outcome.seq);
     }
 
-    if (outcome.aborted === undefined) {
-      await this.#viewPlanPublisher.publish(
-        runtime,
-        this.#options.server,
-        this.#options.space,
-      );
+    if (publish && outcome.aborted === undefined) {
+      // The documents this wave committed reach the sessions before the
+      // planner takes the thread: at quiescence the planner walks every
+      // viewing session's UI, which on a co-hosted server is time the
+      // memory server cannot spend sending the frames those documents owe.
+      // A settle the deadline cut plans nothing a session already holds a
+      // selection for, so its frames keep the refresh's own turn.
+      // The flush only orders work the memory server's own refresh turn would
+      // do anyway, and the wave is already durable, so a failed flush is
+      // logged and the plan and the outbox drain still run.
+      if (!exhausted && this.#active && this.#runtime === runtime) {
+        try {
+          await this.#options.server.flushSessions([this.#options.space]);
+        } catch (error) {
+          logger.warn("view-plan-session-flush-failed", () => [
+            `space ${this.#options.space}: the session flush before the view ` +
+            "plan failed; the plan publishes over the refresh's own turn",
+            error,
+          ]);
+        }
+        if (!this.#active || this.#runtime !== runtime) return;
+      }
+      await this.#publishViewPlan(runtime, !exhausted);
     }
 
     // Drain the durable append rows (FP1): after a wave that landed
@@ -6859,6 +7352,7 @@ export class SpaceServer implements TransactionSealDestination {
    * retries without fresh input. */
   async #drainOutboxAppends(hasNewAppends: boolean): Promise<void> {
     if (!hasNewAppends && !this.#outboxDrainOwed) return;
+    const outboxStart = performance.now();
     try {
       const drained = await this.#outbox?.deliverPendingAppends();
       this.#outboxDrainOwed = (drained?.remaining ?? 0) > 0;
@@ -6868,7 +7362,24 @@ export class SpaceServer implements TransactionSealDestination {
         "outbox drain failed; rows kept for re-send",
         error,
       ]);
+    } finally {
+      timing.time(outboxStart, "executor", "wave", "outbox");
     }
+  }
+
+  /** Publishes the space's view plan, timed as the cycle's `publish` phase.
+   * `quiescent` says whether the settlement it follows reached quiescence
+   * rather than the flush deadline, which decides whether the publisher
+   * walks an invalidated UI again or plans over its last walk. */
+  async #publishViewPlan(runtime: Runtime, quiescent: boolean): Promise<void> {
+    const publishStart = performance.now();
+    await this.#viewPlanPublisher.publish(
+      runtime,
+      this.#options.server,
+      this.#options.space,
+      { quiescent },
+    );
+    timing.time(publishStart, "executor", "wave", "publish");
   }
 
   /** Dispose the serving runtime under a DEADLINE (park liveness — the
@@ -6886,21 +7397,46 @@ export class SpaceServer implements TransactionSealDestination {
    * counted (§7 `parkDisposeTimeouts`), its eventual completion or
    * failure logged when it lands; the park completes regardless (lease
    * released, `#parked` resolved, recovery unblocked). */
-  async #disposeRuntimeTimeboxed(reason: string): Promise<void> {
+  async #disposeRuntimeTimeboxed(
+    reason: string,
+    inFlight: CommitInFlight | undefined,
+  ): Promise<void> {
     this.#viewPlanPublisher.dispose();
     const dispose = this.#disposeRuntime;
-    if (dispose === undefined) return;
+    if (dispose === undefined && inFlight === undefined) return;
+    // A commit the park took over settles ahead of the dispose, under the
+    // same deadline: park never waits on a sink without bound, and a stalled
+    // commit is abandoned with the dispose, its late outcome logged.
+    const settleInFlight = async () => {
+      if (inFlight === undefined) return;
+      let outcome: WaveCommitOutcome;
+      try {
+        outcome = await inFlight.outcome;
+      } catch {
+        return;
+      }
+      this.#reportForeignCommits(outcome);
+      if (outcome.seq !== undefined) this.#reportHomeCommit(outcome.seq);
+      await inFlight.closing.settled();
+    };
+    const pending = (async () => {
+      await settleInFlight();
+      await dispose?.();
+    })();
     // A dispose that fails in time rejects here, for the caller's
     // park-dispose-failed arm to log.
-    await awaitDisposeTimeboxed(dispose(), {
+    await awaitDisposeTimeboxed(pending, {
       policy: this.#options.policy,
       stats: this.#options.stats,
       space: this.#options.space,
       overrun: (timeoutMs) =>
         `space ${this.#options.space}: runtime dispose overran ` +
-        `${timeoutMs}ms during park (${reason}); abandoning the ` +
-        "factory handle and completing the park — loop stopped, " +
-        "wave abandoned, seal chain drained; lease releases and " +
+        `${timeoutMs}ms during park (${reason})` +
+        (inFlight === undefined
+          ? ""
+          : ", a wave commit in flight ahead of it") +
+        "; abandoning the factory handle and completing the park — loop " +
+        "stopped, wave abandoned, seal chain drained; lease releases and " +
         "whenParked resolves now (park liveness)",
     });
   }
@@ -6933,6 +7469,9 @@ export class SpaceServer implements TransactionSealDestination {
       this.#options.retainParkedRuntime !== undefined;
     this.#active = false;
     this.#parkRequested = true;
+    // A tenure activated on this server again starts its first burst at the
+    // base deadline, as one after a quiet loop does.
+    this.#grownFlushDeadlineMs = undefined;
     this.#structureLoadAbort.abort();
     if (wasActive) {
       this.#options.stats.activeSpaces = Math.max(
@@ -7012,6 +7551,16 @@ export class SpaceServer implements TransactionSealDestination {
     // re-activation re-resolves; the map must not outlive engines the
     // server may close meanwhile).
     this.#foreignEngines.clear();
+    // A commit in flight lands or fails on its own, and the park takes it
+    // over from the cycle that started it: the store holds whatever it
+    // committed whatever the tenure does next, so its commits are reported
+    // as a finished wave's are, and its seals settle before the runtime
+    // they sit in is disposed, under the dispose deadline
+    // (`#disposeRuntimeTimeboxed`). Its other bookkeeping goes with the
+    // tenure, as a wave's does when the loop dies mid-commit, and the next
+    // tenure recomputes on demand.
+    const inFlight = this.#commitInFlight;
+    this.#commitInFlight = undefined;
     const wave = this.#currentWave;
     this.#currentWave = undefined;
     await this.#sealChain;
@@ -7072,10 +7621,10 @@ export class SpaceServer implements TransactionSealDestination {
     // disposed rather than offered on.
     if (
       !(offerRuntime && detached && wave === undefined && effectsSettled &&
-        this.#offerRuntime())
+        inFlight === undefined && this.#offerRuntime())
     ) {
       try {
-        await this.#disposeRuntimeTimeboxed(reason);
+        await this.#disposeRuntimeTimeboxed(reason, inFlight);
       } catch (error) {
         logger.warn("park-dispose-failed", () => [
           "runtime dispose during park failed",

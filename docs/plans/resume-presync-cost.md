@@ -199,14 +199,11 @@ Exit: a plan's inputs document is hashed over its links, not its schemas.
       for every cell the family owns, so an absence it was told of is what
       the store holds, and the session's own instance of a session-scoped
       cell, which no store holds before the session writes it, counts as
-      examined without asking. A cell owed a default at a narrower scope
-      still holds the run, since the hold's preparation is what seeds it
-      (`ownedCellOwesSeed`), and so does a family whose probes spent the
-      gate's budget (`NAMING_PROBE_BUDGET`), since a cell the budget left
-      unprobed was never read, and a store-confirmed absence a serving
-      runtime's store read-through remembers (`#storeAbsences`), which
-      the replica reports unexamined for commit to reconcile. Before this, a thirty-message room's load
-      paid eleven name-syncs, nine of them holds of named families on such
+      examined without asking. A family whose probes spent the gate's
+      budget (`NAMING_PROBE_BUDGET`) still holds the run, since a cell the
+      budget left unprobed was never read; a cell owed a default and an
+      absence the store confirmed are the next item's. Before this, a
+      thirty-message room's load paid eleven name-syncs, nine of them holds of named families on such
       cells: the room core, the add-member surface and the manager core on
       session-scoped cells, four nested instances on the valueless cell a
       `wish` writes to; the room core's name-sync planned the whole room a
@@ -218,6 +215,40 @@ Exit: a plan's inputs document is hashed over its links, not its schemas.
       `packages/runner/test/resume-presync-plan-count.test.ts`). The
       record is
       [`../history/development/performance/2026-10-16-fabrichat-room-cold-load-phases.md`](../history/development/performance/2026-10-16-fabrichat-room-cold-load-phases.md).
+- [x] An absence the store read-through confirmed holds no start, named
+      family or not, among the documents the gate's probes reach before
+      their budget is spent; one past the budget holds the start, as the
+      item above says. The replica remembers each instance the store held
+      nothing at until the feed reports a write to it
+      (`IStorageProvider.storeReportedAbsent`), and a name-sync asks the
+      replica, which answers with that report until then; the replica still
+      reports such a read unexamined, for commit to reconcile. The argument
+      document is asked of the store again (`readStoreAbsenceAgain()`):
+      setup writes it with the result that links to it, so with that result
+      present the report predates the write. A cell owed a default at a
+      scope narrower than its owner's result (`ownedCellOwesSeed`) whose
+      absence the store confirmed holds the start only for its seed: the
+      start seeds each such default in a transaction of its own, as the
+      preparation does, and loads nothing, and a caller-owned setup, which
+      seeds the defaults in the caller's transaction, is not held at all. A
+      user- or session-scoped cell owed no default, of a family no pre-sync
+      named, whose absence the store confirmed holds the start the same way: its
+      instance joins the ones the start seeds, though it owes nothing, so that
+      outside a caller-owned setup the start runs apart from the caller's
+      transaction, since a served derivation that set the piece up in its own
+      transaction would read that instance before the serving loop produced it,
+      and be withdrawn until it was (`unproducedScopedInstance`), which only
+      that start would do. Any other absent cell owed a default holds the start
+      for the whole preparation, since the store may hold a value for it. On a
+      served FabriChat send burst, each new message row is started once per
+      viewing session and owes that session's instance of `pickerOpen` a
+      default; with both changes the rows' starts ran no pre-sync, where a
+      burst's ran 2 to 24, and the burst's time did not move (3.3, 3.9 and 3.3 s
+      against 3.1, 4.3 and 2.9 s). A tree whose rows owe a per-session default,
+      named by a synced run in a caller's transaction on a replica with the
+      read-through, pays no name-sync for any row
+      (`packages/runner/test/resume-presync-plan-count.test.ts`). The record is
+      [`../history/development/performance/2026-10-23-start-gate-confirmed-absence.md`](../history/development/performance/2026-10-23-start-gate-confirmed-absence.md).
 - [ ] An instance the pre-sync did not name is still held on a derived
       cell that holds no value: one a caller's `run()` reaches, or one
       whose pre-sync round had a sync that failed. Taking the record there

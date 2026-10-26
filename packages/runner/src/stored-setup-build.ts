@@ -39,7 +39,7 @@ import {
 } from "./cause-assignment.ts";
 
 /** The version of the record this module writes and reads. */
-export const STORED_SETUP_BUILD_VERSION = 1;
+export const STORED_SETUP_BUILD_VERSION = 2;
 
 /** A pattern identity, as the pattern pointer and the setup marker name one. */
 export interface PatternRef {

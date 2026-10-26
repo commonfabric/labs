@@ -137,13 +137,19 @@ export interface RoomMembership extends ChatIndexEntry {
 /** Explicit membership choices, compared by resolved room identity. */
 export type RoomMembershipCell = Writable<RoomMembership[] | Default<[]>>;
 
+/** The validated catalog fields used to discover and list rooms. */
+type RoomCatalogEntry = Pick<
+  SharedSpaceEntry,
+  "space" | "kind" | "state" | "revision" | "since"
+>;
+
 /**
  * Applies standalone catalog choices to room records, including a removed
  * catalog entry. Container membership keeps its own state and revision.
  */
 const effectiveMemberships = (
   memberships: readonly RoomMembership[],
-  entries: Record<string, SharedSpaceEntry>,
+  entries: Record<string, RoomCatalogEntry>,
 ): RoomMembership[] =>
   memberships.map((membership): RoomMembership => {
     const entry = entries[spaceOf(membership.room) ?? ""];
@@ -1770,7 +1776,7 @@ interface ShownPerson {
 
 /** The opaque revision of a conversation discovered through a catalog entry. */
 const chatRevision = (
-  entry: SharedSpaceEntry,
+  entry: RoomCatalogEntry,
   room: Cell<ChatRoomLink>,
 ): string => {
   const resolved = room.resolveAsCell();
@@ -1883,19 +1889,30 @@ export const FabriChatManagerCore = pattern<
     const roomMembership = new Writable<RoomMembership[]>([]);
     const draft = new Writable.perSession<GroupDraft>(EMPTY_DRAFT);
     const startRefusal = new Writable.perSession<string>("");
+    // Validation depends only on the catalog; room discovery can settle one
+    // source at a time without validating every entry and offer again.
+    const catalogEntries = computed((): Record<string, RoomCatalogEntry> => {
+      const catalog = sharedSpaceCatalog.get();
+      if (!isSharedSpaceCatalog(catalog)) return {};
+      return Object.fromEntries(
+        Object.entries(catalog.entries).map(([key, entry]) => [key, {
+          space: entry.space,
+          kind: entry.kind,
+          state: entry.state,
+          revision: entry.revision,
+          ...(entry.since === undefined ? {} : { since: entry.since }),
+        }]),
+      );
+    });
     // Saved catalog entries are discovery sources; standalone rooms come first.
     // A catalog that doesn't read as one supplies no sources.
-    const savedRooms = computed((): SharedSpaceEntry[] => {
-      const catalog = sharedSpaceCatalog.get();
-      return isSharedSpaceCatalog(catalog)
-        ? Object.values(catalog.entries).filter((entry) =>
-          entry.state === "saved"
-        ).sort((a, b) =>
+    const savedRooms = computed((): RoomCatalogEntry[] =>
+      Object.values(catalogEntries).filter((entry) => entry.state === "saved")
+        .sort((a, b) =>
           Number(b.kind === CHAT_ROOM_OFFER_KIND) -
           Number(a.kind === CHAT_ROOM_OFFER_KIND)
         )
-        : [];
-    });
+    );
     // A room's space is read under the reader's own access, so a principal it
     // refuses finds nothing there that the others find. That access is the
     // principal's, so each room is found, and everything read from it
@@ -1913,10 +1930,6 @@ export const FabriChatManagerCore = pattern<
     const roomsForUser = computed((): PerUser<ChatIndexEntry[]> => {
       const self = principalOf(myProfile, "represents-principal");
       const stored = direct.get() ?? {};
-      const catalogValue = sharedSpaceCatalog.get();
-      const catalogEntries = isSharedSpaceCatalog(catalogValue)
-        ? catalogValue.entries
-        : {};
       const memberships = effectiveMemberships(
         roomMembership.get() ?? [],
         catalogEntries,

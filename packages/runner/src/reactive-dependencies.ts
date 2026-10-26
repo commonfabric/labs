@@ -442,6 +442,29 @@ function shallowEqual(
 }
 
 /**
+ * Whether two address lists name the same addresses in the same order, an
+ * address's scope instance (`scopeKey`) included.
+ */
+export function sameAddresses(
+  a: readonly IMemorySpaceAddress[],
+  b: readonly IMemorySpaceAddress[],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index++) {
+    const left = a[index];
+    const right = b[index];
+    if (
+      left.space !== right.space || left.id !== right.id ||
+      left.type !== right.type ||
+      normalizeCellScope(left.scope) !== normalizeCellScope(right.scope) ||
+      left.scopeKey !== right.scopeKey ||
+      !arrayEqual(left.path, right.path)
+    ) return false;
+  }
+  return true;
+}
+
+/**
  * Orders two paths, a path ahead of every path it is a prefix of, and
  * otherwise by the first component the two disagree on.
  */

@@ -184,8 +184,14 @@ const NEW_DB_PRAGMAS = `
   PRAGMA page_size = 32768;
 `;
 
+// The schema, like the migrations below, opens with an immediate transaction:
+// it takes the write lock up front and waits on the busy timeout for it. A
+// deferred transaction reads the schema first and writes after, and fails at
+// once rather than waiting when another connection committed in between,
+// which is what a second connection to a store opens into while the first is
+// writing (the serving loop's worker beside the memory server).
 const INIT = `
-BEGIN TRANSACTION;
+BEGIN IMMEDIATE TRANSACTION;
 
 CREATE TABLE IF NOT EXISTS authorization (
   ref            TEXT    NOT NULL PRIMARY KEY,
@@ -782,6 +788,11 @@ FROM "commit"
 
 const SELECT_DATA_VERSION = `PRAGMA data_version`;
 
+const SELECT_AUTHORED_SEQ_THROUGH = `
+SELECT COALESCE(MAX(seq), 0) AS seq FROM "commit"
+WHERE class = 'authored' AND seq <= :seq AND branch = :branch
+`;
+
 const SELECT_EXISTING_COMMIT = `
 SELECT seq, branch, original, resolution, class, holder
 FROM "commit"
@@ -962,6 +973,7 @@ interface PreparedStatements {
   insertRevision: PreparedStatement;
   insertSnapshot: PreparedStatement;
   selectAtSeqLocal: PreparedStatement;
+  selectAuthoredSeqThrough: PreparedStatement;
   selectBlob: PreparedStatement;
   selectBranch: PreparedStatement;
   selectBranches: PreparedStatement;
@@ -1166,13 +1178,19 @@ export type Engine = {
    * SQLite, and nothing a transaction wrote is remembered before it commits
    * or left behind when it rolls back.
    *
-   * An entry is served without asking SQLite because this engine's
-   * connection is the only one that writes its store. A write through any
-   * other connection goes unseen here until this engine next writes the
-   * table. A name with no row is never recorded, so the map is bounded by
-   * the branches that exist rather than by the names readers ask for.
+   * An entry is served from the map, after one data-version check and no
+   * read of the branch row, while the connection's data version
+   * ({@link dataVersion}) is the one it was recorded under: a commit
+   * through another connection to the store, the serving loop's worker
+   * beside the memory server's connection or the other way round, moves
+   * that version, and the next read then asks SQLite again. A name with no
+   * row is never recorded, so the map is bounded by the branches that exist
+   * rather than by the names readers ask for.
    */
   branchStates: Map<BranchName, Readonly<BranchState>>;
+
+  /** The data version {@link Engine.branchStates}' entries were read under. */
+  branchStatesDataVersion: number;
 };
 
 /** The first stale confirmed read of an entity on a branch in a declared scope. */
@@ -1757,6 +1775,7 @@ const prepareStatements = (database: Database): PreparedStatements => ({
   insertRevision: database.prepare(INSERT_REVISION),
   insertSnapshot: database.prepare(INSERT_SNAPSHOT),
   selectAtSeqLocal: database.prepare(SELECT_AT_SEQ_LOCAL),
+  selectAuthoredSeqThrough: database.prepare(SELECT_AUTHORED_SEQ_THROUGH),
   selectBlob: database.prepare(SELECT_BLOB),
   selectBranch: database.prepare(SELECT_BRANCH),
   selectBranches: database.prepare(SELECT_BRANCHES),
@@ -1912,7 +1931,7 @@ const migrateScopedEntityTables = (database: Database): void => {
   }
 
   database.exec(`
-BEGIN TRANSACTION;
+BEGIN IMMEDIATE TRANSACTION;
 
 DROP INDEX IF EXISTS idx_revision_branch_id_seq;
 DROP INDEX IF EXISTS idx_revision_commit;
@@ -1997,7 +2016,7 @@ const migrateHeadCurrentOp = (database: Database): void => {
     columnDefault(database, "head", "op") !== null
   ) {
     database.exec(`
-BEGIN TRANSACTION;
+BEGIN IMMEDIATE TRANSACTION;
 
 DROP INDEX IF EXISTS idx_head_branch;
 DROP INDEX IF EXISTS idx_head_live_entity_ids;
@@ -2281,6 +2300,7 @@ export const open = async (
       : { documentCacheCoordinator }),
     ...(commitObserver === undefined ? {} : { commitObserver }),
     branchStates: new Map(),
+    branchStatesDataVersion: 0,
   };
 };
 
@@ -2950,6 +2970,22 @@ export const headSeq = (
 
 export const serverSeq = (engine: Engine): number => {
   return (engine.statements.selectServerSeq.get() as { seq: number }).seq;
+};
+
+/** Highest authored commit through a captured head, excluding bookkeeping. */
+export const authoredSeqThrough = (
+  engine: Engine,
+  throughSeq: number,
+  branch: BranchName = DEFAULT_BRANCH,
+): number => {
+  if (!Number.isSafeInteger(throughSeq) || throughSeq < 0) {
+    throw new Error("Authored commit boundary must be a nonnegative integer");
+  }
+  const row = engine.statements.selectAuthoredSeqThrough.get({
+    seq: throughSeq,
+    branch,
+  }) as { seq: number };
+  return row.seq;
 };
 
 /**
@@ -4523,7 +4559,17 @@ export const applyWaveCommit = (
       if (failedPreconditions.length > 0) {
         throw new WavePreconditionError(failedPreconditions, firstDetail);
       }
-      const applied = applyCommitTransaction(txEngine, applyOptions);
+      let applied: AppliedCommit;
+      try {
+        applied = applyCommitTransaction(txEngine, applyOptions);
+      } catch (error) {
+        // A stale edit is a conflict on its document, so that the wave
+        // requeues the contributions writing it rather than all of them.
+        if (error instanceof StaleOperationBaselineError) {
+          throw new WaveCommitConflictError([error.doc]);
+        }
+        throw error;
+      }
       for (const instance of basisInstances ?? []) {
         replaceSchedulerBasisRows(txEngine, {
           branch,
@@ -4738,7 +4784,7 @@ const validateCursor = (cursor: unknown): cursor is OpCursor =>
   Number.isSafeInteger((cursor as { version?: unknown }).version) &&
   (cursor as { version: number }).version >= 0;
 
-const validateApplyOperation = (operation: ApplyOpOperation): void => {
+const validateApplyOperation = (operation: BasedApplyOpOperation): void => {
   validateOperationPath(operation.path);
   if (
     typeof operation.id !== "string" || operation.id.length === 0 ||
@@ -4773,6 +4819,83 @@ const validateApplyOperation = (operation: ApplyOpOperation): void => {
   if (Array.isArray(updates) && updates.length > MAX_OPERATION_BATCH_UPDATES) {
     throw new OpCodecError("operation payload exceeds the update-count limit");
   }
+};
+
+/** An `apply-op` whose base is stated, as the engine applies one. */
+type BasedApplyOpOperation = ApplyOpOperation & { base: OpCursor | null };
+
+/**
+ * An `apply-op` without a base whose `baselineHash` names a value the field no
+ * longer holds. `doc` is the document's instance key, `${id} ${scopeKey}`, so
+ * that a wave commit can name the conflict (`WaveCommitConflictError`).
+ */
+class StaleOperationBaselineError extends OpFieldBaselineMismatchError {
+  readonly doc: string;
+
+  /** Constructs an instance naming the document instance `doc`. */
+  constructor(doc: string) {
+    super("operation field value no longer matches its baseline hash");
+    this.doc = doc;
+  }
+}
+
+/**
+ * Returns `operation` with its base stated. One that names none applies at the
+ * field's current version with nothing to rebase over: its base is the current
+ * cursor, or, for a field with no active epoch, `null` with the hash of the
+ * value the field holds. Its `baselineHash`, when it carries one, names the
+ * value it was computed from, and it applies only while the field holds that
+ * value. Without one it is a blind write, as a `set` or `patch` is, and what
+ * guards it is whatever reads its commit carries, which are validated before
+ * any operation applies.
+ *
+ * @throws StaleOperationBaselineError when the field no longer holds the value
+ *   the hash names.
+ */
+const withStatedBase = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    operation: ApplyOpOperation;
+    scopeKey: string;
+  },
+): BasedApplyOpOperation => {
+  const { branch, operation, scopeKey } = options;
+  if (operation.base !== undefined) {
+    return { ...operation, base: operation.base };
+  }
+  validateOperationPath(operation.path);
+  const { baselineHash, ...unhashed } = operation;
+  const document = readStateForScopeKey(engine, {
+    branch,
+    id: operation.id,
+    scope: normalizeScope(operation.scope),
+    scopeKey,
+  })?.document ?? null;
+  const currentHash = operationBaselineHash(
+    valueAtOperationPath(document, operation.path),
+  );
+  // TODO(ubik2): Drop the hash form once a served handler's reads reach its
+  // wave commit, so that the commit's read guards the edit on every path. A
+  // wave drops the reads of what it seals, and the hash is what still says
+  // which value the edit was computed from.
+  if (baselineHash !== undefined) {
+    if (typeof baselineHash !== "string" || baselineHash.length === 0) {
+      throw new OpFieldBaselineMismatchError(
+        "apply-op baselineHash is malformed",
+      );
+    }
+    if (baselineHash !== currentHash) {
+      throw new StaleOperationBaselineError(`${operation.id} ${scopeKey}`);
+    }
+  }
+  const field = selectOperationField(
+    engine,
+    operationFieldParams(branch, operation.id, scopeKey, operation.path),
+  );
+  return field?.active === 1
+    ? { ...unhashed, base: { epoch: field.epoch, version: field.version } }
+    : { ...unhashed, base: null, baselineHash: currentHash };
 };
 
 const storedOperationResolution = (
@@ -4811,7 +4934,7 @@ const applyOperation = (
     branch: BranchName;
     seq: number;
     opIndex: number;
-    operation: ApplyOpOperation;
+    operation: BasedApplyOpOperation;
     principal?: string;
     sessionId: SessionId;
     scopeKeyOverride?: string;
@@ -6556,14 +6679,23 @@ const applyCommitTransaction = (
       continue;
     }
     if (operation.op === "apply-op") {
+      const scopeKeyOverride = scopeKeyByOpIndex.get(opIndex);
       const applied = applyOperation(engine, {
         branch,
         seq,
         opIndex,
-        operation,
+        operation: withStatedBase(engine, {
+          branch,
+          operation,
+          scopeKey: scopeKeyOverride ??
+            resolveScopeKey(operation.scope, {
+              principal: scanPrincipal,
+              sessionId: scanSession,
+            }),
+        }),
         principal: scanPrincipal,
         sessionId: scanSession,
-        scopeKeyOverride: scopeKeyByOpIndex.get(opIndex),
+        scopeKeyOverride,
       });
       operationResolutions.push(applied.resolution);
       if (applied.revision) revisions.push(applied.revision);
@@ -8597,6 +8729,13 @@ const getBranch = (
   engine: Engine,
   branch: BranchName,
 ): Readonly<BranchState> | null => {
+  // Another connection's commit moves the data version and may have moved
+  // a branch's head; the entries are then as good as absent.
+  const version = dataVersion(engine);
+  if (version !== engine.branchStatesDataVersion) {
+    engine.branchStates.clear();
+    engine.branchStatesDataVersion = version;
+  }
   const known = engine.branchStates.get(branch);
   if (known !== undefined) {
     return known;

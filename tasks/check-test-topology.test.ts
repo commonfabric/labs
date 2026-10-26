@@ -1064,6 +1064,86 @@ describe("reading a run's gathered artifacts", () => {
     }
   });
 
+  it("reads only the latest attempt at each job that was re-run", async () => {
+    // A lane stopped at its bound ships what it finished, and a re-run of
+    // it ships again under the next attempt. The run as it stands is the
+    // re-run's records, beside those of every job that was not re-run.
+    const root = await Deno.makeTempDir({ prefix: "artifacts-" });
+    try {
+      const facts = { job: "Lane", commit: "c0ffee" };
+      await artifact(root, "test-records-tests-1-a1", facts, ["cut short"]);
+      await artifact(root, "test-records-tests-1-a2", facts, ["bakes"]);
+      await artifact(root, "test-records-tests-11-a1", facts, ["glazes"]);
+      await artifact(root, "test-records-tests-2-a9", facts, ["burns"]);
+      await artifact(root, "test-records-tests-2-a10", facts, ["cools"]);
+      await artifact(root, "test-records-tests-3-a1", facts, ["rises"]);
+      await artifact(root, "test-records-coverage-a1", facts, ["gate"]);
+      await artifact(root, "not-shipped-a1", facts, ["proves"]);
+      await artifact(root, "not-shipped-a2", facts, ["rests"]);
+      const records = await readRecords([root], new AliasResolver([]));
+      expect(
+        records.map((record) => [record.from, record.test.n]).sort(),
+      ).toEqual([
+        ["not-shipped-a1", "proves"],
+        ["not-shipped-a2", "rests"],
+        ["test-records-coverage-a1", "gate"],
+        ["test-records-tests-1-a2", "bakes"],
+        ["test-records-tests-11-a1", "glazes"],
+        ["test-records-tests-2-a10", "cools"],
+        ["test-records-tests-3-a1", "rises"],
+      ]);
+      // The same holds where each artifact, or each file, is named on its
+      // own.
+      for (const tail of ["", "/records.ndjson"]) {
+        const named = await readRecords(
+          [
+            `${root}/test-records-tests-1-a1${tail}`,
+            `${root}/test-records-tests-1-a2${tail}`,
+          ],
+          new AliasResolver([]),
+        );
+        expect(named.map((record) => record.test.n)).toEqual(["bakes"]);
+      }
+      // And where the check is handed each artifact as a path of its own:
+      // the superseded one is neither judged nor taken for a path that
+      // arrived empty.
+      const { findings } = await check({
+        root: REPOSITORY,
+        store: {
+          records: [
+            `${root}/test-records-tests-1-a1`,
+            `${root}/test-records-tests-1-a2`,
+          ],
+          commit: "c0ffee",
+        },
+      });
+      const failing = findings.filter((finding) => finding.fails).map((
+        finding,
+      ) => finding.message);
+      expect(failing.length).toBe(1);
+      expect(failing[0]).toContain('"bakes"');
+      // A latest attempt that recorded nothing leaves its path holding
+      // nothing, whatever the attempt before it recorded.
+      const rerun = `${root}/rerun`;
+      await artifact(rerun, "test-records-tests-1-a1", facts, ["bakes"]);
+      await artifact(rerun, "test-records-tests-1-a2", facts, []);
+      const emptied = await check({
+        root: REPOSITORY,
+        store: { records: [rerun], commit: "c0ffee" },
+      });
+      expect(
+        emptied.findings.filter((finding) => finding.fails).map((finding) =>
+          finding.message
+        ),
+      ).toEqual([
+        `${rerun} hold no records, so the store half read nothing of what ` +
+        "they were to carry",
+      ]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("walks a directory of them, however deep each one sits", async () => {
     // A run that produced a single artifact arrives flattened into the
     // directory above, and one that produced many arrives as a directory

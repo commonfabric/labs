@@ -2647,7 +2647,7 @@ describe("piece schema compatibility", () => {
       default: "",
       description: "The producer's display name",
     };
-    const target: JSONSchema = {
+    const target = {
       ...source,
       description: "The consumer's display name",
       title: "Name",

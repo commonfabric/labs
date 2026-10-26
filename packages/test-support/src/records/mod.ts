@@ -11,6 +11,7 @@ export {
   RECORD_SCHEMA_VERSION,
   serializeContextLine,
   serializeRecordLine,
+  shippedArtifact,
   testIdentityKey,
   testIdentityOfKey,
 } from "./schema.ts";

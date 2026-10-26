@@ -17,11 +17,13 @@ import type {
   IMemorySpaceAddress,
 } from "../storage/interface.ts";
 import {
+  endLocalReadValidationStretch,
   localReadsReady,
   releaseLocalReadBasis,
   requireLocalReadCondition,
   usesLocalReads,
   validateLocalReadBasis,
+  validateLocalReadBasisForCommit,
 } from "../storage/local-read-policy.ts";
 import {
   isConflictRejection,
@@ -1276,7 +1278,7 @@ function finalizeReactiveActionCommit(
   }, {
     beforeCommit: () => {
       log = txToReactivityLog(args.tx);
-      if (validateLocalReadBasis(args.tx) !== undefined) return;
+      if (validateLocalReadBasisForCommit(args.tx) !== undefined) return;
       warnOnWriteSurfaceViolations(state, args, log);
       echoRun = state.captureRemoteEcho(args.tx, log, args.invalidCauses);
       hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();
@@ -1299,6 +1301,10 @@ function finalizeReactiveActionCommit(
       }
     },
   });
+  // The commit's own validations stood on the one just before it. A commit
+  // that handed nothing over can still have changed what that one proved,
+  // through its commit callbacks for one, so the check below makes its own.
+  endLocalReadValidationStretch();
   if (parkUnavailableRun(state, args)) return;
   if (!log) {
     throw new Error("scheduler action commit did not build a reactivity log");

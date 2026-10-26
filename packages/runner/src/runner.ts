@@ -5224,7 +5224,8 @@ export class Runner {
    * The description of `pattern`'s build for the identity `ref`: the record
    * setup stamps as `patternSetupBuild`, and the positional cells it
    * describes. A sub-pattern child is described by its own pattern's
-   * identity, which this runtime's pattern manager knows.
+   * identity and the least of its names, which this runtime's pattern manager
+   * knows.
    */
   #describedBuild(
     pattern: Pattern,
@@ -5239,7 +5240,7 @@ export class Runner {
     let described = byRef.get(key);
     if (described === undefined) {
       const entryRefOf = (artifact: object) =>
-        this.#runtime.patternManager.getArtifactEntryRef(artifact);
+        this.#runtime.patternManager.getLeastArtifactEntryRef(artifact);
       described = {
         record: storedSetupBuildOf(pattern, ref, entryRefOf),
         cells: numberedCells(pattern, entryRefOf),
@@ -7789,6 +7790,17 @@ export class Runner {
    * as setup's own resolution does. A piece this runner has named is not
    * held again once the name-sync has landed for the same pattern: whatever
    * the store lacked, it lacks, and the run reports it as it always has.
+   *
+   * A piece whose only absences are defaults its instances are owed
+   * (`ownedCellOwesSeed`), each one the store read-through reported holding
+   * nothing for, needs no name-sync, which could deliver none of them. Its
+   * run is held for the seeds alone, which `seeds` names, and not at all in
+   * a caller-owned setup, which seeds them in the caller's transaction. A
+   * piece of a family no pre-sync named, whose other absences are user- or
+   * session-scoped cells the store reported holding nothing at, is held the
+   * same way, and so not in a caller-owned setup either: their instances
+   * join `seeds`, so that outside such a setup its start runs apart from the
+   * caller's transaction (`#familyAbsent` says why).
    */
   #patternToNameBeforeRun(
     patternOrModule: Pattern | Module | undefined,
@@ -7799,6 +7811,7 @@ export class Runner {
     pattern: Pattern;
     entryKey: string;
     identity?: ScopeKeyIdentity;
+    seeds?: readonly ResumePatternInstance[];
   } | undefined {
     resultCell = resultCell.withTx(tx);
     const identity = tx.tx.scopeKeyIdentity === undefined
@@ -7840,7 +7853,9 @@ export class Runner {
       !this.#runtime.servingPosture &&
       this.#locallyPreparedResults.get(setupKey) === entryKey
     ) return undefined;
-    return this.#familyAbsent(
+    const seeds: ResumePatternInstance[] = [];
+    if (
+      this.#familyAbsent(
         resolved.pattern,
         entryKey,
         key,
@@ -7848,9 +7863,12 @@ export class Runner {
         argumentLink,
         resultCell,
         identity,
+        seeds,
       )
-      ? { pattern: resolved.pattern, entryKey, identity }
-      : undefined;
+    ) return { pattern: resolved.pattern, entryKey, identity };
+    return seeds.length === 0 || this.#callerOwnedSetupTransactions.has(tx)
+      ? undefined
+      : { pattern: resolved.pattern, entryKey, identity, seeds };
   }
 
   /**
@@ -7941,9 +7959,27 @@ export class Runner {
    * for every cell the family owns, so an absence it was told of is what
    * the store holds, and the session's own instance of a session-scoped
    * cell, which no store holds before the session writes it, the replica
-   * counts as examined without asking. A cell owed a default
-   * (`ownedCellOwesSeed`) holds the run whatever the replica examined: the
-   * hold's preparation is what seeds it.
+   * counts as examined without asking. A document the store read-through
+   * reported holding nothing at (`IStorageProvider.storeReportedAbsent`)
+   * holds no run either, named family or not, while the probes have budget
+   * left: a name-sync asks the replica, which answers with that report until
+   * the feed reports a write. Once the budget is spent, a document the probes
+   * have not reached holds the run whatever the store reported, as every
+   * document past the budget does. The
+   * argument document is the one asked of the store again, since the result
+   * here shows the report predates its write. A cell owed a default
+   * (`ownedCellOwesSeed`) that the store reported holding nothing at is not
+   * an absence a name-sync delivers either, so its owning instance is added
+   * to `seeds`, the instances whose defaults a start seeds before it runs,
+   * and the cell holds the run no further. A user- or session-scoped cell
+   * of a family no pre-sync named that the store reported holding nothing at
+   * adds its instance to `seeds` too, so that a start outside a caller-owned
+   * setup runs apart from the caller's transaction: a served derivation that
+   * sets the piece up there reads that instance before the serving loop has
+   * produced it, and is withdrawn until it is produced
+   * (`unproducedScopedInstance`), which only this start would do. Any other
+   * absent cell owed a default holds it, whatever the replica examined, since
+   * the store may hold a value for it.
    */
   #familyAbsent(
     pattern: Pattern,
@@ -7953,6 +7989,7 @@ export class Runner {
     argumentLink: NormalizedFullLink,
     resultCell: Cell<any>,
     identity: ScopeKeyIdentity | undefined,
+    seeds: ResumePatternInstance[],
   ): boolean {
     // Presence probes on a read transaction of their own, so an absent
     // document enters neither the caller's dependencies nor its commit's
@@ -7965,8 +8002,7 @@ export class Runner {
     // whole family per piece for nothing. The probes stop at a budget
     // (`NAMING_PROBE_BUDGET`), and a budget spent reads absent: a hold costs
     // one name-sync, a wrong local verdict costs a conflicting commit.
-    const readTx = this.#familyReadTx(identity);
-    const cell = resultCell.withTx(readTx);
+    let readTx = this.#familyReadTx(identity);
     let probes = this.#namingProbeBudget;
     let budgetSpent = false;
     const present = (link: NormalizedFullLink, record = false): boolean => {
@@ -7995,7 +8031,23 @@ export class Runner {
       }
       return true;
     };
-    if (!present(argumentLink)) return hold("the argument document");
+    // Setup writes the argument document in the transaction that writes the
+    // result linking to it, so with that result here a report that the store
+    // held nothing at the argument predates the write. The store is asked
+    // again, which nothing else does before the feed reports the write: a
+    // name-sync asks the replica, which answers that report. Whatever the
+    // store answers, the run reads what it holds now; an argument the store
+    // still holds nothing at is one no name-sync could deliver. An argument
+    // the store was not asked for, or gave no answer for, holds the run.
+    if (!present(argumentLink)) {
+      const heldNow = this.#readStoreAbsenceAgain(argumentLink, identity);
+      if (heldNow === undefined) return hold("the argument document");
+      // A transaction reads a document as it first checked it out, and the
+      // probe checked the argument out absent, so the walks below read the
+      // argument the store answered through a fresh one.
+      if (heldNow) readTx = this.#familyReadTx(identity);
+    }
+    const cell = resultCell.withTx(readTx);
     const presyncNamed =
       this.#presyncNamedInstances.get(familyKey) === entryKey;
     if (!presyncNamed) {
@@ -8005,7 +8057,9 @@ export class Runner {
           argumentLink,
           resultCell,
           readTx,
-          present,
+          (link) =>
+            present(link) ||
+            (!budgetSpent && this.#storeReportedAbsent(link, identity)),
         )
       ) {
         return hold("a document the argument links to");
@@ -8030,26 +8084,69 @@ export class Runner {
     // them is an absence the replica has yet to examine, which the probes'
     // own reads through `readTx` are what the replica answers from.
     const absent: NormalizedFullLink[] = [];
-    for (const { pattern: owner, resultCell: ownerCell } of instances) {
+    for (const instance of instances) {
+      const { pattern: owner, resultCell: ownerCell } = instance;
       const ownerScope = ownerCell.getAsNormalizedFullLink().scope;
+      let owesSeed = false;
+      let startsApart = false;
       for (const descriptor of owner.derivedInternalCells ?? []) {
         const link = getDerivedInternalCell(ownerCell, descriptor)
           .getAsNormalizedFullLink();
         const record = presyncNamed &&
           ownedCellRecordSuffices(link, ownerScope);
         if (present(link, record)) continue;
-        if (
-          !presyncNamed || budgetSpent ||
-          ownedCellOwesSeed(link, ownerScope)
-        ) {
-          return hold("an owned cell");
+        if (budgetSpent) return hold("an owned cell");
+        const reportedAbsent = this.#storeReportedAbsent(link, identity);
+        if (ownedCellOwesSeed(link, ownerScope)) {
+          if (!reportedAbsent) return hold("an owned cell");
+          owesSeed = true;
+          continue;
         }
+        if (reportedAbsent) {
+          if (!presyncNamed && link.scope !== "space") startsApart = true;
+          continue;
+        }
+        if (!presyncNamed) return hold("an owned cell");
         absent.push(link);
       }
+      if (owesSeed || startsApart) seeds.push(instance);
     }
     return absent.length > 0 && this.#absenceUnexamined(readTx, absent)
       ? hold("an owned cell")
       : false;
+  }
+
+  /**
+   * Whether the store read-through reported holding nothing at the document
+   * `link` names, in the instance `identity` resolves it to: an absence a
+   * name-sync would only report again.
+   */
+  #storeReportedAbsent(
+    link: NormalizedFullLink,
+    identity: ScopeKeyIdentity | undefined,
+  ): boolean {
+    return this.#runtime.storageManager.open(link.space).storeReportedAbsent?.(
+      { id: link.id, ...(link.scope !== undefined && { scope: link.scope }) },
+      identity,
+    ) === true;
+  }
+
+  /**
+   * Asks the store read-through again for the document `link` names, in the
+   * instance `identity` resolves it to, when it reported holding nothing
+   * there (`IStorageProvider.readStoreAbsenceAgain`). Returns whether the
+   * store holds it now, or `undefined` when the store was not asked or gave
+   * no answer.
+   */
+  #readStoreAbsenceAgain(
+    link: NormalizedFullLink,
+    identity: ScopeKeyIdentity | undefined,
+  ): boolean | undefined {
+    return this.#runtime.storageManager.open(link.space)
+      .readStoreAbsenceAgain?.(
+        { id: link.id, ...(link.scope !== undefined && { scope: link.scope }) },
+        identity,
+      );
   }
 
   /**
@@ -8179,7 +8276,12 @@ export class Runner {
 
   /**
    * Names a piece's execution family once per pending load and records the
-   * pattern whose dependencies arrived.
+   * pattern whose dependencies arrived. A family held only for the defaults
+   * its instances are owed, or for a start apart from the caller's
+   * transaction (`toName.seeds`), has everything else its run reads here
+   * already (`#familyAbsent`), so it loads nothing: its start's preparation
+   * seeds those defaults, and a speculative start, whose own transaction
+   * seeds them, has nothing to prepare.
    */
   #nameFamilyBeforeRun(
     resultCell: Cell<any>,
@@ -8187,6 +8289,7 @@ export class Runner {
       pattern: Pattern;
       entryKey: string;
       identity?: ScopeKeyIdentity;
+      seeds?: readonly ResumePatternInstance[];
     },
     argument: unknown,
     isCurrent: () => boolean,
@@ -8220,8 +8323,17 @@ export class Runner {
         error,
       ]);
     };
-    const preparation = initializeDefaults
-      ? this.#prepareCellsForRunningPattern(
+    let preparation: Promise<boolean | void>;
+    if (toName.seeds !== undefined) {
+      preparation = initializeDefaults
+        ? this.#seedOwedDefaults(
+          toName.seeds,
+          identity,
+          this.#currentWithinLifecycle(isCurrent),
+        )
+        : Promise.resolve(false);
+    } else if (initializeDefaults) {
+      preparation = this.#prepareCellsForRunningPattern(
         resultCell,
         toName.pattern,
         argument,
@@ -8230,14 +8342,16 @@ export class Runner {
           isCurrent,
           onSyncError,
         },
-      )
-      : this.#syncCellsForRunningPattern(
+      );
+    } else {
+      preparation = this.#syncCellsForRunningPattern(
         resultCell,
         toName.pattern,
         argument,
         identity,
       )
         .catch(onSyncError);
+    }
     const pending = preparation.then((defaultsPrepared) => {
       if (isCurrent()) {
         this.#namedFamilies.set(key, {
@@ -8275,6 +8389,7 @@ export class Runner {
       pattern: Pattern;
       entryKey: string;
       identity?: ScopeKeyIdentity;
+      seeds?: readonly ResumePatternInstance[];
     },
     argument: T,
     resultCell: Cell<R>,
@@ -9935,10 +10050,29 @@ export class Runner {
   }
 
   /**
+   * `isCurrent`, narrowed to this runner's lifecycle epoch as it stands now
+   * and to an open write path: a preparation that outlives either writes
+   * nothing more.
+   */
+  #currentWithinLifecycle(isCurrent?: () => boolean): () => boolean {
+    const epoch = this.#lifecycleEpoch;
+    return () =>
+      epoch === this.#lifecycleEpoch &&
+      !this.#runtime.writeTeardownSignal.aborted &&
+      (isCurrent?.() ?? true);
+  }
+
+  /**
    * Loads a run's dependencies and fills absent actor instances of defaults
-   * that an accepted setup already declared. Each seed has a transaction of
-   * its own: binding the piece's other values must not label a constant
-   * default with their confidentiality, nor can one private seed label another.
+   * that an accepted setup already declared. The seeds of one piece instance
+   * share a transaction, and instances keep separate ones: binding the
+   * piece's other values must not label a constant default with their
+   * confidentiality, nor can one piece's seed label another piece's. Within an
+   * instance every seed derives from the same reads (the pointer, the
+   * manifest, the root read once), and no seed reads another seed's value,
+   * so one transaction per instance labels each seed as its own would — and
+   * costs one commit per piece start instead of one per defaulted cell,
+   * which on a fresh session is every session-scoped cell the piece owns.
    * Returns whether every eligible default was verified or seeded; a stale
    * declaration must not stand in for completed preparation in the run cache.
    */
@@ -9958,13 +10092,8 @@ export class Runner {
     const identity = sourceIdentity === undefined
       ? undefined
       : { ...sourceIdentity };
-    const epoch = this.#lifecycleEpoch;
-    const isCurrent = () =>
-      epoch === this.#lifecycleEpoch &&
-      !this.#runtime.writeTeardownSignal.aborted &&
-      (options.isCurrent?.() ?? true);
+    const isCurrent = this.#currentWithinLifecycle(options.isCurrent);
     const instances: ResumePatternInstance[] = [];
-    let defaultsPrepared = true;
     try {
       await this.#syncCellsForRunningPattern(
         resultCell,
@@ -9978,10 +10107,39 @@ export class Runner {
       options.onSyncError(error);
       return false;
     }
+    return await this.#seedOwedDefaults(
+      instances,
+      identity,
+      isCurrent,
+      options.allowReadOnly,
+    );
+  }
+
+  /**
+   * Fills the absent actor instances of the defaults `instances` declare at
+   * a scope narrower than that of the instance's result, each in a
+   * transaction of its own (`#prepareCellsForRunningPattern` says why),
+   * under `identity` and while `isCurrent` holds. Returns whether every one
+   * was verified or seeded.
+   */
+  async #seedOwedDefaults(
+    instances: readonly ResumePatternInstance[],
+    identity: ScopeKeyIdentity | undefined,
+    isCurrent: () => boolean,
+    allowReadOnly?: boolean,
+  ): Promise<boolean> {
+    let defaultsPrepared = true;
     const readOnlySpaces = new Map<MemorySpace, boolean>();
     for (const instance of instances) {
+      const resultLink = instance.resultCell.getAsNormalizedFullLink();
+      // The defaults this instance owes: one transaction seeds them all
+      // (see the method comment for why one per instance).
+      const owed: {
+        descriptor: NonNullable<Pattern["derivedInternalCells"]>[number];
+        derivedLink: NormalizedFullLink;
+        schemaDefault: JSONValue;
+      }[] = [];
       for (const descriptor of instance.pattern.derivedInternalCells ?? []) {
-        const resultLink = instance.resultCell.getAsNormalizedFullLink();
         const derivedLink = getDerivedInternalCellLink(
           instance.resultCell,
           descriptor,
@@ -9994,7 +10152,7 @@ export class Runner {
           : undefined;
         if (schemaDefault === undefined) continue;
         if (!isCurrent()) return false;
-        if (options.allowReadOnly && !this.#runtime.servingPosture) {
+        if (allowReadOnly && !this.#runtime.servingPosture) {
           let readOnly = readOnlySpaces.get(derivedLink.space);
           if (readOnly === undefined) {
             const acl = this.#runtime.getCellFromLink<ACL>({
@@ -10018,53 +10176,59 @@ export class Runner {
             continue;
           }
         }
-        const outcome = await this.#runtime.editWithRetry((tx) => {
-          if (!isCurrent()) {
-            defaultsPrepared = false;
-            return;
+        owed.push({ descriptor, derivedLink, schemaDefault });
+      }
+      if (owed.length === 0) continue;
+      const owedIds = owed.map(({ derivedLink }) => derivedLink.id);
+      const outcome = await this.#runtime.editWithRetry((tx) => {
+        if (!isCurrent()) {
+          defaultsPrepared = false;
+          return;
+        }
+        if (identity !== undefined) {
+          tx.tx.scopeKeyIdentity = identity;
+          if (identity.principal !== undefined) {
+            setCfcTrustSnapshot(
+              tx,
+              this.#runtime.trustSnapshotForPrincipal(identity.principal),
+            );
           }
-          if (identity !== undefined) {
-            tx.tx.scopeKeyIdentity = identity;
-            if (identity.principal !== undefined) {
-              setCfcTrustSnapshot(
-                tx,
-                this.#runtime.trustSnapshotForPrincipal(identity.principal),
-              );
-            }
-          }
-          this.#runtime.stampServerRun(tx, {
-            actionId: `scoped-default/${derivedLink.id}`,
-            kind: "bookkeeping",
-            ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
-          });
-          markDurableReadTx(tx);
-          const owner = this.#runtime.getCellFromLink(
-            resultLink,
-            undefined,
-            tx,
-          );
-          const current = getPatternIdentityRef(owner) ??
-            this.#sessionPatternPointer(owner);
-          const expected = this.#runtime.patternManager.getArtifactEntryRef(
-            instance.pattern,
-          );
-          // A fresh runtime has no pointer for a keyless piece. Its exact
-          // accepted manifest still vouches for this descriptor's default;
-          // a keyed piece needs its durable pointer as well.
-          if (
-            (current === undefined && expected !== undefined &&
-              !PatternManager.isKeylessPatternIdentity(expected.identity)) ||
-            (current !== undefined && (expected === undefined ||
-              patternIdentityKey(current) !== patternIdentityKey(expected)))
-          ) {
-            defaultsPrepared = false;
-            return;
-          }
-          const manifest = convertibleJsFromFabricValue(
-            owner.getMetaRaw("internal", {
-              meta: ignoreReadForScheduling,
-            }),
-          );
+        }
+        this.#runtime.stampServerRun(tx, {
+          actionId: `scoped-default/${owedIds.join(",")}`,
+          kind: "bookkeeping",
+          ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
+        });
+        markDurableReadTx(tx);
+        const owner = this.#runtime.getCellFromLink(
+          resultLink,
+          undefined,
+          tx,
+        );
+        const current = getPatternIdentityRef(owner) ??
+          this.#sessionPatternPointer(owner);
+        const expected = this.#runtime.patternManager.getArtifactEntryRef(
+          instance.pattern,
+        );
+        // A fresh runtime has no pointer for a keyless piece. Its exact
+        // accepted manifest still vouches for this descriptor's default;
+        // a keyed piece needs its durable pointer as well.
+        if (
+          (current === undefined && expected !== undefined &&
+            !PatternManager.isKeylessPatternIdentity(expected.identity)) ||
+          (current !== undefined && (expected === undefined ||
+            patternIdentityKey(current) !== patternIdentityKey(expected)))
+        ) {
+          defaultsPrepared = false;
+          return;
+        }
+        const manifest = convertibleJsFromFabricValue(
+          owner.getMetaRaw("internal", {
+            meta: ignoreReadForScheduling,
+          }),
+        );
+        let rootRead = false;
+        for (const { descriptor, derivedLink, schemaDefault } of owed) {
           const derived = getDerivedInternalCell(owner, descriptor, tx);
           const expectedLink = derived.getAsWriteRedirectLink({
             base: owner,
@@ -10081,23 +10245,34 @@ export class Runner {
             )
           ) {
             defaultsPrepared = false;
-            return;
+            continue;
           }
+          // A presence probe, not a read of the value: a sibling already
+          // present is skipped, and its value's label must not join the
+          // flow this transaction stamps on the seeds it does write — a
+          // constant default derives nothing from a value it was seeded
+          // beside. Kept out of scheduling and out of CFC taint, as the
+          // write-elision probe in pattern-binding.ts is.
           if (
-            derived.getRawUntyped({ meta: ignoreReadForScheduling }) !==
-              undefined
-          ) return;
+            derived.getRawUntyped({
+              meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+            }) !== undefined
+          ) continue;
           // A default belongs to its owning piece, so it carries the label on
           // the piece's root. The pattern pointer and the manifest read above
           // are members of the piece's document, and reading a member
           // consumes no label, so this read is what brings the root label
-          // into the seed. It is `nonRecursive`, which consumes the root
+          // into the seeds. It is `nonRecursive`, which consumes the root
           // entry alone: the labels on the piece's fields belong to other
-          // values, and a constant default does not derive from them.
-          tx.readValueOrThrow({ ...resultLink, path: [] }, {
-            nonRecursive: true,
-            meta: ignoreReadForScheduling,
-          });
+          // values, and a constant default does not derive from them. Once
+          // per transaction: every seed in it derives from the same root.
+          if (!rootRead) {
+            tx.readValueOrThrow({ ...resultLink, path: [] }, {
+              nonRecursive: true,
+              meta: ignoreReadForScheduling,
+            });
+            rootRead = true;
+          }
           // The graph has not enrolled its stores yet. This seed carries the
           // same ownership claim as setup through the ordinary writer-fit gate.
           recordRuntimeOwnedStore(tx, owner, derivedLink);
@@ -10110,12 +10285,14 @@ export class Runner {
             target: { ...derivedLink, path: [] },
             value,
           }, runtimeWritePolicyAuthorization);
-        });
-        if (outcome.error) {
-          throw new Error(
-            `Could not initialize scoped default ${derivedLink.id}: ${outcome.error.message}`,
-          );
         }
+      });
+      if (outcome.error) {
+        throw new Error(
+          `Could not initialize scoped defaults ${
+            owedIds.join(", ")
+          }: ${outcome.error.message}`,
+        );
       }
     }
     return defaultsPrepared;
@@ -13592,6 +13769,7 @@ export class Runner {
     // window (per-pattern coalescing, W3). The result cell is stable per
     // instance, so all of one instance's handlers share this id.
     const instanceLink = resultCell.getAsNormalizedFullLink();
+    const demandRootIds = this.#demandRootChainFor(instanceLink.id);
     const wrappedHandler = Object.assign(handler, {
       implementationSelection: schedulerRehydration.implementationSelection,
       viewNodeId: schedulerRehydration.viewNodeId,
@@ -13610,6 +13788,11 @@ export class Runner {
         ownerSpace: instanceLink.space,
         // Raw root id for the per-(action × instance) run supply.
         pieceRootId: instanceLink.id,
+        // The pieces that instantiated this one, as its nodes carry them:
+        // a served event's actor demands each while the event is queued
+        // (`Scheduler.transientEventDemandersFor`), so a nested handler's
+        // inputs that an enclosing piece derives run for the actor too.
+        ...(demandRootIds.length > 1 ? { demandRootIds } : {}),
       },
       ...(presyncInputs !== undefined && { presyncInputs }),
     });

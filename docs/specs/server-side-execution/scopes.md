@@ -192,11 +192,14 @@ faced them:
   with an identity keeps the wave-level fallback and, if it narrows,
   writes the service identity's inert instance — accepted and counted
   (`undemandedNarrowingRuns`; RULED 2026-08-16, design §I.4). The
-  event actor is a TRANSIENT demander of the event's target piece for
-  the dispatch's preflight (RULED 2026-08-16, design §I.5): the actor's
-  own instance of a scoped input her handler reads is materialized
-  before the handler runs even if the actor watches nothing — never
-  another principal's. The preflight tests instance-level currency, not
+  event actor is a TRANSIENT demander of the event's target piece, and
+  of every piece that instantiated it, for the dispatch's preflight
+  (RULED 2026-08-16, design §I.5): the actor's own instance of a scoped
+  input her handler reads is materialized before the handler runs even
+  if the actor watches nothing — never another principal's. A nested
+  pattern's handler reads inputs its enclosing piece derives, so the
+  handler carries the demand-root chain its piece's own nodes carry. The
+  preflight tests instance-level currency, not
   node-level: a per-user node the WATCHERS made node-level clean can
   still be MISSING the actor's instance (B7 made cleanliness per
   instance), so "not current for the actor" — never run at the node's

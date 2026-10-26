@@ -63,8 +63,8 @@ a container holds re-exports, or a room's `room` group for a room shown outside
 any container, and drives the manager through its `chats` group. It reads a
 room's newest messages from its `messages`
 ([`ChatMessageList`](ChatMessageList.md)), and the rest from the room's stored
-messages themselves, each a cell, deriving a thread from their `replyTo` (see
-[reading the rest](ChatMessageList.md#reading-the-rest)). Both are in `[VIEWS]`
+messages themselves, each a cell, each naming the thread it joins in its
+`replyTo` (see [reading the rest](ChatMessageList.md#reading-the-rest)). Both are in `[VIEWS]`
 (see [views a host draws
 itself](../../common/components/COMPONENTS.md#views-a-host-draws-itself)). A
 client that renders VDOM shows the adapter's `[UI]`.
@@ -116,11 +116,22 @@ A client that draws natively MUST:
   shows an entry removed from its store as removed, and fetches and shows the
   bytes as FabriFile's clients do (see [showing a
   file](../fabrifile/clients.md#showing-a-file)).
+- **Send a reply in the shape the room takes**, which its `replyShape` names
+  (see [`ChatRoomOutput`](ChatRoomOutput.md)). A client that sends to rooms
+  whose view offers no `replyShape` as well sends both shapes in one
+  `replyTo`: `thread` and `quotes`, and beside them `message`, holding the
+  message it `quotes` or, for a plain post in a thread, the `thread`'s root.
+  Each room stores the fields it reads and drops the others.
 - **Show replies where they say they are shown**: the main conversation and each
   thread, derived from `replyTo` as [`ChatReply`](ChatReply.md#the-two-views)
-  states, with flat threads. A thread's reply count and latest reply time are
-  the room's `messages.threads` (see
+  states, with flat threads, each message showing the message it `quotes`. A
+  `"both"` message in the main conversation is shown as a message of its thread,
+  which a reader can open from it. A thread's title, reply count, latest reply
+  time and newest messages are the room's `messages.threads` (see
   [`ChatThreadSummary`](ChatThreadSummary.md)).
+- **Say how many messages lost what they replied to**, while the room's
+  `messages.legacyReplies` isn't 0 (see
+  [`ChatReply`](ChatReply.md#a-reply-naming-neither)).
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
@@ -186,8 +197,9 @@ awaits its handling is rejected with the room's reason. A client MUST still
 check each event against those rules before sending it: a
 non-empty body, or one or more attachments, entries of the store of the room's
 space and no more of them than the room's `maxAttachments`, a reply whose
-target is in the room, not deleted, and allowed for its `shownIn`, a single
-emoji (see
+links fit its `shownIn`, whose `thread` is a message of the room in no thread,
+and whose `quotes` is a message of the room, not deleted, in its `thread` where
+it names one, a single emoji (see
 [`ChatRoomOutput`](ChatRoomOutput.md#streams)), and it offers an act only
 where `messageRights` and `canSend` allow it.
 

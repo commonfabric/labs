@@ -87,7 +87,11 @@ export interface AmbiguousDescriptionsOptions {
   hasState?: boolean;
 }
 
-/** The pattern identity of a builder artifact, where one is known. */
+/**
+ * The pattern identity of a builder artifact, where one is known, with a
+ * symbol that is the same for every load of the artifact's module, whichever
+ * of the artifact's names the load registered first.
+ */
 export type EntryRefOf = (
   artifact: object,
 ) => { identity: string; symbol: string } | undefined;
