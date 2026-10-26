@@ -656,7 +656,7 @@ describe("link-resolution", () => {
         expect(
           resolveAcross("annotations-only", {
             description: "d",
-            tags: ["t"],
+            title: "t",
           }, carried),
         ).toEqual(carried);
       });
