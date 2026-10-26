@@ -218,6 +218,7 @@ function createMapInstance(
           !active ? undefined : runtime.editWithRetry((settleTx) => {
             if (!active || !result) return;
             if (identity !== undefined) settleTx.tx.scopeKeyIdentity = identity;
+            settleTx.tx.derivedWrites = true;
             // Out-of-band recovery write; the kind decision (bookkeeping
             // on the serving posture, derivation on clients — the settle
             // writes DERIVED content) is shared across map/filter/flatMap

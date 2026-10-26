@@ -807,15 +807,102 @@ The client provider fires three notification types:
   notifications MUST reflect the visible state transitions, not hidden
   intermediate states.
 
-### 3.8.3 A Derived Write the Space Refuses
+### 3.8.3 Derived State a Principal Cannot Store
 
 A principal may read a space it cannot write, and a reactive computation it
 runs there still writes its outputs. Those writes are derived: running the
-computation again reproduces them. When the server refuses such a commit with
-an `AuthorizationError` it has not marked retriable, a client running under
-the `localFold` flag keeps each written document's new value instead of
-reverting it, as a _local fold_: the confirmed value at the same `seq`, with
-the refused write applied, held by that replica alone.
+computation again reproduces them. The view such a principal reads is made
+of them, so the principal's runtime keeps them rather than asking the space
+to. A client runtime seals a transaction whose writes are derived into the
+replica's process-local layer, and never pushes it, when the principal's
+level in the space, as the access list the replica holds states it, is below
+WRITE. Reads see the held value through the ordinary pending materialization,
+as they see any pending write. A confirmed read, which reads the durable
+view, finds the document as the store holds it and reports it unconfirmed
+while the held layer stands over it; a durable read's settlement promise
+resolves when the held derivation is replaced or released. Nothing is sent,
+synced, or kept past the runtime's life. The store stays the cache of derived
+state for the principals who may write it, and reading a space never requires
+writing one of its documents, user-scoped or otherwise.
+
+The transactions whose writes are derived: a reactive run; a list
+coordinator's seed, settle, and republish of its result container; a piece
+start deferred from one of those, so that the element pieces a held
+coordinator starts, their result documents, and their back-links are held
+with it; and the report a wish writes into its own surface when what it
+resolves fails. An event handler's writes are acts rather than derivations
+and are not held: a refusal of one is reverted and reported. Nor is the
+setup a host asks for, such as a pattern's start, held: the defaults it
+writes into an absent scoped instance are an initialization it records, and
+a reader of an instance that setup could not store reads the default the
+schema declares, as any reader of an absent defaulted slot does.
+
+- The decision never waits, since a wait between a transaction's reads and
+  its commit is a window for the replica's view to move under it, and asks
+  the replica for nothing: it reads the access list the replica holds, and a
+  derivation into a space whose list the replica does not hold is pushed,
+  the store's verdict then teaching the runtime what the list would have. A
+  runtime whose principal may write every space it touches is therefore
+  left exactly as it would be without this: no list is loaded or watched
+  for a space until it refuses a derivation or holds one.
+- A held derivation stands only where the store holds nothing. A write to a
+  document the store already holds a value for is dropped, and the
+  principal's view keeps the stored value: a principal who may write the
+  space produced it, from inputs this principal may not be able to read, and
+  what depends on the document runs from it. The drop changes nothing in the
+  replica, so it notifies nothing, and the computation that made the write
+  stays at rest rather than computing it again; it runs again when an input
+  changes, and is dropped again while the store holds the document.
+- A held derivation is replaced rather than accumulated. A newer one that
+  writes every document of an older one whole retires the older one, and an
+  authoritative value arriving for a document a held derivation wrote retires
+  it.
+- A grant of WRITE retires every derivation held for the space and runs
+  their writers again, which then commit to the store.
+- A derived write the store refuses for lack of a grant after all, because
+  the replica's copy of the access list was behind the store's or had not
+  arrived, is reverted as any other rejection is. The scheduler takes no
+  retry on it, and the revert does not run the computation again. The
+  runtime instead holds every later derivation into the space until the
+  replica's copy of the list changes, and runs the refused computation once
+  more, after the revert, so that what it computes is held rather than
+  lost; that run reaches no store and is refused by nothing.
+
+A held derivation is a pending layer of the session's own that is never
+exported, which is what places it against the invariant catalog
+([09-invariants.md](09-invariants.md)):
+
+- INV-1 is untouched for every accepted commit. A commit in the same space
+  whose read set names a held layer is refused before it is exported, as one
+  naming any speculation layer is; a commit in another space carries no read
+  of it, which is the cross-space bound every derivation already has.
+- INV-9 holds for durable values as before. The locally visible value may
+  include a held layer, as it may include any pending write, and a held
+  layer is never added to the durable log. A frame at a later `seq` for a
+  document a held layer wrote retires the layer, and the entry is registered
+  in the same synchronous stretch as the layer is applied, so no frame can
+  move the base under a layer the retirement cannot see; a frame at the same
+  `seq` leaves it in place.
+- INV-10 holds through the claim check, which compares the local values a
+  transaction read, held layers included: a transaction built over a held
+  layer that changed before it closed is rejected locally and runs again,
+  and a transaction whose reads moved under it between its reads and its
+  hold is rejected the same way, so no layer is applied over a base other
+  than the one its run read.
+- INV-14 is unchanged: holdings declare delivered revisions, and a held
+  layer is never one. A reconnect that replaces the replica drops its held
+  layers with every other pending layer, and the computations run again.
+
+Nothing is ever published over a held layer. A grant of WRITE withdraws the
+held layers first and runs their writers only once the layers have left the
+replica, so each writer reads the durable value and commits an ordinary
+derivation over it, under the same validation any writer's commit gets.
+
+Under the `localFold` experimental flag
+([registry](../../development/EXPERIMENTAL_OPTIONS.md#localfold)), off by
+default, a replica keeps such a refused write as a _local fold_ instead of
+reverting it: the confirmed value at the same `seq`, with the refused write
+applied, held by that replica alone.
 
 - A document is folded only where the refused write sits directly on the
   confirmed version it was made over. Where a newer confirmed version arrived
@@ -832,16 +919,6 @@ the refused write applied, held by that replica alone.
 - The re-run the scheduler makes after the refusal reads the folded value and
   so has nothing to write. Its computation settles instead of re-running
   against the same refusal.
-
-Event handlers are not folded. Their writes are acts rather than derivations,
-and a refusal of one is reverted and reported.
-
-The fold is gated by the `localFold` experimental flag
-([registry](../../development/EXPERIMENTAL_OPTIONS.md#localfold)), off by
-default. Without it, a refused derived write is reverted as any other
-rejection is. The computation is not retried, and the revert of its own
-write does not run it again; it runs again when an input it did not write
-changes, and is refused again while the grant is missing.
 
 ## 3.9 Commit Ordering
 

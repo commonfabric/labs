@@ -493,8 +493,9 @@ const rejectionAttribution = (
 /**
  * Whether `rejection` refused a derived write for lack of a grant: an
  * `AuthorizationError` the server did not mark retriable, of a transaction
- * whose writes are derived from its reads. Such a write is kept locally rather
- * than reverted, since the principal can compute it but never store it.
+ * whose writes are derived from its reads. A replica under the `localFold`
+ * flag keeps such a write as a fold rather than reverting it, since the
+ * principal can compute it but never store it.
  */
 const isRefusedDerivedWrite = (
   rejection: StorageTransactionRejected,
@@ -2268,6 +2269,9 @@ export class StorageManager implements IStorageManager {
    * it. Assigned post-construction by the Runtime; undefined otherwise. */
   spaceOpenObserver?: (space: MemorySpace) => void;
 
+  /** IStorageManager: the `localFold` flag, assigned by the Runtime. */
+  localFold?: boolean;
+
   /** IStorageManager (Phase 4): the currently-open spaces, for the
    * effects channel's construction-time sweep. */
   openedSpaces(): MemorySpace[] {
@@ -2431,6 +2435,7 @@ export class StorageManager implements IStorageManager {
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
         getTelemetry: () => this.#telemetry,
+        foldRefusedDerivedWrites: () => this.localFold === true,
         onSessionReplaced: () => {
           for (const observer of [...this.#spaceSessionReplacedObservers]) {
             try {
@@ -4082,6 +4087,13 @@ type ProviderOptions = {
   /** Late-bound: resolves to the Runtime's telemetry bus once attached. */
   getTelemetry?: () => TelemetrySink | undefined;
 
+  /**
+   * Whether a derived write the space refuses for lack of a grant is kept as
+   * a local fold rather than reverted (IStorageManager.localFold). Absent:
+   * reverted.
+   */
+  foldRefusedDerivedWrites?: () => boolean;
+
   /** The LT9 event-intent persistence seam (see Options). */
   eventAppendQueueStore?: EventAppendQueueStore;
 
@@ -5120,6 +5132,9 @@ export class SpaceReplica
   readonly #storeReadThrough: () => StoreReadThrough | undefined;
   readonly #localSessionDocuments: () => boolean;
 
+  /** See ProviderOptions.foldRefusedDerivedWrites. */
+  readonly #foldRefusedDerivedWrites: () => boolean;
+
   /** See ProviderOptions.loadCrossings. */
   readonly #loadCrossings:
     | ((crossings: readonly SyncCrossing[]) => void)
@@ -5393,6 +5408,8 @@ export class SpaceReplica
     this.#scopeKeyIdentity = options.scopeKeyIdentity;
     this.#createSession = options.createSession;
     this.#getTelemetry = options.getTelemetry ?? (() => undefined);
+    this.#foldRefusedDerivedWrites = options.foldRefusedDerivedWrites ??
+      (() => false);
     this.#settings = options.settings;
     this.#routeState = options.routeState;
     this.#routeGeneration = options.routeGeneration;
@@ -9327,7 +9344,10 @@ export class SpaceReplica
         this.#waitForConflictReadRepair(rejection),
         pushed ? this.#loadAbsentTouched(rejection, touched) : undefined,
       ]);
-      if (isRefusedDerivedWrite(rejection, source)) {
+      if (
+        this.#foldRefusedDerivedWrites() &&
+        isRefusedDerivedWrite(rejection, source)
+      ) {
         this.#foldRefusedWrite(localSeq, touched, identity);
       }
       this.#dropPending(localSeq);

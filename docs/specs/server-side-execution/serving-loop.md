@@ -1172,6 +1172,21 @@ re-advanced; watermark forgery is an accepted authored intrusion —
 protocol.md §1's threat model). A fourth kind is a spec edit here
 first.
 
+**Derived state and the demander's level.** A served run's derived writes
+into the space it serves are the space's own, made by its single deriver
+under its own authority (scopes.md §1), and `sealSpaceCommit` consults the
+acting user's level only for a foreign-space write. A demander who holds
+READ on the space therefore has their instances derived and persisted
+exactly as a WRITE demander's are: an instance a principal's demand names
+is addressed by that principal, not written by them, so reading a served
+pattern requires no write of the demander's, and a client holding READ
+sees the same view whether the space is served or it runs the pattern
+itself. The client posture's dual is memory-v2 03-commit-model.md §3.8.3:
+a client whose principal cannot write the space holds its derivations in
+its own runtime. What differs between the two postures is who keeps the
+derived state, the space or the viewer's runtime, never whether the
+viewer may read it.
+
 **The flag-ON client's speculative-consequence deferred start
 (RULED 2026-08-13; the Phase-4 P1-5 flag).** A flag-ON CLIENT's
 deferred piece-start transaction minted as a SPECULATIVE

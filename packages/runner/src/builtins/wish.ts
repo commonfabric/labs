@@ -2550,6 +2550,9 @@ export function wish(
         ? { scopeKeyIdentity: scopeIdentity }
         : {}),
     });
+    // The report is derived from the failure it accounts for, so a client
+    // whose principal cannot write the surface's space holds it locally.
+    errorTx.tx.derivedWrites = true;
     const { schema: _schema, ...bareLink } = stateLink;
     // One field of the report: the value, and the schema it is authored
     // against, written and named together.
@@ -2742,6 +2745,9 @@ export function wish(
       actionId: `wish/pattern-error-ui/${resultCell.sourceURI}`,
       kind: "bookkeeping",
     });
+    // The account is derived from the failure it reports, so a client whose
+    // principal cannot write the surface's space holds it locally.
+    errorTx.tx.derivedWrites = true;
     // The `sidecarError` marker is the winner predicate's discriminator
     // (sidecarValueIsWinner): a conflict-class loser must never yield to
     // this account as if it were a materialized surface.

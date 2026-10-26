@@ -359,6 +359,15 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   spaceOpenObserver?: (space: MemorySpace) => void;
 
   /**
+   * Whether a replica keeps a derived write the space refuses for lack of a
+   * grant as a local fold rather than reverting it (`03-commit-model.md`
+   * §3.8.3): the `localFold` experimental flag, which the runtime assigns
+   * from its options at construction. Optional: a manager without it
+   * reverts.
+   */
+  localFold?: boolean;
+
+  /**
    * The spaces this manager currently holds providers for — the effects
    * channel's construction-time sweep (spaces opened before the observer
    * was installed). Optional, like the observer.
@@ -1574,10 +1583,12 @@ export interface IStorageTransaction {
   /**
    * Whether this transaction's writes are derived from its reads, as a
    * reactive computation's are, so that running it again reproduces them.
-   * When the space refuses such a write for lack of a grant, a replica may
-   * keep it as a local fold rather than revert it: it does so for each
-   * document the write sits directly on the confirmed version it was made
-   * over, and reverts the write to any other.
+   * A client runtime whose principal cannot write the space holds such
+   * writes locally instead of pushing them (`03-commit-model.md` §3.8.3).
+   * A replica under the `localFold` flag keeps one the space refuses for
+   * lack of a grant as a local fold rather than reverting it: it does so for
+   * each document the write sits directly on the confirmed version it was
+   * made over, and reverts the write to any other.
    */
   derivedWrites?: boolean;
 
@@ -2096,6 +2107,14 @@ export interface IStorageTransaction {
    * backends that cannot seal; the OFF arm never calls it.
    */
   sealInto?(sink: ITransactionSealSink): Promise<Result<Unit, CommitError>>;
+
+  /**
+   * The spaces this transaction has written so far, in first-write order,
+   * which is the order a multi-space commit splits on; empty before the
+   * first write. Optional: a seal destination deciding by the written spaces
+   * treats a transaction that cannot report them as writing none.
+   */
+  writtenSpaces?(): readonly MemorySpace[];
 }
 
 /**
@@ -2160,6 +2179,16 @@ export interface TransactionSealDestination {
    * trusting what a preparation ahead of it was told.
    */
   discards?(tx: IExtendedStorageTransaction): boolean;
+
+  /**
+   * Whether an effect-completion transaction sealing here asserts its
+   * writes whole rather than eliding the no-op ones
+   * (`IStorageTransaction.markAuthoritativeWrites`). A destination whose
+   * layered view a later settlement can drop needs that: a wave, and the
+   * speculation overlay. One that commits a completion to the store does
+   * not, and says so. Absent, the completion asserts its writes.
+   */
+  readonly authoritativeCompletions?: boolean;
 
   /**
    * The HOME space of the wave this destination seals into (the space

@@ -1063,17 +1063,20 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * recorded OFF-arm acceptance in verification-coverage.md.
    */
   markAuthoritativeWrites(): void {
-    // Phase-2 truth update on the gate above: since the speculation
-    // overlay became every flag-ON client's DEFAULT destination, "a
-    // configured seal destination" no longer implies the SERVING
-    // posture. Today this stays correct because no client-side path
-    // reaches `markEffectCompletion` under the flag (egress is dropped
-    // at the overlay, so effectful writebacks never run client-side) —
-    // but a future client-side completion producer would silently get
-    // authoritative (elision-skipping) writes here. Gate on the
-    // destination's posture (or the runtime's `servingPosture`) before
-    // adding one; flagged in the Phase-2 review (F11).
-    if (this.#sealDestination !== undefined) {
+    // A configured seal destination does not by itself imply the serving
+    // posture: the speculation overlay is every flag-ON client's default
+    // destination, and the destination holding derivations locally is every
+    // other client's. The destination says whether a completion sealing into
+    // it asserts its writes (`TransactionSealDestination
+    // .authoritativeCompletions`): the wave and the overlay do, and no
+    // client-side path reaches `markEffectCompletion` under the flag (egress
+    // is dropped at the overlay); the local-derivation destination commits a
+    // completion to the store and declines, so the OFF arm's ordinary
+    // elision stands there.
+    if (
+      this.#sealDestination !== undefined &&
+      this.#sealDestination.authoritativeCompletions !== false
+    ) {
       this.tx.markAuthoritativeWrites?.();
     }
   }

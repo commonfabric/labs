@@ -938,21 +938,26 @@ holds the measurements and the conditions for revisiting.
   baked at build time. Server-authoritative in `EXPERIMENTAL_FLAG_AUTHORITY`:
   a deployed CLI adopts the posture the server publishes, with an explicit
   `EXPERIMENTAL_*` still winning. The flag is consumed from the Runtime
-  instance, at the one place the scheduler marks a reactive run's transaction
-  as carrying derived writes
-  ([`packages/runner/src/scheduler/run.ts`](../../packages/runner/src/scheduler/run.ts));
-  there is no ambient control point.
+  instance, which assigns it to its storage manager
+  (`IStorageManager.localFold`) at construction; the replica reads it where
+  it decides what becomes of a refused derived write
+  ([`packages/runner/src/storage/v2.ts`](../../packages/runner/src/storage/v2.ts)).
+  There is no ambient control point.
 - **Added by.** Robin McCollum, 2026-10-14.
 - **Purpose.** Gates the _local fold_ of
   [`docs/specs/memory-v2/03-commit-model.md`](../specs/memory-v2/03-commit-model.md)
   §3.8.3. A principal may read a space it cannot write, and a reactive
-  computation it runs there still writes its outputs. With the flag off, a
-  write of that kind that the space refuses for lack of a grant is reverted
-  like any other rejection, the scheduler takes no retry on it, and the
-  revert does not run the computation again; it runs again when an input it
-  did not write changes, and is refused again. With the flag on, the replica
-  keeps the write as a fold over the document's confirmed value, and the
-  re-run the refusal causes reads what it computed and settles.
+  computation it runs there still writes its outputs. A client runtime holds
+  such a write locally and pushes nothing when the access list its replica
+  holds puts the principal below WRITE, so the store refuses a derived write
+  only when that list is behind the store's or the replica does not hold it,
+  and the runtime then holds every later derivation into the space. With the
+  flag off, the refused write is reverted like any other rejection, the
+  scheduler takes no retry on it, and the revert does not run the computation
+  again; the runtime runs it once more itself, and holds what that run
+  computes. With the flag on, the replica keeps the refused write as a fold
+  over the document's confirmed value, and the re-run the refusal causes
+  reads what it computed and settles.
 - **Current default and planned end state.** Off by default. Set
   `EXPERIMENTAL_LOCAL_FOLD=true` or pass
   `RuntimeOptions.experimental.localFold: true` to keep refused derived
@@ -962,19 +967,22 @@ holds the measurements and the conditions for revisiting.
 - **Status on 2026-10-14.** Both arms are covered by
   `packages/runner/test/refused-derived-write.test.ts`, and the plumbing by
   `packages/runner/test/experimental-options.test.ts`.
-- **Status on 2026-10-20.** A refused derived write the replica reverts takes
-  no scheduler retry, so a READ principal running a pattern locally settles
-  after one refusal per computation. Its derived state is not stored, the
-  panel list's result container among it, so such a principal sees a loom's
-  root without its panels; `packages/toolshed/test/loom-cold-reader.test.ts`
-  pins that beside the cases that render them: a WRITE viewer under local and
-  server execution, a READ viewer under server execution, and a READ viewer
-  under local execution with the flag on.
+- **Status on 2026-10-20.** A READ principal running a pattern locally holds
+  every derived write in its own runtime and is refused nothing, so it sees a
+  loom's panels as a served viewer does, under either arm of the flag;
+  `packages/toolshed/test/loom-cold-reader.test.ts` pins that beside the
+  WRITE arms under either posture and the READ arm under server execution,
+  and `packages/runner/test/refused-derived-write.test.ts` pins the held
+  value, its replacement when an input changes, and its commit once WRITE is
+  granted. The fold is reachable only where the replica's copy of the access
+  list is behind the store's, which that file reaches by revoking the grant
+  while a push is in flight.
 - **Path to removal.** Remove the env mapping, the runtime option and its
-  authority and shell-source entries, the shell define, and the gate in the
-  scheduler. If the fold loses, the fold machinery in
-  `packages/runner/src/storage/v2.ts`, the `derivedWrites` transaction flag,
-  and §3.8.3 go with it.
+  authority and shell-source entries, the shell define, and the manager
+  field the replica reads it from. If the fold loses, the fold machinery in
+  `packages/runner/src/storage/v2.ts` and the fold's part of §3.8.3 go with
+  it; the `derivedWrites` transaction mark stays, since it is what a client
+  holds a derivation locally by.
 
 ### `instanceNames`
 

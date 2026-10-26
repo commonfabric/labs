@@ -96,6 +96,9 @@ export function seedResultContainerWhenPullSettles(
     return runtime.editWithRetry((seedTx) => {
       if (!stillHeld()) return;
       markDurableReadTx(seedTx);
+      // The seed is derived state: a client whose principal cannot write
+      // the space holds it locally, as it holds the reconcile that follows.
+      seedTx.tx.derivedWrites = true;
       if (identity !== undefined) seedTx.tx.scopeKeyIdentity = identity;
       runtime.stampServerRun(seedTx, {
         actionId: seedActionId,

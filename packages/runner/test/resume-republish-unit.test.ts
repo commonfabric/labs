@@ -123,8 +123,10 @@ function makeRuntime(options: FakeEditOptions = {}): {
       // tx.runWithAmbientReadMeta(linkResolutionProbe, ...) (S16: structure-only
       // container reads must not journal prior element content). Hand the action
       // a tx whose ambient-read-meta scope is a pass-through, so the wrapped
-      // write actually runs.
+      // write actually runs. The republisher marks the inner storage
+      // transaction's writes as derived, so the fake carries one.
       const tx = {
+        tx: {},
         runWithAmbientReadMeta: <T>(_meta: unknown, action: () => T): T =>
           action(),
       };

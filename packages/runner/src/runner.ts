@@ -1601,7 +1601,10 @@ const pieceOwnedStores = (
  * would otherwise hand the start's initializations to the service rather than
  * to that principal. Every deferred start is stamped here, before its first
  * read, so none is stamped without that trust. A start no serving loop stamps
- * takes its trust from the runtime it runs in, as its parent did.
+ * takes its trust from the runtime it runs in, as its parent did. A start
+ * deferred from a transaction whose writes are derived carries that mark,
+ * since what it writes is what that derivation computed: a client that holds
+ * the derivation locally holds the start with it.
  */
 const stampDeferredStart = (
   runtime: Runtime,
@@ -1610,6 +1613,7 @@ const stampDeferredStart = (
   info: Parameters<Runtime["stampServerRun"]>[1],
 ): void => {
   runtime.stampServerRun(start, info);
+  if (from.tx.derivedWrites === true) start.tx.derivedWrites = true;
   const trustSnapshot = from.getCfcState().trustSnapshot;
   if (
     start.getCfcState().attributedInitialization &&

@@ -174,6 +174,9 @@ export function createResumeRepublisher(
   const republishFromConfirmed = (awaited: Set<string>): Promise<void> =>
     runtime.editWithRetry((tx): Cell<any>[] => {
       if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
+      // The republish writes derived content, held locally by a client
+      // whose principal cannot write the space.
+      tx.tx.derivedWrites = true;
       const result = isActive() ? getResult() : undefined;
       if (!result) return [];
       // Out-of-band recovery write (serving-loop.md §3d, RULED

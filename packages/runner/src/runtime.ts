@@ -189,6 +189,7 @@ import {
   SpaceHostValidationError,
 } from "./space-host.ts";
 import { EffectsChannel } from "./speculation/effects-channel.ts";
+import { LocalDerivationDestination } from "./speculation/local-derivation-destination.ts";
 import {
   type EventIntentOutcome,
   SpeculationOverlayDestination,
@@ -1496,6 +1497,15 @@ export class Runtime {
    */
   #speculationOverlay: SpeculationOverlayDestination | undefined;
 
+  /**
+   * The destination that holds a derived write locally when this runtime's
+   * principal cannot write its space (`03-commit-model.md` §3.8.3): the
+   * default seal destination of a runtime with neither a wave destination
+   * nor the speculation overlay. Created lazily on the first `edit()`, and
+   * never on the serving posture.
+   */
+  #localDerivation: LocalDerivationDestination | undefined;
+
   /** The client-effect channel (server-execution v2 Phase 4,
    * protocol.md §5) — constructed for flag-ON non-serving runtimes. */
   #effectsChannel: EffectsChannel | undefined;
@@ -2088,6 +2098,9 @@ export class Runtime {
       this.trustSnapshotProvider = options.trustSnapshotProvider ??
         (() => ambientTrustSnapshot);
       this.userIdentityDID = options.storageManager.as.did() as DID;
+      // The replica keeps a refused derived write as a fold only under the
+      // flag, and the manager is where it reads the flag from.
+      options.storageManager.localFold = this.experimental.localFold === true;
       this.moduleRegistry = new ModuleRegistry(this);
       this.patternManager = new PatternManager(this);
       this.sourceReconciler = new SourceReconciler(this);
@@ -2599,6 +2612,9 @@ export class Runtime {
       // close.
       this.#speculationOverlay?.close();
       this.#speculationOverlay = undefined;
+      // Held derivations die with the runtime the same way.
+      this.#localDerivation?.close();
+      this.#localDerivation = undefined;
       this.#effectsChannel?.close();
       this.#effectsChannel = undefined;
       // Release the manager-side hook — but only when the installed hook
@@ -2756,7 +2772,8 @@ export class Runtime {
     );
     setCfcTrustSnapshot(wrapped, this.trustSnapshotProvider());
     wrapped.configureSealDestination(
-      this.#transactionSealDestination ?? this.#speculationDestination(),
+      this.#transactionSealDestination ?? this.#speculationDestination() ??
+        this.#localDerivationDestination(),
     );
     wrapped.configureRuntimeOwnedStores(this.#runtimeOwnedStores);
     this.#transactions.add(wrapped);
@@ -2911,6 +2928,19 @@ export class Runtime {
     return this.#speculationOverlay;
   }
 
+  /**
+   * The seal destination that holds a derived write locally when this
+   * runtime's principal cannot write its space (`03-commit-model.md`
+   * §3.8.3): the default for a runtime that seals into neither a wave nor
+   * the speculation overlay. A serving runtime writes every space it serves
+   * under its own authority, so it has none.
+   */
+  #localDerivationDestination(): LocalDerivationDestination | undefined {
+    if (this.servingPosture) return undefined;
+    this.#localDerivation ??= new LocalDerivationDestination(this);
+    return this.#localDerivation;
+  }
+
   /** Renderer demand and local preview eligibility owned by this runtime. */
   get viewReplication(): ViewReplicationClient {
     return this.#viewReplication ??= new ViewReplicationClient(this);
@@ -2928,6 +2958,14 @@ export class Runtime {
    * runtime has one. */
   get speculationOverlay(): SpeculationOverlayDestination | undefined {
     return this.#speculationOverlay;
+  }
+
+  /**
+   * DIAGNOSTIC (tests): the destination holding this runtime's derived
+   * writes locally, if this runtime has created one.
+   */
+  get localDerivation(): LocalDerivationDestination | undefined {
+    return this.#localDerivation;
   }
 
   /** Observe terminal client event-intent outcomes. Subscribing eagerly

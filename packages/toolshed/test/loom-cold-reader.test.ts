@@ -232,7 +232,8 @@ describe("loom-cold-reader", () => {
   /**
    * Opens the root as the viewer, served or run locally, and checks that every
    * panel renders, that the viewer's bindings reach the published document,
-   * and that a later edit by the owner reaches the viewer.
+   * that a later edit by the owner reaches the viewer, and that nothing the
+   * viewer pushed was refused. Returns the viewer's runtime.
    */
   const expectPanelsRendered = async (
     loom: ColdLoom,
@@ -244,6 +245,16 @@ describe("loom-cold-reader", () => {
     const { stops } = loom;
     if (served) loom.serve();
     const viewer = client(viewerIdentity, served, localFold);
+    let refusals = 0;
+    viewer.telemetry.addEventListener("telemetry", (event) => {
+      const { marker } = event as RuntimeTelemetryEvent;
+      if (
+        marker.type === "storage.push.error" &&
+        marker.error === "AuthorizationError"
+      ) {
+        refusals++;
+      }
+    });
     expect(
       (await new ACLManager(viewer, space.did()).get())?.[viewerIdentity.did()],
     ).toBe(access);
@@ -329,6 +340,8 @@ describe("loom-cold-reader", () => {
     expect(
       (await new ACLManager(viewer, space.did()).get())?.[viewerIdentity.did()],
     ).toBe(access);
+    expect(refusals).toBe(0);
+    return viewer;
   };
 
   it("renders panel content for a cold READ viewer with serverExecution=true", async () => {
@@ -359,9 +372,8 @@ describe("loom-cold-reader", () => {
   });
 
   it("renders panel content for a cold READ viewer that runs it locally under localFold", async () => {
-    // The fold keeps the viewer's refused writes on the replica, the panel
-    // list's result container among them, so the panels render as they do
-    // for a WRITE viewer.
+    // The viewer's runtime holds its derivations before any push, so the
+    // fold has nothing to keep and the flag changes nothing about the view.
 
     const loom = await publishColdLoom("READ");
     try {
@@ -371,45 +383,17 @@ describe("loom-cold-reader", () => {
     }
   });
 
-  it("renders the root without its panels for a cold READ viewer that runs it locally", async () => {
-    // The viewer's own run writes the derived state the panels rest on, the
-    // panel list's result container first, and the space refuses a READ
-    // principal's writes. Each refusal takes no retry, so the viewer settles
-    // promptly with the root's own content and nothing below it.
+  it("renders panel content for a cold READ viewer that runs it locally", async () => {
+    // The viewer's own run derives the state the panels rest on, the panel
+    // list's result container first, into instances the space refuses a READ
+    // principal's writes to. The viewer's runtime holds those derivations
+    // and pushes none of them, so the view is the one a served viewer sees.
 
     const loom = await publishColdLoom("READ");
-    const { viewerIdentity, space, rootRef, client, stops } = loom;
     try {
-      const viewer = client(viewerIdentity, false);
-      let refusals = 0;
-      viewer.telemetry.addEventListener("telemetry", (event) => {
-        const { marker } = event as RuntimeTelemetryEvent;
-        if (
-          marker.type === "storage.push.error" &&
-          marker.error === "AuthorizationError"
-        ) {
-          refusals++;
-        }
-      });
-      const viewedRoot = viewer.getCellFromLink(rootRef);
-      await viewer.start(viewedRoot);
-      const ui = viewedRoot.asSchema(debugVDOMSchema);
-      stops.push(ui.sink(() => {}));
-      await ui.pull();
-      await viewer.idle();
-      const value = await ui.pull();
-      const text = visibleText(value);
-
-      expect(text).toContain("Cold shared root");
-      for (const panelText of PANEL_TEXTS) {
-        expect(text).not.toContain(panelText);
-      }
-      expect(renderTargets(value)).toHaveLength(0);
-      expect(refusals).toBeGreaterThan(0);
-      expect(
-        (await new ACLManager(viewer, space.did()).get())
-          ?.[viewerIdentity.did()],
-      ).toBe("READ");
+      const viewer = await expectPanelsRendered(loom, false);
+      expect(viewer.localDerivation?.heldCount(loom.space.did()))
+        .toBeGreaterThan(0);
     } finally {
       await loom.close();
     }

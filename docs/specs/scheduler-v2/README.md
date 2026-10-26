@@ -648,8 +648,13 @@ beyond the one refused, and the revert of the refused write is self-suppressed
 for its writer as P5 suppresses the writer's own commit, so the writer runs
 again when another input changes rather than against the same refusal. A grant
 refusal of a write the replica kept as a local fold takes the bounded retry,
-whose run reads the kept value. Waking consumers on success requires the
-committing run's registration to remain active.
+whose run reads the kept value. A client whose principal cannot write the
+space pushes no derived write at all (memory-v2 03-commit-model.md §3.8.3),
+so such a refusal arises only where the replica's access list was behind the
+store's or the replica did not hold it; the client then runs the writer once
+more, by an invalidation of its own after the revert, and holds what that run
+computes. Waking consumers on success requires the committing run's
+registration to remain active.
 
 The run path refreshes live subscriptions incrementally, including during
 retry recovery, without tearing them down and recreating them. The change

@@ -203,6 +203,13 @@ export function watchReactiveActionCommit(state: {
   /** Whether this run may retry or wake consumers of its registration. */
   readonly canRetry: () => boolean;
 
+  /**
+   * Whether the replica keeps a derived write the space refuses for lack of
+   * a grant as a local fold (the `localFold` flag), in which case the run
+   * that follows reads what was kept. Absent: it reverts them.
+   */
+  readonly keepsRefusedDerivedWrites?: boolean;
+
   /** Waits for catch-up and scoped conflict pulls before requeueing. */
   readonly awaitRetryReadiness: (error: unknown) => Promise<void>;
 
@@ -277,15 +284,15 @@ export function watchReactiveActionCommit(state: {
     // stays quiet, and so does a grant refusal, which is a verdict on the
     // principal rather than on what it computed: the replica reports the
     // refused write, and the run comes back when an input it did not write
-    // changes. A grant refusal of a transaction marked `derivedWrites` is one
-    // the replica kept as a local fold (03-commit-model.md §3.8.3), and it
-    // takes the bounded retry below: the re-run reads what was kept, has
-    // nothing to write, and re-creates what the list coordinators' rollback
-    // undid when the commit was refused.
+    // changes. A grant refusal of a derived write the replica kept as a local
+    // fold (03-commit-model.md §3.8.3) takes the bounded retry below: the
+    // re-run reads what was kept, has nothing to write, and re-creates what
+    // the list coordinators' rollback undid when the commit was refused.
     if (
       isPermanentRejection(error) || isTerminalRejection(error) ||
       (isPermanentAuthorizationRefusal(error) &&
-        state.tx.tx.derivedWrites !== true)
+        !(state.keepsRefusedDerivedWrites === true &&
+          state.tx.tx.derivedWrites === true))
     ) {
       state.retries.delete(state.action);
       state.offBudgetRetries.delete(state.action);
@@ -714,10 +721,11 @@ export async function runSchedulerAction(
     (tx.tx as { debugActionId?: string }).debugActionId = actionId;
     tx.tx.sourceAction = action;
     tx.tx.validateReactiveReads = true;
-    // The mark's one effect is the local fold of a write the space refuses
-    // (`IStorageTransaction.derivedWrites`), so the flag gating the fold
-    // decides whether the run carries it.
-    tx.tx.derivedWrites = state.runtime.experimental.localFold === true;
+    // A reactive run's writes are derived from its reads
+    // (`IStorageTransaction.derivedWrites`): a client whose principal cannot
+    // write the space holds them locally, and a replica under the `localFold`
+    // flag keeps one the space refuses as a fold.
+    tx.tx.derivedWrites = true;
     // Server-execution v2 stage F (serving-loop.md §3d): a serving
     // runtime's installed stamper attaches the wave run context here —
     // the reactive-action choke point — so every scheduler-driven
@@ -1335,6 +1343,7 @@ function finalizeReactiveActionCommit(
   const fanOutRun = args.fanOutRun;
   const commitState: Parameters<typeof watchReactiveActionCommit>[0] = {
     isLiveAction: () => state.isLiveAction(args.action),
+    keepsRefusedDerivedWrites: state.runtime.experimental.localFold === true,
     hasCommittedResult: () => owner?.hasCommittedResult === true,
     canRetry: () =>
       !state.runtime.writeTeardownSignal.aborted &&

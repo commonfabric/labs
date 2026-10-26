@@ -3224,6 +3224,11 @@ export class V2StorageTransaction implements IStorageTransaction {
     return judged;
   }
 
+  /** @inheritDoc */
+  writtenSpaces(): readonly MemorySpace[] {
+    return [...this.#writtenSpaces];
+  }
+
   /**
    * Close by sealing (server-execution v2, serving-loop.md §3d): the same
    * close work commit() runs — per-space native commit construction in
