@@ -52,6 +52,7 @@ import {
 } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import {
+  PieceStateMovedError,
   readStoredSetupBuild,
   storedSetupBuildOf,
 } from "../src/stored-setup-build.ts";
@@ -1257,14 +1258,11 @@ describe("stage G SpaceServer recovery seams", () => {
     }
   });
 
-  it("counts a demanded root whose start is refused as refused, parks it, and loads it once a commit to it restores its record", async () => {
-    // The piece's record says another build set it up with its writable one
-    // number further on, so its start is refused, which no retry of this
-    // build changes: the root parks, counted as refused rather than failed,
-    // until a commit to it, here one that restores the record of this
-    // build, as a migration would, re-arms it.
-    const stats = emptyServingLoopStats();
-    const rootName = "refused-root";
+  // Sets up a piece at `rootName` whose record says another build numbered
+  // its writable one number further on, so a start of it is refused.
+  // `restore` stamps the record of this build, as a migration would, and
+  // `close` disposes of the runtime that set the piece up.
+  const setUpRefusedRoot = async (rootName: string) => {
     const creatorManager = EmulatedStorageManager.connectTo(server, {
       as: spaceSigner,
     });
@@ -1272,7 +1270,6 @@ describe("stage G SpaceServer recovery seams", () => {
       apiUrl: new URL(import.meta.url),
       storageManager: creatorManager,
     });
-    let restore: (() => Promise<void>) | undefined;
     try {
       const compiled = await creator.patternManager.compilePattern({
         main: "/main.tsx",
@@ -1289,7 +1286,7 @@ describe("stage G SpaceServer recovery seams", () => {
       }, { space });
       const argument = creator.getCell<{ n: number }>(
         space,
-        "refused-root-arg",
+        `${rootName}-arg`,
         undefined,
       );
       const creatorRoot = creator.getCell<{ total?: number }>(
@@ -1330,12 +1327,29 @@ describe("stage G SpaceServer recovery seams", () => {
           description,
         ]),
       });
-      restore = () => stampRecord(own);
+      return {
+        restore: () => stampRecord(own),
+        close: async () => {
+          await creator.dispose();
+          await creatorManager.close();
+        },
+      };
     } catch (error) {
       await creator.dispose();
       await creatorManager.close();
       throw error;
     }
+  };
+
+  it("counts a demanded root whose start is refused as refused, parks it, and loads it once a commit to it restores its record", async () => {
+    // The piece's record says another build set it up with its writable one
+    // number further on, so its start is refused, which no retry of this
+    // build changes: the root parks, counted as refused rather than failed,
+    // until a commit to it, here one that restores the record of this
+    // build, as a migration would, re-arms it.
+    const stats = emptyServingLoopStats();
+    const rootName = "refused-root";
+    const { restore, close } = await setUpRefusedRoot(rootName);
 
     const created = newSpaceServer({ stats });
     expect(await created.activate()).toBe(true);
@@ -1371,7 +1385,7 @@ describe("stage G SpaceServer recovery seams", () => {
       }
       expect(stats.structureLoadRefused).toBe(1);
 
-      await restore!();
+      await restore();
       created.enqueueCommit({
         space,
         seq: Engine.serverSeq(engine),
@@ -1386,8 +1400,68 @@ describe("stage G SpaceServer recovery seams", () => {
       expect(stats.structureLoadFailures).toBe(0);
     } finally {
       (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
-      await creator.dispose();
-      await creatorManager.close();
+      await close();
+    }
+  });
+
+  it("loads a refused root whose record a commit restores while the refusing pass is still under way", async () => {
+    // The commit is admitted, and a wave drains it, during the demand pass
+    // whose start refuses the root, before the root is parked, so no parked
+    // root is there yet for the drain to re-arm. What re-arms the root is
+    // the pass's own account of the documents changed over it.
+    const stats = emptyServingLoopStats();
+    const rootName = "refused-mid-pass-root";
+    const { restore, close } = await setUpRefusedRoot(rootName);
+
+    const created = newSpaceServer({ stats });
+    expect(await created.activate()).toBe(true);
+    const runtime = servingRuntime!;
+    const rootCell = runtime.getCell<{ total?: number }>(
+      space,
+      rootName,
+      undefined,
+    );
+    const rootId = rootCell.getAsNormalizedFullLink().id;
+    const start = runtime.start.bind(runtime);
+    let restoredMidPass = false;
+    runtime.start = async (resultCell) => {
+      try {
+        return await start(resultCell);
+      } catch (error) {
+        if (error instanceof PieceStateMovedError && !restoredMidPass) {
+          restoredMidPass = true;
+          await restore();
+          created.enqueueCommit({
+            space,
+            seq: Engine.serverSeq(engine),
+            class: "authored",
+            sessionId: "session:refused-mid-pass-restorer",
+            writes: [{ id: rootId, scopeKey: "space" }],
+          });
+          // The pass that is refusing the root runs on past its wave's
+          // deadline; a wave after it drains the commit before the root is
+          // parked.
+          await cycles.reached(cycles.entries.length + 1);
+        }
+        throw error;
+      }
+    };
+    const originalWatched = server.demandForSpace.bind(server);
+    (server as { demandForSpace: unknown }).demandForSpace = () =>
+      sessionDemandOf(demandRowsFor([{ id: rootId }]));
+    try {
+      await awaitEach(cycles, () => {
+        created.noteDemandChanged();
+        return stats.structureLoadRefused === 1;
+      });
+      expect(restoredMidPass).toBe(true);
+
+      await awaitEach(cycles, () => runtime.runner.isRunning(rootCell));
+      expect(stats.structureLoadRefused).toBe(1);
+      expect(stats.structureLoadFailures).toBe(0);
+    } finally {
+      (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
+      await close();
     }
   });
 
