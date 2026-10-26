@@ -86,6 +86,11 @@ export class ServingWaves {
     return this.#space;
   }
 
+  /** The memory engine holding the space, which the waves commit to. */
+  get engine(): Engine.Engine {
+    return this.#engine;
+  }
+
   /** The wave the next seal joins, if one is open. */
   get current(): WaveAccumulator | undefined {
     return this.#current;

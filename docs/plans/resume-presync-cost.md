@@ -248,7 +248,7 @@ Exit: a plan's inputs document is hashed over its links, not its schemas.
       named by a synced run in a caller's transaction on a replica with the
       read-through, pays no name-sync for any row
       (`packages/runner/test/resume-presync-plan-count.test.ts`). The record is
-      [`../history/development/performance/2026-10-23-served-chat-burst-per-session-rows.md`](../history/development/performance/2026-10-23-served-chat-burst-per-session-rows.md).
+      [`../history/development/performance/2026-10-23-start-gate-confirmed-absence.md`](../history/development/performance/2026-10-23-start-gate-confirmed-absence.md).
 - [ ] An instance the pre-sync did not name is still held on a derived
       cell that holds no value: one a caller's `run()` reaches, or one
       whose pre-sync round had a sync that failed. Taking the record there

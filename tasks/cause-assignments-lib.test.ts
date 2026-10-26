@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  ambiguousCells,
   assignmentDigest,
   assignmentLevels,
   movedCells,
@@ -109,7 +110,7 @@ describe("cause-assignments-lib", () => {
           level: "",
           description:
             "cell, computed, written by sub-pattern child-identi#Child",
-          holdsState: true,
+          hasState: true,
           from: 1,
           to: 0,
         },
@@ -117,11 +118,55 @@ describe("cause-assignments-lib", () => {
           pattern: "test.tsx",
           level: "",
           description: "stream, not computed, no writer",
-          holdsState: false,
+          hasState: false,
           from: 2,
           to: 1,
         },
       ]);
+    });
+  });
+
+  describe("ambiguousCells()", () => {
+    it("returns, with its pattern and level, a description of children whose count differs", () => {
+      expect(
+        ambiguousCells(
+          assignment([{ child: CHILD }, { child: CHILD }, { lift: true }]),
+          assignment([{ child: CHILD }, { lift: true }]),
+        ),
+      ).toEqual([{
+        pattern: "test.tsx",
+        level: "",
+        description:
+          "cell, computed, written by sub-pattern child-identi#Child",
+        before: [0, 1],
+        after: [0],
+        hasState: true,
+      }]);
+    });
+
+    it("returns, as holding no state, a description of lifts whose count differs", () => {
+      expect(
+        ambiguousCells(
+          assignment([{ lift: true }, { lift: true }, { child: CHILD }]),
+          assignment([{ lift: true }, { child: CHILD }]),
+        ).map(({ description, before, after, hasState }) => [
+          description,
+          before,
+          after,
+          hasState,
+        ]),
+      ).toEqual([
+        ["cell, computed, written by function", [0, 1], [0], false],
+      ]);
+    });
+
+    it("returns nothing for a level only one side has", () => {
+      expect(
+        ambiguousCells(
+          { pattern: "test.tsx", source: "source", levels: [] },
+          assignment([{ child: CHILD }]),
+        ),
+      ).toEqual([]);
     });
   });
 

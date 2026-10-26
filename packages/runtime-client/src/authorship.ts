@@ -24,6 +24,7 @@ import {
   type CellHandleRead,
   CellReadRefusedError,
   type CellSubscribeOptions,
+  isCellHandle,
 } from "./cell-handle.ts";
 
 /**
@@ -43,11 +44,11 @@ export interface AuthorshipObservation {
 
   /**
    * Who the author cell claims wrote the value: the principal its label
-   * names, as `{ subject, name? }`, else what the cell reads as. A cell that
-   * can be narrowed reads under {@link AUTHOR_CLAIM_SCHEMA}, as the claim
-   * fields it holds and no more, so a profile reads as `{ name }` rather than
-   * whole; a cell that offers no narrowing reads whole. An author given as a
-   * plain value rather than a cell is its own claim.
+   * names, as `{ subject, name? }`, else what the cell reads as. A
+   * `CellHandle` reads under {@link AUTHOR_CLAIM_SCHEMA}, as the claim fields
+   * it holds and no more, so a profile reads as `{ name }` rather than whole;
+   * any other cell reads whole. An author given as a plain value rather than
+   * a cell is its own claim.
    */
   readonly authorClaim: unknown;
 }
@@ -119,7 +120,7 @@ const AUTHOR_DISPLAY_FIELDS = [
 
 /** A claim's own value, or one of its fields: a primitive. */
 const PRIMITIVE_CLAIM_SCHEMA = {
-  anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }],
+  type: ["string", "number", "boolean"],
 } as const;
 
 /**
@@ -133,7 +134,7 @@ const PRIMITIVE_CLAIM_SCHEMA = {
  */
 export const AUTHOR_CLAIM_SCHEMA: JSONSchema = {
   anyOf: [
-    ...PRIMITIVE_CLAIM_SCHEMA.anyOf,
+    PRIMITIVE_CLAIM_SCHEMA,
     {
       type: "object",
       properties: Object.fromEntries(
@@ -144,25 +145,13 @@ export const AUTHOR_CLAIM_SCHEMA: JSONSchema = {
   ],
 };
 
-/** A cell that can be read under a schema of the reader's choosing. */
-type SchemaNarrowableValue = {
-  asSchema(schema: JSONSchema): unknown;
-};
-
-const hasSchemaNarrowing = (
-  value: unknown,
-): value is SchemaNarrowableValue =>
-  isObjectOrArray(value) &&
-  typeof (value as { asSchema?: unknown }).asSchema === "function";
-
 /**
  * `author` as the observation reads it: narrowed to
- * {@link AUTHOR_CLAIM_SCHEMA} when it is a cell that can be, else as given.
- * A plain value is its own claim, and a cell that offers no narrowing is
- * read as it is bound.
+ * {@link AUTHOR_CLAIM_SCHEMA} when it is a `CellHandle`, else as given. A
+ * plain value is its own claim, and any other cell is read as it is bound.
  */
 const asClaimReader = (author: unknown): unknown =>
-  hasSchemaNarrowing(author) ? author.asSchema(AUTHOR_CLAIM_SCHEMA) : author;
+  isCellHandle(author) ? author.asSchema(AUTHOR_CLAIM_SCHEMA) : author;
 
 const hasLabelQuery = (value: unknown): value is CfcLabelQueryableValue =>
   isObjectOrArray(value) &&
@@ -548,7 +537,7 @@ export const authorshipStateForLabel = (
  * `value` is the content whose authorship is in question and `author` the
  * claim, each usually a `CellHandle` as a render binds one (`$value` and
  * `$author` on `cf-cfc-authorship`). Either may also be a plain value, which
- * has no label to load. An author cell is read under
+ * has no label to load. An author `CellHandle` is read under
  * {@link AUTHOR_CLAIM_SCHEMA}, the fields a claim is read from and no more,
  * whatever schema it was bound with. A label counts as loaded once a read of
  * it has finished with nothing left waiting: the value's own label, or that

@@ -23,6 +23,10 @@ import { readStoredCfcMetadata } from "./cfc/metadata.ts";
 import type { CfcMetadata } from "./cfc/types.ts";
 import { ColdLoadNegativeMemo } from "./cold-load-negative-memo.ts";
 import {
+  isPatternCoverageCacheRuntimeVersion,
+  moduleByteCacheRuntimeVersion,
+} from "./compilation-cache/cache-variants.ts";
+import {
   buildSourceDocs,
   type ClosureLoadTally,
   COMPILED_INTEGRITY_ATOM,
@@ -77,6 +81,7 @@ import type {
   CommitError,
   IExtendedStorageTransaction,
 } from "./storage/interface.ts";
+import { isPermanentAuthorizationRefusal } from "./storage/rejection.ts";
 import { fromURI, toURI } from "./uri-utils.ts";
 
 /**
@@ -133,13 +138,6 @@ const MAX_PARKED_FAILED_REPLICATIONS = 64;
 // bundle is ~10 modules), and entries are cheap (a reference to an already-live
 // namespace).
 const MAX_EVALUATED_MODULE_CACHE_SIZE = 1000;
-const PATTERN_COVERAGE_CACHE_VARIANT = "pattern-coverage";
-
-/**
- * The compiled-code cache variant of a compile that names `const`-bound
- * sub-pattern instances (`namesInstances()`).
- */
-const INSTANCE_NAMES_CACHE_VARIANT = "instance-names";
 
 /**
  * The compiler's hoist namespace. `builder-call-hoisting` mints
@@ -216,24 +214,19 @@ function throwableStorageError(error: CommitError): Error {
   });
 }
 
-function moduleByteCacheRuntimeVersion(
-  runtimeVersion: string | undefined,
-  options: { patternCoverage: boolean; instanceNames: boolean },
-): string | undefined {
-  if (runtimeVersion === undefined) return undefined;
-  // A compile that names instances emits different bytes for the same source,
-  // so it keeps a variant of its own. It goes ahead of the coverage suffix,
-  // which `isPatternCoverageCacheRuntimeVersion()` reads at the end.
-  const named = options.instanceNames
-    ? `${runtimeVersion}/${INSTANCE_NAMES_CACHE_VARIANT}`
-    : runtimeVersion;
-  return options.patternCoverage
-    ? `${named}/${PATTERN_COVERAGE_CACHE_VARIANT}`
-    : named;
-}
+type RefusalShape = Parameters<typeof isPermanentAuthorizationRefusal>[0];
 
-function isPatternCoverageCacheRuntimeVersion(runtimeVersion: string): boolean {
-  return runtimeVersion.endsWith(`/${PATTERN_COVERAGE_CACHE_VARIANT}`);
+/**
+ * Whether `error`, a replication's failure, is its target space refusing the
+ * write for want of a grant (`isPermanentAuthorizationRefusal`), as the error
+ * says itself or through the storage error `throwableStorageError` raised it
+ * from.
+ */
+function isGrantRefusal(
+  error: RefusalShape & { cause?: RefusalShape },
+): boolean {
+  return isPermanentAuthorizationRefusal(error) ||
+    isPermanentAuthorizationRefusal(error?.cause);
 }
 
 /**
@@ -403,17 +396,22 @@ class ClosureReplicationSupplyError extends Error {
   }
 }
 
-/** One parked failed replication (see `#parkedFailedReplications`): enough
- * to re-issue the ENTRY's full replication — fresh ticket, fresh visited
- * set — when a matching supply records. `delegated` is the original §2b
- * carriage; the accept gate's delegated admission validates completeness,
- * not freshness (engine-wave-sink's protocol.md §2b row), so a late
- * re-issue is the same admission shape as the fire-and-forget original. */
-type ParkedReplication = {
+/** One closure replication `#issueReplication()` runs, and what a parked
+ * failed one keeps (see `#parkedFailedReplications`): enough to re-issue the
+ * ENTRY's full replication — fresh ticket, fresh visited set — when a
+ * matching supply records. `delegated` is the original §2b carriage; the
+ * accept gate's delegated admission validates completeness, not freshness
+ * (engine-wave-sink's protocol.md §2b row), so a late re-issue is the same
+ * admission shape as the fire-and-forget original. `copyForLoad` marks a copy
+ * a load served from memory issued on its own
+ * (`#copyClosureForLoadFromMemory()`), whose target may be a space the
+ * session may only read. */
+type ClosureReplication = {
   entryIdentity: string;
   fromSpace: MemorySpace;
   toSpace: MemorySpace;
   delegated: WritebackDelegation | undefined;
+  copyForLoad: boolean;
 };
 
 /** A shared compilation and the spaces requesting its durable closure. */
@@ -770,7 +768,7 @@ export class PatternManager {
    */
   #parkedFailedReplications = new Map<
     string,
-    Map<string, ParkedReplication>
+    Map<string, ClosureReplication>
   >();
 
   /**
@@ -818,13 +816,7 @@ export class PatternManager {
               `to=${record.toSpace}`,
               `trigger=persist-record:${space}`,
             ]);
-            this.#issueReplication(
-              record.entryIdentity,
-              record.fromSpace,
-              record.toSpace,
-              record.delegated,
-              { wantedIdentity: identity },
-            );
+            this.#issueReplication(record, { wantedIdentity: identity });
             // deno-coverage-ignore-start -- nothing in the re-issue path
             // throws synchronously: the replication is an `async` call
           } catch (error) {
@@ -866,7 +858,7 @@ export class PatternManager {
    */
   #registerFailedReplication(
     wantedIdentity: string,
-    record: ParkedReplication,
+    record: ClosureReplication,
     checkRecordedSupply: boolean,
   ): void {
     if (checkRecordedSupply) {
@@ -887,13 +879,7 @@ export class PatternManager {
           `to=${record.toSpace}`,
           "trigger=recorded-at-registration",
         ]);
-        this.#issueReplication(
-          record.entryIdentity,
-          record.fromSpace,
-          record.toSpace,
-          record.delegated,
-          { wantedIdentity },
-        );
+        this.#issueReplication(record, { wantedIdentity });
         return;
       }
     }
@@ -1282,7 +1268,13 @@ export class PatternManager {
 
     const entryRef = this.getArtifactEntryRef(pattern);
     if (!entryRef) return;
-    this.#issueReplication(entryRef.identity, fromSpace, toSpace, delegated);
+    this.#issueReplication({
+      entryIdentity: entryRef.identity,
+      fromSpace,
+      toSpace,
+      delegated,
+      copyForLoad: false,
+    });
   }
 
   /** Issue one closure replication fire-and-forget: fresh ticket and
@@ -1303,16 +1295,20 @@ export class PatternManager {
    * heal line, and its failure re-parks WITHOUT the registration-time
    * map check — the failed attempt's read just consulted the map, so an
    * immediate retry could only spin on state it already read; the next
-   * matching record wakes it instead. */
+   * matching record wakes it instead.
+   *
+   * A copy a load issued on its own (`copyForLoad`) that its target refuses
+   * for want of a grant logs `closure-copy-refused` at debug instead: the
+   * session may only read that space, which is no fault, and no re-run can
+   * supply the grant. */
   #issueReplication(
-    entryIdentity: string,
-    fromSpace: MemorySpace,
-    toSpace: MemorySpace,
-    delegated: WritebackDelegation | undefined,
+    replication: ClosureReplication,
     reissueOf?: { wantedIdentity: string },
   ): void {
+    const { entryIdentity, fromSpace, toSpace, delegated, copyForLoad } =
+      replication;
     const ticket = this.#nextReplicationTicket++;
-    const replication = this.#replicateClosures(
+    const settled = this.#replicateClosures(
       entryIdentity,
       fromSpace,
       toSpace,
@@ -1329,6 +1325,15 @@ export class PatternManager {
         ]);
       }
     }).catch((error) => {
+      if (copyForLoad && isGrantRefusal(error)) {
+        logger.debug("closure-copy-refused", () => [
+          `entry=${entryIdentity}`,
+          `from=${fromSpace}`,
+          `to=${toSpace}`,
+          String(error),
+        ]);
+        return;
+      }
       logger.error("closure-replication-failed", () => [
         `entry=${entryIdentity}`,
         `from=${fromSpace}`,
@@ -1338,7 +1343,7 @@ export class PatternManager {
       if (error instanceof ClosureReplicationSupplyError) {
         this.#registerFailedReplication(
           error.wantedIdentity,
-          { entryIdentity, fromSpace, toSpace, delegated },
+          replication,
           reissueOf === undefined,
         );
       }
@@ -1348,16 +1353,16 @@ export class PatternManager {
       intoTarget = new Set();
       this.#replicationsIntoSpace.set(toSpace, intoTarget);
     }
-    const registration = { ticket, settled: replication };
+    const registration = { ticket, settled };
     intoTarget.add(registration);
-    replication.finally(() => {
+    settled.finally(() => {
       const entries = this.#replicationsIntoSpace.get(toSpace);
       if (entries === undefined) return;
       entries.delete(registration);
       if (entries.size === 0) this.#replicationsIntoSpace.delete(toSpace);
     });
-    this.#compileCacheWrites.add(replication);
-    replication.finally(() => this.#compileCacheWrites.delete(replication));
+    this.#compileCacheWrites.add(settled);
+    settled.finally(() => this.#compileCacheWrites.delete(settled));
   }
 
   /**
@@ -1375,7 +1380,10 @@ export class PatternManager {
    * supplied by the next session that writes it), and a space the session
    * has written into, or is writing into, is copied into no more. A
    * preview load (`repairCache: false`) persists nothing and copies
-   * nothing.
+   * nothing. A space the session may only read refuses the copy, and the
+   * refusal is logged at debug as `closure-copy-refused`, not as a failed
+   * replication: the next session that writes the closure as a principal
+   * who may write that space supplies it.
    */
   #copyClosureForLoadFromMemory(
     entryIdentity: string,
@@ -1407,7 +1415,13 @@ export class PatternManager {
       `to=${space}`,
       "trigger=load-from-memory",
     ]);
-    this.#issueReplication(entryIdentity, origin, space, undefined);
+    this.#issueReplication({
+      entryIdentity,
+      fromSpace: origin,
+      toSpace: space,
+      delegated: undefined,
+      copyForLoad: true,
+    });
   }
 
   /**
@@ -3610,10 +3624,18 @@ export class PatternManager {
     });
     logger.time(writebackStart, "compile-cache", "source-writeback");
     if (error) {
-      logger.error("source-cache-writeback-failed", () => [
-        `entry=${entryIdentity}`,
-        error.message,
-      ]);
+      // As in `#writeBackCompileCache()`.
+      if (isPermanentAuthorizationRefusal(error)) {
+        logger.debug("source-cache-writeback-refused", () => [
+          `entry=${entryIdentity}`,
+          error.message,
+        ]);
+      } else {
+        logger.error("source-cache-writeback-failed", () => [
+          `entry=${entryIdentity}`,
+          error.message,
+        ]);
+      }
       throw throwableStorageError(error);
     }
     this.#runtime.registerModuleDelegations(space, committedModuleDelegations);
@@ -3625,7 +3647,8 @@ export class PatternManager {
    * `editWithRetry` so a commit conflict (e.g. the cache write racing the
    * pattern's own space writes) retries rather than silently dropping the
    * entry. A final failure throws because persisted refs-only pattern JSON
-   * requires a durable closure behind every `$patternRef`.
+   * requires a durable closure behind every `$patternRef`, and is logged at
+   * error level unless the space refused it for want of a grant.
    */
   async #writeBackCompileCache(
     space: MemorySpace,
@@ -3701,11 +3724,22 @@ export class PatternManager {
       }, writebackMaxRetries);
       if (error) {
         logger.time(writebackStart, "compile-cache", "writeback");
-        logger.error("compile-cache-writeback-failed", () => [
-          `entry=${entryIdentity}`,
-          `chunkModules=${chunk.length}/${modules.length}`,
-          error.message,
-        ]);
+        // A space that refuses the write for want of a grant is logged at
+        // debug: only the caller knows whether the session was meant to
+        // write there, and each caller reports the error thrown here on its
+        // own terms.
+        if (isPermanentAuthorizationRefusal(error)) {
+          logger.debug("compile-cache-writeback-refused", () => [
+            `entry=${entryIdentity}`,
+            error.message,
+          ]);
+        } else {
+          logger.error("compile-cache-writeback-failed", () => [
+            `entry=${entryIdentity}`,
+            `chunkModules=${chunk.length}/${modules.length}`,
+            error.message,
+          ]);
+        }
         throw throwableStorageError(error);
       }
       for (const [identity, predecessors] of chunkDelegations) {

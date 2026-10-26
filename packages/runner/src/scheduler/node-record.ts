@@ -1,4 +1,5 @@
 import type { IMemorySpaceAddress } from "../storage/interface.ts";
+import { endLocalReadValidationStretch } from "../storage/local-read-policy.ts";
 import type { FanOutNodeState } from "./fan-out.ts";
 import type { Action, ReactivityLog } from "./types.ts";
 
@@ -229,6 +230,9 @@ export class NodeRegistry {
   remove(action: Action): SchedulerNode | undefined {
     const record = this.#records.get(action);
     if (!record) return undefined;
+    // A removed node is no current producer, which a validation made before
+    // may have counted on.
+    endLocalReadValidationStretch();
     record.registrationToken = {};
     delete record.hasCommittedResult;
     delete record.gate.retryOwed;
@@ -281,6 +285,9 @@ export class NodeRegistry {
     const record = this.#records.get(action);
     if (!record) return;
     if (status !== "clean") {
+      // A node that is not clean is no current producer, which a validation
+      // made before may have counted on.
+      endLocalReadValidationStretch();
       record.adoptedViewIdentity = undefined;
       record.adoptedViewDependencies = undefined;
     }

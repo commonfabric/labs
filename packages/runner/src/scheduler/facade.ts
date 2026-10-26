@@ -34,6 +34,7 @@ import {
   ReplicaLoadFailureError,
 } from "../storage/interface.ts";
 import {
+  endLocalReadValidationStretch,
   recordLocalReadWake,
   requireLocalReadCondition,
   restrictToLocalReads,
@@ -2299,6 +2300,9 @@ export class Scheduler {
 
   /** Revokes authority evidence while the next invocation is unresolved. */
   beginViewAction(action: Action): void {
+    // The action stops being a current producer here, which a validation
+    // made before may have counted on.
+    endLocalReadValidationStretch();
     const node = this.#nodes.get(action);
     if (node !== undefined) {
       node.adoptedViewIdentity = undefined;
