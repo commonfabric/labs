@@ -22,7 +22,7 @@ active collaborative field.** Only an editor session can.
 That rules out:
 
 - an agent appending action items to shared meeting notes;
-- a suggestion that adds an item to a list in the note;
+- an agent adding an item to a list in the note;
 - a summary inserted under a heading;
 - resetting a shared note from a handler.
 
@@ -81,20 +81,20 @@ shape everything below:
 
 ```ts
 type TextEdit =
-  | { old: string; new: string; replaceAll?: boolean } // replace by content
+  | { old: string; new: string }                       // replace by content
   | { append: string }                                 // on its own line, at the end
   | { prepend: string };                               // on its own line, at the start
 
 type EditOutcome =
   | { state: "pending" }
-  | { state: "applied"; duplicate: boolean }
+  | { state: "applied" }
   | { state: "refused"; kind: "no-match" | "ambiguous" | "overlap"; edit: number; count?: number }
   | { state: "conflict"; reason: string }; // could not write at all: authority,
                                            // epoch or history, codec too old
 
 interface Writable<string> {
   /** Submits a text edit as its own operation; never part of this handler's transaction. */
-  edit(e: TextEdit | readonly TextEdit[], opts: { dedupeId: string }): Reactive<EditOutcome>;
+  edit(e: TextEdit | readonly TextEdit[]): Reactive<EditOutcome>;
 }
 
 /** Pure; the same function the server runs. A handler may call it on its snapshot. */
@@ -115,8 +115,8 @@ cell transactions editor semantics. Two consequences:
 - A later `.get()` in the same handler sees the old value.
 - The handler does not block, and nothing re-runs. The outcome is a
   reactive value that resolves from `pending` to the server's verdict.
-  Anything that depends on the verdict, such as marking a proposal
-  stale, is derived from it. There is no prediction to keep consistent
+  Anything that depends on the verdict, such as the caller re-reading
+  after a `no-match`, is derived from it. There is no prediction to keep consistent
   with the server.
 
 A handler that wants to decide *whether* to submit can call
@@ -156,11 +156,11 @@ The first is simpler, and it removes a race. Epoch and history errors
 - Compare exact code units, with no normalization.
 - `old` must be non-empty. The one exception: `old: ""` matches once
   when the whole value is empty.
-- Without `replaceAll`, exactly one occurrence is required: zero is
-  `no-match`, two or more is `ambiguous` (count includes overlaps).
-- With `replaceAll`, at least one is required. Replacement runs left to
-  right over non-overlapping occurrences, and `count` reports
-  non-overlapping occurrences.
+- Exactly one occurrence is required: zero is `no-match`, and two or
+  more is `ambiguous`, with the count (overlaps included).
+- There is no replace-all. Nothing in the agent-harness precedent needs
+  it, and it is a broad change made by one call. A caller that wants
+  several replacements lists them.
 
 ### Append and prepend are line-oriented
 
@@ -194,31 +194,29 @@ are integrated.
   stands after the edits before it in the list.
 - **Atomicity.** The list applies all or nothing.
 
-### Idempotence
+### Duplicates: the runtime's receipts, not a new mechanism
 
-`dedupeId` is required. Derive it deterministically from the cause, for
-example `${eventId}:${purpose}`.
+The runtime already makes handling exactly-once. Every handling derives
+a create-only receipt from the durable event id, so a redelivered event
+collides on its receipt and is rejected, not handled a second time
+(`docs/specs/scheduler-v2/README.md`, "Receipts"). `edit` adds no
+mechanism of its own:
 
-A handler may run more than once, and in a shared space every
-participant's runtime may run it. The engine dedupes on
-`(epoch, dedupeId)`, ignoring the payload, **before** matching. So the
-second runtime resolves to `applied, duplicate: true` rather than a
-false `no-match` against text the first runtime already changed.
-
-`dedupeId` is a namespace separate from `submissionId`. A
-`submissionId` reused with a different payload is an error
-(`OpSubmissionMismatchError`), and two runtimes, or two model-generated
-payloads, legitimately differ. Submitted rows are never pruned (§7.8),
-so dedupe across the whole epoch is feasible with an indexed column.
-After release and a new epoch, the same `dedupeId` applies again.
-
-### Proposals taken later
-
-A proposed edit (a suggestion offered now and accepted later) stores
-`{target, edits, dedupeId}`. Whether it still applies is derived from
-`matchEdits(currentValue, edits)`, so it can dim as soon as `old` stops
-matching uniquely. On acceptance it calls `edit`, and a `refused`
-outcome marks it stale for the proposer to re-read.
+- **The operation's submission id derives from the handling's event
+  id.** A resend after a reconnect reuses it, and §7's durable
+  submission ids already make that idempotent.
+- **One runtime handles an event.** Client-side, it is the runtime the
+  event was sent to. Server-side, it is the server, and the client's
+  local speculative run is not replicated. So there is no "every
+  participant runs it" case to guard against.
+- **A request that must not be sent twice needs an event id derived
+  from its inputs.** For an agent calling `edit` through a harness tool,
+  the trusted environment (the harness) supplies the timestamp the id
+  is derived from. Agents never invent ids or timestamps. This is open
+  work shared with other callers, not something `edit` defines.
+- **A lost turn followed by a fresh request is just another request.**
+  If the first edit landed, the text it replaced is gone, so the second
+  fails with `no-match`. No protocol can do better, and none is needed.
 
 ### Inactive fields
 
@@ -242,14 +240,13 @@ writer of that field start throwing.
 ## CFC
 
 - **`edit` needs READ as well as WRITE.** §7.13 requires only WRITE for
-  `apply-op`, but the outcome (`no-match`, `ambiguous` and its count,
-  `duplicate`) reveals content. A write-only principal would gain a read
+  `apply-op`, but the outcome (`no-match`, `ambiguous` and its count)
+  reveals content. A write-only principal would gain a read
   oracle. Without READ, a refusal collapses to `conflict`.
 - **The outcome is labeled with the field's confidentiality**, attached
   where the runner resolves it rather than through a recorded read.
 - **`new` is checked against the field's label**, like any write, at
-  integrate time, for the submitting principal. An accepted proposal
-  runs with the accepting user's authority, not the proposer's.
+  integrate time, for the submitting principal.
 - **No label side data.** Range-oriented CFC stays deferred (plan WP9),
   so labels stay whole-field.
 
@@ -261,15 +258,14 @@ writer of that field start throwing.
    the codec handshake (§7.5), not unknown-key rejection.
 2. **A server-resolved head base** for text-edit payloads (§7.7), or
    the runner fetching the cursor with `op.query`.
-3. **Engine dedupe on `(epoch, dedupeId)`**, indexed and checked before
-   integration.
-4. **Structured refusals** in place of a generic codec error.
-5. **`Writable<string>.edit` in the runner**: a standalone operation
-   after the handler commits, with a reactive outcome. It is not in
+3. **Structured refusals** in place of a generic codec error.
+4. **`Writable<string>.edit` in the runner**: a standalone operation
+   after the handler commits, with a reactive outcome and a submission
+   id derived from the handling's event id. It is not in
    `PendingVersion`.
-6. **One exported pure `matchEdits`**, shared by the codec, the runner
-   and proposal UIs.
-7. **The outcome returned unchanged** through any command or agent tool
+5. **One exported pure `matchEdits`**, shared by the codec and the
+   runner.
+6. **The outcome returned unchanged** through any command or agent tool
    surface.
 
 ## Open questions
