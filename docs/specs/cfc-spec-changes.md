@@ -504,10 +504,12 @@ The fit measurement joins the target's declared policy with
 carries `PersonalSpace(<that same space>)`, the addition proposed by
 [specs#71](https://github.com/commonfabric/specs/pull/71). That proposal is
 closed without merging. The runtime implements its proposed own-space rule
-under the development-phase exception for unresolved specs dependencies; the
-pin has not incorporated it. The existing specs#68 marker covers the base
-residency work, and the own-space addition has no separate marker. The
-conformance statement and enforcement matrix record this additional gap.
+at the strict default, ahead of a ruling and a reconciled pin. The existing
+specs#68 marker covers the base residency work; the own-space addition has
+neither a separate marker nor a default-off dial. This is a nonconforming
+semantic gap and does not satisfy the correspondence procedure's step 4.
+The conformance statement and enforcement matrix record the gap, which still
+needs a ruling.
 
 A flow clause listing either spelling of the target's own space among its
 alternatives fits a space-scoped document whatever it declares. The proposal

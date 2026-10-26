@@ -317,12 +317,17 @@ three marker slots are occupied. Its record is the "Runtime-owned-store derived
 admission" entry in
 [`cfc-enforcement-matrix.md`](../specs/cfc-enforcement-matrix.md) §4 and the
 [conformance statement](../specs/cfc-conformance-statement.md) §5.
-The own-space residency addition described in those documents likewise runs
-ahead of a reconciled pin under the development-phase exception. Its proposal,
+
+The own-space residency addition is a nonconforming semantic gap that still
+needs a ruling. Its proposal,
 [specs#71](https://github.com/commonfabric/specs/pull/71), is closed without
-merging. The existing residency marker names specs#68, and there is no
-separate marker for the own-space addition; the conformance statement records
-that gap and the unresolved ruling status.
+merging. It admits more at the strict default, with no default-off dial and
+no separate `SPEC-PENDING` marker; the existing residency marker names specs#68.
+This does not satisfy step 4 above. @danfuzz has authorized regular labs pull
+requests ahead of unresolved specs dependencies during this development phase;
+that authorization does not establish specification conformance or amend this
+procedure. The conformance statement records the gap until a ruling and a
+reconciled pin address it.
 
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by

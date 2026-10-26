@@ -352,10 +352,13 @@ dials.
   pinned §8.12.4 has no residency term, and the proposed base rule in
   [specs#68](https://github.com/commonfabric/specs/pull/68) admits only the
   `Space(S)` form on an unbound store. The own-space addition admits writes
-  those texts refuse and runs at strict under the development-phase exception
-  for unresolved specs dependencies. It has no separate `SPEC-PENDING`
-  marker; the three slots are occupied and the residency marker names #68.
-  This entry and `cfc-enforcement-matrix.md` §4 record the additional gap.
+  those texts refuse and runs at strict without a default-off dial or a
+  separate `SPEC-PENDING` marker; the three slots are occupied and the
+  residency marker names #68. This is a nonconforming semantic gap and does
+  not satisfy the correspondence procedure's step 4. @danfuzz's authorization
+  to proceed ahead of unresolved specs dependencies does not supply a ruling;
+  the gap still needs one and a reconciled pin. This entry and
+  `cfc-enforcement-matrix.md` §4 record the additional gap.
   The new clause is absent on `user` and `session` stores, even when their
   scoped principal is unavailable. No foreign-space clause or unbound
   `User` clause is added. Full derived labels still persist and taint readers;
