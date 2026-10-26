@@ -1,12 +1,11 @@
 # Value descriptors
 
-The conformance fixtures beside this file, `fvj1-conformance.json` and
-`hash-conformance.json`, write each value as a descriptor: JSON that says
-everything about a value a fixture checks, and nothing about how any format
-carries it. An implementation in another language reads a fixture by building
-the value each descriptor describes.
-[`fvj1-conformance.md`](fvj1-conformance.md) and
-[`hash-conformance.md`](hash-conformance.md) describe the fixtures themselves.
+The conformance fixture beside this file, `fvj1-conformance.json`, writes each
+value as a descriptor: JSON that says everything about a value the fixture
+checks, and nothing about how any format carries it. An implementation in
+another language reads the fixture by building the value each descriptor
+describes. [`fvj1-conformance.md`](fvj1-conformance.md) describes the fixture
+itself.
 
 `src/conformance-fixtures.ts`, in `packages/data-model`, writes and reads them.
 
