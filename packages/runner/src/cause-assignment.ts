@@ -44,7 +44,7 @@ export interface NumberedCell {
    * sub-pattern child, whose state is the child piece under its id, or a
    * cell that is not computed.
    */
-  holdsState: boolean;
+  hasState: boolean;
 }
 
 /** A numbered cell whose number differs between two builds of one source. */
@@ -53,7 +53,7 @@ export interface RenumberedCell {
   description: string;
 
   /** Whether it holds state, as {@link NumberedCell} says. */
-  holdsState: boolean;
+  hasState: boolean;
 
   /** Its number in the earlier build. */
   from: number;
@@ -212,7 +212,7 @@ export function numberedCells(
         computed ? "computed" : "not computed",
         writers.length === 0 ? "no writer" : `written by ${writers.join(", ")}`,
       ].join(", "),
-      holdsState: !stream && (!computed || child),
+      hasState: !stream && (!computed || child),
     });
   }
   return cells.sort((a, b) => a.number - b.number);
@@ -260,7 +260,7 @@ export function renumberedCells(
     if (from === undefined || from === cell.number) continue;
     moved.push({
       description: cell.description,
-      holdsState: cell.holdsState,
+      hasState: cell.hasState,
       from,
       to: cell.number,
     });
@@ -295,12 +295,12 @@ export function ambiguousDescriptions(
     return found;
   };
   for (const cell of after) {
-    if (cell.holdsState === hasState) {
+    if (cell.hasState === hasState) {
       entry(cell.description).after.push(cell.number);
     }
   }
   for (const cell of before) {
-    if (cell.holdsState === hasState) {
+    if (cell.hasState === hasState) {
       entry(cell.description).before.push(cell.number);
     }
   }

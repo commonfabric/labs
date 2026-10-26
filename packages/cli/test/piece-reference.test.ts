@@ -173,6 +173,7 @@ describe("piece-reference", () => {
         },
       };
       const pieces = {
+        runtime: { experimental: { serverExecution: false } },
         get: (id: string) => {
           seen.got = id;
           return Promise.resolve(piece);

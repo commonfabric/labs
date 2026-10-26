@@ -116,9 +116,30 @@ a single chokepoint (`packages/data-model/src/value-hash/ValueHasher.ts`). The U
 (`packages/runner/src/uri-utils.ts`, `toURI`/`fromURI`) prefixes an entity
 scheme onto the tagged hash — historically always `of:`.
 
-The manifest of materialized internal cells is stored in result-cell
-metadata and matched by partial cause plus kind
-(`packages/runner/src/runner.ts`, `materializeDerivedInternalCells`).
+The manifest of materialized internal cells is stored in result-cell metadata
+and matched by partial cause plus kind (`packages/runner/src/runner.ts`,
+`materializeDerivedInternalCells`). Setup also stamps `patternSetupBuild`, a
+record of the build it staged (`packages/runner/src/stored-setup-build.ts`): the
+pattern identity it describes, a digest of the level's positional cells by
+number and description, the cells holding state by number and description, and a
+digest of the projection map, each result path that links a positional cell with
+the cell's number. The descriptions are the schema-free ones of
+`packages/runner/src/cause-assignment.ts`, so a schema-generator change that
+moves no cell changes no record. Because a positional cause is a place in the
+build, two builds of one pattern source can name different cells by one cause,
+and the result projection links each slot to the cell of the build that wrote
+it. A start therefore holds the stored setup against the build it loads
+(`Runner.#storedSetupVerdict`): where the manifest misses one of the build's
+cells or names one the build lacks, or the record describes another build, it
+re-stages the internal cells and the projection when every cell that moved is
+one recomputing restores, and holds when a cell holding state moved, since
+re-staging would record one cell's state as another's. A hold writes no setup
+and reports the moves, so the stored setup and its record stay as evidence of
+what moved; the piece still instantiates at the loaded build's numbers, so a
+moved cell reads, and anything the running piece writes lands in, its neighbor's
+document, as it does with no record at all. A document with no record of the
+pattern it runs is judged by its manifest alone, and re-staged on a disagreement
+only when the build has no cell holding state.
 
 A `{ $generated: N }` cause moves with the compiler as well as with the
 source: a transformer change that adds or removes an anonymous cell ahead of

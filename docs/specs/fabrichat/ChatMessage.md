@@ -71,11 +71,12 @@ interface ChatMessage {
 - **`editedAt`** is the room's handler clock when it recorded the current
   text, or the deletion. It is absent until the message is first edited or
   deleted.
-- **`replyTo`** is a [`ChatReply`](ChatReply.md): the message this one replies
-  to, in the same room, and whether the reply is shown in the main conversation,
-  in a thread, or both. Threads, and which messages the main conversation shows,
-  are derived from it (see [`ChatReply`](ChatReply.md#threads)). A message
-  without one is shown in the main conversation. It never changes.
+- **`replyTo`** is a [`ChatReply`](ChatReply.md): the root of the thread this
+  message joins, the message it quotes, each in the same room, and whether it is
+  shown in the main conversation, in its thread, or both. Threads, and which
+  messages the main conversation shows, are derived from it (see
+  [`ChatReply`](ChatReply.md#threads)). A message without one is shown in the
+  main conversation. It never changes.
 - **`reactions`** holds each person's reactions to this message, as
   [`ChatReaction`](ChatReaction.md)s, in the order they were added. A reaction
   belongs to its message, so it names no message of its own. It is absent once

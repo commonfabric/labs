@@ -110,7 +110,7 @@ describe("cause-assignments-lib", () => {
           level: "",
           description:
             "cell, computed, written by sub-pattern child-identi#Child",
-          holdsState: true,
+          hasState: true,
           from: 1,
           to: 0,
         },
@@ -118,7 +118,7 @@ describe("cause-assignments-lib", () => {
           pattern: "test.tsx",
           level: "",
           description: "stream, not computed, no writer",
-          holdsState: false,
+          hasState: false,
           from: 2,
           to: 1,
         },
@@ -140,7 +140,7 @@ describe("cause-assignments-lib", () => {
           "cell, computed, written by sub-pattern child-identi#Child",
         before: [0, 1],
         after: [0],
-        holdsState: true,
+        hasState: true,
       }]);
     });
 
@@ -149,11 +149,11 @@ describe("cause-assignments-lib", () => {
         ambiguousCells(
           assignment([{ lift: true }, { lift: true }, { child: CHILD }]),
           assignment([{ lift: true }, { child: CHILD }]),
-        ).map(({ description, before, after, holdsState }) => [
+        ).map(({ description, before, after, hasState }) => [
           description,
           before,
           after,
-          holdsState,
+          hasState,
         ]),
       ).toEqual([
         ["cell, computed, written by function", [0, 1], [0], false],

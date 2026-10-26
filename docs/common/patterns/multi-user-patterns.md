@@ -843,6 +843,51 @@ const roomButtons = conversation.rooms.map((room) => (
 For editable nested objects, pass a writable item reference and use `.key(...)`
 inside the child pattern or handler.
 
+## Per-Viewer Work
+
+Under server execution one runtime derives for every viewer. A computed that
+reads user-scoped state, such as the viewer's profile, runs once for each user
+who demands it, one that reads session-scoped state runs once for each such
+session, and so does everything downstream of either
+([cell scopes](../../specs/server-side-execution/scopes.md), §2). Two sessions
+of one user share that user's instance and have separate session instances. The
+runtime learns what a node reads by running it, so nothing in the source says
+which derivations fan out, and a client runtime, which derives only its own
+viewer's instances, shows none of the cost.
+
+### Keep the viewer out of shared derivations
+
+A tally of shared votes that also marks which entry is the viewer's turns the
+tally, the ranking over it, and every card that reads the ranking into
+per-viewer work: five copies of each for five users. Derive shared data from
+shared inputs alone, and decide what is the viewer's at the leaf, from one small
+per-viewer value:
+
+```tsx
+// Shown for illustration only.
+// `board.entries` reads nothing of the viewer; `me` is their profile cell.
+{board.entries.map((entry) => {
+  const outline = computed(() =>
+    entry.owner !== undefined && equals(entry.owner, me)
+      ? "2px solid currentColor"
+      : "none"
+  );
+  return <span style={{ outline }}>{entry.title}</span>;
+})}
+```
+
+The lunch poll's self ring (`packages/patterns/lunch-poll/main.tsx`) takes this
+shape over rows a `computed()` produced, reading the viewer's per-user profile,
+and its pattern test checks that the ring lands on the viewer's own swatch and
+no other. A per-session read in the same place can fail to resolve; see
+[per-session reads in mapped computations](../../development/debugging/gotchas/persession-read-in-mapped-computed.md),
+which also says what does.
+
+The shared derivations then run once per change, and only the comparison at the
+leaf runs per viewer. The same holds for any "is this me", "my entry", or "can
+I" read: carry the identity-free data through the shared derivations and apply
+the viewer's identity where it is displayed or acted on.
+
 ## Concurrent Edits Without Clobbering
 
 When several users edit the same shared data at once, a handler written as
@@ -964,6 +1009,8 @@ See:
 - Every participant is rendered with `cf-profile-badge` bound to their profile cell
   (`cf-avatar` + snapshot only as an offline fallback), never a bare name string.
 - The current viewer is resolved via `#profile`, not a self-typed name field.
+- Derivations over shared data read no viewer state; what is the viewer's is
+  decided at the leaf.
 - Rosters are built by join (each viewer contributes their live profile cell); "me"
   is a cell reference, not a name.
 - Authorization is modeled with CFC/IFC policy, not scopes.

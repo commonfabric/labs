@@ -5,6 +5,7 @@ import type {
   DashRoute,
   DocumentInterestsRoute,
   IndexRoute,
+  ServingLoopRealmRoute,
   StatsRoute,
 } from "./health.routes.ts";
 import {
@@ -16,6 +17,7 @@ import {
   getSlowQueries,
 } from "@commonfabric/memory/v2/server";
 import { getServingLoopStats } from "@commonfabric/runner/executor/stats";
+import { serverExecutionHost } from "@/lib/server-execution.ts";
 import {
   getLoggerCountsBreakdown,
   getTimingStatsBreakdown,
@@ -54,13 +56,16 @@ const serverStartTimestamp = Date.now();
 export const stats: AppRouteHandler<StatsRoute> = (c) => {
   // The serving loop's §7 counters
   // (docs/specs/server-side-execution/serving-loop.md §7): present only
-  // when an ExecutorHost runs in this process (the ON arm), so an OFF-arm
-  // response carries no serving-loop block at all. Phase 6 nests the memory
-  // server's push-priority counters (protocol.md §3) under the same
-  // ON-arm-only block — all-zero OFF by construction, but the block's very
-  // presence stays flag-gated, so the OFF arm never shows it. The memory
-  // server's own diagnostics below follow whether one is co-hosted, not the
-  // flag.
+  // when the loop runs in this process (the ON arm), on this thread or in
+  // its worker, whose counters the bridge relays as the worker posts them;
+  // an OFF-arm response carries no serving-loop block at all. Phase 6 nests
+  // the memory server's push-priority counters (protocol.md §3) under the
+  // same ON-arm-only block — all-zero OFF by construction, but the block's
+  // very presence stays flag-gated, so the OFF arm never shows it. The
+  // memory server's own diagnostics below follow whether one is co-hosted,
+  // not the flag. Nothing here waits on another thread: the loop's realm's
+  // own loggers are `servingLoopRealm`'s, a route of its own, because an
+  // answer from the worker waits for the worker's turn.
   const servingLoop = getServingLoopStats();
   const push = getPushPriorityStats();
   // The memory server's decoded-document caches, one per open space:
@@ -88,6 +93,41 @@ export const stats: AppRouteHandler<StatsRoute> = (c) => {
       servingLoop: { ...servingLoop, ...(push === undefined ? {} : { push }) },
     }),
   }, HttpStatusCodes.OK);
+};
+
+/**
+ * The serving loop's realm's loggers: the worker's where the loop runs
+ * there, which `stats` cannot read, and this process's own where the loop
+ * runs on this thread. The answer waits for the realm's turn; a worker
+ * between a failure and its replacement answers nothing, and the route says
+ * so rather than wait for the replacement.
+ */
+export const servingLoopRealm: AppRouteHandler<ServingLoopRealmRoute> = async (
+  c,
+) => {
+  c.header("Cache-Control", "no-store");
+  const loop = serverExecutionHost();
+  if (loop === undefined) {
+    return c.json(
+      { error: "No serving loop runs in this process" },
+      HttpStatusCodes.NOT_FOUND,
+    );
+  }
+  try {
+    const diagnostics = await loop.diagnostics();
+    return c.json(
+      { timestamp: Date.now(), ...diagnostics },
+      HttpStatusCodes.OK,
+    );
+  } catch (error) {
+    return c.json(
+      {
+        error: "The serving loop's worker is not serving: " +
+          (error instanceof Error ? error.message : String(error)),
+      },
+      HttpStatusCodes.SERVICE_UNAVAILABLE,
+    );
+  }
 };
 
 /** Reads existing session indexes without loading documents or changing watches. */

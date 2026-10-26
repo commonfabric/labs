@@ -140,6 +140,8 @@ describe("SpaceServer", () => {
     };
     let demand = initial === "served" ? [] : initial;
     const excluded: Array<string | undefined> = [];
+    /** Holds the answer to the next demand request until it settles. */
+    let held: Promise<void> | undefined;
     const facade = initial === "served" ? server : new Proxy(server, {
       get(target, key, receiver) {
         if (key === "demandForSpace") {
@@ -148,7 +150,9 @@ describe("SpaceServer", () => {
             options: { excludePrincipal?: string } = {},
           ) => {
             excluded.push(options.excludePrincipal);
-            return demand;
+            const hold = held;
+            held = undefined;
+            return hold === undefined ? demand : hold.then(() => demand);
           };
         }
         const value = Reflect.get(target, key, receiver);
@@ -215,6 +219,20 @@ describe("SpaceServer", () => {
         expect(throwOnEnter).toBeUndefined();
         expect(throwOnRearm).toBeUndefined();
       },
+      /**
+       * Replaces the client demand and starts the pass it wakes, which waits
+       * for its demand until the result is called.
+       */
+      async passHeldAtDemand(next: SessionDemand[]): Promise<() => void> {
+        demand = next;
+        const release = Promise.withResolvers<void>();
+        held = release.promise;
+        tenure.noteDemandChanged();
+        await clock.tick(300);
+        await clock.settle();
+        expect(held).toBeUndefined();
+        return release.resolve;
+      },
       /** Forgets the scheduler calls recorded so far. */
       forget(): void {
         entered.length = 0;
@@ -249,6 +267,29 @@ describe("SpaceServer", () => {
         expect(fixture.stats.demand.demandedInstances).toBe(2);
         expect(fixture.stats.demand.demandedRows).toBe(2);
         expect(fixture.stats.demand.demandedPairs).toBe(2);
+      });
+    });
+
+    describe("park()", () => {
+      it("leaves the demand registry alone when the tenure parks while a pass waits for its demand", async () => {
+        const fixture = await openFixture([
+          share("s1", [row("computed:a", "s1", alice)]),
+        ]);
+        const reconciled = fixture.stats.demand.demandKeysReconciled;
+        fixture.forget();
+        const release = await fixture.passHeldAtDemand([
+          share("s1", [
+            row("computed:a", "s1", alice),
+            row("computed:b", "s1", alice),
+          ]),
+        ]);
+
+        await settle(fixture.serving.park("test"));
+        release();
+        await clock.settle();
+
+        expect(fixture.entered).toEqual([]);
+        expect(fixture.stats.demand.demandKeysReconciled).toBe(reconciled);
       });
     });
 

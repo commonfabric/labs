@@ -568,9 +568,11 @@ adopts Home's inbox at its next reading and goes on reading the refused one. A
 daemon running as another identity refuses Home's inbox, which grants that
 identity no `OWNER`, and leaves the pointer as it is. Senders then deliver to
 Home's inbox, where the share intake registers loom offers in Home's catalog,
-as "The share intake" says, which that daemon reads through its catalog
-adapter rather than through the inbox. The daemon never re-points a profile
-that already points at an inbox, so the two don't contend for the pointer.
+as "The share intake" says. That daemon reads the catalog of its own
+identity's Home, not the owner's, so it stops receiving loom shares, which
+reach the owner's Home instead, as the line beside the button says. The daemon
+never re-points a profile that already points at an inbox, so the two don't
+contend for the pointer.
 
 The replacement never clears a profile's pointer, only replaces one, so it
 doesn't depend on how a cleared pointer reads.
