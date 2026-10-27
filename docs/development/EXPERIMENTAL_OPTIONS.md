@@ -1540,12 +1540,16 @@ the per-epic implementation notes).
   capability from the access list's grant to the chain's root issuer, while
   the session's principal stays the key that opened it. The design is
   [`profile-delegation.md`](../specs/profile-delegation.md).
-- **End state and removal:** turn on by default once a client presents a
-  chain (the design's second phase), then retain the negotiation while
-  deployments may contain servers that admit none.
-- **Status (2026-10-26):** implemented on the server and off by default. No
-  client presents a chain yet, so turning it on admits nothing today; it
-  exists so the server side can be deployed ahead of the client.
+- **End state and removal:** turn on by default once profile creation
+  records a delegation in the Home space (the design's third phase), then
+  retain the negotiation while deployments may contain servers that admit
+  none.
+- **Status (2026-10-27):** implemented on the server and off by default. A
+  runtime presents a chain for a space it holds a delegation over, fed
+  through `StorageManager.addDelegation`, and refuses a server that does not
+  advertise the capability rather than opening under its own grant; no
+  delegation is recorded durably yet, so a deployment with the flag off
+  loses nothing until the third phase lands.
 
 ### `conflictAdmissionMode`
 

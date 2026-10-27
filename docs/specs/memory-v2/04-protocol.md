@@ -1902,7 +1902,9 @@ key that opened it: scope partitions, commit attribution, presence, and
 is the design this serves, and the delegation's encoding is specified there.
 
 A server advertises `sessionOpenProofs` when its access-list policy admits
-delegations, and refuses every chain when it does not. The chain is
+delegations, and refuses every chain when it does not; a client holding a
+chain for the space refuses such a server before opening, rather than open
+under its key's own grant and be refused there. The chain is
 `authorization.proofs`, the delegations' bytes as their issuers encoded them,
 in order from the root. A signed open also names their CIDs in
 `invocation.prf`, in the same order; the invocation is signed, so a relay

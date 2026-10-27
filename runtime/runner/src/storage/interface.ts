@@ -451,6 +451,16 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * @throws If the memory server refuses the genesis commit. No DID is
    *   returned then, and the space that was being created is abandoned.
    */
+  /**
+   * Holds the delegation `bytes` encode, so that a session this manager opens
+   * from here on, on the space it is over and as a key it reaches, presents
+   * the chain it belongs to and acts under the root issuer's grant
+   * (`docs/specs/profile-delegation.md`). Throws a `DelegationError` for
+   * bytes that are not a delegation or do not verify, and an `Error` where
+   * the manager's sessions cannot present a chain.
+   */
+  addDelegation?(bytes: Uint8Array): Promise<void>;
+
   createSpace?(
     acl: ACL,
     genesis?: {

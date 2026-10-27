@@ -1,6 +1,7 @@
 import { isCanonicalEd25519DID } from "@commonfabric/identity";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { getLogger } from "@commonfabric/utils/logger";
 import { maxOf } from "@commonfabric/utils/math";
 import {
@@ -364,6 +365,17 @@ export type SessionPrincipal = {
 
   /** Signs a `session.open`, for a server that verifies only those. */
   readonly authorizeSessionOpen: SessionOpenAuthFactory;
+
+  /**
+   * The proof chain every open of a session mounted as this key presents
+   * (04-protocol.md §4.5.1, "Proof chains"): each delegation's bytes as its
+   * issuer encoded them, root first, the last one's audience being this
+   * key. An open naming the connection's authenticated principal carries
+   * them as `authorization.proofs`; `authorizeSessionOpen` is expected to
+   * carry them the same way and to name their CIDs in the signed `prf`.
+   * Absent for a key that presents no chain.
+   */
+  readonly proofs?: readonly Uint8Array[];
 };
 
 /** How a session is authenticated when it opens and each time it reopens. */
@@ -1278,6 +1290,18 @@ export class Client {
           "memory server does not seal a space's declared kind",
         );
       }
+      // A server admitting no chain refuses an open presenting one, so a
+      // key holding a chain is told here rather than refused there.
+      if (
+        typeof auth === "object" && auth.proofs !== undefined &&
+        this.serverFlags?.sessionOpenProofs !== true
+      ) {
+        throw protocolError(
+          "memory server does not admit a session.open proof chain " +
+            "(`sessionOpenProofs` is not among its protocol flags), so a " +
+            "session presenting one cannot act under it",
+        );
+      }
     };
     // A mount whose caller has cancelled it sends nothing more.
     const requireUncancelled = (): void => {
@@ -1315,6 +1339,15 @@ export class Client {
               space,
               principal,
               session,
+              // The chain rides outside any signature here: the connection
+              // authenticated the key, and each proof carries its own.
+              ...(auth.proofs === undefined ? {} : {
+                authorization: {
+                  proofs: auth.proofs.map((proof) =>
+                    new FabricBytes(proof)
+                  ),
+                },
+              }),
               ...(holdings !== undefined
                 ? { holdings: this.declarableHoldings(holdings) }
                 : {}),

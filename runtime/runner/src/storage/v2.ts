@@ -1903,6 +1903,14 @@ export class StorageManager implements IStorageManager {
     await this.#sessionFactory.setMessageCompressionEnabled?.(enabled);
   }
 
+  /** @inheritDoc */
+  async addDelegation(bytes: Uint8Array): Promise<void> {
+    if (this.#sessionFactory.addDelegation === undefined) {
+      throw new Error("This storage manager's sessions present no proof chain");
+    }
+    await this.#sessionFactory.addDelegation(bytes);
+  }
+
   protected constructor(
     options: Options,
     sessionFactory: SessionFactory,

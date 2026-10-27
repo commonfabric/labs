@@ -504,8 +504,17 @@ part of this design.
    registered in
    [`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md) and
    off by default until the client ships.
-2. **Client presents proofs.** `createSignedSessionOpenAuth` and the storage
-   manager carry a chain for a space that has one; reopens keep it.
+2. **Client presents proofs.** Implemented. The remote session factory holds
+   a delegation store (`delegation-store.ts`), fed through
+   `StorageManager.addDelegation`, and every session it opens presents the
+   chain the store assembles for the space and the opening key: a signed open
+   names the CIDs in `prf` and carries the bytes, and an open naming a
+   connection-authenticated principal carries the bytes alone. A reopen
+   presents the same chain, since it rides on the session's principal. A
+   client holding a chain refuses a server that does not advertise
+   `sessionOpenProofs` rather than opening under the key's own grant. The
+   store is fed programmatically until the next phase records delegations in
+   the Home space.
 3. **Profile identity at creation.** The profile creation path signs
    genesis as the profile key, issues the delegation, records it beside the
    link, and destroys the key once both have landed. `HOME_SPACE.md` and
