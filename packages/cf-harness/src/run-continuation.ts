@@ -100,6 +100,18 @@ export const prepareHarnessContinuation = (options: {
       "--structured-result-path requires a recorded or explicit schema",
     );
   }
+  let handleTable = prior.handleTable === undefined
+    ? undefined
+    : tableForNextTurn(prior.handleTable);
+  if (handleTable !== undefined && boundary < source.length) {
+    // A truncated batch may have described handles whose descriptions are no
+    // longer in the model's history. The final table cannot attest which
+    // descriptions survived the checkpoint, so every handle needs a new one.
+    handleTable = {
+      ...handleTable,
+      entries: handleTable.entries.map(({ described: _, ...entry }) => entry),
+    };
+  }
   const runState = createHarnessRunState({
     runId,
     currentDir: prior.currentDir,
@@ -124,9 +136,7 @@ export const prepareHarnessContinuation = (options: {
     cfcPolicySnapshot: prior.cfcPolicySnapshot,
     cellLabels: prior.cellLabels,
     cfcInvocationContexts: prior.cfcInvocationContexts,
-    handleTable: prior.handleTable === undefined
-      ? undefined
-      : tableForNextTurn(prior.handleTable),
+    handleTable,
     docsCorpus: prior.docsCorpus,
     researchGoal: prior.researchGoal,
     researchRuns: prior.researchRuns?.map((run) => ({

@@ -6,7 +6,14 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { createSession, Identity } from "@commonfabric/identity";
+import { PiecesController } from "@commonfabric/piece/ops";
+import { Runtime } from "@commonfabric/runner";
+import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { buildCfHarnessBatchSystemPrompt } from "../src/cli.ts";
+import type { HarnessFabricSession } from "../src/fabric-session.ts";
 import { readHarnessRunArtifacts } from "../src/artifacts.ts";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import type {
@@ -15,6 +22,7 @@ import type {
 } from "../src/contracts/transcript.ts";
 import {
   createHarnessHandleTable,
+  markHandleDescribed,
   mintAddressHandle,
 } from "../src/handle-table.ts";
 import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
@@ -67,6 +75,11 @@ describe("continue-run", () => {
   let errors: string[];
   let before: Map<string, string>;
   let scripted: HarnessAssistantTranscriptMessage[];
+  let fabric: {
+    runtime: Runtime;
+    storage: ReturnType<typeof StorageManager.emulate>;
+    session: HarnessFabricSession;
+  } | undefined;
 
   const save = async (
     transcript: HarnessTranscriptMessage[] | undefined = history,
@@ -117,6 +130,9 @@ describe("continue-run", () => {
       createPromptLoop: (options) =>
         new CfHarnessPromptLoop({
           ...options,
+          ...(fabric === undefined
+            ? {}
+            : { allowedToolIds: ["read_value", "describe_handle"] }),
           modelClient: {
             providerId: "openai-compatible-gateway",
             complete: (request) => {
@@ -135,6 +151,9 @@ describe("continue-run", () => {
             runState: options.engine?.getRunState(),
             sandboxRuntime: sandbox,
             workspaceHostPath: workspace,
+            ...(fabric === undefined ? {} : {
+              fabricSessionFactory: () => Promise.resolve(fabric!.session),
+            }),
           }),
         }),
     });
@@ -169,6 +188,9 @@ describe("continue-run", () => {
     await save();
   });
   afterEach(async () => {
+    await fabric?.runtime.dispose();
+    await fabric?.storage.close();
+    fabric = undefined;
     await Deno.remove(workspace, { recursive: true });
   });
 
@@ -364,6 +386,195 @@ describe("continue-run", () => {
     });
     expect((await nextArtifacts()).runState.handleTable?.salt).toBe("prior");
   });
+  for (const interrupted of [false, true]) {
+    it(
+      interrupted
+        ? "requires a fresh description before reading a handle after a truncated turn"
+        : "reads a previously described handle after a complete transcript",
+      async () => {
+        const signer = await Identity.fromPassphrase(
+          "continue described handle",
+        );
+        const storage = StorageManager.emulate({ as: signer });
+        const runtime = new Runtime({
+          apiUrl: new URL("http://toolshed.test"),
+          storageManager: storage,
+          cfcEnforcementMode: "disabled",
+        });
+        const pieces = new PiecesController(
+          createSession({ identity: signer, spaceDid: signer.did() }),
+          runtime,
+        );
+        fabric = { runtime, storage, session: { pieces } };
+        await pieces.synced();
+        const tx = runtime.edit();
+        const cell = runtime.getCell(
+          pieces.getSpace(),
+          "continued-description",
+          undefined,
+          tx,
+        );
+        cell.set("checkpoint value");
+        expect((await tx.commit().settled).ok).toBeDefined();
+        const held = await mintAddressHandle(
+          createHarnessHandleTable("prior"),
+          createLLMFriendlyLink(
+            cell.getAsNormalizedFullLink(),
+            pieces.getSpace(),
+          ),
+          { schema: { type: "string" } },
+        );
+        state.handleTable = markHandleDescribed(held.table, held.token);
+        const call = (id: string, name: string) => ({
+          id,
+          type: "function" as const,
+          function: { name, arguments: JSON.stringify({ token: held.token }) },
+        });
+        const priorDescription: HarnessTranscriptMessage[] = [{
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            call("prior-describe", "describe_handle"),
+            ...(interrupted ? [call("unfinished", "read_value")] : []),
+          ],
+        }, {
+          role: "tool",
+          toolCallId: "prior-describe",
+          toolName: "describe_handle",
+          content: JSON.stringify({
+            token: held.token,
+            known: true,
+            schema: { type: "string" },
+          }),
+        }];
+        await save([...history, ...priorDescription]);
+        scripted = [
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [call("first-read", "read_value")],
+          },
+          ...(interrupted
+            ? [{
+              role: "assistant" as const,
+              content: "",
+              toolCalls: [call("new-description", "describe_handle")],
+            }, {
+              role: "assistant" as const,
+              content: "",
+              toolCalls: [call("second-read", "read_value")],
+            }]
+            : []),
+        ];
+        expect(await run()).toBe(0);
+        const output = (id: string) =>
+          JSON.parse(
+            requests.at(-1)!.transcript.find((message) =>
+              message.role === "tool" && message.toolCallId === id
+            )!.content,
+          );
+        if (interrupted) {
+          expect(output("first-read")).toMatchObject({
+            status: "error",
+            message: expect.stringContaining("describe it first"),
+          });
+          expect(output("new-description")).toMatchObject({ known: true });
+          expect(output("second-read")).toMatchObject({
+            status: "ok",
+            value: "checkpoint value",
+          });
+          expect(
+            requests[0].transcript.some((message) =>
+              message.role === "tool" && message.toolCallId === "prior-describe"
+            ),
+          ).toBe(false);
+        } else {
+          expect(output("first-read")).toMatchObject({
+            status: "ok",
+            value: "checkpoint value",
+          });
+        }
+        await unchanged();
+      },
+    );
+  }
+  it("refuses explicit submit_result without an effective result contract", async () => {
+    expect(await run(["--allow-tool=submit_result"])).toBe(1);
+    expect(errors).toEqual([
+      "--allow-tool submit_result requires --structured-result-path and a schema\n",
+    ]);
+    expect(requests).toHaveLength(0);
+  });
+  it("protects a transcript symlink's outward target from the batch-result sidecar", async () => {
+    const outside = join(workspace, "saved-transcript.json");
+    const transcript = join(priorRoot, "transcript.json");
+    await Deno.rename(transcript, outside);
+    await Deno.symlink(outside, transcript);
+    const bytes = await Deno.readTextFile(outside);
+    expect(await run(["--result-json-path", outside])).toBe(1);
+    expect(errors.join("")).toContain("prior run");
+    expect(requests).toHaveLength(0);
+    expect(await Deno.readTextFile(outside)).toBe(bytes);
+  });
+  for (const outputName of ["new-output", "..new-output"]) {
+    it(`protects an outward artifact directory from ${outputName}`, async () => {
+      const outside = join(workspace, "saved-artifacts");
+      await Deno.mkdir(outside);
+      await Deno.symlink(outside, join(priorRoot, "linked-artifacts"));
+      expect(await run(["--artifact-root", join(outside, outputName)])).toBe(1);
+      expect(errors.join("")).toContain("prior run");
+      expect(requests).toHaveLength(0);
+      expect(Array.from(Deno.readDirSync(outside))).toEqual([]);
+      await unchanged();
+    });
+  }
+  for (const priorSubmitTool of [false, true]) {
+    for (const replaceSystem of [false, true]) {
+      it(`rebuilds result instructions for the new path with ${priorSubmitTool ? "submission" : "file-writing"} history${replaceSystem ? " and a replacement system prompt" : ""}`, async () => {
+        state.structuredResult = {
+          schema: { type: "string" },
+          path: join(workspace, "old-result.json"),
+        };
+        await Deno.writeTextFile(state.structuredResult.path, '"prior result"');
+        const sourceSystem = buildCfHarnessBatchSystemPrompt({
+          structuredResult: {
+            ...state.structuredResult,
+            sandboxPath: "/workspace/old-result.json",
+          },
+          allowedToolIds: priorSubmitTool ? undefined : ["bash"],
+          systemPrompt: "Keep this user instruction.",
+        });
+        await save([
+          { role: "system", content: sourceSystem },
+          ...history.slice(1),
+        ]);
+        const flags = [
+          "--structured-result-path",
+          join(workspace, "new-result.json"),
+          "--allow-tool=bash",
+          ...(replaceSystem
+            ? ["--system-prompt=Replacement user instruction."]
+            : []),
+        ];
+        expect(await run(flags)).toBe(1);
+        expect(requests).toHaveLength(1);
+        const system = requests[0].transcript.filter((message) =>
+          message.role === "system"
+        ).map((message) => message.content).join("\n");
+        expect(system).toContain("/workspace/new-result.json");
+        expect(system).not.toContain("old-result.json");
+        expect(system).toContain(
+          replaceSystem
+            ? "Replacement user instruction."
+            : "Keep this user instruction.",
+        );
+        expect(await Deno.readTextFile(state.structuredResult.path)).toBe(
+          '"prior result"',
+        );
+        await unchanged();
+      });
+    }
+  }
   it("validates a new result with the carried schema and leaves the old result unchanged", async () => {
     const priorResult = join(priorRoot, "result.json");
     await Deno.writeTextFile(priorResult, '{"answer":"old"}\n');

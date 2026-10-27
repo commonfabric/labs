@@ -9,6 +9,7 @@ import {
   join,
   relative,
   resolve,
+  SEPARATOR,
 } from "@std/path";
 import { normalize as normalizeSandboxPath } from "@std/path/posix";
 import type { JSONSchema } from "@commonfabric/api";
@@ -1232,8 +1233,42 @@ const createAllowedHostRoots = (
 
 const isHostPathWithinRoot = (root: string, path: string): boolean => {
   const relativePath = relative(root, path);
-  return relativePath === "" ||
-    (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+  return relativePath !== ".." && !relativePath.startsWith(`..${SEPARATOR}`) &&
+    !isAbsolute(relativePath);
+};
+
+/** Resolves prior artifacts, following directory links once per real target. */
+const protectedRunTargets = async (
+  runRoot: string,
+  resultPath?: string,
+): Promise<{ files: Set<string>; directories: Set<string> }> => {
+  const files = new Set<string>();
+  const directories = new Set<string>();
+  const pending = [runRoot];
+  while (pending.length > 0) {
+    const path = resolveHostPathThroughNearestRealParent(pending.pop()!);
+    let stat: Deno.FileInfo;
+    try {
+      stat = await Deno.stat(path);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+      files.add(path);
+      continue;
+    }
+    if (!stat.isDirectory) {
+      files.add(path);
+      continue;
+    }
+    if (directories.has(path)) continue;
+    directories.add(path);
+    for await (const entry of Deno.readDir(path)) {
+      pending.push(join(path, entry.name));
+    }
+  }
+  if (resultPath !== undefined) {
+    files.add(resolveHostPathThroughNearestRealParent(resultPath));
+  }
+  return { files, directories };
 };
 
 const findAllowedHostRoot = (
@@ -1363,6 +1398,21 @@ const resolvePrompt = async (
     return await readTextFile(promptFile);
   }
   return positionalPrompt!;
+};
+
+/** An explicit result tool needs a schema and destination before model work. */
+const assertStructuredResultToolConfigured = (
+  allowedToolIds: readonly BuiltinToolId[] | undefined,
+  structuredResult: CfHarnessStructuredResultConfig | undefined,
+): void => {
+  if (
+    allowedToolIds?.includes("submit_result") === true &&
+    structuredResult === undefined
+  ) {
+    throw new Error(
+      "--allow-tool submit_result requires --structured-result-path and a schema",
+    );
+  }
 };
 
 const parseStructuredResultConfig = async (
@@ -1968,13 +2018,8 @@ export const parseCfHarnessCliArgs = async (
     allowedHostRoots,
     readTextFile,
   });
-  if (
-    allowedToolIds?.includes("submit_result") === true &&
-    structuredResult === undefined && continueRun === undefined
-  ) {
-    throw new Error(
-      "--allow-tool submit_result requires --structured-result-path and a schema",
-    );
+  if (continueRun === undefined) {
+    assertStructuredResultToolConfigured(allowedToolIds, structuredResult);
   }
   const prompt = await resolvePrompt(args, cwd, readTextFile);
   const imageAttachments = await Promise.all(
@@ -2644,6 +2689,63 @@ const appendStructuredResultInstructions = (
     "Result schema (JSON):",
     JSON.stringify(structuredResult.schema),
   );
+};
+
+/** Removes only the recorded host contract, retaining surrounding instructions. */
+const withoutRecordedResultInstructions = (
+  content: string,
+  recorded: { schema: JSONSchema; path: string },
+): string => {
+  const marker = "__CF_HARNESS_RECORDED_RESULT_PATH__";
+  for (const allowedToolIds of [undefined, []] as const) {
+    const lines: string[] = [];
+    appendStructuredResultInstructions(lines, {
+      ...recorded,
+      sandboxPath: marker,
+    }, allowedToolIds);
+    const template = lines.join("\n");
+    const pathIndex = template.indexOf(marker);
+    const prefix = template.slice(0, pathIndex);
+    const suffix = template.slice(pathIndex + marker.length);
+    while (true) {
+      const start = content.indexOf(prefix);
+      if (start < 0) break;
+      const pathStart = start + prefix.length;
+      const pathEnd = content.indexOf(suffix, pathStart);
+      if (pathEnd < 0 || content.slice(pathStart, pathEnd).includes("\n")) {
+        break;
+      }
+      const end = pathEnd + suffix.length;
+      if (end < content.length && content[end] !== "\n") break;
+      content = content.slice(0, start) + content.slice(end);
+    }
+  }
+  return content;
+};
+
+/** Gives the continued history the effective run's structured-result contract. */
+const withContinuedResultInstructions = (
+  transcript: HarnessTranscriptMessage[],
+  recorded: { schema: JSONSchema; path: string } | undefined,
+  effective: CfHarnessStructuredResultConfig | undefined,
+  allowedToolIds: readonly BuiltinToolId[] | undefined,
+): HarnessTranscriptMessage[] => {
+  if (effective === undefined) return transcript;
+  const messages = transcript.map((message) =>
+    message.role === "system" && recorded !== undefined
+      ? {
+        ...message,
+        content: withoutRecordedResultInstructions(message.content, recorded),
+      }
+      : message
+  );
+  const index = messages.findIndex((message) => message.role === "system");
+  const lines = index < 0 ? [] : [messages[index].content];
+  appendStructuredResultInstructions(lines, effective, allowedToolIds);
+  const system = { role: "system" as const, content: lines.join("\n") };
+  if (index < 0) messages.unshift(system);
+  else messages[index] = system;
+  return messages;
 };
 
 const appendHostMountInstructions = (
@@ -3963,14 +4065,10 @@ export const runCfHarnessCli = async (
         );
       }
       if (parsed.continueRun !== undefined) {
-        const priorRoot = resolveHostPathThroughNearestRealParent(
+        const targets = await protectedRunTargets(
           artifacts.runRoot,
+          artifacts.runState.structuredResult?.path,
         );
-        const priorResult = artifacts.runState.structuredResult === undefined
-          ? undefined
-          : resolveHostPathThroughNearestRealParent(
-            artifacts.runState.structuredResult.path,
-          );
         const outputPaths = [
           parsed.artifactRoot,
           parsed.structuredResult?.path,
@@ -3980,7 +4078,10 @@ export const runCfHarnessCli = async (
           .map(resolveHostPathThroughNearestRealParent);
         if (
           outputPaths.some((path) =>
-            isHostPathWithinRoot(priorRoot, path) || path === priorResult
+            targets.files.has(path) ||
+            [...targets.directories].some((directory) =>
+              isHostPathWithinRoot(directory, path)
+            )
           )
         ) {
           throw new Error(
@@ -4002,6 +4103,16 @@ export const runCfHarnessCli = async (
         });
       if (continuation !== undefined) {
         effectiveStructuredResult = continuation.structuredResult;
+        assertStructuredResultToolConfigured(
+          parsed.allowedToolIds,
+          effectiveStructuredResult,
+        );
+        continuation.transcript = withContinuedResultInstructions(
+          continuation.transcript,
+          artifacts.runState.structuredResult,
+          effectiveStructuredResult,
+          parsed.allowedToolIds,
+        );
       }
       const engineStructuredResult = continuation === undefined
         ? parsed.structuredResult
