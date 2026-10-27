@@ -278,8 +278,8 @@ Two preconditions belong to the board rather than to the code:
   render it by default. Three consequences, and the first is the reason:
   `lastActivityAt` is a max over the array, so a real removal would move a
   topic's activity *backwards* and visibly reorder the board, while a stamped
-  one cannot. `lastActivityOf` therefore keeps counting stamped records, and
-  changing it to skip them reintroduces that silently. `commentCount` is the
+  one cannot. The activity time a verb keeps therefore counts stamped records,
+  and changing it to skip them reintroduces that silently. `commentCount` is the
   other side: it counts the records carrying no `removedAt` stamp, so a card
   never promises more comments than the topic shows. Both are computations
   rather than schema, so neither needs a migration.

@@ -346,12 +346,7 @@ function fixtureTopic(
 //
 
 /** The Topics lifts reached by authored name. */
-export const TOPICS_LIFT_NAMES = [
-  "crossrefTable",
-  "backlinksOf",
-  "presentCommentCountOf",
-  "lastActivityOf",
-] as const;
+export const TOPICS_LIFT_NAMES = ["crossrefTable", "backlinksOf"] as const;
 
 /** The authored name of one reached Topics lift. */
 export type TopicsLiftName = typeof TOPICS_LIFT_NAMES[number];
@@ -360,8 +355,6 @@ export type TopicsLiftName = typeof TOPICS_LIFT_NAMES[number];
 const LIFT_MODULES: Readonly<Record<TopicsLiftName, "board" | "topic">> = {
   crossrefTable: "board",
   backlinksOf: "topic",
-  presentCommentCountOf: "topic",
-  lastActivityOf: "topic",
 };
 
 /** The patterns package, which the Topics sources resolve their imports within. */
@@ -637,23 +630,16 @@ export type TopicsDemand =
   /** A board loaded before any topic is opened: none of the reached lifts. */
   | { readonly workload: "board" }
   /**
-   * The board with one topic open: the pivot, and that topic's backlinks and
-   * comment count.
+   * The board with one topic open: the pivot, and that topic's backlinks. A
+   * topic's comment count and last activity are stored values its verbs keep,
+   * so opening it derives nothing else.
    */
   | { readonly workload: "topic-open"; readonly topic: number }
   /**
    * The pivot, and every topic's backlinks: a scaling probe, not what a board
    * in use demands.
    */
-  | { readonly workload: "all-backlinks" }
-  /**
-   * Every topic's comment count and last activity, and nothing else: the lifts
-   * that read a topic's comments, and of those the last activity reads its
-   * links as well. A browser ran them only for the topic it opened, the
-   * comment count on opening that topic and its last activity on returning to
-   * the board, so every topic's at once is not what a board in use demands.
-   */
-  | { readonly workload: "aggregates" };
+  | { readonly workload: "all-backlinks" };
 
 /** The demanded lifts' outputs over a seeded fixture. */
 export interface TopicsOutputs {
@@ -665,12 +651,6 @@ export interface TopicsOutputs {
 
   /** Each demanded topic's backlinks, by topic index. */
   readonly backlinks: ReadonlyMap<number, Cell<unknown[]>>;
-
-  /** Each demanded topic's present comment count, by topic index. */
-  readonly commentCounts: ReadonlyMap<number, Cell<number>>;
-
-  /** Each demanded topic's last activity, by topic index. */
-  readonly lastActivity: ReadonlyMap<number, Cell<number>>;
 }
 
 /**
@@ -1072,12 +1052,6 @@ interface DemandedLifts {
    * read the pivot's result, so no demand runs them without it.
    */
   readonly pivot?: { readonly backlinks: readonly number[] };
-
-  /** The topics whose present comment count runs. */
-  readonly commentCounts: readonly number[];
-
-  /** The topics whose last activity runs. */
-  readonly lastActivity: readonly number[];
 }
 
 /**
@@ -1093,22 +1067,12 @@ function demandedLiftsOf(
   const every = Array.from({ length: topicCount }, (_, index) => index);
   switch (demand.workload) {
     case "board":
-      return { commentCounts: [], lastActivity: [] };
+      return {};
     case "topic-open":
       requireCount("demand.topic", demand.topic, 0, topicCount - 1);
-      return {
-        pivot: { backlinks: [demand.topic] },
-        commentCounts: [demand.topic],
-        lastActivity: [],
-      };
+      return { pivot: { backlinks: [demand.topic] } };
     case "all-backlinks":
-      return {
-        pivot: { backlinks: every },
-        commentCounts: [],
-        lastActivity: [],
-      };
-    case "aggregates":
-      return { commentCounts: every, lastActivity: every };
+      return { pivot: { backlinks: every } };
   }
 }
 
@@ -1164,8 +1128,6 @@ async function startTopicsLifts(
   const output = <T>(cause: string) =>
     runtime.getCell<T>(space, cause, undefined, tx);
   const withBacklinks = new Set(demanded.pivot?.backlinks);
-  const withCommentCount = new Set(demanded.commentCounts);
-  const withLastActivity = new Set(demanded.lastActivity);
   // Starts one instance of each demanded lift, with `prefix` opening the cause
   // of every output it writes.
   const start = (prefix: string): TopicsOutputs => {
@@ -1176,8 +1138,6 @@ async function startTopicsLifts(
       output<PivotRow[]>(`${prefix}crossrefs`),
     );
     const backlinks = new Map<number, Cell<unknown[]>>();
-    const commentCounts = new Map<number, Cell<number>>();
-    const lastActivity = new Map<number, Cell<number>>();
     seeded.topics.forEach((topic, index) => {
       if (table !== undefined && withBacklinks.has(index)) {
         backlinks.set(
@@ -1190,38 +1150,8 @@ async function startTopicsLifts(
           ),
         );
       }
-      if (withCommentCount.has(index)) {
-        commentCounts.set(
-          index,
-          runtime.run(
-            tx,
-            lifts.presentCommentCountOf,
-            { comments: topic.key("comments") },
-            output<number>(`${prefix}comment-count-${index}`),
-          ),
-        );
-      }
-      if (withLastActivity.has(index)) {
-        lastActivity.set(
-          index,
-          runtime.run(
-            tx,
-            lifts.lastActivityOf,
-            {
-              comments: topic.key("comments"),
-              links: topic.key("links"),
-              createdAt: topic.key("createdAt"),
-              bodyUpdatedAt: topic.key("bodyUpdatedAt"),
-              titleUpdatedAt: topic.key("titleUpdatedAt"),
-            },
-            output<number>(`${prefix}last-activity-${index}`),
-          ),
-        );
-      }
     });
-    return table === undefined
-      ? { backlinks, commentCounts, lastActivity }
-      : { table, backlinks, commentCounts, lastActivity };
+    return table === undefined ? { backlinks } : { table, backlinks };
   };
   const outputs = start("topics-fixture-");
   const variantOutputs = startVariant?.({
@@ -1243,13 +1173,8 @@ async function startTopicsLifts(
 
 /** Returns every output cell `outputs` holds, the pivot's first when held. */
 function outputCellsOf(outputs: TopicsOutputs): Cell<unknown>[] {
-  const { table, backlinks, commentCounts, lastActivity } = outputs;
-  return [
-    ...(table === undefined ? [] : [table]),
-    ...backlinks.values(),
-    ...commentCounts.values(),
-    ...lastActivity.values(),
-  ];
+  const { table, backlinks } = outputs;
+  return [...(table === undefined ? [] : [table]), ...backlinks.values()];
 }
 
 /**
@@ -1282,15 +1207,11 @@ function recordTopicsReads(
     bodies: {
       crossrefTable: emptyBody(),
       backlinksOf: emptyBody(),
-      presentCommentCountOf: emptyBody(),
-      lastActivityOf: emptyBody(),
       other: emptyBody(),
     },
     attempts: {
       crossrefTable: emptyAttempts(),
       backlinksOf: emptyAttempts(),
-      presentCommentCountOf: emptyAttempts(),
-      lastActivityOf: emptyAttempts(),
       other: emptyAttempts(),
       unattributed: emptyAttempts(),
     },
@@ -1424,12 +1345,6 @@ export function mentionersOf(fixture: TopicsFixture, topic: number): number[] {
   return [...new Set(fixture.board)].filter((source) =>
     source !== topic && fixture.topics[source].mentions.includes(topic)
   );
-}
-
-/** Returns how many of `topic`'s comments carry no retraction stamp. */
-export function presentCommentCount(topic: FixtureTopic): number {
-  return topic.comments.filter((comment) => comment.removedAt === undefined)
-    .length;
 }
 
 /**

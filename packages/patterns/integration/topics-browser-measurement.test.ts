@@ -234,11 +234,6 @@ describe("topics-browser-measurement", () => {
         ).toEqual([
           ["crossrefTable", "({ sources })"],
           ["backlinksOf", "({ table, self })"],
-          ["presentCommentCountOf", "({ comments })"],
-          [
-            "lastActivityOf",
-            "({ comments, links, createdAt, bodyUpdatedAt, titleUpdatedAt })",
-          ],
         ]);
         expect(
           sample.lifts.filter((lift) =>
@@ -285,7 +280,7 @@ describe("topics-browser-measurement", () => {
 
       checkSample(sample, () => {
         expect(sample.mayRunNothing).toBe(true);
-        expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0, 0, 0]);
+        expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0]);
         expect(sample.remaining.runs).toBe(sample.runsWithoutSource);
         expect(sample.graph.after.nodes).toBeGreaterThan(0);
       });
@@ -364,7 +359,7 @@ describe("topics-browser-measurement", () => {
         // Counted apart for reporting, and still part of `remaining`, which
         // is every run the sample could not place against a named lift.
         expect(sample.remaining.runs).toBe(1);
-        expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0, 0, 0]);
+        expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0]);
       });
 
       // The same run undeclared: the waiver is what admits it.
