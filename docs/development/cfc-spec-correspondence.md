@@ -310,11 +310,14 @@ on four things, each read against the committed snapshot:
   naming no `https://github.com/commonfabric/specs/pull/<n>`. A marker
   outside those files is not counted, and the rule does not reach there.
 
-The marker count is not a complete inventory of semantic gaps. The enrolled-store
-persistence change pending [specs#78](https://github.com/commonfabric/specs/pull/78)
-runs at the strict default under an authorized exception without a marker; the
-three marker slots are occupied. Its record is the "Runtime-owned-store derived
-admission" entry in
+The marker count is not a complete inventory of semantic gaps. The persistence
+change for enrolled stores and authenticated piece setup, pending
+[specs#78](https://github.com/commonfabric/specs/pull/78), changes what is
+stored at the strict default without a default-off dial or a separate marker; the
+three marker slots are occupied. This is a nonconforming semantic gap and does
+not satisfy step 4 above. @danfuzz has authorized proceeding ahead of unresolved
+specs dependencies; that authorization does not supply a ruling or amend this
+procedure. Its record is the "Runtime-owned-store derived admission" entry in
 [`cfc-enforcement-matrix.md`](../specs/cfc-enforcement-matrix.md) §4 and the
 [conformance statement](../specs/cfc-conformance-statement.md) §5.
 

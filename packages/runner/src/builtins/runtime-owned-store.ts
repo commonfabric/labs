@@ -1,7 +1,7 @@
 /**
  * Names and enrolls the stores a builtin owns for as long as its piece runs.
  * CFC's fit check admits eligible labeled writes. Enrolled stores keep the
- * flow join in derived stamps; transaction-only markers also declare it.
+ * flow join in derived stamps; generic transaction-only markers declare it.
  * `docs/specs/cfc-enforcement-matrix.md` §4 states the boundary.
  */
 
@@ -28,8 +28,8 @@ import { scopedCell } from "./scope-policy.ts";
  * write-side fit check reads this marker and admits eligible writes. Without
  * lifetime enrollment, it also declares the misfit so later authored clients
  * can write the store; `docs/specs/cfc-enforcement-matrix.md` §4 states the
- * boundary. The runner records the same marker for a piece's own argument,
- * result and internal documents.
+ * boundary. Piece setup uses its own transaction-local claim for argument,
+ * result, and internal documents; running pieces enroll those stores.
  *
  * Only a store keyed on this NODE belongs here. A document the runtime mints
  * from a constant or from the space's own principal — a space cell, a shared

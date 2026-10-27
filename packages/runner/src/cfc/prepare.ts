@@ -13149,7 +13149,8 @@ export function* prepareBoundaryCommitSteps(
         ? persistedLabelEntries.filter(isDeclaredValuePolicyEntry)
         : [];
       // Whether runtime ownership can admit a misfit at a rung that would
-      // reject. Only lifetime enrollment keeps it solely in derived stamps.
+      // reject. Lifetime enrollment and authenticated piece setup keep the
+      // misfit solely in derived stamps.
       // `cfc-enforcement-matrix.md` §4 states the admission boundary; the
       // remaining conditions are checked below.
       //
@@ -13344,18 +13345,18 @@ export function* prepareBoundaryCommitSteps(
               )
             )
           ) {
-            const enrolled = tx.isEnrolledRuntimeOwnedStore(
+            const derivedOnly = tx.usesDerivedRuntimeOwnedStoreLabels(
               target.space,
               id,
               runtimeWritePolicyAuthorization,
             );
-            // A store enrolled for a running piece keeps this attempt's
+            // A live enrollment or a piece setup claim keeps this attempt's
             // misfit solely in the derived stamps below:
             // https://github.com/commonfabric/specs/pull/78
-            // A transaction-only marker can describe a handoff to authored
-            // clients, including an AgentRun record or an anchored child;
+            // A generic transaction-only marker can describe a handoff to
+            // authored clients, including an AgentRun record or an anchored child;
             // retain its declaration until those lifecycles are covered.
-            if (!enrolled) {
+            if (!derivedOnly) {
               persistedLabelEntries.push(markFlowStampEntry({
                 path,
                 label: {
@@ -13369,7 +13370,7 @@ export function* prepareBoundaryCommitSteps(
             }
             tx.noteCfcDiagnostic(
               `writer-fit(runtime-owned-store-${
-                enrolled ? "derived" : "declared"
+                derivedOnly ? "derived" : "declared"
               }): ${id} at /${path.join("/")} (§8.12.5): ${
                 offending.map(renderCfcAtom).join(", ")
               }`,

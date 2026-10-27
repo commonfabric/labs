@@ -113,6 +113,7 @@ import {
   type RuntimeOwnedStores,
 } from "../cfc/runtime-owned-stores.ts";
 import {
+  CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   type CfcPreparationWork,
@@ -848,6 +849,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * needs no more than this.
    */
   #markedOwnedStores = new Set<string>();
+
+  /** Piece setup stores whose misfits stay derived in this transaction. */
+  #pieceSetupStores = new Set<string>();
 
   /**
    * The stores no schema declares a policy on that a marker named on this
@@ -2347,13 +2351,16 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // join would put another space's bytes behind this one's promise.
       if (
         frozen.kind === "structural-provenance" &&
-        frozen.claim === CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE &&
+        (frozen.claim === CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE ||
+          frozen.claim === CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE) &&
         canonicalizeLogicalPath(frozen.target.path).length === 0 &&
         frozen.sources?.[0]?.space === frozen.target.space
       ) {
-        this.#markedOwnedStores.add(
-          runtimeOwnedStoreKey(frozen.target.space, frozen.target.id),
-        );
+        const key = runtimeOwnedStoreKey(frozen.target.space, frozen.target.id);
+        this.#markedOwnedStores.add(key);
+        if (frozen.claim === CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE) {
+          this.#pieceSetupStores.add(key);
+        }
       }
       // The same whole-document test, for the same reason: whether a schema
       // could have declared a policy is a question about the document. There
@@ -2452,6 +2459,17 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (!runtimeWritePolicyAuthorized(authorization)) return false;
     return this.#runtimeOwnedStores?.has(runtimeOwnedStoreKey(space, id)) ??
       false;
+  }
+
+  /** @inheritDoc */
+  usesDerivedRuntimeOwnedStoreLabels(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean {
+    if (!runtimeWritePolicyAuthorized(authorization)) return false;
+    return this.#pieceSetupStores.has(runtimeOwnedStoreKey(space, id)) ||
+      this.isEnrolledRuntimeOwnedStore(space, id, authorization);
   }
 
   isUndeclarablePolicyStore(
@@ -4956,6 +4974,19 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     authorization?: RuntimeWritePolicyAuthorization,
   ): boolean {
     return this.#wrapped.isEnrolledRuntimeOwnedStore(space, id, authorization);
+  }
+
+  /** @inheritDoc */
+  usesDerivedRuntimeOwnedStoreLabels(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean {
+    return this.#wrapped.usesDerivedRuntimeOwnedStoreLabels(
+      space,
+      id,
+      authorization,
+    );
   }
 
   isUndeclarablePolicyStore(
