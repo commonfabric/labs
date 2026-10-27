@@ -20,6 +20,7 @@ import type {
   HarnessPatternRefSpec,
 } from "../src/contracts/pattern-refs.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
+import { createHarnessRunState } from "../src/run-state.ts";
 import type { CfHarnessEngine } from "../src/engine.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "../src/revision-verification.ts";
 import {
@@ -48,6 +49,11 @@ const stubEngine = (
     config: { fabricSession: { space: "context-space" } },
     fabricSessionAvailable: true,
     startRun: () => undefined,
+    getRunState: () =>
+      createHarnessRunState({
+        currentDir: "/workspace",
+        cfcEnforcementMode: "disabled",
+      }),
     failRun: () => Promise.resolve(),
     establishWellKnownGrants: () =>
       Promise.resolve([{ name: "piece-registry", token: "cfh:a:grant" }]),
@@ -84,6 +90,10 @@ const recordingLoop = (
           { role: "assistant", content: "done" },
         ],
         modelTurns: 1,
+        runState: createHarnessRunState({
+          currentDir: "/workspace",
+          cfcEnforcementMode: "disabled",
+        }),
       } as HarnessPromptLoopResult,
     );
   },

@@ -798,23 +798,26 @@ leaves the predecessor's artifacts and result untouched. It seeds the model with
 history through the last complete tool-call checkpoint, excluding turn-local
 notices persisted with `turnLocal: true`. Older artifacts have no such marker,
 so unmarked notice text remains ordinary history. The marker is omitted from
-provider requests. An interrupted tail is replaced by the chat service's
-interrupted-turn notice before the new message; a run with no complete
-checkpoint is refused. The harness always rebuilds the system message from
-recorded builder inputs, the recorded task classification, and the new result
-contract. Explicit flags override the recorded inputs; `--system-prompt`
-replaces the prior additional instructions. Runs without recorded builder inputs
-are refused before any model request. A run bound to one exact prompt value
-cannot be continued, because the binding does not cover a new prompt. A run
-whose artifacts link outside its run root cannot be continued.
+provider requests. A dropped tail or a recorded status other than `completed`
+adds the cause-neutral interrupted-turn notice before the new message; a run
+with no complete checkpoint is refused. The harness always rebuilds the system
+message from recorded builder inputs, the recorded task classification, and the
+new result contract. Explicit flags override the recorded inputs;
+`--system-prompt` replaces the prior additional instructions. Runs without
+recorded builder inputs are refused before any model request. A run bound to one
+exact prompt value cannot be continued, because the binding does not cover a new
+prompt. A run whose artifacts link outside its run root cannot be continued.
 
 Continuation explicitly retains the prior handle table, result schema, research
-context, CFC record, and prompt-slot binding. Skill-context handles expire as
-they do between chat turns. The new result defaults to `result.json` under the
-new run's artifact directory; `--structured-result-path` can name another new
-path without repeating the recorded schema. An explicit schema must agree with
-the recorded one. Output paths that overlap the prior run's artifacts or result
-are refused. Continuation shares resume's provider, credential owner,
+context, CFC record, and prompt-slot binding. Both batch continuation and chat
+turns use the same next-run builder. Research retains the latest orientation and
+two latest answers, marked historical. Grants, skills, and turn guidance are
+re-established as turn-local context before the new input. Skill-context handles
+expire as they do between chat turns. The new result defaults to `result.json`
+under the new run's artifact directory; `--structured-result-path` can name
+another new path without repeating the recorded schema. An explicit schema must
+agree with the recorded one. Output paths that overlap the prior run's artifacts
+or result are refused. Continuation shares resume's provider, credential owner,
 read-ceiling, sandbox-runtime and CFC-mode checks, also refusing a changed model
 or a subagent source. It cannot be combined with `--resume-run`, `--skill`,
 `--image`, `--input-cell`, `--task-tags` or `--task-domains`.
