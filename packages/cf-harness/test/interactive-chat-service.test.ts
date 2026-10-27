@@ -984,6 +984,65 @@ Deno.test("a canceled turn keeps its request and completed work for the next tur
   ]);
 });
 
+Deno.test("waiting for a canceled turn includes its checkpoint commit", async () => {
+  const ready = Promise.withResolvers<void>();
+  const committing = Promise.withResolvers<void>();
+  const commit = Promise.withResolvers<void>();
+  const cancellationRecorded = Promise.withResolvers<void>();
+  const { store } = recordingStore();
+  const service = new HarnessInteractiveChatService({
+    onEvent: ({ event }) => {
+      if (event.kind === "turn_canceled") cancellationRecorded.resolve();
+    },
+    sessionStore: {
+      ...store,
+      saveSessionTurnAndAppendEvent: async (mutation) => {
+        if (mutation.turn.turn.status === "canceled") {
+          committing.resolve();
+          await commit.promise;
+        }
+        return true;
+      },
+    },
+    createPromptLoop: () => ({
+      runTranscript: (options) =>
+        new Promise((_resolve, reject) => {
+          options.signal?.addEventListener("abort", () => {
+            void cancellationRecorded.promise.then(() =>
+              reject(options.signal?.reason)
+            );
+          }, { once: true });
+          ready.resolve();
+        }),
+    }),
+  });
+  await service.startSession("session", {
+    sessionId: "session",
+    workspace: { hostPath: "/workspace" },
+  });
+  await service.startTurn("turn", {
+    sessionId: "session",
+    turnId: "turn",
+    input: { text: "Work" },
+  });
+  await ready.promise;
+  await service.cancelTurn("cancel", "session", "turn");
+  await committing.promise;
+  const order: string[] = [];
+  const waiting = service.waitForTurn("session", "turn").then(() =>
+    order.push("wait returned")
+  );
+  const release = Promise.resolve().then(() => {
+    order.push("commit released");
+    commit.resolve();
+  });
+  await Promise.all([waiting, release]);
+  expect(order).toEqual(["commit released", "wait returned"]);
+  expect(service.listTurns({ sessionId: "session" }).turns[0].turn.status).toBe(
+    "canceled",
+  );
+});
+
 Deno.test("a canceled turn ignores checkpoints it cannot resume from or that arrive after the cancel", async () => {
   const declared = {
     role: "assistant" as const,

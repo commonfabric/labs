@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { decodeBase64 } from "@std/encoding/base64";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
@@ -28,7 +29,9 @@ import {
   createHarnessHandleTable,
   markHandleDescribed,
   mintAddressHandle,
+  resolveHandleToken,
 } from "../src/handle-table.ts";
+import { materializeImageAttachmentContentPart } from "../src/image-attachments.ts";
 import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
 import { OpenAICompatibleGatewayModelClient } from "../src/model/openai-compatible-gateway.ts";
 import { OpenAICodexResponsesClient } from "../src/model/openai-codex-responses.ts";
@@ -135,6 +138,9 @@ describe("continue-run", () => {
       cwd: workspace,
       structuredHostFailures,
       env: { CF_HARNESS_API_KEY: "test" },
+      ...(fabric === undefined
+        ? {}
+        : { fabricSessionFactory: () => Promise.resolve(fabric!.session) }),
       io: { stdout: () => {}, stderr: (text) => errors.push(text) },
       createPromptLoop: (options) =>
         new CfHarnessPromptLoop({
@@ -179,6 +185,49 @@ describe("continue-run", () => {
     );
   };
 
+  const attachmentCells = async () => {
+    const signer = await Identity.fromPassphrase("follow-up attachments");
+    const storage = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("http://toolshed.test"),
+      storageManager: storage,
+      cfcEnforcementMode: "disabled",
+    });
+    const pieces = new PiecesController(
+      createSession({ identity: signer, spaceDid: signer.did() }),
+      runtime,
+    );
+    fabric = { runtime, storage, session: { pieces } };
+    await pieces.synced();
+    const tx = runtime.edit();
+    const old = runtime.getCell(
+      pieces.getSpace(),
+      "old-attachment",
+      undefined,
+      tx,
+    );
+    const added = runtime.getCell(
+      pieces.getSpace(),
+      "new-attachment",
+      undefined,
+      tx,
+    );
+    old.set("old cell");
+    added.set("new cell");
+    expect((await tx.commit().settled).ok).toBeDefined();
+    const refs = [old, added].map((cell) =>
+      createLLMFriendlyLink(cell.getAsNormalizedFullLink(), pieces.getSpace())
+    );
+    const held = await mintAddressHandle(
+      createHarnessHandleTable("prior"),
+      refs[0],
+      { schema: { type: "string" } },
+    );
+    state.handleTable = held.table;
+    state.inputCells = [{ name: "original", ref: refs[0], token: held.token }];
+    return { oldRef: refs[0], newRef: refs[1], oldToken: held.token };
+  };
+
   beforeEach(async () => {
     workspace = await Deno.realPath(await Deno.makeTempDir());
     priorRoot = join(workspace, ".cf-harness-artifacts", "prior");
@@ -211,6 +260,117 @@ describe("continue-run", () => {
     await fabric?.storage.close();
     fabric = undefined;
     await Deno.remove(workspace, { recursive: true });
+  });
+
+  it("attaches a snapshotted follow-up image to the new prompt in the first request", async () => {
+    const bytes = decodeBase64(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p94AAAAASUVORK5CYII=",
+    );
+    const path = join(workspace, "follow-up.png");
+    await Deno.writeFile(path, bytes);
+    expect(await run(["--image", path])).toBe(0);
+    const prompt = requests[0].transcript.at(-1);
+    expect(prompt?.role).toBe("user");
+    if (prompt?.role !== "user") throw new Error("missing new user prompt");
+    expect(prompt.content).toBe("Next task");
+    expect(prompt.imageAttachments).toHaveLength(1);
+    const attachment = prompt.imageAttachments![0];
+    expect(attachment.snapshotPath?.startsWith(workspace + "/")).toBe(true);
+    expect(await Deno.readFile(attachment.snapshotPath!)).toEqual(bytes);
+    await Deno.writeFile(path, new Uint8Array([1, 2, 3]));
+    expect((await materializeImageAttachmentContentPart(attachment)).type).toBe(
+      "image_url",
+    );
+    expect(
+      requests[0].transcript.slice(0, -1).some((message) =>
+        message.role === "user" && message.imageAttachments?.length
+      ),
+    ).toBe(false);
+    await unchanged();
+  });
+
+  it("adds a follow-up input handle while retaining the prior token and naming records", async () => {
+    const refs = await attachmentCells();
+    await save();
+    expect(await run(["--input-cell", `additional=${refs.newRef}`])).toBe(0);
+    const next = await nextArtifacts();
+    const added = next.runState.inputCells?.find((cell) =>
+      cell.name === "additional"
+    );
+    expect(added).toBeDefined();
+    expect(resolveHandleToken(next.runState.handleTable!, refs.oldToken)?.ref)
+      .toBe(refs.oldRef);
+    expect(resolveHandleToken(next.runState.handleTable!, added!.token)?.ref)
+      .toBe(refs.newRef);
+    expect(
+      next.runState.inputCells?.find((cell) => cell.name === "original")?.token,
+    ).toBe(refs.oldToken);
+    const context = requests[0].transcript.filter((message) =>
+      message.role === "user" && message.turnLocal
+    ).map((message) => message.content).join("\n");
+    expect(context).toContain(`${added!.token} — additional`);
+    expect(
+      await run(["--input-cell", `additional=${refs.oldRef}`], next.runRoot),
+    ).toBe(1);
+    expect(errors.join("")).toContain("already");
+    expect(errors.join("")).toContain("additional");
+    expect(requests).toHaveLength(1);
+    await unchanged();
+  });
+
+  it("refuses a follow-up input name already held before any model request", async () => {
+    const refs = await attachmentCells();
+    await save();
+    expect(await run(["--input-cell", `original=${refs.newRef}`])).toBe(1);
+    expect(errors.join("")).toContain("already");
+    expect(errors.join("")).toContain("original");
+    expect(requests).toHaveLength(0);
+    await unchanged();
+  });
+
+  for (const source of ["assigned piece", "grant"] as const) {
+    it(`refuses an input name held by a prior ${source}`, async () => {
+      const refs = await attachmentCells();
+      const name = source === "grant" ? "piece-registry" : "assigned-ledger";
+      if (source === "grant") {
+        state.wellKnownGrants = [{
+          name: "piece-registry",
+          ref: refs.oldRef,
+          token: refs.oldToken,
+        }];
+      } else state.assignedPieces = [{ slug: name, ref: refs.oldRef }];
+      await save();
+      expect(await run(["--input-cell", `${name}=${refs.newRef}`])).toBe(1);
+      expect(errors.join("")).toContain("already");
+      expect(errors.join("")).toContain(name);
+      expect(requests).toHaveLength(0);
+      await unchanged();
+    });
+  }
+
+  it("carries assigned pieces and names them as attachments in the first request", async () => {
+    const refs = await attachmentCells();
+    state.assignedPieces = [{ slug: "assigned-ledger", ref: refs.newRef }];
+    await save();
+    expect(await run()).toBe(0);
+    const next = await nextArtifacts();
+    expect(next.runState.assignedPieces).toEqual(state.assignedPieces);
+    const assigned = next.runState.inputCells?.find((cell) =>
+      cell.name === "assigned-ledger"
+    );
+    expect(assigned).toBeDefined();
+    expect(resolveHandleToken(next.runState.handleTable!, assigned!.token)?.ref)
+      .toBe(refs.newRef);
+    const context = requests[0].transcript.filter((message) =>
+      message.role === "user" && message.turnLocal
+    ).map((message) => message.content).join("\n");
+    expect(context).toContain(`${assigned!.token} — assigned-ledger`);
+    expect(await run([], next.runRoot)).toBe(0);
+    const repeatedContext = requests[1].transcript.filter((message) =>
+      message.role === "user" && message.turnLocal
+    ).map((message) => message.content).join("\n");
+    expect(repeatedContext).toContain(`${assigned!.token} — assigned-ledger`);
+    await unchanged();
   });
 
   it("seeds the same durable history as chat with the same prior turn", async () => {
@@ -1094,11 +1254,6 @@ describe("continue-run", () => {
   for (
     const [flag, value] of [
       ["--skill", "review"],
-      ["--image", "image.png"],
-      [
-        "--input-cell",
-        "value=/of:fid1:rszomt4Ti8MwDNpMJLZCjcENRtAH6MFBxgf0wYVNCs8/title",
-      ],
       ["--task-tags", "find"],
       ["--task-domains", "web"],
     ]
