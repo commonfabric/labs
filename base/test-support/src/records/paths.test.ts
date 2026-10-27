@@ -51,7 +51,7 @@ describe("paths", () => {
   describe("repositoryRelativePath()", () => {
     it("returns the path from the repository root, forward-slashed", () => {
       expect(repositoryRelativePath(import.meta.filename!)).toBe(
-        "utils/test-support/src/records/paths.test.ts",
+        "base/test-support/src/records/paths.test.ts",
       );
     });
 

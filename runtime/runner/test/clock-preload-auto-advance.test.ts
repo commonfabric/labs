@@ -1,4 +1,4 @@
-// The auto-advance clock (`utils/test-support/test/clock-preload.ts`,
+// The auto-advance clock (`base/test-support/test/clock-preload.ts`,
 // installed by this package's preload) fires the runtime's own positive-delay
 // timers when the event loop is idle. Two properties of that pump are easy to
 // lose and cheap to pin. "Idle" includes the zero-delay turns still armed: the

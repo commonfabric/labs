@@ -5,7 +5,7 @@ import { join } from "@std/path";
 import { findViolations } from "./check-dependency-direction.ts";
 
 /**
- * A workspace holding a `utils/low` package, a `runtime/high` package, and the
+ * A workspace holding a `base/low` package, a `runtime/high` package, and the
  * `patterns` package, with the given files written into it.
  */
 async function fixtureTree(files: Record<string, string>): Promise<string> {
@@ -15,11 +15,11 @@ async function fixtureTree(files: Record<string, string>): Promise<string> {
   await Deno.writeTextFile(
     join(root, "deno.jsonc"),
     JSON.stringify({
-      workspace: ["./utils/low", "./runtime/high", "./patterns"],
+      workspace: ["./base/low", "./runtime/high", "./patterns"],
     }),
   );
   const configs = {
-    "utils/low/deno.jsonc": { name: "@commonfabric/low" },
+    "base/low/deno.jsonc": { name: "@commonfabric/low" },
     "runtime/high/deno.jsonc": { name: "@commonfabric/high" },
     "patterns/deno.jsonc": { name: "@commonfabric/patterns" },
   };
@@ -52,16 +52,16 @@ describe("check-dependency-direction", () => {
     it("returns an import from a package to one in a later place", async () => {
       expect(
         await violationsIn({
-          "utils/low/mod.ts": 'import "@commonfabric/high";\n',
+          "base/low/mod.ts": 'import "@commonfabric/high";\n',
           "runtime/high/mod.ts": "export {};\n",
         }),
-      ).toEqual([{ from: "low", to: "high", file: "utils/low/mod.ts" }]);
+      ).toEqual([{ from: "low", to: "high", file: "base/low/mod.ts" }]);
     });
 
     it("returns nothing for an import from a package to one in an earlier place", async () => {
       expect(
         await violationsIn({
-          "utils/low/mod.ts": "export {};\n",
+          "base/low/mod.ts": "export {};\n",
           "runtime/high/mod.ts": 'import "@commonfabric/low";\n',
         }),
       ).toEqual([]);
@@ -95,7 +95,7 @@ describe("check-dependency-direction", () => {
     it("returns nothing for a test that imports from anywhere", async () => {
       expect(
         await violationsIn({
-          "utils/low/test/low.test.ts": 'import "@commonfabric/high";\n',
+          "base/low/test/low.test.ts": 'import "@commonfabric/high";\n',
           "patterns/system/home/home.test.tsx":
             'import "../../apps/topics/topic.tsx";\n',
           "runtime/high/mod.ts": "export {};\n",

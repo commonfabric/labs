@@ -10,14 +10,14 @@ configuration file, listed in the root `deno.jsonc`.
 
 ## Packages
 
-A package is either a directory directly inside one of three parent directories
-(`base/`, `utils/`, and `runtime/`), or one of two directories at the top level
-(`connectors/` and `patterns/`). The file `tasks/package-layout.ts` encodes this
-rule for the repository's tools.
+A package is either a directory directly inside one of two parent directories
+(`base/` and `runtime/`), or one of three directories at the top level
+(`connectors/`, `dashboard/`, and `patterns/`). The file
+`tasks/package-layout.ts` encodes this rule for the repository's tools.
 
 The places are listed below in the order that dependencies run between them. A
 package imports only from packages in its own place or an earlier one, and
-`connectors/` and `patterns/` share the last place.
+`connectors/`, `dashboard/`, and `patterns/` share the last place.
 `deno task check-dependency-direction` fails on a production import that runs
 the other way. The section of `AGENTS.md` titled "Pace Layers" says more.
 
@@ -29,11 +29,9 @@ the other way. The section of `AGENTS.md` titled "Pace Layers" says more.
   are written against (`api`), the schemas of the data model's values
   (`data-model-schema`), the compiler that turns a pattern's TypeScript into
   code the runtime can run (`js-compiler`, `ts-transformers`, and
-  `schema-generator`), and the client for language-model services (`llm`).
-- `utils/` holds development tools that stand apart from the product: the code
-  that records test results (`test-support`), a front-end build tool (`felt`),
-  and the dashboard that reports on continuous integration (`dashboard`). They
-  use the libraries in `base/`, and the runtime's build and tests use them.
+  `schema-generator`), the client for language-model services (`llm`), a
+  front-end build tool (`felt`), and the code that records test results
+  (`test-support`).
 - `runtime/` holds the program that runs patterns (`runner`) and everything
   built on it. Examples are the storage service (`memory`), the server that
   hosts storage and serves patterns (`toolshed`), the web front end (`shell`),
@@ -43,6 +41,9 @@ the other way. The section of `AGENTS.md` titled "Pace Layers" says more.
   such as GitHub, into Common Fabric. Each connector has a directory here that
   holds the connector, the program that runs the connector on a server, and the
   pattern that displays the data the connector copied.
+- `dashboard/` is one package: the dashboard that reports on the state of
+  development, such as continuous integration. It stands apart from the product,
+  and uses only the libraries in `base/`.
 - `patterns/` is one package. It holds the patterns, each in a directory of its
   own inside a directory for its category. The categories are listed in the
   order that dependencies run between them, and a pattern imports only from its
@@ -69,7 +70,7 @@ the other way. The section of `AGENTS.md` titled "Pace Layers" says more.
 
 A package that is deployed as a container image keeps its `Dockerfile` in its
 own directory. The two such files are `runtime/toolshed/Dockerfile` and
-`utils/dashboard/Dockerfile`.
+`dashboard/Dockerfile`.
 
 ## Tooling
 

@@ -920,7 +920,7 @@ Three things read them:
   drops any older than `LOCAL_COVERAGE_BASELINE_DAYS`.
   `tasks/test-selection/baselines.ts` is where that happens.
 - The dashboard's coverage debt tile
-  (`utils/dashboard/coverage-debt-history.ts`) takes the `workspace`
+  (`dashboard/coverage-debt-history.ts`) takes the `workspace`
   figure of one `main` run attempt a day, the newest of the day's attempts
   that has one, was not measured on a cold compile cache, and passed, and
   charts the run of them. The record store does not say whether an attempt

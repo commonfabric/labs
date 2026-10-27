@@ -38,7 +38,7 @@ describe("isTestFile()", () => {
   });
 
   it("returns false for a directory whose name only contains `test`", () => {
-    expect(isTestFile(ROOT, "/repo/utils/test-support/src/records.ts"))
+    expect(isTestFile(ROOT, "/repo/base/test-support/src/records.ts"))
       .toBe(false);
     expect(isTestFile(ROOT, "/repo/runtime/p/tests/x.ts")).toBe(false);
   });

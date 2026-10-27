@@ -573,7 +573,7 @@ the package-level counterpart of a class's `accessForTestingOnly` getter
 - Only tests and benchmarks import it, as `tasks/test-files.ts` defines them.
   No gate checks this; review does.
 
-Such code belongs beside what it depends on. In `utils/test-support` it
+Such code belongs beside what it depends on. In `base/test-support` it
 would make that package import the package it serves.
 
 ### Avoid Ambiguous Types

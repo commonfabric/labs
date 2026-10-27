@@ -42,7 +42,7 @@ leading `docs/` dropped. Examples:
 
 A document keeps the path it was archived under when the file it came from
 moves later. So `packages/` here holds what was archived from the packages
-before they moved to `base/`, `utils/`, `runtime/`, `connectors/` and
+before they moved to `base/`, `runtime/`, `connectors/`, `dashboard/`, and
 `patterns/`.
 
 One more segment is dropped: when a document is absorbed from a local

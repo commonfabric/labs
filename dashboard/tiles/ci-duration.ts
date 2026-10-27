@@ -68,7 +68,7 @@ import {
 } from "../theme.ts";
 
 const CIGANTT = fromFileUrl(
-  new URL("../../../scripts/ci-gantt.ts", import.meta.url),
+  new URL("../../scripts/ci-gantt.ts", import.meta.url),
 );
 const GANTT_REFRESH_MS = 30 * 60_000;
 // How many job listings a duration tile requests at once. Its first

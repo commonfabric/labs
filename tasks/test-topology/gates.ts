@@ -178,8 +178,8 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     // declaration fails there.
     reachedBy: [
       ".github/workflows/benchmarks.yml",
-      "utils/dashboard/bench-report.ts",
-      "utils/dashboard/machine-calibration.bench.ts",
+      "dashboard/bench-report.ts",
+      "dashboard/machine-calibration.bench.ts",
       "patterns/integration/topic-board-navigation.bench.ts",
       "patterns/integration/topic-board-scale.bench.ts",
       "tasks/check-bench-workflow.ts",
@@ -269,7 +269,7 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     run: ["task", "check-deno-pins"],
     reachedBy: [
       ".github/actions/deno-setup/action.yml",
-      "utils/dashboard/Dockerfile",
+      "dashboard/Dockerfile",
       "runtime/toolshed/Dockerfile",
       "mise.toml",
       "tasks/check-deno-pins.ts",
@@ -443,7 +443,7 @@ export const HISTORY_GATES: readonly Gate[] = [
     // directory is one the gate fails on sight, so a change adding it has
     // to reach the gate; `REACHED_BY_ABSENT_PATHS` records it as absent.
     reachedBy: [
-      "utils/test-support/",
+      "base/test-support/",
       "tasks/check-test-aliases.ts",
       "tasks/test-identity-aliases/",
       "tasks/test-identity-aliases.jsonl",

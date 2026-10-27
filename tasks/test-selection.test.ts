@@ -740,7 +740,7 @@ describe("gatedMembers()", () => {
     // The workspace file lists members with a leading "./", and the
     // coverage baselines a manifest carries do not.
     expect(members.some((member) => member.startsWith("./"))).toBe(false);
-    expect(members).toContain("utils/test-support");
+    expect(members).toContain("base/test-support");
     expect([...members].sort()).toEqual(members);
   });
 

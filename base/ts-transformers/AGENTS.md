@@ -34,7 +34,7 @@ the spec). `docs/common/` is author-facing teaching material, lowest authority.
   `deno task cf check <pattern-or-fixture>.tsx --show-transformed --no-run` —
   pipe through `| deno task cf view` for a syntax-aware pager.
 - Run one fixture: `env FIXTURE=<name> deno task test`. Regenerate goldens:
-  `UPDATE_GOLDENS=1` (runner in `utils/test-support`). Fixture suites live under
+  `UPDATE_GOLDENS=1` (runner in `base/test-support`). Fixture suites live under
   `test/fixtures/<suite>/` as `*.input.tsx` / `*.expected.jsx` pairs;
   `closures/` is by far the largest.
 - Population-scale questions ("how often does the analyzer say X across

@@ -11,13 +11,13 @@ signatures.
 ## Pace Layers
 
 This repository contains many packages that compose and stack to create the
-Common Fabric product. Each package is a directory inside `base/`, `utils/`, or
-`runtime/`, or is one of the two top-level directories `connectors/` and
+Common Fabric product. Each package is a directory inside `base/` or `runtime/`,
+or is one of the three top-level directories `connectors/`, `dashboard/`, and
 `patterns/`. `LAYOUT.md` says what each of these holds.
 `tasks/package-layout.ts` encodes the same rule for the repository's tools.
 
 These places are layers, and dependencies run between them in one order:
-`base/`, then `utils/`, then `runtime/`, then `connectors/` and `patterns/`
+`base/`, then `runtime/`, then `connectors/`, `dashboard/`, and `patterns/`
 together. A package imports from packages in its own layer or an earlier one.
 Inside `patterns/`, the categories are ordered the same way: `system`,
 `product`, `apps`, `examples`, `showcase`, `dev`. A pattern imports from its own

@@ -10,7 +10,7 @@
  *
  *   cd <repo root>
  *   deno run --allow-net --allow-run=deno,git --allow-read --allow-write \
- *     --allow-env utils/dashboard/server.ts
+ *     --allow-env dashboard/server.ts
  *   open http://localhost:8731
  *
  * The token-gated tiles read optional environment variables, and each one

@@ -39,7 +39,7 @@ import {
   unusedGrammarDirectories,
 } from "./build-binaries.ts";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
-import { type Config, ResolvedConfig } from "../utils/felt/interface.ts";
+import { type Config, ResolvedConfig } from "../base/felt/interface.ts";
 import {
   compileFingerprintGlobs,
   computeCompilerVersion,
@@ -540,7 +540,7 @@ Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async (
     buildBinariesScript,
     config.toolshedEntryPath(),
     config.cliEntryPath(),
-    join(shell, "..", "..", "utils", "felt", "cli.ts"),
+    join(shell, "..", "..", "base", "felt", "cli.ts"),
     shellConfigPath,
     ...shellConfig.entries.map((entry) => entry.in),
   ];

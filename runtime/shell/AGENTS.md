@@ -60,7 +60,7 @@ runtime and gives a user a way to move around their spaces. Entry point is
   navigation has to preserve it — including one issued by a rendered pattern. A
   navigation that drops the prefix escapes the embedding host.
 - The build tool is `@commonfabric/felt`, which lives in this repository at
-  `utils/felt` rather than coming from a registry. Its configuration is
+  `base/felt` rather than coming from a registry. Its configuration is
   `felt.config.ts`.
 - Views use `@lit/task` for asynchronous work, and cleanup belongs in the
   component lifecycle. A task that outlives its component keeps writing into a

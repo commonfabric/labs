@@ -230,7 +230,7 @@ Deno.test("isTestPath: directories and basenames", () => {
       "src/__snapshots__/app.test.ts.snap",
       "packages/x/baselines/main.tsx/contract.json",
       "packages/x/browser-tests/repro.tsx",
-      "utils/test-support/src/mod.ts",
+      "base/test-support/src/mod.ts",
       "src/test-utils/mock-document.ts",
       "src/test_helpers.rb",
       "patterns/dev/render-test/render-test.tsx",

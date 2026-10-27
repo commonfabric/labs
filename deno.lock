@@ -3095,12 +3095,12 @@
           "npm:typescript@6.0.3"
         ]
       },
-      "utils/dashboard": {
+      "dashboard": {
         "dependencies": [
           "npm:@resvg/resvg-js@2.6.2"
         ]
       },
-      "utils/felt": {
+      "base/felt": {
         "dependencies": [
           "jsr:@deno/esbuild-plugin@^1.2.1",
           "jsr:@std/fmt@^1.0.10",

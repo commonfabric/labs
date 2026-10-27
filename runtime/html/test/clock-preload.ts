@@ -7,7 +7,7 @@
 // dispatch, the worker reconciler's flush, and teardown resolve on their own.
 // Tests write plain `Deno.test` and `await t.settle()`; nothing is imported.
 // `test/clock.d.ts` gives `t.settle` its type. See the shared harness at
-// `utils/test-support/test/clock-preload.ts` and
+// `base/test-support/test/clock-preload.ts` and
 // `docs/development/waiting-in-tests.md`.
 
 import { installFakeClock } from "@commonfabric/test-support/clock-preload";

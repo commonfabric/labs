@@ -171,7 +171,7 @@ against it:
 - `tasks/check.sh` (run by `deno task check` and by CI) reads the pin for its
   version warning, and accepts the surrounding range set in its
   `DENO_VERSION_MIN`/`DENO_VERSION_MAX` variables.
-- `utils/dashboard/Dockerfile` and `runtime/toolshed/Dockerfile` repeat the
+- `dashboard/Dockerfile` and `runtime/toolshed/Dockerfile` repeat the
   version in their `FROM` lines, which cannot read another file.
 
 To bump the toolchain: update the version in `mise.toml` and every
@@ -325,7 +325,7 @@ compiler emits. If it does not, run
 
 ### esbuild
 
-`utils/felt` is the only package that declares esbuild. Its import map holds
+`base/felt` is the only package that declares esbuild. Its import map holds
 two entries that have to move in step: `npm:esbuild`, which felt calls directly,
 and `jsr:@deno/esbuild-plugin`, which teaches esbuild to resolve and load
 modules the way Deno does. The plugin is what lets felt bundle a source tree

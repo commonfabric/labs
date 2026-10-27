@@ -5,7 +5,7 @@
  * its own.
  *
  * Packages live in places that dependencies run between in one order: `base`,
- * then `utils`, then `runtime`, then `connectors` and `patterns` together
+ * then `runtime`, then `connectors`, `dashboard`, and `patterns` together
  * (`dependencyLayerOf` in `tasks/package-layout.ts`). A package imports from
  * packages in its own place or an earlier one. Patterns are sorted into categories that
  * dependencies run between in the same way (`PATTERN_CATEGORIES`): a pattern

@@ -736,7 +736,7 @@ so each test runs under a clock that freezes only positive-delay timers, and it
 adds `settle` to the context. `test/clock.d.ts` gives `t.settle` its type, which
 `deno check` sees because it type-checks the package directory as one program.
 The preload is a thin wrapper: it calls `installFakeClock` from the shared
-harness in `utils/test-support/test/clock-preload.ts`, selecting that harness's
+harness in `base/test-support/test/clock-preload.ts`, selecting that harness's
 `freeze-all` mode. The runner preload calls the same harness in its
 `auto-advance` mode (below), so the timer-faking core lives in one place.
 

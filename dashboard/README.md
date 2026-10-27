@@ -8,7 +8,7 @@ with a fixed interface; a single file registers them.
 
 ```bash
 cd <repo root>
-deno task dashboard      # = deno run … utils/dashboard/server.ts
+deno task dashboard      # = deno run … dashboard/server.ts
 # open http://localhost:8731
 ```
 
@@ -22,7 +22,7 @@ The root `deno task dashboard` command starts the server once. Watch mode and
 dashboard-specific tests are package tasks:
 
 ```bash
-cd utils/dashboard
+cd dashboard
 deno task watch
 deno task test
 ```
@@ -279,7 +279,7 @@ After changing `favicon-artwork.ts`, regenerate the embedded PNGs and their
 content-based cache version from the dashboard package directory:
 
 ```bash
-cd utils/dashboard
+cd dashboard
 deno task regenerate-favicons
 deno test --allow-all favicon-raster.test.ts regenerate-favicons.test.ts
 ```
@@ -1585,7 +1585,7 @@ Notes:
   one model have measured a fifth apart on work that touches no repository code
   at all, because a run gets whatever share of a shared host the other tenants
   leave it. So the workflow also runs
-  `utils/dashboard/machine-calibration.bench.ts`, whose benchmarks call no
+  `dashboard/machine-calibration.bench.ts`, whose benchmarks call no
   repository code, and each step divides their geometric mean out of the
   product benchmarks' one. What is left is what the repository did. Those
   calibration benchmarks are the tile's ruler rather than one of the things it
@@ -1819,7 +1819,7 @@ Everything below is a tunable constant in `config.ts`:
 Local-first: no build step, no deployment, a single process on `localhost`.
 
 - One-shot: `deno task dashboard`.
-- Watch mode from `utils/dashboard` (reloads the server on any edit to a tile
+- Watch mode from `dashboard` (reloads the server on any edit to a tile
   or the core): `deno task watch`.
 
 Env knobs for the dev loop:
@@ -1862,7 +1862,7 @@ const view = await myTile.collect(fakeCtx);
 ### Tests
 
 ```bash
-cd utils/dashboard
+cd dashboard
 deno task test
 ```
 
@@ -1881,7 +1881,7 @@ a workspace package, so its ordinary unit tests also run as part of the repo-wid
 
 ## Deploying (stage GKE, tailnet-only)
 
-The deploy artifacts follow the golink pattern. `utils/dashboard/Dockerfile` (labs repo
+The deploy artifacts follow the golink pattern. `dashboard/Dockerfile` (labs repo
 root) builds the image; the manifests, ExternalSecrets, and tofu secret
 containers live in the **infra** repo (`k8s/manifests/dev-dashboard/`,
 `k8s/overlays/stage/external-secrets/dashboard-secrets.yaml`,

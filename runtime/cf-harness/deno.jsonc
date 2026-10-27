@@ -3,8 +3,8 @@
   "tasks": {
     "run": "deno run -A src/main.ts",
     "help": "deno run -A src/main.ts --help",
-    "console:build": "cd console && deno run -A ../../../utils/felt/cli.ts build .",
-    "console:watch": "cd console && deno run -A ../../../utils/felt/cli.ts dev .",
+    "console:build": "cd console && deno run -A ../../../base/felt/cli.ts build .",
+    "console:watch": "cd console && deno run -A ../../../base/felt/cli.ts dev .",
     "console": "deno task console:build && deno run -A console/server.ts",
     "console:launch": "deno task console:build && deno run -A console/launch.ts",
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",

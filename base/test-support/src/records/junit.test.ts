@@ -458,7 +458,7 @@ describe("junit", () => {
       // with `..` in it is refused before ever reaching that check.
       const wrapped = DENO_SAMPLE.replaceAll(
         'classname="test/glaze.test.ts"',
-        'classname="utils/test-support/src/records/registration.ts"',
+        'classname="base/test-support/src/records/registration.ts"',
       );
       const records = ingestJUnit(wrapped, {
         kind: "unit",

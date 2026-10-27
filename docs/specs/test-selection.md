@@ -10,7 +10,7 @@ reasoning behind it. It rests on
 [test-run records](test-records.md), whose store it reads and beside whose
 dataset area it writes. The implementation is `tasks/test-selection/`, and
 the manifest format itself is
-`utils/test-support/src/records/selection.ts`, beside the record schema
+`base/test-support/src/records/selection.ts`, beside the record schema
 it is the counterpart of.
 
 ## What the score measures

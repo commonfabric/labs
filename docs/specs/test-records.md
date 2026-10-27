@@ -9,7 +9,7 @@ guide](../development/test-records.md) says how to use it, and
 repository joins it. [The plan this system came
 from](../history/plans/test-run-telemetry.md) is archived, and carries the
 reasoning that shaped what follows. The shared implementation is
-`utils/test-support/src/records/`.
+`base/test-support/src/records/`.
 
 ## Identity
 

@@ -84,7 +84,7 @@ describe("typecheck", () => {
       const byScope = await collectPathsByScope(REPO_ROOT);
       // Directory entries survive as-is under their member's scope.
       expect(byScope.get("runner")).toContain("runtime/runner");
-      expect(byScope.get("test-support")).toContain("utils/test-support");
+      expect(byScope.get("test-support")).toContain("base/test-support");
       // Glob entries expand to repository-relative files.
       expect(byScope.get("scripts")).toContain("scripts/bundle.ts");
       expect(byScope.get("ui")).toContain("runtime/ui");

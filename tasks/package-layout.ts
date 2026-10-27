@@ -10,10 +10,14 @@
 import { existsSync } from "@std/fs/exists";
 
 /** The directories whose subdirectories are packages. */
-export const PACKAGE_PARENTS = ["base", "runtime", "utils"] as const;
+export const PACKAGE_PARENTS = ["base", "runtime"] as const;
 
 /** The packages that sit at the top level of the repository. */
-export const TOP_LEVEL_PACKAGES = ["connectors", "patterns"] as const;
+export const TOP_LEVEL_PACKAGES = [
+  "connectors",
+  "dashboard",
+  "patterns",
+] as const;
 
 /** Every directory holding package source, repository-relative. */
 export const PACKAGE_ROOTS: readonly string[] = [
@@ -75,14 +79,13 @@ export function packageDirNamed(root: string, name: string): string {
 
 /**
  * The order dependencies run in between the places packages live. A package
- * imports from packages in its own place or an earlier one; `connectors` and
- * `patterns` share the last place.
+ * imports from packages in its own place or an earlier one; `connectors`,
+ * `dashboard`, and `patterns` share the last place.
  */
 const DEPENDENCY_ORDER: readonly (readonly string[])[] = [
   ["base"],
-  ["utils"],
   ["runtime"],
-  ["connectors", "patterns"],
+  ["connectors", "dashboard", "patterns"],
 ];
 
 /**

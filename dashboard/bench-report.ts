@@ -33,14 +33,14 @@ export interface Bench {
 // the last, because a package can contain a directory with one of these names.
 // This assumes that no directory above the checkout has one of these names.
 const CHECKOUT_PREFIX =
-  /^file:\/\/.*?\/(?=(?:base|connectors|data-model|packages|patterns|runtime|utils)\/)/;
+  /^file:\/\/.*?\/(?=(?:base|connectors|dashboard|packages|patterns|runtime)\/)/;
 
 // The current directory of each package that had benchmarks when the packages
 // lived under `packages/`. Keys from older reports are mapped through this
 // table, so each benchmark keeps one series of results.
 export const MOVED_PACKAGES: Readonly<Record<string, string>> = {
   "content-hash": "base/content-hash",
-  dashboard: "utils/dashboard",
+  dashboard: "dashboard",
   "data-model": "base/data-model",
   fuse: "runtime/fuse",
   html: "runtime/html",
@@ -81,7 +81,7 @@ export const benchKey = (b: Bench): string =>
 // drill-down. Runs from before the calibration landed carry none, and read
 // uncorrected.
 export const CALIBRATION_FILE =
-  "utils/dashboard/machine-calibration.bench.ts";
+  "dashboard/machine-calibration.bench.ts";
 
 export const isCalibrationKey = (key: string): boolean =>
   key.startsWith(`${CALIBRATION_FILE} > `);

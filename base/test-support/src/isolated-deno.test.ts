@@ -75,7 +75,7 @@ Deno.test("nested checks use the checked-in dependency graph", async () => {
   const output = await runDenoCheckWithTemporaryConfig({
     root: ROOT,
     config: rootConfig,
-    files: ["utils/test-support/src/mod.ts"],
+    files: ["base/test-support/src/mod.ts"],
     tempConfigPrefix: "deno.test-support.frozen-check",
   });
 

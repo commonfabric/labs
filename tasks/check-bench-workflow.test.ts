@@ -13,10 +13,7 @@ import {
   namedBenchmarkFiles,
   stepWords,
 } from "./check-bench-workflow.ts";
-import {
-  CALIBRATION_FILE,
-  KEY_BENCHMARKS,
-} from "../utils/dashboard/bench-report.ts";
+import { CALIBRATION_FILE, KEY_BENCHMARKS } from "../dashboard/bench-report.ts";
 
 /** Helper for the tests below, which builds a workflow around its steps. */
 const workflowWith = (steps: string[]): string =>

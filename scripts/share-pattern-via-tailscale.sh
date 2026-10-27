@@ -106,7 +106,7 @@ cd "$REPO_ROOT/runtime/shell"
 rm -rf dist
 echo "Starting shell (API_URL=$PUBLIC_URL)..."
 nohup env SHELL_PORT="$SHELL_PORT" API_URL="$PUBLIC_URL" \
-  deno run -A ../../utils/felt/cli.ts dev . > /tmp/cf-share-shell.log 2>&1 &
+  deno run -A ../../base/felt/cli.ts dev . > /tmp/cf-share-shell.log 2>&1 &
 echo $! >> "$PIDFILE"
 
 # ---------- wait for both to come up ----------

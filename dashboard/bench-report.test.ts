@@ -95,7 +95,7 @@ describe("bench-report", () => {
       const aliases = new Map(
         (await Deno.readTextFile(
           new URL(
-            "../../tasks/test-identity-aliases/moved-paths.jsonl",
+            "../tasks/test-identity-aliases/moved-paths.jsonl",
             import.meta.url,
           ),
         )).split("\n").filter((line) => line.length > 0).map((line) => {

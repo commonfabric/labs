@@ -92,7 +92,7 @@ describe("package-layout", () => {
     });
 
     it("throws for a name two packages go by", async () => {
-      const root = await tree(["runtime/oven", "utils/oven"]);
+      const root = await tree(["runtime/oven", "base/oven"]);
       try {
         expect(() => packageDirNamed(root, "oven")).toThrow(
           "more than one package is named oven",
@@ -122,10 +122,7 @@ describe("package-layout", () => {
   describe("dependencyLayerOf()", () => {
     it("returns an earlier layer for a package that others depend on", () => {
       expect(dependencyLayerOf("base/utils")).toBeLessThan(
-        dependencyLayerOf("utils/test-support"),
-      );
-      expect(dependencyLayerOf("utils/felt")).toBeLessThan(
-        dependencyLayerOf("runtime/shell"),
+        dependencyLayerOf("dashboard"),
       );
       expect(dependencyLayerOf("base/api")).toBeLessThan(
         dependencyLayerOf("runtime/runner"),

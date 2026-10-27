@@ -68,7 +68,7 @@ describe("registration", () => {
   describe("repositoryPathOf()", () => {
     it("returns a file's path relative to the repository enclosing it", () => {
       expect(repositoryPathOf(import.meta.url)).toBe(
-        "utils/test-support/src/records/registration.test.ts",
+        "base/test-support/src/records/registration.test.ts",
       );
     });
 
@@ -91,7 +91,7 @@ describe("registration", () => {
   describe("runningFile()", () => {
     it("returns the test file this process runs, relative to the repository root", () => {
       expect(runningFile()).toBe(
-        "utils/test-support/src/records/registration.test.ts",
+        "base/test-support/src/records/registration.test.ts",
       );
     });
   });

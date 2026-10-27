@@ -531,7 +531,7 @@ describe("preload", () => {
 
   it("places a file above the directory the run happened in", async () => {
     // A workspace member's test task runs in the member's directory and
-    // may name a file anywhere in the tree: `utils/test-support` runs
+    // may name a file anywhere in the tree: `base/test-support` runs
     // the repository tools' own regression tests, two directories above
     // itself. The map says which directory the run happened in, and a
     // read scoped to that directory takes it whole.

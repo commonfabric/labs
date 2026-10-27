@@ -23,7 +23,7 @@ function alignedFiles() {
   return {
     miseToml: '[tools]\ndeno = "2.9.4"\n',
     dockerfiles: {
-      "utils/dashboard/Dockerfile":
+      "dashboard/Dockerfile":
         "FROM --platform=linux/amd64 denoland/deno:2.9.4\n",
       "runtime/toolshed/Dockerfile": "FROM denoland/deno:2.9.4 AS builder\n" +
         "RUN deno install --frozen\n" +
@@ -83,7 +83,7 @@ Deno.test("findProblems flags a Deno pin defined twice", () => {
 Deno.test("parseDockerfileDenoVersions finds every FROM line", () => {
   assertEquals(
     parseDockerfileDenoVersions(
-      alignedFiles().dockerfiles["utils/dashboard/Dockerfile"],
+      alignedFiles().dockerfiles["dashboard/Dockerfile"],
     ),
     ["2.9.4"],
   );
@@ -198,7 +198,7 @@ Deno.test("findProblems flags a Dockerfile without deno images", () => {
     ...alignedFiles(),
     dockerfiles: {
       ...alignedFiles().dockerfiles,
-      "utils/dashboard/Dockerfile": "FROM debian:12\n",
+      "dashboard/Dockerfile": "FROM debian:12\n",
     },
   };
   assertEquals(findProblems(files).length, 1);
@@ -289,7 +289,7 @@ Deno.test("findProblems flags a Dockerfile stage stale behind a flag", () => {
     ...alignedFiles(),
     dockerfiles: {
       ...alignedFiles().dockerfiles,
-      "utils/dashboard/Dockerfile":
+      "dashboard/Dockerfile":
         "FROM --platform=linux/amd64 denoland/deno:2.5.0\n",
     },
   };

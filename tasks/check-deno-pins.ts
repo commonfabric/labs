@@ -24,7 +24,7 @@ const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
 const MISE_TOML = "mise.toml";
 const DOCKERFILES = [
-  "utils/dashboard/Dockerfile",
+  "dashboard/Dockerfile",
   "runtime/toolshed/Dockerfile",
 ] as const;
 const CHECK_SH = "tasks/check.sh";

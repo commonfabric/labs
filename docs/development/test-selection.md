@@ -1412,7 +1412,7 @@ aggregate in any case: the count falls on its own.
 What to check is that surface's wiring, which
 [the record guide](test-records.md#covering-a-new-test-surface) covers: the
 JUnit output the suite's command declares, the `--preload` naming
-`utils/test-support/src/records/preload.ts` where the surface is `deno test`,
+`base/test-support/src/records/preload.ts` where the surface is `deno test`,
 and the working directory that relative class names are joined onto. Where the
 records do have a file, the file is one no suite has a unit for, and the answer
 is in the topology.
@@ -1760,7 +1760,7 @@ running on main. Activity and new manifests are checked every 30 seconds.
 Activity requires the dashboard's GitHub token; the public measurements remain
 available when that lookup fails.
 
-Both follow [the dashboard's rules](../../utils/dashboard/README.md#philosophy-and-values):
+Both follow [the dashboard's rules](../../dashboard/README.md#philosophy-and-values):
 they report on the system, they name tests, and nothing about either is
 aggregated per person.
 
@@ -1919,7 +1919,7 @@ itself.
   it if it is not.
 
 Five properties keep this on the right side of
-[the dashboard's rule](../../utils/dashboard/README.md#philosophy-and-values)
+[the dashboard's rule](../../dashboard/README.md#philosophy-and-values)
 that reporting is about the system and never about individuals. The
 comment's subject is a commit and a test, and no author is named. Nothing
 is counted per author, per team, or per anything, and no history is kept:
@@ -2040,7 +2040,7 @@ each group as a `deno test` of its own and merges their JUnit reports into the
 one path it was handed. A lane groups the files it selects the same way, with a
 report for each group. The topology refuses a `--serial` or `--all-access`
 pattern that names no test file, and so does the runner, which also refuses such
-an `--ignore`. `runtime/cli` uses both options, and `utils/dashboard` uses
+an `--ignore`. `runtime/cli` uses both options, and `dashboard` uses
 `--all-access`.
 
 ## A case that fails only when its siblings do not run
@@ -2072,7 +2072,7 @@ independent case:
 }
 ```
 
-`utils/test-support/src/records/preload.ts` is what reads the list, so
+`base/test-support/src/records/preload.ts` is what reads the list, so
 the invocation adds it to whatever preloads and variables the package's
 own test task already passes, and runs from that package's directory.
 Deno resolves `--preload` as a path rather than through the import map,
@@ -2080,7 +2080,7 @@ so it is absolute:
 
 ```bash
 CF_TEST_SKIP_LIST=/tmp/skips.json deno test --no-check --allow-all \
-  --preload="$(git rev-parse --show-toplevel)/utils/test-support/src/records/preload.ts" \
+  --preload="$(git rev-parse --show-toplevel)/base/test-support/src/records/preload.ts" \
   test/glaze.test.ts
 ```
 

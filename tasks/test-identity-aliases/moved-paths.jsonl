@@ -4,11 +4,11 @@
 {"date": "2026-12-01", "from": {"p": "packages/cli"}, "to": {"p": "runtime/cli"}}
 {"date": "2026-12-01", "from": {"p": "packages/connectors"}, "to": {"p": "connectors"}}
 {"date": "2026-12-01", "from": {"p": "packages/content-hash"}, "to": {"p": "base/content-hash"}}
-{"date": "2026-12-01", "from": {"p": "packages/dashboard"}, "to": {"p": "utils/dashboard"}}
+{"date": "2026-12-01", "from": {"p": "packages/dashboard"}, "to": {"p": "dashboard"}}
 {"date": "2026-12-01", "from": {"p": "packages/data-model"}, "to": {"p": "base/data-model"}}
 {"date": "2026-12-01", "from": {"p": "packages/data-model-schema"}, "to": {"p": "base/data-model-schema"}}
 {"date": "2026-12-01", "from": {"p": "packages/deno-web-test"}, "to": {"p": "runtime/deno-web-test"}}
-{"date": "2026-12-01", "from": {"p": "packages/felt"}, "to": {"p": "utils/felt"}}
+{"date": "2026-12-01", "from": {"p": "packages/felt"}, "to": {"p": "base/felt"}}
 {"date": "2026-12-01", "from": {"p": "packages/fuse"}, "to": {"p": "runtime/fuse"}}
 {"date": "2026-12-01", "from": {"p": "packages/generated-patterns"}, "to": {"p": "runtime/generated-patterns"}}
 {"date": "2026-12-01", "from": {"p": "packages/home-schemas"}, "to": {"p": "base/home-schemas"}}
@@ -33,7 +33,7 @@
 {"date": "2026-12-01", "from": {"p": "packages/spec-model"}, "to": {"p": "base/spec-model"}}
 {"date": "2026-12-01", "from": {"p": "packages/state-inspector"}, "to": {"p": "runtime/state-inspector"}}
 {"date": "2026-12-01", "from": {"p": "packages/static"}, "to": {"p": "base/static"}}
-{"date": "2026-12-01", "from": {"p": "packages/test-support"}, "to": {"p": "utils/test-support"}}
+{"date": "2026-12-01", "from": {"p": "packages/test-support"}, "to": {"p": "base/test-support"}}
 {"date": "2026-12-01", "from": {"p": "packages/toolshed"}, "to": {"p": "runtime/toolshed"}}
 {"date": "2026-12-01", "from": {"p": "packages/ts-transformers"}, "to": {"p": "base/ts-transformers"}}
 {"date": "2026-12-01", "from": {"p": "packages/ui"}, "to": {"p": "runtime/ui"}}

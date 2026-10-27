@@ -37,7 +37,7 @@ package that splits its tests this way matches the pattern twice: once as an
 the argument list handed to `deno-web-test`. Both are globs, so there is no list
 to add the file to. `runtime/ui` and `base/iframe-sandbox` write the two
 halves as separate `deno-test` and `browser-test` tasks, and
-`utils/dashboard` spreads the pair across a runner script and the task that
+`dashboard` spreads the pair across a runner script and the task that
 runner calls. Where the pair is written changes; what it matches does not.
 
 Two things break it, and the second is what makes the first hard to notice.

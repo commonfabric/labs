@@ -25,7 +25,7 @@ import {
   shareLabel,
   TEST_SELECTION_PREFIX,
 } from "./test-selection-manifest.ts";
-import { manifestPrefix } from "../../tasks/test-selection/store.ts";
+import { manifestPrefix } from "../tasks/test-selection/store.ts";
 import type { TestSelectionSource } from "./test-selection-history.ts";
 import { makeTestFlakes } from "./tiles/test-flakes.ts";
 import { makeTestSelection } from "./tiles/test-selection.ts";

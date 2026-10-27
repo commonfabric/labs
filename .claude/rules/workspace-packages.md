@@ -5,7 +5,6 @@ paths:
   - "patterns/deno.jsonc"
   - "runtime/*/deno.jsonc"
   - "connectors/*/*/deno.jsonc"
-  - "utils/*/deno.jsonc"
 ---
 
 # Workspace package configuration

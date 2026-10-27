@@ -2343,7 +2343,7 @@ synthetic node resolution failure → `any` → `true`
   `test/fixtures/schema/*.input.ts` → `*.expected.json`; the root type is the
   fixture's `SchemaRoot`. Env knobs: `FIXTURE=<baseName>` filter;
   `UPDATE_GOLDENS=1` rewrites goldens
-  (`utils/test-support/src/fixture-runner.ts`); `SKIP_INPUT_CHECK=1`
+  (`base/test-support/src/fixture-runner.ts`); `SKIP_INPUT_CHECK=1`
   disables the default batch type-check of all inputs in one program — type
   errors otherwise fail the suite before any comparison.
 - **Normalization caveat**: goldens are normalized — object keys sorted,
@@ -2393,7 +2393,7 @@ canonical; update prose from it, not the other way around. Paths relative to
 | Hint shape (§13) | `SchemaHint` / `UiContractHint` (`src/interface.ts`) | — |
 | Generation options (§14) | `SchemaGenerationOptions` (`src/interface.ts`) | widening, writer identity, and diagnostics |
 | Throw inventory (§15) | grep `throw new Error` under `src/` | messages quoted above verified this snapshot |
-| Fixture env knobs (§17) | `test/fixtures-runner.test.ts`; `utils/test-support/src/fixture-runner.ts` | — |
+| Fixture env knobs (§17) | `test/fixtures-runner.test.ts`; `base/test-support/src/fixture-runner.ts` | — |
 
 A drift-resistant habit (mirroring the ts-transformers spec §21.1): when
 editing a set above, update this document from the canonical source and keep

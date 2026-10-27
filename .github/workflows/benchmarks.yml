@@ -16,7 +16,7 @@ name: Benchmarks
 # share of a host the other tenants leave it. The dashboard draws a separate
 # line per processor model, which tells the models apart but not the hosts. So
 # every run also measures the machine it landed on, through
-# utils/dashboard/machine-calibration.bench.ts below, and the dashboard
+# dashboard/machine-calibration.bench.ts below, and the dashboard
 # divides that measurement out of its trend. Without it a run that landed on a
 # busy host reads on the tile as a code regression.
 on:
@@ -104,7 +104,7 @@ jobs:
             base/data-model/bench/hashing.bench.ts \
             base/data-model/bench/codec-json.bench.ts \
             runtime/piece/test/piece-cold-runtime.bench.ts \
-            utils/dashboard/machine-calibration.bench.ts \
+            dashboard/machine-calibration.bench.ts \
             patterns/integration/topic-board-navigation.bench.ts \
             patterns/integration/topic-board-scale.bench.ts \
             patterns/integration/lunch-poll-vote-burst.bench.ts \
@@ -128,7 +128,7 @@ jobs:
       # key tile selects by name are simply absent from it. None of that is a
       # corrupt report, but a chart that quietly thins says nothing about when
       # it started, so the run that produced one fails here instead. The checks
-      # live in utils/dashboard/bench-report.ts, beside the code that reads
+      # live in dashboard/bench-report.ts, beside the code that reads
       # the report, so the two cannot drift apart.
       - name: ✅ Validate benchmark results
         run: >

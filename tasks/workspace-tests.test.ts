@@ -625,7 +625,7 @@ Deno.test("the workspace's capable members are read from their manifests", async
       "./runtime/runner",
       "./base/api",
       "./runtime/memory",
-      "./utils/dashboard",
+      "./dashboard",
       "./patterns",
     ]
   ) {
@@ -791,7 +791,7 @@ Deno.test("a recording leaf is given the preload and the permissions it needs", 
   // A member behind the batch runner is read by the flags its leaf takes,
   // which here grant a write anywhere.
   assertEquals(recording.get("./runtime/cli"), [preload]);
-  assertEquals(recording.get("./utils/dashboard"), [preload]);
+  assertEquals(recording.get("./dashboard"), [preload]);
   // A member whose task cannot take the preload takes nothing at all.
   assertEquals(recording.get("./base/identity"), []);
 });

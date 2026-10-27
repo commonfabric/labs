@@ -164,7 +164,7 @@ open http://127.0.0.1:8100
 `console` and `console:launch` both build the page and then serve it, and differ
 only in where the configuration comes from: `console` takes it, `console:launch`
 resolves it from the fabric and prints what it found. The page is a
-[felt](../../../utils/felt/) build: its source is `src/`, its static files are
+[felt](../../../base/felt/) build: its source is `src/`, its static files are
 `public/`, and both are emitted to `dist/`, which the server serves and git
 ignores. A server started without that build answers `/` by naming the command
 that produces it. While changing the page,

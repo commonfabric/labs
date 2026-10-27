@@ -6,7 +6,7 @@
 // sleeping, while a wall-clock sleep armed from a `test/` file freezes and its
 // waiter deadlocks. The controls are a global `clock` (settle/tick/reset), typed
 // in `test/clock.d.ts`. See the shared harness at
-// `utils/test-support/test/clock-preload.ts` and
+// `base/test-support/test/clock-preload.ts` and
 // `docs/development/waiting-in-tests.md`.
 
 import { installFakeClock } from "@commonfabric/test-support/clock-preload";

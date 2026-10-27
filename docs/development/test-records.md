@@ -32,7 +32,7 @@ default and stay ambient-OFF, so they are unmarked for the older reason: the
 flip does not reach them (`docs/specs/test-records.md`). One record is one JSON
 line; one uploaded object is a run's context line followed by its record lines.
 The schema, the line codecs, and their validators live in
-`utils/test-support/src/records/`.
+`base/test-support/src/records/`.
 
 Records carry only public-repository material: names, hashes, durations. No
 usernames, hostnames, tokens, or log text — that discipline is what makes
@@ -328,7 +328,7 @@ https://storage.googleapis.com/storage/v1/b/cf-ci-metadata/o?prefix=labs/test-re
 ```
 
 Objects are gzip-encoded NDJSON served with transcoding, so a plain fetch
-receives text. `utils/test-support/src/records/store-reader.ts` is the
+receives text. `base/test-support/src/records/store-reader.ts` is the
 validating reader; the readers built on it:
 
 - `tasks/test-records-report.ts` — collisions, high-churn identity
@@ -353,7 +353,7 @@ validating reader; the readers built on it:
   on a daily schedule, which is the only place its identity can be
   assumed; there is no key for it and no way to run the writing half by
   hand.
-- `utils/dashboard/test-records-history.ts` — the dashboard's collector:
+- `dashboard/test-records-history.ts` — the dashboard's collector:
   cached per-identity daily series shaped for `trend.ts`.
 
 Readers that join history across renames apply the alias file through
@@ -417,7 +417,7 @@ the modules under `tasks/test-topology/`, and never a new job: the lanes run
 what the topology declares and ship its records. A suite whose runner emits
 JUnit declares each report, with its kind, scope and file prefix, in the
 invocations its `command()` returns, and passes a `--preload` naming
-`utils/test-support/src/records/preload.ts` where the surface is `deno test`.
+`base/test-support/src/records/preload.ts` where the surface is `deno test`.
 `preloadArgument()` from `@commonfabric/test-support/records` returns that flag;
 Deno resolves `--preload` as a path rather than through the import map, so it
 must be absolute and no caller writes it out.
@@ -594,7 +594,7 @@ nothing. And where the bdd re-export loaded before the preload, a skip
 list is what makes the preload end the run rather than warn and carry on.
 An empty value is unset for that variable too, so naming it beside
 `CF_TEST_RECORDS_DIR` is the whole of it.
-`utils/test-support/test/records/preload.test.ts` starts a recording
+`base/test-support/test/records/preload.test.ts` starts a recording
 child on purpose, and names both.
 
 Every test must finish within sixty seconds in CI, not counting setup; a

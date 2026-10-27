@@ -1,10 +1,10 @@
 {
   "workspace": [
     "./base/content-hash",
-    "./utils/dashboard",
-    "./utils/felt",
+    "./dashboard",
+    "./base/felt",
     "./base/leb128",
-    "./utils/test-support",
+    "./base/test-support",
     "./base/utils",
     "./base/data-model",
     "./base/api",
@@ -113,7 +113,7 @@
     "initialize-db": "deno run --allow-env --allow-read --allow-write --allow-ffi --allow-net=github.com,release-assets.githubusercontent.com,jsr.io runtime/memory/scripts/initialize-db.ts",
     "integration": "./tasks/integration.ts",
     "demo": "./tasks/demo.ts",
-    "dashboard": "deno run --allow-net --allow-run=deno --allow-read --allow-write --allow-env utils/dashboard/server.ts",
+    "dashboard": "deno run --allow-net --allow-run=deno --allow-read --allow-write --allow-env dashboard/server.ts",
     "profile": "./scripts/restart-local-dev.sh --inspect-brk",
     "cf-profile": "ROOT=\"$(pwd)\" && cd \"$INIT_CWD\" && deno run -A \"$ROOT/runtime/cli/support/profiling/cf-profile.ts\"",
     "cf-inspect-brk": "bash -lc 'ROOT=\"$(pwd)\" && cd \"$INIT_CWD\" && CF_CLI_NAME=cf deno run --inspect-brk --allow-net --allow-ffi --allow-read --allow-write --allow-env --allow-run --allow-sys=networkInterfaces,uid \"$ROOT/runtime/cli/mod.ts\" \"$@\"' --",
@@ -186,7 +186,7 @@
       ".beads/",
       ".claude/",
       "docs/",
-      "utils/dashboard/",
+      "dashboard/",
       "base/static/assets/",
       "base/ts-transformers/test/fixtures",
       "base/schema-generator/test/fixtures",
@@ -235,7 +235,7 @@
     // that re-exports the real one and applies this invocation's skip
     // list. The real module keeps a specifier of its own, which is the
     // only thing that imports it.
-    "@std/testing/bdd": "./utils/test-support/src/records/bdd.ts",
+    "@std/testing/bdd": "./base/test-support/src/records/bdd.ts",
     "@std/testing/bdd/real": "jsr:@std/testing@^1.0.19/bdd",
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
     "dagre": "npm:dagre@^0.8.5",
