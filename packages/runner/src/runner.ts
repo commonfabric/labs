@@ -11570,8 +11570,8 @@ export class Runner {
    * defaults rather than standing in for the whole value. Each owed cell is
    * probed in the instance `identity` resolves it to, and loaded first when
    * neither the replica nor the store read-through can say whether it holds
-   * a value; the cells found absent are seeded, each in a transaction of its
-   * own (`#seedOwedDefaults`). Returns whether every owed default was
+   * a value; the cells found absent are seeded, one transaction per piece
+   * instance (`#seedOwedDefaults`). Returns whether every owed default was
    * verified or seeded. A piece not running here, or whose pattern pointer
    * this runtime cannot read, seeds nothing and returns `false`.
    */
@@ -11599,7 +11599,11 @@ export class Runner {
     }
     if (ref === undefined) return false;
     const manager = this.#runtime.patternManager;
-    const loaded = manager.artifactFromIdentitySync(ref.identity, ref.symbol) ??
+    const loaded = manager.artifactFromIdentitySyncInSpace(
+      ref.identity,
+      ref.symbol,
+      rootCell.space,
+    ) ??
       await manager.loadPatternByIdentity(
         ref.identity,
         ref.symbol,
