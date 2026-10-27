@@ -193,15 +193,15 @@ describe("lunch-poll-diagnose", () => {
         compactActionSite(
           `cf:module/${IDENTITY}/apps/lunch-poll/main.tsx:1366:19`,
         ),
-      ).toBe("lunch-poll/main.tsx:1366:19");
+      ).toBe("apps/lunch-poll/main.tsx:1366:19");
     });
 
     it("names the authored site a handler id ends in", () => {
       expect(
         compactActionSite(
-          `handler:cf:module/${IDENTITY}/lunch-poll/card.tsx:62:2`,
+          `handler:cf:module/${IDENTITY}/apps/lunch-poll/card.tsx:62:2`,
         ),
-      ).toBe("lunch-poll/card.tsx:62:2");
+      ).toBe("apps/lunch-poll/card.tsx:62:2");
     });
 
     it("names the symbol of an action with no authored site", () => {
