@@ -654,7 +654,9 @@ flags it adopts from the deployment it runs against.
 - **Status (2026-10-27):** off by default. The browser shell takes both flags
   from its deployment rather than from its build, so a toolshed started with
   `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true` turns it on for the browsers
-  it serves, and a shell build define still pins either flag.
+  it serves, where the shell's resolved `serverExecution` is on as well (the
+  scope above). A shell build define still pins either flag, and
+  `serverExecution` too.
 
 
 ### `lazyMaterialization`
