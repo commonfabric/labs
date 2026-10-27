@@ -124,6 +124,9 @@ describe("harness-job continuation", () => {
       );
       const system = history.find((m) => m.role === "system")!.content;
       expect(system).toContain(
+        "You are cf-harness, an autonomous agent harness for Common Fabric work.",
+      );
+      expect(system).toContain(
         replace ? "Replacement instructions" : "Original instructions",
       );
       if (replace) expect(system).not.toContain("Original instructions");
