@@ -641,6 +641,17 @@ export class MultiRuntimeSession {
   }
 
   /**
+   * Have this session's runtime reconsider `space` after it was refused, as
+   * the shell's Retry does. A permanent refusal is retained until an ACL
+   * notice or an explicit retry, and a runtime the space refused holds no
+   * session there to carry a notice, so a read made after a grant finds the
+   * retained refusal until this is called.
+   */
+  async retrySpaceAccess(space: string): Promise<void> {
+    await this.#client.call("retrySpaceAccess", { space });
+  }
+
+  /**
    * Inspect the normalized link (id, space, scope) at `path` in the result,
    * or in another piece's result when `piece` is given, as for {@link read}.
    * The link at a path holding a piece is that piece's {@link PieceAddress}.

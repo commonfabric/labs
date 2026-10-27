@@ -194,7 +194,11 @@ describe("fabrichat add offer across runtimes", () => {
       );
     }
 
-    // Grace, a member of the room now, reads it, and none of Ada's adds.
+    // Grace, a member of the room now, reads it, and none of Ada's adds. Her
+    // runtime reached the room's space before the add admitted her, and
+    // retains that refusal, so it retries the space as her shell's Retry
+    // would.
+    await grace.retrySpaceAccess(room.space);
     expect(await grace.read(["about", "title"], { piece: room })).toBe(
       "Added",
     );
