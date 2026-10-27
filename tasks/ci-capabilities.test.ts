@@ -935,11 +935,15 @@ describe("the binaries a lane caches", () => {
   it("bakes no commit into any of them", () => {
     // A cached binary serves every commit whose sources match, so a commit
     // baked into it would be wrong at all but one of them.
-    for (const [on, off] of [[true, false], [false, true]]) {
+    for (const on of [true, false]) {
       for (const { bakes } of Object.values(cachedBinaries(on))) {
         expect(bakes.COMMIT_SHA).toBeUndefined();
       }
-      // The ON arm's binary bakes the flags that arm runs with besides.
+    }
+  });
+
+  it("bakes each role's arm, and on the ON arm the flags it runs with besides", () => {
+    for (const [on, off] of [[true, false], [false, true]]) {
       expect(cachedBinaries(on)["toolshed-baked-opposite"].bakes)
         .toEqual({
           EXPERIMENTAL_SERVER_EXECUTION: `${off}`,

@@ -189,6 +189,38 @@ describe("the pattern and package suites", () => {
     }
   });
 
+  it("runs each arm's suites under its lane's environment, before and after a default flip", async () => {
+    const current = serverExecutionCiLane("default").enabled;
+    for (const defaultEnabled of [current, !current]) {
+      const suites = [
+        ...await loadPatternSuites(root, defaultEnabled),
+        ...await loadPackageIntegrationSuites(root, defaultEnabled),
+      ];
+      for (
+        const [id, role] of [
+          ["pattern-integration", "default"],
+          ["package-integration", "default"],
+          ["pattern-integration-opposite", "opposite"],
+          ["package-integration-opposite", "opposite"],
+        ] as const
+      ) {
+        const lane = serverExecutionCiLane(role, defaultEnabled);
+        const suite = suites.find((candidate) => candidate.id === id)!;
+        const [invocation] = await suite.command(
+          [{ unit: suite.units[0]!, skip: [] }],
+          { root, outputDir: await outputDir(), spoolDir: "/spool" },
+        );
+        const label = `${id} with the default ${defaultEnabled}`;
+        expect(invocation!.env, label).toMatchObject(lane.environment);
+        // Web view-scoped replication rides the ON arm, whichever role it is.
+        expect(
+          invocation!.env?.EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION,
+          label,
+        ).toBe(lane.enabled ? "true" : undefined);
+      }
+    }
+  });
+
   it("names a skip list only where a leaf inside a unit is skipped", async () => {
     const suite = byId("pattern-integration");
     const out = await outputDir();

@@ -592,9 +592,11 @@ flags it adopts from the deployment it runs against.
 - **Default:** global `false`; web override absent. A web runtime resolves
   `webViewScopedReplication ?? viewScopedReplication ?? false`. An explicit web
   `false` overrides a global `true`. CI's server-execution ON arm sets the web
-  override `true` on its Toolshed servers, baked shells and integration test
-  processes (`SERVER_EXECUTION_ON_ENVIRONMENT` in
-  `tasks/server-execution-ci.ts`), and its OFF arm sets neither flag.
+  override `true` on its Toolshed servers, baked shells and the test processes
+  of its package- and pattern-integration suites
+  (`SERVER_EXECUTION_ON_ENVIRONMENT` in `tasks/server-execution-ci.ts`), and
+  its OFF arm sets neither flag. The setting follows the ON arm, so a flip of
+  `serverExecution`'s default moves it to the `default` role's lanes.
 - **Scope:** requires `serverExecution: true`, the browser-worker
   `clientClass: "web"` preset, and a server advertising
   `viewScopedReplicationV1`. Other client classes retain ordinary replication.

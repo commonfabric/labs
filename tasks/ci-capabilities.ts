@@ -182,7 +182,7 @@ export const COMPILE_CACHE_FILE = `${CACHE_DIR}/compile/lane.json`;
  * where it names none, and on the ON arm the flags it runs with besides.
  * `defaultEnabled` stands in for the first-party default where given.
  */
-function serverExecutionDefine(
+function serverExecutionEnvironment(
   role: ServerExecutionCiRole,
   defaultEnabled?: boolean,
 ): Record<string, string> {
@@ -223,7 +223,7 @@ export function cachedBinaries(
   const toolshed = (role: ServerExecutionCiRole): CachedBinary => ({
     build: "toolshed",
     bakes: {
-      ...serverExecutionDefine(role, defaultEnabled),
+      ...serverExecutionEnvironment(role, defaultEnabled),
       // A lane's binary is a test fixture, not a release: it takes the
       // compiler-input fingerprint as its compile-cache version rather than
       // the corpus compile a shipped build pays for.
@@ -516,7 +516,7 @@ function serverExecutionEnv(
   for (const name of Object.keys(SERVER_EXECUTION_ON_ENVIRONMENT)) {
     delete env[name];
   }
-  return { ...env, ...serverExecutionDefine(role) };
+  return { ...env, ...serverExecutionEnvironment(role) };
 }
 
 /** How a Toolshed server is started, whichever binary provides it. */
