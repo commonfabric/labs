@@ -151,9 +151,12 @@ spaces and route changes. Reads, access Retry, and ACL notices cannot trigger
 fresh admission attempts from that runtime. A permission denial without the
 marker remains per-space and can be reconsidered after an access event.
 
-An initial permanent admission refusal is retained just like a terminated
-session. A failed access Retry retains its refusal too, so ordinary reads do
-not each open another session. Transient failures remain recoverable.
+An initial permanent authorization or update-required refusal is retained just
+like a terminated session. A failed access Retry retains its permission refusal
+too, so ordinary reads do not each open another session. An unmarked
+`SessionRevokedError` on a failed open discards that mount, allowing a later
+operation to attempt admission again. This does not reopen an established
+session that was taken over. Transient failures remain recoverable.
 
 `StorageManager.clientUpdateRequired()` returns the retained explanation and
 whether writes were unconfirmed when the refusal was observed.

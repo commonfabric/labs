@@ -11995,7 +11995,6 @@ export class SpaceReplica
         if (this.#sessionHandle === handle) {
           const permanent = error instanceof Error && (
             isPermanentAuthorizationFailure(error) ||
-            error.name === "SessionRevokedError" ||
             MemoryV2Client.isClientUpdateRequiredError(error)
           );
           if (permanent && !this.#closed) {

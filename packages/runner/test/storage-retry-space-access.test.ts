@@ -323,6 +323,31 @@ describe("storage space access retry", () => {
     expect(manager.spaceSessionError(space)).toBeUndefined();
   });
 
+  it("reopens on a later read after an unmarked admission revocation", async () => {
+    await setAccess(true);
+    const failure = Object.assign(
+      new Error("resume token is no longer valid"),
+      {
+        name: "SessionRevokedError",
+      },
+    );
+    failNextGuestMount = failure;
+    const provider = manager.open(space);
+    expect((await provider.sync("of:refused-open")).error?.message).toBe(
+      failure.message,
+    );
+    expect(guestMounts).toBe(1);
+    expect(manager.spaceAccessError(space)).toBeUndefined();
+    expect(manager.clientUpdateRequired()).toBeUndefined();
+
+    expect((await provider.sync("of:after-refused-open")).error)
+      .toBeUndefined();
+    expect(guestMounts).toBe(2);
+    expect(manager.spaceSessionError(space)).toBeUndefined();
+    await manager.retrySpaceAccess(space);
+    expect(guestMounts).toBe(2);
+  });
+
   for (const name of ["SessionRevokedError", "AuthorizationError"]) {
     it(`retains an update-required ${name} across reads, Retry, ACL notices, and new spaces`, async () => {
       const failure = Object.assign(new Error("Update this runtime"), {
