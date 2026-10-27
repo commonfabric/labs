@@ -2262,10 +2262,10 @@ Deno.test("a set staged in parts counts toward the context's quotas from its fir
   });
   await t.step("a part after one the server could not read", async () => {
     const f = await fixture("staged-unread-part", {
-      limits: { watchesPerSession: 6 },
+      limits: { watchesPerContext: 6, watchesPerSession: 6 },
     });
     try {
-      const first = await f.open();
+      const first = await f.open(), second = await f.open();
       const part = (index: number, fields: Record<string, unknown>) =>
         set(f, first, { stage: "ab", part: index, more: true, ...fields });
       assertEquals((await part(0, { watches: watches("a", 2) })).ok, {
@@ -2275,25 +2275,31 @@ Deno.test("a set staged in parts counts toward the context's quotas from its fir
       // and the server refuses the part without ending the set it holds.
       const unread = await part(1, { watches: [], holdings: [1] });
       assert(unread.error !== undefined, JSON.stringify(unread));
-      // The refusal ended the set here, so the next part, which would follow
-      // the parts the server holds, is refused for good.
       const reasons = await refusalReasons(async () => {
+        // The held part's two IDs still count: five more would make seven.
+        assertEquals(
+          retriable(await set(f, second, { watches: watches("c", 5) })),
+          true,
+        );
+        // The refusal ended the set here, so the next part, which would
+        // follow the parts the server holds, is refused for good.
         const next = await part(1, { watches: watches("b", 1) });
         assert(next.error !== undefined, JSON.stringify(next));
         assertEquals(retriable(next), undefined);
       });
-      assertEquals(reasons, ["staged-set-not-held"]);
-      // A set sent again from its first part is taken.
-      assertEquals((await part(0, { watches: watches("c", 2) })).ok, {
+      assertEquals(reasons, ["watch-limit", "staged-set-not-held"]);
+      // A set sent again from its first part is taken, and counts as it is.
+      assertEquals((await part(0, { watches: watches("d", 2) })).ok, {
         staged: true,
       });
       assert(
         (await set(f, first, {
-          watches: watches("d", 1),
+          watches: watches("e", 1),
           stage: "ab",
           part: 1,
         })).ok,
       );
+      assert((await set(f, second, { watches: watches("c", 3) })).ok);
       assertEquals(f.socket.readyState, 1);
     } finally {
       await f.close();

@@ -2007,8 +2007,6 @@ export class RoutedMemoryHost {
           staged?: RoutedStagedSet;
           /** The usage the session counted before the mutation. */
           prior?: { principal: string; count: number; holdings: number };
-          /** The usage it counts if the server refuses the mutation. */
-          held: { principal: string; count: number; holdings: number };
         }>()
         : undefined;
     const closes = new Map<string, string>();
@@ -2296,15 +2294,19 @@ export class RoutedMemoryHost {
               undefined,
             );
           } else if (message.error !== undefined) {
-            // The server refused the mutation, which ends a set the session
-            // was staging there, and here: the session counts what it holds.
-            // A refusal made here is settled where it is made.
+            // The server refused the mutation, which ends the set the session
+            // was staging here, so no later part follows it. The server's
+            // ends too, unless it refused a message it could not read or a
+            // session whose lease ran out, and the answer does not say which:
+            // the session counts what it counted before the mutation until
+            // its next one is admitted. A refusal made here is settled where
+            // it is made.
             mutation.session.staged = undefined;
             this.#setUsage(
               ticket!.link,
               ticket!.context,
               mutation.key,
-              mutation.held,
+              mutation.prior,
             );
           } else if (mutation.staged !== undefined) {
             // A staged part changes nothing the session holds yet.
@@ -2908,9 +2910,9 @@ export class RoutedMemoryHost {
             // its unanswered watch mutation, and this host dispatches a
             // session's watch mutations one at a time. A refusal made here
             // leaves `session.staged` and its count, as the server still holds
-            // the set; the server's refusal ends both here, though a server
-            // that refused a message it could not read, or a session whose
-            // lease ran out, still holds the set's parts.
+            // the set; the server's refusal ends `session.staged` and leaves
+            // the count, as a server that refused a message it could not read,
+            // or a session whose lease ran out, still holds the set's parts.
             const set = body.type === "session.watch.set";
             // As the Memory server reads them from a set alone.
             requireRouted(
@@ -3000,7 +3002,6 @@ export class RoutedMemoryHost {
               throw new RoutedRequestRefusal("frame-limit");
             }
             const held = {
-              principal: session.principal,
               count: countWatches
                 ? (session.watches?.size ?? 0) + (session.views ?? 0)
                 : 0,
@@ -3031,7 +3032,6 @@ export class RoutedMemoryHost {
                 }
                 : {}),
               prior: ticket.context.usage.get(key),
-              held,
             });
             // A session staging a set counts the larger of what it holds and
             // what the set's parts so far make, from the first part until the

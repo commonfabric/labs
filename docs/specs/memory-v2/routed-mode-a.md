@@ -746,13 +746,17 @@ is applied or ends, the session counts toward every watch and holdings quota
 the larger of what it holds and what the parts so far make, since the server
 holds the parts meanwhile. A part the toolshed refuses leaves the set staged
 and counted, as the server still holds it. A refusal from the server ends the
-toolshed's count of the set, and the server's set too, unless the server
-refused a message it could not read or a session whose lease ran out: it then
-still holds the set's parts, which no count includes. So the toolshed and the
-router, each when it counts watches, views or holdings, deny for good a later
-part that does not follow the parts it counts (`staged-set-not-held` in the
-toolshed); the router ends its count of a set on any refusal from the toolshed.
-A client sends a refused set again from its first part, as the SDK does. The Memory server bounds the
+toolshed's record of the set, and the server's set too, unless the server
+refused a message it could not read or a session whose lease ran out, whose
+parts it then still holds; the answer does not say which, so the toolshed
+counts what the session counted before the refused request until its next
+watch mutation is admitted. The toolshed and the router, each when it counts
+watches, views or holdings, deny for good a later part that does not follow the
+parts it records (`staged-set-not-held` in the toolshed), so parts the server
+still holds are never applied. The router ends its record and its count of a
+set on any refusal from the toolshed, so its count can be below the toolshed's
+until then. A client sends a refused set again from its first part, as the SDK
+does. The Memory server bounds the
 characters of every set a connection is staging together
 ([04-protocol.md](04-protocol.md) section 4.3.5). The router holds a
 session's requests behind its unanswered watch mutation, so a set of `n` parts
