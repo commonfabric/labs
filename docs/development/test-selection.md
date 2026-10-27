@@ -326,8 +326,12 @@ The pattern integration suites make the Topics pivot session test and the
 seven Topics measurement files mandatory when the board or topic source
 changes. Changes to the Topics measurement inputs declared alongside that rule
 also require the measurement files. These declarations cover both
-server-execution arms, including after the default changes: the fixtures read
-authored source by path, so a change can break them without editing a test.
+server-execution arms, including after the default changes. The measurement
+fixtures reach authored lifts by name and attribute measurements to their
+source locations, so renaming or removing a lift can break them without
+editing a test. The declarations cover the board, topic, and listed
+measurement inputs; changes to their other imports remain subject to
+selection by score.
 
 A pull request's labels say how much it runs:
 

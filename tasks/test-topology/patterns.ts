@@ -167,9 +167,11 @@ async function patternIntegrationSuites(
         `${packageDir}/topics/main.tsx`,
         `${packageDir}/topics/topic.tsx`,
       ], changed);
-      // The measurement fixtures reach authored lifts by name and read their
-      // source from disk. Their shared inputs must select the tests even when
-      // none of the test files changes.
+      // The measurement fixtures reach authored lifts by name and attribute
+      // measurements to their source locations. Renaming or removing a lift
+      // can therefore break these fixtures without a test edit. This
+      // declaration covers the board, topic, and listed measurement inputs;
+      // their other imports remain subject to selection by score.
       const measurementsChanged = boardChanged || reachedByChange([
         `${packageDir}/integration/topics-headless-fixture.ts`,
         `${packageDir}/integration/topics-cost-cases.ts`,
