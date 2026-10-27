@@ -133,6 +133,8 @@ const SECTION_KEY_ORDER = "3-json-encoding.md section 10";
 const SECTION_HOLES = "3-json-encoding.md section 3, sparse array encoding";
 const SECTION_UNDEFINED = "3-json-encoding.md section 5";
 const SECTION_ESCAPES = "3-json-encoding.md section 6";
+const SECTION_ESCAPE_DISPATCH =
+  "3-json-encoding.md section 6, encoder dispatch";
 const SECTION_RESERVED_KEYS = "3-json-encoding.md section 4";
 const SECTION_SYMBOL = "3-json-encoding.md section 3, `Symbol@1`";
 const SECTION_BIGINT = "3-json-encoding.md section 3, `BigInt@1`";
@@ -353,32 +355,32 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   // Records with `/`-prefixed keys.
   {
     name: "slash key over a literal",
-    section: SECTION_ESCAPES,
+    section: SECTION_ESCAPE_DISPATCH,
     make: () => ({ "/a": 1 }),
   },
   {
     name: "slash key alone",
-    section: SECTION_ESCAPES,
+    section: SECTION_ESCAPE_DISPATCH,
     make: () => ({ "/": 1 }),
   },
   {
     name: "slash key over a value that needs encoding",
-    section: SECTION_ESCAPES,
+    section: SECTION_ESCAPE_DISPATCH,
     make: () => ({ "/a": 10n, b: [undefined] }),
   },
   {
     name: "slash keys nested over literals",
-    section: SECTION_ESCAPES,
+    section: SECTION_ESCAPE_DISPATCH,
     make: () => ({ "/a": { "/b": 1 } }),
   },
   {
     name: "slash keys nested over a value that needs encoding",
-    section: SECTION_ESCAPES,
+    section: SECTION_ESCAPE_DISPATCH,
     make: () => ({ "/a": { "/b": 1n } }),
   },
   {
     name: "object escape over literals",
-    section: SECTION_ESCAPES,
+    section: SECTION_ESCAPE_DISPATCH,
     text: 'fvj1:{"/object":{"/x":1}}',
   },
   {
