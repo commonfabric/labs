@@ -17,6 +17,9 @@ import {
   type HarnessTranscriptMessage,
   inspectHarnessTranscriptPairing,
 } from "./contracts/transcript.ts";
+import { assertInputCellNamesAvailable } from "./input-cells.ts";
+import type { HarnessInputCellSpec } from "./contracts/input-cells.ts";
+import { snapshotHarnessImageAttachment } from "./image-attachments.ts";
 import { assertValidHarnessHandleTable } from "./handle-table.ts";
 import { harnessResumeRefusal } from "./control-errors.ts";
 import { recordedSandboxRuntime } from "./sandbox/runtime-selection.ts";
@@ -183,12 +186,13 @@ export const NEXT_RUN_STATE_FIELDS = {
     reason: "Re-established against current session grants.",
   },
   inputCells: {
-    kind: "excluded",
-    reason: "Attachments are established for the new task.",
+    kind: "carried",
+    reason:
+      "Retains attachment names and tokens across follow-ups for collision checks.",
   },
   assignedPieces: {
-    kind: "excluded",
-    reason: "Session attachment selection is supplied by the turn host.",
+    kind: "carried",
+    reason: "Named pieces remain targets for follow-up requests.",
   },
   patternRefs: sourceRunEvidence,
   policyEvents: { kind: "re-derived", reason: "Fresh run policy evidence." },
@@ -233,6 +237,8 @@ export interface PrepareNextHarnessRunOptions {
   transcript?: readonly HarnessTranscriptMessage[];
   prompt?: string;
   imageAttachments?: readonly HarnessImageAttachment[];
+  imageSnapshotDir?: string;
+  inputCells?: readonly HarnessInputCellSpec[];
   runId?: string;
   artifactRoot?: string;
   structuredResult?: HarnessRunState["structuredResult"];
@@ -258,6 +264,11 @@ export const prepareNextHarnessRun = async (
   if (prior.handleTable !== undefined) {
     assertValidHarnessHandleTable(prior.handleTable);
   }
+  assertInputCellNamesAvailable(options.inputCells ?? [], [
+    ...(prior.inputCells ?? []).map((cell) => cell.name),
+    ...(prior.assignedPieces ?? []).map((piece) => piece.slug),
+    ...(prior.wellKnownGrants ?? []).map((grant) => grant.name),
+  ]);
   const source = options.transcript ?? [];
   const boundary = inspectHarnessTranscriptPairing(source).safeBoundary;
   const interrupted = boundary < source.length || prior.status !== "completed";
@@ -329,13 +340,18 @@ export const prepareNextHarnessRun = async (
   for (const content of context.messages) {
     transcript.push({ role: "user", content, turnLocal: true });
   }
+  const imageAttachments = await Promise.all(
+    (options.imageAttachments ?? []).map((attachment) =>
+      options.imageSnapshotDir === undefined
+        ? attachment
+        : snapshotHarnessImageAttachment(attachment, options.imageSnapshotDir)
+    ),
+  );
   if (options.prompt !== undefined) {
     transcript.push({
       role: "user",
       content: options.prompt,
-      ...(options.imageAttachments?.length
-        ? { imageAttachments: options.imageAttachments }
-        : {}),
+      ...(imageAttachments.length ? { imageAttachments } : {}),
     });
   }
   return {
@@ -397,6 +413,7 @@ export const prepareHarnessContinuation = async (
     ...options,
     runId,
     artifactRoot: runRoot,
+    imageSnapshotDir: join(runRoot, "image-attachments"),
     structuredResult,
   });
   return { ...next, structuredResult };
