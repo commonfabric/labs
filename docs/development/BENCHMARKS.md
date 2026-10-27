@@ -312,9 +312,8 @@ measurement.
   its own, in its own space, because sending a comment is a durable write that
   makes the commented topic the board's first card, which would leave `crossref`
   and `journey` opening a card with no citation to follow. Each iteration
-  comments on a topic that has none, so every iteration measures the same thing;
-  how cost grows with thread length is the headless probe's question, and its
-  thread cases run at 10, 100, and 1,000 comments.
+  comments on a topic that has none, so every iteration measures the same
+  thing.
 - `backlink` opens the topic the most siblings cite and waits for every row the
   topic's backlink derivation produces. `crossref` cannot measure that: it
   follows a citation outward from the board's first card, which is the newest
@@ -443,11 +442,11 @@ is the distinction `mayRunNothing` is scoped to.
 
 Widening the interval would not recover a lift run worth having. Of those four
 boundaries only the whole round trip yields one, and for the return leg:
-measuring the return to the board on its own records that same single
-`lastActivityOf` run with the same counters, while the reopen beside it records
-none. Charging this series for a board render is what widening that far would
-do, and the `<size>` series already measures it, at a hundred topics costing an
-order of magnitude more than the reopen.
+measuring the return to the board on its own records no run of a topic's own,
+since a topic's last activity is a stored value the board reads, while the
+reopen beside it records none. Charging this series for a board render is what
+widening that far would do, and the `<size>` series already measures it, at a
+hundred topics costing an order of magnitude more than the reopen.
 
 The sample reports `runsWithoutSource` beside its zero so that a zero taken
 next to such runs does not print identically to one taken next to no runs at
@@ -594,9 +593,8 @@ shell's runtime client, runs the operation, waits until the view has settled and
 the runtime is idle, and turns both off again. From the `scheduler.run.complete`
 markers it sums runs, `durationMs`, proxy accesses, the largest single run's
 accesses, link resolutions, distinct documents, and registered dependencies, in
-one row for the board's pivot (`crossrefTable`, the producer), one for each
-per-topic consumer (`backlinksOf`, `presentCommentCountOf`, and
-`lastActivityOf`), and one for every other run. It also records the scheduler
+one row for the board's pivot (`crossrefTable`, the producer), one for the
+per-topic consumer (`backlinksOf`), and one for every other run. It also records the scheduler
 graph's node and edge counts before and after, the operation's elapsed time, and
 the timing statistics the main thread and the worker accumulated over it, less
 the helper's own requests. A timing row sums spans that can overlap, so its
@@ -1384,12 +1382,13 @@ records the validated local count matrix and its limits.
 ## Topics computation cost probe
 
 Run `deno run -A --frozen scripts/topics-computation-cost.ts` from the
-repository root to measure the Topics board's mention pivot, each topic's
-backlink lookup, and a topic's comment and link aggregates over the headless
-fixture in `packages/patterns/integration/topics-headless-fixture.ts`. The
-fixture writes synthetic topics straight to emulated storage and runs the
-unmodified Topics lifts — `crossrefTable`, `backlinksOf`,
-`presentCommentCountOf`, and `lastActivityOf` — with no browser and no server.
+repository root to measure the Topics board's mention pivot and each topic's
+backlink lookup over the headless fixture in
+`packages/patterns/integration/topics-headless-fixture.ts`. The fixture writes
+synthetic topics straight to emulated storage and runs the unmodified Topics
+lifts — `crossrefTable` and `backlinksOf` — with no browser and no server. A
+topic's comment count and last activity are stored values its verbs keep in the
+write that changes them, so there is no derivation of theirs to measure.
 Each case runs in a process of its own, started with `--frozen` as well, so no
 process in a run writes `deno.lock`.
 
@@ -1463,46 +1462,28 @@ small pivot cases hold 4 topics, with as many mentions per source, up to four,
 as each graph allows. The fixture's documentation of
 `MentionGraph` says how each graph spreads its mentions.
 
-The thread cases hold four topics, each with 10, 100, or 1,000 comments and
-three links, then with 10, 100, or 1,000 links and three comments. The small
-thread case gives each topic one comment and one link.
-
 The pivot cases are recorded under three demand workloads. The first topic is
 the focus topic: the one `topic-open` opens. The mention phases change which
 topics mention it, and the comment and link phases edit it; the unrelated
 sibling edit changes a different topic, the last one.
 
-- `board`: a board loaded before any topic is opened, which demands none of the
-  four lifts. The probe does not measure it: each `board` case writes a sample
+- `board`: a board loaded before any topic is opened, which demands neither
+  lift. The probe does not measure it: each `board` case writes a sample
   recording `measured: false` and the reason, and starts no process.
-- `topic-open`: the board with the focus topic open, which demands the pivot,
-  the focus topic's backlinks, and its present comment count, but not its last
-  activity.
+- `topic-open`: the board with the focus topic open, which demands the pivot
+  and the focus topic's backlinks.
 - `all-backlinks`: the pivot and every topic's backlinks. This is a scaling
   probe, not what a board in use demands.
 
 The `board` and `topic-open` definitions come from one browser measurement of a
 small Topics board, with client execution, lazy materialization on, and card
-values already stored. Loading the board, before any topic was opened, ran none
-of the four lifts, since the cards read their stored values. Opening a topic ran
-the pivot and that topic's backlinks and comment count, but not its last
-activity. Returning to the board afterward ran that topic's last activity once;
-a board returned to after opening a topic is not one of the probe's workloads.
-That is one small sample. Server execution, and lazy materialization off, were
-not measured.
-
-The thread cases are measured under one workload, `aggregates`, which demands
-every topic's present comment count and last activity and nothing else. Those
-are the lifts that read a topic's comments, which the thread cases scale, and of
-the two the last activity reads the topic's links as well; no pivot workload
-demands a topic's last activity. The browser ran them only for the topic it
-opened, the comment count on opening that topic and its last activity on
-returning to the board; `aggregates` runs every topic's, so it is not what a
-board in use demands either.
+values already stored. Loading the board, before any topic was opened, ran
+neither lift, since the cards read their stored values. Opening a topic ran the
+pivot and that topic's backlinks. That is one small sample. Server execution,
+and lazy materialization off, were not measured.
 
 A case's ID names all of that, as
-`pivot/<graph>/mentions-<count>/topics-<count>/<workload>` or
-`thread/comments-<count>/links-<count>/aggregates`.
+`pivot/<graph>/mentions-<count>/topics-<count>/<workload>`.
 
 ### The phases
 
@@ -1523,9 +1504,7 @@ each measured from the start of its edit through settlement:
 - comment append, edit, and retraction on the focus topic;
 - link removal, which stamps the focus topic's first present link as removed;
 - an unrelated sibling edit, which writes the last topic's `title` and nothing
-  else. None of the measured lifts reads a title. A rename through a topic also
-  stamps `titleUpdatedAt`, which `lastActivityOf` reads, so this phase is not a
-  rename.
+  else. Neither measured lift reads a title.
 
 Where nothing mentions the focus topic, as in the `none` graph, mention removal
 is not measured and insertion starts from the second topic. The warm updates
@@ -1630,15 +1609,14 @@ The gated cases are:
 - the 4-topic `low-degree` pivot cases under `topic-open` and `all-backlinks`;
 - the 32-topic pivot cases under both workloads for the `high-degree` and
   `single-bucket` graphs at four mentions per source, and for the `low-degree`
-  graph at 16;
-- the thread cases with one comment and one link, with 100 comments, and with
-  100 links.
+  graph at 16.
 
-No `board` case is gated, since the probe measures none. Every gated pivot
-case holds 32 topics or the small case's 4, and no gated thread case holds more
-than 100 comments or links; the larger sizes run only from the probe. A
+No `board` case is gated, since the probe measures none. Every gated case holds
+32 topics or the small case's 4; the larger sizes run only from the probe. A
 regression that appears only above 32 topics is one the probe finds, not
-continuous integration.
+continuous integration. The `small-and-threads` group keeps the name its test
+file has carried: the thread cases it once held measured a topic's
+comment-count and last-activity lifts, which stored values replaced.
 
 Every measured phase of a gated case has a limit on each of five counts, read
 from its phase record:
@@ -1653,11 +1631,11 @@ from its phase record:
 
 The two read boundaries are the attempt and body boundaries that
 [read accounting](../features/read-accounting.md#execution-boundary) defines,
-and each count covers the complete settled operation: the pivot, lookup,
-aggregate, and every other run together. A limit is the largest count five runs
+and each count covers the complete settled operation: the pivot, lookup, and
+every other run together. A limit is the largest count five runs
 of the case observed, plus 10%, rounded up to an integer. A phase in which the
 case read nothing has a limit of zero on that count: the unrelated sibling edit
-is such a phase in every gated case, since no measured lift reads a title. A
+is such a phase in every gated case, since neither measured lift reads a title. A
 change that adds any read there exceeds the limit.
 
 Each limit has a negative control: a regression variant that grows the count the
@@ -1671,10 +1649,8 @@ lifts, in the same transaction:
   topic's title, the titles of the topics it mentions, and every stamp on its
   comments and links. Each warm update writes one of those, so the scan runs
   again in every phase.
-- `duplicate-demand`, assigned the graph counts of the pivot cases, starts a
-  second instance of each demanded lift, the pivot among them.
-- `per-record`, assigned the graph counts of the thread cases, starts a lift
-  for each comment position and each link position on every topic.
+- `duplicate-demand`, assigned the graph counts, starts a second instance of
+  each demanded lift, the pivot among them.
 
 Every limit is an upper bound, so the budget catches a change that reads more
 and is blind to one that reads differently. Lazy materialization turned back

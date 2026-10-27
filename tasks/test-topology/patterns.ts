@@ -159,11 +159,22 @@ async function patternIntegrationSuites(
         `${packageDir}/system/home.tsx`,
         `${packageDir}/system/shared-space-catalog.ts`,
       ], changed);
+      // Where the Topics board stores its mention pivot, and so whether a
+      // session that never runs the board reads it, is decided by the board's
+      // source; a topic's source computes the backlinks read out of it. The
+      // pivot integration reads both by path.
+      const boardChanged = reachedByChange([
+        `${packageDir}/topics/main.tsx`,
+        `${packageDir}/topics/topic.tsx`,
+      ], changed);
       return suite.units.filter((unit) =>
         changed.has(unit) ||
         (catalogChanged &&
           unit ===
-            `${packageDir}/integration/home-shared-space-catalog.test.ts`)
+            `${packageDir}/integration/home-shared-space-catalog.test.ts`) ||
+        (boardChanged &&
+          unit ===
+            `${packageDir}/integration/topic-board-pivot-sessions.test.ts`)
       );
     },
   }));

@@ -32,7 +32,6 @@ import {
   mentionersOf,
   type MentionGraph,
   pivotEntriesOf,
-  presentCommentCount,
   topicIndicesOf,
   TOPICS_LIFT_NAMES,
   type TopicsDemand,
@@ -79,23 +78,8 @@ const MENTION_SWEEP_TOPIC_COUNTS = [32, 128];
  */
 const MENTION_SWEEP = [0, 1, 4, 16];
 
-/** Comment and link counts the thread cases scale over, one at a time. */
-const THREAD_LENGTHS = [10, 100, 1_000];
-
-/** Comments and links on each topic of the small thread case. */
-const SMALL_THREAD_LENGTH = 1;
-
-/** Topics in every thread case. */
-const THREAD_TOPIC_COUNT = 4;
-
-/** The mention graph of every thread case. */
-const THREAD_MENTIONS: MentionGraph = { shape: "low-degree", perSource: 1 };
-
 /** The demand workloads each pivot case is recorded under. */
 const PIVOT_WORKLOADS = ["board", "topic-open", "all-backlinks"] as const;
-
-/** The demand workloads each thread case is measured under. */
-const THREAD_WORKLOADS = ["aggregates"] as const;
 
 /**
  * Why no `board` case is measured, which each `board` sample says in place of
@@ -117,17 +101,20 @@ export const BOARD_NOT_MEASURED =
 const FOCUS_TOPIC = 0;
 
 /** A demand workload, by name. */
-export type Workload =
-  | typeof PIVOT_WORKLOADS[number]
-  | typeof THREAD_WORKLOADS[number];
+export type Workload = typeof PIVOT_WORKLOADS[number];
 
 /** One case of the matrix. */
 export interface ProbeCase {
   /** Names the case in output, to `--filter`, and to the child that runs it. */
   readonly id: string;
 
-  /** The part of the matrix the case belongs to. */
-  readonly family: "pivot" | "thread";
+  /**
+   * The part of the matrix the case belongs to. Every case is a pivot case: the
+   * thread cases measured a topic's comment-count and last-activity lifts over
+   * long threads, and those are stored values a topic's verbs keep now, so
+   * there is no derivation of theirs to measure.
+   */
+  readonly family: "pivot";
 
   /** Whether `--small` selects the case. */
   readonly small: boolean;
@@ -191,25 +178,6 @@ export function probeCases(): ProbeCase[] {
       { topicCount, mentions },
     );
   };
-  const thread = (commentsPerTopic: number, linksPerTopic: number) => {
-    const byLinks = linksPerTopic !== DEFAULT_LINKS_PER_TOPIC;
-    add(
-      "thread",
-      THREAD_WORKLOADS,
-      commentsPerTopic === SMALL_THREAD_LENGTH &&
-        linksPerTopic === SMALL_THREAD_LENGTH,
-      [`comments-${commentsPerTopic}`, `links-${linksPerTopic}`],
-      byLinks ? 1 : 0,
-      byLinks ? linksPerTopic : commentsPerTopic,
-      {
-        topicCount: THREAD_TOPIC_COUNT,
-        mentions: THREAD_MENTIONS,
-        commentsPerTopic,
-        linksPerTopic,
-      },
-    );
-  };
-
   for (const shape of SPREADS) {
     for (const topicCount of [SMALL_TOPIC_COUNT, ...PIVOT_TOPIC_COUNTS]) {
       const most = shape === "single-bucket"
@@ -231,13 +199,6 @@ export function probeCases(): ProbeCase[] {
         pivot({ shape, perSource }, topicCount);
       }
     }
-  }
-  thread(SMALL_THREAD_LENGTH, SMALL_THREAD_LENGTH);
-  for (const length of THREAD_LENGTHS) {
-    thread(length, DEFAULT_LINKS_PER_TOPIC);
-  }
-  for (const length of THREAD_LENGTHS) {
-    thread(DEFAULT_COMMENTS_PER_TOPIC, length);
   }
   return cases;
 }
@@ -341,10 +302,6 @@ export interface MeasuredPhaseRecord {
   readonly bodies: {
     readonly producer: { readonly crossrefTable: BodyRecord };
     readonly consumer: { readonly backlinksOf: BodyRecord };
-    readonly aggregate: {
-      readonly presentCommentCountOf: BodyRecord;
-      readonly lastActivityOf: BodyRecord;
-    };
     readonly other: BodyRecord;
     readonly total: BodyRecord;
   };
@@ -353,10 +310,6 @@ export interface MeasuredPhaseRecord {
   readonly attempts: {
     readonly producer: { readonly crossrefTable: AttemptReads };
     readonly consumer: { readonly backlinksOf: AttemptReads };
-    readonly aggregate: {
-      readonly presentCommentCountOf: AttemptReads;
-      readonly lastActivityOf: AttemptReads;
-    };
     readonly other: AttemptReads;
     readonly unattributed: AttemptReads;
     readonly total: AttemptReads;
@@ -458,8 +411,6 @@ function demandOf(workload: Workload): TopicsDemand {
     case "topic-open":
       return { workload, topic: FOCUS_TOPIC };
     case "all-backlinks":
-      return { workload };
-    case "aggregates":
       return { workload };
   }
 }
@@ -671,12 +622,6 @@ interface DemandedOutputs {
 
   /** The topics whose backlinks it holds, in topic order. */
   readonly backlinks: readonly number[];
-
-  /** The topics whose present comment count it holds, in topic order. */
-  readonly commentCounts: readonly number[];
-
-  /** The topics whose last activity it holds, in topic order. */
-  readonly lastActivity: readonly number[];
 }
 
 /**
@@ -691,33 +636,11 @@ function demandedOutputsOf(
   const every = Array.from({ length: topicCount }, (_, index) => index);
   switch (demand.workload) {
     case "board":
-      return {
-        pivot: false,
-        backlinks: [],
-        commentCounts: [],
-        lastActivity: [],
-      };
+      return { pivot: false, backlinks: [] };
     case "topic-open":
-      return {
-        pivot: true,
-        backlinks: [demand.topic],
-        commentCounts: [demand.topic],
-        lastActivity: [],
-      };
+      return { pivot: true, backlinks: [demand.topic] };
     case "all-backlinks":
-      return {
-        pivot: true,
-        backlinks: every,
-        commentCounts: [],
-        lastActivity: [],
-      };
-    case "aggregates":
-      return {
-        pivot: false,
-        backlinks: [],
-        commentCounts: every,
-        lastActivity: every,
-      };
+      return { pivot: true, backlinks: every };
   }
 }
 
@@ -729,16 +652,8 @@ function demandedActionsOf(
   demand: TopicsDemand,
   topicCount: number,
 ): Record<TopicsLiftName, number> {
-  const { pivot, backlinks, commentCounts, lastActivity } = demandedOutputsOf(
-    demand,
-    topicCount,
-  );
-  return {
-    crossrefTable: pivot ? 1 : 0,
-    backlinksOf: backlinks.length,
-    presentCommentCountOf: commentCounts.length,
-    lastActivityOf: lastActivity.length,
-  };
+  const { pivot, backlinks } = demandedOutputsOf(demand, topicCount);
+  return { crossrefTable: pivot ? 1 : 0, backlinksOf: backlinks.length };
 }
 
 /**
@@ -758,8 +673,6 @@ function verifyOutputs(
   expect({
     pivot: outputs.table !== undefined,
     backlinks: [...outputs.backlinks.keys()],
-    commentCounts: [...outputs.commentCounts.keys()],
-    lastActivity: [...outputs.lastActivity.keys()],
   }).toEqual(demandedOutputsOf(demand, model.topics.length));
   if (outputs.table !== undefined) {
     expect(
@@ -776,18 +689,6 @@ function verifyOutputs(
     expect({ topic, backlinks: topicIndicesOf(seeded, backlinks) }).toEqual({
       topic,
       backlinks: mentionersOf(model, topic),
-    });
-  }
-  for (const [topic, commentCount] of outputs.commentCounts) {
-    expect({ topic, commentCount: commentCount.get() }).toEqual({
-      topic,
-      commentCount: presentCommentCount(model.topics[topic]),
-    });
-  }
-  for (const [topic, lastActivity] of outputs.lastActivity) {
-    expect({ topic, lastActivity: lastActivity.get() }).toEqual({
-      topic,
-      lastActivity: latestStamp(model.topics[topic]),
     });
   }
 }
@@ -859,20 +760,12 @@ function phaseRecord(
     bodies: {
       producer: { crossrefTable: bodyRecord(bodies.crossrefTable) },
       consumer: { backlinksOf: bodyRecord(bodies.backlinksOf) },
-      aggregate: {
-        presentCommentCountOf: bodyRecord(bodies.presentCommentCountOf),
-        lastActivityOf: bodyRecord(bodies.lastActivityOf),
-      },
       other: bodyRecord(bodies.other),
       total: bodyTotalOf(Object.values(bodies)),
     },
     attempts: {
       producer: { crossrefTable: { ...attempts.crossrefTable } },
       consumer: { backlinksOf: { ...attempts.backlinksOf } },
-      aggregate: {
-        presentCommentCountOf: { ...attempts.presentCommentCountOf },
-        lastActivityOf: { ...attempts.lastActivityOf },
-      },
       other: { ...attempts.other },
       unattributed: { ...attempts.unattributed },
       total: attemptTotalOf(Object.values(attempts)),

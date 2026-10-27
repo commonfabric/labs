@@ -7,7 +7,10 @@
  * `cancelled`, `interrupted`. Every move, and everything a job reports while
  * it runs, is appended as an event with the next `seq` for that job, in the
  * same transaction as the move, so a caller that has read up to `seq` and
- * asks for what follows misses nothing.
+ * asks for what follows misses nothing. Messages wait on the conversation's
+ * newest job, are delivered at a turn boundary, or open or move to its
+ * follow-up when it ends with a recorded run. Pending messages receive their
+ * outcome before the terminal event, which is always the job's last event.
  *
  * A job found `running` when the store opens was cut off by a stop or a
  * crash. It is ended `interrupted` and never run again: a job may already
@@ -101,6 +104,40 @@ export interface LocalJobEvent {
   body: Record<string, unknown>;
 }
 
+/** A caller's message, with its current delivery outcome. */
+export interface LocalJobMessage {
+  key: string;
+  target: string;
+  message: string;
+  instructions?: string;
+  acceptedAt: string;
+  delivery: "pending" | "delivered" | "follow-up" | "dropped";
+  jobId: string;
+  turn?: number;
+  reason?: "cancelled" | "not_continuable" | "interrupted";
+}
+
+/** The body a caller sends to the message route. */
+export interface LocalJobMessageRequest {
+  caller: string;
+  idempotencyKey: string;
+  message: string;
+  instructions?: string;
+}
+
+/** A refusal to accept a message. */
+export interface LocalJobMessageRefusal {
+  code:
+    | "not_found"
+    | "not_callers"
+    | "not_continuable"
+    | "instructions_on_steer"
+    | "cannot_steer"
+    | "unknown_profile"
+    | "idempotency_conflict";
+  error: string;
+}
+
 /** A job as a caller reads it. */
 export interface LocalJob {
   id: string;
@@ -109,6 +146,18 @@ export interface LocalJob {
   idempotencyKey: string;
   request: LocalJobRequest;
   state: LocalJobState;
+
+  /** The predecessor whose recorded run this job continues. */
+  continues?: string;
+
+  /** This job's sole follow-up, once one has opened. */
+  continuedBy?: string;
+
+  /** The message that opened this follow-up. */
+  openedBy?: LocalJobMessage;
+
+  /** Current records of messages that waited on this job, in acceptance order. */
+  messages: LocalJobMessage[];
 
   /** The `seq` of the job's latest event. */
   seq: number;
@@ -141,6 +190,9 @@ export interface LocalJob {
 
 /** The ending a running job is given. */
 export interface LocalJobEnding {
+  /** Whether the run left a complete checkpoint a follow-up can use. */
+  recordedRun?: boolean;
+
   state: "completed" | "failed" | "cancelled" | "interrupted";
   result?: unknown;
   errorCode?: string;
@@ -171,6 +223,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   created_at TEXT NOT NULL,
   started_at TEXT,
   finished_at TEXT,
+  continues TEXT REFERENCES jobs (id),
+  recorded_run INTEGER NOT NULL DEFAULT 0,
   UNIQUE (caller, idempotency_key)
 );
 CREATE TABLE IF NOT EXISTS job_events (
@@ -181,11 +235,31 @@ CREATE TABLE IF NOT EXISTS job_events (
   body_json TEXT NOT NULL,
   PRIMARY KEY (job_id, seq)
 );
+CREATE TABLE IF NOT EXISTS messages (
+  seq INTEGER PRIMARY KEY,
+  caller TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  target TEXT NOT NULL REFERENCES jobs (id),
+  message TEXT NOT NULL,
+  instructions TEXT,
+  accepted_at TEXT NOT NULL,
+  holder TEXT NOT NULL REFERENCES jobs (id),
+  delivery TEXT NOT NULL,
+  turn INTEGER,
+  reason TEXT,
+  opened_job TEXT REFERENCES jobs (id),
+  after_cancel INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (caller, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS messages_holder ON messages (holder, delivery, seq);
+CREATE UNIQUE INDEX IF NOT EXISTS messages_opened_job ON messages (opened_job);
 CREATE INDEX IF NOT EXISTS jobs_state ON jobs (state, created_at);
 `;
 
 /** A `jobs` row as SQLite returns it. */
 interface JobRow {
+  continues: string | null;
+  recorded_run: number;
   id: string;
   caller: string;
   profile: string;
@@ -201,6 +275,23 @@ interface JobRow {
   finished_at: string | null;
 }
 
+/** A message row as SQLite returns it. */
+interface MessageRow {
+  seq: number;
+  caller: string;
+  idempotency_key: string;
+  target: string;
+  message: string;
+  instructions: string | null;
+  accepted_at: string;
+  holder: string;
+  delivery: LocalJobMessage["delivery"];
+  turn: number | null;
+  reason: LocalJobMessage["reason"] | null;
+  opened_job: string | null;
+  after_cancel: number;
+}
+
 /** An event row as SQLite returns it. */
 interface EventRow {
   seq: number;
@@ -211,6 +302,9 @@ interface EventRow {
 
 /** The store, over one SQLite database it owns. */
 export class LocalJobStore {
+  #appended: [string, LocalJobEvent][] = [];
+  #notifications: [string, LocalJobEvent][] = [];
+  #notifying = false;
   #database: Database;
   #now: () => Date;
   #newId: () => string;
@@ -229,24 +323,9 @@ export class LocalJobStore {
     this.#newId = options.newId ?? (() => `job-${crypto.randomUUID()}`);
   }
 
-  /**
-   * Opens the store at `path`, creating it when absent; `":memory:"` opens
-   * one that lives as long as the process.
-   */
-  static open(
-    path: string,
-    options: { now?: () => Date; newId?: () => string } = {},
-  ): LocalJobStore {
-    const database = new Database(path, { create: true });
-    try {
-      database.exec(PRAGMAS);
-      database.exec(INIT);
-    } catch (error) {
-      database.close();
-      throw error;
-    }
-    return new LocalJobStore(database, options);
-  }
+  //
+  // Instance members
+  //
 
   /** Closes the database. */
   close(): void {
@@ -276,42 +355,175 @@ export class LocalJobStore {
     idempotencyKey: string,
     request: LocalJobRequest,
   ): { job: LocalJob; created: boolean } | { conflict: string } {
-    const requestJson = JSON.stringify(request);
-    const existing = this.#database.prepare(`
-      SELECT * FROM jobs WHERE caller = :caller AND idempotency_key = :key
-    `).get({ caller, key: idempotencyKey }) as JobRow | undefined;
-    if (existing !== undefined) {
-      if (
-        existing.profile !== profile ||
-        hashStringOf(JSON.parse(existing.request_json)) !==
-          hashStringOf(JSON.parse(requestJson))
-      ) {
-        return {
-          conflict:
-            `The idempotency key \`${idempotencyKey}\` already names a different request.`,
-        };
+    const result = this.#write(() => {
+      const conflict = {
+        conflict:
+          `The idempotency key \`${idempotencyKey}\` already names a different request.`,
+      };
+      if (this.#messageRow(caller, idempotencyKey) !== undefined) {
+        return conflict;
       }
-      return { job: this.#view(existing), created: false };
-    }
-    const id = this.#newId();
-    const at = this.#now().toISOString();
-    const appended = this.#write(() => {
-      this.#database.prepare(`
-        INSERT INTO jobs (id, caller, profile, idempotency_key, request_json,
-          state, created_at)
-        VALUES (:id, :caller, :profile, :key, :request, 'queued', :at)
-      `).run({
-        id,
-        caller,
-        profile,
-        key: idempotencyKey,
-        request: requestJson,
-        at,
-      });
-      return [this.#append(id, "state", { state: "queued" }, at)];
+      const existing = this.#database.prepare(`
+        SELECT * FROM jobs WHERE caller = :caller AND idempotency_key = :key
+      `).get({ caller, key: idempotencyKey }) as JobRow | undefined;
+      if (existing !== undefined) {
+        if (
+          existing.profile !== profile ||
+          hashStringOf(JSON.parse(existing.request_json)) !==
+            hashStringOf(JSON.parse(JSON.stringify(request)))
+        ) return conflict;
+        return { id: existing.id, created: false };
+      }
+      return {
+        id: this.#insert(
+          caller,
+          profile,
+          idempotencyKey,
+          request,
+          this.#now().toISOString(),
+        ),
+        created: true,
+      };
     });
-    this.#notify(id, appended);
-    return { job: this.get(id)!, created: true };
+    return "conflict" in result
+      ? result
+      : { job: this.get(result.id)!, created: result.created };
+  }
+
+  /**
+   * Accepts or replays a caller's message in conversation order. Replay is
+   * resolved before the head or its state; only a new follow-up checks the
+   * host's profile availability.
+   */
+  acceptMessage(
+    target: string,
+    request: LocalJobMessageRequest,
+    options: {
+      canSteer: boolean;
+      canOpenFollowUp?: (profile: string) => boolean;
+    },
+  ):
+    | { message: LocalJobMessage; job: LocalJob; created: boolean }
+    | LocalJobMessageRefusal {
+    const result = this.#write(
+      (): { created: boolean } | LocalJobMessageRefusal => {
+        const { caller, idempotencyKey: key, message, instructions } = request;
+        const conflict: LocalJobMessageRefusal = {
+          code: "idempotency_conflict",
+          error: "The key already names another request.",
+        };
+        const existing = this.#messageRow(caller, key);
+        if (existing !== undefined) {
+          return existing.target === target && existing.message === message &&
+              existing.instructions === (instructions ?? null)
+            ? { created: false }
+            : conflict;
+        }
+        if (
+          this.#database.prepare(
+            "SELECT id FROM jobs WHERE caller = :caller AND idempotency_key = :key",
+          ).get({ caller, key }) !== undefined
+        ) return conflict;
+        let head = this.#row(target);
+        if (head === undefined) {
+          return { code: "not_found", error: "No such job." };
+        }
+        if (head.caller !== caller) {
+          return {
+            code: "not_callers",
+            error: "The job belongs to another caller.",
+          };
+        }
+        for (;;) {
+          const next = this.#database.prepare(
+            "SELECT * FROM jobs WHERE continues = :id",
+          ).get({ id: head.id }) as JobRow | undefined;
+          if (next === undefined) break;
+          head = next;
+        }
+        const finished = LOCAL_JOB_TERMINAL_STATES.has(head.state);
+        if (
+          finished && (head.recorded_run === 0 || head.state === "interrupted")
+        ) {
+          return {
+            code: "not_continuable",
+            error: "The head has no recorded run to continue.",
+          };
+        }
+        if (!finished && head.cancel_requested_at === null) {
+          if (instructions !== undefined) {
+            return {
+              code: "instructions_on_steer",
+              error: "A steer cannot replace the run's instructions.",
+            };
+          }
+          if (!options.canSteer) {
+            return {
+              code: "cannot_steer",
+              error: "The lane cannot take messages during a run.",
+            };
+          }
+        }
+        if (finished && options.canOpenFollowUp?.(head.profile) === false) {
+          return {
+            code: "unknown_profile",
+            error: "The host no longer names the head's profile.",
+          };
+        }
+        const at = this.#now().toISOString();
+        this.#database.prepare(`
+        INSERT INTO messages (caller, idempotency_key, target, message, instructions,
+          accepted_at, holder, delivery, after_cancel)
+        VALUES (:caller, :key, :target, :message, :instructions, :at, :holder, 'pending', :after)
+      `).run({
+            caller,
+            key,
+            target,
+            message,
+            instructions: instructions ?? null,
+            at,
+            holder: head.id,
+            after: head.cancel_requested_at === null ? 0 : 1,
+          });
+        if (finished) {
+          this.#openFollowUp(head, this.#messageRow(caller, key)!, at);
+        } else {
+          this.#append(
+            head.id,
+            "message",
+            { key, delivery: "pending" },
+            at,
+          );
+        }
+        return { created: true };
+      },
+    );
+    if ("code" in result) return result;
+    const message = messageOf(
+      this.#messageRow(request.caller, request.idempotencyKey)!,
+    );
+    return { message, job: this.get(message.jobId)!, created: result.created };
+  }
+
+  /** Takes the answerable prefix of waiting messages for a running turn. */
+  takeMessages(id: string, turn: number): string[] {
+    return this.#write(() => {
+      if (this.#row(id)?.state !== "running") return [];
+      const taken: string[] = [];
+      for (const row of this.#waiting(id)) {
+        if (row.instructions !== null || row.after_cancel !== 0) break;
+        this.#database.prepare(
+          "UPDATE messages SET delivery = 'delivered', turn = :turn WHERE seq = :seq",
+        ).run({ turn, seq: row.seq });
+        this.#append(id, "message", {
+          key: row.idempotency_key,
+          delivery: "delivered",
+          turn,
+        }, this.#now().toISOString());
+        taken.push(row.message);
+      }
+      return taken;
+    });
   }
 
   /** The job named `id`, or `undefined`. */
@@ -350,7 +562,6 @@ export class LocalJobStore {
       if (row?.state !== "running") return [];
       return [this.#append(id, kind, body, this.#now().toISOString())];
     });
-    this.#notify(id, appended);
     return appended[0];
   }
 
@@ -361,7 +572,7 @@ export class LocalJobStore {
    */
   requestCancel(id: string): LocalJob | undefined {
     const at = this.#now().toISOString();
-    const appended = this.#write(() => {
+    this.#write(() => {
       const row = this.#row(id);
       if (row === undefined || LOCAL_JOB_TERMINAL_STATES.has(row.state)) {
         return [];
@@ -372,6 +583,7 @@ export class LocalJobStore {
           UPDATE jobs SET state = 'cancelled', cancel_requested_at = :at,
             finished_at = :at WHERE id = :id
         `).run({ id, at });
+        this.#settleMessages(row, "cancelled", false, at);
         return [this.#append(id, "state", { state: "cancelled" }, at)];
       }
       this.#database.prepare(
@@ -379,7 +591,6 @@ export class LocalJobStore {
       ).run({ id, at });
       return [this.#append(id, "cancel", { requestedAt: at }, at)];
     });
-    this.#notify(id, appended);
     return this.get(id);
   }
 
@@ -387,7 +598,7 @@ export class LocalJobStore {
   claimNext(): LocalJob | undefined {
     const at = this.#now().toISOString();
     let claimed: string | undefined;
-    const appended = this.#write(() => {
+    this.#write(() => {
       const row = this.#database.prepare(`
         SELECT id FROM jobs WHERE state = 'queued'
         ORDER BY created_at, rowid LIMIT 1
@@ -401,7 +612,6 @@ export class LocalJobStore {
       return [this.#append(row.id, "state", { state: "running" }, at)];
     });
     if (claimed === undefined) return undefined;
-    this.#notify(claimed, appended);
     return this.get(claimed);
   }
 
@@ -418,13 +628,15 @@ export class LocalJobStore {
         ? "cancelled"
         : ending.state;
       const completed = state === "completed";
+      const recorded = ending.recordedRun === true && state !== "interrupted";
       this.#database.prepare(`
         UPDATE jobs SET state = :state, result_json = :result,
-          error_code = :error_code, report_json = :report, finished_at = :at
+          error_code = :error_code, report_json = :report, finished_at = :at, recorded_run = :recorded
         WHERE id = :id
       `).run({
         id,
         state,
+        recorded: recorded ? 1 : 0,
         result: completed ? JSON.stringify(ending.result ?? null) : null,
         error_code: completed || state === "cancelled"
           ? null
@@ -434,6 +646,7 @@ export class LocalJobStore {
           : JSON.stringify(ending.report),
         at,
       });
+      this.#settleMessages(row, state, recorded, at);
       return [this.#append(
         id,
         "state",
@@ -454,7 +667,6 @@ export class LocalJobStore {
       )];
     });
     if (appended.length === 0) return undefined;
-    this.#notify(id, appended);
     return this.get(id);
   }
 
@@ -466,16 +678,18 @@ export class LocalJobStore {
   recover(): string[] {
     const at = this.#now().toISOString();
     const ids: string[] = [];
-    const appended = this.#write(() => {
+    this.#write(() => {
       const rows = this.#database.prepare(
-        "SELECT id FROM jobs WHERE state = 'running'",
-      ).all() as { id: string }[];
-      return rows.map(({ id }) => {
+        "SELECT * FROM jobs WHERE state = 'running'",
+      ).all() as JobRow[];
+      return rows.map((row) => {
+        const { id } = row;
         ids.push(id);
         this.#database.prepare(`
-          UPDATE jobs SET state = 'interrupted', error_code = :code,
+          UPDATE jobs SET state = 'interrupted', error_code = :code, recorded_run = 0,
             finished_at = :at WHERE id = :id
         `).run({ id, code: RUNNER_RESTARTED, at });
+        this.#settleMessages(row, "interrupted", false, at);
         return this.#append(
           id,
           "state",
@@ -484,13 +698,142 @@ export class LocalJobStore {
         );
       });
     });
-    ids.forEach((id, index) => this.#notify(id, [appended[index]]));
     return ids;
+  }
+
+  /** Inserts an enqueue or a follow-up with its initial state event. */
+  #insert(
+    caller: string,
+    profile: string,
+    key: string,
+    request: LocalJobRequest,
+    at: string,
+    continues?: string,
+  ): string {
+    const id = this.#newId();
+    this.#database.prepare(
+      `INSERT INTO jobs (id, caller, profile, idempotency_key,
+      request_json, state, created_at, continues)
+      VALUES (:id, :caller, :profile, :key, :request, 'queued', :at, :continues)`,
+    )
+      .run({
+        id,
+        caller,
+        profile,
+        key,
+        request: JSON.stringify(request),
+        at,
+        continues: continues ?? null,
+      });
+    this.#append(id, "state", { state: "queued" }, at);
+    return id;
+  }
+
+  /** Reads a message by its caller's key inside a transaction. */
+  #messageRow(caller: string, key: string): MessageRow | undefined {
+    return this.#database.prepare(
+      "SELECT * FROM messages WHERE caller = :caller AND idempotency_key = :key",
+    ).get({ caller, key }) as MessageRow | undefined;
+  }
+
+  /** Reads a holder's waiting messages in acceptance order. */
+  #waiting(id: string): MessageRow[] {
+    return this.#database.prepare(
+      "SELECT * FROM messages WHERE holder = :id AND delivery = 'pending' ORDER BY seq",
+    ).all({ id }) as MessageRow[];
+  }
+
+  /** Opens the sole follow-up and records the message that opened it. */
+  #openFollowUp(head: JobRow, message: MessageRow, at: string): string {
+    const request: LocalJobRequest = JSON.parse(head.request_json);
+    const id = this.#insert(
+      head.caller,
+      head.profile,
+      message.idempotency_key,
+      {
+        ...request,
+        task: message.message,
+        ...(message.instructions !== null
+          ? { instructions: message.instructions }
+          : {}),
+      },
+      at,
+      head.id,
+    );
+    this.#database.prepare(
+      "UPDATE messages SET holder = :id, opened_job = :id, delivery = 'follow-up', after_cancel = 0 WHERE seq = :seq",
+    ).run({ id, seq: message.seq });
+    return id;
+  }
+
+  /** Gives waiting messages their outcome before the holder's terminal event. */
+  #settleMessages(
+    row: JobRow,
+    state: LocalJobState,
+    recorded: boolean,
+    at: string,
+  ): void {
+    let followUp: string | undefined;
+    for (const message of this.#waiting(row.id)) {
+      const reason = state === "cancelled" && message.after_cancel === 0
+        ? "cancelled"
+        : !recorded
+        ? state === "interrupted" ? "interrupted" : "not_continuable"
+        : undefined;
+      const key = message.idempotency_key;
+      if (reason !== undefined) {
+        this.#database.prepare(
+          "UPDATE messages SET delivery = 'dropped', reason = :reason WHERE seq = :seq",
+        ).run({ reason, seq: message.seq });
+        this.#append(
+          row.id,
+          "message",
+          { key, delivery: "dropped", reason },
+          at,
+        );
+      } else if (followUp === undefined) {
+        followUp = this.#openFollowUp(row, message, at);
+        this.#append(row.id, "message", {
+          key,
+          delivery: "follow-up",
+          jobId: followUp,
+        }, at);
+      } else {
+        this.#database.prepare(
+          "UPDATE messages SET holder = :id, after_cancel = 0 WHERE seq = :seq",
+        ).run({ id: followUp, seq: message.seq });
+        this.#append(row.id, "message", {
+          key,
+          delivery: "moved",
+          jobId: followUp,
+        }, at);
+        this.#append(followUp, "message", { key, delivery: "pending" }, at);
+      }
+    }
   }
 
   /** Helper for writes, which runs `body` in one immediate transaction. */
   #write<T>(body: () => T): T {
-    return this.#database.transaction(body).immediate();
+    this.#appended = [];
+    let result: T;
+    try {
+      result = this.#database.transaction(body).immediate();
+      for (const event of this.#appended) this.#notifications.push(event);
+    } finally {
+      this.#appended = [];
+    }
+    if (!this.#notifying) {
+      this.#notifying = true;
+      try {
+        while (this.#notifications.length) {
+          const [id, event] = this.#notifications.shift()!;
+          this.#notify(id, [event]);
+        }
+      } finally {
+        this.#notifying = false;
+      }
+    }
+    return result;
   }
 
   /** Helper for writes, which reads one row inside the open transaction. */
@@ -514,7 +857,9 @@ export class LocalJobStore {
       INSERT INTO job_events (job_id, seq, at, kind, body_json)
       VALUES (:id, :seq, :at, :kind, :body)
     `).run({ id, seq, at, kind, body: JSON.stringify(body) });
-    return { seq, at, kind, body };
+    const event = { seq, at, kind, body };
+    this.#appended.push([id, event]);
+    return event;
   }
 
   /** Helper for writes, which tells subscribers of committed events. */
@@ -527,6 +872,20 @@ export class LocalJobStore {
   /** Helper for reads, which builds a job's view from its row and events. */
   #view(row: JobRow): LocalJob {
     const events = this.events(row.id);
+    const continuedBy = this.#database.prepare(
+      "SELECT id FROM jobs WHERE continues = :id",
+    ).get({ id: row.id }) as { id: string } | undefined;
+    const openedBy = this.#database.prepare(
+      "SELECT * FROM messages WHERE opened_job = :id",
+    ).get({ id: row.id }) as MessageRow | undefined;
+    const messages = this.#database.prepare(`
+      SELECT m.* FROM job_events e JOIN messages m
+        ON m.caller = :caller
+        AND m.idempotency_key = json_extract(e.body_json, '$.key')
+      WHERE e.job_id = :id AND e.kind = 'message'
+        AND json_extract(e.body_json, '$.delivery') = 'pending'
+      ORDER BY m.seq
+    `).all({ caller: row.caller, id: row.id }) as MessageRow[];
     const steps = events.filter((event) => event.kind === "step");
     const errorDetail = events.findLast((event) => event.kind === "state")
       ?.body.errorDetail;
@@ -537,6 +896,10 @@ export class LocalJobStore {
       idempotencyKey: row.idempotency_key,
       request: JSON.parse(row.request_json),
       state: row.state,
+      ...(row.continues !== null ? { continues: row.continues } : {}),
+      ...(continuedBy !== undefined ? { continuedBy: continuedBy.id } : {}),
+      ...(openedBy !== undefined ? { openedBy: messageOf(openedBy) } : {}),
+      messages: messages.map(messageOf),
       seq: events.at(-1)?.seq ?? 0,
       ...(steps.length > 0 ? { step: steps.at(-1)!.body } : {}),
       commands: events.filter((event) => event.kind === "command").map((
@@ -558,6 +921,45 @@ export class LocalJobStore {
       ...(row.finished_at !== null ? { finishedAt: row.finished_at } : {}),
     };
   }
+
+  //
+  // Static members
+  //
+
+  /**
+   * Opens the store at `path`, creating it when absent; `":memory:"` opens
+   * one that lives as long as the process.
+   */
+  static open(
+    path: string,
+    options: { now?: () => Date; newId?: () => string } = {},
+  ): LocalJobStore {
+    const database = new Database(path, { create: true });
+    try {
+      database.exec(PRAGMAS);
+      database.exec(INIT);
+      const columns = database.prepare("PRAGMA table_info(jobs)").all() as {
+        name: string;
+      }[];
+      for (
+        const [name, declaration] of [
+          ["continues", "TEXT REFERENCES jobs (id)"],
+          ["recorded_run", "INTEGER NOT NULL DEFAULT 0"],
+        ]
+      ) {
+        if (!columns.some((column) => column.name === name)) {
+          database.exec(`ALTER TABLE jobs ADD COLUMN ${name} ${declaration}`);
+        }
+      }
+      database.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS jobs_continues ON jobs (continues)",
+      );
+    } catch (error) {
+      database.close();
+      throw error;
+    }
+    return new LocalJobStore(database, options);
+  }
 }
 
 /** Helper for reads, which decodes one event row. */
@@ -566,4 +968,17 @@ const eventOf = (row: EventRow): LocalJobEvent => ({
   at: row.at,
   kind: row.kind,
   body: JSON.parse(row.body_json),
+});
+
+/** Decodes the current public record of a message. */
+const messageOf = (row: MessageRow): LocalJobMessage => ({
+  key: row.idempotency_key,
+  target: row.target,
+  message: row.message,
+  ...(row.instructions !== null ? { instructions: row.instructions } : {}),
+  acceptedAt: row.accepted_at,
+  delivery: row.delivery,
+  jobId: row.holder,
+  ...(row.turn !== null ? { turn: row.turn } : {}),
+  ...(row.reason !== null ? { reason: row.reason } : {}),
 });

@@ -28,6 +28,7 @@ export const LOCAL_JOB_ROUTES = [
   { method: "POST", path: "/jobs" },
   { method: "GET", path: "/jobs/:id" },
   { method: "POST", path: "/jobs/:id/cancel" },
+  { method: "POST", path: "/jobs/:id/messages" },
   { method: "GET", path: "/jobs/:id/events" },
   { method: "GET", path: "/jobs/:id/browser/stream" },
   { method: "POST", path: "/jobs/:id/browser/result" },
