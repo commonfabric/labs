@@ -137,7 +137,8 @@ const foreignSpacesOf = async (
  * `inputs` become the run's input cells, each held by the model as a handle,
  * and the space of each one living outside the profile's is admitted for the
  * run on the host the request's `foreignSpaces` names for it; `narrowLocalJobProfile` has already refused them
- * under a profile with no fabric session.
+ * under a profile with no fabric session. A follow-up's `continueFrom` names
+ * its predecessor's run root under the lane's `workRoot`.
  *
  * SHORTCUT: context reaches the model inside the system prompt, marked as
  * data rather than instructions, because a batch job has one prompt slot and
@@ -145,6 +146,7 @@ const foreignSpacesOf = async (
  * To harden, give the harness a prompt slot of role `quote` for caller data.
  *
  * @throws Error when the profile's identity key cannot be read.
+ * @throws Error when a follow-up is given without `workRoot`.
  */
 export const localJobSpecOf = async (
   job: LocalJob,

@@ -185,6 +185,37 @@ describe("runHarnessJob()", () => {
       return loopResult(runRoot);
     };
 
+  describe("pending continuation wiring", () => {
+    for (const seam of ["continueFrom", "takeMessages"] as const) {
+      it(`refuses ${seam} before creating the run root`, async () => {
+        const nextRunRoot = join(runRoot, "uncreated-run");
+        const spec = plainSpec(
+          seam === "continueFrom"
+            ? { continueFrom: { runRoot: join(runRoot, "predecessor") } }
+            : {},
+        );
+        const job = runHarnessJob(spec, {
+          runRoot: nextRunRoot,
+          signal: new AbortController().signal,
+          ...(seam === "takeMessages" ? { takeMessages: () => [] } : {}),
+          harnessDeps: {
+            env: SCRIPTED_ENV,
+            createPromptLoop: () => ({
+              runPrompt: () => Promise.resolve(loopResult(nextRunRoot)),
+              runTranscript: () =>
+                Promise.reject(new Error("unexpected continuation")),
+            }),
+          },
+        });
+
+        await expect(job).rejects.toThrow("Harness wiring is pending stage 4");
+        await expect(Deno.lstat(nextRunRoot)).rejects.toThrow(
+          Deno.errors.NotFound,
+        );
+      });
+    }
+  });
+
   for (const valid of [true, false]) {
     it(`keeps the real loop's final-turn ${valid ? "submission" : "failure report"}`, async () => {
       let calls = 0;

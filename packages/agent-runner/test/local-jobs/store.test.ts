@@ -282,6 +282,111 @@ describe("local-jobs/store", () => {
       }
     });
 
+    it("notifies both listeners in per-job sequence order across reentrant writes", () => {
+      const store = openStore();
+      const first: [string, LocalJobEvent][] = [];
+      const second: [string, LocalJobEvent][] = [];
+      let claimed: string | undefined;
+      let taken: string[] | undefined;
+      try {
+        store.subscribe((id, event) => {
+          first.push([id, event]);
+          if (
+            event.kind === "state" && event.body.state === "queued" &&
+            store.get(id)?.continues === "job-1"
+          ) {
+            claimed = store.claimNext()?.id;
+            taken = store.takeMessages(id, 1);
+            store.finish(id, { state: "completed", recordedRun: true });
+          }
+        });
+        store.subscribe((id, event) => second.push([id, event]));
+        store.enqueue("cfs:weaver", "ask", "initial", request());
+        store.claimNext();
+        accept(store, "job-1", "A");
+        accept(store, "job-1", "B");
+        accept(store, "job-1", "C");
+
+        store.finish("job-1", { state: "completed", recordedRun: true });
+
+        expect(claimed).toBe("job-2");
+        expect(taken).toEqual(["B", "C"]);
+        expect(store.get("job-2")?.state).toBe("completed");
+        expect(first).toEqual(second);
+        for (const seen of [first, second]) {
+          for (const id of ["job-1", "job-2"]) {
+            expect(seen.filter(([job]) => job === id).map(([, event]) => event))
+              .toEqual(store.events(id));
+          }
+        }
+        expect(
+          store.events("job-2").map((event) =>
+            event.body.delivery ?? event.body.state
+          ),
+        ).toEqual([
+          "queued",
+          "pending",
+          "pending",
+          "running",
+          "delivered",
+          "delivered",
+          "completed",
+        ]);
+      } finally {
+        store.close();
+      }
+    });
+
+    it("notifies nothing on rollback and only committed events on the next write", () => {
+      let fail = false;
+      let clockCalls = 0;
+      const store = LocalJobStore.open(":memory:", {
+        now: () => {
+          if (fail && ++clockCalls === 2) {
+            throw new Error("second append failed");
+          }
+          return new Date("2026-10-05T12:00:00.000Z");
+        },
+      });
+      const seen: [string, LocalJobEvent][] = [];
+      try {
+        const { job } = added(
+          store.enqueue("cfs:weaver", "ask", "initial", request()),
+        );
+        store.claimNext();
+        accept(store, job.id, "A");
+        accept(store, job.id, "B");
+        store.subscribe((id, event) => seen.push([id, event]));
+        const before = store.get(job.id)!;
+        const eventsBefore = store.events(job.id);
+
+        fail = true;
+        expect(() => store.takeMessages(job.id, 2)).toThrow(
+          "second append failed",
+        );
+
+        expect(seen).toEqual([]);
+        expect(store.get(job.id)).toEqual(before);
+        expect(store.events(job.id)).toEqual(eventsBefore);
+
+        fail = false;
+        expect(store.takeMessages(job.id, 7)).toEqual(["A", "B"]);
+        expect(seen).toEqual(
+          store.events(job.id, before.seq).map((event) => [job.id, event]),
+        );
+        expect(seen.map(([, event]) => event.body)).toEqual([
+          { key: "A", delivery: "delivered", turn: 7 },
+          { key: "B", delivery: "delivered", turn: 7 },
+        ]);
+        expect(store.get(job.id)?.messages).toMatchObject([
+          { key: "A", delivery: "delivered", turn: 7 },
+          { key: "B", delivery: "delivered", turn: 7 },
+        ]);
+      } finally {
+        store.close();
+      }
+    });
+
     for (const queuedC of [false, true]) {
       it(`keeps instruction replacements in separate follow-ups with C ${queuedC ? "accepted while queued" : "moved after cancellation"}`, () => {
         const store = seed();
