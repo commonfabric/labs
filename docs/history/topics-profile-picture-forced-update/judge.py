@@ -2,10 +2,13 @@
 
     python3 -I tools/judge.py <pass dir> <pristine fingerprint json>
 
-Reports the gate's decisions, the applies, the diffs, the kept scan, and the
-authored-content check: every entity whose hash changed between the pristine
-fingerprint and the pass's, by kind. A changed free-cell is a clobber to
-investigate; a changed owned-cell is the migration doing its job.
+Reports the gate's decisions, the applies, the diffs, the kept scan, and every
+entity whose hash changed between the pristine fingerprint and the pass's, by
+kind, writing the changed free-cells out for `field-diff.ts`. That breakdown is
+not the authored-content check: a Topic's argument fingerprints as an
+owned-cell, so a clobbered Topic input would not appear among the free-cells.
+`authored-check.ts` compares the Topics' arguments and records directly, and is
+the check a pass is judged by.
 """
 
 import collections
@@ -65,7 +68,7 @@ changed = collections.Counter(
     after[key][0] for key in after
     if key in before and before[key][1] != after[key][1]
 )
-print("authored-content check: changed by kind", dict(changed),
+print("fingerprint changes by kind (authored content: authored-check.ts)", dict(changed),
       "| added", len(after.keys() - before.keys()),
       "| removed", len(before.keys() - after.keys()))
 free = [key for key in after

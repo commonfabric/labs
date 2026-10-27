@@ -14,6 +14,7 @@ const { getValueAt } = await import(
 const { fabricAwareEqual } = await import(
   `${ROOT}/packages/data-model/src/index.ts`
 );
+const { isPlainObject } = await import(`${ROOT}/packages/utils/src/types.ts`);
 
 const [pristinePath, workingPath, idsPath, outPath] = Deno.args;
 const pristine = openSpace(pristinePath);
@@ -39,9 +40,9 @@ for (const line of ids) {
   try {
     const before = valueOf(pristine, id, scope);
     const after = valueOf(working, id, scope);
-    const isRecord = (v: unknown) =>
-      typeof v === "object" && v !== null && !Array.isArray(v);
-    if (isRecord(before) && isRecord(after)) {
+    // Plain objects only: a special object (bytes, a fabric instance) keeps its
+    // state where `Object.keys` cannot see it, so it is compared whole.
+    if (isPlainObject(before) && isPlainObject(after)) {
       const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
       row.changed = [...keys].filter((key) =>
         !fabricAwareEqual(before[key], after[key])
