@@ -76,6 +76,7 @@ describe("continue-run", () => {
   let errors: string[];
   let before: Map<string, string>;
   let scripted: HarnessAssistantTranscriptMessage[];
+  let structuredHostFailures: boolean;
   let fabric: {
     runtime: Runtime;
     storage: ReturnType<typeof StorageManager.emulate>;
@@ -126,6 +127,7 @@ describe("continue-run", () => {
         throw new Error("unexpected provider request");
       },
       cwd: workspace,
+      structuredHostFailures,
       env: { CF_HARNESS_API_KEY: "test" },
       io: { stdout: () => {}, stderr: (text) => errors.push(text) },
       createPromptLoop: (options) =>
@@ -186,6 +188,7 @@ describe("continue-run", () => {
     requests = [];
     errors = [];
     scripted = [];
+    structuredHostFailures = false;
     await save();
   });
   afterEach(async () => {
@@ -504,6 +507,71 @@ describe("continue-run", () => {
     expect(errors).toEqual([
       "--allow-tool submit_result requires --structured-result-path and a schema\n",
     ]);
+    expect(requests).toHaveLength(0);
+  });
+  it("classifies an unreadable prior artifact directory as an internal host error", async () => {
+    structuredHostFailures = true;
+    const unreadable = join(priorRoot, "unreadable");
+    await Deno.mkdir(unreadable);
+    await Deno.chmod(unreadable, 0o000);
+    const readDir = Deno.readDir.bind(Deno);
+    const probe = stub(Deno, "readDir", (path) => {
+      // The probe also enforces unreadability when tests run as root.
+      if (path === unreadable) {
+        throw new Deno.errors.PermissionDenied(
+          "unreadable prior artifact directory",
+        );
+      }
+      return readDir(path);
+    });
+    let exitCode: number;
+    try {
+      exitCode = await run();
+    } finally {
+      probe.restore();
+      await Deno.chmod(unreadable, 0o700);
+    }
+    expect(exitCode).toBe(1);
+    const failure = JSON.parse(errors[0]);
+    expect(failure.error.code).toBe("internal-error");
+    expect(failure.error.message).toBe(
+      "The local cf-harness host operation failed",
+    );
+    expect(requests).toHaveLength(0);
+    await unchanged();
+  });
+  it("classifies an outward artifact link as the same control refusal as a subagent source", async () => {
+    structuredHostFailures = true;
+    state.lineage = {
+      role: "subagent",
+      rootRunId: "root",
+      parentRunId: "root",
+      parentToolCallId: "call",
+      depth: 1,
+    };
+    await save();
+    expect(await run()).toBe(1);
+    const subagentFailure = JSON.parse(errors[0]).error;
+    expect(subagentFailure.code).toBe("provider-mismatch");
+    delete state.lineage;
+    await save();
+    errors = [];
+    const outside = join(workspace, "outside");
+    const entry = join(priorRoot, "outward-link");
+    await Deno.mkdir(outside);
+    await Deno.symlink(outside, entry);
+    expect(await run()).toBe(1);
+    const outwardFailure = JSON.parse(errors[0]).error;
+    expect(outwardFailure.code).toBe(subagentFailure.code);
+    expect(outwardFailure.message).toContain(entry);
+    expect(outwardFailure.message).toContain("outside its run root");
+    expect(requests).toHaveLength(0);
+    await unchanged();
+  });
+  it("classifies a missing prior run as an invalid host request", async () => {
+    structuredHostFailures = true;
+    expect(await run([], join(workspace, "missing"))).toBe(1);
+    expect(JSON.parse(errors[0]).error.code).toBe("invalid-request");
     expect(requests).toHaveLength(0);
   });
   it("refuses an outward transcript link before reading its target", async () => {

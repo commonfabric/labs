@@ -1248,7 +1248,7 @@ const validateContinuationArtifacts = async (
     const entry = pending.pop()!;
     const path = resolveHostPathThroughNearestRealParent(entry);
     if (!isHostPathWithinRoot(root, path)) {
-      throw new Error(
+      throw harnessResumeRefusal(
         `cannot continue prior run: artifact entry \`${entry}\` links outside its run root`,
       );
     }
@@ -3911,19 +3911,23 @@ export const runCfHarnessCli = async (
         : undefined;
     const recordedRun = parsed.resumeRun ?? parsed.continueRun;
     if (recordedRun !== undefined) {
+      const rethrowArtifactFailure = (error: unknown): never => {
+        // Naming a run that is not there is a bad request. A run that is
+        // there and will not read is infrastructure, whatever the argv said.
+        if (
+          !(error instanceof Deno.errors.NotFound) &&
+          !(error instanceof HarnessControlError)
+        ) requestAccepted = true;
+        throw error;
+      };
       const continuedRunRoot = parsed.continueRun === undefined
         ? undefined
         : await validateContinuationArtifacts(
           resolveHarnessRunPaths(recordedRun).runRoot,
-        );
+        ).catch(rethrowArtifactFailure);
       const readRunArtifacts = deps.readRunArtifacts ?? readHarnessRunArtifacts;
       const artifacts = await readRunArtifacts(recordedRun).catch(
-        (error: unknown) => {
-          // Naming a run that is not there is a bad request. A run that is
-          // there and will not read is infrastructure, whatever the argv said.
-          if (!(error instanceof Deno.errors.NotFound)) requestAccepted = true;
-          throw error;
-        },
+        rethrowArtifactFailure,
       );
       if (artifacts.runState.lineage?.role === "subagent") {
         throw harnessResumeRefusal(
