@@ -506,18 +506,33 @@ describe("continue-run", () => {
     ]);
     expect(requests).toHaveLength(0);
   });
-  it("protects a transcript symlink's outward target from the batch-result sidecar", async () => {
+  it("refuses an outward transcript link before reading its target", async () => {
     const outside = join(workspace, "saved-transcript.json");
     const transcript = join(priorRoot, "transcript.json");
     await Deno.rename(transcript, outside);
     await Deno.symlink(outside, transcript);
     const bytes = await Deno.readTextFile(outside);
-    expect(await run(["--result-json-path", outside])).toBe(1);
-    expect(errors.join("")).toContain("prior run");
+    const opened: (string | URL)[] = [];
+    const readTextFile = Deno.readTextFile.bind(Deno);
+    const probe = stub(Deno, "readTextFile", (path) => {
+      if (path === transcript || path === outside) opened.push(path);
+      return readTextFile(path);
+    });
+    let exitCode: number;
+    try {
+      exitCode = await run(["--result-json-path", outside]);
+    } finally {
+      probe.restore();
+    }
+    expect(exitCode).toBe(1);
+    expect(errors.join("")).toContain("artifact entry");
+    expect(errors.join("")).toContain(transcript);
+    expect(errors.join("")).toContain("outside its run root");
+    expect(opened).toEqual([]);
     expect(requests).toHaveLength(0);
     expect(await Deno.readTextFile(outside)).toBe(bytes);
   });
-  it("continues without opening an outward directory containing an unreadable subtree", async () => {
+  it("refuses an unreadable outward tree without opening it", async () => {
     const outside = join(workspace, "outside-tree");
     const unreadable = join(outside, "unreadable");
     await Deno.mkdir(unreadable, { recursive: true });
@@ -540,23 +555,59 @@ describe("continue-run", () => {
       probe.restore();
       await Deno.chmod(unreadable, 0o700);
     }
-    expect(exitCode).toBe(0);
+    expect(exitCode).toBe(1);
+    expect(errors.join("")).toContain(join(priorRoot, "linked-artifacts"));
+    expect(errors.join("")).toContain("outside its run root");
     expect(opened).toEqual([]);
-    expect(requests).toHaveLength(1);
+    expect(requests).toHaveLength(0);
     await unchanged();
   });
-  for (const outputName of ["new-output", "..new-output"]) {
-    it(`protects an outward artifact directory from ${outputName}`, async () => {
-      const outside = join(workspace, "saved-artifacts");
-      await Deno.mkdir(outside);
-      await Deno.symlink(outside, join(priorRoot, "linked-artifacts"));
-      expect(await run(["--artifact-root", join(outside, outputName)])).toBe(1);
-      expect(errors.join("")).toContain("prior run");
-      expect(requests).toHaveLength(0);
-      expect(Array.from(Deno.readDirSync(outside))).toEqual([]);
-      await unchanged();
+  it("refuses an outward artifact-directory link without opening it", async () => {
+    const outside = join(workspace, "saved-artifacts");
+    const entry = join(priorRoot, "linked-artifacts");
+    await Deno.mkdir(outside);
+    await Deno.symlink(outside, entry);
+    const opened: (string | URL)[] = [];
+    const readDir = Deno.readDir.bind(Deno);
+    const probe = stub(Deno, "readDir", (path) => {
+      if (path === outside) opened.push(path);
+      return readDir(path);
     });
-  }
+    let exitCode: number;
+    try {
+      exitCode = await run(["--artifact-root", join(outside, "new-output")]);
+    } finally {
+      probe.restore();
+    }
+    expect(exitCode).toBe(1);
+    expect(errors.join("")).toContain(entry);
+    expect(errors.join("")).toContain("outside its run root");
+    expect(opened).toEqual([]);
+    expect(requests).toHaveLength(0);
+    expect(Array.from(Deno.readDirSync(outside))).toEqual([]);
+    await unchanged();
+  });
+  it("refuses a dotted output name inside an unaltered prior root", async () => {
+    expect(await run(["--artifact-root", join(priorRoot, "..new-output")]))
+      .toBe(1);
+    expect(errors.join("")).toContain("must not modify the prior run");
+    expect(requests).toHaveLength(0);
+    await unchanged();
+  });
+  it("continues with an internal transcript link and directory-link cycle", async () => {
+    const transcript = join(priorRoot, "transcript.json");
+    const saved = join(priorRoot, "saved-transcript.json");
+    await Deno.rename(transcript, saved);
+    await Deno.symlink(saved, transcript);
+    await Deno.symlink(priorRoot, join(priorRoot, "cycle"));
+    expect(await run()).toBe(0);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].transcript).toEqual([...history, {
+      role: "user",
+      content: "Next task",
+    }]);
+    await unchanged();
+  });
   for (const priorSubmitTool of [false, true]) {
     for (const replaceSystem of [false, true]) {
       it(`rebuilds result instructions for the new path with ${priorSubmitTool ? "submission" : "file-writing"} history${replaceSystem ? " and a replacement system prompt" : ""}`, async () => {

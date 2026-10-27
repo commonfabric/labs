@@ -802,7 +802,8 @@ provider requests. An interrupted tail is replaced by the chat service's
 interrupted-turn notice before the new message; a run with no complete
 checkpoint is refused. `--system-prompt` replaces the prior system message. A
 run bound to one exact prompt value cannot be continued, because the binding
-does not cover a new prompt.
+does not cover a new prompt. A run whose artifacts link outside its run root
+cannot be continued.
 
 Continuation explicitly retains the prior handle table, result schema, research
 context, CFC record, and prompt-slot binding. Skill-context handles expire as

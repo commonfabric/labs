@@ -1237,42 +1237,29 @@ const isHostPathWithinRoot = (root: string, path: string): boolean => {
     !isAbsolute(relativePath);
 };
 
-/** Protects prior artifacts and link targets, walking only inside the run. */
-const protectedRunTargets = async (
+/** Refuses outward artifact links and returns the canonical run root. */
+const validateContinuationArtifacts = async (
   runRoot: string,
-  resultPath?: string,
-): Promise<{ files: Set<string>; directories: Set<string> }> => {
-  const files = new Set<string>();
-  const directories = new Set<string>();
+): Promise<string> => {
   const root = resolveHostPathThroughNearestRealParent(runRoot);
+  const directories = new Set<string>();
   const pending = [root];
   while (pending.length > 0) {
-    const path = resolveHostPathThroughNearestRealParent(pending.pop()!);
-    let stat: Deno.FileInfo;
-    try {
-      stat = await Deno.stat(path);
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
-      files.add(path);
-      continue;
+    const entry = pending.pop()!;
+    const path = resolveHostPathThroughNearestRealParent(entry);
+    if (!isHostPathWithinRoot(root, path)) {
+      throw new Error(
+        `cannot continue prior run: artifact entry \`${entry}\` links outside its run root`,
+      );
     }
-    if (!stat.isDirectory) {
-      files.add(path);
-      continue;
-    }
-    if (directories.has(path)) continue;
+    const stat = await Deno.stat(path);
+    if (!stat.isDirectory || directories.has(path)) continue;
     directories.add(path);
-    // Protection covers the run's files and their first-hop targets. Links
-    // inside outward directories that point elsewhere are not followed.
-    if (!isHostPathWithinRoot(root, path)) continue;
-    for await (const entry of Deno.readDir(path)) {
-      pending.push(join(path, entry.name));
+    for await (const child of Deno.readDir(path)) {
+      pending.push(join(path, child.name));
     }
   }
-  if (resultPath !== undefined) {
-    files.add(resolveHostPathThroughNearestRealParent(resultPath));
-  }
-  return { files, directories };
+  return root;
 };
 
 const findAllowedHostRoot = (
@@ -3924,6 +3911,11 @@ export const runCfHarnessCli = async (
         : undefined;
     const recordedRun = parsed.resumeRun ?? parsed.continueRun;
     if (recordedRun !== undefined) {
+      const continuedRunRoot = parsed.continueRun === undefined
+        ? undefined
+        : await validateContinuationArtifacts(
+          resolveHarnessRunPaths(recordedRun).runRoot,
+        );
       const readRunArtifacts = deps.readRunArtifacts ?? readHarnessRunArtifacts;
       const artifacts = await readRunArtifacts(recordedRun).catch(
         (error: unknown) => {
@@ -4068,11 +4060,12 @@ export const runCfHarnessCli = async (
           "Loom openai-codex runs require an authenticated credential owner reference",
         );
       }
-      if (parsed.continueRun !== undefined) {
-        const targets = await protectedRunTargets(
-          artifacts.runRoot,
-          artifacts.runState.structuredResult?.path,
-        );
+      if (continuedRunRoot !== undefined) {
+        const priorResult = artifacts.runState.structuredResult === undefined
+          ? undefined
+          : resolveHostPathThroughNearestRealParent(
+            artifacts.runState.structuredResult.path,
+          );
         const outputPaths = [
           parsed.artifactRoot,
           parsed.structuredResult?.path,
@@ -4082,10 +4075,7 @@ export const runCfHarnessCli = async (
           .map(resolveHostPathThroughNearestRealParent);
         if (
           outputPaths.some((path) =>
-            targets.files.has(path) ||
-            [...targets.directories].some((directory) =>
-              isHostPathWithinRoot(directory, path)
-            )
+            isHostPathWithinRoot(continuedRunRoot, path) || path === priorResult
           )
         ) {
           throw new Error(
