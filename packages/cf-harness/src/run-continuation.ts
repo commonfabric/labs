@@ -23,7 +23,6 @@ export const prepareHarnessContinuation = (options: {
   runState: HarnessRunState;
   transcript?: readonly HarnessTranscriptMessage[];
   prompt: string;
-  systemPrompt?: string;
   artifactRoot: string;
   workspace: string;
   structuredResult?: CfHarnessStructuredResultConfig;
@@ -59,13 +58,9 @@ export const prepareHarnessContinuation = (options: {
   ) {
     throw new Error(`continue run ${prior.runId} has no complete checkpoint`);
   }
-  let transcript = checkpoint.filter((message) =>
+  const transcript = checkpoint.filter((message) =>
     message.role !== "user" || !message.turnLocal
   );
-  if (options.systemPrompt !== undefined) {
-    transcript = transcript.filter((message) => message.role !== "system");
-    transcript.unshift({ role: "system", content: options.systemPrompt });
-  }
   if (boundary < source.length) {
     transcript.push({
       role: "user",

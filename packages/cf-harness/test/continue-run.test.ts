@@ -937,15 +937,62 @@ describe("continue-run", () => {
       expect(requests).toHaveLength(0);
     });
   }
-  it("replaces the prior system message", async () => {
-    expect(await run(["--system-prompt=New instructions"])).toBe(0);
-    expect(requests[0].transcript[0]).toEqual({
-      role: "system",
-      content: "New instructions",
+  for (const additionalInstructions of ["New instructions", ""]) {
+    it(`rebuilds harness guidance with ${additionalInstructions === "" ? "empty" : "new"} additional instructions`, async () => {
+      state.structuredResult = {
+        schema: { type: "string" },
+        path: join(workspace, "old-result.json"),
+      };
+      await Deno.writeTextFile(state.structuredResult.path, '"prior result"');
+      await save([
+        {
+          role: "system",
+          content: buildCfHarnessBatchSystemPrompt({
+            structuredResult: {
+              ...state.structuredResult,
+              sandboxPath: "/workspace/old-result.json",
+            },
+            systemPrompt: "Prior additional instructions",
+          }),
+        },
+        ...history.slice(1),
+      ]);
+      const resultPath = join(workspace, "new-result.json");
+      await Deno.writeTextFile(resultPath, '"next result"');
+      expect(
+        await run([
+          `--system-prompt=${additionalInstructions}`,
+          "--structured-result-path",
+          resultPath,
+          "--allow-tool=bash",
+        ]),
+      ).toBe(0);
+      expect(requests).toHaveLength(1);
+      const systems = requests[0].transcript.filter((message) =>
+        message.role === "system"
+      );
+      expect(systems).toHaveLength(1);
+      const system = systems[0].content;
+      expect(system).toContain(
+        "You are cf-harness, an autonomous agent harness",
+      );
+      expect(system).toContain("Operator guidance for cf-harness runs:");
+      expect(system).toContain("/workspace/new-result.json");
+      expect(system).not.toContain("old-result.json");
+      expect(system).not.toContain("Prior additional instructions");
+      if (additionalInstructions === "") {
+        expect(system).not.toContain("Additional instructions:");
+      } else {
+        expect(system).toContain(
+          `Additional instructions:\n${additionalInstructions}`,
+        );
+      }
+      expect(await Deno.readTextFile(state.structuredResult.path)).toBe(
+        '"prior result"',
+      );
+      await unchanged();
     });
-    expect(requests[0].transcript.filter((m) => m.role === "system"))
-      .toHaveLength(1);
-  });
+  }
   for (
     const [name, extra, mutate, message] of [
       ["subagent", [], () => {
