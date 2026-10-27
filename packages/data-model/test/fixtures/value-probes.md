@@ -136,10 +136,10 @@ probe for each of its keys.
 
 The one exception is a path where a patch puts a value. The patch is what states
 that part of the value, so there is no probe at its path or under it, and the
-reader counts the index or key it names as present. The arrays and records on
-the way to it keep their special forms. A symbol of no registry key, and a
-cycle, whether it passes through instances or not, are stated that way, and have
-no probe.
+reader counts the index, key or field it names as present. The arrays, records
+and instances on the way to it keep their special forms. A symbol of no registry
+key, and a cycle, whether it passes through instances or not, are stated that
+way, and have no probe.
 
 A path has one probe. A node's probe comes before the probes of what it holds:
 an array's elements and runs of holes in index order, a record's keys in UTF-8

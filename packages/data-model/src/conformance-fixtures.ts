@@ -65,9 +65,9 @@ export type ValuePatch = {
   readonly at: ValuePath;
 
   /**
-   * What is put there: the array or record at the path `cycle`, which closes
-   * a cycle, or a symbol of no registry key, under its description, `null`
-   * being none.
+   * What is put there: the array, record or instance at the path `cycle`,
+   * which closes a cycle, or a symbol of no registry key, under its
+   * description, `null` being none.
    */
   readonly put:
     | { readonly cycle: ValuePath }
