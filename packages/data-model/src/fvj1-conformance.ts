@@ -436,9 +436,24 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "bigint state not minimal",
     section: SECTION_BIGINT,
     text: 'fvj1:{"/BigInt@1":"AAA"}',
-    divergence: "A state with a redundant leading `0x00` or `0xff` byte is " +
-      "refused. This implementation reads it as the value it stands for.",
   },
+  // `0xff 0xff`, `0x00 0x7f` and `0xff 0x80`: sign-extended.
+  ...["__8", "AH8", "_4A"].map((state): Fvj1ConformanceCase => ({
+    name: `bigint state sign-extended, ${JSON.stringify(state)}`,
+    section: SECTION_BIGINT,
+    text: `fvj1:{"/BigInt@1":${JSON.stringify(state)}}`,
+  })),
+  // Each temporal decodes its state as `BigInt@1` does, through its own path.
+  ...[
+    ["EpochNsec", "AAA"],
+    ["EpochDay", "__8"],
+    ["DurationNsec", "AH8"],
+    ["DurationDay", "_4A"],
+  ].map(([tag, state]): Fvj1ConformanceCase => ({
+    name: `${tag} state not minimal`,
+    section: "3-json-encoding.md section 3, temporal quantities",
+    text: `fvj1:{"/${tag}@1":${JSON.stringify(state)}}`,
+  })),
   {
     name: "bigint state of no bytes",
     section: SECTION_BIGINT,
@@ -463,16 +478,11 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "bytes state holding whitespace",
     section: SECTION_BASE64,
     text: 'fvj1:{"/Bytes@1":"AQ I"}',
-    divergence: "A base64url state holding whitespace is refused. This " +
-      "implementation skips the whitespace.",
   },
   {
     name: "bytes state with nonzero trailing bits",
     section: SECTION_BASE64,
     text: 'fvj1:{"/Bytes@1":"AR"}',
-    divergence: "A base64url state whose bits after its last whole byte are " +
-      "not all zero is refused. This implementation ignores them, reading " +
-      "`AR` as the byte `AQ` writes.",
   },
 
   // Nesting, and values beyond the class examples.
