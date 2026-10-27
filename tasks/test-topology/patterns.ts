@@ -118,7 +118,7 @@ async function patternIntegrationSuites(
       parts: [{
         packageDir,
         flags,
-        env,
+        env: { ...env, ...defaultLane.environment },
         junit,
         files: defaultLane.enabled
           ? files.filter((file) => !on.excluded.has(file))
@@ -139,10 +139,7 @@ async function patternIntegrationSuites(
       parts: [{
         packageDir,
         flags,
-        env: {
-          ...env,
-          EXPERIMENTAL_SERVER_EXECUTION: String(oppositeLane.enabled),
-        },
+        env: { ...env, ...oppositeLane.environment },
         junit,
         files: oppositeLane.enabled
           ? files.filter((file) => !on.excluded.has(file))

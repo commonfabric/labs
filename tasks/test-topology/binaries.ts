@@ -118,12 +118,13 @@ function binarySuite(
  * two configurations, two histories that never stand in for each other.
  */
 export function loadBinarySuites(): Suite[] {
+  const defaults = serverExecutionCiLane("default");
   const opposite = serverExecutionCiLane("opposite");
   return [
-    binarySuite("binaries", BINARY_NAMES),
+    binarySuite("binaries", BINARY_NAMES, { env: { ...defaults.environment } }),
     binarySuite("binaries-opposite", ["toolshed"], {
       variant: opposite.recordVariant,
-      env: { EXPERIMENTAL_SERVER_EXECUTION: String(opposite.enabled) },
+      env: { ...opposite.environment },
     }),
   ];
 }

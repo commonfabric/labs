@@ -438,7 +438,9 @@ flags it adopts from the deployment it runs against.
   default is ON). CI resolves stable `default` and `opposite`
   roles through `tasks/server-execution-ci.ts`: `default` leaves the flag
   unset, while `opposite` explicitly selects the inverse and bakes that same
-  value into its toolshed shell. Therefore changing the default is exactly:
+  value into its toolshed shell. Whichever role resolves ON also sets
+  `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true`, so the ON arm is exercised
+  with web view-scoped replication. Therefore changing the default is exactly:
   `SERVER_EXECUTION_DEFAULT_ENABLED`, the summary cell above, a dated status
   entry here, and a delta in the plan's live coordination block; workflow
   job topology, probes, skip placement, coverage ownership, test record
@@ -589,7 +591,10 @@ flags it adopts from the deployment it runs against.
   define pins either flag over the deployment.
 - **Default:** global `false`; web override absent. A web runtime resolves
   `webViewScopedReplication ?? viewScopedReplication ?? false`. An explicit web
-  `false` overrides a global `true`.
+  `false` overrides a global `true`. CI's server-execution ON arm sets the web
+  override `true` on its servers, baked shells and test processes
+  (`SERVER_EXECUTION_ON_ENVIRONMENT` in `tasks/server-execution-ci.ts`), and its
+  OFF arm leaves both unset.
 - **Scope:** requires `serverExecution: true`, the browser-worker
   `clientClass: "web"` preset, and a server advertising
   `viewScopedReplicationV1`. Other client classes retain ordinary replication.

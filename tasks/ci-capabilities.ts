@@ -20,6 +20,7 @@ import * as path from "@std/path";
 
 import { type BinaryName, BUILD_HOST_VARIABLES } from "./build-binaries.ts";
 import {
+  SERVER_EXECUTION_ON_ENVIRONMENT,
   serverExecutionCiLane,
   type ServerExecutionCiRole,
   verifyServerExecutionPosture,
@@ -176,16 +177,16 @@ export const BINARY_CACHE_DIR = `${CACHE_DIR}/binaries`;
 export const COMPILE_CACHE_FILE = `${CACHE_DIR}/compile/lane.json`;
 
 /**
- * The server-execution define a Toolshed at `role` is built and run with: the
- * value the role names, or nothing where it names none. `defaultEnabled`
- * stands in for the first-party default where given.
+ * The server-execution variables a Toolshed at `role` is built and run with
+ * (`ServerExecutionCiLane.environment`): the value the role names, or nothing
+ * where it names none, and on the ON arm the flags it runs with besides.
+ * `defaultEnabled` stands in for the first-party default where given.
  */
 function serverExecutionDefine(
   role: ServerExecutionCiRole,
   defaultEnabled?: boolean,
 ): Record<string, string> {
-  const value = serverExecutionCiLane(role, defaultEnabled).experimentalValue;
-  return value === undefined ? {} : { EXPERIMENTAL_SERVER_EXECUTION: value };
+  return { ...serverExecutionCiLane(role, defaultEnabled).environment };
 }
 
 /** The name of a binary a lane keeps in `BINARY_CACHE_DIR`. */
@@ -500,7 +501,8 @@ const githubApi: Capability = {
 /**
  * The environment a Toolshed at `role` runs under: the ambient environment
  * carrying the server-execution define the role names, and carrying none
- * where the role names none.
+ * where the role names none, with the ON arm's other flags set on that arm
+ * and unset on the other.
  *
  * An unset define is a third state rather than a synonym for `false`. It
  * follows the first-party default, which is what the default role's posture
@@ -511,6 +513,9 @@ function serverExecutionEnv(
 ): Record<string, string> {
   const env = Deno.env.toObject();
   delete env.EXPERIMENTAL_SERVER_EXECUTION;
+  for (const name of Object.keys(SERVER_EXECUTION_ON_ENVIRONMENT)) {
+    delete env[name];
+  }
   return { ...env, ...serverExecutionDefine(role) };
 }
 

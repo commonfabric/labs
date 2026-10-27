@@ -537,8 +537,12 @@ current value. CI keeps stable `default` and
 `opposite` roles; `tasks/server-execution-ci.ts` derives their actual ON/OFF
 posture from the first-party default constant. The opposite toolshed binary is
 built with an explicit inverse so its browser shell, server, and test processes
-stay aligned. [EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md#serverexecution)
-covers the flag itself.
+stay aligned. Whichever role resolves ON also runs with
+`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true` on its servers, baked shell and
+test processes, so the ON arm's browsers receive only what their views need,
+and its posture probe checks that the toolshed publishes it.
+[EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md#serverexecution) covers the
+flag itself.
 
 Running an explicit posture locally means putting the flag on every process the
 test spans, not only the one `deno test` starts. A pattern integration test
