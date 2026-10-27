@@ -2025,12 +2025,12 @@ A caller sends another message with `POST /jobs/<id>/messages`, also bounded at
 `instructions` is optional and replaces the system framing of a follow-up,
 inherited by later jobs unless replaced again. The request grants no profile,
 tools or limits. Any job id in a conversation addresses its newest job, the
-head. A message to a queued or running head waits there to be taken at a model
-turn boundary. A message to a finished head with a recorded run opens a new
-queued job, with `continues` naming its predecessor, its task replaced by the
-message, and the rest of the predecessor's request inherited. A recorded run has
-a complete checkpoint from which another run can start. An interrupted job has
-none.
+head. Every local run receives the message hook. A message to a queued or
+running head waits there to be taken at a model turn boundary. A message to a
+finished head with a recorded run opens a new queued job, with `continues`
+naming its predecessor, its task replaced by the message, and the rest of the
+predecessor's request inherited. A recorded run has a complete checkpoint from
+which another run can start. An interrupted job has none.
 
 The response is `201 {message, job}` on acceptance or `200 {message, job}` on
 replay. The message record has fixed `key`, `target`, `message`, `acceptedAt`
@@ -2077,7 +2077,6 @@ Every refusal is `{ok: false, code, error}`:
 | 403    | `not_callers`           | The body names another caller.                                   |
 | 409    | `not_continuable`       | The finished head has no recorded run.                           |
 | 409    | `instructions_on_steer` | Instructions supplied to a queued or running head before cancel. |
-| 409    | `cannot_steer`          | That head could take a steer, but the lane cannot.               |
 | 400    | `unknown_profile`       | A follow-up would open now under a profile no longer named.      |
 | 409    | `idempotency_conflict`  | The caller's key already names another request or route.         |
 

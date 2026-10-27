@@ -227,19 +227,12 @@ Every refusal is `{ok: false, code, error}`, as elsewhere on the socket.
 | 403 | `not_callers` | `caller` is not the caller that enqueued the conversation. |
 | 409 | `not_continuable` | The head has finished with no recorded run. |
 | 409 | `instructions_on_steer` | The message carries `instructions`, and the head is queued or running with no cancel requested. |
-| 409 | `cannot_steer` | The head is queued or running with no cancel requested, and the lane's runs cannot take messages. |
 | 400 | `unknown_profile` | A follow-up would open now, and its profile is no longer one the host names. |
 | 409 | `idempotency_conflict` | See "Replay". |
 
 `not_callers` is not a security boundary: the socket and its token are the
 authority, as for every other route. It keeps one client from steering
 another client's conversation by mistake.
-
-`cannot_steer` applies only to a message the head's run could take. A
-message to a head whose cancel was requested waits for the follow-up
-whatever the lane can do. The refusal exists for a lane given a `runJob`
-that does not take the seam. Every job that runs through `runHarnessJob` can
-take messages once stage 4 lands.
 
 ### Ordering
 
@@ -352,11 +345,12 @@ by a new flag, `--continue-run <run root> --prompt=<message>`:
 - the seeded history: the prior run's transcript up to its last complete
   checkpoint, then the interrupted-turn notice when the run went past that
   checkpoint, then the new prompt. With no complete checkpoint, the flag is
-  refused. A `--system-prompt` given with `--continue-run` replaces the prior
-  run's additional instructions, which is how a follow-up's new
-  `instructions` arrive. The harness rebuilds the rest of the system
-  message, its own guidance and the new result contract, with the builder
-  every batch run uses, so a follow-up keeps that guidance;
+  refused. The harness always rebuilds the system message from the prior
+  run's recorded builder inputs and the new result contract, using the same
+  builder as a fresh run. Explicit flags override the recorded inputs:
+  `--system-prompt` replaces the additional instructions, which is how a
+  follow-up's new `instructions` arrive. A run without recorded builder
+  inputs is refused;
 - the prior handle table, result schema and CFC record, passed on
   explicitly (`AH-REF-3`). The result path is the new run's own;
 - the provider, model, credential owner and read ceiling checked against the
@@ -459,9 +453,12 @@ client:
   prompt, and no turn-local notices.
 - A handle from the prior run resolves.
 - A new structured result is written and validated.
-- A `--system-prompt` given with it replaces the prior run's additional
-  instructions, and the system message still holds the harness's own
-  guidance and the new result contract.
+- With or without `--system-prompt`, the system message is rebuilt from
+  recorded builder inputs, with explicit flags overriding them. It holds
+  the harness's guidance and the new result contract, never the old result
+  path. `--system-prompt` replaces the recorded additional instructions.
+- A run without recorded system-prompt builder inputs is refused before
+  any model request.
 - A prior run cut off in the middle of a turn is continued from its last
   complete checkpoint, with the interrupted-turn notice before the new
   prompt. A prior run with no complete checkpoint is refused.
@@ -497,7 +494,7 @@ existing fake `runJob`:
   - `not_found` and `not_callers`;
   - `not_continuable`, for an interrupted job, a `PROFILE_UNAVAILABLE`
     failure, and a job cancelled while queued;
-  - `cannot_steer` and `instructions_on_steer`;
+  - `instructions_on_steer`;
   - `invalid_request` and `too_large`;
   - `unknown_profile`, for a message to a finished job whose profile the
     host no longer names.

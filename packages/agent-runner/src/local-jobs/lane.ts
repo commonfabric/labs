@@ -88,9 +88,6 @@ export interface LocalJobLaneOptions {
     identityKeyPath: string,
   ) => Promise<ACL | null>;
 
-  /** Whether `runJob` takes messages; defaults to true for the built-in runner. */
-  steering?: boolean;
-
   /** Runs one job; `runHarnessJob` unless a test replaces it. */
   runJob?: (
     spec: HarnessJobSpec,
@@ -385,11 +382,6 @@ export class LocalJobLane {
     this.#options = options;
   }
 
-  /** Whether this lane's runs can take messages during a run. */
-  canSteer(): boolean {
-    return this.#options.steering ?? this.#options.runJob === undefined;
-  }
-
   /**
    * Ends every job a stop or a crash cut off as `interrupted`, then starts
    * the queued jobs it has room for.
@@ -532,11 +524,7 @@ export class LocalJobLane {
           runRoot: join(this.#options.workRoot, job.id),
           workspace: join(this.#options.workRoot, root.id, "workspace"),
           signal,
-          ...(this.canSteer()
-            ? {
-              takeMessages: (turn: number) => store.takeMessages(job.id, turn),
-            }
-            : {}),
+          takeMessages: (turn: number) => store.takeMessages(job.id, turn),
           ...(browserHost !== undefined ? { browserHost } : {}),
           onEvent: (event) => {
             const { message } = event;

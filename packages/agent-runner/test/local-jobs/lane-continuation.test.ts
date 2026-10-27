@@ -114,13 +114,13 @@ const conversation = async () => {
       caller: "test",
       idempotencyKey: "follow",
       message: "Run this job's command",
-    }, { canSteer: lane.canSteer() });
+    });
     if (!("job" in follow)) throw new Error(follow.error);
     const steer = store.acceptMessage(follow.job.id, {
       caller: "test",
       idempotencyKey: "steer",
       message: "Use the current command only",
-    }, { canSteer: lane.canSteer() });
+    });
     if (!("job" in steer)) throw new Error(steer.error);
     lane.kick();
     const next = await ended(store, follow.job.id);

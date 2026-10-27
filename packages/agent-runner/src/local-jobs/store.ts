@@ -132,7 +132,6 @@ export interface LocalJobMessageRefusal {
     | "not_callers"
     | "not_continuable"
     | "instructions_on_steer"
-    | "cannot_steer"
     | "unknown_profile"
     | "idempotency_conflict";
   error: string;
@@ -399,9 +398,8 @@ export class LocalJobStore {
     target: string,
     request: LocalJobMessageRequest,
     options: {
-      canSteer: boolean;
       canOpenFollowUp?: (profile: string) => boolean;
-    },
+    } = {},
   ):
     | { message: LocalJobMessage; job: LocalJob; created: boolean }
     | LocalJobMessageRefusal {
@@ -455,12 +453,6 @@ export class LocalJobStore {
             return {
               code: "instructions_on_steer",
               error: "A steer cannot replace the run's instructions.",
-            };
-          }
-          if (!options.canSteer) {
-            return {
-              code: "cannot_steer",
-              error: "The lane cannot take messages during a run.",
             };
           }
         }

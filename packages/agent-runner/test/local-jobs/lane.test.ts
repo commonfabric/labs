@@ -97,7 +97,6 @@ interface HeldRun {
 /** Helper for tests, which builds a lane whose jobs the test settles. */
 const laneWith = (
   options: {
-    steering?: boolean;
     profiles?: Map<string, LocalJobProfile>;
     maxConcurrent?: number;
     report?: (message: string) => void;
@@ -113,7 +112,6 @@ const laneWith = (
   const started: ((run: HeldRun) => void)[] = [];
   const lane = new LocalJobLane({
     store,
-    steering: options.steering,
     profiles: options.profiles ?? new Map([["ask", ASK]]),
     maxConcurrent: options.maxConcurrent ?? 2,
     workRoot: "/work/local",
@@ -179,7 +177,7 @@ describe("local-jobs/lane", () => {
       caller: "cfs:weaver",
       idempotencyKey: "next",
       message: "Continue",
-    }, { canSteer: true });
+    });
     if (!("job" in accepted)) {
       throw new Error("message refused");
     }
@@ -206,6 +204,19 @@ describe("local-jobs/lane", () => {
   });
 
   describe("messages", () => {
+    it("always supplies the message hook to a custom job runner", async () => {
+      const { store, lane, enqueue, nextRun, runs } = laneWith();
+      try {
+        enqueue("always-steer");
+        const run = await nextRun(0);
+        expect(typeof run.options.takeMessages).toBe("function");
+      } finally {
+        for (const run of runs) run.settle({ outcome: "cancelled" });
+        await lane.stop();
+        store.close();
+      }
+    });
+
     const message = (key: string) => ({
       caller: "cfs:weaver",
       idempotencyKey: key,
@@ -213,18 +224,15 @@ describe("local-jobs/lane", () => {
     });
 
     it("passes the turn seam and recorded run through and launches the follow-up", async () => {
-      const { store, lane, enqueue, nextRun, runs } = laneWith({
-        steering: true,
-      });
+      const { store, lane, enqueue, nextRun, runs } = laneWith({});
       try {
         lane.start();
         const id = enqueue("initial");
         const first = await nextRun(0);
-        expect(lane.canSteer()).toBe(true);
-        store.acceptMessage(id, message("A"), { canSteer: lane.canSteer() });
+        store.acceptMessage(id, message("A"));
         expect(await first.options.takeMessages!(2)).toEqual(["A"]);
-        store.acceptMessage(id, message("B"), { canSteer: true });
-        store.acceptMessage(id, message("C"), { canSteer: true });
+        store.acceptMessage(id, message("B"));
+        store.acceptMessage(id, message("C"));
         first.settle({
           outcome: "completed",
           structuredResult: {},
@@ -262,7 +270,6 @@ describe("local-jobs/lane", () => {
     for (const queuedC of [false, true]) {
       it(`runs each instruction replacement in its own follow-up with C ${queuedC ? "sent while queued" : "sent after cancel"}`, async () => {
         const { store, lane, enqueue, nextRun, runs } = laneWith({
-          steering: true,
           maxConcurrent: 1,
         });
         const api = createLocalJobApi({
@@ -271,7 +278,6 @@ describe("local-jobs/lane", () => {
           token: "test",
           kick: () => lane.kick(),
           cancel: (id) => lane.cancel(id),
-          canSteer: () => lane.canSteer(),
         });
         const send = async (id: string, key: string, instructions?: string) => {
           const response = await api(
@@ -346,31 +352,13 @@ describe("local-jobs/lane", () => {
       });
     }
 
-    it("gives runs no message hook when steering is disabled or omitted", async () => {
-      for (const steering of [false, undefined]) {
-        const { store, lane, enqueue, nextRun, runs } = laneWith({ steering });
-        try {
-          lane.start();
-          enqueue("initial");
-          const run = await nextRun(0);
-          expect(lane.canSteer()).toBe(false);
-          expect("takeMessages" in run.options).toBe(false);
-        } finally {
-          for (const run of runs) run.settle({ outcome: "cancelled" });
-          await lane.stop();
-          store.close();
-        }
-      }
-    });
-
-    it("defaults steering off and drops pending messages if the profile disappears", async () => {
+    it("drops pending messages if the profile disappears", async () => {
       const profiles = new Map([["ask", ASK]]);
       const { store, lane, runs } = laneWith({ profiles });
       try {
         const id = idOf(store.enqueue("cfs:weaver", "ask", "initial", REQUEST));
-        store.acceptMessage(id, message("A"), { canSteer: true });
+        store.acceptMessage(id, message("A"));
         profiles.clear();
-        expect(lane.canSteer()).toBe(false);
         lane.start();
         await reached(store, id, "failed");
         expect(store.get(id)).toMatchObject({
@@ -390,14 +378,12 @@ describe("local-jobs/lane", () => {
     });
 
     it("drops pending messages when runJob throws without a recorded run", async () => {
-      const { store, lane, enqueue, nextRun, runs } = laneWith({
-        steering: true,
-      });
+      const { store, lane, enqueue, nextRun, runs } = laneWith({});
       try {
         lane.start();
         const id = enqueue("initial");
         const run = await nextRun(0);
-        store.acceptMessage(id, message("A"), { canSteer: true });
+        store.acceptMessage(id, message("A"));
         run.fail(new Error("provider gone"));
         await reached(store, id, "failed");
         expect(store.get(id)?.messages).toMatchObject([{

@@ -212,9 +212,7 @@ describe("local-jobs/store", () => {
       key: string,
       instructions?: string,
     ) => {
-      const accepted = store.acceptMessage(id, body(key, instructions), {
-        canSteer: true,
-      });
+      const accepted = store.acceptMessage(id, body(key, instructions));
       if ("code" in accepted) throw new Error(accepted.code);
       return accepted;
     };
@@ -510,7 +508,7 @@ describe("local-jobs/store", () => {
         store.close();
         store = LocalJobStore.open(path);
         expect(store.get(id)).toEqual(view);
-        expect(store.acceptMessage(id, body("A"), { canSteer: false }))
+        expect(store.acceptMessage(id, body("A")))
           .toMatchObject({
             created: false,
             message: { delivery: "follow-up" },
@@ -550,7 +548,7 @@ describe("local-jobs/store", () => {
               request: request(),
               messages: [],
             });
-            expect(store.acceptMessage("old", body("A"), { canSteer: true }))
+            expect(store.acceptMessage("old", body("A")))
               .toMatchObject({ code: "not_continuable" });
           } finally {
             store.close();
@@ -568,7 +566,7 @@ describe("local-jobs/store", () => {
         accept(store, "job-1", "A");
         store.recover();
         const events = store.events("job-1");
-        expect(store.acceptMessage("job-1", body("A"), { canSteer: false }))
+        expect(store.acceptMessage("job-1", body("A")))
           .toMatchObject({
             created: false,
             message: { delivery: "dropped", reason: "interrupted" },

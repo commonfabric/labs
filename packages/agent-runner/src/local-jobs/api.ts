@@ -88,9 +88,6 @@ export interface LocalJobApiOptions {
   /** Starts queued jobs; called after an enqueue. */
   kick: () => void;
 
-  /** Whether the lane can take messages during a run; false when absent. */
-  canSteer?: () => boolean;
-
   /** Asks a job to stop. */
   cancel: (id: string) => unknown;
 
@@ -396,7 +393,6 @@ const acceptMessage = async (
   const read = messageRequestOf(body);
   if ("error" in read) return refuse(400, "invalid_request", read.error);
   const accepted = options.store.acceptMessage(id, read, {
-    canSteer: options.canSteer?.() ?? false,
     canOpenFollowUp: (profile) => options.profiles.get(profile) !== undefined,
   });
   if ("code" in accepted) {
