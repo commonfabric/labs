@@ -16,6 +16,7 @@ export const unattachedTurnContext = () =>
     content,
   ) => ({
     role: "user" as const,
+    turnLocal: true as const,
     content,
   }));
 
