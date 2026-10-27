@@ -2302,15 +2302,33 @@ Unpaired work, including a tool call still running when the cancel lands, and
 process interruptions do not advance the checkpoint; their evidence remains in
 the audit trail.
 
+`CfHarnessPromptLoop.runPrompt()` and `runTranscript()` accept an optional
+`takeMessages(turn)` callback, which may return user message strings directly or
+through a promise. The loop calls it before each root model request, including
+the first, with the number of the model turn that will receive the messages. It
+also checks before accepting a final text answer, structured result, or
+`finish_task` ending when another model turn remains; pending messages keep the
+run going within its existing turn budget. Each turn number is asked at most
+once: an ending take replaces the next turn's start take, and messages arriving
+between them wait for the following boundary. A call consumes the messages it
+returns; the host must not return them again. Each string is appended verbatim
+as an ordinary user message, after the prompt or previous turn's tool results,
+and retained in resumable history and subsequent checkpoints. Delegated child
+loops never receive the callback, and the loop never calls it after ending or
+when no model request remains. Steering is refused when the prompt-slot binding
+carries `valueDigest`, `slotDigest`, or `snapshotDigest`, because that binding
+authorizes one exact prompt value.
+
 Every run gets 32 root model turns unless its host names another budget. With a
 budget of three turns or more, two turns before the last the host tells the
 model how many remain, so it can finish rather than be cut off; a subagent's run
 is told the same against its own budget. A run that has `submit_result` is told
-to submit on the next turn; acceptance ends the run. `finalizeOnTurnLimit`
-instead reserves the last root model turn for a partial answer with harness and
-native tools disabled, warning in those terms, and records `budget_finalized`
-with a `gave-up` task outcome. Provider failures, blank answers, and attempted
-final tool calls remain failures. Root budgets include this final call; provider
+to submit on the next turn; acceptance ends the run when it owes no piece output
+and no pending steer continues it. `finalizeOnTurnLimit` instead reserves the
+last root model turn for a partial answer with harness and native tools
+disabled, warning in those terms, and records `budget_finalized` with a
+`gave-up` task outcome. Provider failures, blank answers, and attempted final
+tool calls remain failures. Root budgets include this final call; provider
 retries and child budgets are separate. Generated budget notices remain in
 events and durable run artifacts, but are excluded from returned transcripts and
 interactive checkpoints so subsequent user turns receive a fresh budget. They
@@ -2976,20 +2994,21 @@ asks for the result through it: the model passes the whole value as `result`,
 the harness validates it against the schema, and the host writes it to the
 structured-result path. A refused value comes back as `invalid_result` with the
 reason, and the model corrects it and submits again. An accepted value is the
-run's return: the run completes after the turn that submitted it, without asking
-the model for another, and the words the model wrote beside the call, if any,
-are its final answer. A later valid submission in that same turn replaces an
-earlier one. A turn with neither words nor a tool call gets one host notice
-asking for the submission when a turn that still offers tools follows it; a
-second such turn, or one with no such turn after it, fails the run. This is the
-way that works under every enforcement mode and prompt-slot role — under
-`enforce-strict`, a run whose prompt is bound as `context` or `quote` is refused
-`bash`, `edit_file`, and `write_file`, and so cannot write the file itself. A
-run that does hold such a tool may still write the file directly; both ways end
-at the same path. With `--allow-tool`, name `submit_result` alongside the run's
-other tools. The schema and host path are retained in run state, so a resumed
-root run keeps the same result contract without repeating the command-line
-flags; a conflicting restatement is refused.
+run's return: once any required piece output is satisfied, the run completes
+after the turn that submitted it, and the words the model wrote beside the call,
+if any, are its final answer. With `takeMessages` and a model turn remaining, a
+pending user message continues the run instead. A later valid submission
+replaces the earlier result. A turn with neither words nor a tool call gets one
+host notice asking for the submission when a turn that still offers tools
+follows it; a second such turn, or one with no such turn after it, fails the
+run. This is the way that works under every enforcement mode and prompt-slot
+role — under `enforce-strict`, a run whose prompt is bound as `context` or
+`quote` is refused `bash`, `edit_file`, and `write_file`, and so cannot write
+the file itself. A run that does hold such a tool may still write the file
+directly; both ways end at the same path. With `--allow-tool`, name
+`submit_result` alongside the run's other tools. The schema and host path are
+retained in run state, so a resumed root run keeps the same result contract
+without repeating the command-line flags; a conflicting restatement is refused.
 
 The system prompt includes the complete result schema for both batch and
 operator runs, whether the result is submitted through the tool or written to
