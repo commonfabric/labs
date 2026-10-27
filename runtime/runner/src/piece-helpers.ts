@@ -3,10 +3,10 @@ import {
   isEntityRef,
 } from "@commonfabric/data-model/cell-rep";
 
-import { getLogger } from "../../../utils/utils/src/logger.ts";
+import { getLogger } from "../../../base/utils/src/logger.ts";
 // Relative import (not "@commonfabric/utils/types") for the same rollup
 // reason as traverse.ts.
-import { isObjectOrArray } from "../../../utils/utils/src/types.ts";
+import { isObjectOrArray } from "../../../base/utils/src/types.ts";
 import type { JSONSchema, Pattern } from "./builder/types.ts";
 import { type Cell, cellRuntime, cellTx, isCell } from "./cell.ts";
 import {

@@ -12,7 +12,7 @@ commitments, provenance commitments, optional TEEs).
 **Conventions:**
 
 - Hash/commitment values are content-addressed digests (see `FabricHash` in
-  `data-model/typescript/data-model/src/fabric-primitives/FabricHash.ts`, whose
+  `base/data-model/src/fabric-primitives/FabricHash.ts`, whose
   tagged string form reads `fid1:…`).
 - `refer(x)` refers to the `merkle-reference` hashing function used elsewhere
   in this spec.

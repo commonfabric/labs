@@ -70,7 +70,7 @@ describe("typecheck", () => {
       expect(scopeOfPath("connectors/pattern-sources.ts")).toBe(
         "connectors",
       );
-      expect(scopeOfPath("data-model/typescript/data-model/src/x.ts")).toBe(
+      expect(scopeOfPath("base/data-model/src/x.ts")).toBe(
         "data-model",
       );
       expect(scopeOfPath(".claude/scripts")).toBe(".claude");

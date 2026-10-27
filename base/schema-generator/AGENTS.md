@@ -33,8 +33,8 @@ subpath exports. Entry point is `src/index.ts` (not `mod.ts`).
   deliberate non-standard extensions, as are the `FabricPrimitive` type names
   (`{ type: "FabricBytes" }` and friends — each the `.schemaType` its class
   reports, listed at runtime by `FABRIC_PRIMITIVE_SCHEMA_TYPES` in
-  `data-model/typescript/data-model/src/fabric-primitives/impl.ts`), emitted for
-  fields authored against those classes.
+  `base/data-model/src/fabric-primitives/impl.ts`), emitted for fields authored
+  against those classes.
 - Fail-loud inventory: `Map`/`Set`/`WeakMap`, `Cell<Stream<T>>`,
   `Default<undefined>`, unresolvable DeepDefault keys, and circular aliases
   THROW rather than degrade. An unformattable type also throws (complete

@@ -1,12 +1,12 @@
 {
   "workspace": [
-    "./utils/content-hash",
+    "./base/content-hash",
     "./utils/dashboard",
     "./utils/felt",
-    "./utils/leb128",
+    "./base/leb128",
     "./utils/test-support",
-    "./utils/utils",
-    "./data-model/typescript/data-model",
+    "./base/utils",
+    "./base/data-model",
     "./base/api",
     "./base/data-model-schema",
     "./base/home-schemas",
@@ -197,8 +197,8 @@
       // the viewer is tested on those bytes.
       "runtime/cli/test/fixtures/view-language/",
       // Generated, and its bytes are compared with what generates it.
-      "data-model/typescript/data-model/test/fixtures/fvj1-conformance.json",
-      "data-model/typescript/data-model/test/fixtures/hash-conformance.json",
+      "base/data-model/test/fixtures/fvj1-conformance.json",
+      "base/data-model/test/fixtures/hash-conformance.json",
       "runtime/ui/src/v2/components/cf-chart/cf-chart.ts",
       "runtime/ui/src/v2/components/cf-chart/lib/axes.ts",
       "runtime/ui/src/v2/components/cf-chart/lib/render.ts",

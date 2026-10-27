@@ -558,7 +558,7 @@ What a package offers only to other packages' tests — examples of its values, 
 fake, an internal step or count its public surface cannot reach dependably —
 goes behind an export-map entry named `./for-testing-only`, pointing at
 `src/for-testing-only.ts` or at a `src/for-testing-only/` directory's
-`index.ts`. `data-model/typescript/data-model` is the worked example. This is
+`index.ts`. `base/data-model` is the worked example. This is
 the package-level counterpart of a class's `accessForTestingOnly` getter
 (§ Classes).
 
@@ -1130,7 +1130,7 @@ suite will break.
    }
    ```
 
-See `utils/utils` and `utils/leb128` for real examples.
+See `base/utils` and `base/leb128` for real examples.
 If the new package needs registry dependencies, follow
 [Adding dependencies](DEPENDENCIES.md#adding-dependencies).
 

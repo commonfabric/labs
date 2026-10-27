@@ -14,12 +14,12 @@
     "incremental": false,
     "paths": {
       "@/*": [
-        "../../../data-model/typescript/data-model/src/*"
+        "../../../base/data-model/src/*"
       ],
       // `data-model`'s import map gives this key a target of its own, where
       // the pattern above would resolve it to the directory of the same name.
       "@/value-debug": [
-        "../../../data-model/typescript/data-model/src/value-debug-internal.ts"
+        "../../data-model/src/value-debug-internal.ts"
       ],
       "@commonfabric/api": [
         "../index.ts"
@@ -31,13 +31,13 @@
       // with its own `@/` alias this flat map cannot express -- out of a
       // profile whose whole subject is compile cost.
       "@commonfabric/data-model": [
-        "../../../data-model/typescript/data-model/src/deep-freeze.ts"
+        "../../data-model/src/deep-freeze.ts"
       ],
       "@commonfabric/data-model/api": [
-        "../../../data-model/typescript/data-model/src/api.ts"
+        "../../data-model/src/api.ts"
       ],
       "@commonfabric/utils/*": [
-        "../../../utils/utils/src/*"
+        "../../../base/utils/src/*"
       ],
       "commonfabric": [
         "../index.ts"

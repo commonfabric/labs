@@ -39,9 +39,9 @@ const CHECKOUT_PREFIX =
 // lived under `packages/`. Keys from older reports are mapped through this
 // table, so each benchmark keeps one series of results.
 export const MOVED_PACKAGES: Readonly<Record<string, string>> = {
-  "content-hash": "utils/content-hash",
+  "content-hash": "base/content-hash",
   dashboard: "utils/dashboard",
-  "data-model": "data-model/typescript/data-model",
+  "data-model": "base/data-model",
   fuse: "runtime/fuse",
   html: "runtime/html",
   memory: "runtime/memory",
@@ -50,7 +50,7 @@ export const MOVED_PACKAGES: Readonly<Record<string, string>> = {
   runner: "runtime/runner",
   "runtime-client": "runtime/runtime-client",
   "state-inspector": "runtime/state-inspector",
-  utils: "utils/utils",
+  utils: "base/utils",
 };
 
 /**

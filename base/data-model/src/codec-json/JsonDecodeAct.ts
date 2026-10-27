@@ -139,7 +139,7 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
     // represent, which `JSON.parse()` has already turned into an infinity by
     // the time it arrives here. The cases `number literal negative zero` and
     // `number literal past the largest double` in
-    // `data-model/typescript/data-model/test/fixtures/fvj1-conformance.json` record both.
+    // `base/data-model/test/fixtures/fvj1-conformance.json` record both.
     if (
       data === null || typeof data === "boolean" ||
       typeof data === "number" || typeof data === "string"
@@ -256,7 +256,7 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
       // other boundaries refuse or drop `constructor`, which assignment
       // copies faithfully. The cases `record with key __proto__` and
       // `record with key constructor` in
-      // `data-model/typescript/data-model/test/fixtures/fvj1-conformance.json` record both.
+      // `base/data-model/test/fixtures/fvj1-conformance.json` record both.
       if (isUnsafeObjectKey(key)) {
         return this.reportReservedKey(key, data);
       }

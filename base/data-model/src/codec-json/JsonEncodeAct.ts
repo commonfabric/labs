@@ -172,7 +172,7 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
     // than by way of an object whose enumeration reorders them -- is what
     // would actually deliver it. The case
     // `record keys that read as integers` in
-    // `data-model/typescript/data-model/test/fixtures/fvj1-conformance.json` records it.
+    // `base/data-model/test/fixtures/fvj1-conformance.json` records it.
     const keys = utf8SortedKeysOf(value);
 
     this.enter(value);

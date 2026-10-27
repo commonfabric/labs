@@ -365,7 +365,7 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     // text this one inlines.
     reachedBy: [
       "base/api/",
-      "data-model/typescript/data-model/",
+      "base/data-model/",
       "base/static/assets/types/",
       "base/static/scripts/",
     ],
@@ -380,7 +380,7 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     reachedBy: [
       "base/static/assets/types/",
       "base/static/scripts/",
-      "utils/utils/",
+      "base/utils/",
     ],
   },
 ];

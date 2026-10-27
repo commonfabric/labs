@@ -10,12 +10,7 @@
 import { existsSync } from "@std/fs/exists";
 
 /** The directories whose subdirectories are packages. */
-export const PACKAGE_PARENTS = [
-  "base",
-  "data-model/typescript",
-  "runtime",
-  "utils",
-] as const;
+export const PACKAGE_PARENTS = ["base", "runtime", "utils"] as const;
 
 /** The packages that sit at the top level of the repository. */
 export const TOP_LEVEL_PACKAGES = ["connectors", "patterns"] as const;
@@ -84,9 +79,8 @@ export function packageDirNamed(root: string, name: string): string {
  * `patterns` share the last place.
  */
 const DEPENDENCY_ORDER: readonly (readonly string[])[] = [
-  ["utils"],
-  ["data-model/typescript"],
   ["base"],
+  ["utils"],
   ["runtime"],
   ["connectors", "patterns"],
 ];

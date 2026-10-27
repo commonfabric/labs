@@ -295,10 +295,10 @@ Deliberate extensions beyond the 2020-12 vocabulary:
   hand-written schemas can, and they get no shape enforcement on opaque
   leaves. Each name is the one its class's instances report as `.schemaType`,
   and no list of them is written out: the type `FabricPrimitiveSchemaType`
-  (`data-model/typescript/data-model/src/api.ts`, which `@commonfabric/api`
+  (`base/data-model/src/api.ts`, which `@commonfabric/api`
   re-exports) is derived from the class declarations there, and the runtime list
   `FABRIC_PRIMITIVE_SCHEMA_TYPES`
-  (`data-model/typescript/data-model/src/fabric-primitives/impl.ts`) from the
+  (`base/data-model/src/fabric-primitives/impl.ts`) from the
   classes.
 
 A generated schema places each named type in its root `$defs` and refers to

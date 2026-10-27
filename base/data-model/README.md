@@ -3,7 +3,7 @@
 The fabric value model: the `FabricValue` types, and the codecs, hashing,
 comparison, cloning, and debug rendering that operate on them. The normative
 description is the formal spec, starting at
-[`1-fabric-values.md`](../../../docs/specs/space-model-formal-spec/1-fabric-values.md).
+[`1-fabric-values.md`](../../docs/specs/space-model-formal-spec/1-fabric-values.md).
 
 ## Every exported class is frozen
 

@@ -462,7 +462,7 @@ than what the list first said, the item says what it does now and why.
       `runtime/runner/test/storage-subscription-filter.bench.ts` seed a
       stamped link where they seed `{ $stream: true }` today (nothing reads
       the value in either), and the codec round-trip case in
-      `data-model/typescript/data-model/test/codecs.test.ts`, which is about `$`-keyed
+      `base/data-model/test/codecs.test.ts`, which is about `$`-keyed
       records in general, keeps its record under another key.
 - [ ] Confirm no `$stream` remains outside `docs/history/`, the plan docs, and
       exactly two pattern comments,

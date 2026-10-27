@@ -10,10 +10,10 @@ configuration file, listed in the root `deno.jsonc`.
 
 ## Packages
 
-A package is either a directory directly inside one of four parent directories
-(`utils/`, `data-model/typescript/`, `base/`, and `runtime/`), or one of two
-directories at the top level (`connectors/` and `patterns/`). The file
-`tasks/package-layout.ts` encodes this rule for the repository's tools.
+A package is either a directory directly inside one of three parent directories
+(`base/`, `utils/`, and `runtime/`), or one of two directories at the top level
+(`connectors/` and `patterns/`). The file `tasks/package-layout.ts` encodes this
+rule for the repository's tools.
 
 The places are listed below in the order that dependencies run between them. A
 package imports only from packages in its own place or an earlier one, and
@@ -21,19 +21,19 @@ package imports only from packages in its own place or an earlier one, and
 `deno task check-dependency-direction` fails on a production import that runs
 the other way. The section of `AGENTS.md` titled "Pace Layers" says more.
 
-- `utils/` holds general-purpose libraries and development tools. Examples are
-  general utilities (`utils`), the code that records test results
-  (`test-support`), a front-end build tool (`felt`), and the dashboard that
-  reports on continuous integration (`dashboard`).
-- `data-model/typescript/` holds the TypeScript implementation of the data
-  model. The data model defines the values Common Fabric stores, and how those
-  values are encoded, hashed, and compared.
 - `base/` holds code that the runtime is built on and that does not itself use
-  the runtime. Examples are the interface that patterns are written against
-  (`api`), the schemas of the data model's values (`data-model-schema`), the
-  compiler that turns a pattern's TypeScript into code the runtime can run
-  (`js-compiler`, `ts-transformers`, and `schema-generator`), and the client for
-  language-model services (`llm`).
+  the runtime. It starts with the data model, which defines the values Common
+  Fabric stores and how those values are encoded, hashed, and compared
+  (`data-model`), and the libraries the data model is built on (`utils`,
+  `content-hash`, and `leb128`). Other examples are the interface that patterns
+  are written against (`api`), the schemas of the data model's values
+  (`data-model-schema`), the compiler that turns a pattern's TypeScript into
+  code the runtime can run (`js-compiler`, `ts-transformers`, and
+  `schema-generator`), and the client for language-model services (`llm`).
+- `utils/` holds development tools that stand apart from the product: the code
+  that records test results (`test-support`), a front-end build tool (`felt`),
+  and the dashboard that reports on continuous integration (`dashboard`). They
+  use the libraries in `base/`, and the runtime's build and tests use them.
 - `runtime/` holds the program that runs patterns (`runner`) and everything
   built on it. Examples are the storage service (`memory`), the server that
   hosts storage and serves patterns (`toolshed`), the web front end (`shell`),

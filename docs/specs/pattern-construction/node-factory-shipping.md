@@ -980,7 +980,7 @@ Each stage is independently testable and revertible.
 
 ## Implementation Areas
 
-- `data-model/typescript/data-model`: FabricFactory type arm and brand,
+- `base/data-model`: FabricFactory type arm and brand,
   `FactoryCodec`, codec registry function dispatch, conversion, freeze/clone,
   equality/hash, JSON cycle tracking, and formal type declarations.
 - `runtime/memory` and runner storage/update paths: treat branded factories as

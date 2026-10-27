@@ -148,7 +148,7 @@ disposal. These explicit string boundaries pay the encoding cost.
 
 ## Self-contained data URIs
 
-`data-model/typescript/data-model/src/codec-data-uri.ts` implements the portable
+`base/data-model/src/codec-data-uri.ts` implements the portable
 encoding:
 
 ```text

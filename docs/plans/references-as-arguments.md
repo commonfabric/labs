@@ -195,7 +195,7 @@ payload with no gate and no traversal.
 
 **And "data cannot name a cell" is not a core invariant — measured.** A sigil
 link is a link wherever it appears in stored data (`isLinkRef`,
-`data-model/typescript/data-model/src/cell-rep.ts`), and a sigil riding an event
+`base/data-model/src/cell-rep.ts`), and a sigil riding an event
 payload survives `send()` as a **live edge**: probed against a local toolshed
 with an `any`-typed event field, so no gate intervened, the handler received the
 resolved target — its own properties, and its `title` read back. The door is

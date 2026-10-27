@@ -105,19 +105,19 @@ Read path:   storage → traverseDAG → normalizeAndDiff → builtins (map, etc
 These layers handle sparse arrays correctly and are less likely to regress
 because their sparse support was part of the original design:
 
-- **`data-model/typescript/data-model/src/convertible-js.ts`** —
+- **`base/data-model/src/convertible-js.ts`** —
   `shallowFabricFromConvertibleJsValue` and `fabricFromConvertibleJsValue` use
   `i in arr` checks. An accepted array that needs a copy goes through
   `cloneHelper()`, which rebuilds it with `new Array(length)` and copies only
   the indices that are present; one that is already a valid deep-frozen
   `FabricValue` crosses by identity, holes and all.
-- **`data-model/typescript/data-model/src/codec-json/JsonCodecEngine.ts`** —
+- **`base/data-model/src/codec-json/JsonCodecEngine.ts`** —
   Encodes a run of holes as a single hole-tagged count; decoding rebuilds them
   as true holes.
-- **`data-model/typescript/data-model/src/value-hash/ValueHasher.ts`** — Feeds holes to the hash
+- **`base/data-model/src/value-hash/ValueHasher.ts`** — Feeds holes to the hash
   directly, coalescing each run into one hole entry.
 
-### Value validation (`data-model/typescript/data-model/src/types/validation.ts`)
+### Value validation (`base/data-model/src/types/validation.ts`)
 
 `isValidFabricValueLayer()` and `isValidFabricValue()` accept sparse arrays —
 holes are valid fabric structure. `isValidFabricValue()` uses `for` + `i in`
@@ -128,7 +128,7 @@ values.
 
 The hot write path plans each write with `planMutablePathWrite()` and
 carries it out with the plan's `apply()`, which calls `cloneForMutation`
-(in `data-model/typescript/data-model/src/value-clone.ts`) to shallow-thaw the
+(in `base/data-model/src/value-clone.ts`) to shallow-thaw the
 spine and then mutates the leaf parent in place. `cloneForMutation`'s
 shallow-thaw step uses `cloneIfNecessary({ frozen: false, deep: false })`
 on each spine container, which for arrays preserves sparseness: it
@@ -218,7 +218,7 @@ changes reactively:
   value returning after its entry was released is set up again on the same
   result cell, whose id is deterministic, so it recovers what it persisted.
 
-### Hashing boundary (`data-model/typescript/data-model/src/value-hash/ValueHasher.ts`)
+### Hashing boundary (`base/data-model/src/value-hash/ValueHasher.ts`)
 
 Holes are hashed as themselves. `ValueHasher`'s `#feedArray()` walks the array
 by index and, on reaching an absent one, coalesces the whole run of consecutive
@@ -252,9 +252,9 @@ the preferred entry point in runner code.
 
 Test coverage verifies sparse preservation at each layer:
 
-- **`data-model/typescript/data-model/test/types/validation.test.ts`** —
+- **`base/data-model/test/types/validation.test.ts`** —
   `isValidFabricValueLayer()` accepts sparse arrays.
-- **`data-model/typescript/data-model/test/convertible-js.test.ts`** — 
+- **`base/data-model/test/convertible-js.test.ts`** — 
   `fabricFromConvertibleJsValue()` preserves holes.
 - **`runtime/runner/test/cell-core.test.ts`** — sparse-array writes through
   the full Cell write path (which lands in a planned write's `apply()`) preserve

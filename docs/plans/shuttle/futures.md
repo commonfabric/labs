@@ -195,7 +195,7 @@ decisions point here where they defer.
   such promise, so it is where a spelling for them belongs, and the storage
   codec already has one to borrow: `Undefined@1` beside the `BigInt@1` that
   `get` writes as `$bigint` today
-  (`data-model/typescript/data-model/src/codec-json/`).
+  (`base/data-model/src/codec-json/`).
 - **Vim keybindings, as a `where` dimension.** Modal editing at the prompt,
   an option and never a default. What it costs is a second binding table
   over motions the line editor already drives, plus the mode the table

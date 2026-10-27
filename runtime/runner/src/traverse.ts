@@ -41,7 +41,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { StagedMap } from "@commonfabric/utils/staged-map";
 
 import { readStatsActive, recordLinkResolution } from "./read-stats.ts";
-import { getLogger } from "../../../utils/utils/src/logger.ts";
+import { getLogger } from "../../../base/utils/src/logger.ts";
 // TODO(@ubik2): Ideally this would import from "@commonfabric/utils/types",
 // but rollup has issues
 import {
@@ -51,7 +51,7 @@ import {
   isObjectOrArray,
   isPrimitive,
   isString,
-} from "../../../utils/utils/src/types.ts";
+} from "../../../base/utils/src/types.ts";
 import {
   externalResolutionMissCount,
   lookupSchemaDocument,

@@ -2,7 +2,6 @@
 paths:
   - "deno.jsonc"
   - "base/*/deno.jsonc"
-  - "data-model/typescript/*/deno.jsonc"
   - "patterns/deno.jsonc"
   - "runtime/*/deno.jsonc"
   - "connectors/*/*/deno.jsonc"
@@ -73,7 +72,7 @@ entry is the one Deno resolves: a `deno.json` beside a `deno.jsonc` is taken
 whole and the other file ignored, so a `test` task written in the ignored one
 counts for nothing.
 
-`utils/utils/deno.jsonc` is a correct minimal example.
+`base/utils/deno.jsonc` is a correct minimal example.
 
 ## A new package is three edits
 
@@ -121,7 +120,7 @@ until its entry is deleted.
 
 What a package offers only to other packages' tests goes behind an entry named
 `./for-testing-only`, and no other entry or barrel reaches it.
-`data-model/typescript/data-model/deno.jsonc` is the example. Nothing checks
+`base/data-model/deno.jsonc` is the example. Nothing checks
 that only tests and benchmarks import it, so the rest of the convention, from
 naming to who may import it, is `docs/development/DEVELOPMENT.md`, § Offering
 test-only code to other packages.

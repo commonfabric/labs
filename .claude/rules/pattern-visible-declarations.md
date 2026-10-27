@@ -2,7 +2,7 @@
 paths:
   - "base/api/index.ts"
   - "base/api/schema.ts"
-  - "data-model/typescript/data-model/src/**"
+  - "base/data-model/src/**"
   - "runtime/runner/src/builder/factory.ts"
   - "runtime/runner/src/builder/types.ts"
   - "runtime/memory/v2/sqlite/schema.ts"
@@ -22,7 +22,7 @@ resolves none.
 
 Anything that file describes and does not implement, it describes by declaring a
 second copy of the shape by hand, and the implementation is in
-`runtime/runner/src/builder`, `data-model/typescript/data-model`, or
+`runtime/runner/src/builder`, `base/data-model`, or
 `runtime/memory/v2/sqlite`.
 
 The fabric value types are not among them: `base/api` re-exports

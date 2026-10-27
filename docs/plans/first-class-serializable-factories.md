@@ -157,7 +157,7 @@ Tests to port or extend:
 ### WP1.1 — Define the dependency-light factory protocol
 
 - [ ] Add the `FabricFactory` callable arm to the `FabricValue` union in
-  `data-model/typescript/data-model/src/api.ts`, which `base/api/index.ts`
+  `base/data-model/src/api.ts`, which `base/api/index.ts`
   re-exports.
 - [ ] Define the `FactoryStateV1` discriminated union with exactly the fields in
   the specification: shared `ref`; pattern schemas/params/scope/space selector;
@@ -174,31 +174,31 @@ Tests to port or extend:
 - [ ] Export only the minimum protocol surface needed by the runner and codec;
   do not expose `.curry` or state mutation to pattern authors.
 - [ ] Re-export the runner-facing protocol through
-  `data-model/typescript/data-model/src/index.ts` without creating a dependency
+  `base/data-model/src/index.ts` without creating a dependency
   from the data model back into the runner.
 
 Expected implementation files:
 
-- `data-model/typescript/data-model/src/api.ts`
+- `base/data-model/src/api.ts`
 - a new dependency-light module such as
-  `data-model/typescript/data-model/src/fabric-factory.ts`
-- `data-model/typescript/data-model/deno.jsonc` export map
+  `base/data-model/src/fabric-factory.ts`
+- `base/data-model/deno.jsonc` export map
 - `base/api/index.ts`
 
 ### WP1.2 — Add `Factory@1` codec dispatch
 
 - [ ] Add the `Factory@1` constant to
-  `data-model/typescript/data-model/src/codec-interface/codec-type-tags.ts`.
+  `base/data-model/src/codec-interface/codec-type-tags.ts`.
 - [ ] Implement a `FactoryCodec` with wire tag `Factory@1`.
 - [ ] Validate discriminant, exact allowed fields, content-addressed ref shape,
   schemas, modifiers, and pattern-only params fields during decode.
 - [ ] Decode to a frozen branded callable shell whose body throws
   `factory requires runner materialization` and whose state can be re-encoded.
 - [ ] Add a dedicated callable-factory codec slot to
-  `data-model/typescript/data-model/src/codec-common/CodecRegistry.ts`; do not
+  `base/data-model/src/codec-common/CodecRegistry.ts`; do not
   classify all functions as primitives or match `Function` by constructor.
 - [ ] Register the codec where the class rosters are applied, in
-  `data-model/typescript/data-model/src/codecs.ts`.
+  `base/data-model/src/codecs.ts`.
 - [ ] Route callable factories through codec lookup before the generic function
   rejection.
 - [ ] Include callable factories in JSON encoder cycle tracking.
@@ -207,35 +207,35 @@ Expected implementation files:
 
 Expected implementation and test files:
 
-- `data-model/typescript/data-model/src/codec-common/` for the codec/state
+- `base/data-model/src/codec-common/` for the codec/state
   validator
-- `data-model/typescript/data-model/src/codec-common/CodecRegistry.ts`
-- `data-model/typescript/data-model/src/codec-json/JsonCodecEngine.ts`
-- `data-model/typescript/data-model/src/codecs.ts`
-- `data-model/typescript/data-model/test/codec-common/FactoryCodec.test.ts`
-- `data-model/typescript/data-model/test/codec-common/CodecRegistry.test.ts`
-- `data-model/typescript/data-model/test/codec-json/JsonCodecEngine.test.ts`
-- a focused `data-model/typescript/data-model/test/fabric-factory.test.ts`
+- `base/data-model/src/codec-common/CodecRegistry.ts`
+- `base/data-model/src/codec-json/JsonCodecEngine.ts`
+- `base/data-model/src/codecs.ts`
+- `base/data-model/test/codec-common/FactoryCodec.test.ts`
+- `base/data-model/test/codec-common/CodecRegistry.test.ts`
+- `base/data-model/test/codec-json/JsonCodecEngine.test.ts`
+- a focused `base/data-model/test/fabric-factory.test.ts`
 
 ### WP1.3 — Make every Fabric operation see the same factory state
 
-- [ ] Update `data-model/typescript/data-model/src/convertible-js.ts` so
+- [ ] Update `base/data-model/src/convertible-js.ts` so
   admitted factories are recognized through `tryFactoryState()`, and unbranded
   functions remain invalid. Codec dispatch remains the serialization layer's
   job.
-- [ ] Update `data-model/typescript/data-model/src/types/validation.ts` and
+- [ ] Update `base/data-model/src/types/validation.ts` and
   compatibility guards so `FabricFactory` is the only valid function-shaped
   `FabricValue`.
-- [ ] Update `data-model/typescript/data-model/src/deep-freeze.ts` to
+- [ ] Update `base/data-model/src/deep-freeze.ts` to
   seal/freeze canonical state and then freeze the callable. Factory handling
   must precede the current shortcut that treats functions as already frozen.
-- [ ] Update `data-model/typescript/data-model/src/value-clone.ts` so canonical
+- [ ] Update `base/data-model/src/value-clone.ts` so canonical
   factories are immutable logical atoms and both mutable/frozen clone requests
   preserve the same canonical factory.
-- [ ] Update `data-model/typescript/data-model/src/valueEqual.ts` to compare
+- [ ] Update `base/data-model/src/valueEqual.ts` to compare
   canonical codec state rather than function identity, before any same-reference
   shortcut that could accidentally admit an arbitrary function.
-- [ ] Update `data-model/typescript/data-model/src/value-hash/ValueHasher.ts` to hash the `Factory@1` tag
+- [ ] Update `base/data-model/src/value-hash/ValueHasher.ts` to hash the `Factory@1` tag
   and recursively hashed canonical state.
 - [ ] Ensure all of these paths call the shared state/codec visitor rather than
   independently enumerating hidden fields.
@@ -245,15 +245,15 @@ Expected implementation and test files:
 
 Focused tests:
 
-- `data-model/typescript/data-model/test/convertible-js.test.ts`
-- `data-model/typescript/data-model/test/types/validation.test.ts`
-- `data-model/typescript/data-model/test/deep-freeze.test.ts`
-- `data-model/typescript/data-model/test/cloneIfNecessary.test.ts`
-- `data-model/typescript/data-model/test/cloneForMutation.test.ts`
-- `data-model/typescript/data-model/test/shallowMutableClone.test.ts`
-- `data-model/typescript/data-model/test/value-clone.test.ts`
-- `data-model/typescript/data-model/test/valueEqual.test.ts`
-- `data-model/typescript/data-model/test/value-hash/impl.test.ts`
+- `base/data-model/test/convertible-js.test.ts`
+- `base/data-model/test/types/validation.test.ts`
+- `base/data-model/test/deep-freeze.test.ts`
+- `base/data-model/test/cloneIfNecessary.test.ts`
+- `base/data-model/test/cloneForMutation.test.ts`
+- `base/data-model/test/shallowMutableClone.test.ts`
+- `base/data-model/test/value-clone.test.ts`
+- `base/data-model/test/valueEqual.test.ts`
+- `base/data-model/test/value-hash/impl.test.ts`
 
 Each suite must cover all three factory kinds, nested factory state, independent
 but equal decoded shells, pre-seal failure, and arbitrary-function rejection.
@@ -296,7 +296,7 @@ Focused tests:
 ### WP1.5 — Traverse hidden factory state during graph construction
 
 - [ ] Adapt the shared visitor/accessor from
-  `data-model/typescript/data-model/src/fabric-factory.ts` for builder
+  `base/data-model/src/fabric-factory.ts` for builder
   traversal; runner code supplies alias mapping and derived-callable
   construction but does not define a second state view.
 - [ ] Integrate it into `runtime/runner/src/builder/traverse-utils.ts` and
@@ -392,7 +392,7 @@ Expected files and tests:
 - [ ] Arbitrary functions and pseudo refs are still rejected.
 - [ ] Context-free decode is inert; runner materialization is the only path to
   executable behavior.
-- [ ] `deno task test` passes in `data-model/typescript/data-model` and
+- [ ] `deno task test` passes in `base/data-model` and
   `runtime/runner`.
 - [ ] `deno check base/api/index.ts` (or the package's standard type-check)
   passes with `.curry` absent from public `PatternFactory`.
@@ -1083,7 +1083,7 @@ alone authorizes deleting readers for durable values.
 Use the package's current task names if they change while this live plan is in
 progress.
 
-- [ ] `deno task test` in `data-model/typescript/data-model`
+- [ ] `deno task test` in `base/data-model`
 - [ ] `deno task test` in `base/schema-generator`
 - [ ] `deno task test` in `base/ts-transformers`
 - [ ] `deno task test` in `runtime/runner`

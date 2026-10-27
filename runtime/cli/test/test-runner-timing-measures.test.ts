@@ -97,7 +97,7 @@ describe(
 
     it("takes its cap from the environment when none is passed", () => {
       // This lives here rather than beside the other logger tests because
-      // `utils/utils` runs its suite with no permissions at all, and
+      // `base/utils` runs its suite with no permissions at all, and
       // reading an environment variable needs one. The library copes — every
       // env read there is wrapped — but a test that sets one cannot.
       const before = getTimingMeasuresState();

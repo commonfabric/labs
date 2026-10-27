@@ -117,7 +117,7 @@ Reload paths:
 - **pin** — the trailing `@<hash>` selected-module identity on a mutable ref.
 - **hash** — 43 base64url chars (`[A-Za-z0-9_-]`, case-SENSITIVE, no
   padding), the unprefixed output of `hashStringOf`/`hashOf`
-  (`data-model/typescript/data-model/src/value-hash/impl.ts`). NOT hex — e.g.
+  (`base/data-model/src/value-hash/impl.ts`). NOT hex — e.g.
   `Avcny13Rj8q-2ClANy_-k0ikWWQcXx7QTdsiqGfrC1c`. Never lowercase or
   otherwise normalize a hash.
 - **terminal identity** — the selected-module identity after pointer and

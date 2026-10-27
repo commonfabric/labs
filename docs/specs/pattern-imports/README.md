@@ -332,7 +332,7 @@ hash    = 43 base64url chars  ; hashStringOf/hashOf output (value-hash/):
 ```
 
 (Hashes are **not** hex: `hashStringOf` emits unprefixed base64url
-(`data-model/typescript/data-model/src/value-hash/impl.ts`), and entity URIs
+(`base/data-model/src/value-hash/impl.ts`), and entity URIs
 carry the `fid1:` tag inside `of:` — `of:fid1:<hash>` is what `toURI` produces.
 The base64url alphabet contains no `/`, `@`, or `:`, so pin-splitting and
 segment-splitting stay unambiguous.)

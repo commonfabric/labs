@@ -28,7 +28,7 @@ const GENERATED_URL = new URL(
 );
 const SOURCE_URL = new URL("../../api/index.ts", import.meta.url);
 const INLINED_URL = new URL(
-  "../../../data-model/typescript/data-model/src/api.ts",
+  "../../data-model/src/api.ts",
   import.meta.url,
 );
 const LIBRARY_URL = new URL("../assets/types/es2023.d.ts", import.meta.url);

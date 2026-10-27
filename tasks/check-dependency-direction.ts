@@ -4,11 +4,10 @@
  * Fails when production source imports from a place the layout puts after
  * its own.
  *
- * Packages live in places that dependencies run between in one order: `utils`,
- * then `data-model/typescript`, then `base`, then `runtime`, then
- * `connectors` and `patterns` together (`dependencyLayerOf` in
- * `tasks/package-layout.ts`). A package imports from packages in its own
- * place or an earlier one. Patterns are sorted into categories that
+ * Packages live in places that dependencies run between in one order: `base`,
+ * then `utils`, then `runtime`, then `connectors` and `patterns` together
+ * (`dependencyLayerOf` in `tasks/package-layout.ts`). A package imports from
+ * packages in its own place or an earlier one. Patterns are sorted into categories that
  * dependencies run between in the same way (`PATTERN_CATEGORIES`): a pattern
  * imports from its own category or an earlier one.
  *

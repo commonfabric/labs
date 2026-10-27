@@ -65,7 +65,7 @@ const BINARY_EXTENSIONS: readonly string[] = [
  */
 const EXEMPT_PATHS: readonly string[] = [
   // A hashing fixture whose CRLF endings are the whole point of the fixture.
-  "utils/content-hash/test/fixture-frank.txt",
+  "base/content-hash/test/fixture-frank.txt",
   // A drawing, stored as tab-separated data.
   "runtime/memory/memory.tldr",
   // Makefiles from a real repository, which the file viewer's tests read.

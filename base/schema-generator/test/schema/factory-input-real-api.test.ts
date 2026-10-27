@@ -13,7 +13,7 @@ const DEEP_FREEZE_STUB = join(
 );
 const DATA_MODEL_API = join(
   REPO_ROOT,
-  "data-model/typescript/data-model/src/api.ts",
+  "base/data-model/src/api.ts",
 );
 
 /**

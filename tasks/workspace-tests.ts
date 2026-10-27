@@ -371,7 +371,7 @@ export async function assertMemberTestTasksDefined(
       `Missing from: ${named}.`,
       `Add a \`test\` entry to that manifest's \`tasks\` — one running`,
       `\`tasks/run-member-tests.ts\` over a \`deno-test\` entry where the`,
-      `package has tests, as \`utils/utils/deno.jsonc\` shows, or`,
+      `package has tests, as \`base/utils/deno.jsonc\` shows, or`,
       `\`echo 'No tests defined.'\` where it has none yet. Put it in the file`,
       `named above rather than in a second manifest beside it: where a member`,
       `carries both a \`deno.json\` and a \`deno.jsonc\`, Deno takes the`,

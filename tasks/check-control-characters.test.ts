@@ -140,7 +140,7 @@ describe("check-control-characters", () => {
     it("exempts the named data fixtures and the trees it may not reach", () => {
       for (
         const path of [
-          "utils/content-hash/test/fixture-frank.txt",
+          "base/content-hash/test/fixture-frank.txt",
           "runtime/memory/memory.tldr",
           "runtime/cli/test/fixtures/view-language/make-infra/after.mk",
           "docs/history/specs/pattern-id-retirement.md",

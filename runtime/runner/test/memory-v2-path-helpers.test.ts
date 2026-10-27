@@ -6,7 +6,7 @@ import { hasValueAtPath, readValueAtPath } from "../src/storage/v2-path.ts";
 describe("memory v2 path helpers", () => {
   // `cloneWithValueAtPath` / `cloneWithoutValueAtPath` now live in
   // `@commonfabric/data-model` (`value-clone.ts`); their tests are in
-  // `data-model/typescript/data-model/test/value-clone.test.ts`. This file covers the
+  // `base/data-model/test/value-clone.test.ts`. This file covers the
   // path-traversal readers that remain in `v2-path.ts`.
 
   it("ignores inherited object properties during traversal", () => {

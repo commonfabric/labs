@@ -15,8 +15,8 @@ describe("package-layout", () => {
     it("returns the parent and the next segment for a path under a parent", () => {
       expect(packageDirOf("runtime/runner/src/cell.ts")).toBe("runtime/runner");
       expect(packageDirOf("runtime/runner")).toBe("runtime/runner");
-      expect(packageDirOf("data-model/typescript/data-model/src/x.ts")).toBe(
-        "data-model/typescript/data-model",
+      expect(packageDirOf("base/data-model/src/x.ts")).toBe(
+        "base/data-model",
       );
     });
 
@@ -47,7 +47,7 @@ describe("package-layout", () => {
   describe("withoutPackageParent()", () => {
     it("takes the parent off a path under one", () => {
       expect(withoutPackageParent("runtime/runner/src")).toBe("runner/src");
-      expect(withoutPackageParent("data-model/typescript/data-model")).toBe(
+      expect(withoutPackageParent("base/data-model")).toBe(
         "data-model",
       );
     });
@@ -121,8 +121,11 @@ describe("package-layout", () => {
 
   describe("dependencyLayerOf()", () => {
     it("returns an earlier layer for a package that others depend on", () => {
-      expect(dependencyLayerOf("utils/utils")).toBeLessThan(
-        dependencyLayerOf("data-model/typescript/data-model"),
+      expect(dependencyLayerOf("base/utils")).toBeLessThan(
+        dependencyLayerOf("utils/test-support"),
+      );
+      expect(dependencyLayerOf("utils/felt")).toBeLessThan(
+        dependencyLayerOf("runtime/shell"),
       );
       expect(dependencyLayerOf("base/api")).toBeLessThan(
         dependencyLayerOf("runtime/runner"),

@@ -2900,7 +2900,7 @@ const THE_VALUE_ITSELF = "the value itself";
  *
  * What makes the list closed is that it is read off the admission test rather
  * than composed beside it. `isValidFabricValueLayer`
- * (`data-model/typescript/data-model/src/types/validation.ts`) switches on `typeof` and, for
+ * (`base/data-model/src/types/validation.ts`) switches on `typeof` and, for
  * an `object`, branches four ways; this walk answers the same arms:
  *
  * - `undefined`, `bigint` and a registry-interned `symbol` are admitted and

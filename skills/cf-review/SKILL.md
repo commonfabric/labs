@@ -50,9 +50,9 @@ themselves, the semantic equivalent of apps). They review differently:
   under live subscriptions. The source is far from what runs, so a change — to a
   pattern _or to the runtime code that executes it_ — can span many abstraction
   levels with implications that aren't obvious in isolation.
-- **Platform code** (`base/`, `data-model/`, `runtime/`, `utils/`) is plain
-  TypeScript: review it as you would any TS codebase, plus this repo's
-  conventions and the anti-duplication map below.
+- **Platform code** (`base/`, `runtime/`, `utils/`) is plain TypeScript: review
+  it as you would any TS codebase, plus this repo's conventions and the
+  anti-duplication map below.
 
 Two failure modes recur when moving fast without the whole picture:
 

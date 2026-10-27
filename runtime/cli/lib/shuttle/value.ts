@@ -66,7 +66,7 @@ export interface ValueRendering {
  * because neither survives to be read out of a cell. The fabric's
  * value-admission test refuses both on the way in
  * (`assertValidFabricValueLayer`,
- * `data-model/typescript/data-model/src/types/validation.ts`), and its codec has no form for
+ * `base/data-model/src/types/validation.ts`), and its codec has no form for
  * either at the commit that would store one (`BaseEncodeAct`), so the raw write
  * that skips the first still meets the second.
  *

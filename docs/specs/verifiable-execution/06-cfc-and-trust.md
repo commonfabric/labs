@@ -101,7 +101,7 @@ type CFCLabelMap = {
 #### 10.3.4 Label Map Commitments (Future)
 
 This spec uses content-addressed hashes (see `FabricHash` in
-`data-model/typescript/data-model/src/fabric-primitives/FabricHash.ts`) for
+`base/data-model/src/fabric-primitives/FabricHash.ts`) for
 commitments.
 
 A label map commitment MUST be domain-separated and deterministic. One simple

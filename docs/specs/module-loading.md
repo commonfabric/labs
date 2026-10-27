@@ -990,7 +990,7 @@ index's restart-stable `action` column,
 [c10]: ../../runtime/runner/src/sandbox/ses-runtime.ts
 [c11]: ../../runtime/runner/src/builder/module.ts
 [c12]: ../../runtime/runner/src/scheduler/run.ts
-[c13]: ../../data-model/typescript/data-model/src/value-hash/impl.ts
+[c13]: ../../base/data-model/src/value-hash/impl.ts
 [c14]: ../../runtime/runner/src/compilation-cache/cell-cache.ts
 [c15]: ../../runtime/runner/src/sandbox/runtime-module-policy.ts
 [c16]: ../../runtime/runner/src/harness/authored-debug-source.ts

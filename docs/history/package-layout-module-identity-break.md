@@ -9,13 +9,13 @@ reason: "Decision record for the contract changes the pattern update gate
 
 # Module identities under the new package layout
 
-This change moved the repository's packages out of `packages/`. They now live
-in `base/`, `utils/`, `data-model/typescript/`, and `runtime/`, and
-`connectors/` and `patterns/` moved to the top level. Each pattern also moved
-into a directory of its own inside a directory for its category, in the form
-`patterns/<category>/<pattern>/`. The server serves each pattern at its new
-path. The runtime maps a stored reference that names a pattern's old path, such
-as `system:topics/main.tsx`, to the new path.
+This change moved the repository's packages out of `packages/`. They now live in
+`base/`, `utils/`, and `runtime/`, and `connectors/` and `patterns/` moved to
+the top level. Each pattern also moved into a directory of its own inside a
+directory for its category, in the form `patterns/<category>/<pattern>/`. The
+server serves each pattern at its new path. The runtime maps a stored reference
+that names a pattern's old path, such as `system:topics/main.tsx`, to the new
+path.
 
 ## What the pattern update check reports
 

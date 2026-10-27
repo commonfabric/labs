@@ -11,21 +11,19 @@ signatures.
 ## Pace Layers
 
 This repository contains many packages that compose and stack to create the
-Common Fabric product. Each package is a directory inside `base/`,
-`data-model/typescript/`, `runtime/`, or `utils/`, or is one of the two
-top-level directories `connectors/` and `patterns/`. `LAYOUT.md` says what each
-of these holds. `tasks/package-layout.ts` encodes the same rule for the
-repository's tools.
+Common Fabric product. Each package is a directory inside `base/`, `utils/`, or
+`runtime/`, or is one of the two top-level directories `connectors/` and
+`patterns/`. `LAYOUT.md` says what each of these holds.
+`tasks/package-layout.ts` encodes the same rule for the repository's tools.
 
 These places are layers, and dependencies run between them in one order:
-`utils/`, then `data-model/typescript/`, then `base/`, then `runtime/`, then
-`connectors/` and `patterns/` together. A package imports from packages in its
-own layer or an earlier one. Inside `patterns/`, the categories are ordered the
-same way: `system`, `product`, `apps`, `examples`, `showcase`, `dev`. A pattern
-imports from its own category or an earlier one.
-`deno task check-dependency-direction` fails on a production import that runs
-against either order, and `deno task check-package-cycles` fails when two
-packages import each other.
+`base/`, then `utils/`, then `runtime/`, then `connectors/` and `patterns/`
+together. A package imports from packages in its own layer or an earlier one.
+Inside `patterns/`, the categories are ordered the same way: `system`,
+`product`, `apps`, `examples`, `showcase`, `dev`. A pattern imports from its own
+category or an earlier one. `deno task check-dependency-direction` fails on a
+production import that runs against either order, and
+`deno task check-package-cycles` fails when two packages import each other.
 
 Inside `runtime/`, the packages stack further. `runner` and `memory` are at the
 bottom. `piece`, `html`, and `navigation` come next, then `cf-harness`, `cli`,
