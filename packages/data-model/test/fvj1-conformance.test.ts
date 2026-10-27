@@ -281,6 +281,56 @@ describe("fvj1-conformance", () => {
       ).toThrow("declares a divergence, but this implementation does what");
     });
 
+    it("returns an entry holding the spec's decode and a re-encode divergence, for a text the spec decodes as this package does", () => {
+      const entry = JSON.parse(
+        fvj1ConformanceFixtureTextForTestingOnly([
+          {
+            name: "proto",
+            section: "s",
+            text: 'fvj1:{"/quote":{"__proto__":1}}',
+            specDecodes: true,
+            divergence: "note",
+          },
+        ]),
+      ).cases[0];
+      expect(entry).toEqual({
+        name: "proto",
+        section: "s",
+        text: 'fvj1:{"/quote":{"__proto__":1}}',
+        probes: [[[], { record: 1 }], [["__proto__"], "fvj1:1"]],
+        canonical: 'fvj1:{"__proto__":1}',
+        divergence: { note: "note", encode: { refused: "unencodable" } },
+      });
+    });
+
+    it("throws given a text the spec is said to decode that this package refuses", () => {
+      expect(() =>
+        fvj1ConformanceFixtureTextForTestingOnly([
+          {
+            name: "bare",
+            section: "s",
+            text: "42",
+            specDecodes: true,
+            divergence: "note",
+          },
+        ])
+      ).toThrow("says the spec decodes a text this package refuses");
+    });
+
+    it("throws given a divergence on a text the spec is said to decode, whose spec text is not computed", () => {
+      expect(() =>
+        fvj1ConformanceFixtureTextForTestingOnly([
+          {
+            name: "bigint",
+            section: "s",
+            text: 'fvj1:{"/BigInt@1":"AQ"}',
+            specDecodes: true,
+            divergence: "note",
+          },
+        ])
+      ).toThrow("does not compute");
+    });
+
     it("throws given a value whose decoded text re-encodes unlike its spec text, with no divergence", () => {
       expect(() =>
         fvj1ConformanceFixtureTextForTestingOnly([
@@ -388,6 +438,11 @@ describe("fvj1-conformance", () => {
 
     it("returns the path of the container a malformed hole run is in", () => {
       expect(fvj1ProblematicPathsOfForTestingOnly('fvj1:[{"/hole":0}]'))
+        .toEqual([[]]);
+    });
+
+    it("returns no path for a problematic value within another's state", () => {
+      expect(fvj1ProblematicPathsOfForTestingOnly('fvj1:{"/Link@1":{"/x":1}}'))
         .toEqual([[]]);
     });
 

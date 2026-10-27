@@ -32,6 +32,10 @@ import {
 } from "@/fabric-instances";
 import {
   FabricBytes,
+  FabricDurationDay,
+  FabricDurationNsec,
+  FabricEpochDay,
+  FabricEpochNsec,
   type FabricPrimitiveClassesByName,
   FabricRegExp,
   FabricUnavailable,
@@ -90,7 +94,10 @@ export type Fvj1Outcome =
  * value, it is the value's own probes, and the text {@link plainJsonTextOf}
  * computes, so a divergence can only be declared for a value that function
  * writes. For a text, it is that the text is refused, the format refusing
- * every text this package over-accepts.
+ * every text this package over-accepts, unless `specDecodes` says the format
+ * decodes the text as this package does. Then the format's outcome is the
+ * text {@link plainJsonTextOf} computes for what it decodes to, and the
+ * divergence is in re-encoding that.
  */
 export type Fvj1ConformanceCase =
   & {
@@ -100,7 +107,7 @@ export type Fvj1ConformanceCase =
   }
   & (
     | { readonly make: () => FabricValue }
-    | { readonly text: string }
+    | { readonly text: string; readonly specDecodes?: true }
   );
 
 //
@@ -143,6 +150,25 @@ const SECTION_UNKNOWN = "3-json-encoding.md section 8";
 const SECTION_TAG_SYNTAX = "3-json-encoding.md section 2";
 const SECTION_RESERVATION = "3-json-encoding.md section 9";
 const SECTION_TYPES = "3-json-encoding.md section 3";
+const SECTION_TEMPORAL = "3-json-encoding.md section 3, temporal quantities";
+const SECTION_ERROR = "3-json-encoding.md section 3, `Error@1`";
+const SECTION_LINK = "3-json-encoding.md section 3, `Link@1`";
+const SECTION_REGEXP = "3-json-encoding.md section 3, `RegExp@1`";
+const SECTION_UNAVAILABLE = "3-json-encoding.md section 3, `Unavailable@1`";
+
+/**
+ * The integers at and just past the edges of a signed 64-bit integer, and a
+ * pair far past them. The format bounds none of them, and an implementation
+ * that holds these counts in an `int64` meets its edges here.
+ */
+const WIDE_INTEGERS: readonly (readonly [string, bigint])[] = [
+  ["2^63 - 1", 2n ** 63n - 1n],
+  ["-2^63", -(2n ** 63n)],
+  ["2^63", 2n ** 63n],
+  ["-2^63 - 1", -(2n ** 63n) - 1n],
+  ["2^100", 2n ** 100n],
+  ["-2^100", -(2n ** 100n)],
+];
 
 /** Note shared by the cases with a key this implementation reserves. */
 const RESERVED_KEY_NOTE = "Section 4 lets a record carry any key, and its " +
@@ -640,6 +666,264 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: "3-json-encoding.md section 3, `Problematic@1`",
     text: 'fvj1:{"/Problematic@1":{"error":"e","tag":"x"}}',
   },
+
+  // Escapes, and what the reservation of `/` keys refuses.
+  {
+    name: "slash key that is a tag, over a literal",
+    section: SECTION_ESCAPE_DISPATCH,
+    make: () => ({ "/Bytes@1": "AQ" }),
+  },
+  {
+    name: "quote escape nested in an object escape",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/object":{"/a":{"/quote":{"/b":1}}}}',
+  },
+  {
+    name: "object escape nested in a quote escape",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/quote":{"/object":{"/x":1}}}',
+  },
+  {
+    name: "object escape over the empty record",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/object":{}}',
+  },
+  {
+    name: "quote escape over the empty record",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/quote":{}}',
+  },
+  {
+    name: "quote escape over an undefined",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/quote":{"/Undefined@1":null}}',
+  },
+  {
+    name: "quote escape over a key that is not a tag",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/quote":{"/bytes@1":1}}',
+  },
+  {
+    name: "object escape over a key that is an escape",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/object":{"/quote":1}}',
+  },
+  {
+    name: "object escape over slash and plain keys",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/object":{"/x":1,"y":2}}',
+  },
+  {
+    name: "object escape beside a plain key",
+    section: SECTION_RESERVATION,
+    text: 'fvj1:{"/object":{"a":1},"b":2}',
+  },
+  {
+    name: "quote escape beside a plain key",
+    section: SECTION_RESERVATION,
+    text: 'fvj1:{"/quote":1,"a":1}',
+  },
+  {
+    name: "link payload with a bare slash key",
+    section: SECTION_RESERVATION,
+    text: 'fvj1:{"/Link@1":{"/x":1}}',
+  },
+
+  // Keys this implementation reserves, below the top of a value.
+  {
+    name: "record with key __proto__ nested in a record",
+    section: SECTION_RESERVED_KEYS,
+    make: () => ({ a: JSON.parse('{"__proto__":1}') }),
+    divergence: RESERVED_KEY_NOTE,
+  },
+  {
+    name: "record with key constructor nested in a record",
+    section: SECTION_RESERVED_KEYS,
+    make: () => ({ a: { constructor: 1 } }),
+    divergence: RESERVED_KEY_NOTE,
+  },
+  {
+    name: "quote escape over a record with key __proto__",
+    section: SECTION_RESERVED_KEYS,
+    text: 'fvj1:{"/quote":{"__proto__":1}}',
+    specDecodes: true,
+    divergence: RESERVED_KEY_NOTE + " Here it decodes the text, the " +
+      "`/quote` escape taking the record as it is, but refuses to encode the " +
+      "record it decodes to.",
+  },
+
+  // Integers at and past the edges of a signed 64-bit integer.
+  ...WIDE_INTEGERS.map(([label, count]): Fvj1ConformanceCase => ({
+    name: `bigint ${label}`,
+    section: SECTION_BIGINT,
+    make: () => count,
+  })),
+  ...WIDE_INTEGERS.map(([label, count]): Fvj1ConformanceCase => ({
+    name: `EpochNsec of ${label}`,
+    section: SECTION_TEMPORAL,
+    make: () => new FabricEpochNsec(count),
+  })),
+  ...([
+    ["EpochDay", (count: bigint) => new FabricEpochDay(count)],
+    ["DurationNsec", (count: bigint) => new FabricDurationNsec(count)],
+    ["DurationDay", (count: bigint) => new FabricDurationDay(count)],
+  ] as const).flatMap(([tag, made]) =>
+    WIDE_INTEGERS.filter(([label]) => label === "2^63" || label === "-2^63")
+      .map(([label, count]): Fvj1ConformanceCase => ({
+        name: `${tag} of ${label}`,
+        section: SECTION_TEMPORAL,
+        make: () => made(count),
+      }))
+  ),
+
+  // Errors and links.
+  {
+    name: "error with extras of every primitive kind",
+    section: SECTION_ERROR,
+    make: () =>
+      new FabricError({
+        type: "Error",
+        name: null,
+        message: "m",
+        stack: undefined,
+        cause: undefined,
+        extras: {
+          bigint: 2n,
+          boolean: true,
+          null: null,
+          number: -1.5,
+          string: "s",
+          symbol: Symbol.for("key"),
+          undefined: undefined,
+        },
+      }),
+  },
+  {
+    name: "link with a payload key that is an escape",
+    section: SECTION_LINK,
+    make: () => new FabricLink({ "/quote": { "/Link@1": { id: "x" } } }),
+  },
+  {
+    name: "link with a payload key that is a tag, over a bigint",
+    section: SECTION_LINK,
+    make: () => new FabricLink({ "/Bytes@1": 1n }),
+  },
+  {
+    name: "link with a numeric payload",
+    section: SECTION_LINK,
+    text: 'fvj1:{"/Link@1":5}',
+  },
+  {
+    name: "link with an array payload",
+    section: SECTION_LINK,
+    text: 'fvj1:{"/Link@1":[]}',
+  },
+  {
+    name: "link with the empty record as payload",
+    section: SECTION_LINK,
+    text: 'fvj1:{"/Link@1":{}}',
+  },
+
+  // More decodes the spec refuses.
+  {
+    name: "hole run of a negative number",
+    section: SECTION_HOLES,
+    text: 'fvj1:[{"/hole":-1}]',
+  },
+  {
+    name: "error with a string state",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":"boom"}',
+  },
+  {
+    name: "error with a numeric type",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":null,"type":7}}',
+  },
+  {
+    name: "error with a numeric name",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":1,"type":"Error"}}',
+  },
+  {
+    name: "error with a numeric stack",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":null,"stack":5,' +
+      '"type":"Error"}}',
+  },
+  {
+    name: "error with a type that is not a string",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":null,' +
+      '"type":{"/Undefined@1":null}}}',
+  },
+  {
+    name: "unavailable with a string state",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":"pending"}',
+  },
+  {
+    name: "unavailable with an unknown reason",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"reason":"gone"}}',
+  },
+  {
+    name: "unavailable error with no kind",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"reason":"error"}}',
+  },
+  {
+    name: "unavailable error with an unknown kind",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"nope","reason":"error"}}',
+  },
+  {
+    name: "unavailable error with a numeric message",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","errorMessage":5,' +
+      '"reason":"error"}}',
+  },
+  {
+    name: "unavailable error with a null message",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
+      '"errorMessage":null,"reason":"error"}}',
+  },
+  {
+    name: "unavailable pairing a message with a transient reason",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorMessage":"m","reason":"pending"}}',
+  },
+  {
+    name: "regular expression with a string state",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":"a"}',
+  },
+  {
+    name: "regular expression with a numeric source",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":1}}',
+  },
+  {
+    name: "regular expression with a numeric flavor",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":1,"source":"a"}}',
+  },
+  {
+    name: "regular expression with a flag es2025 lacks",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flags":"z","flavor":"es2025","source":"a"}}',
+  },
+  {
+    name: "tag with no version",
+    section: SECTION_TAG_SYNTAX,
+    text: 'fvj1:{"/EpochNsec":"AA"}',
+  },
+  {
+    name: "special number with a numeric state",
+    section: SECTION_NUMBERS,
+    text: 'fvj1:{"/SpecialNumber@1":0}',
+  },
 ];
 
 /** What the primitive classes' examples need beyond their makers. */
@@ -758,14 +1042,23 @@ export function fvj1DecodeOutcomeOf(stated: TextWithMods): Fvj1Outcome {
  * package's default JSON codec, made lenient, returns in place of refusing.
  * Section 9 of `3-json-encoding.md` has a lenient decoder return one for a
  * text a strict one refuses, and does not say where; these are where this
- * package puts them.
+ * package puts them. A `ProblematicValue` within another's state is part of
+ * what the other preserves, and has no path here.
  *
  * @throws What the codec throws.
  */
 export function fvj1ProblematicPathsOf(text: string): ValuePath[] {
-  return probedPathsOf(
+  const paths = probedPathsOf(
     newDefaultJsonCodecEngine({ lenient: true }).decode(text),
     (node) => node instanceof ProblematicValue,
+  );
+  return paths.filter((path) =>
+    !paths.some((outer) =>
+      outer.length < path.length &&
+      outer.every((step, index) =>
+        JSON.stringify(step) === JSON.stringify(path[index])
+      )
+    )
   );
 }
 
@@ -844,14 +1137,26 @@ function fixtureEntryOf(
       return reencoded;
     };
   } else {
-    const { text } = conformanceCase;
+    const { text, specDecodes } = conformanceCase;
     stated = { text };
-    specDecoded = (divergence === undefined)
+    specDecoded = (divergence === undefined || specDecodes)
       ? fvj1DecodeOutcomeOf(stated)
       : { refused: decodeRefusalOf(text) };
     reencode = () => fvj1EncodeOutcomeOf(fabricValueOfTextWithMods(stated));
-    if ("probes" in specDecoded) {
-      const restated = textWithModsOf(fabricValueOfTextWithMods(stated));
+    if (specDecodes && !("probes" in specDecoded)) {
+      throw new Error(
+        `${name}: says the spec decodes a text this package refuses, whose ` +
+          "decoding this module therefore does not compute.",
+      );
+    } else if ("probes" in specDecoded) {
+      const value = fabricValueOfTextWithMods(stated);
+      if (divergence !== undefined && plainJsonTextOf(value) === undefined) {
+        throw new Error(
+          `${name}: declares a divergence for a value whose spec text this ` +
+            "module does not compute.",
+        );
+      }
+      const restated = textWithModsOf(value);
       if (restated.unclaimed !== undefined || restated.patches !== undefined) {
         throw new Error(`${name}: decodes to a value no text alone writes.`);
       }

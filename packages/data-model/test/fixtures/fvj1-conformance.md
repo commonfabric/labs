@@ -83,7 +83,9 @@ need not match. This package puts a codec's refusal at the tagged value refused,
 a structural fault at the container being built when it was found, and a text
 that lacks the prefix or is not JSON at the root. The fields are this package's,
 such as an English message, so the fixture neither probes them nor re-encodes
-the value.
+the value. A `Problematic` value within another's state, as for a link whose
+payload holds a malformed tag, is part of what the other preserves, and is not
+counted.
 
 ## Divergences
 
@@ -106,6 +108,10 @@ for a record with the key `__proto__` or `constructor`, or decodes to another
 value, `divergence.decode` is this package's outcome, and
 `test/fvj1-conformance.test.ts` re-encodes the value the case makes instead of
 the value decoded.
+
+Where this package decodes a text as the spec does, but refuses to re-encode
+what it decodes to, as it does for `{"/quote":{"__proto__":1}}`, the entry has
+the spec's probes and `canonical`, and `divergence.encode` is the refusal.
 
 A divergence that does not hold fails generation, so that a fix here retires the
 mark rather than leaving it to mislead.
