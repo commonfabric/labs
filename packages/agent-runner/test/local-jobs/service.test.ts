@@ -5,7 +5,10 @@ import { join } from "@std/path";
 import type { HarnessTranscriptMessage } from "@commonfabric/cf-harness/contracts/transcript";
 
 import { browserChild, delegatedBrowse } from "./fixtures/delegated-browse.ts";
-import type { HarnessJobResult } from "../../src/harness-job.ts";
+import type {
+  HarnessJobOptions,
+  HarnessJobResult,
+} from "../../src/harness-job.ts";
 import { startLocalJobs } from "../../src/local-jobs/service.ts";
 
 /** A profile file with one read-only profile. */
@@ -74,6 +77,62 @@ describe("startLocalJobs()", () => {
       client.close();
     }
   };
+
+  for (const steering of [true, false]) {
+    it(`serves message steering with the lane capability ${steering}`, async () => {
+      const started = Promise.withResolvers<HarnessJobOptions>();
+      const result = Promise.withResolvers<HarnessJobResult>();
+      const running = await startLocalJobs(
+        {
+          socketPath: join(dir, "jobs.sock"),
+          profilesPath: join(dir, "profiles.json"),
+          maxConcurrent: 1,
+          workRoot: join(dir, "runs"),
+        },
+        () => {},
+        {
+          steering,
+          runJob: (_spec, options) => {
+            started.resolve(options);
+            return result.promise;
+          },
+        },
+      );
+      try {
+        const { body } = await call("/jobs", {
+          method: "POST",
+          body: JSON.stringify({
+            caller: "test",
+            profile: "read",
+            idempotencyKey: "k",
+            task: "First.",
+            resultSchema: true,
+          }),
+        });
+        const options = await started.promise;
+        expect((await call("/health")).body.routes).toContainEqual({
+          method: "POST",
+          path: "/jobs/:id/messages",
+        });
+        const response = await call(`/jobs/${body.job.id}/messages`, {
+          method: "POST",
+          body: JSON.stringify({
+            caller: "test",
+            idempotencyKey: "m",
+            message: "Next.",
+          }),
+        });
+        expect(response.status).toBe(steering ? 201 : 409);
+        if (steering) {
+          expect(response.body.message.delivery).toBe("pending");
+          expect(await options.takeMessages!(1)).toEqual(["Next."]);
+        } else expect(response.body.code).toBe("cannot_steer");
+      } finally {
+        result.resolve({ outcome: "cancelled" });
+        await running.stop();
+      }
+    });
+  }
 
   it("serves the API on a private socket with a private token and store", async () => {
     const { service, reported } = start();
