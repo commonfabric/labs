@@ -2,8 +2,9 @@
 
 This document specifies the JSON-compatible wire format used to represent
 `FabricValue`s, including the `fvj1:` encoding prefix, the tagged-object
-convention, escaping mechanisms, codec engine responsibilities, and the
-reservation rules for `/`-prefixed keys.
+convention, escaping mechanisms, codec engine responsibilities, the
+reservation rules for `/`-prefixed keys, and the canonical text an encoder
+writes.
 
 ## Status
 
@@ -34,13 +35,16 @@ a string is sufficient to tell whether it carries a `FabricValue` payload.
 
 - A conforming **encoder** emits the prefix exactly once, immediately before
   the JSON body, on every encoded value (including encoded primitives — e.g.,
-  the number `42` encodes as the seven-character string `fvj1:42`).
+  the number `42` encodes as the seven-character string `fvj1:42`). The JSON
+  body it writes is the canonical text of Sections 10 and 11.
 - A conforming **decoder** verifies the prefix is present before parsing the
   remainder as JSON, and strips the prefix before processing. It refuses JSON
   in which an object names one member twice, and a number too large in
   magnitude for an IEEE 754 double, which it does not round to an infinity or
   to the largest double. It refuses the number `-0` too: negative zero is
-  written only as `SpecialNumber@1` (Section 3).
+  written only as `SpecialNumber@1` (Section 3). Short of those refusals, it
+  accepts any JSON text, not only the canonical text an encoder writes
+  (Section 11.4).
 - A short detection helper (`JsonCodecEngine.seemsLikeEncoded()`) tests for
   the prefix without parsing — useful for routing arbitrary input through the
   right decode path.
@@ -491,7 +495,9 @@ When a JSON decode encounters a `/<Type>@<Version>` key it doesn't recognize,
 it wraps the data in `UnknownValue` (see `1-fabric-values.md` Section 3) to
 preserve it for round-tripping. Re-encoding reproduces the original key,
 the codec's `tagForValue()` reading back the preserved tag and `encode()`
-returning the preserved bare state, so the value passes through byte for byte.
+returning the preserved bare state, so the value passes through byte for byte
+when it arrived as the text this encoder writes for it: canonical text
+(Section 11), with the escape choices of Section 6 that this encoder makes.
 
 This applies only to a key that is syntactically a tag but claimed by no
 codec. A key that is not a tag at all is a structural violation rather than an
@@ -551,6 +557,9 @@ byte order**, using the same comparison defined for hashing in
 2. At each position, the byte with the smaller unsigned value comes first.
 3. If one key is a prefix of another, the shorter key comes first.
 
+A key holding a lone surrogate is compared by the bytes WTF-8 gives it, as
+`2-hash-byte-format.md` Sections 4.4 and 5 specify.
+
 This requirement applies to every plain object that reaches the wire,
 including:
 
@@ -560,9 +569,10 @@ including:
 - Plain objects wrapped in `/quote` (Section 6) — the keys of the quoted
   literal must be sorted.
 
-> **Why sort.** Sorting makes the JSON wire form **canonical**: two plain
-> objects with the same keys and values produce the same JSON bytes regardless
-> of the order in which their keys were inserted. This in turn lets two
+> **Why sort.** Sorting is the part of the JSON wire form's **canonical** text
+> (Section 11) that concerns records: two plain objects with the same keys and
+> values produce the same JSON bytes regardless of the order in which their keys
+> were inserted. This in turn lets two
 > independently-built encoders agree on a single byte-for-byte encoding for the
 > same logical value, which simplifies content addressing, deduplication, and
 > diffing. The sort key is the same UTF-8 byte order used by hashing, so the two
@@ -588,3 +598,100 @@ including:
 > regardless of the order in which they appeared on the wire). A conforming
 > encoder re-establishes UTF-8 canonical key order on output regardless of the
 > order in which keys were received or the host language's iteration rules.
+
+## 11. Canonical Text
+
+The sections before this one settle the structure of the JSON body for a value:
+which arrays, records, and tags it holds, the exact states of Section 3, and
+the order of a record's keys (Section 10). The one choice they leave an encoder
+is between `/object` and `/quote` where Section 6 allows either. This section
+settles the text: for a given structure, a conforming encoder **must** write
+exactly one text, fixing where whitespace goes, how a number is written, and
+how a string is written. Two independently built encoders that make the same
+choices under Section 6 therefore write the same text for the same value.
+
+The rules are the ones ECMAScript's `JSON.stringify()` follows when called with
+no indentation argument, and ECMA-262 is the authority wherever the summary
+below seems to leave room. The summary is written so that an implementation in
+another language can follow it without running JavaScript.
+
+### 11.1 Whitespace
+
+The body carries no insignificant whitespace: none before or after it, and none
+between tokens. Members of a record are separated by a bare `,`, and a key from
+its value by a bare `:`, so a record holding an array is written
+`{"a":[1,2],"b":null}`. Whitespace appears only inside strings, as Section 11.3
+writes it. The JSON examples elsewhere in this document are spaced for reading,
+and are not the text an encoder writes for them.
+
+### 11.2 Numbers
+
+A number in the body is finite and is not negative zero: `NaN`, the infinities,
+and `-0` are written as `SpecialNumber@1` (Section 3). A number is written as
+ECMA-262's `Number::toString` abstract operation writes it in radix 10, which
+is what `JSON.stringify()` writes for a finite number. In outline:
+
+1. **Digits.** Take the shortest string of significant decimal digits that,
+   scaled by a power of ten, reads back as the same IEEE 754 double. Where more
+   than one string of that length reads back, take the one closest in value to
+   the double, and of two equally close, the one whose last digit is even.
+   ECMA-262 states this last refinement as a recommendation, in a note to
+   `Number::toString`; this format requires it, since without it the final
+   digit is not determined.
+2. **Form.** Let `e` be the decimal exponent of the leading digit, so that the
+   number's magnitude is `d.ddd × 10^e`.
+   - For `-6 ≤ e ≤ 20`, the number is written positionally, with no exponent:
+     a whole number as its digits followed by any zeros needed, with no decimal
+     point; any other magnitude of 1 or more with the point after the first
+     `e + 1` digits; and a magnitude below 1 as `0.`, then `-e - 1` zeros,
+     then the digits.
+   - Otherwise, that is for `e ≥ 21` or `e ≤ -7`, it is written exponentially:
+     the first digit; then, if there are more, `.` and the rest; then a
+     lowercase `e`, the sign of the exponent (`+` or `-`, always present), and
+     the exponent's magnitude in decimal with no leading zeros.
+3. **Sign.** A negative number is `-` followed by the form of its magnitude. A
+   positive number carries no sign.
+
+So `0`, `-1`, `100`, `0.1`, `0.000001`, `1e-7`, `1.5e-7`,
+`100000000000000000000` (`1e20`), `1e+21`, `1.25e+21`, `0.30000000000000004`,
+and `5e-324` are each the one way to write their number. A digit string never
+ends in a zero after the point, and no number is written with an uppercase
+`E`, a leading `+`, or a leading zero other than the one before `.` in a
+magnitude below 1.
+
+### 11.3 Strings
+
+Every string in the body — a string value, a record key, a tag key such as
+`"/Bytes@1"` — is written as ECMA-262's `QuoteJSONString` abstract operation
+writes it. The string is taken as its sequence of UTF-16 code units, lone
+surrogates included (`1-fabric-values.md` Section 6.7), and written between two
+`"` characters, code unit by code unit:
+
+- `"` and `\` are written `\"` and `\\`.
+- U+0008, U+0009, U+000A, U+000C, and U+000D are written `\b`, `\t`, `\n`,
+  `\f`, and `\r`.
+- Every other code unit below U+0020, and every lone surrogate (a code unit in
+  the range U+D800 to U+DFFF that is not part of a high-then-low pair), is
+  written `\u` followed by four **lowercase** hexadecimal digits: U+001B is
+  `\u001b`, and a lone U+DABC is `\udabc`.
+- Everything else is written as itself, `/`, U+007F, U+2028, and U+2029
+  included, and a surrogate pair as the one character it encodes.
+
+Because a lone surrogate is always escaped, the body is always well-formed
+Unicode, whatever strings the value holds.
+
+### 11.4 Encoder and decoder
+
+These rules bind what an encoder writes, and nothing else. A decoder accepts
+any JSON text RFC 8259 allows, subject only to the refusals of Section 1.1:
+whitespace between tokens, a number written `1.0E2` or `1E+21`, an escaped `\/`
+or `\u2028`, an escape with uppercase digits such as `\uD800`, and keys in any
+order (Section 10) all decode. Such a text decodes to the same value its
+canonical form does, so re-encoding that value writes the canonical form, which
+can differ from the text that arrived even though the value does not.
+
+> **Why one text.** Section 10's reasoning for key order extends to the rest of
+> the body: when the text is a function of the structure alone, equal values
+> encoded with the same escape choices have equal text, which lets content
+> addressing, deduplication, and diffing work on the text directly, and lets a
+> conformance case state the exact text an encoder must produce.

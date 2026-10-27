@@ -74,7 +74,6 @@ import {
   commitSnapshotShare,
   prepareSnapshotShare,
 } from "@commonfabric/runner/cfc/share-snapshot";
-import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 import {
   initializePiecesController,
   type PieceController,
@@ -88,6 +87,7 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from "./multi-runtime-ipc.ts";
+import { writeOwnProfile } from "./own-profile-fixture.ts";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   clearTimingMeasures,
@@ -490,29 +490,6 @@ function componentBinding(
     ? cellRuntime(props).getCellFromLink(link)
     : prop.resolveAsCell();
 }
-
-/**
- * The writer `createOwnProfile` writes as, standing in for a profile's own
- * handlers, which a `represents-principal` claim needs.
- */
-const OWN_PROFILE_WRITER = "multi-runtime-own-profile";
-
-/**
- * A profile labeled as representing the principal that writes it, as a Fabric
- * profile is.
- */
-const OWN_PROFILE_SCHEMA = {
-  type: "object",
-  properties: { name: { type: "string" } },
-  ifc: {
-    addIntegrity: [{
-      kind: "represents-principal",
-      subject: { __ctCurrentPrincipal: true },
-    }],
-    ownerPrincipal: { __ctCurrentPrincipal: true },
-    writeAuthorizedBy: [OWN_PROFILE_WRITER],
-  },
-} as never;
 
 /** The trusted host gesture used after the test confirms the exact preview. */
 function shareClick() {
@@ -1119,22 +1096,16 @@ const handlers: Record<
    * space refuses can't read whom it attests.
    */
   async createOwnProfile({ name }) {
+    if (typeof name !== "string") {
+      throw new TypeError("createOwnProfile takes a string name.");
+    }
     const runtime = controller().runtime;
-    const space = await runtime.createSpace();
-    const tx = runtime.edit();
-    setCfcImplementationIdentity(tx, {
-      kind: "builtin",
-      builtinId: OWN_PROFILE_WRITER,
-    });
-    const profile = runtime.getCell(
-      space,
+    const profile = await writeOwnProfile(
+      runtime,
+      await runtime.createSpace(),
       "own profile",
-      OWN_PROFILE_SCHEMA,
-      tx,
+      name,
     );
-    profile.set({ name } as never);
-    const { error } = await tx.commit().settled;
-    if (error) throw error;
     await idle();
     return profile.getAsLink();
   },

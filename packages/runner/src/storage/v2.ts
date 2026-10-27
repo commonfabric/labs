@@ -161,6 +161,7 @@ import {
   type QueuedEventAppend,
 } from "./event-append-queue.ts";
 import {
+  type ClientUpdateRequired,
   IMemoryAddress,
   IMemorySpaceAddress,
   IMergedChanges,
@@ -1643,6 +1644,9 @@ export class StorageManager implements IStorageManager {
     MemorySpace,
     MemoryV2Client.DeclaredSpaceKind
   >();
+  #clientUpdateError: Error | undefined;
+  #clientUpdateStatus: ClientUpdateRequired | undefined;
+  #clientUpdateObservers = new Set<(status: ClientUpdateRequired) => void>();
   #spaceAccessErrors = new Map<MemorySpace, Error>();
   #spaceAccessObservers = new Set<(space: MemorySpace, error: Error) => void>();
   #spaceAccessChangeObservers = new Set<(space: MemorySpace) => void>();
@@ -2082,6 +2086,25 @@ export class StorageManager implements IStorageManager {
     return { accepted: true };
   }
 
+  /** Opens through admission unless this manager already requires an update. */
+  async #createSession(
+    ...args: Parameters<SessionFactory["create"]>
+  ): Promise<OpenedSpaceSession> {
+    if (this.#clientUpdateError !== undefined) throw this.#clientUpdateError;
+    const signal = args[3];
+    const noteFailure = (error: Error): void => {
+      if (signal?.aborted !== true) this.#noteClientUpdateRequired(error);
+    };
+    try {
+      const opened = await this.#sessionFactory.create(...args);
+      opened.session.subscribeTermination(noteFailure);
+      return opened;
+    } catch (error) {
+      if (error instanceof Error) noteFailure(error);
+      throw error;
+    }
+  }
+
   /**
    * Creates a space and returns its DID. See `IStorageManager.createSpace`.
    *
@@ -2122,7 +2145,7 @@ export class StorageManager implements IStorageManager {
       ...(spaceKind === undefined ? {} : { spaceKind }),
     };
     const aclId = aclDocId(space);
-    const { client, session } = await this.#sessionFactory.create(
+    const { client, session } = await this.#createSession(
       space,
       key,
       { sessionId: crypto.randomUUID(), ...declarations },
@@ -2134,7 +2157,7 @@ export class StorageManager implements IStorageManager {
       if (spaceKind !== undefined && client.serverFlags?.spaceKind !== true) {
         throw new Error("Host does not support declared space kinds");
       }
-      await session.transact({
+      const commit = session.transact({
         ...declarations,
         localSeq: 1,
         reads: {
@@ -2143,6 +2166,8 @@ export class StorageManager implements IStorageManager {
         },
         operations: [{ op: "set", id: aclId, value: { value: { ...acl } } }],
       });
+      this.trackPendingCommit(commit);
+      await commit;
     } finally {
       try {
         await client.close();
@@ -2346,7 +2371,7 @@ export class StorageManager implements IStorageManager {
     // told nothing of the kind, and stays open without being told. A session
     // of its own, opened now, is told the kind as the space stands, and is
     // closed however the read ends.
-    const { client, session } = await this.#sessionFactory.create(
+    const { client, session } = await this.#createSession(
       space,
       this.as,
       {
@@ -2424,13 +2449,14 @@ export class StorageManager implements IStorageManager {
               routeSignal,
             )
           : (_routeGeneration, routeSignal) =>
-            this.#sessionFactory.create(space, signer, {
+            this.#createSession(space, signer, {
               sessionId: this.#sessionId,
               ...this.#sessionDescriptorFields(),
             }, routeSignal),
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
         getTelemetry: () => this.#telemetry,
+        trackPendingCommit: (promise) => this.trackPendingCommit(promise),
         onSessionReplaced: () => {
           for (const observer of [...this.#spaceSessionReplacedObservers]) {
             try {
@@ -2441,6 +2467,7 @@ export class StorageManager implements IStorageManager {
           }
         },
         onSessionError: (error) => {
+          this.#noteClientUpdateRequired(error);
           for (const observer of [...this.#spaceSessionErrorObservers]) {
             try {
               observer(space, error);
@@ -2543,7 +2570,7 @@ export class StorageManager implements IStorageManager {
       const detached = this.#detachedSessionResumes.get(space);
       this.#detachedSessionResumes.delete(space);
       const normal = track(
-        await this.#sessionFactory.create(
+        await this.#createSession(
           space,
           signer,
           detached !== undefined && detached.routeGeneration === routeGeneration
@@ -2625,7 +2652,7 @@ export class StorageManager implements IStorageManager {
         bootstrapSessionId = crypto.randomUUID();
       }
       const bootstrap = track(
-        await this.#sessionFactory.create(
+        await this.#createSession(
           space,
           signer,
           { sessionId: bootstrapSessionId },
@@ -2639,7 +2666,7 @@ export class StorageManager implements IStorageManager {
         // first inspection; the resume below then opens what it wrote.
         if (isFresh(current)) {
           try {
-            await bootstrap.session.transact({
+            const commit = bootstrap.session.transact({
               localSeq: 1,
               reads: {
                 confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
@@ -2654,6 +2681,8 @@ export class StorageManager implements IStorageManager {
               assertCurrentRoute();
               routeState.writeIssuedGeneration = routeGeneration;
             });
+            this.trackPendingCommit(commit);
+            await commit;
           } catch (error) {
             // A concurrent genesis by the same user's other runtime wins the
             // same document; any other failure is a real bootstrap error.
@@ -2669,7 +2698,7 @@ export class StorageManager implements IStorageManager {
 
       assertCurrentRoute();
       const resumed = track(
-        await this.#sessionFactory.create(
+        await this.#createSession(
           space,
           signer,
           resumeNormal,
@@ -2805,6 +2834,48 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
+  clientUpdateRequired(): ClientUpdateRequired | undefined {
+    return this.#clientUpdateStatus;
+  }
+
+  /** @inheritDoc */
+  subscribeClientUpdateRequired(
+    observer: (status: ClientUpdateRequired) => void,
+  ): Cancel {
+    this.#clientUpdateObservers.add(observer);
+    if (this.#clientUpdateStatus !== undefined) {
+      try {
+        observer(this.#clientUpdateStatus);
+      } catch (cause) {
+        console.error("client-update-required subscriber threw:", cause);
+      }
+    }
+    return () => this.#clientUpdateObservers.delete(observer);
+  }
+
+  /** Retains a refusal and the write uncertainty present before commits settle. */
+  #noteClientUpdateRequired(error: Error): void {
+    if (!MemoryV2Client.isClientUpdateRequiredError(error)) return;
+    this.#clientUpdateError ??= error;
+    const unconfirmedWrites = this.hasPendingCommits() ||
+      this.#clientUpdateStatus?.unconfirmedWrites === true;
+    if (this.#clientUpdateStatus?.unconfirmedWrites === unconfirmedWrites) {
+      return;
+    }
+    this.#clientUpdateStatus = Object.freeze({
+      message: this.#clientUpdateError.message,
+      unconfirmedWrites,
+    });
+    for (const observer of [...this.#clientUpdateObservers]) {
+      try {
+        observer(this.#clientUpdateStatus);
+      } catch (cause) {
+        console.error("client-update-required subscriber threw:", cause);
+      }
+    }
+  }
+
+  /** @inheritDoc */
   spaceSessionError(space: MemorySpace): Error | undefined {
     return this.#providers.get(space)?.replica.sessionError();
   }
@@ -2863,6 +2934,9 @@ export class StorageManager implements IStorageManager {
       context,
     });
     if (this.#pendingCommits.size === 1) {
+      if (this.#clientUpdateError !== undefined) {
+        this.#noteClientUpdateRequired(this.#clientUpdateError);
+      }
       this.#notifyPendingCommits(true);
     }
     tracked.finally(() => {
@@ -4057,6 +4131,9 @@ type ProviderOptions = {
   subscription: IStorageSubscription;
   onAccessChange?: (error: Error | undefined) => void;
 
+  /** Registers operation writes with the manager's durability barrier. */
+  trackPendingCommit?: (promise: Promise<unknown>) => void;
+
   /** Called when the space's memory session is replaced on reconnect. */
   onSessionReplaced?: () => void;
 
@@ -4405,15 +4482,19 @@ class Provider
   }
 
   applyOperation(operation: ApplyOpOperation): Promise<ApplyOpResolution> {
-    return this.#followReplacement((replica) =>
+    const commit = this.#followReplacement((replica) =>
       replica.applyOperation(operation)
     );
+    this.options.trackPendingCommit?.(commit);
+    return commit;
   }
 
   releaseOperationField(operation: ReleaseOpFieldOperation): Promise<void> {
-    return this.#followReplacement((replica) =>
+    const commit = this.#followReplacement((replica) =>
       replica.releaseOperationField(operation)
     );
+    this.options.trackPendingCommit?.(commit);
+    return commit;
   }
 
   /**
@@ -5352,6 +5433,7 @@ export class SpaceReplica
    * silent absent read.
    */
   #lastAuthorizationError: IAuthorizationError | null = null;
+  #sessionAdmissionError: Error | undefined;
   #onAccessChange?: (error: Error | undefined) => void;
   #cancelTermination: Cancel | undefined;
   #onSessionReplaced?: () => void;
@@ -5817,8 +5899,12 @@ export class SpaceReplica
     // revocation (SessionRevokedError) carries a different name and is not an
     // authorization denial for this space, so only the AuthorizationError is
     // surfaced here.
-    const closeError = this.#sessionSession?.closeError;
-    if (closeError !== undefined && closeError.name === "AuthorizationError") {
+    const closeError = this.#sessionAdmissionError ??
+      this.#sessionSession?.closeError;
+    if (
+      closeError !== undefined && closeError.name === "AuthorizationError" &&
+      !MemoryV2Client.isClientUpdateRequiredError(closeError)
+    ) {
       return closeError;
     }
     return undefined;
@@ -5827,7 +5913,7 @@ export class SpaceReplica
   /** The terminal error of the remote subscription supplying this replica. */
   sessionError(): Error | undefined {
     if (this.#storeReadThrough() !== undefined) return undefined;
-    return this.#sessionSession?.closeError;
+    return this.#sessionAdmissionError ?? this.#sessionSession?.closeError;
   }
 
   /**
@@ -5918,48 +6004,8 @@ export class SpaceReplica
   }
 
   /**
-   * THE SESSION REMOUNT itself. Drop a memoized session that an ACL verdict
-   * terminated, so the next `#memoizedSessionHandle()` opens a fresh one.
-   *
-   * A revoked (or permanently denied) space session is TERMINAL for that
-   * session object: `terminateSession` (memory/v2/client.ts) closes it,
-   * clears its watch specs, and stores the verdict in `closeError`, which
-   * `#assertOpen()` then rethrows for every later call. Nothing on the read
-   * or commit path ever dropped the memoized mount —
-   * `#memoizedSessionHandle()` clears it only in `close()`/`closeNow()` — so
-   * every subsequent pull
-   * reused the same dead session and the space read `unauthorized` forever.
-   * `storage/rejection.ts`'s `SessionError` note named this gap when it was
-   * written: "the convergence argument is sound, only the remount is
-   * missing."
-   *
-   * WHY ONLY WORD OF AN ACL CHANGE TRIGGERS IT. The verdict that killed the
-   * session is a function of the space's ACL, so re-opening on any other
-   * schedule re-runs a decision whose inputs have not changed — one doomed
-   * round-trip per retry, exactly the cost `isTransientCommitRejection`
-   * refuses to pay for `SessionError`. This is the space-root ensure's own
-   * discipline for the very same boot order, one layer down: latch the owed
-   * work at the fail-closed refusal, consume it when a commit touches
-   * `of:<space>` (executor/space-server.ts `#rootEnsureAwaitingOwner`). A
-   * client sees no ACL commit for a space it was refused, so its word is a
-   * host's retry instead, one attempt per call.
-   *
-   * WHY IT CANNOT WIDEN AUTHORITY. This re-opens a session; it does not
-   * decide one. `session.open` re-runs the server's full admission against
-   * the ACL as it now stands, and under OW31's ruled read posture a serving
-   * mount carries `actingAs: "space-owner"`, so the server re-resolves the
-   * binding from the LANDED ACL and the session runs as whoever owns the
-   * space now. Two cases:
-   *   - the genesis case (this defect): the pre-genesis session opened under
-   *     the service envelope's fresh-space READ floor and the genesis ACL
-   *     `{user: OWNER}` de-authorized it by design. The re-open binds the
-   *     user, who is OWNER, and is admitted.
-   *   - a GENUINE de-authorization (the user removed, ownership moved): the
-   *     re-open is DENIED at `session.open`. `#memoizedSessionHandle()`'s
-   *     catch drops the failed handle, the load keeps failing, and the
-   *     served event
-   *     keeps deferring — the ratified wedge, which OW54's give-up arm
-   *     covers. Fail-closed, and loud.
+   * Reconsiders a permanent admission or ACL refusal after word of an ACL
+   * change. Runtime incompatibility requires a new runtime and stays latched.
    */
   #consumeOwedSessionRemount(): void {
     if (!this.#aclChangedSinceMount) return;
@@ -5974,7 +6020,12 @@ export class SpaceReplica
     // the client's own `reconnect()`/`restore()` already heals) must all be
     // left alone: this arm exists for the one termination class no other
     // path recovers from.
-    const closeError = this.#sessionSession?.closeError;
+    const closeError = this.#sessionAdmissionError ??
+      this.#sessionSession?.closeError;
+    if (MemoryV2Client.isClientUpdateRequiredError(closeError)) {
+      this.#aclChangedSinceMount = false;
+      return;
+    }
     if (
       closeError === undefined ||
       (closeError.name !== "SessionRevokedError" &&
@@ -5992,6 +6043,7 @@ export class SpaceReplica
     }
     this.#aclChangedSinceMount = false;
     this.#sessionHandle = undefined;
+    this.#sessionAdmissionError = undefined;
     this.#sessionClient = undefined;
     // Dropping the terminated session drops the `closeError` half of
     // `authorizationError()` with it. That is the right direction — keeping it
@@ -7094,7 +7146,8 @@ export class SpaceReplica
     const sessionError = this.sessionError();
     if (
       !this.#closed && sessionError !== undefined &&
-      sessionError.name !== "AuthorizationError"
+      (sessionError.name !== "AuthorizationError" ||
+        MemoryV2Client.isClientUpdateRequiredError(sessionError))
     ) {
       return { error: toPullError(sessionError) };
     }
@@ -11899,6 +11952,7 @@ export class SpaceReplica
           }
           this.#sessionClient = resolved.client;
           this.#sessionSession = resolved.session;
+          this.#sessionAdmissionError = undefined;
           this.#lastAuthorizationError = null;
           this.#onAccessChange?.(undefined);
           this.#cancelTermination?.();
@@ -11908,7 +11962,10 @@ export class SpaceReplica
                 return;
               }
               const reported = this.sessionError() !== undefined;
-              if (MemoryV2Client.isPermanentAuthorizationError(error)) {
+              if (
+                MemoryV2Client.isPermanentAuthorizationError(error) &&
+                !MemoryV2Client.isClientUpdateRequiredError(error)
+              ) {
                 this.#onAccessChange?.(error);
               }
               if (reported) this.#onSessionError?.(error);
@@ -11936,11 +11993,22 @@ export class SpaceReplica
         },
       ).catch((error) => {
         if (this.#sessionHandle === handle) {
-          this.#sessionHandle = undefined;
-          if (
-            !this.#closed && error instanceof Error &&
-            isPermanentAuthorizationFailure(error)
-          ) this.#onAccessChange?.(error);
+          const permanent = error instanceof Error && (
+            isPermanentAuthorizationFailure(error) ||
+            MemoryV2Client.isClientUpdateRequiredError(error)
+          );
+          if (permanent && !this.#closed) {
+            this.#sessionAdmissionError = error;
+            if (
+              isPermanentAuthorizationFailure(error) &&
+              !MemoryV2Client.isClientUpdateRequiredError(error)
+            ) {
+              this.#onAccessChange?.(error);
+            }
+            this.#onSessionError?.(error);
+          } else {
+            this.#sessionHandle = undefined;
+          }
         }
         throw error;
       });
@@ -11997,7 +12065,10 @@ const isPermanentAuthorizationFailure = (error: { name: string }): boolean =>
 // tell an authorization denial apart from a transport failure. Everything else
 // remains a ConnectionError.
 const toPullError = (error: unknown): PullError => {
-  if (!(error instanceof Error) || error.name !== "AuthorizationError") {
+  if (
+    !(error instanceof Error) || error.name !== "AuthorizationError" ||
+    MemoryV2Client.isClientUpdateRequiredError(error)
+  ) {
     return toConnectionError(error);
   }
   const details = error as unknown as {

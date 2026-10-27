@@ -166,14 +166,20 @@ export interface StoreAccess {
 }
 
 /** The store as it really is. */
-export function liveStore(bucket: string): StoreAccess {
+export function liveStore(
+  bucket: string,
+  fetchImpl: typeof fetch = fetch,
+): StoreAccess {
   return {
     list: (prefix) => listObjects({ bucket, prefix }),
     read: (objectName) => readObject({ bucket, objectName }),
     readText: async (objectName) => {
-      const response = await fetch(objectUrl(bucket, objectName));
+      const response = await fetchImpl(objectUrl(bucket, objectName), {
+        headers: { "accept-encoding": "identity" },
+      });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      // Transcoded on the way out, so this is already the JSON.
+      // Let Cloud Storage decode the stored gzip object: Deno 2.9.8 fails
+      // to read the complete large aggregate with automatic decompression.
       return await response.text();
     },
     create: async (name, body) => {

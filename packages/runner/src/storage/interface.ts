@@ -274,6 +274,15 @@ export type StoreReadThrough = (
   address: { id: URI; scopeKey: ScopeKey },
 ) => SessionSyncUpsert | undefined;
 
+/** Runtime replacement required by a memory server. */
+export type ClientUpdateRequired = {
+  /** Server's explanation of the incompatibility. */
+  readonly message: string;
+
+  /** Writes were unconfirmed at refusal or attempted afterward. */
+  readonly unconfirmedWrites: boolean;
+};
+
 /**
  * A stored document: its space and id, and the scope it is read in, with the
  * scope instance when the read names one.
@@ -552,6 +561,14 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    */
   spaceSessionError?(space: MemorySpace): Error | undefined;
 
+  /** Runtime incompatibility retained until this manager is replaced. */
+  clientUpdateRequired?(): ClientUpdateRequired | undefined;
+
+  /** Observes incompatibility, immediately replaying an existing verdict. */
+  subscribeClientUpdateRequired?(
+    observer: (status: ClientUpdateRequired) => void,
+  ): Cancel;
+
   /** The latest authoritative access loss for a space, cleared on reopening. */
   spaceAccessError?(space: MemorySpace): Error | undefined;
 
@@ -628,10 +645,9 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   getSizes?(): StorageSizes;
 
   /**
-   * Whether any registered commit is still unconfirmed. Every write flows
-   * through `edit()` transactions, so this is the authoritative "are there
-   * unconfirmed local writes" signal — narrower than `synced()`, which also
-   * waits for pulls and cross-space read work.
+   * Whether any registered commit is still unconfirmed, including space
+   * genesis and home bootstrap writes. This is narrower than `synced()`,
+   * which also waits for pulls and cross-space read work.
    */
   hasPendingCommits(): boolean;
 

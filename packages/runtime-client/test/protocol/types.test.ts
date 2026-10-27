@@ -1,12 +1,15 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { isErrorNotification } from "@/protocol/guards.ts";
 import {
   type CellRefusedAnswer,
   type CellValueAnswer,
   ClientNotificationType,
+  type ErrorNotification,
   NotificationType,
   RequestType,
+  RuntimeErrorCode,
 } from "@/protocol/types.ts";
 
 // The runtime the rest of the repository describes has pieces, not pages. The
@@ -100,5 +103,46 @@ describe("a read's answer", () => {
     const valued: CellValueAnswer = { value: "shown", refused: refusal };
 
     expect([both, labeled, valued]).toHaveLength(3);
+  });
+});
+
+describe("an error report's write uncertainty", () => {
+  it("requires a boolean for an update-required report", () => {
+    const report = {
+      type: NotificationType.ErrorReport,
+      code: RuntimeErrorCode.ClientUpdateRequired,
+      message: "Reload this runtime",
+    } as const;
+    for (const unconfirmedWrites of [true, false]) {
+      const notice: ErrorNotification = { ...report, unconfirmedWrites };
+      expect(isErrorNotification(notice)).toBe(true);
+    }
+    // @ts-expect-error Update-required reports must describe write uncertainty.
+    const missing: ErrorNotification = report;
+    expect(isErrorNotification(missing)).toBe(false);
+    expect(isErrorNotification({ ...report, unconfirmedWrites: "false" }))
+      .toBe(false);
+  });
+
+  it("refuses write uncertainty on unrelated or uncoded reports", () => {
+    const report = {
+      type: NotificationType.ErrorReport,
+      message: "Something failed",
+    } as const;
+    const unrelated = {
+      ...report,
+      code: RuntimeErrorCode.CompilerStackLoadFailed,
+    } as const;
+    expect(isErrorNotification(report)).toBe(true);
+    expect(isErrorNotification(unrelated)).toBe(true);
+    // @ts-expect-error Write uncertainty requires the update-required code.
+    const uncoded: ErrorNotification = { ...report, unconfirmedWrites: true };
+    // @ts-expect-error A compiler error cannot carry update-required recovery.
+    const contradictory: ErrorNotification = {
+      ...unrelated,
+      unconfirmedWrites: false,
+    };
+    expect(isErrorNotification(uncoded)).toBe(false);
+    expect(isErrorNotification(contradictory)).toBe(false);
   });
 });

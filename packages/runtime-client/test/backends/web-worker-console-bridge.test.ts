@@ -231,6 +231,7 @@ describe("web-worker-console-bridge", () => {
       const notifications: unknown[] = [];
       let notificationError: Error | undefined;
       const fakeWorker = {
+        reportClientUpdateRequired: () => {},
         isDisposed: () => disposed,
         handleRequest: (request: { type: RequestType }) => {
           switch (request.type) {

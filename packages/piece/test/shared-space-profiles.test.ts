@@ -35,6 +35,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 
 import {
@@ -160,6 +161,10 @@ interface Host {
   controller: PiecesController;
 }
 
+// One cache for every runtime this file makes, so that a pattern compiles
+// once per file rather than once per case.
+const moduleByteCache = createCompileByteCache();
+
 describe("shared-space-profiles", () => {
   let server: ReturnType<typeof newLoopbackServer>;
   let hosts: Host[];
@@ -231,6 +236,7 @@ describe("shared-space-profiles", () => {
   async function open(): Promise<Host> {
     const storage = EmulatedStorageManager.connectTo(server, { as: identity });
     const runtime = new Runtime({
+      moduleByteCache,
       apiUrl: new URL(HOST),
       storageManager: storage,
       experimental: { serverExecution: false },
@@ -456,6 +462,7 @@ describe("shared-space-profiles", () => {
   async function strangersProfile(name: string): Promise<Cell<unknown>> {
     const storage = EmulatedStorageManager.connectTo(server, { as: stranger });
     const theirs = new Runtime({
+      moduleByteCache,
       apiUrl: new URL(HOST),
       storageManager: storage,
       experimental: { serverExecution: false },

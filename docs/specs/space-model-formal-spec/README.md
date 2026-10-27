@@ -17,8 +17,8 @@ This spec covers:
 - **Codec engines** (Section 4) -- boundary-crossing encoding strategy, the
   `encode()`/`decode()` boundary, and boundary inventory
 - **JSON encoding** -- the `fvj1:` encoding prefix, the `/<Type>@<Version>`
-  wire format for special types, escaping, detection rules, and the `/`-key
-  reservation rule
+  wire format for special types, escaping, detection rules, the `/`-key
+  reservation rule, and the canonical text an encoder writes
 - **Realm-crossing encoding** -- the wire format for a structured-clone
   transport: the envelope and the marker that identifies it, per-type
   encodings, the ownership contract on decode, and what the format refuses
@@ -38,8 +38,9 @@ system, schemas.
   the hash algorithm.
 - [3-json-encoding.md](./3-json-encoding.md) -- The JSON wire format for
   `FabricValue`s: the `fvj1:` encoding prefix, `/<Type>@<Version>` tagged
-  objects, standard type encodings, detection, escaping, and the `/`-key
-  reservation rule.
+  objects, standard type encodings, detection, escaping, the `/`-key
+  reservation rule, and the canonical text an encoder writes: key order,
+  numbers, strings, and whitespace.
 - [4-realm-encoding.md](./4-realm-encoding.md) -- The realm-crossing wire
   format, for the self-dealing boundary internal to a runtime --
   `structuredClone()` and `postMessage()`, and a durable structured-clone

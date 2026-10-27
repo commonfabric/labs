@@ -71,6 +71,7 @@ function fakeProcessor() {
   let disposed = false;
   const processor = {
     isDisposed: () => disposed,
+    reportClientUpdateRequired: () => {},
     assertAttachable: (asserted: RuntimeSecurityContext) => {
       if (asserted.identity === runningContext.identity) return;
       throw new Error(

@@ -11,6 +11,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import {
@@ -67,6 +68,10 @@ const DECLARATIONS: [string, string][] = [
   ],
 ];
 
+// One cache for every runtime this file makes, so that a pattern compiles
+// once per file rather than once per case.
+const moduleByteCache = createCompileByteCache();
+
 describe("home-profile-lists", () => {
   let manager: EmulatedStorageManager;
   let rt: Runtime;
@@ -76,6 +81,7 @@ describe("home-profile-lists", () => {
   beforeEach(async () => {
     manager = EmulatedStorageManager.emulate({ as: signer });
     rt = new Runtime({
+      moduleByteCache,
       apiUrl: new URL(import.meta.url),
       storageManager: manager,
     });

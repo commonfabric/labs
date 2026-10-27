@@ -2399,6 +2399,9 @@ export type SessionAdmissibleMessage = {
 export type V2Error = {
   name: string;
   message: string;
+  /** Runtime incompatibility that requires replacing the client before mounting. */
+  clientUpdateRequired?: true;
+
   precondition?: string;
   retryAfterSeq?: number;
 
