@@ -39,8 +39,8 @@ latency predictions or unconditional complexity guarantees.
 | Shared keyed backlink-row lookup                            | Remove each demanding topic's repeated search through N cross-reference rows. With N consumers, eliminate a potential N-by-N lookup stage. | The pivot producer remains. Index maintenance and consumer demand can add graph work; putting an index inside every topic would duplicate maintenance. |
 | Reuse active counts/views                                   | Avoid duplicate C- and L-sized filtering for presence and link resolution.                                                                 | Likely a modest constant-factor benefit; sharing a broader view can increase demand.                                                                   |
 | Maintain source-to-destination edges grouped by destination | On a local mention edit, update affected edges and destination buckets instead of rescanning all source lists for every destination.       | Building all edges afresh retains producer cost. Ordering, duplicate occurrences, membership reconciliation, and large buckets require work.           |
-| Maintained comment count                                    | Reduce repeated predicate work for large threads when one independently linked comment changes.                                            | Shared captures or broad source edits can invalidate many predicates; small threads may not benefit.                                                   |
-| Maintained activity maxima                                  | Reduce full comment/link timestamp scans on localized activity edits.                                                                      | Must include edit and removal timestamps; score production and public Cell typing can dominate the benefit.                                            |
+| Maintained comment count                                    | Adopted as a stored input (`commentCount`) the topic's verbs keep; T4 closed on it.                                                        | Reliable once every writer runs the current topic module and legacy writers are retired.                                                               |
+| Maintained activity maxima                                  | Adopted as a stored input (`lastActivityAt`) the topic's verbs keep, counting stamped removals; T4 closed on it.                           | Reliable once every writer runs the current topic module and legacy writers are retired.                                                               |
 
 A reduction in reads can coexist with increased startup cost, graph size,
 storage, or latency. Do not promise a percentage speedup before matched
@@ -171,7 +171,10 @@ implementation and prototypes can begin earlier.
       a topic's comment count and last activity are stored inputs its verbs
       keep in the write that changes them, so there is no per-thread
       derivation left to maintain or to measure, and the thread cases that
-      would have measured one are gone from the headless tier.
+      would have measured one are gone from the headless tier. The stored
+      values are reliable once every writer runs the current topic module and
+      legacy writers are retired
+      ([rollout](../../packages/patterns/topics/state-upgrades.md#rollout-and-rollback)).
 - [ ] **T5 — Harden accepted changes and prepare release artifacts.** Add
       regression read budgets, run all relevant authored/package/integration
       tests, preserve compatibility baselines, pass the
@@ -343,10 +346,9 @@ or memory measurements. The browser tier records body reads, graph size, and
 timings; attempt reads come from the headless tier, because the runtime client's
 read-stats request enables body accounting only. Count producer and consumer
 work separately but decide on the complete settled operation. T0 measured the
-browser tier's reopen workload to run none of the pivot, backlink,
-comment-count, or last-activity lifts, so that one has no producer or consumer
-work to separate. Network claims require bytes/subscription measurements in
-addition to read accounting.
+browser tier's reopen workload to run neither the pivot nor the backlinks lift,
+so that one has no producer or consumer work to separate. Network claims
+require bytes/subscription measurements in addition to read accounting.
 
 T0 must set numeric baseline-derived acceptance limits before tuning candidates.
 Read budgets are total and per-run, with explicit output/UI demand. Read and
