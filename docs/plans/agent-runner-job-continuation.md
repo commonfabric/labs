@@ -64,59 +64,109 @@ The message is addressed to job `<id>`, but it lands on the newest job of
 lands on the head, a conversation never forks, and a caller that holds any
 job id of a chat can keep talking to it.
 
-What happens next depends on the head's state:
+### What becomes of a message
 
-| Head state | What the message becomes |
+Every accepted message waits on one job, its *holder*, and ends with exactly
+one outcome:
+
+- **`delivered`:** the holder's run took it at a turn boundary, so the
+  holder's result answers it.
+- **`follow-up`:** it opened a follow-up job, whose result answers it.
+- **`dropped`,** with a `reason`, when nothing will answer it:
+  - `cancelled`: a cancel request arrived after the message;
+  - `not_continuable`: its holder ended with no run to continue;
+  - `interrupted`: a stop or crash cut its holder off.
+
+A job *has a recorded run* when its run reached a complete checkpoint, a
+point at which every tool call had its result, that a follow-up can start
+from. The lane tells the store which, as it ends the job. A job that failed
+`PROFILE_UNAVAILABLE` has none, and neither has a job cancelled while
+queued. A run that the harness ended itself, by finishing, failing or being
+cancelled, recorded where it stopped, and section 2 says how a follow-up
+treats a turn it cut off. An `interrupted` job never counts as having a
+recorded run. A stop or crash ended it outside the harness, so the runner
+cannot tell whether the run's records are intact, or which of its commands
+ran after the last checkpoint. That is the same reason the store never
+reruns an interrupted job.
+
+**At acceptance**, the head's state decides:
+
+| Head | The message |
 |---|---|
-| `queued` or `running`, no cancel requested | A **steer**, delivered before the head's next model call. |
-| `running`, cancel requested | A **follow-up**, started when the head ends `cancelled`. |
-| `completed`, `failed` or `cancelled`, with a recorded run | A **follow-up**, started now. |
-| `interrupted`, or `failed` with no recorded run | Refused as `not_continuable`. |
+| `queued` or `running`, no cancel requested | Waits on the head. Its run may take it. One that carries `instructions` is refused `instructions_on_steer`. |
+| `running`, cancel requested | Waits on the head. Its run will not take it, because the run is stopping. |
+| Finished, with a recorded run | Opens a follow-up at once. |
+| Finished, with no recorded run | Refused `not_continuable`. |
 
-A job "has a recorded run" when the harness wrote a run state the job can be
-continued from. A job that failed `PROFILE_UNAVAILABLE` never started a run.
-An `interrupted` job is refused because a stop or crash cut its turn off
-partway. Its last checkpoint may predate commands that already ran, and a
-follow-up from it could run them again. That is the same reason the store
-never reruns an interrupted job.
+**At a turn boundary**, the run takes the messages waiting on its job in
+acceptance order. It stops at the first message that carries `instructions`
+or that was accepted after a cancel request, because the run cannot answer
+either one. Messages behind such a message wait with it, so the model never
+reads a message before an earlier one.
+
+**When the holder ends**, every message still waiting on it gets its outcome
+or moves, in the transaction that writes the holder's terminal event:
+
+1. If the holder ends `cancelled`, the messages accepted before the cancel
+   request are `dropped` as `cancelled`. The caller cancelled that work, and
+   a message accepted after the request is a new request.
+2. If the holder has no recorded run, the remaining messages are `dropped`
+   as `not_continuable`, or as `interrupted` when restart recovery ends it.
+3. Otherwise, the first remaining message opens the holder's follow-up,
+   carrying that message's `instructions` if it has any. Every other
+   remaining message *moves* to the follow-up in order, and waits there
+   under the same rules. A moved message without `instructions` is therefore
+   taken before the follow-up's first model call. A moved message that
+   carries `instructions` waits for the follow-up to end and opens the next
+   follow-up. Each instruction replacement gets its own job, and the chain
+   never forks.
 
 ### The answer
 
-`201` on first acceptance, `200` for a replay of the same request:
+`201` on first acceptance, `200` for a replay:
 
 ```json
 {
-  "message": {"key": "chat-msg-81", "mode": "steer", "jobId": "job-…", "acceptedAt": "…"},
-  "job": {"id": "job-…", "state": "running", "…": "…"}
+  "message": {"key": "chat-msg-81", "target": "job-a", "acceptedAt": "…", "delivery": "pending", "jobId": "job-a"},
+  "job": {"id": "job-a", "state": "running", "…": "…"}
 }
 ```
 
-`mode` is `steer` or `follow-up`. `job` is the job that takes the message:
-for a steer, that is the head itself; for a follow-up, it is the new job.
-For a follow-up held back by a pending cancel, `job` is the head, and the new
-job's id arrives on the head's event stream (below).
+`message` is the message's record:
+
+- `key`, `target` (the job id the request named) and `acceptedAt` are fixed
+  at acceptance.
+- `delivery` is `pending` or one of the outcomes. `jobId` is the job it
+  waits on, or the job whose result answers it. `turn` is set once a run has
+  delivered it, and `reason` once it has been dropped. These fields always
+  hold the current values.
+
+`job` is the current snapshot of the job `jobId` names. On first acceptance,
+`delivery` is `pending` (waiting on the head) or `follow-up` (a finished head
+opened a new job).
 
 ### Events on the existing stream
 
-A steer appends `message` events to the job that takes it, in the job's
-usual `seq` order:
+A job's stream carries one `message` event each time a message starts
+waiting on it, gets an outcome, or leaves it:
 
-- `{key, delivery: "pending"}` when the steer is accepted.
-- `{key, delivery: "delivered", turn}` when the run takes it, with the model
-  turn it joins.
-- `{key, delivery: "follow-up", jobId}` when the run ended before taking it.
-  The runner then starts a follow-up with it, described under "Ordering".
-- `{key, delivery: "dropped", reason: "cancelled"}` when a cancel arrived
-  after the steer and before the run took it.
+- `{key, delivery: "pending"}` when it starts waiting there, on acceptance or
+  on moving in;
+- `{key, delivery: "delivered", turn}` when the run takes it;
+- `{key, delivery: "follow-up", jobId}` when it opens this job's follow-up;
+- `{key, delivery: "moved", jobId}` when it moves to that follow-up;
+- `{key, delivery: "dropped", reason}`.
 
-When a run ends with steers still pending, the store writes their
-`follow-up` events, the new job and the terminal `state` event in one
-transaction, with the terminal event last. A reader that follows the stream
-to its end therefore always learns where its message went.
+Each message that waited on a job has its outcome or `moved` event before
+that job's terminal `state` event, because both are written in one
+transaction. A reader that follows a stream to its end therefore learns,
+for every message that waited on that job, where it went. This holds for
+every way a job ends: a run's own end, a cancel while queued,
+`PROFILE_UNAVAILABLE`, and restart recovery.
 
-A follow-up of a job that had already finished appends nothing to that job:
-its stream has already ended. The new job's own stream starts with `queued`,
-as every job's does.
+A follow-up of a job that had already finished appends nothing to that job,
+because its stream has already ended. The new job's stream starts with
+`queued`, as every job's does.
 
 ### The job view
 
@@ -124,23 +174,26 @@ as every job's does.
 
 - `continues`: the job this one follows, when it is a follow-up.
 - `continuedBy`: the follow-up that followed this one, once there is one.
-- `messages`: the steers this job took or was sent, in order, each as
-  `{key, message, acceptedAt, delivery, turn?, jobId?}`.
+- `messages`: the records of the messages that waited on this job, in order.
 
 A follow-up's `request` is the request of the job it follows, with `task`
-replaced by the message, and `instructions` replaced when the message
-carries them. Its `idempotencyKey` is the message's key.
+replaced by the message that opened it, and `instructions` replaced when
+that message carries them. Its `idempotencyKey` is that message's key.
 
 ### Replay
 
-The store keeps `(caller, idempotencyKey)` unique across jobs and messages:
+The store keeps `(caller, idempotencyKey)` unique across jobs and messages.
+A message's fingerprint is its `target`, its `message`, and its
+`instructions`, either absent or with their value. The runner checks replay
+first, before it resolves the head or applies any state refusal:
 
-- **Same key, same target, same message and instructions:** the original answer, `200`,
-  nothing new written. This holds whatever the job has done since. A steer
-  replayed after it was delivered still answers `mode: "steer"`, and the
-  current `delivery` is in the job view.
-- **Same key, another message or target:** `409 idempotency_conflict`.
-- **A key already used by `POST /jobs`:** `409 idempotency_conflict`.
+- **Same key, same fingerprint:** `200`, with the message's record and the
+  current snapshot, as under "The answer". Nothing new is written. This holds
+  whatever has happened since, including a head that has moved on or a
+  target that can no longer be continued.
+- **Same key, another fingerprint:** `409 idempotency_conflict`.
+- **A key already used by `POST /jobs`, or one that names a message on
+  `POST /jobs`:** `409 idempotency_conflict`.
 
 ### Refusals
 
@@ -152,35 +205,33 @@ Every refusal is `{ok: false, code, error}`, as elsewhere on the socket.
 | 413 | `too_large` | The body runs past 1 MiB. |
 | 404 | `not_found` | No job has `<id>`. |
 | 403 | `not_callers` | `caller` is not the caller that enqueued the conversation. |
-| 409 | `not_continuable` | The head is `interrupted`, or it failed before any run was recorded. |
-| 409 | `cannot_steer` | The head is running, and its run has no way to take a message. |
-| 409 | `instructions_on_steer` | The message carries `instructions`, and the head would take it as a steer. |
-| 400 | `unknown_profile` | A follow-up's profile is no longer one the host names. |
+| 409 | `not_continuable` | The head has finished with no recorded run. |
+| 409 | `instructions_on_steer` | The message carries `instructions`, and the head is queued or running with no cancel requested. |
+| 409 | `cannot_steer` | The head is queued or running with no cancel requested, and the lane's runs cannot take messages. |
+| 400 | `unknown_profile` | A follow-up would open now, and its profile is no longer one the host names. |
 | 409 | `idempotency_conflict` | See "Replay". |
 
 `not_callers` is not a security boundary: the socket and its token are the
 authority, as for every other route. It keeps one client from steering
 another client's conversation by mistake.
 
-`cannot_steer` exists for a run that cannot drain messages, for example a
-lane given a `runJob` that does not take the seam. Every job that runs
-through `runHarnessJob` will be able to take messages once stage 1 lands.
+`cannot_steer` applies only to a message the head's run could take. A
+message to a head whose cancel was requested waits for the follow-up
+whatever the lane can do. The refusal exists for a lane given a `runJob`
+that does not take the seam. Every job that runs through `runHarnessJob` can
+take messages once stage 4 lands.
 
 ### Ordering
 
 - The store accepts messages to one conversation one at a time, in its
   immediate write transaction. Acceptance order is the conversation's order.
-- At a turn boundary, the run takes every steer pending at that moment and
-  appends each as its own user message, in acceptance order.
-- When a run ends with steers still pending, the first one becomes the
-  follow-up's `task`. The rest become pending steers on the follow-up, which
-  takes them before its first model call. The model therefore reads them in
-  acceptance order, before it answers anything.
-- A message sent while a follow-up is still `queued` is a steer on that
-  follow-up, so it also arrives before the first model call.
-- A cancel drops the steers accepted before it. A message accepted after a
-  cancel request waits for the job to end, then starts its follow-up. The
-  caller cancelled the earlier work, and the later message is a new request.
+- A run takes the waiting messages in acceptance order, up to the first it
+  cannot answer, and appends each as its own user message.
+- When a holder ends, the outcomes and moves above keep acceptance order. The
+  first remaining message opens the follow-up, and the rest wait on the
+  follow-up in their order.
+- A message sent while a follow-up is still `queued` waits on it, so it also
+  arrives before that follow-up's first model call.
 
 ## 2. What "running" and "finished" mean
 
@@ -203,16 +254,29 @@ its profile.
 
 **What a follow-up carries.**
 
-- the resumable transcript of the job it follows, meaning every message
-  except the harness's turn-local notices;
+- the transcript of the job it follows, up to that run's last complete
+  checkpoint, meaning the last point at which every tool call had its
+  result. The harness's turn-local notices are left out;
 - that job's handle table, so the handles the model holds still resolve;
-- its structured-result configuration;
+- its result schema. Each job writes its result to a file of its own, named
+  for the job, so a follow-up never overwrites or deletes the result file of
+  the job it follows;
 - its CFC record;
 - its workspace. A conversation has one workspace, its first job's, so files
   the model wrote stay where it left them. Only the head of a conversation
   runs, so no two runs write that workspace at once.
 
 Its artifacts are its own, under its own job id.
+
+**A run cut off partway.** A job that ended `cancelled` or `failed` may have
+stopped in the middle of a turn, after some of that turn's commands ran and
+before their results were recorded. Its follow-up starts from the last
+complete checkpoint. The harness then adds its interrupted-turn notice ahead
+of the new message, as the interactive chat service does after a cancelled
+turn. The model is told that the turn was cut off and that its effects are
+unknown, rather than finding the turn missing. A job whose run never reached
+a complete checkpoint has no recorded run, and a message to it is refused
+`not_continuable`.
 
 ## 3. How cf-harness takes a message
 
@@ -223,7 +287,9 @@ turn while one runs, so it has no steer either. Two harness changes are
 needed.
 
 **The steer seam.** `CfHarnessPromptLoop` takes one new optional option,
-`takeMessages: () => readonly string[]`.
+`takeMessages: (turn) => readonly string[]`, which may also return a promise.
+`turn` is the number of the model turn whose request will include the
+messages.
 
 - The loop calls it at the top of each model turn, before the model request.
   That point follows the previous turn's tool results and checkpoint, and on
@@ -232,11 +298,15 @@ needed.
   The harness adds no framing; any framing is the caller's, and so are the
   evals of what it tells the model. These are ordinary transcript messages,
   not turn-local notices, so they stay in the resumable history.
-- The loop also calls it before each of its two exits: a final text answer,
-  and an accepted `submit_result` under `stopOnStructuredResult`. If either
-  call returns anything, the loop takes another turn instead of ending.
-- Once the loop has ended, it never calls `takeMessages` again. A message is
-  therefore delivered exactly when the loop takes it, and the lane marks it
+- The loop also calls it before each of its exits: a final text answer, an
+  accepted `submit_result` under `stopOnStructuredResult`, and an admitted
+  task ending. It does so only while a model turn remains. If the call
+  returns anything, the loop takes another turn instead of ending. On the
+  last permitted turn the loop ends without calling it, so a message
+  arriving then stays waiting and opens the follow-up.
+- Once the loop has ended, it never calls `takeMessages` again. Every
+  message it takes is followed by a model request. A message is therefore
+  delivered exactly when the loop takes it, and the lane marks it
   `delivered` at that point.
 - Only the root loop takes messages. A delegated child loop does not.
 
@@ -249,12 +319,14 @@ by a new flag, `--continue-run <run root> --prompt=<message>`:
 
 - a new run id, with lineage naming the run it continues;
 - a fresh engine and sandbox;
-- the seeded history: the prior run's resumable transcript, then the new
-  prompt. A `--system-prompt` given with `--continue-run` replaces the prior
+- the seeded history: the prior run's transcript up to its last complete
+  checkpoint, then the interrupted-turn notice when the run went past that
+  checkpoint, then the new prompt. With no complete checkpoint, the flag is
+  refused. A `--system-prompt` given with `--continue-run` replaces the prior
   transcript's system message, which is how a follow-up's new
   `instructions` arrive;
-- the prior handle table, structured-result configuration and CFC record,
-  passed on explicitly (`AH-REF-3`);
+- the prior handle table, result schema and CFC record, passed on
+  explicitly (`AH-REF-3`). The result path is the new run's own;
 - the provider, model, credential owner and read ceiling checked against the
   prior run's, refusing anything broader (`AH-ART-4`, `AH-ART-5`,
   `AH-INT-4`). The checks are the ones `--resume-run` already makes;
@@ -272,14 +344,24 @@ run too.
 under the same profile, and the request cannot set the role.
 
 Under `docs/development/cfc-spec-correspondence.md`, the steer seam is a host
-arrangement. Batch mode binds one prompt slot per run, naming its role and
-its subject (the workspace or resumed run), and digests no prompt text. The
-interactive chat service already binds every later user turn of a session
-under that session's one binding. A steer is one more user message from the
-same driver under the run's existing binding, and the seam changes no CFC
-enforcement source. A steer reaches the model by the same path as the task
-prompt, so whatever records the prompt as model context records the steer
-too.
+arrangement. The binding a local job runs under is the one
+`createCliPromptSlotBinding` builds. It names a role, a source and a subject
+(the workspace), and it carries no `valueDigest`, `slotDigest` or
+`snapshotDigest`. It therefore authorizes the run's driver at that role, not
+one exact prompt value. The task itself is caller text arriving the same
+way. The interactive chat service likewise runs a session's later user turns
+under the session's binding whenever a turn supplies no replacement policy.
+A steer is one more user message from the same driver, under the run's
+existing binding, and the seam changes no CFC enforcement source. A steer
+reaches the model by the same path as the task prompt, so whatever records
+the prompt as model context records the steer too.
+
+A binding can digest an exact value. A run manifest's `promptSlot` may carry
+those digests, and then the binding covers that one prompt and nothing
+appended to it. The prompt loop refuses `takeMessages` for a run whose
+binding carries any of the three digests, before its first model request.
+Such a run takes no messages, rather than lending one value's authority to
+another.
 
 ## 4. The surface CFS calls
 
@@ -289,7 +371,7 @@ wants or chat.
 
 Loom's adapter, `src/lib/agent_jobs.py`, would gain a `message` action
 beside `start` and `cancel`, and would read `continues`, `continuedBy` and
-`messages` from the job view. When an answer says `mode: "follow-up"`, the
+`messages` from the job view. When an answer says `delivery: "follow-up"`, the
 adapter follows the returned job. That adapter work is track D's.
 
 How the two loom uses fit:
@@ -317,8 +399,13 @@ client:
   prompt.
 - A message pending when the model submits a result keeps the loop running.
   The model sees the message, and its second submission is the result.
+- On the last permitted turn, nothing is taken at the exit, whether the turn
+  ends with a final text answer or an accepted result. The message is still
+  waiting.
 - Nothing is taken after the loop ends.
 - A child loop takes nothing.
+- A run whose binding carries a value digest is refused before any model
+  request, and `takeMessages` is never called.
 
 **Stage 2: `--continue-run`,** in `packages/cf-harness`:
 
@@ -328,35 +415,55 @@ client:
 - A handle from the prior run resolves.
 - A new structured result is written and validated.
 - A `--system-prompt` given with it replaces the prior system message.
+- A prior run cut off in the middle of a turn is continued from its last
+  complete checkpoint, with the interrupted-turn notice before the new
+  prompt. A prior run with no complete checkpoint is refused.
+- The new run writes its result to its own path, and the prior run's result
+  file is unchanged.
 - A broader read ceiling, a subagent run or a missing run root is refused.
 
 **Stage 3: the route,** in `packages/agent-runner`, through the API with the
 existing fake `runJob`:
 
-- A steer to a running job returns `201` with `mode: "steer"`, appends
-  `pending`, and then `delivered` with its turn once the fake run takes it.
-- A follow-up of a completed job returns `201` with `mode: "follow-up"`. The
-  new job is queued, with `continues` set and the message as its `task`. The
-  old job's events are unchanged, and its view shows `continuedBy`.
-- A follow-up carrying `instructions` runs with them in place of its
-  predecessor's, and one without inherits them. A steer carrying
-  `instructions` is `409 instructions_on_steer`.
-- A message to a job that already has a follow-up lands on the head.
-- A replay with the same key and message returns `200` and the same answer,
-  and writes no event. The same key with another message, or a key used by
-  `POST /jobs`, is `409 idempotency_conflict`.
-- Each refusal in the table: `not_found`, `not_callers`, `not_continuable`
-  for an interrupted job and for a `PROFILE_UNAVAILABLE` failure,
-  `cannot_steer`, `instructions_on_steer`, `invalid_request` and
-  `too_large`.
-- Ordering:
-  - Two steers pending at one boundary arrive in acceptance order.
-  - Steers still pending when the run ends become one follow-up: the first is
-    its task and the second a steer it takes first. The old job's terminal
-    event comes after their `follow-up` events.
-  - A cancel drops the steers accepted before it.
-  - A message accepted after a cancel request starts a follow-up when the job
-    ends.
+- **A message the run takes.** A message to a running job returns `201`
+  with `delivery: "pending"`. It appends `pending`, and then `delivered` with
+  its turn once the fake run takes it.
+- **A finished head.** A message to a completed job returns `201` with
+  `delivery: "follow-up"`. The new job is queued, with `continues` set and
+  the message as its `task`. The old job's events are unchanged, and its
+  view shows `continuedBy`.
+- **Instructions.** A follow-up carrying `instructions` runs with them in
+  place of its predecessor's, and one without inherits them. A message
+  carrying `instructions` to a running job is `409 instructions_on_steer`.
+- **The head.** A message to a job that already has a follow-up lands on
+  the head.
+- **Replay:**
+  - The same key and fingerprint returns `200` with the current record, and
+    writes no event.
+  - The same holds after the head has moved on to a follow-up, and after
+    the target can no longer be continued.
+  - The same key with another message, with changed or added
+    `instructions`, or with another target is `409 idempotency_conflict`.
+  - So is a key already used by `POST /jobs`.
+- **Refusals.** Each one in the table:
+  - `not_found` and `not_callers`;
+  - `not_continuable`, for an interrupted job, a `PROFILE_UNAVAILABLE`
+    failure, and a job cancelled while queued;
+  - `cannot_steer` and `instructions_on_steer`;
+  - `invalid_request` and `too_large`.
+- **Ordering and outcomes:**
+  - Two messages waiting at one boundary arrive in acceptance order.
+  - Messages still waiting when the run ends: the first opens one follow-up,
+    the second moves to it and is taken first. On the old job's stream,
+    the `follow-up` and `moved` events come before its terminal event.
+  - A cancel drops the messages accepted before it.
+  - Two messages accepted after a cancel request, each carrying different
+    `instructions`, open two follow-ups in a chain. Each follow-up runs with
+    its own message's instructions.
+  - A message waiting on a queued job that is then cancelled, one waiting on
+    a job that fails `PROFILE_UNAVAILABLE`, and one waiting on a job that
+    restart recovery ends `interrupted` each get `dropped`, with its reason,
+    before that job's terminal event.
 
 **Stage 4: wiring,** one `harness-job` test with a scripted model. A
 follow-up job's first request holds its predecessor's transcript and the new
