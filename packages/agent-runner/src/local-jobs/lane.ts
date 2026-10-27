@@ -87,6 +87,9 @@ export interface LocalJobLaneOptions {
     identityKeyPath: string,
   ) => Promise<ACL | null>;
 
+  /** Whether `runJob` takes messages at turn boundaries; false when absent. */
+  steering?: boolean;
+
   /** Runs one job; `runHarnessJob` unless a test replaces it. */
   runJob?: (
     spec: HarnessJobSpec,
@@ -146,11 +149,16 @@ const foreignSpacesOf = async (
 export const localJobSpecOf = async (
   job: LocalJob,
   profile: LocalJobProfile,
-  options: Pick<
-    LocalJobLaneOptions,
-    "loomRetrievalConfigPath" | "model" | "readSpaceAcl" | "report"
-  >,
+  options:
+    & Pick<
+      LocalJobLaneOptions,
+      "loomRetrievalConfigPath" | "model" | "readSpaceAcl" | "report"
+    >
+    & Partial<Pick<LocalJobLaneOptions, "workRoot">>,
 ): Promise<HarnessJobSpec> => {
+  if (job.continues !== undefined && options.workRoot === undefined) {
+    throw new Error("A follow-up requires the lane's work root.");
+  }
   const { request } = job;
   const { fabric } = profile;
   const browser = profile.browserHost === true;
@@ -164,6 +172,9 @@ export const localJobSpecOf = async (
       : []),
   ];
   return {
+    ...(job.continues !== undefined
+      ? { continueFrom: { runRoot: join(options.workRoot!, job.continues) } }
+      : {}),
     task: request.task,
     ...(request.imageAttachments !== undefined
       ? { imageAttachments: request.imageAttachments }
@@ -369,6 +380,11 @@ export class LocalJobLane {
     this.#options = options;
   }
 
+  /** Whether this lane's runs can take messages during a run. */
+  canSteer(): boolean {
+    return this.#options.steering === true;
+  }
+
   /**
    * Ends every job a stop or a crash cut off as `interrupted`, then starts
    * the queued jobs it has room for.
@@ -496,6 +512,7 @@ export class LocalJobLane {
         {
           runRoot: join(this.#options.workRoot, job.id),
           signal,
+          takeMessages: (turn) => store.takeMessages(job.id, turn),
           ...(browserHost !== undefined ? { browserHost } : {}),
           onEvent: (event) => {
             const { message } = event;
@@ -573,6 +590,7 @@ export class LocalJobLane {
     if (this.#stopping && signal.aborted) return;
     store.finish(job.id, {
       state: result.outcome,
+      recordedRun: result.recordedRun,
       ...(result.outcome === "completed"
         ? { result: result.structuredResult }
         : {}),

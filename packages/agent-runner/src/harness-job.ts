@@ -87,6 +87,9 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   /** The task text, given to the model as the prompt. */
   task: string;
 
+  /** The predecessor's run root, whose checkpoint seeds this follow-up. */
+  continueFrom?: { runRoot: string };
+
   /** Inline host-owned images, snapshotted into this job workspace. */
   imageAttachments?: readonly HarnessInlineImageAttachment[];
 
@@ -204,6 +207,14 @@ export interface HarnessJobOptions {
   /** The directory the job's workspace and artifacts are created under. */
   runRoot: string;
 
+  /**
+   * Takes caller messages for the next model turn, in acceptance order.
+   * Each returned string becomes a user message at that turn's boundary.
+   */
+  takeMessages?: (
+    turn: number,
+  ) => readonly string[] | Promise<readonly string[]>;
+
   /** Aborts the job. */
   signal: AbortSignal;
 
@@ -222,7 +233,12 @@ export interface HarnessJobOptions {
 
 /** How a job ended. */
 export type HarnessJobResult =
-  & { report?: AgentRunReport }
+  & {
+    report?: AgentRunReport;
+
+    /** Whether the run left a complete checkpoint a follow-up can use. */
+    recordedRun?: boolean;
+  }
   & (
     | {
       outcome: "completed";
@@ -378,6 +394,8 @@ const SANDBOX_SELECTION = { sandboxSelectionFlags: false };
 export const selectHarnessJobSandboxRuntime = (
   harnessDeps: RunCfHarnessCliDependencies = {},
 ) => selectCfHarnessCliSandboxRuntime({ ...harnessDeps, ...SANDBOX_SELECTION });
+
+// Stage 4 wires `takeMessages` and `continueFrom` into the harness.
 
 /**
  * Runs one job. It ends `completed` with the value the model submitted and

@@ -2009,6 +2009,83 @@ Enqueue commits its job and first event in a SQLite WAL transaction with
 key with the same request returns that job; a different request or profile
 returns a conflict.
 
+A caller sends another message with `POST /jobs/<id>/messages`, also bounded at
+1 MiB of UTF-8 JSON:
+
+```json
+{
+  "caller": "cfs:weaver",
+  "idempotencyKey": "message-81",
+  "message": "Use the April numbers.",
+  "instructions": "Answer briefly."
+}
+```
+
+`caller` must match the conversation's caller. `message` is a nonempty string;
+`instructions` is optional and replaces the system framing of a follow-up,
+inherited by later jobs unless replaced again. The request grants no profile,
+tools or limits. Any job id in a conversation addresses its newest job, the
+head. A message to a queued or running head waits there to be taken at a model
+turn boundary. A message to a finished head with a recorded run opens a new
+queued job, with `continues` naming its predecessor, its task replaced by the
+message, and the rest of the predecessor's request inherited. A recorded run has
+a complete checkpoint from which another run can start. An interrupted job has
+none.
+
+The response is `201 {message, job}` on acceptance or `200 {message, job}` on
+replay. The message record has fixed `key`, `target`, `message`, `acceptedAt`
+and, when supplied, `instructions`. Its current `delivery` is `pending`,
+`delivered`, `follow-up`, or `dropped`; `jobId` names the job waiting on or
+answering it, `turn` is present after delivery, and `reason` after a drop. `job`
+is that job's current snapshot. A first acceptance returns `pending` or
+`follow-up`. The same caller/key/fingerprint returns the current record without
+writing events, even after the head moves on or can no longer continue. The
+fingerprint includes the target id, message and presence and value of
+instructions. Keys share one namespace per caller with enqueue: reusing a key
+across routes, or changing its fingerprint, returns `409 idempotency_conflict`.
+
+The job view adds `continues`, `continuedBy` (its sole follow-up once opened),
+`openedBy` (the message that opened a follow-up), and `messages` (the current
+records of messages that waited on this job, in acceptance order). A finished
+job stays finished. Its event stream stays unchanged when a later message opens
+a follow-up directly; the follow-up starts with its own queued event.
+
+A waiting message publishes `message {key, delivery: "pending"}`. Taking it
+publishes `{key, delivery: "delivered", turn}`. When a job ends, its first
+remaining message opens one follow-up and publishes
+`{key, delivery: "follow-up", jobId}`; the rest publish
+`{key, delivery: "moved", jobId}` on the old job and `pending` on the new job.
+Each such outcome precedes the old job's terminal state event. A run takes
+messages in acceptance order up to the first instruction replacement or message
+accepted after that holder's cancel request. Messages behind it wait with it. A
+moved message loses the old holder's cancellation restriction, but an
+instruction replacement still waits to open its own follow-up.
+
+Cancellation drops waiting messages accepted before the request as
+`{key, delivery: "dropped", reason: "cancelled"}`. Later messages wait for the
+follow-up. Without a recorded run, remaining messages drop as `not_continuable`,
+or `interrupted` on restart recovery, before the terminal event. Queued
+cancellation and `PROFILE_UNAVAILABLE` failures have no recorded run.
+
+Every refusal is `{ok: false, code, error}`:
+
+| Status | Code                    | Condition                                                        |
+| ------ | ----------------------- | ---------------------------------------------------------------- |
+| 400    | `invalid_request`       | Invalid JSON, missing or mistyped fields, or an empty message.   |
+| 413    | `too_large`             | The body exceeds 1 MiB.                                          |
+| 404    | `not_found`             | The target job does not exist.                                   |
+| 403    | `not_callers`           | The body names another caller.                                   |
+| 409    | `not_continuable`       | The finished head has no recorded run.                           |
+| 409    | `instructions_on_steer` | Instructions supplied to a queued or running head before cancel. |
+| 409    | `cannot_steer`          | That head could take a steer, but the lane cannot.               |
+| 400    | `unknown_profile`       | A follow-up would open now under a profile no longer named.      |
+| 409    | `idempotency_conflict`  | The caller's key already names another request or route.         |
+
+The production harness wiring is pending: its lane keeps steering disabled and
+its runs do not yet report continuation checkpoints. The store and API support
+follow-ups and delivery through a runner that supplies these seams. A message
+after a cancel request can wait regardless of steering capability.
+
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an
 admitted host answer, limited to 500 characters. An answer withheld by CFC
