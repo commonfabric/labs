@@ -1473,10 +1473,12 @@ after it are refused too, as none follows the parts held, so a set staged in
 parts is applied whole or not at all. A set without `part` is whole, and it and
 any other watch mutation of the session end a set the session was staging, and
 are applied as ever; a router or a routed host can have refused the set's last
-part itself, leaving the server parts no part follows. A staged set also ends
+part itself, leaving the server parts no part follows. A watch mutation the
+server refuses unread, or for a session whose lease has run out, ends nothing. A staged set also ends
 when its connection closes, and when the session closes, is revoked or is
-opened again. A server holds at most 64 parts of one set, of at most 64 Mi
-characters together, before the last part.
+opened again. A server holds at most 64 parts of one set before the last part,
+and at most 64 Mi characters of the parts of every set a connection's sessions
+are staging; a part past either is refused, and with it its set.
 
 A client sends a set's parts back to back on one connection, before any later
 watch mutation of the session, and takes the first refusal among their answers

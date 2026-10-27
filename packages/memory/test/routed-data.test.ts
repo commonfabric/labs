@@ -1301,7 +1301,7 @@ describe("optional routed host quotas", () => {
 
 Deno.test("routed host limits are config over defaults, and must nest", () => {
   assertEquals(routedHostLimits(), DEFAULT_ROUTED_HOST_LIMITS);
-  // A session's watch IDs are configuration, sized to fit one frame.
+  // A session's watch IDs are configuration.
   assertEquals(routedHostLimits().watchesPerSession, 2048);
   assertEquals(
     routedHostLimits({ watchesPerSession: 40960 }).watchesPerSession,
@@ -2129,6 +2129,205 @@ Deno.test("holdings and views named on a watch add leave a session's counted usa
     await f.close();
     resetServerExecutionConfig();
   }
+});
+
+Deno.test("a set staged in parts counts toward the context's quotas from its first part", async (t) => {
+  const watches = (prefix: string, length: number) =>
+    Array.from(
+      { length },
+      (_, i) => ({ id: `${prefix}${i}`, kind: "graph", query: { roots: [] } }),
+    );
+  const holdings = (prefix: string, length: number) =>
+    Array.from({ length }, (_, i) => ({ id: `of:${prefix}${i}`, seq: 0 }));
+  const set = (
+    f: Awaited<ReturnType<typeof fixture>>,
+    session: { sessionId: string },
+    fields: Record<string, unknown>,
+  ) =>
+    f.request({
+      type: "session.watch.set",
+      space: f.space.did(),
+      sessionId: session.sessionId,
+      ...fields,
+    });
+  const retriable = (answer: Record<string, unknown>) =>
+    (answer.error as { retriable?: boolean } | undefined)?.retriable;
+  await t.step(
+    "watches, through a refused part, and past what is held",
+    async () => {
+      const f = await fixture("staged-context-watches", {
+        limits: { watchesPerContext: 6, watchesPerSession: 6 },
+      });
+      try {
+        const first = await f.open(), second = await f.open();
+        const part = (prefix: string, length: number, index: number) =>
+          set(f, first, {
+            watches: watches(prefix, length),
+            stage: "ab",
+            part: index,
+            ...(index === 0 ? { more: true } : {}),
+          });
+        assertEquals((await part("a", 4, 0)).ok, { staged: true });
+        const reasons = await refusalReasons(async () => {
+          // The held part's four IDs count before the set is applied: three
+          // more would make seven in the context.
+          assertEquals(
+            retriable(await set(f, second, { watches: watches("c", 3) })),
+            true,
+          );
+          assert((await set(f, second, { watches: watches("c", 2) })).ok);
+          // The last part would take the set to five, seven in the context.
+          assertEquals(retriable(await part("b", 1, 1)), true);
+          // A refusal made here leaves the server holding the set's first part,
+          // and the set counted: three more IDs are still too many.
+          assertEquals(
+            retriable(await set(f, second, { watches: watches("c", 3) })),
+            true,
+          );
+        });
+        assertEquals(reasons, ["watch-limit", "watch-limit", "watch-limit"]);
+        // With room made, the same last part follows the part still held and
+        // applies the set: the first session holds five IDs.
+        assert((await set(f, second, { watches: watches("c", 1) })).ok);
+        assert((await part("b", 1, 1)).ok);
+        // A set staged smaller than what the session holds leaves it counting
+        // what it holds, five, so the second session has room for one ID.
+        assert(
+          (await set(f, first, {
+            watches: watches("e", 1),
+            stage: "e",
+            part: 0,
+            more: true,
+          })).ok,
+        );
+        const held = await refusalReasons(async () => {
+          assertEquals(
+            retriable(await set(f, second, { watches: watches("c", 2) })),
+            true,
+          );
+        });
+        assertEquals(held, ["watch-limit"]);
+        assertEquals(f.socket.readyState, 1);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await t.step("holdings", async () => {
+    const f = await fixture("staged-context-holdings", {
+      limits: { holdingsPerContext: 4 },
+    });
+    try {
+      const first = await f.open(), second = await f.open();
+      assertEquals(
+        (await set(f, first, {
+          watches: [],
+          holdings: holdings("a", 3),
+          stage: "held",
+          part: 0,
+          more: true,
+        })).ok,
+        { staged: true },
+      );
+      const reasons = await refusalReasons(async () => {
+        // The held part's three holdings count: two more would make five.
+        assertEquals(
+          retriable(
+            await set(f, second, { watches: [], holdings: holdings("b", 2) }),
+          ),
+          true,
+        );
+      });
+      assertEquals(reasons, ["holdings-limit"]);
+      // The set applied counts what it holds, four, and the context is full.
+      assert(
+        (await set(f, first, {
+          watches: [],
+          holdings: holdings("c", 1),
+          stage: "held",
+          part: 1,
+        })).ok,
+      );
+      const full = await refusalReasons(async () => {
+        assert(
+          (await set(f, second, { watches: [], holdings: holdings("b", 1) }))
+            .error !== undefined,
+        );
+      });
+      assertEquals(full, ["holdings-limit"]);
+      assertEquals(f.socket.readyState, 1);
+    } finally {
+      await f.close();
+    }
+  });
+  await t.step("a part after one the server could not read", async () => {
+    const f = await fixture("staged-unread-part", {
+      limits: { watchesPerSession: 6 },
+    });
+    try {
+      const first = await f.open();
+      const part = (index: number, fields: Record<string, unknown>) =>
+        set(f, first, { stage: "ab", part: index, more: true, ...fields });
+      assertEquals((await part(0, { watches: watches("a", 2) })).ok, {
+        staged: true,
+      });
+      // A holding the server cannot read passes the list checks made here,
+      // and the server refuses the part without ending the set it holds.
+      const unread = await part(1, { watches: [], holdings: [1] });
+      assert(unread.error !== undefined, JSON.stringify(unread));
+      // The refusal ended the set here, so the next part, which would follow
+      // the parts the server holds, is refused for good.
+      const reasons = await refusalReasons(async () => {
+        const next = await part(1, { watches: watches("b", 1) });
+        assert(next.error !== undefined, JSON.stringify(next));
+        assertEquals(retriable(next), undefined);
+      });
+      assertEquals(reasons, ["staged-set-not-held"]);
+      // A set sent again from its first part is taken.
+      assertEquals((await part(0, { watches: watches("c", 2) })).ok, {
+        staged: true,
+      });
+      assert(
+        (await set(f, first, {
+          watches: watches("d", 1),
+          stage: "ab",
+          part: 1,
+        })).ok,
+      );
+      assertEquals(f.socket.readyState, 1);
+    } finally {
+      await f.close();
+    }
+  });
+  await t.step("with no quota, which keeps no mirror", async () => {
+    const f = await fixture("staged-no-quota", {
+      limits: routedHostLimits(Object.fromEntries(
+        Object.keys(DEFAULT_ROUTED_HOST_LIMITS).map((key) => [key, null]),
+      )),
+    });
+    try {
+      const first = await f.open();
+      assertEquals(
+        (await set(f, first, {
+          watches: watches("a", 4),
+          stage: "ab",
+          part: 0,
+          more: true,
+        })).ok,
+        { staged: true },
+      );
+      assert(
+        (await set(f, first, {
+          watches: watches("b", 1),
+          stage: "ab",
+          part: 1,
+        }))
+          .ok,
+      );
+    } finally {
+      await f.close();
+    }
+  });
 });
 
 Deno.test("holdings and views are counted as lists, and anything else closes the socket", async (t) => {

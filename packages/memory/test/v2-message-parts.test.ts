@@ -808,19 +808,28 @@ const rawSession = async (storeName: string) => {
   const space = `did:key:z6Mk-${storeName}`;
   await connection.receive(encodeMemoryBoundary(HELLO));
   const ok = messages.shift() as HelloOkMessage;
-  const sessionOpen = ok.sessionOpen as SessionOpenAuthMetadata;
-  await connection.receive(encodeMemoryBoundary({
-    type: "session.open",
-    requestId: "open",
-    space,
-    session: {},
-    invocation: {
-      aud: sessionOpen.audience,
-      challenge: sessionOpen.challenge.value,
-    },
-  }));
-  const opened = messages.shift() as ResponseMessage<{ sessionId: string }>;
-  const sessionId = opened.ok!.sessionId;
+  // Each open is answered with the challenge for the next.
+  let sessionOpen = ok.sessionOpen as SessionOpenAuthMetadata;
+  /** Opens a session of the space on the connection, and returns its ID. */
+  const open = async (requestId: string) => {
+    messages.length = 0;
+    await connection.receive(encodeMemoryBoundary({
+      type: "session.open",
+      requestId,
+      space,
+      session: {},
+      invocation: {
+        aud: sessionOpen.audience,
+        challenge: sessionOpen.challenge.value,
+      },
+    }));
+    const opened = messages.shift() as ResponseMessage<
+      { sessionId: string; sessionOpen: SessionOpenAuthMetadata }
+    >;
+    sessionOpen = opened.ok!.sessionOpen;
+    return opened.ok!.sessionId;
+  };
+  const sessionId = await open("open");
   await connection.receive(encodeMemoryBoundary({
     type: "transact",
     requestId: "write",
@@ -836,11 +845,16 @@ const rawSession = async (storeName: string) => {
       })),
     },
   }));
-  /** Sends `request` for the session and returns the answer to it. */
-  const send = async (request: Record<string, unknown>) => {
+  /** Sends `request` for a session, the first by default, and returns the answer to it. */
+  const send = async (
+    request: Record<string, unknown>,
+    session = sessionId,
+  ) => {
     messages.length = 0;
     await connection.receive(
-      encodeMemoryBoundary({ ...request, space, sessionId } as never),
+      encodeMemoryBoundary(
+        { ...request, space, sessionId: session } as never,
+      ),
     );
     return messages.find((message) =>
       message.type === "response" &&
@@ -857,7 +871,7 @@ const rawSession = async (storeName: string) => {
       }],
     },
   });
-  return { server, send, watch };
+  return { server, send, watch, open };
 };
 
 Deno.test("a server holds a watch set's staged parts and applies them as one set", async () => {
@@ -1153,6 +1167,70 @@ Deno.test("a server holds at most 64 parts of a staged set before its last", asy
       part: 65,
     });
     assertEquals(last.error?.name, "ProtocolError");
+  } finally {
+    await server.close();
+  }
+});
+
+Deno.test("a connection's staged sets hold at most 64 Mi characters together", async () => {
+  const { server, send, watch, open } = await rawSession("staged-set-chars");
+  // Parts of just under 8 Mi characters: eight fit the bound together.
+  const pad = "x".repeat(8 * 1024 * 1024 - 1024);
+  const part = (
+    requestId: string,
+    index: number,
+    stage: string,
+    session?: string,
+  ) =>
+    send({
+      type: "session.watch.set",
+      requestId,
+      watches: [{
+        ...watch(index),
+        query: {
+          roots: [{
+            id: `of:sync-part-${index}`,
+            selector: { path: [], schema: { description: pad } },
+          }],
+        },
+      }],
+      stage,
+      part: index,
+      more: true,
+    }, session);
+  try {
+    const second = await open("open-second");
+    for (let index = 0; index < 5; index++) {
+      assertEquals((await part(`a-${index}`, index, "a")).ok, {
+        staged: true,
+      });
+    }
+    for (let index = 0; index < 3; index++) {
+      assertEquals((await part(`b-${index}`, index, "b", second)).ok, {
+        staged: true,
+      });
+    }
+    // A ninth part takes the connection past the bound, though the second
+    // session's set would hold four parts, not 64. The refusal ends that set.
+    assertEquals(
+      (await part("b-3", 3, "b", second)).error?.name,
+      "ProtocolError",
+    );
+    for (let index = 0; index < 3; index++) {
+      assertEquals((await part(`c-${index}`, index, "c", second)).ok, {
+        staged: true,
+      });
+    }
+    // The first session's whole set ends its staged set, which makes room.
+    assertEquals(
+      (await send({
+        type: "session.watch.set",
+        requestId: "whole",
+        watches: [watch(0)],
+      })).error,
+      undefined,
+    );
+    assertEquals((await part("c-3", 3, "c", second)).ok, { staged: true });
   } finally {
     await server.close();
   }

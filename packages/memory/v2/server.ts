@@ -871,10 +871,15 @@ const sessionKey = (space: string, sessionId: string): string =>
   `${space}\0${sessionId}`;
 
 /**
- * Most parts, and most characters of their messages, a session may hold of a
- * watch set staged in parts before the part that applies it: 64 of the routed
- * client's 1 MiB parts. A direct client bounds each part by the slot limit on
- * a message alone, so these bound its staged set.
+ * Most parts a session may hold of a watch set staged in parts before the
+ * part that applies it, 64 of the routed client's 1 MiB parts, and most
+ * characters of their messages a connection may hold over every set its
+ * sessions are staging. A direct client bounds each part by the slot limit on
+ * a message alone, so these bound its staged sets. The characters are bounded
+ * per connection, not per set, since a connection may stage a set for each of
+ * its sessions: the routed quotas count watch IDs, views and holdings, not
+ * characters. Sets a connection stages at once share the bound, so a client
+ * staging sets that together pass it has a part refused.
  */
 const MAX_STAGED_WATCH_SET_PARTS = 64;
 const MAX_STAGED_WATCH_SET_CHARACTERS = 64 * 1024 * 1024;
@@ -1211,7 +1216,8 @@ class Connection {
    * set its parts so far make, how many parts and their messages'
    * characters, until the part without `more` applies it. A connection's
    * staged sets end with it, and a session's when it leaves the connection,
-   * opens again, or sends another watch mutation.
+   * opens again, or sends another watch mutation, unless that one is refused
+   * unread or for a lapsed lease; see `#endStagedWatchSet`.
    */
   #stagedWatchSets = new Map<
     string,
@@ -1222,6 +1228,8 @@ class Connection {
       characters: number;
     }
   >();
+  /** The characters of every set in `#stagedWatchSets`, summed. */
+  #stagedCharacters = 0;
 
   /** Every unexpired challenge issued on this connection, oldest first. */
   #challenges = new Map<string, ConnectionChallengeState>();
@@ -1410,7 +1418,7 @@ class Connection {
    */
   closeSession(space: string, sessionId: string): void {
     this.#sessions.delete(sessionKey(space, sessionId));
-    this.#stagedWatchSets.delete(sessionKey(space, sessionId));
+    this.#endStagedWatchSet(sessionKey(space, sessionId));
     this.#server.endPresenceForSession(space, sessionId, this.id);
     this.#server.detachSession(space, sessionId, this.id);
   }
@@ -1474,7 +1482,7 @@ class Connection {
     reason: SessionRevokedMessage["reason"],
   ): void {
     const key = sessionKey(space, sessionId);
-    this.#stagedWatchSets.delete(key);
+    this.#endStagedWatchSet(key);
     if (!this.#sessions.delete(key) || this.#closed) {
       return;
     }
@@ -1953,6 +1961,20 @@ class Connection {
     return true;
   }
 
+  /**
+   * Ends the watch set the session `key` names was staging, if any, and
+   * returns it; the only way a set leaves `#stagedWatchSets`, so
+   * `#stagedCharacters` stays its sum.
+   */
+  #endStagedWatchSet(key: string) {
+    const staged = this.#stagedWatchSets.get(key);
+    if (staged !== undefined) {
+      this.#stagedWatchSets.delete(key);
+      this.#stagedCharacters -= staged.characters;
+    }
+    return staged;
+  }
+
   /** Helper for the staged watch set parts, which refuses one as a protocol error. */
   #refuseWatchSetPart(
     parsed: { requestId: string; space: string; sessionId: string },
@@ -2147,7 +2169,7 @@ class Connection {
           isFabricPlainObject(response.ok) &&
           typeof response.ok.sessionId === "string"
         ) {
-          this.#stagedWatchSets.delete(
+          this.#endStagedWatchSet(
             sessionKey(parsed.space, response.ok.sessionId),
           );
         }
@@ -2333,8 +2355,7 @@ class Connection {
           // number is whole. Either way the set held so far ends here, kept
           // only by the part that continues it.
           const key = sessionKey(parsed.space, parsed.sessionId);
-          const held = this.#stagedWatchSets.get(key);
-          this.#stagedWatchSets.delete(key);
+          const held = this.#endStagedWatchSet(key);
           if (parsed.part === undefined) {
             const response = await this.#server.watchSet(parsed);
             this.#sendSessionResponse(
@@ -2367,17 +2388,21 @@ class Connection {
           staged.parts += 1;
           staged.characters += characters;
           if (parsed.more === true) {
+            // This session's set ended above, so the total counts the
+            // connection's other staged sets.
             if (
               staged.parts > MAX_STAGED_WATCH_SET_PARTS ||
-              staged.characters > MAX_STAGED_WATCH_SET_CHARACTERS
+              this.#stagedCharacters + staged.characters >
+                MAX_STAGED_WATCH_SET_CHARACTERS
             ) {
               this.#refuseWatchSetPart(
                 parsed,
-                `A staged watch set holds at most ${MAX_STAGED_WATCH_SET_PARTS} parts of ${MAX_STAGED_WATCH_SET_CHARACTERS} characters`,
+                `A staged watch set holds at most ${MAX_STAGED_WATCH_SET_PARTS} parts, and a connection's staged sets at most ${MAX_STAGED_WATCH_SET_CHARACTERS} characters together`,
               );
               return;
             }
             this.#stagedWatchSets.set(key, staged);
+            this.#stagedCharacters += staged.characters;
             this.#sendSessionResponse(
               parsed.space,
               parsed.sessionId,
@@ -2417,9 +2442,7 @@ class Connection {
         // Another watch mutation ends a set the session was staging, which a
         // router or a routed host can have left incomplete by refusing its
         // last part itself.
-        this.#stagedWatchSets.delete(
-          sessionKey(parsed.space, parsed.sessionId),
-        );
+        this.#endStagedWatchSet(sessionKey(parsed.space, parsed.sessionId));
         {
           const response = await this.#server.watchAdd(parsed);
           this.#sendSessionResponse(
@@ -2443,9 +2466,7 @@ class Connection {
         // Another watch mutation ends a set the session was staging, which a
         // router or a routed host can have left incomplete by refusing its
         // last part itself.
-        this.#stagedWatchSets.delete(
-          sessionKey(parsed.space, parsed.sessionId),
-        );
+        this.#endStagedWatchSet(sessionKey(parsed.space, parsed.sessionId));
         {
           const response = await this.#server.watchRemove(parsed);
           this.#sendSessionResponse(

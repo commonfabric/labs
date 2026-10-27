@@ -740,14 +740,28 @@ add, that would leave a session with more than `watchesPerSession` watch IDs
 or `viewsPerSession` views (`frame-limit`), when the respective quota is enabled.
 A part of a set staged in parts is checked as the set the parts of its set so
 far make, and its holdings against `holdingsPerSession` as well, since the
-frame bound on holdings bounds each part alone; a part that more parts follow
-changes no usage until the last part applies the set. The router holds a
+frame bound on holdings bounds each part alone. A part that more parts follow
+changes nothing the session holds, but from the set's first part until the set
+is applied or ends, the session counts toward every watch and holdings quota
+the larger of what it holds and what the parts so far make, since the server
+holds the parts meanwhile. A part the toolshed refuses leaves the set staged
+and counted, as the server still holds it. A refusal from the server ends the
+toolshed's count of the set, and the server's set too, unless the server
+refused a message it could not read or a session whose lease ran out: it then
+still holds the set's parts, which no count includes. So the toolshed and the
+router, each when it counts watches, views or holdings, deny for good a later
+part that does not follow the parts it counts (`staged-set-not-held` in the
+toolshed); the router ends its count of a set on any refusal from the toolshed.
+A client sends a refused set again from its first part, as the SDK does. The Memory server bounds the
+characters of every set a connection is staging together
+([04-protocol.md](04-protocol.md) section 4.3.5). The router holds a
 session's requests behind its unanswered watch mutation, so a set of `n` parts
 takes `n` round trips to the toolshed.
 Each is logged in the toolshed's own journal, never the router's, as a
 `routed-memory-verdict` with verdict `request-refused` and reason
 `session-limit`, `watch-limit`, `holdings-limit`, `frame-limit`,
-`principal-expired`, `session-not-held` or `principal-not-held`. A frame that
+`principal-expired`, `session-not-held`, `staged-set-not-held` or
+`principal-not-held`. A frame that
 itself names more than the enabled `holdingsPerSession` quota is malformed,
 and so is a request whose
 `watches`, `holdings` or `views` is not a JSON list. Such a
