@@ -45,7 +45,7 @@ for stage in ("topics", "board"):
         else [fvj(f"{P}/{stage}-applied.json")]
     rows = [row for report in reports for row in report["rows"]]
     print("  applied", sum(report["applied"] for report in reports),
-          "complete", all(report["complete"] for report in reports),
+          "complete", bool(reports) and all(report["complete"] for report in reports),
           "reports", len(reports),
           dict(collections.Counter(r.get("verdict") for r in rows)))
     ms = sorted(r.get("elapsedMs", 0) for r in rows)
