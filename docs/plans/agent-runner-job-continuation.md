@@ -99,10 +99,17 @@ reruns an interrupted job.
 | Finished, with no recorded run | Refused `not_continuable`. |
 
 **At a turn boundary**, the run takes the messages waiting on its job in
-acceptance order. It stops at the first message that carries `instructions`
-or that was accepted after a cancel request, because the run cannot answer
-either one. Messages behind such a message wait with it, so the model never
-reads a message before an earlier one.
+acceptance order. It stops at the first message it cannot answer, which is
+one of two kinds:
+
+- a message that carries `instructions`, which only a follow-up of its own
+  can answer;
+- a message accepted on this job after its cancel request, because the
+  run is stopping. This restriction belongs to the cancelled job. A message
+  that moves on from it is ordinary on the job it moves to.
+
+Messages behind the first one the run cannot answer wait with it, so the
+model never reads a message before an earlier one.
 
 **When the holder ends**, every message still waiting on it gets its outcome
 or moves, in the transaction that writes the holder's terminal event:
@@ -115,11 +122,12 @@ or moves, in the transaction that writes the holder's terminal event:
 3. Otherwise, the first remaining message opens the holder's follow-up,
    carrying that message's `instructions` if it has any. Every other
    remaining message *moves* to the follow-up in order, and waits there
-   under the same rules. A moved message without `instructions` is therefore
-   taken before the follow-up's first model call. A moved message that
-   carries `instructions` waits for the follow-up to end and opens the next
-   follow-up. Each instruction replacement gets its own job, and the chain
-   never forks.
+   under the same rules. The moved messages ahead of the first one carrying
+   `instructions` are therefore taken before the follow-up's first model
+   call. That message and every message behind it wait for the follow-up to
+   end, and then it opens the next follow-up. Each instruction replacement
+   gets its own job, each message is answered under the instructions in
+   force when its turn comes, and the chain never forks.
 
 ### The answer
 
@@ -134,8 +142,8 @@ or moves, in the transaction that writes the holder's terminal event:
 
 `message` is the message's record:
 
-- `key`, `target` (the job id the request named) and `acceptedAt` are fixed
-  at acceptance.
+- `key`, `target` (the job id the request named), `message`, `instructions`
+  (when the request gave them) and `acceptedAt` are fixed at acceptance.
 - `delivery` is `pending` or one of the outcomes. `jobId` is the job it
   waits on, or the job whose result answers it. `turn` is set once a run has
   delivered it, and `reason` once it has been dropped. These fields always
@@ -148,7 +156,7 @@ opened a new job).
 ### Events on the existing stream
 
 A job's stream carries one `message` event each time a message starts
-waiting on it, gets an outcome, or leaves it:
+waiting on that job, gets its outcome while waiting there, or leaves it:
 
 - `{key, delivery: "pending"}` when it starts waiting there, on acceptance or
   on moving in;
@@ -164,17 +172,20 @@ for every message that waited on that job, where it went. This holds for
 every way a job ends: a run's own end, a cancel while queued,
 `PROFILE_UNAVAILABLE`, and restart recovery.
 
-A follow-up of a job that had already finished appends nothing to that job,
-because its stream has already ended. The new job's stream starts with
-`queued`, as every job's does.
+A message sent to a head that had already finished never waits on any job,
+so no stream carries an event for it. It appends nothing to that head,
+whose stream has already ended. The new job's stream starts with `queued`,
+as every job's does. That message's outcome, `follow-up`, is observable in
+the answer, in a replay, and in the new job's view as `openedBy`.
 
 ### The job view
 
-`GET /jobs/<id>` gains three fields:
+`GET /jobs/<id>` gains four fields:
 
 - `continues`: the job this one follows, when it is a follow-up.
 - `continuedBy`: the follow-up that followed this one, once there is one.
 - `messages`: the records of the messages that waited on this job, in order.
+- `openedBy`: on a follow-up, the record of the message that opened it.
 
 A follow-up's `request` is the request of the job it follows, with `task`
 replaced by the message that opened it, and `instructions` replaced when
@@ -230,8 +241,9 @@ take messages once stage 4 lands.
 - When a holder ends, the outcomes and moves above keep acceptance order. The
   first remaining message opens the follow-up, and the rest wait on the
   follow-up in their order.
-- A message sent while a follow-up is still `queued` waits on it, so it also
-  arrives before that follow-up's first model call.
+- A message sent while a follow-up is still `queued` waits on it, behind
+  any message already waiting there. It reaches the follow-up's first model
+  call only when no message carrying `instructions` waits ahead of it.
 
 ## 2. What "running" and "finished" mean
 
@@ -240,9 +252,12 @@ The states stay the ones the store has now. For messages, `queued` and
 as finished. `interrupted` counts as finished and cannot be continued.
 
 **A steered job's result.** It is the last result the model submitted. When a
-steer arrives after the model has already called `submit_result`, the run
-does not stop: the model reads the steer and may submit again, which replaces
-the result. If it does not submit again, the earlier result stands. A steered
+steer arrives after the model has already called `submit_result` and a
+model turn remains, the run does not stop: the model reads the steer and may
+submit again, which replaces
+the result. If it does not submit again, the earlier result stands. When no
+turn remains, the run ends with the submitted result, and the steer opens
+the follow-up. A steered
 job's `commands` hold every command of the run, and its `report` covers the
 whole run. Steers spend model turns from the job's own `maxModelTurns`.
 
@@ -370,7 +385,7 @@ socket, with the body, answers and events above. Nothing in it is about
 wants or chat.
 
 Loom's adapter, `src/lib/agent_jobs.py`, would gain a `message` action
-beside `start` and `cancel`, and would read `continues`, `continuedBy` and
+beside `start` and `cancel`, and would read `continues`, `continuedBy`, `openedBy` and
 `messages` from the job view. When an answer says `delivery: "follow-up"`, the
 adapter follows the returned job. That adapter work is track D's.
 
@@ -397,15 +412,18 @@ client:
   previous turn's tool results.
 - A message pending before the first turn is in the first request, after the
   prompt.
-- A message pending when the model submits a result keeps the loop running.
-  The model sees the message, and its second submission is the result.
+- With a model turn remaining, a message pending when the model submits a
+  result keeps the loop running. The model sees the message, and its second
+  submission is the result.
 - On the last permitted turn, nothing is taken at the exit, whether the turn
   ends with a final text answer or an accepted result. The message is still
   waiting.
 - Nothing is taken after the loop ends.
 - A child loop takes nothing.
-- A run whose binding carries a value digest is refused before any model
-  request, and `takeMessages` is never called.
+- A run given `takeMessages`, under a binding that carries a
+  `valueDigest`, a `slotDigest` or a `snapshotDigest`, is refused before any
+  model request, once for each of the three, and `takeMessages` is never
+  called. The same binding without `takeMessages` runs as it does today.
 
 **Stage 2: `--continue-run`,** in `packages/cf-harness`:
 
@@ -434,7 +452,8 @@ existing fake `runJob`:
   view shows `continuedBy`.
 - **Instructions.** A follow-up carrying `instructions` runs with them in
   place of its predecessor's, and one without inherits them. A message
-  carrying `instructions` to a running job is `409 instructions_on_steer`.
+  carrying `instructions` to a running job with no cancel requested is
+  `409 instructions_on_steer`.
 - **The head.** A message to a job that already has a follow-up lands on
   the head.
 - **Replay:**
@@ -450,7 +469,9 @@ existing fake `runJob`:
   - `not_continuable`, for an interrupted job, a `PROFILE_UNAVAILABLE`
     failure, and a job cancelled while queued;
   - `cannot_steer` and `instructions_on_steer`;
-  - `invalid_request` and `too_large`.
+  - `invalid_request` and `too_large`;
+  - `unknown_profile`, for a message to a finished job whose profile the
+    host no longer names.
 - **Ordering and outcomes:**
   - Two messages waiting at one boundary arrive in acceptance order.
   - Messages still waiting when the run ends: the first opens one follow-up,
@@ -460,6 +481,12 @@ existing fake `runJob`:
   - Two messages accepted after a cancel request, each carrying different
     `instructions`, open two follow-ups in a chain. Each follow-up runs with
     its own message's instructions.
+  - After a cancel request, accept A and B, each with different
+    `instructions`, then C with none. A opens follow-up J, and B and C move
+    to J. J's run takes neither. When J ends, B opens J's follow-up K, C
+    moves to K, and K's run takes C before its first model call, under B's
+    instructions. The same holds when C is sent instead while J is still
+    queued.
   - A message waiting on a queued job that is then cancelled, one waiting on
     a job that fails `PROFILE_UNAVAILABLE`, and one waiting on a job that
     restart recovery ends `interrupted` each get `dropped`, with its reason,
