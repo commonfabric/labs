@@ -103,6 +103,25 @@ describe("storage-delegation-chain", () => {
           expect(written.seq).toBeGreaterThan(0);
         });
 
+        it("presents a delegation added after an earlier open was refused, on the same factory", async () => {
+          const { server, space } = await serverWithOwnedSpace({
+            delegations: true,
+            connectionAuth,
+          });
+          const factory = guestFactory(server);
+          await expect(factory.create(space)).rejects.toThrow("lacks READ");
+          const delegation = await issueDelegation(owner, {
+            aud: guest.did(),
+            sub: space as DIDKey,
+            cmd: "/memory",
+            pol: [],
+          });
+          await factory.addDelegation(delegation.bytes);
+          const { client, session } = await factory.create(space);
+          cleanups.push(() => client.close());
+          expect((await write(session, 1)).seq).toBeGreaterThan(0);
+        });
+
         it("is refused the space with no delegation held", async () => {
           const { server, space } = await serverWithOwnedSpace({
             delegations: true,

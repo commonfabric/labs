@@ -16,10 +16,14 @@
 import {
   decodeDelegation,
   type Delegation,
+  delegationCovers,
   DelegationError,
   verifyDelegation,
 } from "@commonfabric/identity";
-import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
+import {
+  MAX_PROOF_CHAIN_LENGTH,
+  SESSION_OPEN_COMMAND,
+} from "@commonfabric/memory/v2/session-open-auth";
 
 /** The delegations a runtime holds, keyed by the space each is over. */
 export class DelegationStore {
@@ -32,7 +36,9 @@ export class DelegationStore {
    * not verify. Adding a delegation the store holds changes nothing.
    */
   async add(bytes: Uint8Array): Promise<Delegation> {
-    const delegation = await decodeDelegation(bytes);
+    // A copy, so the held bytes stay the bytes the CID and payload describe
+    // whatever the caller does with its array afterwards.
+    const delegation = await decodeDelegation(bytes.slice());
     await verifyDelegation(delegation);
     const { sub } = delegation.payload;
     // A delegation over any subject is one no space's open can present.
@@ -51,10 +57,11 @@ export class DelegationStore {
   /**
    * The chain to present when opening `space` as `principal`, root first, or
    * `undefined` when the store holds no delegation over `space` whose
-   * audience is `principal`. Each link is the earliest-added unexpired
-   * delegation whose audience is the link after it, a delegation the space
-   * itself issued being preferred since it ends the chain; the chain stops
-   * there, where no link precedes, or at the length a server admits.
+   * audience is `principal`. Each link is the earliest-added delegation
+   * whose audience is the link after it, among those valid now and covering
+   * a session open, a delegation the space itself issued being preferred
+   * since it ends the chain; the chain stops there, where no link precedes,
+   * or at the length a server admits.
    */
   chainFor(
     space: string,
@@ -72,7 +79,9 @@ export class DelegationStore {
         const { payload } = delegation;
         if (
           payload.aud !== audience || used.has(delegation.cid) ||
-          (payload.exp !== null && payload.exp < nowSeconds)
+          (payload.exp !== null && payload.exp < nowSeconds) ||
+          (payload.nbf !== undefined && payload.nbf > nowSeconds) ||
+          !delegationCovers(payload.cmd, SESSION_OPEN_COMMAND)
         ) continue;
         if (payload.iss === space) {
           next = delegation;

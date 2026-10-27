@@ -367,15 +367,17 @@ export type SessionPrincipal = {
   readonly authorizeSessionOpen: SessionOpenAuthFactory;
 
   /**
-   * The proof chain every open of a session mounted as this key presents
-   * (04-protocol.md §4.5.1, "Proof chains"): each delegation's bytes as its
-   * issuer encoded them, root first, the last one's audience being this
-   * key. An open naming the connection's authenticated principal carries
-   * them as `authorization.proofs`; `authorizeSessionOpen` is expected to
-   * carry them the same way and to name their CIDs in the signed `prf`.
-   * Absent for a key that presents no chain.
+   * The proof chain an open of a session mounted as this key presents
+   * (04-protocol.md §4.5.1, "Proof chains"), asked for at every open and
+   * reopen so that each presents the chain as it stands then: each
+   * delegation's bytes as its issuer encoded them, root first, the last
+   * one's audience being this key, or `undefined` for no chain. An open
+   * naming the connection's authenticated principal carries them as
+   * `authorization.proofs`; `authorizeSessionOpen` is expected to carry them
+   * the same way and to name their CIDs in the signed `prf`. Absent for a
+   * key that never presents one.
    */
-  readonly proofs?: readonly Uint8Array[];
+  readonly proofs?: (space: string) => readonly Uint8Array[] | undefined;
 };
 
 /** How a session is authenticated when it opens and each time it reopens. */
@@ -1293,7 +1295,7 @@ export class Client {
       // A server admitting no chain refuses an open presenting one, so a
       // key holding a chain is told here rather than refused there.
       if (
-        typeof auth === "object" && auth.proofs !== undefined &&
+        typeof auth === "object" && auth.proofs?.(space) !== undefined &&
         this.serverFlags?.sessionOpenProofs !== true
       ) {
         throw protocolError(
@@ -1333,17 +1335,19 @@ export class Client {
             : this.#waitForRenewal(renewal, options.signal));
           if (principal !== STALE) {
             requireUncancelled();
+            // The chain as it stands for this open. It rides outside any
+            // signature here: the connection authenticated the key, and
+            // each proof carries its own.
+            const proofs = auth.proofs?.(space);
             return await this.request<SessionOpenResult>({
               type: "session.open",
               requestId: this.#nextRequestId(),
               space,
               principal,
               session,
-              // The chain rides outside any signature here: the connection
-              // authenticated the key, and each proof carries its own.
-              ...(auth.proofs === undefined ? {} : {
+              ...(proofs === undefined ? {} : {
                 authorization: {
-                  proofs: auth.proofs.map((proof) =>
+                  proofs: proofs.map((proof) =>
                     new FabricBytes(proof)
                   ),
                 },

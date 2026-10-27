@@ -451,6 +451,14 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * @throws If the memory server refuses the genesis commit. No DID is
    *   returned then, and the space that was being created is abandoned.
    */
+  createSpace?(
+    acl: ACL,
+    genesis?: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
+  ): Promise<MemorySpace>;
+
   /**
    * Holds the delegation `bytes` encode, so that a session this manager opens
    * from here on, on the space it is over and as a key it reaches, presents
@@ -460,14 +468,6 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * the manager's sessions cannot present a chain.
    */
   addDelegation?(bytes: Uint8Array): Promise<void>;
-
-  createSpace?(
-    acl: ACL,
-    genesis?: {
-      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
-      spaceKind?: string;
-    },
-  ): Promise<MemorySpace>;
 
   /**
    * The kind `space` declares in its genesis commit, or `undefined` when it

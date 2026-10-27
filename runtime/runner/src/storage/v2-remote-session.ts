@@ -1360,10 +1360,7 @@ export class RemoteSessionFactory implements SessionFactory {
     client: SessionConnection;
     session: MemoryClient.SpaceSession;
   }> {
-    const principal = this.#sessionPrincipal(
-      signer,
-      this.#delegations.chainFor(space, signer.did()),
-    );
+    const principal = this.#sessionPrincipal(signer);
     return this.#sharedConnections
       ? this.#createShared(space, principal, mountOptions, signal)
       : this.#createDedicated(space, principal, mountOptions, signal);
@@ -1371,14 +1368,14 @@ export class RemoteSessionFactory implements SessionFactory {
 
   /**
    * Helper for `create()`, which returns both authentication signers for the
-   * key, each presenting `chain` where the key holds one. The server's
-   * capabilities select authentication independently of whether the factory
-   * shares connections.
+   * key, each presenting the chain the store assembles for the key at the
+   * moment of the open, so a reopen presents a delegation added since and
+   * leaves out one that has expired. The server's capabilities select
+   * authentication independently of whether the factory shares connections.
    */
-  #sessionPrincipal(
-    signer: Signer,
-    chain: readonly Delegation[] | undefined,
-  ): MemoryClient.SessionPrincipal {
+  #sessionPrincipal(signer: Signer): MemoryClient.SessionPrincipal {
+    const chainFor = (space: string) =>
+      this.#delegations.chainFor(space, signer.did());
     return {
       did: signer.did(),
       authorizeConnection: (context) =>
@@ -1389,11 +1386,9 @@ export class RemoteSessionFactory implements SessionFactory {
           space as MemorySpace,
           descriptor,
           context,
-          chain,
+          chainFor(space),
         ),
-      ...(chain === undefined
-        ? {}
-        : { proofs: chain.map((delegation) => delegation.bytes) }),
+      proofs: (space) => chainFor(space)?.map((delegation) => delegation.bytes),
     };
   }
 

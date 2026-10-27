@@ -107,6 +107,29 @@ describe("DelegationStore", () => {
       ]);
     });
 
+    it("leaves out a delegation that is not yet valid, or whose command does not cover opening a session", async () => {
+      const store = new DelegationStore();
+      const early = await delegate(space, alice, { nbf: now + 100 });
+      const transactOnly = await delegate(space, alice, {
+        cmd: "/memory/transact",
+      });
+      await store.add(early.bytes);
+      await store.add(transactOnly.bytes);
+      expect(store.chainFor(space.did(), alice.did(), now)).toBeUndefined();
+      expect(cids(store.chainFor(space.did(), alice.did(), now + 100)))
+        .toEqual([early.cid]);
+    });
+
+    it("keeps the bytes it was given, whatever the caller does with its array after", async () => {
+      const store = new DelegationStore();
+      const root = await delegate(space, alice);
+      const bytes = root.bytes.slice();
+      await store.add(bytes);
+      bytes.fill(0);
+      const [held] = store.chainFor(space.did(), alice.did(), now)!;
+      expect(held.bytes).toEqual(root.bytes);
+    });
+
     it("leaves out a delegation that has expired", async () => {
       const store = new DelegationStore();
       const expired = await delegate(space, alice, { exp: now - 1 });
