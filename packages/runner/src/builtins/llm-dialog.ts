@@ -2313,6 +2313,118 @@ function toolInputValueIntegrity(
   return (view?.entries ?? []).flatMap((entry) => entry.label.integrity ?? []);
 }
 
+/**
+ * `schema`, a node of a tool's input schema, resolved where it is a reference,
+ * with the document a local reference beneath it resolves against: `root`, the
+ * owning document a walk carries, or the resolved document once an external
+ * reference is followed. A local reference resolves against `root`, since a
+ * member of a recursive group arrives as a bare pointer with its floor behind
+ * it. Returns `undefined` where the reference resolves to no object, and
+ * `"unresolvable"` where the fail-closed resolver cannot resolve it.
+ * Deliberately NOT `resolveExternalRootRefForStructure`, whose
+ * reference-unchanged miss would read as nothing to refuse.
+ */
+function resolveToolInputSchemaNode(
+  schema: Record<string, unknown>,
+  root: unknown,
+):
+  | { structural: Record<string, unknown>; root: JSONSchema }
+  | "unresolvable"
+  | undefined {
+  const ref = schema.$ref;
+  if (typeof ref !== "string") {
+    return { structural: schema, root: (root ?? schema) as JSONSchema };
+  }
+  try {
+    const resolved = ContextualFlowControl.resolveSchemaRefsOrThrow(
+      schema as JSONSchemaObj,
+      (root ?? schema) as JSONSchema,
+    );
+    if (!isObjectOrArray(resolved) || Array.isArray(resolved)) return undefined;
+    const owning = isExternalSchemaRef(ref)
+      ? resolved as JSONSchema
+      : (root ?? schema) as JSONSchema;
+    return {
+      structural: resolved,
+      root: cfcSchemaResolvedRoot(resolved as JSONSchema, owning),
+    };
+  } catch {
+    return "unresolvable";
+  }
+}
+
+// Scan a tool's `inputSchema` for a floor (`ifc.requiredIntegrity`) declared
+// as anything but a list, at every position the schema reaches, whatever the
+// model supplied: a malformed declaration refuses the call even where no value
+// reaches it (§8.10.3), as a malformed ceiling does
+// (`toolAllowsObservedConfidentiality`). Returns the first such field's reason.
+// A reference the session cannot resolve is left to
+// `toolInputRequiredIntegrityFailure`, which refuses the call wherever a
+// supplied value reaches one.
+function toolInputMalformedFloor(
+  schema: unknown,
+  path: string,
+  root?: unknown,
+  followed: ReadonlySet<string> = new Set(),
+  document = "",
+): string | undefined {
+  if (!isObjectOrArray(schema) || Array.isArray(schema)) return undefined;
+  // A recursive group closes on a reference this branch has already
+  // followed. A reference is named within the document that holds it, since a
+  // local pointer means another definition in another document, and resolving
+  // one returns a fresh object, so the resolved node cannot name it.
+  const ref = schema.$ref;
+  let branchFollowed = followed;
+  let branchDocument = document;
+  if (typeof ref === "string") {
+    const key = isExternalSchemaRef(ref) ? ref : `${document}${ref}`;
+    if (followed.has(key)) return undefined;
+    branchFollowed = new Set([...followed, key]);
+    if (isExternalSchemaRef(ref)) branchDocument = ref;
+  }
+  const node = resolveToolInputSchemaNode(schema, root);
+  if (node === undefined || node === "unresolvable") return undefined;
+  const { structural, root: structuralRoot } = node;
+  const ifc = structural.ifc;
+  if (
+    isObjectOrArray(ifc) && !Array.isArray(ifc) &&
+    ifc.requiredIntegrity !== undefined &&
+    !Array.isArray(ifc.requiredIntegrity)
+  ) {
+    return `field "${path || "(root)"}" declares a requiredIntegrity that is ` +
+      `not a list; refusing the call (fail closed)`;
+  }
+  const children: [unknown, string][] = [];
+  if (isObjectOrArray(structural.properties)) {
+    for (const [key, child] of Object.entries(structural.properties)) {
+      children.push([child, path ? `${path}.${key}` : key]);
+    }
+  }
+  if (Array.isArray(structural.prefixItems)) {
+    structural.prefixItems.forEach((child, index) =>
+      children.push([child, `${path}[${index}]`])
+    );
+  }
+  children.push([structural.items, `${path}[]`]);
+  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+    const branches = structural[key];
+    if (Array.isArray(branches)) {
+      for (const branch of branches) children.push([branch, path]);
+    }
+  }
+  for (const [child, childPath] of children) {
+    const failure = toolInputMalformedFloor(
+      child,
+      childPath,
+      structuralRoot,
+      branchFollowed,
+      branchDocument,
+    );
+    if (failure !== undefined) return failure;
+  }
+  return undefined;
+}
+
 // Walk a tool's `inputSchema` for fields declaring `ifc.requiredIntegrity` and
 // verify the model-supplied value at each carries every required atom (Epic D2,
 // docs/history/specs/cfc-trusted-agent-tool-integrity.md piece A/C). A control/routing
@@ -2333,40 +2445,17 @@ function toolInputRequiredIntegrityFailure(
   if (!isObjectOrArray(schema)) {
     return undefined;
   }
-  // A reference-form schema resolves before the walk, through the
-  // fail-closed resolver: this is a security gate, so an unresolvable
-  // reference refuses the call — a floor could hide behind it. Deliberately
-  // NOT resolveExternalRootRefForStructure, whose reference-unchanged miss
-  // would read as nothing-to-refuse. A LOCAL reference resolves against the
-  // owning document (`root`) the recursion carries — a member of a recursive
-  // group arrives as a bare pointer with its floor behind it — and following
-  // an external reference makes the resolved document the owning root for
-  // everything under it.
-  let structural = schema;
-  let structuralRoot: JSONSchema = (root ?? schema) as JSONSchema;
-  const ref = structural.$ref;
-  if (typeof ref === "string") {
-    try {
-      const resolved = ContextualFlowControl.resolveSchemaRefsOrThrow(
-        structural,
-        structuralRoot,
-      );
-      if (!isObjectOrArray(resolved)) return undefined;
-      structural = resolved;
-      if (isExternalSchemaRef(ref)) {
-        structuralRoot = resolved;
-      }
-      structuralRoot = cfcSchemaResolvedRoot(
-        structural as JSONSchema,
-        structuralRoot,
-      );
-    } catch {
-      return `field "${
-        path || "(root)"
-      }" carries a schema reference this session cannot resolve; ` +
-        `refusing the call (fail closed)`;
-    }
+  // This is a security gate, so an unresolvable reference refuses the call:
+  // a floor could hide behind it.
+  const node = resolveToolInputSchemaNode(schema, root);
+  if (node === undefined) return undefined;
+  if (node === "unresolvable") {
+    return `field "${
+      path || "(root)"
+    }" carries a schema reference this session cannot resolve; ` +
+      `refusing the call (fail closed)`;
   }
+  const { structural, root: structuralRoot } = node;
   // A compound branch recurses on the SAME value, so a self-referential
   // group could otherwise walk forever. Everything reachable at this value
   // position is gated the first time its (interned, identity-stable)
@@ -2375,15 +2464,6 @@ function toolInputRequiredIntegrityFailure(
   if (seen.has(structural)) return undefined;
   seen.add(structural);
   const ifc = structural.ifc;
-  // A floor declared as anything but a list is malformed, and refuses the
-  // call rather than read as no floor (§8.10.3).
-  if (
-    isObjectOrArray(ifc) && ifc.requiredIntegrity !== undefined &&
-    !Array.isArray(ifc.requiredIntegrity)
-  ) {
-    return `field "${path || "(root)"}" declares a requiredIntegrity that is ` +
-      `not a list; refusing the call (fail closed)`;
-  }
   if (isObjectOrArray(ifc) && Array.isArray(ifc.requiredIntegrity)) {
     const required = ifc.requiredIntegrity;
     if (required.length > 0) {
@@ -2577,14 +2657,15 @@ async function executeToolCalls(
           trustResolver: createTrustResolver(runtime.cfcTrustConfig),
           actingPrincipal: runtime.trustSnapshotProvider()?.actingPrincipal,
         };
-        const integrityFailure = toolInputRequiredIntegrityFailure(
-          runtime,
-          space,
-          gate.schema,
-          gate.input,
-          "",
-          trust,
-        );
+        const integrityFailure = toolInputMalformedFloor(gate.schema, "") ??
+          toolInputRequiredIntegrityFailure(
+            runtime,
+            space,
+            gate.schema,
+            gate.input,
+            "",
+            trust,
+          );
         if (integrityFailure !== undefined) {
           results.push({
             id: part.toolCallId,
@@ -2694,6 +2775,7 @@ export const llmToolExecutionHelpers = {
   stripFrameworkProvidedFields,
   applyAutoProvidedSandboxId,
   toolInputRequiredIntegrityFailure,
+  toolInputMalformedFloor,
 };
 
 /**

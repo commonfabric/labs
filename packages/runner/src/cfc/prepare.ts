@@ -5530,21 +5530,28 @@ const unsupportedTrustSensitiveReason = (
       return `malformed ${key} at /${path.join("/")}`;
     }
   }
-  const uiContract = ifc.uiContract;
-  if (
-    isObjectOrArray(uiContract) && !Array.isArray(uiContract) &&
-    uiContract.requiredEventIntegrity !== undefined &&
-    !Array.isArray(uiContract.requiredEventIntegrity)
-  ) {
+  if (!writesEventIntegrityAsList(ifc.uiContract)) {
     return `malformed uiContract.requiredEventIntegrity at /${path.join("/")}`;
   }
   return undefined;
 };
 
 /**
+ * Whether `contract`, a UI contract as a schema declares it, writes its
+ * `requiredEventIntegrity`, where it writes one, as a list. Its parse
+ * (`uiContractFromSchema()`) keeps only a list, so a requirement written as
+ * anything else would be dropped.
+ */
+const writesEventIntegrityAsList = (contract: unknown): boolean =>
+  !isObjectNotArray(contract) ||
+  contract.requiredEventIntegrity === undefined ||
+  Array.isArray(contract.requiredEventIntegrity);
+
+/**
  * Whether the `writePolicyAnyOf` that `ifc` declares is one this runner
  * enforces: a nonempty list of alternatives, each a writer claim with at most a
- * UI contract that parses beside it, and no writer or contract of the
+ * UI contract that parses beside it, its event integrity written as a list
+ * where it writes one, and no writer or contract of the
  * position's own beside the list, which would leave unclear which of the two
  * governs.
  */
@@ -5558,7 +5565,8 @@ const isWellFormedWritePolicyAnyOf = (ifc: Record<string, unknown>) => {
         key === "writeAuthorizedBy" || key === "uiContract"
       ) &&
       (policy.uiContract === undefined ||
-        uiContractFromSchema({ ifc: policy } as JSONSchema) !== undefined)
+        (uiContractFromSchema({ ifc: policy } as JSONSchema) !== undefined &&
+          writesEventIntegrityAsList(policy.uiContract)))
     );
 };
 

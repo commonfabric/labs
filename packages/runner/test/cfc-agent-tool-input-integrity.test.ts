@@ -987,33 +987,158 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
 
 describe("CFC trusted agent: a floor declared as anything but a list", () => {
   // A `requiredIntegrity` the specification types as a list (§8.8), declared
-  // as anything else, refuses the call rather than read as no floor
-  // (§8.10.3).
+  // as anything else, refuses the call wherever the input schema declares it,
+  // whatever the model supplied (§8.10.3), rather than read as no floor.
 
-  const storageManager = StorageManager.emulate({ as: signer });
-  const runtime = new Runtime({
-    apiUrl: new URL(import.meta.url),
-    storageManager,
+  const { toolInputMalformedFloor } = llmToolExecutionHelpers;
+  const MALFORMED = { type: "string", ifc: { requiredIntegrity: {} } };
+
+  it("reports a field the model may leave out", () => {
+    expect(
+      toolInputMalformedFloor({
+        type: "object",
+        properties: { route: { type: "string" }, note: MALFORMED },
+      }, ""),
+    ).toContain('field "note" declares a requiredIntegrity that is not a list');
   });
 
-  it("refuses a literal under a requiredIntegrity declared as an object", () => {
+  it("reports an array's items, whatever the array holds", () => {
     expect(
-      llmToolExecutionHelpers.toolInputRequiredIntegrityFailure(
-        runtime,
-        space,
+      toolInputMalformedFloor({
+        type: "object",
+        properties: { recipients: { type: "array", items: MALFORMED } },
+      }, ""),
+    ).toContain('field "recipients[]"');
+  });
+
+  it("reports a floor behind a local reference in a recursive group", () => {
+    expect(
+      toolInputMalformedFloor({
+        $ref: "#/$defs/Node",
+        $defs: {
+          Node: {
+            type: "object",
+            properties: { next: { $ref: "#/$defs/Node" }, tag: MALFORMED },
+          },
+        },
+      }, ""),
+    ).toContain('field "tag"');
+  });
+
+  it("reports nothing where every floor is a list", () => {
+    expect(
+      toolInputMalformedFloor({
+        type: "object",
+        properties: {
+          note: { type: "string", ifc: { requiredIntegrity: [KERNEL_ATOM] } },
+        },
+      }, ""),
+    ).toBeUndefined();
+    expect(
+      toolInputMalformedFloor({
+        $ref: "#/$defs/Node",
+        $defs: {
+          Node: {
+            type: "object",
+            properties: {
+              next: { $ref: "#/$defs/Node" },
+              tag: {
+                type: "string",
+                ifc: { requiredIntegrity: [KERNEL_ATOM] },
+              },
+            },
+          },
+        },
+      }, ""),
+    ).toBeUndefined();
+  });
+
+  it("denies a call that leaves the field out, without running the tool", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    const tx = runtime.edit();
+    const { commonfabric } = createTrustedBuilder(runtime);
+    const { pattern, handler, Writable } = commonfabric;
+    try {
+      const routeInputSchema = {
+        type: "object",
+        properties: { route: { type: "string" }, note: MALFORMED },
+        required: ["route"],
+      } as unknown as JSONSchema;
+      const sendRoute = handler<{ route: string }, { sent: any }>(
+        routeInputSchema,
         {
           type: "object",
           properties: {
-            recipient: { type: "string", ifc: { requiredIntegrity: {} } },
+            sent: {
+              type: "array",
+              items: { type: "string" },
+              asCell: ["cell"],
+            },
           },
+          required: ["sent"],
         },
-        { recipient: "attacker@example.com" },
-        "",
-        {},
-      ),
-    ).toContain(
-      'field "recipient" declares a requiredIntegrity that is not a list',
-    );
+        ({ route }, { sent }) => {
+          sent.push(route);
+        },
+      );
+      const resultSchema = {
+        type: "object",
+        properties: {
+          sent: { type: "array", items: { type: "string" } },
+          tools: true,
+        },
+        required: ["sent", "tools"],
+      } as const satisfies JSONSchema;
+      const testPattern = pattern(
+        () => {
+          const sent = Writable.of<string[]>([]);
+          return {
+            sent,
+            tools: {
+              sendRoute: {
+                description: "Send along a route.",
+                inputSchema: routeInputSchema,
+                handler: sendRoute({ sent }),
+              },
+            },
+          };
+        },
+        false,
+        resultSchema,
+      );
+      const resultCell = runtime.getCell(
+        space,
+        "agent-malformed-floor",
+        resultSchema,
+        tx,
+      );
+      const result = runtime.run(tx, testPattern, {}, resultCell);
+      runtime.prepareTxForCommit(tx);
+      await tx.commit().settled;
+      await runtime.idle();
+
+      const catalog = llmToolExecutionHelpers.buildToolCatalog(
+        result.key("tools") as any,
+        false,
+      );
+      await llmToolExecutionHelpers.executeToolCalls(runtime, space, catalog, [{
+        type: "tool-call",
+        toolCallId: "call-malformed-floor",
+        toolName: "sendRoute",
+        input: { route: "a" },
+      }] as any);
+      await runtime.idle();
+
+      const sent = (await result.key("sent").pull()) as string[] | undefined;
+      expect(sent ?? []).toEqual([]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
   });
 });
 
