@@ -303,10 +303,10 @@ describe("topics-headless-fixture", () => {
       );
       const { sources, mentionedBy } = measurement.derivations;
       expect(sources.crossrefTable).toMatch(
-        /^cf:module\/[^/]+\/topics\/main\.tsx:\d+:\d+$/,
+        /^cf:module\/[^/]+\/apps\/topics\/main\.tsx:\d+:\d+$/,
       );
       expect(sources.backlinksOf).toMatch(
-        /^cf:module\/[^/]+\/topics\/topic\.tsx:\d+:\d+$/,
+        /^cf:module\/[^/]+\/apps\/topics\/topic\.tsx:\d+:\d+$/,
       );
       expect(new Set(Object.values(sources)).size).toBe(2);
       expect(typeof mentionedBy).toBe("function");

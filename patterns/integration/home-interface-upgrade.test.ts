@@ -86,22 +86,33 @@ describe("Home interface upgrade", () => {
       const temporary = await Deno.makeTempDir({
         prefix: "home-origin-rehearsal-",
       });
+      // The vintage system tree is the checkout's with Home's own module
+      // replaced: every other entry beside Home's directory, and every other
+      // file in it, is a link to the checkout's.
       const vintageSystem = join(temporary, "system");
-      await Deno.mkdir(vintageSystem);
-      for await (const entry of Deno.readDir(join(patterns, "system"))) {
-        if (entry.name === "home.tsx") continue;
-        await Deno.symlink(
-          join(patterns, "system", entry.name),
-          join(vintageSystem, entry.name),
-        );
-      }
+      const linkAllBut = async (from: string, to: string, except: string) => {
+        await Deno.mkdir(to, { recursive: true });
+        for await (const entry of Deno.readDir(from)) {
+          if (entry.name === except) continue;
+          await Deno.symlink(join(from, entry.name), join(to, entry.name));
+        }
+      };
+      await linkAllBut(join(patterns, "system"), vintageSystem, "home");
+      await linkAllBut(
+        join(patterns, "system", "home"),
+        join(vintageSystem, "home"),
+        "home.tsx",
+      );
       const oldHome = await Deno.readTextFile(
         new URL(
           `./fixtures/home-interface-upgrade/${fixture}`,
           import.meta.url,
         ),
       );
-      await Deno.writeTextFile(join(vintageSystem, "home.tsx"), oldHome);
+      await Deno.writeTextFile(
+        join(vintageSystem, "home", "home.tsx"),
+        oldHome,
+      );
       let route = new PatternsRoute(patterns, [{
         routePrefix: "system/",
         directory: vintageSystem,
