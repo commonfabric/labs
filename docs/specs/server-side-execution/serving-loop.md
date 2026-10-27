@@ -776,8 +776,9 @@ executing:
   which the removed fan-out had covered incidentally). The foreign
   commit is never home input — W and the input batch stay per home
   space.
-  Foreign SCOPED reads are the exception: fail-closed refused until
-  the grant-scoped read design's resolution lands — protocol.md §2.)*
+  A foreign SCOPED read is admitted on the reading actor's own READ
+  grant in the foreign space's access list and refused otherwise —
+  protocol.md §2's grant-scoped read.)*
 - **Scope discovery is part of read discovery**: a run's scope is the
   narrowest scope of anything it read, so it too is discovered by
   running. A narrowing discovery writes the broad-slot redirect AND
@@ -1270,12 +1271,14 @@ the 2026-08-24 ruling; the owner may re-rule it).
 - Failure isolation is per action: an aborted tx discards only its own
   writes; the wave keeps the rest.
 - A derivation run that read the value of a document its runtime refuses
-  by construction (protocol.md §2's foreign scoped read refusal) aborts
-  its tx rather than sealing it. What it derived came from an absence
-  that is not the document's state, and sealing it would overwrite the
-  instance a runtime that can read the document derives. The refusal is
-  the same on every run, so the abort takes no retry; the run's reads stay
-  subscribed, and a change to any other input runs it again.
+  (protocol.md §2's grant-scoped read), or one whose actor's grant it is
+  still asking for, aborts its tx rather than sealing it. What it derived
+  came from an absence that is not the document's state, and sealing it
+  would overwrite the instance a runtime that can read the document
+  derives. A refusal is the same on every run until the foreign space's
+  access list changes, so the abort takes no retry; the run's reads stay
+  subscribed, and a change to any other input, or the admitted instance
+  landing, runs it again.
 - A derivation run that read, through a link, an absent user- or
   session-scoped instance of a document another derivation registered in
   this runtime declares as a write (a builtin's stores included) aborts its

@@ -2610,18 +2610,22 @@ export async function dispatchQueuedEvent(state: {
     };
 
     const finalize = (error?: unknown): void => {
-      // A served run that read a document this runtime refuses by
-      // construction read an absence that is not the document's state, so
-      // whatever it did with it — an `undefined` argument, a throw, a
-      // branch taken on nothing — is no consequence of the event. The read
-      // is refused the same way every time, so the entry fails permanently
-      // in `dispatch-load`, as a load that cannot succeed fails it. Only
-      // what the run itself read decides this: the preflight's dependency
-      // walk is a transaction of its own, and a refused document only it
-      // reaches leaves the run free to dispatch.
+      // A served run that read a document this runtime does not admit
+      // read an absence that is not the document's state, so whatever it
+      // did with it — an `undefined` argument, a throw, a branch taken on
+      // nothing — is no consequence of the event. The read is refused the
+      // same way every time until the target's access list changes, so
+      // the entry fails permanently in `dispatch-load`, as a load that
+      // cannot succeed fails it. Only what the run itself read decides
+      // this: the preflight's dependency walk is a transaction of its own,
+      // and a refused document only it reaches leaves the run free to
+      // dispatch. The preflight parks on a read whose grant is still being
+      // asked for, so a run meets no unresolved document; one that did
+      // is treated as refused, since the absence it read is no state
+      // either way.
       const refused = served === undefined
         ? undefined
-        : refusedReadIn(state.runtime.storageManager, tx.tx);
+        : refusedReadIn(state.runtime.storageManager, tx.tx)?.document;
       if (refused !== undefined) {
         if (tx.status().status === "ready") {
           tx.abort(new Error(`served run read a refused document: ${refused}`));
@@ -3359,8 +3363,9 @@ export async function dispatchQueuedEvent(state: {
 }
 
 /**
- * The first document whose value `tx` read that `manager` refuses by
- * construction, as `<space>/<scope>/<id>`, or `undefined` when it read none.
+ * The first document whose value `tx` read under its identity that `manager`
+ * does not admit (`scopedReadStanding`), as `<space>/<scope>/<id>` with the
+ * standing it has, or `undefined` when every document it read is admitted.
  * A read of the document's root counts, as a read of its value does, among
  * the reads the run depends on. Three kinds of read do not count, since none
  * is the run consuming the document's data: a read of its CFC metadata, which
@@ -3373,10 +3378,10 @@ export async function dispatchQueuedEvent(state: {
  * natively; a transaction that records none names no document.
  */
 export function refusedReadIn(
-  manager: Pick<IStorageManager, "refusesReadByConstruction">,
-  tx: Pick<IStorageTransaction, "getReadActivities">,
-): string | undefined {
-  if (manager.refusesReadByConstruction === undefined) return undefined;
+  manager: Pick<IStorageManager, "scopedReadStanding">,
+  tx: Pick<IStorageTransaction, "getReadActivities" | "scopeKeyIdentity">,
+): { document: string; standing: "refused" | "unresolved" } | undefined {
+  if (manager.scopedReadStanding === undefined) return undefined;
   for (const read of tx.getReadActivities?.() ?? []) {
     if (
       isLinkResolutionProbe(read.meta) ||
@@ -3385,8 +3390,12 @@ export function refusedReadIn(
       continue;
     }
     if (read.path.length > 0 && read.path[0] !== "value") continue;
-    if (manager.refusesReadByConstruction(read)) {
-      return `${read.space}/${read.scope ?? "space"}/${read.id}`;
+    const standing = manager.scopedReadStanding(read, tx.scopeKeyIdentity);
+    if (standing !== "admitted") {
+      return {
+        document: `${read.space}/${read.scope ?? "space"}/${read.id}`,
+        standing,
+      };
     }
   }
   return undefined;
