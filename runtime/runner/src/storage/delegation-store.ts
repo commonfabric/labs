@@ -15,6 +15,11 @@
  * itself rooted is preferred, since the server resolves its grant without
  * any access-list entry naming another principal, and otherwise the chain
  * added last: the holder's latest intent.
+ *
+ * What the store hands back is its own: the arrays are copies, but the
+ * delegations in them, their bytes included, are the ones the store holds
+ * and will present. A caller reads them and changes nothing in them; a
+ * delegation changed after it was added is a proof the server refuses.
  */
 
 import {
@@ -46,11 +51,12 @@ export class DelegationStore {
    * Adds the chain `bytes` encode, root first, decoding and verifying each
    * delegation and checking that the links meet: each audience is the next
    * issuer, every subject is one space, and the chain is at most
-   * {@link MAX_PROOF_CHAIN_LENGTH} long. Returns the decoded chain. Throws a
-   * `DelegationError` for anything else. Adding a chain the store holds
-   * changes nothing.
+   * {@link MAX_PROOF_CHAIN_LENGTH} long. Returns the decoded chain, whose
+   * delegations the store holds from then on and the caller must not change.
+   * Throws a `DelegationError` for anything else. Adding a chain the store
+   * holds changes nothing.
    */
-  async add(bytes: readonly Uint8Array[]): Promise<Delegation[]> {
+  async add(bytes: readonly Uint8Array[]): Promise<readonly Delegation[]> {
     if (bytes.length === 0) {
       throw new DelegationError("the chain is empty");
     }
@@ -101,13 +107,15 @@ export class DelegationStore {
    * `undefined` when the store holds no usable chain over `space` ending at
    * `principal`. A chain is usable when every link holds at `nowSeconds` and
    * covers a session open. Among the usable chains, one the space itself
-   * rooted is preferred, and otherwise the one added last.
+   * rooted is preferred, and otherwise the one added last. The delegations
+   * returned are the ones the store holds, and the caller must not change
+   * them.
    */
   chainFor(
     space: string,
     principal: string,
     nowSeconds = Math.floor(Date.now() / 1000),
-  ): Delegation[] | undefined {
+  ): readonly Delegation[] | undefined {
     const held = this.#bySubject.get(space);
     if (held === undefined) return undefined;
     let latest: Delegation[] | undefined;

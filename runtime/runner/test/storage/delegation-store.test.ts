@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  type Delegation,
   DelegationError,
   type DelegationFields,
   Identity,
@@ -31,7 +32,8 @@ const delegate = (
     ...fields,
   });
 
-const cids = (chain: { cid: string }[] | undefined) => chain?.map((d) => d.cid);
+const cids = (chain: readonly { cid: string }[] | undefined) =>
+  chain?.map((d) => d.cid);
 
 describe("DelegationStore", () => {
   describe("add()", () => {
@@ -48,7 +50,8 @@ describe("DelegationStore", () => {
     it("returns a chain the caller may change without changing what is held", async () => {
       const store = new DelegationStore();
       const root = await delegate(space, alice);
-      const returned = await store.add([root.bytes]);
+      // The type says the caller may not; the store does not rely on that.
+      const returned = await store.add([root.bytes]) as Delegation[];
       returned.length = 0;
       expect(cids(store.chainFor(space.did(), alice.did(), now))).toEqual([
         root.cid,
