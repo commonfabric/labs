@@ -178,6 +178,13 @@ Admission checks, tests of the exact packaged source, and observation of actual
 migration writes establish different things; a successful source compatibility
 check alone does not establish successful migration execution.
 
+A topic deployed before the author's optional `picture` existed is refused the
+update to this source by the retained-link proof, on its comments, and so is its
+board, on its members; each takes the update once forced, past that finding
+alone, and is proven normally afterwards. The decision, the gate that confines
+the forcing to that finding, and the rehearsal are recorded in
+[`topics-profile-picture-forced-update.md`](../../../docs/history/topics-profile-picture-forced-update.md).
+
 ## Tests and extension
 
 Each step needs coverage starting from the shape immediately before that step,
