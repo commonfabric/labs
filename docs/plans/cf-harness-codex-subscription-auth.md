@@ -253,8 +253,6 @@ pre-implementation approval gate.
 Expected files:
 
 - `runtime/cf-harness/src/model/client.ts`
-- `runtime/cf-harness/src/model/types.ts`
-- `runtime/cf-harness/test/model-client.test.ts`
 
 ### WP1.2 — Adapt the current gateway without changing behavior
 
@@ -397,7 +395,7 @@ Expected files:
 Expected files:
 
 - `runtime/cf-harness/src/model/openai-codex-responses.ts`
-- `runtime/cf-harness/src/model/responses-conversion.ts`
+- `runtime/cf-harness/src/model/responses-protocol.ts`
 - `runtime/cf-harness/test/openai-codex-responses.test.ts`
 
 ### WP3.2 — Parse SSE into the normalized result
@@ -597,9 +595,10 @@ Expected files:
 - [x] Update `runtime/cf-harness/README.md` with provider selection, auth
   commands, local and Loom credential ownership, credential storage warning,
   logout, model listing, and troubleshooting.
-- [x] Update `runtime/cf-harness/docs/IMPLEMENTATION_PLAN.md` where its gateway
-  auth discussion would otherwise imply that API keys are the only authenticated
-  path.
+- [x] Update `runtime/cf-harness/docs/IMPLEMENTATION_PLAN.md` (since archived
+  as `docs/history/packages/cf-harness/docs/IMPLEMENTATION_PLAN.md`) where its
+  gateway auth discussion would otherwise imply that API keys are the only
+  authenticated path.
 - [x] Document that API-key usage and ChatGPT subscription usage have different
   billing, workspace policy, retention, and availability.
 - [ ] Ship local CLI support first, then enable Loom behind explicit user

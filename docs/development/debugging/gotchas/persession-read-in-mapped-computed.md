@@ -99,5 +99,5 @@ perSession doesn't.
 **Known-good references:**
 `lot-watch/main.tsx` (`sightingRows`, spot picker) and
 `parking-coordinator/main.tsx` (`adminPeopleData`/`adminSpotsData`) both bake the
-flag into the producing computed. `apps/cozy-poll/main.tsx` maps `options`
+flag into the producing computed. `patterns/apps/cozy-poll/main.tsx` maps `options`
 directly and needs no change.

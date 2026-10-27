@@ -15,7 +15,7 @@ explicit migration or hybrid.
 Keep the authored sources beside generated `main.tsx`:
 
 ```text
-patterns/phaser-shared-targets/
+patterns/examples/phaser-shared-targets/
 ├── contract.ts
 ├── guest.ts
 ├── guest.html   # optional; useful for a canvas parent and status UI
@@ -342,14 +342,14 @@ destroy the game, remove global listeners, and disconnect the bridge.
 
 ```bash
 deno run -A scripts/write-iframe-wrapper.ts \
-  --contract patterns/phaser-shared-targets/contract.ts \
-  --guest patterns/phaser-shared-targets/guest.ts \
-  --html patterns/phaser-shared-targets/guest.html \
-  --out patterns/phaser-shared-targets/main.tsx
+  --contract patterns/examples/phaser-shared-targets/contract.ts \
+  --guest patterns/examples/phaser-shared-targets/guest.ts \
+  --html patterns/examples/phaser-shared-targets/guest.html \
+  --out patterns/examples/phaser-shared-targets/main.tsx
 
-deno fmt patterns/phaser-shared-targets
-deno check patterns/phaser-shared-targets/guest.ts
-deno task cf check patterns/phaser-shared-targets/main.tsx --no-run
+deno fmt patterns/examples/phaser-shared-targets
+deno check patterns/examples/phaser-shared-targets/guest.ts
+deno task cf check patterns/examples/phaser-shared-targets/main.tsx --no-run
 ```
 
 Launch the pattern with the steps under

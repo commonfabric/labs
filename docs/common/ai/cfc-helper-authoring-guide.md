@@ -603,8 +603,8 @@ Before moving code into `patterns/system/cfc/`:
 Use the narrowest meaningful checks:
 
 ```sh
-deno task cf test patterns/<pattern>/main.test.tsx --root patterns
-deno task cf check patterns/<pattern>/main.tsx --no-run
+deno task cf test patterns/<category>/<pattern>/main.test.tsx --root patterns
+deno task cf check patterns/<category>/<pattern>/main.tsx --no-run
 deno fmt --check <touched files>
 ```
 

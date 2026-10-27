@@ -14,7 +14,7 @@ you are migrating an existing guest and need to compare the two source styles.
 Keep these authored files beside the generated wrapper:
 
 ```text
-patterns/iframe-react-quick-notes/
+patterns/examples/iframe-react-quick-notes/
 ├── contract.ts  # input, durable state, output, scopes, optional databases
 ├── guest.tsx    # React application and Fabric bridge client
 ├── guest.html   # optional document shell
@@ -651,9 +651,9 @@ settings target the Common Fabric host runtime instead.
 
 ```bash
 deno run -A scripts/write-iframe-wrapper.ts \
-  --contract patterns/iframe-react-quick-notes/contract.ts \
-  --guest patterns/iframe-react-quick-notes/guest.tsx \
-  --out patterns/iframe-react-quick-notes/main.tsx \
+  --contract patterns/examples/iframe-react-quick-notes/contract.ts \
+  --guest patterns/examples/iframe-react-quick-notes/guest.tsx \
+  --out patterns/examples/iframe-react-quick-notes/main.tsx \
   --react
 ```
 
@@ -666,9 +666,9 @@ must contain `<!-- PATTERN_IFRAME_SCRIPT -->` exactly once.
 Format and compile both realms:
 
 ```bash
-deno fmt patterns/iframe-react-quick-notes
-deno check patterns/iframe-react-quick-notes/guest.tsx
-deno task cf check patterns/iframe-react-quick-notes/main.tsx --no-run
+deno fmt patterns/examples/iframe-react-quick-notes
+deno check patterns/examples/iframe-react-quick-notes/guest.tsx
+deno task cf check patterns/examples/iframe-react-quick-notes/main.tsx --no-run
 ```
 
 Launch against local servers, starting them first:
@@ -696,7 +696,7 @@ test -e .cf/iframe-pattern.key || \
 export CF_API_URL=http://localhost:8000
 export CF_IDENTITY=.cf/iframe-pattern.key
 export CF_SPACE="$(deno task cf space create --label "Iframe React notes")"
-deno task cf piece new patterns/iframe-react-quick-notes/main.tsx \
+deno task cf piece new patterns/examples/iframe-react-quick-notes/main.tsx \
   --root . --slug react-notes
 ```
 

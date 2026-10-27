@@ -15,7 +15,7 @@ of those styles.
 Keep the authored contract and guest beside the generated wrapper:
 
 ```text
-patterns/d3-shared-bars/
+patterns/examples/d3-shared-bars/
 ├── contract.ts  # input, durable state, output, scopes, optional databases
 ├── guest.ts     # D3 application and Fabric bridge client
 ├── guest.html   # optional document shell
@@ -342,18 +342,18 @@ Generate the wrapper without the React flag:
 
 ```bash
 deno run -A scripts/write-iframe-wrapper.ts \
-  --contract patterns/d3-shared-bars/contract.ts \
-  --guest patterns/d3-shared-bars/guest.ts \
-  --html patterns/d3-shared-bars/guest.html \
-  --out patterns/d3-shared-bars/main.tsx
+  --contract patterns/examples/d3-shared-bars/contract.ts \
+  --guest patterns/examples/d3-shared-bars/guest.ts \
+  --html patterns/examples/d3-shared-bars/guest.html \
+  --out patterns/examples/d3-shared-bars/main.tsx
 ```
 
 Then validate the authored guest and generated pattern:
 
 ```bash
-deno fmt patterns/d3-shared-bars
-deno check patterns/d3-shared-bars/guest.ts
-deno task cf check patterns/d3-shared-bars/main.tsx --no-run
+deno fmt patterns/examples/d3-shared-bars
+deno check patterns/examples/d3-shared-bars/guest.ts
+deno task cf check patterns/examples/d3-shared-bars/main.tsx --no-run
 ```
 
 Launch the pattern with the steps under

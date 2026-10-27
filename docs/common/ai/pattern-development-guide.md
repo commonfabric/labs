@@ -38,7 +38,7 @@ growing, revisit the available data and component contracts before adding more.
 Start with:
 
 ```text
-patterns/<name>/main.tsx
+patterns/<category>/<name>/main.tsx
 ```
 
 Only split into `schemas.tsx` or additional modules when:

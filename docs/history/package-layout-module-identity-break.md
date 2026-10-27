@@ -37,19 +37,19 @@ whose code may write a field. A _module policy reference_ names the module that
 defines the policy a value is held to. The check treats a writer claim's module
 identity as one that is expected to change, so it records the new contract as an
 addition. A module policy reference holds the identity as part of the label, so
-the check reports `ifc changed` for eight patterns, compared with each
-pattern's latest baseline:
+the check reports `ifc changed` for eight patterns, compared with the
+baselines recorded for them before the move:
 
-| Pattern                                                | Paths                                    |
-| ------------------------------------------------------ | ---------------------------------------- |
-| `examples/cfc-exchange-rules/blessed-computation.tsx`  | `argument.briefs[]`                      |
-| `examples/cfc-exchange-rules/blessed-object.tsx`       | `argument.briefs[]`                      |
-| `examples/cfc-exchange-rules/custody-answer-room.tsx`  | `argument.policy`, `result.policy`       |
-| `examples/cfc-exchange-rules/custody-projector.tsx`    | `argument.policy`, `result.policy`       |
-| `examples/cfc-exchange-rules/direct-release.tsx`       | `result.message`                         |
-| `examples/cfc-exchange-rules/imported-policy.tsx`      | `result.message`                         |
-| `examples/cfc-exchange-rules/witnessed-chain.tsx`      | `argument.briefs[]`                      |
-| `dev/test/writer-policy/main.tsx`                      | `argument.entries[]`, `result.entries[]` |
+| Pattern                                               | Paths                                                                        |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `examples/cfc-exchange-rules/blessed-computation.tsx` | `argument.briefs[]`                                                          |
+| `examples/cfc-exchange-rules/blessed-object.tsx`      | `argument.briefs[]`                                                          |
+| `examples/cfc-exchange-rules/custody-answer-room.tsx` | `argument.policy`, `result.policy`                                           |
+| `examples/cfc-exchange-rules/custody-projector.tsx`   | `argument.policy`, `result.policy`                                           |
+| `examples/cfc-exchange-rules/direct-release.tsx`      | `result.message`                                                             |
+| `examples/cfc-exchange-rules/imported-policy.tsx`     | `result.message`                                                             |
+| `examples/cfc-exchange-rules/witnessed-chain.tsx`     | `argument.briefs[]`, `argument.committed`                                    |
+| `dev/test/writer-policy/main.tsx`                     | `argument.entries[]`, `argument.frozen`, `result.entries[]`, `result.frozen` |
 
 ## The decision
 

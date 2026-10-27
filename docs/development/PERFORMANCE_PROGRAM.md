@@ -127,7 +127,7 @@ client profiling, just for the server.
 
 For more structured server tracing, toolshed already has OpenTelemetry
 instrumentation (request-level spans in `middlewares/opentelemetry.ts`,
-memory operation spans in `runtime/memory/telemetry.ts`). It's disabled by
+memory operation spans in `runtime/memory/v2/server.ts`). It's disabled by
 default (`OTEL_ENABLED=false`) and requires a collector (Jaeger, etc.), so
 `--inspect` is the lower-friction starting point. OTEL becomes valuable
 when you want queryable traces ("show me the 10 slowest storage reads")

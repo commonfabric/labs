@@ -14,7 +14,7 @@ No other pattern guide is required for this shape.
 Keep these files together:
 
 ```text
-patterns/quick-notes/
+patterns/examples/quick-notes/
 ├── contract.ts  # input, durable state, output, scopes, optional resources
 ├── guest.ts     # the iframe application; guest.tsx is also accepted
 ├── guest.html   # optional custom document shell
@@ -715,9 +715,9 @@ Run the checked-in helper from the repository root:
 
 ```bash
 deno run -A scripts/write-iframe-wrapper.ts \
-  --contract patterns/quick-notes/contract.ts \
-  --guest patterns/quick-notes/guest.ts \
-  --out patterns/quick-notes/main.tsx
+  --contract patterns/examples/quick-notes/contract.ts \
+  --guest patterns/examples/quick-notes/guest.ts \
+  --out patterns/examples/quick-notes/main.tsx
 ```
 
 The helper refuses to overwrite a file. Pass `--force` when regenerating the
@@ -738,9 +738,9 @@ helper supplies a complete document with `<div id="root"></div>`.
 Format and compile the result:
 
 ```bash
-deno fmt patterns/quick-notes
-deno check patterns/quick-notes/guest.ts
-deno task cf check patterns/quick-notes/main.tsx --no-run
+deno fmt patterns/examples/quick-notes
+deno check patterns/examples/quick-notes/guest.ts
+deno task cf check patterns/examples/quick-notes/main.tsx --no-run
 ```
 
 If the pattern is intentionally outside the repository, pass its directory as
@@ -772,7 +772,7 @@ test -e .cf/iframe-pattern.key || \
 export CF_API_URL=http://localhost:8000
 export CF_IDENTITY=.cf/iframe-pattern.key
 export CF_SPACE="$(deno task cf space create --label "Iframe quick notes")"
-deno task cf piece new patterns/quick-notes/main.tsx \
+deno task cf piece new patterns/examples/quick-notes/main.tsx \
   --root . --slug quick-notes
 ```
 
