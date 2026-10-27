@@ -22,7 +22,8 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
 - `text`: the value hashed, as its `fvj1:` text, which
   [`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
   specifies. A reader decodes it to get the value, applying the mods below.
-- `unclaimed` and `patches`: the mods, present where the case needs them.
+- `unclaimed` and `patches`: the mods, present where the case needs them, as
+  [Mods](#mods) describes.
 - `hash`: what hashing the value yields, or `refused: "unhashable"`. A hash is
   three strings: `stream`, the bytes fed to SHA-256, in lowercase hexadecimal;
   `digest`, the 32 bytes SHA-256 makes of them, likewise; and `string`, the
@@ -38,9 +39,9 @@ generation instead.
 
 ## Texts
 
-Each `text` is the one the spec gives the value, with record keys in the UTF-8
-order section 10 of `3-json-encoding.md` requires, so a decoder that holds a
-text to that order can read every one. That order is the spec's rather than this
+Each `text` is the value's canonical text, as sections 10 and 11 of
+`3-json-encoding.md` define it, so a decoder that holds a text to section 10's
+key order can read every one. That order is the spec's rather than this
 package's encoder's, which writes keys that read as array indices first: the
 case "record keys that read as integers" is `{"10":…,"2":…,"a":…}`.
 
@@ -51,33 +52,13 @@ cases that differ only in those ways have the same text.
 
 ## Mods
 
-Some values have no text, or none that decodes to them unaided. Two mods state
-what the text cannot:
-
-- `unclaimed`: wire tags, in UTF-8 order and each once. Decode the text as
-  though no codec claimed them, so that a value under one decodes as an unknown
-  value preserving its tag and state, as it would for a reader that has no codec
-  for the tag. Only a tag a class claims is named here. The four that the format
-  itself decides, `BigInt@1`, `SpecialNumber@1`, `Symbol@1` and `Undefined@1`,
-  never are, so an unknown value under one of those has no text and mods, and
-  none of the cases holds one.
-- `patches`: changes made to the decoded value, each `{"at": path, "put": …}`. A
-  path is a list of steps from the root, `[]` being the root itself: a number
-  steps into an array at that index, and a string, or `{"utf16": [...]}` for one
-  holding a lone surrogate, steps into a record under that key. The path runs
-  through the arrays and records of the decoded text, and the text holds a
-  `null` where it ends, which the patch replaces. `put` is one of:
-  - `{"cycle": path}`: the array or record at that path, which closes a cycle.
-    The path is absolute, from the root, and is a proper prefix of `at`.
-  - `{"unregisteredSymbol": description}`: a symbol of no registry key, under
-    that description, a string, or `null` for none.
-
-  Follow every path before making any patch, so that no path runs into what a
-  patch put. No two patches share a path.
-
-The cycles and unregistered symbols among the cases are written with patches.
-Section 4.19 puts instances among what a cycle may pass through, and a patch can
-state such a cycle, but none of the cases holds one.
+The mods, `unclaimed` and `patches`, are those
+[`value-probes.md`](value-probes.md) defines, along with the paths a patch
+follows. The cycles and unregistered symbols among the cases are written with
+patches. Section 4.19 puts instances among what a cycle may pass through, but a
+patch's path does not step into an instance, so no text and mods state such a
+cycle, and none of the cases holds one. No case holds an unknown value under one
+of the four tags the format itself decides, which no text and mods write.
 
 ## Divergences
 
@@ -103,10 +84,10 @@ where by comparing streams.
 
 Each case makes its value in TypeScript, and generating writes the text and mods
 from it. The value they decode to must be the one made: the same hash, and
-`valueEqual()` to it, or for a value whose hashing is refused, the same value in
-the notation of [`value-descriptors.md`](value-descriptors.md). Where this
-package's decoder refuses the text, that check is the divergence's to answer
-for, and the test hashes the value as the case made it instead.
+`valueEqual()` to it, or for a value whose hashing is refused, a value whose own
+text and mods are the case's. Where this package's decoder refuses the text,
+that check is the divergence's to answer for, and the test hashes the value as
+the case made it instead.
 
 Every two hashed cases hold to the spec's rule on equality: their hashes are the
 same exactly when their values are `valueEqual()`, and

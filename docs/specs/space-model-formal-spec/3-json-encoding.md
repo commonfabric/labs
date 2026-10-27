@@ -397,11 +397,11 @@ other malformation off a channel.
 
 **When the encoder emits `/object`:** During encoding, if a plain object
 has any string key that starts with `/` — regardless of how many other keys the
-object has — the encoder wraps it in one of these escapes (either `/object`
-or `/quote`; see "Encoder dispatch" below). This prevents the decoder from
-treating the object as a reserved form. `/object` is always a valid choice; the
-distinction between `/object` and `/quote` is a recommendation about which form
-makes the wire output most readable, not a correctness requirement.
+object has — the encoder wraps it in one of these escapes, `/object` or
+`/quote`, chosen as "Encoder Dispatch" below requires. This prevents the
+decoder from treating the object as a reserved form. A decoder reads either
+escape wherever it is well-formed; the choice binds the encoder alone, so that a
+value has one text (Section 11).
 
 ### `/quote` — Fully Literal
 
@@ -438,29 +438,35 @@ Use cases:
   should still be interpreted normally.
 - `/quote`: You want the entire subtree treated as literal JSON data.
 
-### Encoder Dispatch (Recommended Best Practice)
+### Encoder Dispatch
 
 When the encoder encounters a plain object that needs an escape (i.e., any plain
-object containing one or more `/`-prefixed keys), both `/object` and `/quote`
-are valid choices. The recommended best practice is:
+object containing one or more `/`-prefixed keys), it **must** choose the escape
+this way:
 
-- If the entire subtree to be wrapped is fully literal — i.e., it contains no
-  values that would themselves need encoding as special types — emit `/quote`.
+- If the entire subtree to be wrapped is fully literal — it contains no value
+  encoded under a tag (Section 3, `undefined` and the special numbers among
+  them) and no array holding a hole — emit `/quote`. A plain object within it
+  that has `/`-prefixed keys of its own is written as itself, `/quote` having
+  already made the whole subtree literal.
 - Otherwise (some descendant value still needs to be processed as a special
-  type during decoding), emit `/object`.
+  type during decoding), emit `/object`. Each plain object within it that has
+  `/`-prefixed keys of its own makes the same choice for its own subtree.
 
-The motivation for the recommendation is wire-format readability and round-trip
-fidelity: a `/quote`-wrapped literal subtree appears in the wire format as
-itself, with no per-key escaping or restructuring, which is easier for humans to
-read and easier for tools to compare. Conversely, `/object` is required (not
-just preferred) whenever any descendant value still needs encoding, because
-`/quote` would suppress that encoding entirely.
+The motivation is wire-format readability and round-trip fidelity: a
+`/quote`-wrapped literal subtree appears in the wire format as itself, with no
+per-key escaping or restructuring, which is easier for humans to read and
+easier for tools to compare. Conversely, `/object` is required whenever any
+descendant value still needs encoding, because `/quote` would suppress that
+encoding entirely. Requiring one choice rather than allowing either is what
+gives a value one text (Section 11).
 
-This is a **recommendation, not a requirement**. A conforming encoder may emit
-`/object` in either case; the wire format is unambiguous either way. **A
-conforming decoder must accept both forms.** See `1-fabric-values.md` Section
-2.9 (immutability) and the freeze guarantee under `/quote` above for the
-properties a decoder preserves regardless of which form it sees.
+The rule binds the encoder alone. **A conforming decoder must accept both
+forms** wherever each is well-formed, whichever an encoder would have chosen:
+`{ "/object": { "/x": 1 } }` decodes to the plain object `{ "/x": 1 }`, whose
+canonical text is `{"/quote":{"/x":1}}`. See `1-fabric-values.md` Section 2.9
+(immutability) and the freeze guarantee under `/quote` above for the properties
+a decoder preserves regardless of which form it sees.
 
 ## 7. Codec Engine Responsibilities
 
@@ -496,8 +502,7 @@ it wraps the data in `UnknownValue` (see `1-fabric-values.md` Section 3) to
 preserve it for round-tripping. Re-encoding reproduces the original key,
 the codec's `tagForValue()` reading back the preserved tag and `encode()`
 returning the preserved bare state, so the value passes through byte for byte
-when it arrived as the text this encoder writes for it: canonical text
-(Section 11), with the escape choices of Section 6 that this encoder makes.
+when it arrived as its canonical text (Section 11).
 
 This applies only to a key that is syntactically a tag but claimed by no
 codec. A key that is not a tag at all is a structural violation rather than an
@@ -602,13 +607,12 @@ including:
 ## 11. Canonical Text
 
 The sections before this one settle the structure of the JSON body for a value:
-which arrays, records, and tags it holds, the exact states of Section 3, and
-the order of a record's keys (Section 10). The one choice they leave an encoder
-is between `/object` and `/quote` where Section 6 allows either. This section
-settles the text: for a given structure, a conforming encoder **must** write
-exactly one text, fixing where whitespace goes, how a number is written, and
-how a string is written. Two independently built encoders that make the same
-choices under Section 6 therefore write the same text for the same value.
+which arrays, records, and tags it holds, the exact states of Section 3, the
+escape each record with a `/`-prefixed key takes (Section 6), and the order of
+a record's keys (Section 10). This section settles the text: for a given value,
+a conforming encoder **must** write exactly one text, fixing where whitespace
+goes, how a number is written, and how a string is written. Two independently
+built encoders therefore write the same text for the same value.
 
 The rules are the ones ECMAScript's `JSON.stringify()` follows when called with
 no indentation argument, and ECMA-262 is the authority wherever the summary
@@ -685,13 +689,14 @@ Unicode, whatever strings the value holds.
 These rules bind what an encoder writes, and nothing else. A decoder accepts
 any JSON text RFC 8259 allows, subject only to the refusals of Section 1.1:
 whitespace between tokens, a number written `1.0E2` or `1E+21`, an escaped `\/`
-or `\u2028`, an escape with uppercase digits such as `\uD800`, and keys in any
-order (Section 10) all decode. Such a text decodes to the same value its
+or `\u2028`, an escape with uppercase digits such as `\uD800`, keys in any order
+(Section 10), and `/object` where an encoder would write `/quote` (Section 6)
+all decode. Such a text decodes to the same value its
 canonical form does, so re-encoding that value writes the canonical form, which
 can differ from the text that arrived even though the value does not.
 
 > **Why one text.** Section 10's reasoning for key order extends to the rest of
-> the body: when the text is a function of the structure alone, equal values
-> encoded with the same escape choices have equal text, which lets content
-> addressing, deduplication, and diffing work on the text directly, and lets a
-> conformance case state the exact text an encoder must produce.
+> the body: when the text is a function of the value alone, equal values have
+> equal text, which lets content addressing, deduplication, and diffing work on
+> the text directly, and lets a conformance case state the exact text an
+> encoder must produce.

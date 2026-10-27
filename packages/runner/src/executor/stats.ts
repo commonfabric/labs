@@ -306,6 +306,13 @@ export type ServingLoopStats = {
      * and the pass after one that threw partway, reconcile every key. */
     demandKeysReconciled: number;
 
+    /** The (piece root, demanding pair) seedings of owed defaults the
+     * passes completed — the arrival seed: a pattern-owned cell declaring a
+     * default at a scope narrower than its result is seeded in a demanding
+     * pair's instance when the pair's demand for the piece arrives, as the
+     * piece's start seeds it for the identity the start runs under. */
+    ownedDefaultSeeds: number;
+
     /** Root documents the pass pulled TOGETHER before its sequential
      * structure loads ran (`SpaceServer.#loadStructureRootDocs`): the
      * instance each demand names and, for every scoped demand, the space
@@ -748,6 +755,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     demandPasses: 0,
     demandPassMs: 0,
     demandKeysReconciled: 0,
+    ownedDefaultSeeds: 0,
     structureRootsPreloaded: 0,
     pushGrowthWakes: 0,
     watchWakes: 0,

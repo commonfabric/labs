@@ -7,7 +7,7 @@
  * does with it: the bytes it feeds SHA-256, the digest, and the digest's string
  * form, or the refusal. A value is written as its `fvj1:` text, with the mods
  * to decoding it that state what no text carries, as
- * `test/fixtures/hash-conformance.md` defines. Generating the fixture fails
+ * `test/fixtures/value-probes.md` defines. Generating the fixture fails
  * when they do not decode to the value the case made. Where this package's
  * decoder refuses a text the spec allows, a divergence has to say so.
  *
@@ -63,16 +63,15 @@ import {
   bytesOfHex,
   type ClassCaseNotes,
   classCasesOf,
-  descriptorOf,
   type ExampleMakers,
   fabricValueOfTextWithMods,
+  type FixtureJson,
   fixtureTextOf,
   hexOf,
   sparseArrayOf,
   STUB_CODEC_EXCLUSION,
   type TextWithMods,
   textWithModsOf,
-  type ValueDescriptor,
 } from "./conformance-fixtures.ts";
 import { ValueHasher } from "./value-hash/ValueHasher.ts";
 
@@ -1003,7 +1002,7 @@ type MadeCase = {
  * @throws What the hasher or the decoder throws other than a refusal; or if
  *   the text and mods decode to a value other than the one made, which is
  *   decided by its hash and by `valueEqual()`, and for a value whose hashing is
- *   refused, by its hash and its descriptor.
+ *   refused, by its hash and its own text and mods.
  */
 function madeCaseOf(conformanceCase: HashConformanceCase): MadeCase {
   const value = conformanceCase.make();
@@ -1022,8 +1021,7 @@ function madeCaseOf(conformanceCase: HashConformanceCase): MadeCase {
 
   const same = isSameOutcome(hashOutcomeOf(restated), hashed) &&
     (("refused" in hashed)
-      ? JSON.stringify(descriptorOf(restated)) ===
-        JSON.stringify(descriptorOf(value))
+      ? JSON.stringify(textWithModsOf(restated)) === JSON.stringify(stated)
       : valueEqual(restated, value));
   if (!same) {
     throw new Error(
@@ -1126,13 +1124,13 @@ function outcomeOfStream(stream: Uint8Array): HashedOutcome {
 /** Returns the fixture entry for one case. */
 function fixtureEntryOf(
   { conformanceCase, stated, textRefused, hashed }: MadeCase,
-): Record<string, ValueDescriptor> {
+): Record<string, FixtureJson> {
   const { name, section, spec, equals, divergence } = conformanceCase;
   const specHashed = (spec === undefined)
     ? hashed
     : outcomeOfStream(bytesOfHex(spec.replaceAll(" ", "").toLowerCase()));
 
-  const entry: Record<string, ValueDescriptor> = { name, section };
+  const entry: Record<string, FixtureJson> = { name, section };
   entry.text = stated.text;
   if (stated.unclaimed !== undefined) {
     entry.unclaimed = stated.unclaimed;
@@ -1145,7 +1143,7 @@ function fixtureEntryOf(
     entry.equals = equals;
   }
 
-  const implementation: Record<string, ValueDescriptor> = {};
+  const implementation: Record<string, FixtureJson> = {};
   if (!isSameOutcome(hashed, specHashed)) {
     if (divergence === undefined) {
       throw new Error(

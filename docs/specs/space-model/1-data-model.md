@@ -841,13 +841,12 @@ Use cases for `/quote`:
   still be interpreted normally
 - `/quote`: You want the entire subtree treated as literal JSON data
 
-**Encoder dispatch (recommended best practice).** When the encoder must wrap
-a plain object with `/`-prefixed keys, both forms are valid wire output, but
-the recommended choice is `/quote` when the entire subtree is fully literal
-(no descendants need encoding) and `/object` otherwise. The wire form is
-unambiguous either way — a conforming encoder may emit `/object` in any
-case, and **a conforming decoder must accept both forms**. See Section 6 of
-the formal spec for the precise dispatch rule and motivation.
+**Encoder dispatch.** When the encoder must wrap a plain object with
+`/`-prefixed keys, it must emit `/quote` when the entire subtree is fully
+literal (no descendants need encoding) and `/object` otherwise, so that each
+value has one text. The rule binds the encoder alone: **a conforming decoder
+must accept both forms**. See Section 6 of the formal spec for the precise
+dispatch rule and motivation.
 
 #### Reservation Rule
 

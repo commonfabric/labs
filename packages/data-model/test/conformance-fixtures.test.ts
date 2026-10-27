@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import type { FabricInstance, FabricValue } from "@";
 import { ProblematicStateError, UnknownValue } from "@/codec-common";
+import { jsonFromFabricValue } from "@/codecs.ts";
 import {
   BaseFabricInstance,
   DEEP_CLONE_CORE,
@@ -10,14 +11,13 @@ import {
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
 } from "@/fabric-bases";
+import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
 import { FabricBytes, FabricKeyPair } from "@/fabric-primitives";
 import {
-  descriptorOfForTestingOnly,
-  fabricValueOfDescriptorForTestingOnly,
   fabricValueOfTextWithModsForTestingOnly,
+  probesOfForTestingOnly,
   type TextWithMods,
   textWithModsOfForTestingOnly,
-  type ValueDescriptor,
 } from "@/for-testing-only.ts";
 
 /** A `FabricInstance` of a class neither class table names. */
@@ -25,7 +25,7 @@ class OtherInstance extends BaseFabricInstance {
   //
   // Unreached stubs
   //
-  // Describing an instance reads none of these.
+  // Probing an instance reads none of these.
   //
 
   [DEEP_FREEZE](_subFreeze: (value: FabricValue) => FabricValue): FabricValue {
@@ -48,157 +48,162 @@ class OtherInstance extends BaseFabricInstance {
 }
 
 describe("conformance-fixtures", () => {
-  describe("descriptorOfForTestingOnly()", () => {
-    it("throws given a key pair holding `CryptoKey` handles", async () => {
+  describe("probesOfForTestingOnly()", () => {
+    it("returns a special form for each container before the probes of what it holds, with record keys in UTF-8 order", () => {
+      const record = Object.fromEntries([["b", [true]], ["\ud800", null], [
+        "a",
+        1n,
+      ]]);
+      expect(probesOfForTestingOnly(record)).toEqual([
+        [[], { record: 3 }],
+        [["a"], 'fvj1:{"/BigInt@1":"AQ"}'],
+        [["b"], { array: 1 }],
+        [["b", 0], "fvj1:true"],
+        [[{ utf16: [0xd800] }], "fvj1:null"],
+      ]);
+    });
+
+    it("returns the canonical text of each leaf, written on its own", () => {
+      expect(
+        probesOfForTestingOnly([
+          "a\ud800",
+          -0,
+          undefined,
+          Symbol.for("s"),
+          new FabricBytes(new Uint8Array([1])),
+        ]),
+      ).toEqual([
+        [[], { array: 5 }],
+        [[0], 'fvj1:"a\\ud800"'],
+        [[1], 'fvj1:{"/SpecialNumber@1":"-0"}'],
+        [[2], 'fvj1:{"/Undefined@1":null}'],
+        [[3], 'fvj1:{"/Symbol@1":"s"}'],
+        [[4], 'fvj1:{"/Bytes@1":"AQ"}'],
+      ]);
+    });
+
+    it("returns a hole run for each maximal run of holes, at its first index", () => {
+      const array: FabricValue[] = [1];
+      array[3] = 2;
+      array.length = 5;
+      expect(probesOfForTestingOnly(array)).toEqual([
+        [[], { array: 5 }],
+        [[0], "fvj1:1"],
+        [[1], { holes: 2 }],
+        [[3], "fvj1:2"],
+        [[4], { holes: 1 }],
+      ]);
+    });
+
+    it("returns the probes of an instance's fields, by the paths of the value rather than of the wire", () => {
+      expect(
+        probesOfForTestingOnly(
+          new FabricLink({ id: "x", path: ["a"] }),
+        ),
+      ).toEqual([
+        [[], { instance: "Link@1" }],
+        [["payload"], { record: 2 }],
+        [["payload", "id"], 'fvj1:"x"'],
+        [["payload", "path"], { array: 1 }],
+        [["payload", "path", 0], 'fvj1:"a"'],
+      ]);
+    });
+
+    it("returns an error's extras even when there are none, and no probe for an absent stack or cause", () => {
+      const error = new FabricError({
+        type: "TypeError",
+        name: "TypeError",
+        message: "m",
+        stack: undefined,
+        cause: undefined,
+      });
+      expect(probesOfForTestingOnly(error)).toEqual([
+        [[], { instance: "Error@1" }],
+        [["type"], 'fvj1:"TypeError"'],
+        [["name"], 'fvj1:"TypeError"'],
+        [["message"], 'fvj1:"m"'],
+        [["extras"], { record: 0 }],
+      ]);
+    });
+
+    it("returns an error's stack, cause and extras where it has them", () => {
+      const error = new FabricError({
+        type: "Error",
+        name: "Custom",
+        message: "m",
+        stack: "s",
+        cause: null,
+        extras: { code: 7 },
+      });
+      expect(probesOfForTestingOnly(error)).toEqual([
+        [[], { instance: "Error@1" }],
+        [["type"], 'fvj1:"Error"'],
+        [["name"], 'fvj1:"Custom"'],
+        [["message"], 'fvj1:"m"'],
+        [["stack"], 'fvj1:"s"'],
+        [["cause"], "fvj1:null"],
+        [["extras"], { record: 1 }],
+        [["extras", "code"], "fvj1:7"],
+      ]);
+    });
+
+    it("returns an unknown value's tag and the probes of its state", () => {
+      expect(probesOfForTestingOnly(new UnknownValue("Future@2", [1])))
+        .toEqual([
+          [[], { unknown: "Future@2" }],
+          [["state"], { array: 1 }],
+          [["state", 0], "fvj1:1"],
+        ]);
+    });
+
+    it("returns no probe at or under the path of a patch, and the special forms of the containers along it", () => {
+      const record: { self?: FabricValue; s?: FabricValue; n?: FabricValue } = {
+        s: [Symbol("s")],
+        n: 1,
+      };
+      record.self = record;
+      expect(
+        probesOfForTestingOnly(record, [
+          { at: ["s", 0], put: { unregisteredSymbol: "s" } },
+          { at: ["self"], put: { cycle: [] } },
+        ]),
+      ).toEqual([
+        [[], { record: 3 }],
+        [["n"], "fvj1:1"],
+        [["s"], { array: 1 }],
+      ]);
+    });
+
+    it("throws given a cycle no patch closes", () => {
+      const record: { self?: FabricValue } = {};
+      record.self = record;
+      expect(() => probesOfForTestingOnly(record))
+        .toThrow('No probe for a cycle at ["self"]');
+    });
+
+    it("throws given a symbol of no registry key that no patch puts", () => {
+      expect(() => probesOfForTestingOnly([Symbol("s")]))
+        .toThrow("No probe for a symbol of no registry key at [0]");
+    });
+
+    it("throws given a map, whose codec is a stub", () => {
+      expect(() => probesOfForTestingOnly(new FabricMap(new Map())))
+        .toThrow("No probe for a map.");
+    });
+
+    it("throws given a key pair holding `CryptoKey` handles, which has no text", async () => {
       const pair = await crypto.subtle.generateKey("Ed25519", false, [
         "sign",
         "verify",
       ]);
-      expect(() => descriptorOfForTestingOnly(new FabricKeyPair(pair)))
-        .toThrow("No descriptor for a key pair holding `CryptoKey` handles.");
+      expect(() => probesOfForTestingOnly([new FabricKeyPair(pair)]))
+        .toThrow("Cannot encode a key pair that holds handles");
     });
 
     it("throws given an instance of a class no table names", () => {
-      expect(() => descriptorOfForTestingOnly(new OtherInstance()))
-        .toThrow("No descriptor for a value of an unknown class.");
-    });
-
-    it("returns a cycle reference for a record that holds itself", () => {
-      const record: { self?: FabricValue } = {};
-      record.self = record;
-      expect(descriptorOfForTestingOnly(record)).toEqual({
-        record: [["self", { cycle: 1 }]],
-      });
-    });
-
-    it("returns a cycle reference counting the containers up to where the cycle closes", () => {
-      const record: { x?: FabricValue } = {};
-      record.x = [{ x: record }];
-      expect(descriptorOfForTestingOnly(record)).toEqual({
-        record: [["x", { array: [{ record: [["x", { cycle: 3 }]] }] }]],
-      });
-    });
-
-    it("returns a container reached twice off the path in full each time", () => {
-      const shared = [1];
-      expect(descriptorOfForTestingOnly({ a: shared, b: shared })).toEqual({
-        record: [["a", { array: [1] }], ["b", { array: [1] }]],
-      });
-    });
-
-    it("throws given a cycle that closes at an instance", () => {
-      const state: FabricValue[] = [];
-      const unknown = new UnknownValue("Example@1", state);
-      state.push(unknown);
-      expect(() => descriptorOfForTestingOnly(unknown))
-        .toThrow("No descriptor for a cycle through an instance.");
-    });
-
-    it("throws given a cycle that passes through an instance", () => {
-      const record: { u?: FabricValue } = {};
-      record.u = new UnknownValue("Example@1", [record]);
-      expect(() => descriptorOfForTestingOnly(record))
-        .toThrow("No descriptor for a cycle through an instance.");
-    });
-  });
-
-  describe("fabricValueOfDescriptorForTestingOnly()", () => {
-    it("throws given a descriptor the notation does not define", () => {
-      const cases: ReadonlyArray<readonly [ValueDescriptor, string]> = [
-        [{ number: "Infinity" }, "Not a special number"],
-        [{ nonesuch: 1 }, "Not a descriptor kind"],
-        [{ a: 1, b: 2 }, "Not a single-key object"],
-        [{}, "Not a single-key object"],
-        [[1], "Not an object"],
-        [{ bigint: { text: "1" } }, "Not a string descriptor"],
-        [{ utf16: ["a"] }, "Not a code unit"],
-        [{ utf16: [-1] }, "Not a code unit"],
-        [{ utf16: [0x10000] }, "Not a code unit"],
-        [{ utf16: [97.5] }, "Not a code unit"],
-        [-0, "Not a number descriptor"],
-        [Infinity, "Not a number descriptor"],
-        [{ bigint: "0x10" }, "Not a decimal integer"],
-        [{ bigint: " 1" }, "Not a decimal integer"],
-        [{ bigint: "" }, "Not a decimal integer"],
-        [{ bigint: "01" }, "Not a decimal integer"],
-        [{ bigint: "-0" }, "Not a decimal integer"],
-        [{ EpochNsec: "1e3" }, "Not a decimal integer"],
-        [{ Bytes: "ZZ" }, "Not lowercase hexadecimal bytes"],
-        [{ array: 1 }, "Not a list"],
-        [{ record: [["a"]] }, "Not a pair"],
-        [{ record: [["a", 1, 2]] }, "Not a pair"],
-        [{ Hash: 1 }, "Not an object"],
-        [{ Hash: { tag: "fid1" } }, "No field `hash`"],
-        [{ Unavailable: { reason: "gone" } }, "Not an unavailable reason"],
-        [
-          { Unavailable: { reason: "error", errorKind: "nonesuch" } },
-          "Not an error kind",
-        ],
-        [{ Link: 1 }, "A link's payload must be a record."],
-        [{ array: [{ hole: "1" }] }, "Not a hole count"],
-        [{ cycle: 1 }, "Not a cycle distance"],
-        [{ array: [{ cycle: 2 }] }, "Not a cycle distance"],
-        [{ array: [{ cycle: 0 }] }, "Not a cycle distance"],
-        [{ array: [{ cycle: 1.5 }] }, "Not a cycle distance"],
-        [{ Link: { record: [["a", { cycle: 2 }]] } }, "Not a cycle distance"],
-      ];
-      for (const [descriptor, message] of cases) {
-        expect(() => fabricValueOfDescriptorForTestingOnly(descriptor))
-          .toThrow(message);
-      }
-    });
-
-    it("throws given an array descriptor holding a hole run below one", () => {
-      for (const count of [0, -1]) {
-        expect(() =>
-          fabricValueOfDescriptorForTestingOnly({
-            array: [1, { hole: count }],
-          })
-        ).toThrow("Not a hole count");
-      }
-    });
-
-    it("returns a value of each descriptor kind that describes back to it", () => {
-      const descriptors: readonly ValueDescriptor[] = [
-        { unregisteredSymbol: null },
-        { KeyPair: { algorithm: "A", publicKey: "01", privateKey: "02" } },
-        { Unavailable: { reason: "error", errorKind: "network" } },
-        {
-          Unavailable: {
-            reason: "error",
-            errorKind: "general",
-            errorMessage: "boom",
-          },
-        },
-        { Map: [["a", 1]] },
-        { Set: [1, { bigint: "2" }] },
-        { record: [["self", { cycle: 1 }]] },
-        { array: [{ record: [["x", { cycle: 2 }]] }, { cycle: 1 }] },
-      ];
-      for (const descriptor of descriptors) {
-        const value = fabricValueOfDescriptorForTestingOnly(descriptor);
-        expect(descriptorOfForTestingOnly(value)).toEqual(descriptor);
-      }
-    });
-
-    it("returns for a cycle reference the container it counts up to", () => {
-      const value = fabricValueOfDescriptorForTestingOnly({
-        record: [["x", { array: [{ cycle: 2 }] }]],
-      }) as { x: FabricValue[] };
-      expect(value.x[0]).toBe(value);
-    });
-
-    it("returns a record holding a key `__proto__` as an own property", () => {
-      const value = fabricValueOfDescriptorForTestingOnly({
-        record: [["__proto__", 1]],
-      }) as object;
-      expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
-      expect(Object.getOwnPropertyDescriptor(value, "__proto__")).toEqual({
-        value: 1,
-        writable: true,
-        enumerable: true,
-        configurable: true,
-      });
+      expect(() => probesOfForTestingOnly([new OtherInstance()])).toThrow(
+        "No codec registered",
+      );
     });
   });
 
@@ -258,6 +263,56 @@ describe("conformance-fixtures", () => {
         ]).unclaimed,
       ).toEqual(["Bytes@1", "Link@1"]);
     });
+
+    describe("for a value whose text the encoder writes", () => {
+      // A value that is not plain JSON has its text from this package's
+      // encoder, with only its record keys put in UTF-8 order.
+
+      it("returns the encoder's text unchanged where its keys are already in order", () => {
+        const values: FabricValue[] = [
+          { a: 1n, b: [undefined, Symbol.for("s")] },
+          new FabricError({
+            type: "TypeError",
+            name: "Custom",
+            message: "m",
+            stack: undefined,
+            cause: -0,
+            extras: { code: 7 },
+          }),
+          new FabricLink({ id: "x", path: ["p"] }),
+          new UnknownValue("Example@1", { a: [NaN] }),
+        ];
+        for (const value of values) {
+          expect(textWithModsOfForTestingOnly(value))
+            .toEqual({ text: jsonFromFabricValue(value) });
+        }
+      });
+
+      it("returns the encoder's text with nothing changed but the order of its keys", () => {
+        const value = {
+          "2": 2n,
+          "10": [{ "b": 1n, "a": 2 }],
+          a: new FabricError({
+            type: "Error",
+            name: "Error",
+            message: "m",
+            stack: undefined,
+            cause: undefined,
+            extras: { "2": "two", "10": "ten" },
+          }),
+        };
+        const encoded = jsonFromFabricValue(value);
+        const { text } = textWithModsOfForTestingOnly(value);
+        expect(text).toBe(
+          'fvj1:{"10":[{"a":2,"b":{"/BigInt@1":"AQ"}}],"2":{"/BigInt@1":"Ag"},' +
+            '"a":{"/Error@1":{"10":"ten","2":"two","message":"m",' +
+            '"name":null,"type":"Error"}}}',
+        );
+        expect(text).not.toBe(encoded);
+        expect(JSON.parse(text.slice("fvj1:".length)))
+          .toEqual(JSON.parse(encoded.slice("fvj1:".length)));
+      });
+    });
   });
 
   describe("fabricValueOfTextWithModsForTestingOnly()", () => {
@@ -306,9 +361,13 @@ describe("conformance-fixtures", () => {
       record.self = record;
       const read = fabricValueOfTextWithModsForTestingOnly(
         textWithModsOfForTestingOnly(record),
-      );
-      expect(descriptorOfForTestingOnly(read))
-        .toEqual(descriptorOfForTestingOnly(record));
+      ) as { self: FabricValue; u: [UnknownValue, symbol] };
+      expect(read.self).toBe(read);
+      expect(read.u[0]).toBeInstanceOf(UnknownValue);
+      expect(read.u[0].wireTypeTag).toBe("Link@1");
+      expect(read.u[0].state).toEqual({ id: "x" });
+      expect(Symbol.keyFor(read.u[1])).toBeUndefined();
+      expect(read.u[1].description).toBe("s");
     });
 
     it("throws what the codec throws refusing the text", () => {

@@ -20,43 +20,98 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
 
 - `name`: unique among the cases.
 - `section`: the part of the spec the case exercises.
-- `encode`: a value, under `value`, and either the exact text encoding it
-  yields, under `text`, or `refused: "unencodable"`.
-- `decode`: a text, under `text`, and either the value decoding it yields, under
-  `value`, or the reason it is refused, under `refused`: `not-fvj1` when the
-  text lacks the prefix, `not-json` when what follows the prefix is not JSON,
-  and `malformed` for any other form the format does not allow. The spec settles
-  all three alike, so a decoder need only refuse; the kind says why.
-- `divergence`: present where this package falls short of the format, as the
-  spec states it. The `encode` and `decode` beside it are then the format's
-  outcomes, computed by the generator rather than written by hand, and
-  `divergence.encode` and `divergence.decode` are this package's, given only
-  where they differ. `divergence.note` says what the format requires.
+- `text`: the text to decode. For a case that starts from a value, it is the
+  value's canonical text, as [Exact text](#exact-text) describes, with `null`
+  wherever a patch puts what no text carries.
+- `unclaimed` and `patches`: the mods to decoding `text`, present where the case
+  needs them, as [`value-probes.md`](value-probes.md) defines them. Among the
+  cases they state symbols of no registry key; none of the cases needs
+  `unclaimed`.
+- `probes` or `refused`: what decoding `text` with the mods yields. `probes`
+  states the value it returns, in the vocabulary
+  [`value-probes.md`](value-probes.md) defines. `refused` says why the text is
+  refused: `not-fvj1` when it lacks the prefix, `not-json` when what follows the
+  prefix is not JSON, and `malformed` for any other form the format does not
+  allow. The spec settles all three alike, so a decoder need only refuse; the
+  kind says why.
+- `canonical`: present where `text` is not the canonical text of the value it
+  decodes to, as with whitespace, `1.0e2`, base64 padding, an escape in
+  uppercase, or record keys out of order. It is the canonical text.
+- `reencode`: `{"refused": "unencodable"}`, present where the value decoded has
+  no text, as a cycle and a symbol of no registry key have none.
+- `problematicAt`: present only beside `refused`, as described under
+  [Lenient decoding](#lenient-decoding).
+- `divergence`: present where this package falls short of the format, as
+  described under [Divergences](#divergences).
 
-An entry has `encode`, `decode`, or both. A value whose text decodes back to it
-has both, with the same value and text. A text that is not the canonical form of
-the value it decodes to has an `encode` giving that canonical form.
+## Checking an entry
+
+A reader checks an entry in three steps:
+
+1. Decode `text`, applying the mods.
+2. Check the result against `probes`, walking the decoded value, as
+   [`value-probes.md`](value-probes.md) describes; or, where the entry has
+   `refused`, check that the decode was refused.
+3. Re-encode the decoded value, and compare the text with `canonical` where the
+   entry has it, and with `text` otherwise; or, where the entry has `reencode`,
+   check that the encode was refused.
+
+The probes fix the structure, the fragments fix each leaf, and the re-encode
+fixes the whole, catching anything a decoder adds that a walk of its own value
+might not visit.
 
 A refusal is recorded only where the codec refused; a fault in the codec fails
-generation instead. Refusals assume a strict decoder. A lenient one returns a
-`Problematic` value in place of raising, at the point of the malformation.
+generation instead.
 
 ## Exact text
 
-An encoder that is to match `text` byte for byte writes the JSON that
-ECMAScript's `JSON.stringify()` writes with no indentation, as ECMA-262 defines
-it: a string by the `QuoteJSONString` abstract operation, and a number by
-`Number::toString`. The result is JSON as RFC 8259 defines it. Record keys are
-in the order section 10 of the spec requires, UTF-8 byte order, a lone surrogate
-taking the bytes WTF-8 gives it.
+`canonical`, `text` where there is no `canonical`, each fragment, and each
+`divergence.encode` text are canonical text, the one text a conforming encoder
+writes, as
+[section 11 of `3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md#11-canonical-text)
+defines it, with record keys in the order of section 10.
 
-## Descriptors
+## Lenient decoding
 
-A `value` is a descriptor, in the notation
-[`value-descriptors.md`](value-descriptors.md) defines: JSON that says
-everything about a value the format carries, and nothing about how the format
-carries it. A `cycle` descriptor appears in none of the cases, this package's
-codec refusing to encode a value with a cycle. `Map` and `Set` values are in the
-notation but not among the cases, their codecs being stubs pending general
-`FabricInstance` support. `name` in an `Error` is the error's name even where
-the wire writes `null` for a name equal to the type.
+The refusals assume a strict decoder. A lenient one returns a `Problematic`
+value in place of refusing, as sections 3 and 9 of the spec require. The spec
+fixes that one appears, but not where in the value, nor what its fields hold.
+
+`problematicAt` is the path at which this package's lenient decoder puts the one
+`Problematic` value it returns for the text, which an implementation elsewhere
+need not match. This package puts a codec's refusal at the tagged value refused,
+a structural fault at the container being built when it was found, and a text
+that lacks the prefix or is not JSON at the root. The fields are this package's,
+such as an English message, so the fixture neither probes them nor re-encodes
+the value.
+
+## Divergences
+
+A `divergence` is present where this package falls short of the format, as the
+spec states it. The rest of the entry is then the format's outcome, computed by
+the generator rather than written by hand. `divergence.note` says what the
+format requires, and `divergence.decode` and `divergence.encode` are this
+package's outcomes, each given only where it differs from the format's:
+`divergence.decode` is `{"probes": [...]}` or `{"refused": kind}`, and
+`divergence.encode` is `{"text": ...}` or `{"refused": "unencodable"}`.
+
+Where the spec refuses a text that this package decodes, the entry has `refused`
+and no probes, and `divergence.decode` gives the probes of what this package
+decodes. The entry has no `problematicAt`, this package's lenient decoder making
+no `Problematic` value there, and nothing is re-encoded, the spec having no
+value to re-encode.
+
+Where the spec decodes a text that this package's decoder refuses, as it does
+for a record with the key `__proto__` or `constructor`, or decodes to another
+value, `divergence.decode` is this package's outcome, and
+`test/fvj1-conformance.test.ts` re-encodes the value the case makes instead of
+the value decoded.
+
+A divergence that does not hold fails generation, so that a fix here retires the
+mark rather than leaving it to mislead.
+
+## What is not among the cases
+
+`Map` and `Set` values are not among the cases, their codecs being stubs pending
+general `FabricInstance` support. Nor is a value holding a cycle, which the mods
+can state and which re-encodes to a refusal.
