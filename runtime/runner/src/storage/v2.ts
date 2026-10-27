@@ -6185,10 +6185,14 @@ export class SpaceReplica
    * resolves once the server has admitted it: what carries a proof chain
    * held since the session opened to the server, since each open presents
    * the chain as it stands then (04-protocol.md §4.5.1). Opens a session
-   * first where none is open yet.
+   * first where none is open yet. On a host that does not record session
+   * holdings, a restore ends a session with a holdings provider instead of
+   * resuming it, so there the session is left standing, on the grant it
+   * opened with, until it opens again.
    */
   async restoreSession(): Promise<void> {
-    const { session } = await this.#activeSessionHandle();
+    const { client, session } = await this.#activeSessionHandle();
+    if (client.serverFlags?.sessionHoldings !== true) return;
     await session.restore();
   }
 

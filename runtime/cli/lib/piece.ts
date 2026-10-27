@@ -607,7 +607,8 @@ async function makeSession(config: SpaceConfig): Promise<Session> {
 export interface ConnectionOutput {
   /**
    * Takes each line the connection writes for itself: the navigate callback's
-   * three, and the two warnings a failed connect's own cleanup writes.
+   * three, the two warnings a failed connect's own cleanup writes, and the
+   * warning that the profile delegations Home records could not be loaded.
    */
   readonly report?: (message: string) => void;
 
