@@ -121,7 +121,7 @@ describe("personalized book invitation", () => {
     try {
       const program = await resolveLocalProgram(
         (request) => runtime.harness.resolve(request),
-        { main: `${ROOT}recommend-a-book/library.tsx`, root: ROOT },
+        { main: `${ROOT}apps/recommend-a-book/library.tsx`, root: ROOT },
       );
       const profileSpace = await Identity.fromPassphrase(
         "book originator profile",
