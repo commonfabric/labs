@@ -65,7 +65,17 @@ describe("space-invites", () => {
   });
   it("rejects malformed origins, links, and secret encodings", () => {
     expect(() => normalizeInviteHost("not an origin")).toThrow("invalid-host");
-    for (const secret of [undefined, 32, "", "A".repeat(42), "A".repeat(44)]) {
+    for (
+      const secret of [
+        undefined,
+        32,
+        "",
+        "A".repeat(42),
+        "A".repeat(44),
+        // Nonzero bits past the last whole byte.
+        `${"A".repeat(42)}B`,
+      ]
+    ) {
       expect(isInviteSecret(secret)).toBe(false);
     }
     expect(isInviteSecret("A".repeat(43))).toBe(true);
