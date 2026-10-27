@@ -23,6 +23,7 @@ import {
 import {
   createHarnessImageAttachment,
   parseImageAttachmentPaths,
+  snapshotHarnessImageAttachment,
 } from "./image-attachments.ts";
 import type { HarnessImageAttachment } from "./contracts/image.ts";
 import {
@@ -192,7 +193,10 @@ import {
   setProvenanceCommand,
 } from "./provenance.ts";
 import type { HarnessInputCellSpec } from "./contracts/input-cells.ts";
-import { parseInputCellArgument } from "./input-cells.ts";
+import {
+  inputCellsForHarnessTurn,
+  parseInputCellArgument,
+} from "./input-cells.ts";
 import {
   argvHolds,
   flagWithoutValue,
@@ -1767,11 +1771,9 @@ export const parseCfHarnessCliArgs = async (
   const imagePaths = parseImageAttachmentPaths(
     args.image as string | readonly string[] | undefined,
   );
-  if ((resumeRun ?? continueRun) !== undefined && imagePaths.length > 0) {
+  if (resumeRun !== undefined && imagePaths.length > 0) {
     throw new Error(
-      `--image is not supported with ${
-        resumeRun !== undefined ? "--resume-run" : "--continue-run"
-      }`,
+      "--image is not supported with --resume-run",
     );
   }
   if (configuredSkillsRoot !== undefined) {
@@ -1952,11 +1954,9 @@ export const parseCfHarnessCliArgs = async (
   // A resumed run replays the input cells its run state recorded; a new
   // one on resume would be silently ignored, so it is refused like --skill
   // and --image are.
-  if ((resumeRun ?? continueRun) !== undefined && inputCells.length > 0) {
+  if (resumeRun !== undefined && inputCells.length > 0) {
     throw new Error(
-      `--input-cell is not supported with ${
-        resumeRun !== undefined ? "--resume-run" : "--continue-run"
-      }`,
+      "--input-cell is not supported with --resume-run",
     );
   }
   const structuredResult = await parseStructuredResultConfig(args, {
@@ -4061,6 +4061,8 @@ export const runCfHarnessCli = async (
           runState: artifacts.runState,
           transcript: artifacts.transcript,
           prompt: parsed.prompt!,
+          imageAttachments: parsed.imageAttachments,
+          inputCells: parsed.inputCells,
           artifactRoot: parsed.artifactRoot,
           workspace: parsed.workspace,
           structuredResult: effectiveStructuredResult,
@@ -4082,6 +4084,19 @@ export const runCfHarnessCli = async (
               },
             );
             activateEngine(continuedEngine);
+            const explicit = parsed.inputCells.length > 0
+              ? parsed.inputCells
+              : undefined;
+            const attachments =
+              inputCellsForHarnessTurn(explicit, state.assignedPieces) ?? [];
+            const additions = explicit === undefined
+              ? attachments.filter((spec) =>
+                !state.inputCells?.some((held) =>
+                  held.name === spec.name && held.ref === spec.ref
+                )
+              )
+              : attachments;
+            await continuedEngine.establishInputCells(additions);
             const messages = await establishHarnessSessionContext({
               engine: continuedEngine,
               config: parsed,
@@ -4305,7 +4320,14 @@ export const runCfHarnessCli = async (
         systemPromptInputs,
         prompt: parsed.prompt!,
         openingResearchTask: parsed.prompt!,
-        imageAttachments: parsed.imageAttachments,
+        imageAttachments: await Promise.all(
+          parsed.imageAttachments.map((attachment) =>
+            snapshotHarnessImageAttachment(
+              attachment,
+              join(engine.getRunState().artifactRoot!, "image-attachments"),
+            )
+          ),
+        ),
         systemPrompt: buildSystemPromptFromInputs(
           systemPromptInputs,
           effectiveStructuredResult,

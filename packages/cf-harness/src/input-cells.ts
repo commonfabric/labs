@@ -37,6 +37,7 @@ import {
   mintAddressHandle,
   parseHandleRef,
 } from "./handle-table.ts";
+import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import type { HarnessHandleTable } from "./contracts/handle-table.ts";
 import type {
   HarnessInputCell,
@@ -229,6 +230,31 @@ export const checkInputCellSpec = (
     );
   }
 };
+
+/** Refuses a new attachment name already associated with a held handle. */
+export const assertInputCellNamesAvailable = (
+  specs: readonly HarnessInputCellSpec[],
+  heldNames: Iterable<string>,
+): void => {
+  const names = new Set(heldNames);
+  for (const spec of specs) {
+    if (names.has(spec.name)) {
+      throw new Error(
+        `--input-cell name \`${spec.name}\` is already held by this run`,
+      );
+    }
+  }
+};
+
+/** Selects explicit attachments, or the pieces the prior turn named. */
+export const inputCellsForHarnessTurn = (
+  inputCells: readonly HarnessInputCellSpec[] | undefined,
+  assignedPieces: readonly HarnessAssignedPiece[] | undefined,
+): readonly HarnessInputCellSpec[] | undefined =>
+  inputCells ??
+    (assignedPieces?.length
+      ? assignedPieces.map(({ slug, ref }) => ({ name: slug, ref }))
+      : undefined);
 
 /**
  * Parses one `--input-cell` argument of the form `<name>=<link>`, holding

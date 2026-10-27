@@ -1,3 +1,4 @@
+import { inputCellsForHarnessTurn } from "./input-cells.ts";
 import { prepareNextHarnessRun } from "./run-continuation.ts";
 import { createHarnessRunState, type HarnessRunState } from "./run-state.ts";
 import {
@@ -1735,53 +1736,62 @@ export class HarnessInteractiveChatService {
     if (latest?.activeTurnToken !== activeTurnToken) {
       return;
     }
-    latest.activeTurnToken = undefined;
-    latest.activeTask = undefined;
-    latest.activeAbortController = undefined;
-    latest.canceledTurnIds.delete(turnId);
-    if (
-      latest.status.status === "canceling" &&
-      latest.status.activeTurnId === turnId
-    ) {
-      const updatedAt = this.#now();
-      const nextTurn = this.#updatedTurnRecord(latest, turnId, {
-        status: "canceled",
-        updatedAt,
-        endedAt: updatedAt,
-        cancelReason: latest.status.activeTurn?.cancelReason,
-      });
-      const session = clearActiveTurnStatus(latest.status, updatedAt);
-      const transcript = interrupted === undefined
-        ? undefined
-        : (await prepareNextHarnessRun({
-          runState: createHarnessRunState({
-            currentDir: latest.status.workspace?.cwd ?? "/workspace",
-            cfcEnforcementMode: "disabled",
-            status: "canceled",
-          }),
-          transcript: interrupted.transcript,
-        })).transcript;
-      // Checked rather than assumed: history a provider would refuse is not
-      // saved, and the session keeps the checkpoint it already had.
-      const checkpoint = transcript !== undefined &&
-          isResumableHarnessTranscript(transcript)
-        ? {
-          transcript,
-          ...(interrupted?.researchContext === undefined
-            ? {}
-            : { researchContext: interrupted.researchContext }),
-          ...(interrupted?.handleTable === undefined
-            ? {}
-            : { handleTable: interrupted.handleTable }),
-        }
-        : {};
-      await this.#emit(sessionId, undefined, {
-        kind: "status_changed",
-        session,
-      }, {
-        ...(nextTurn === undefined ? {} : { turnRecord: nextTurn }),
-        ...checkpoint,
-      });
+    /** Releases this task without clearing a newer turn's ownership. */
+    const releaseTask = () => {
+      if (latest.activeTurnToken !== activeTurnToken) return;
+      latest.activeTurnToken = undefined;
+      latest.activeTask = undefined;
+      latest.activeAbortController = undefined;
+      latest.canceledTurnIds.delete(turnId);
+    };
+    try {
+      if (
+        latest.status.status === "canceling" &&
+        latest.status.activeTurnId === turnId
+      ) {
+        const updatedAt = this.#now();
+        const nextTurn = this.#updatedTurnRecord(latest, turnId, {
+          status: "canceled",
+          updatedAt,
+          endedAt: updatedAt,
+          cancelReason: latest.status.activeTurn?.cancelReason,
+        });
+        const session = clearActiveTurnStatus(latest.status, updatedAt);
+        const transcript = interrupted === undefined
+          ? undefined
+          : (await prepareNextHarnessRun({
+            runState: createHarnessRunState({
+              currentDir: latest.status.workspace?.cwd ?? "/workspace",
+              cfcEnforcementMode: "disabled",
+              status: "canceled",
+            }),
+            transcript: interrupted.transcript,
+          })).transcript;
+        // Checked rather than assumed: history a provider would refuse is not
+        // saved, and the session keeps the checkpoint it already had.
+        const checkpoint = transcript !== undefined &&
+            isResumableHarnessTranscript(transcript)
+          ? {
+            transcript,
+            ...(interrupted?.researchContext === undefined
+              ? {}
+              : { researchContext: interrupted.researchContext }),
+            ...(interrupted?.handleTable === undefined
+              ? {}
+              : { handleTable: interrupted.handleTable }),
+          }
+          : {};
+        await this.#emit(sessionId, undefined, {
+          kind: "status_changed",
+          session,
+        }, {
+          ...(nextTurn === undefined ? {} : { turnRecord: nextTurn }),
+          ...checkpoint,
+          onCommitted: releaseTask,
+        });
+      }
+    } finally {
+      releaseTask();
     }
   }
 
@@ -1892,11 +1902,10 @@ export class HarnessInteractiveChatService {
     const session = record.status;
     const researchGoal = record.researchContext?.researchGoal ??
       params.input.text;
-    const inputCells = params.inputCells !== undefined
-      ? params.inputCells
-      : record.assignedPieces?.length
-      ? record.assignedPieces.map(({ slug, ref }) => ({ name: slug, ref }))
-      : undefined;
+    const inputCells = inputCellsForHarnessTurn(
+      params.inputCells,
+      record.assignedPieces,
+    );
     // Seeded only when the durable history carries no system message. A turn
     // persists the transcript it ran, so the second turn of a seeded session
     // finds the message already there and prepends nothing.
