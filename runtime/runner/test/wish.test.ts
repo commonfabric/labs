@@ -4566,7 +4566,7 @@ describe("wish built-in", () => {
         // The patterns route serves the system patterns from this checkout,
         // so the picker sidecar opens and runs.
         const route = new PatternsRoute(
-          fromFileUrl(new URL("../../patterns/", import.meta.url)),
+          fromFileUrl(new URL("../../../patterns/", import.meta.url)),
         );
         const originalFetch = globalThis.fetch;
         globalThis.fetch = async (input: Request | URL | string) =>

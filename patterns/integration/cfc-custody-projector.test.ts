@@ -199,7 +199,7 @@ const sealAndRelease = async (
     const S = await host.createSpace({ grants: { [bob.did()]: "WRITE" } });
     const program = await resolveLocalProgram(
       (resolver) => host.harness.resolve(resolver),
-      { main: join(ROOT, "cfc-exchange-rules", file), root: ROOT },
+      { main: join(ROOT, "examples", "cfc-exchange-rules", file), root: ROOT },
     );
     const compiled = await host.patternManager.compilePattern(program, {
       space: S,

@@ -215,7 +215,7 @@ try {
     const root = join(import.meta.dirname!, "..");
     const program = await resolveLocalProgram(
       (resolver) => controller.runtime.harness.resolve(resolver),
-      { main: join(root, "lunch-poll", "main.tsx"), root },
+      { main: join(root, "apps", "lunch-poll", "main.tsx"), root },
     );
     pieceId = (await controller.create(program, { start: true })).id;
     await controller.runtime.idle();

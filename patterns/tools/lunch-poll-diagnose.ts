@@ -291,7 +291,7 @@ const traceCursors = new Map<string, number>();
 const VOTE_COLORS = ["green", "yellow", "red"] as const;
 let matrixProgram = "main.tsx";
 const ROOT_PATH = dirname(dirname(fromFileUrl(import.meta.url)));
-const LUNCH_POLL_DIR = join(ROOT_PATH, "lunch-poll");
+const LUNCH_POLL_DIR = join(ROOT_PATH, "apps", "lunch-poll");
 
 const asString = (value: unknown): string =>
   typeof value === "string" ? value : "";
