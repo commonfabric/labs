@@ -539,16 +539,18 @@ run was started. `topics-browser-posture.ts` reads it from the deployment
 rather than from the benchmark process's own `EXPERIMENTAL_SERVER_EXECUTION`,
 which would label whatever it was told: the toolshed reports the posture it
 serves at on `/api/meta`, and the shell it serves states its own through the
-build define. The worker refuses to initialize when its resolved posture
-disagrees with the shell's declaration, so a page that loaded at all ran the
-posture its shell declared.
+build define where one is baked, and otherwise adopts the toolshed's
+(`SHELL_FLAG_SOURCES`). The worker refuses to initialize when its resolved
+posture disagrees with the shell's declaration, so a page that loaded at all
+ran the posture its shell declared.
 
-The shell's define has two possible statements and they are not
+The shell's half has three possible statements and they are not
 interchangeable. The bundle served to the browser is the artifact the run
 loads; `shellServerExecutionDefine` on `/api/meta` describes the shell its own
 toolshed serves, which is the same artifact only when `FRONTEND_URL` and
-`API_URL` name one origin. Both are read on every run, and what settles the
-shell's posture is:
+`API_URL` name one origin; and a shell with no define baked adopts the posture
+the deployment publishes, which is the toolshed's own half. The first two are
+read on every run, and what settles the shell's posture is:
 
 - both stating a define and agreeing — the posture, read from both;
 - both stating one and disagreeing — refused, since they describe different
@@ -556,34 +558,24 @@ shell's posture is:
 - the bundle alone — the posture, whichever host served the shell, because the
   script the browser loads answers for itself;
 - `/api/meta` alone, with the toolshed serving the shell — the posture;
-- `/api/meta` alone, with another host serving the shell — undeclared, that
-  define describing a shell this run never loads;
-- neither — undeclared.
+- `/api/meta` alone, with another host serving the shell — the deployment's
+  posture, that define describing a shell this run never loads;
+- neither — the deployment's posture.
 
 A bundle states nothing whether it could not be read or was read and carries
-no define; that changes none of the above, and shows only in the reason an
-undeclared posture records.
+no define; that changes none of the above.
 
-Reading a deployment has three outcomes. Where both halves state a posture and
-agree, that is the mode. Where both state one and disagree, reading refuses,
-because a client and a server on opposite postures exercise neither. Where the
-deployment states the shell's half nowhere — a bundle with no define, or no
-bundle that can be read — the posture is `undeclared`: a recorded fact about
-the deployment, never the first-party default, which is a constant compiled
-into the benchmark process rather than something the deployment said. So no
-path labels a run from an assumption.
+Reading a deployment has two outcomes. Where the two halves agree, that is the
+mode, labeled with where the shell's half was read from: `meta`, `bundle`,
+`meta and bundle` or `deployment`. Where a baked define puts the shell on the
+other arm from the toolshed, reading refuses, because a client and a server on
+opposite postures exercise neither. So no path labels a run from an assumption.
 
-Whether `undeclared` is usable belongs to the caller, because strictness is a
-property of what a measurement is for. A benchmark comparing two postures needs
-a declared one and reads through `readDeclaredTopicsBrowserPosture()`, which
-refuses the rest; the Benchmarks workflow builds its toolshed binary with
-`EXPERIMENTAL_SERVER_EXECUTION` set, so the shell it serves carries a define
-and the read succeeds. A test exercising these helpers does not care what
-posture it ran under, reads through `readTopicsBrowserPosture()`, and carries
-whatever it finds into its samples; the pattern-integration lane serves a shell
-built with no posture defines, which is an ordinary configuration rather than a
-fault. A sample taken under an undeclared posture prints `[posture undeclared]`
-rather than a mode, so it cannot later be read as a measurement of either.
+Every benchmark reads through `readTopicsBrowserPosture()`. The Benchmarks
+workflow builds its toolshed binary with `EXPERIMENTAL_SERVER_EXECUTION` set,
+so the shell it serves carries a define; the pattern-integration lane serves a
+shell built with no posture defines, which adopts the posture the lane's
+toolshed serves at.
 
 ### What a sample records
 

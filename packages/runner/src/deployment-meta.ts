@@ -32,8 +32,7 @@ export const DEPLOYMENT_META_NAME = "cf-deployment";
  *
  * - `"build"`: the shell's build decides, through the build define where
  *   `packages/shell/felt.config.ts` has one and the built-in default
- *   otherwise. CI pins a lane's defines, and the worker checks the
- *   `serverExecution` arm it declares against its own.
+ *   otherwise. CI pins a lane's defines.
  * - `"deployment"`: the deployment decides. One shell build is served by
  *   every deployment, so a flag whose value differs between deployments
  *   that share a build goes here: a compiled toolshed publishes it, out of
@@ -43,8 +42,12 @@ export const DEPLOYMENT_META_NAME = "cf-deployment";
  *   adopts the whole posture: an explicit build define still wins. Such a
  *   flag has to be `"server"` in `EXPERIMENTAL_FLAG_AUTHORITY`, since that
  *   adoption takes only server-authority flags, and must not change while a
- *   toolshed serves, since the page is built once; the runner's tests hold
- *   both.
+ *   toolshed serves, since the page is built once. A flag the serving loop
+ *   forces (`SERVING_RUNTIME_EXPERIMENTAL`) holds still because the toolshed
+ *   resolves it into the base posture the same way it gates the loop
+ *   (`packages/toolshed/runtime-options.ts`), so the page and `/api/meta`
+ *   state it alike for the process lifetime. The runner's tests hold the
+ *   authority and the resolution; the toolshed's hold the gate.
  */
 export type ShellFlagSource = "build" | "deployment";
 
@@ -62,10 +65,16 @@ export const SHELL_FLAG_SOURCES = {
   plainResultReceipts: "build",
   computedCellIds: "build",
   lazyMaterialization: "build",
-  serverExecution: "build",
+  // Which side computes what is stored is decided per deployment, in the
+  // environment that starts its toolshed, and one shell build serves
+  // deployments on both arms. The worker refuses to initialize when its
+  // resolved posture differs from the one the page declared to it.
+  serverExecution: "deployment",
   localSessionDocuments: "deployment",
-  viewScopedReplication: "build",
-  webViewScopedReplication: "build",
+  // The replication defaults a deployment publishes, which each web session
+  // negotiates from; a deployment turns them on beside its serving loop.
+  viewScopedReplication: "deployment",
+  webViewScopedReplication: "deployment",
   readerSchemaPrecedence: "build",
   localFold: "build",
   // Whether a connection may carry several spaces is how the deployment

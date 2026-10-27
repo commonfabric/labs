@@ -16,6 +16,7 @@ import {
   experimentalPosture,
   publishExperimentalPosture,
 } from "@/lib/experimental-posture.ts";
+import { serverExecutionEnabledFromEnv } from "@/lib/server-execution-flag.ts";
 import {
   attachRuntimeOtelBridge,
   createToolshedRuntime,
@@ -61,6 +62,34 @@ Deno.test("toolshedRuntimeOptions splits MEMORY_URL/API_URL and honors the env r
     SERVER_EXECUTION_DEFAULT_ENABLED,
   );
   assertEquals(options.cfcEnforcementMode, "enforce-strict");
+});
+
+Deno.test("toolshedRuntimeOptions resolves serverExecution as the serving-host gate does", () => {
+  // The compiled shell takes `serverExecution` from the page this toolshed
+  // builds once, out of the posture the Runtime published, while `/api/meta`
+  // adds the serving loop's override on top. The two state one value for the
+  // process lifetime only because the base resolves the flag the way
+  // `startServerExecutionHost` decides whether the loop runs.
+  const storageManager = {
+    sentinel: true,
+  } as unknown as RuntimeOptions["storageManager"];
+  for (const value of [undefined, "true", "false"]) {
+    const envGet = (name: string) =>
+      name === "EXPERIMENTAL_SERVER_EXECUTION" ? value : undefined;
+    assertEquals(
+      toolshedRuntimeOptions(
+        {
+          MEMORY_URL: "http://memory.test:8000/",
+          API_URL: "http://api.test:9000/",
+          API_INTERNAL_URL: undefined,
+        },
+        storageManager,
+        envGet,
+      ).experimental?.serverExecution,
+      serverExecutionEnabledFromEnv(envGet),
+      String(value),
+    );
+  }
 });
 
 Deno.test("toolshedRuntimeOptions sends self-addressed requests to API_INTERNAL_URL and changes no URL", async () => {

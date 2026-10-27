@@ -27,9 +27,9 @@ export const buildInfo: BuildInfo = readBuildInfoFrom(COMPILED_PATH);
 /**
  * The raw `EXPERIMENTAL_SERVER_EXECUTION` value present in the build
  * environment when this binary was built — the value the browser shell
- * BAKED as its esbuild define (packages/shell/felt.config.ts; the shell
- * has no serve-time override) — or null when it was unset (the shell then
- * follows `SERVER_EXECUTION_DEFAULT_ENABLED`) and in a source run. Same
+ * BAKED as its esbuild define (packages/shell/felt.config.ts) — or null
+ * when it was unset (the shell then adopts the posture its deployment
+ * publishes, `SHELL_FLAG_SOURCES`) and in a source run. Same
  * failure posture as `readBuildInfoFrom`: an unreadable or malformed
  * marker reads as null. Surfaced on `/api/meta` as
  * `shellServerExecutionDefine` so CI's server-execution lanes can verify

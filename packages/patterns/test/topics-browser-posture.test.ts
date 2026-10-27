@@ -2,11 +2,8 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
-  type DeclaredTopicsBrowserPosture,
   type ServedBundle,
-  type TopicsBrowserPosture,
   topicsBrowserPostureOf,
-  type UndeclaredTopicsBrowserPosture,
 } from "../integration/topics-browser-posture.ts";
 
 /** A served bundle carrying the build define `value` as the bundler emits it. */
@@ -28,32 +25,12 @@ function unreadable(servedByToolshed: boolean): ServedBundle {
   };
 }
 
-/** Returns `posture` as a declared one, failing when it declares nothing. */
-function declared(
-  posture: TopicsBrowserPosture,
-): DeclaredTopicsBrowserPosture {
-  if (!posture.declared) {
-    throw new Error(`Expected a declared posture: ${posture.reason}`);
-  }
-  return posture;
-}
-
-/** Returns `posture` as an undeclared one, failing when it declares a mode. */
-function undeclared(
-  posture: TopicsBrowserPosture,
-): UndeclaredTopicsBrowserPosture {
-  if (posture.declared) {
-    throw new Error(`Expected an undeclared posture: ${posture.mode}`);
-  }
-  return posture;
-}
-
 describe("topicsBrowserPostureOf()", () => {
   it("returns `server-execution-off` when the toolshed and its shell both run off", () => {
-    const posture = declared(topicsBrowserPostureOf({
+    const posture = topicsBrowserPostureOf({
       experimental: { serverExecution: false },
       shellServerExecutionDefine: "false",
-    }));
+    });
     expect(posture.mode).toBe("server-execution-off");
     expect(posture.served).toBe(false);
     expect(posture.client).toBe(false);
@@ -61,66 +38,68 @@ describe("topicsBrowserPostureOf()", () => {
   });
 
   it("returns `server-execution-on` when the toolshed and its shell both run on", () => {
-    const posture = declared(topicsBrowserPostureOf({
+    const posture = topicsBrowserPostureOf({
       experimental: { serverExecution: true },
       shellServerExecutionDefine: "true",
-    }));
+    });
     expect(posture.mode).toBe("server-execution-on");
     expect(posture.clientFrom).toBe("meta");
   });
 
   it("reads the shell's posture from the bundle when the toolshed reports no baked define", () => {
-    const posture = declared(topicsBrowserPostureOf(
+    const posture = topicsBrowserPostureOf(
       {
         experimental: { serverExecution: true },
         shellServerExecutionDefine: null,
       },
       bundleWith("true"),
-    ));
+    );
     expect(posture.mode).toBe("server-execution-on");
     expect(posture.client).toBe(true);
     expect(posture.clientFrom).toBe("bundle");
   });
 
-  it("returns an undeclared posture when a bundle was read and names no define", () => {
-    const posture = undeclared(topicsBrowserPostureOf(
-      { experimental: { serverExecution: false } },
-      {
-        kind: "read",
-        servedByToolshed: true,
-        source: "var somethingElse = 1;",
-      },
-    ));
-    expect(posture.served).toBe(false);
-    expect(posture.reason).toBe(
-      "the toolshed names no baked define and the served shell's entry " +
-        "script carries no define",
-    );
+  it("takes the deployment's posture as the shell's when a bundle was read and names no define", () => {
+    // A shell with no define baked adopts the posture its deployment
+    // publishes, so the toolshed's half is the shell's too.
+    for (const served of [true, false]) {
+      const posture = topicsBrowserPostureOf(
+        { experimental: { serverExecution: served } },
+        {
+          kind: "read",
+          servedByToolshed: true,
+          source: "var somethingElse = 1;",
+        },
+      );
+      expect(posture.mode).toBe(
+        served ? "server-execution-on" : "server-execution-off",
+      );
+      expect(posture.served).toBe(served);
+      expect(posture.client).toBe(served);
+      expect(posture.clientFrom).toBe("deployment");
+    }
   });
 
-  it("returns an undeclared posture naming the reason when no bundle could be read", () => {
-    const posture = undeclared(topicsBrowserPostureOf(
+  it("takes the deployment's posture as the shell's when no define is named and no bundle could be read", () => {
+    const posture = topicsBrowserPostureOf(
       {
         experimental: { serverExecution: true },
         shellServerExecutionDefine: null,
       },
       unreadable(true),
-    ));
-    expect(posture.served).toBe(true);
-    expect(posture.reason).toBe(
-      "the toolshed names no baked define and no served shell could be read " +
-        "(`/scripts/index.js` gave 404)",
     );
+    expect(posture.mode).toBe("server-execution-on");
+    expect(posture.clientFrom).toBe("deployment");
   });
 
   it("returns `meta and bundle` when the toolshed's report and the served shell agree", () => {
-    const posture = declared(topicsBrowserPostureOf(
+    const posture = topicsBrowserPostureOf(
       {
         experimental: { serverExecution: true },
         shellServerExecutionDefine: "true",
       },
       bundleWith("true"),
-    ));
+    );
     expect(posture.mode).toBe("server-execution-on");
     expect(posture.clientFrom).toBe("meta and bundle");
   });
@@ -140,38 +119,36 @@ describe("topicsBrowserPostureOf()", () => {
   });
 
   it("reads the shell's posture from the bundle even when another host serves it", () => {
-    const posture = declared(topicsBrowserPostureOf(
+    const posture = topicsBrowserPostureOf(
       { experimental: { serverExecution: true } },
       bundleWith("true", false),
-    ));
+    );
     expect(posture.mode).toBe("server-execution-on");
     expect(posture.clientFrom).toBe("bundle");
   });
 
-  it("returns an undeclared posture when only the toolshed names a define and another host serves the shell", () => {
-    const posture = undeclared(topicsBrowserPostureOf(
+  it("takes the deployment's posture as the shell's when only the toolshed names a define and another host serves the shell", () => {
+    // The toolshed's define describes a shell this run does not load; the
+    // one it loads carries none, and adopts the deployment's posture.
+    const posture = topicsBrowserPostureOf(
       {
         experimental: { serverExecution: false },
         shellServerExecutionDefine: "false",
       },
       unreadable(false),
-    ));
-    expect(posture.served).toBe(false);
-    expect(posture.reason).toBe(
-      "the toolshed names a baked define for its own shell, but another " +
-        "deployment serves the shell this run loads, and no served shell " +
-        "could be read (`/scripts/index.js` gave 404)",
     );
+    expect(posture.mode).toBe("server-execution-off");
+    expect(posture.clientFrom).toBe("deployment");
   });
 
   it("uses the toolshed's report alone when it serves the shell whose script could not be read", () => {
-    const posture = declared(topicsBrowserPostureOf(
+    const posture = topicsBrowserPostureOf(
       {
         experimental: { serverExecution: false },
         shellServerExecutionDefine: "false",
       },
       unreadable(true),
-    ));
+    );
     expect(posture.mode).toBe("server-execution-off");
     expect(posture.clientFrom).toBe("meta");
   });

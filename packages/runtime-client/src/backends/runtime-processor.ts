@@ -525,8 +525,8 @@ export function browserWorkerParamsFromInitializationData(
   return {
     apiUrl: new URL(data.apiUrl),
     storageManager,
-    // The host decides the flags (shell build-time defines); absent ⇒ runtime
-    // defaults.
+    // The host decides the flags (shell build-time defines, and the ones its
+    // deployment publishes); absent ⇒ runtime defaults.
     experimental: data.experimental ?? {},
     telemetry,
     ...(data.spaceHostMap !== undefined

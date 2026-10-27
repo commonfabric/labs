@@ -131,11 +131,9 @@ function fixture(count: number): Promise<GridFixture> {
 async function seed(count: number): Promise<GridFixture> {
   const startedAt = performance.now();
   // Server execution decides whether the browser starts what it displays, so
-  // the posture labels every run; a deployment that declares none is said to.
+  // the posture labels every run.
   const posture = await readTopicsBrowserPosture(env.API_URL, env.FRONTEND_URL);
-  const mode = posture.declared
-    ? posture.mode
-    : `undeclared (${posture.reason})`;
+  const mode = posture.mode;
   const spaceDid = await createTestSpace(identity);
   const cc = await initializePiecesController({
     space: spaceDid,

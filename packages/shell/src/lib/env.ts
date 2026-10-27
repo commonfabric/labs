@@ -113,6 +113,8 @@ export const EXPERIMENTAL = {
   modernCellRep: flagValue(EXPERIMENTAL_MODERN_CELL_REP_DEFINE),
   agentBuiltin: flagValue(EXPERIMENTAL_AGENT_BUILTIN_DEFINE),
   computedCellIds: flagValue(EXPERIMENTAL_COMPUTED_CELL_IDS_DEFINE),
+  // Decided by the deployment (SHELL_FLAG_SOURCES), as serverExecution is;
+  // the defines pin them for a lane.
   viewScopedReplication: flagValue(
     typeof $EXPERIMENTAL_VIEW_SCOPED_REPLICATION === "string"
       ? $EXPERIMENTAL_VIEW_SCOPED_REPLICATION
@@ -137,15 +139,14 @@ export const EXPERIMENTAL = {
       ? $EXPERIMENTAL_SHARED_MEMORY_CONNECTION
       : undefined,
   ),
-  // Server-execution v2 (docs/specs/server-side-execution/): the
-  // first-party default (the constant; the registry states its current
-  // value), overridable by the build define either way (CI's `opposite`
-  // lane bakes the inverse of the constant into its shell). The worker
-  // refuses to
-  // initialize if its resolved posture disagrees with this declaration
-  // (runtime-client's posture agreement).
-  serverExecution: flagValue(EXPERIMENTAL_SERVER_EXECUTION_DEFINE) ??
-    SERVER_EXECUTION_DEFAULT_ENABLED,
+  // Server-execution v2 (docs/specs/server-side-execution/): decided by the
+  // deployment (SHELL_FLAG_SOURCES), with the define as the explicit override
+  // either way (CI's lanes bake the arm they test into their shells). Where
+  // neither says, {@link experimentalForDeployment} applies the first-party
+  // default (the constant; the registry states its current value). The
+  // worker refuses to initialize if its resolved posture disagrees with the
+  // declaration the page hands it (runtime-client's posture agreement).
+  serverExecution: flagValue(EXPERIMENTAL_SERVER_EXECUTION_DEFINE),
   // Content-addressed schemas Phases 1 and 2: link writers and selectors
   // emit cid: references. On by default in the runner; the define is the
   // rollback override (`EXPERIMENTAL_CONTENT_ADDRESSED_SCHEMAS=false` bakes
@@ -176,10 +177,18 @@ export const EXPERIMENTAL = {
  * adoption is `adoptServerExperimentalOptions` as `cf` runs it: an explicit
  * define wins, otherwise the deployment's value, otherwise the built-in
  * default. One shell build thereby runs a flag on against a deployment that
- * turned it on and off against one that did not.
+ * turned it on and off against one that did not. `serverExecution` always
+ * resolves, to `SERVER_EXECUTION_DEFAULT_ENABLED` where neither says, as the
+ * deployed-topology presets resolve it: the worker checks the arm this
+ * declares against the one it runs.
  */
 export function experimentalForDeployment(
   declared: ExperimentalOptions,
 ): ExperimentalOptions {
-  return adoptServerExperimentalOptions(declared, EXPERIMENTAL);
+  const experimental = adoptServerExperimentalOptions(declared, EXPERIMENTAL);
+  return {
+    ...experimental,
+    serverExecution: experimental.serverExecution ??
+      SERVER_EXECUTION_DEFAULT_ENABLED,
+  };
 }

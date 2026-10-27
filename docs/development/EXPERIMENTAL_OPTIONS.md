@@ -35,9 +35,9 @@ was last checked against the code.
 | [`computedCellIds`](#computedcellids)                                       | `EXPERIMENTAL_COMPUTED_CELL_IDS` env, or `RuntimeOptions.experimental`                                                                          | on                                                                                   | Robin McCollum (#4659)                                | graduate to unconditional behavior, then delete flag                                                                                                                                                                              | implemented, on by default                                                      |
 | [`lazyMaterialization`](#lazymaterialization)                               | `EXPERIMENTAL_LAZY_MATERIALIZATION` env, or `RuntimeOptions.experimental`                                                                       | on                                                                                   | Bernhard Seefeld                                      | fold into base read semantics, then delete flag                                                             | implemented, on by default                                         |
 | [`readerSchemaPrecedence`](#readerschemaprecedence)                         | `EXPERIMENTAL_READER_SCHEMA_PRECEDENCE` env, or `RuntimeOptions.experimental`                                                                   | on                                                                                   | Robin McCollum (#6338)                                | graduate to unconditional behavior, then delete flag                                                                                                                                                                              | implemented, on by default                                                      |
-| [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental` | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
+| [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental`; the shell adopts both from its deployment, and explicit build defines of the same names override them | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
-| [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental` | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
+| [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
 | [`localSessionDocuments`](#localsessiondocuments) | `EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS` env / shell build define, or `RuntimeOptions.experimental`; clients adopt the deployment value | off | Bernhard Seefeld (#8919) | validate local session semantics and performance, then graduate for client execution | implemented, opt-in; requires validation-only commit support |
 | [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
@@ -331,10 +331,15 @@ flags it adopts from the deployment it runs against.
 
 - **Toggle via.** `EXPERIMENTAL_SERVER_EXECUTION` environment variable (through
   the canonical mapping described in the category note above), or
-  `RuntimeOptions.experimental.serverExecution`; browser-side via the shell
-  build define of the same name
+  `RuntimeOptions.experimental.serverExecution`. Browser-side the shell adopts
+  the deployment's value, `"deployment"` in `SHELL_FLAG_SOURCES`
+  ([`packages/runner/src/deployment-meta.ts`](../../packages/runner/src/deployment-meta.ts)):
+  a compiled toolshed publishes it in the page it serves and the shell takes
+  it from there, or from `/api/meta`, with the build define of the same name
   ([`packages/shell/felt.config.ts`](../../packages/shell/felt.config.ts) /
-  [`packages/shell/src/lib/env.ts`](../../packages/shell/src/lib/env.ts)). The
+  [`packages/shell/src/lib/env.ts`](../../packages/shell/src/lib/env.ts)) as
+  the explicit override either way and the first-party default where neither
+  says. The
   ambient control point is `setServerExecutionConfig` in
   [`packages/memory/v2.ts`](../../packages/memory/v2.ts): the runner owns the
   feature, but the per-class commit admission rows are enforced by the memory
@@ -477,6 +482,11 @@ flags it adopts from the deployment it runs against.
   retires and the OFF code path is removed — a separate post-soak PR (the plan's
   Phase 7 task 2; it also removes the opposite suites and the
   `toolshed-baked-opposite` capability).
+- **Status on 2026-10-26 (the shell follows its deployment).** The shell
+  takes the flag from the deployment it runs against where its build define
+  is unset, so one release binary serves a deployment on either arm with its
+  browsers on the same arm as its toolshed; a deployment selects the arm in
+  the environment that starts its toolshed. The release build sets no define.
 - **Status on 2026-09-11 (the served source update).** Under ON,
   `setsrc` runs on the space's serving runtime as well, and `cf piece
   setsrc` requests it: the update's setup transaction commits directly to
@@ -569,10 +579,11 @@ flags it adopts from the deployment it runs against.
 - **Added by:** Bernhard Seefeld, 2026-09-09.
 - **Toggle:** `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` sets the global default;
   `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION` sets the web client override. Both
-  are available through `RuntimeOptions.experimental`, deployment metadata, and
-  the shell's build defines. Both have server authority in the experimental flag
-  registry; explicit environment values still take precedence when adopting
-  deployment defaults.
+  are available through `RuntimeOptions.experimental` and deployment metadata.
+  Both have server authority in the experimental flag registry and are
+  `"deployment"` in `SHELL_FLAG_SOURCES`, so the shell adopts them from its
+  deployment as `cf` does; explicit environment values and the shell's build
+  defines of the same names still take precedence.
 - **Default:** global `false`; web override absent. A web runtime resolves
   `webViewScopedReplication ?? viewScopedReplication ?? false`. An explicit web
   `false` overrides a global `true`.
@@ -859,8 +870,7 @@ holds the measurements and the conditions for revisiting.
   `RuntimeOptions.experimental.sharedMemoryConnection`. Server-authoritative in
   `EXPERIMENTAL_FLAG_AUTHORITY`: whether a connection may carry several spaces
   is a property of how the deployment routes connections, so a client follows
-  what the deployment publishes. The shell follows it too, unlike its other
-  flags: `SHELL_FLAG_SOURCES`
+  what the deployment publishes. The shell follows it too: `SHELL_FLAG_SOURCES`
   ([`packages/runner/src/deployment-meta.ts`](../../packages/runner/src/deployment-meta.ts))
   gives it to the deployment,
   so a compiled toolshed publishes its value in the
@@ -2246,8 +2256,9 @@ serving loop a deployment would run.
 Browser-side flags are baked at build time and carried to the web worker
 that hosts the runtime; changing one means rebuilding and redeploying the
 shell. The exception is the flags `SHELL_FLAG_SOURCES` gives the deployment
-(`sharedMemoryConnection` today), which the shell adopts from its deployment
-where the define leaves them unset: see
+(`serverExecution`, `viewScopedReplication`, `webViewScopedReplication`,
+`localSessionDocuments`, `sharedMemoryConnection` and `instanceNames`), which
+the shell adopts from its deployment where the define leaves them unset: see
 [Clients that are not built alongside their server](#clients-that-are-not-built-alongside-their-server).
 
 ```
@@ -2279,7 +2290,9 @@ the defines and serves the bundle, so the two ship one posture per deploy.
 One shell build is served by every deployment, though, so a flag that
 deployments sharing a build set differently cannot be a define alone. Those
 flags are the ones `SHELL_FLAG_SOURCES` in `deployment-meta.ts` gives the
-deployment (`sharedMemoryConnection`): a compiled toolshed publishes them, out of the
+deployment (`serverExecution`, `viewScopedReplication`,
+`webViewScopedReplication`, `localSessionDocuments`, `sharedMemoryConnection`
+and `instanceNames`): a compiled toolshed publishes them, out of the
 posture it publishes on `/api/meta`, in the `<meta name="cf-deployment">`
 element of the page it serves, beside the memory URL, and the shell adopts
 them from the page, or from `/api/meta` when the page states nothing or came

@@ -20,6 +20,7 @@ import {
   ADOPT_SERVER_FLAGS_ENV,
   experimentalOptionsFromEnv,
   runtimePresets,
+  withServerExecutionDefault,
 } from "../src/runtime-presets.ts";
 import type { IStorageManager } from "../src/storage/interface.ts";
 
@@ -916,6 +917,7 @@ describe("deployment-meta", () => {
               experimental: {
                 sharedMemoryConnection: true,
                 serverExecution: true,
+                readerSchemaPrecedence: true,
               },
             }),
           );
@@ -924,7 +926,10 @@ describe("deployment-meta", () => {
       expect(read.memoryUrl?.href).toBe("https://router.example/");
       // One request serves both; the posture is restricted to the flags the
       // shell takes from its deployment.
-      expect(read.experimental).toEqual({ sharedMemoryConnection: true });
+      expect(read.experimental).toEqual({
+        sharedMemoryConnection: true,
+        serverExecution: true,
+      });
       expect(read.transient).toBe(false);
       expect(requested).toEqual(["https://deployment.example/api/meta"]);
       expect(
@@ -951,7 +956,7 @@ describe("deployment-meta", () => {
           {},
           { experimental: null },
           { experimental: {} },
-          { experimental: { serverExecution: true } },
+          { experimental: { readerSchemaPrecedence: true } },
         ]
       ) {
         const read = await deploymentForShell({
@@ -1057,7 +1062,10 @@ describe("deployment-meta", () => {
   describe("SHELL_DEPLOYMENT_FLAGS", () => {
     it("is the flags SHELL_FLAG_SOURCES gives the deployment", () => {
       expect(SHELL_DEPLOYMENT_FLAGS).toEqual([
+        "serverExecution",
         "localSessionDocuments",
+        "viewScopedReplication",
+        "webViewScopedReplication",
         "sharedMemoryConnection",
         "instanceNames",
       ]);
@@ -1072,11 +1080,15 @@ describe("deployment-meta", () => {
       }
     });
 
-    it("holds no flag the serving loop forces, since the page is built once", () => {
-      // /api/meta applies the serving overrides live; a page carrying one of
-      // them would disagree with it whenever the loop started or stopped.
+    it("states a flag the serving loop forces through the deployed presets, since the page is built once", () => {
+      // /api/meta applies the serving overrides on top of the base posture a
+      // toolshed's Runtime resolved, and a page built once carries the base.
+      // A forced flag the base left unresolved would disagree with /api/meta
+      // for the process lifetime; the deployed-topology presets resolve it,
+      // and the toolshed gates its loop by the same resolution.
       for (const flag of SHELL_DEPLOYMENT_FLAGS) {
-        expect(flag in SERVING_RUNTIME_EXPERIMENTAL, flag).toBe(false);
+        if (!(flag in SERVING_RUNTIME_EXPERIMENTAL)) continue;
+        expect(withServerExecutionDefault({})[flag], flag).not.toBeUndefined();
       }
     });
   });
@@ -1088,7 +1100,7 @@ describe("deployment-meta", () => {
         serverExecution: false,
         readerSchemaPrecedence: true,
         unknownToThisBuild: true,
-      })).toEqual({ sharedMemoryConnection: true });
+      })).toEqual({ sharedMemoryConnection: true, serverExecution: false });
       expect(shellFlagsFromDeclared({ sharedMemoryConnection: false }))
         .toEqual({ sharedMemoryConnection: false });
     });

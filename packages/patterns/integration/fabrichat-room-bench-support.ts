@@ -13,8 +13,8 @@ import {
 } from "./fabrichat-room-fixture.ts";
 import { RoomSession } from "./fabrichat-room-session.ts";
 import {
-  type DeclaredTopicsBrowserPosture,
-  readDeclaredTopicsBrowserPosture,
+  readTopicsBrowserPosture,
+  type TopicsBrowserPosture,
 } from "./topics-browser-posture.ts";
 
 /** Reads a positive integer from `name`, or `fallback` when it is unset. */
@@ -115,21 +115,19 @@ export async function seedLoadedRoom(
   return fixture;
 }
 
-let reading: Promise<DeclaredTopicsBrowserPosture> | undefined;
+let reading: Promise<TopicsBrowserPosture> | undefined;
 
 /**
  * Reads, once per process, the server-execution posture the deployment under
- * measurement declares, refusing one that declares none, and writes it with
- * `report`: a timing means something only beside the posture that produced
- * it.
+ * measurement runs, and writes it with `report`: a timing means something
+ * only beside the posture that produced it.
  */
 export function benchPosture(
   report: (message: string) => void,
-): Promise<DeclaredTopicsBrowserPosture> {
-  reading ??= readDeclaredTopicsBrowserPosture(
+): Promise<TopicsBrowserPosture> {
+  reading ??= readTopicsBrowserPosture(
     env.API_URL,
     env.FRONTEND_URL,
-    "A FabriChat room benchmark",
   ).then((posture) => {
     report(`posture ${posture.mode} (shell from ${posture.clientFrom})`);
     return posture;

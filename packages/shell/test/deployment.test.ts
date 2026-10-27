@@ -96,7 +96,7 @@ describe("deployment", () => {
         const page of [
           { memoryUrl: null, experimental: null },
           { memoryUrl: null },
-          { memoryUrl: null, experimental: { serverExecution: true } },
+          { memoryUrl: null, experimental: { readerSchemaPrecedence: true } },
         ]
       ) {
         expect(
@@ -231,12 +231,17 @@ describe("deployment", () => {
         "https://cdn.test",
         serving(fetched, {
           memoryUrl: "https://api-router.test",
-          experimental: { sharedMemoryConnection: true, serverExecution: true },
+          experimental: {
+            sharedMemoryConnection: true,
+            serverExecution: true,
+            readerSchemaPrecedence: true,
+          },
         }),
       );
       expect(fromDeployment.memoryUrl?.href).toBe("https://api-router.test/");
       expect(fromDeployment.experimental).toEqual({
         sharedMemoryConnection: true,
+        serverExecution: true,
       });
       expect(fromDeployment.transient).toBe(false);
       expect(fetched).toEqual(["https://app.test/api/meta"]);

@@ -41,9 +41,6 @@ Deno.test({
 
     expect(mod.EXPERIMENTAL).toEqual({
       modernCellRep: true,
-      // Server-execution v2: the first-party default (the landed-dark
-      // constant) when the build define is unset.
-      serverExecution: SERVER_EXECUTION_DEFAULT_ENABLED,
       contentAddressedSchemas: true,
     });
   },
@@ -69,7 +66,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "serverExecution: the build define selects the OFF arm (rollback lever) or forces ON",
+    "serverExecution: the build define selects the OFF arm (rollback lever) or forces ON, and unset leaves it to the deployment",
   permissions: { read: true },
   async fn() {
     const off = await withPatchedGlobals({
@@ -86,9 +83,10 @@ Deno.test({
       $API_URL: "http://shell.test/",
       $EXPERIMENTAL_SERVER_EXECUTION: undefined,
     }, importFreshEnvModule);
-    expect(unset.EXPERIMENTAL.serverExecution).toBe(
-      SERVER_EXECUTION_DEFAULT_ENABLED,
-    );
+    // Unset, the deployment decides (`SHELL_FLAG_SOURCES`), and
+    // `experimentalForDeployment` applies the first-party default where the
+    // deployment says nothing, which the tests below hold.
+    expect(unset.EXPERIMENTAL.serverExecution).toBeUndefined();
   },
 });
 
@@ -248,6 +246,11 @@ for (
   const [flag, defineName] of [
     ["sharedMemoryConnection", "$EXPERIMENTAL_SHARED_MEMORY_CONNECTION"],
     ["localSessionDocuments", "$EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS"],
+    ["viewScopedReplication", "$EXPERIMENTAL_VIEW_SCOPED_REPLICATION"],
+    [
+      "webViewScopedReplication",
+      "$EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
+    ],
   ] as const
 ) {
   Deno.test({
@@ -296,8 +299,11 @@ for (
             deployment.experimental,
           );
           expect(resolved[flag]).toBeUndefined();
-          // Nothing else moved.
-          expect(resolved).toEqual(mod.EXPERIMENTAL);
+          // Nothing else moved, past the arm serverExecution always declares.
+          expect(resolved).toEqual({
+            ...mod.EXPERIMENTAL,
+            serverExecution: SERVER_EXECUTION_DEFAULT_ENABLED,
+          });
         });
       }
     },
@@ -331,6 +337,88 @@ for (
     },
   });
 }
+
+Deno.test({
+  name:
+    "serverExecution: the deployment's value governs where no define pins it",
+  permissions: { read: true },
+  async fn() {
+    for (const published of [true, false]) {
+      await withShellPage(
+        JSON.stringify({
+          memoryUrl: null,
+          experimental: { serverExecution: published },
+        }),
+        [],
+        async (mod) => {
+          // The define is unset in a release build; the shell takes the
+          // deployment's word, whichever arm it names.
+          expect(mod.EXPERIMENTAL.serverExecution).toBeUndefined();
+          const deployment = await mod.shellDeployment.get();
+          expect(
+            mod.experimentalForDeployment(deployment.experimental)
+              .serverExecution,
+          ).toBe(published);
+        },
+      );
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "serverExecution: the first-party default governs where the deployment says nothing",
+  permissions: { read: true },
+  async fn() {
+    // A page from a toolshed without a Runtime, one whose Runtime left the
+    // flag unresolved, and a page that reads a meta document saying nothing.
+    // The worker checks the declared arm against its own, so the shell
+    // declares one either way.
+    for (
+      const [tag, responses] of [
+        [JSON.stringify({ memoryUrl: null, experimental: null }), []],
+        [JSON.stringify({ memoryUrl: null, experimental: {} }), []],
+        [undefined, [() => Response.json({ memoryUrl: null })]],
+      ] as const
+    ) {
+      await withShellPage(tag, [...responses], async (mod) => {
+        const deployment = await mod.shellDeployment.get();
+        expect(deployment.experimental).toEqual({});
+        expect(
+          mod.experimentalForDeployment(deployment.experimental)
+            .serverExecution,
+        ).toBe(SERVER_EXECUTION_DEFAULT_ENABLED);
+      });
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "serverExecution: an explicit define overrides the deployment either way",
+  permissions: { read: true },
+  async fn() {
+    for (
+      const [define, published] of [["false", true], ["true", false]] as const
+    ) {
+      await withShellPage(
+        JSON.stringify({
+          memoryUrl: null,
+          experimental: { serverExecution: published },
+        }),
+        [],
+        async (mod) => {
+          expect(
+            mod.experimentalForDeployment(
+              (await mod.shellDeployment.get()).experimental,
+            ).serverExecution,
+          ).toBe(define === "true");
+        },
+        { $EXPERIMENTAL_SERVER_EXECUTION: define },
+      );
+    }
+  },
+});
 
 Deno.test({
   name:

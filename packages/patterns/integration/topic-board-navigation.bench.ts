@@ -76,8 +76,8 @@ import {
   type TopicsProgram,
 } from "./topics-browser-measurement.ts";
 import {
-  type DeclaredTopicsBrowserPosture,
-  readDeclaredTopicsBrowserPosture,
+  readTopicsBrowserPosture,
+  type TopicsBrowserPosture,
 } from "./topics-browser-posture.ts";
 import { waitForPieceView } from "./topics-navigation-helpers.ts";
 
@@ -320,15 +320,11 @@ function topicsProgram(): Promise<TopicsProgram> {
  * sizes are all skipped asks it nothing, and read once so that every sample of
  * a run carries the same statement of what produced it.
  */
-let reading: Promise<DeclaredTopicsBrowserPosture> | undefined;
+let reading: Promise<TopicsBrowserPosture> | undefined;
 
-/** Returns the deployment's declared posture, reading it on first use. */
-function benchPosture(): Promise<DeclaredTopicsBrowserPosture> {
-  reading ??= readDeclaredTopicsBrowserPosture(
-    env.API_URL,
-    env.FRONTEND_URL,
-    "This benchmark",
-  );
+/** Returns the deployment's posture, reading it on first use. */
+function benchPosture(): Promise<TopicsBrowserPosture> {
+  reading ??= readTopicsBrowserPosture(env.API_URL, env.FRONTEND_URL);
   return reading;
 }
 
@@ -725,7 +721,7 @@ function measuredSegment(
  * declaration permits that zero rather than asserting it, so a served
  * sample whose worker does run counts those runs as usual.
  */
-function mayRunNothingUnder(posture: DeclaredTopicsBrowserPosture): boolean {
+function mayRunNothingUnder(posture: TopicsBrowserPosture): boolean {
   return posture.mode === "server-execution-on";
 }
 

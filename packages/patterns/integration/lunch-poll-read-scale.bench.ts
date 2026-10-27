@@ -25,7 +25,7 @@ import {
   settleView,
   waitForSettledText,
 } from "./cfc-browser-helpers.ts";
-import { readDeclaredTopicsBrowserPosture } from "./topics-browser-posture.ts";
+import { readTopicsBrowserPosture } from "./topics-browser-posture.ts";
 import { waitForPieceView } from "./topics-navigation-helpers.ts";
 
 const SIZES = [74, 296, 1184];
@@ -91,11 +91,7 @@ async function verifyPosture(): Promise<void> {
   }
   const serving = arm === "true";
   const [posture, statsResponse] = await Promise.all([
-    readDeclaredTopicsBrowserPosture(
-      env.API_URL,
-      env.FRONTEND_URL,
-      "The read-scale benchmark",
-    ),
+    readTopicsBrowserPosture(env.API_URL, env.FRONTEND_URL),
     fetch(new URL("api/health/stats", env.API_URL)),
   ]);
   if (!statsResponse.ok) {
