@@ -140,6 +140,39 @@ placeholder as revoked content shown directly, while its binding is withheld,
 and the binding is made again, mounting the content, once the space is in reach
 again.
 
+## Runtime incompatibility: replace the client
+
+An admission refusal marked `clientUpdateRequired: true` says that this runtime
+cannot mount until its code is replaced. It is independent of the error name;
+the expression-result identity check sends it on a `SessionRevokedError`.
+A refused restore keeps the server's actual reason. The memory client remembers
+the update requirement across mounts, and the storage manager retains it across
+spaces and route changes. Reads, access Retry, and ACL notices cannot trigger
+fresh admission attempts from that runtime. A permission denial without the
+marker remains per-space and can be reconsidered after an access event.
+
+An initial permanent authorization or update-required refusal is retained just
+like a terminated session. A failed access Retry retains its permission refusal
+too, so ordinary reads do not each open another session. An unmarked
+`SessionRevokedError` on a failed open discards that mount, allowing a later
+operation to attempt admission again. This does not reopen an established
+session that was taken over. Transient failures remain recoverable.
+
+`StorageManager.clientUpdateRequired()` returns the retained explanation and
+whether writes were unconfirmed when the refusal was observed.
+`subscribeClientUpdateRequired()` reports changes and immediately replays the
+current status. The uncertainty stays recorded after rejected writes leave the
+pending set, and subsequent writes in that runtime also set it. This is a
+conservative warning, not proof that a write was lost or saved.
+
+The worker reports this status with `RuntimeErrorCode.ClientUpdateRequired` to
+its connected clients and replays it to clients that attach later. The shell
+shows persistent reload guidance, including a request to copy recent edits
+when writes were unconfirmed. It preserves the browser's leave-page warning
+for those writes and never reloads automatically. Updating the CLI checkout
+and starting a new process is the equivalent recovery for a command-line host.
+This recovery mechanism does not enable client-generation retirement.
+
 ## CLI: surface the denial for the space it was asked to reach
 
 The CLI reads `storageManager.authorizationError(space)` for the one space it

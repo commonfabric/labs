@@ -5160,11 +5160,14 @@ export class Server {
       if (!connection.stableExpressionResultIds) {
         return respondTypedError<SessionOpenResult>(
           message.requestId,
-          toError(
-            "SessionRevokedError",
-            "This runtime uses incompatible expression result identities. " +
-              "Reload the browser tab or update the CLI checkout.",
-          ),
+          {
+            ...toError(
+              "SessionRevokedError",
+              "This runtime uses incompatible expression result identities. " +
+                "Reload the browser tab or update the CLI checkout.",
+            ),
+            clientUpdateRequired: true,
+          },
         );
       }
       const principal = authContext === undefined
@@ -5307,8 +5310,7 @@ export class Server {
           connection.elidedVerdicts,
         );
       } catch (error) {
-        // The client ends a session refused here as taken over, and logs
-        // nothing that says which resume was refused.
+        // Record the refused resume together with its session and connection.
         if (error instanceof Error && error.name === "SessionRevokedError") {
           // Quoted: the id, the space and the message (which repeats the id)
           // are the peer's text, and a line break in one would read as a log

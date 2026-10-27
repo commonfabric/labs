@@ -53,6 +53,7 @@ import type {
   SharedSpaceCollectionView,
   SharedSpaceInterface,
 } from "../system/shared-space-interface.ts";
+import { moduleByteCache } from "./pieces-controller.ts";
 
 const owner = await Identity.fromPassphrase("Home catalog owner");
 const service = await Identity.fromPassphrase("Home catalog service");
@@ -268,6 +269,7 @@ async function withHome(
   const fresh = (executeOnServer = serverExecution) => {
     const storage = EmulatedStorageManager.connectTo(server, { as: owner });
     const runtime = new Runtime({
+      moduleByteCache,
       apiUrl: new URL("https://home.example"),
       storageManager: storage,
       experimental: { serverExecution: executeOnServer },
@@ -297,6 +299,7 @@ async function withHome(
             servingHomeSpace: space,
           });
           const runtime = new Runtime({
+            moduleByteCache,
             apiUrl: new URL("https://home.example"),
             storageManager: storage,
             servingPosture: true,
@@ -933,6 +936,7 @@ describe("Home shared-space catalog", () => {
       await withHome(serving, async (_runtime, home, _fresh, server) => {
         const storage = EmulatedStorageManager.connectTo(server, { as: owner });
         const reader = new Runtime({
+          moduleByteCache,
           apiUrl: new URL("https://home.example"),
           storageManager: storage,
           experimental: { serverExecution: serving },
@@ -993,6 +997,7 @@ describe("Home shared-space catalog", () => {
           as: outsider,
         });
         const reader = new Runtime({
+          moduleByteCache,
           apiUrl: new URL("https://home.example"),
           storageManager: storage,
           experimental: { serverExecution: serving },

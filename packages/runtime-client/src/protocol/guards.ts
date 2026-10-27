@@ -33,6 +33,7 @@ import {
   PendingWritesNotification,
   PresenceUpdateNotification,
   RequestType,
+  RuntimeErrorCode,
   SpaceAccessLostNotification,
   SpaceAccessRestoredNotification,
   TelemetryNotification,
@@ -246,9 +247,9 @@ export function isNavigateRequestNotification(
 }
 
 /**
- * Is `value` an {@link ErrorNotification}? Only `message` is required; the
- * context fields an error may carry -- its piece, space, pattern, and stack --
- * are all optional and unchecked.
+ * Is `value` an {@link ErrorNotification}? Checks the message and the write
+ * uncertainty required only by update-required reports. Other context is
+ * optional and unchecked.
  */
 export function isErrorNotification(
   value: unknown,
@@ -256,7 +257,10 @@ export function isErrorNotification(
   return (
     isObjectNotArray(value) &&
     value.type === NotificationType.ErrorReport &&
-    typeof value.message === "string"
+    typeof value.message === "string" &&
+    (value.code === RuntimeErrorCode.ClientUpdateRequired
+      ? typeof value.unconfirmedWrites === "boolean"
+      : value.unconfirmedWrites === undefined)
   );
 }
 

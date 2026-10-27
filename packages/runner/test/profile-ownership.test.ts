@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import {
@@ -51,6 +52,10 @@ const linkListSchema = {
 function spaceOf(profile: Cell<unknown>): MemorySpace {
   return profile.getAsNormalizedFullLink().space;
 }
+
+// One cache for every runtime this file makes, so that a pattern compiles
+// once per file rather than once per case.
+const moduleByteCache = createCompileByteCache();
 
 describe("profile-ownership", () => {
   let server: ReturnType<typeof newSharedServer>;
@@ -96,6 +101,7 @@ describe("profile-ownership", () => {
   ): { runtime: Runtime; storage: EmulatedStorageManager } {
     const storage = EmulatedStorageManager.connectTo(server, { as });
     const runtime = new Runtime({
+      moduleByteCache,
       apiUrl: new URL(import.meta.url),
       storageManager: storage,
       ...(preferredProfileSpace === undefined ? {} : { preferredProfileSpace }),
