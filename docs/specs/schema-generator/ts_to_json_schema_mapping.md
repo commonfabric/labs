@@ -249,7 +249,9 @@ other consumers read is untouched. A member a homomorphic mapped type such as
 `Pick`, `Omit`, `Partial` or `Readonly` makes keeps the declaration of the
 member it maps, and is read as that declaration reads it where the mapping
 leaves its value as declared: a named member type stays a `$ref`, and the
-`undefined` an optional member's `?` adds stays out of it.
+`undefined` an optional member's `?` adds stays out of it. A property several
+members of an intersection or a union declare has no one declaration to read
+it as, and is read as its type, the `undefined` its `?` adds left out.
 `Partial<Foo>` and `Required<Foo>` map
 over each arm's own keys and so distribute over a union, arm by arm; on an
 array they map the elements, which count as optional: `Partial` admits

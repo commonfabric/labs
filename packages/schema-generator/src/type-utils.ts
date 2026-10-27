@@ -168,8 +168,12 @@ export function safeGetPropertyType(
   // A property a homomorphic mapped type makes, as `Pick`, `Omit` and
   // `Partial` do, has no value declaration but keeps the declaration of the
   // property it maps, which says what its type is where the mapping leaves it.
+  // One several members of an intersection or a union declare has none either,
+  // and no one of its declarations says what its type is there.
   const decl = prop.valueDeclaration ??
-    prop.declarations?.find(ts.isPropertySignature);
+    (prop.declarations?.length === 1
+      ? prop.declarations.find(ts.isPropertySignature)
+      : undefined);
   const isOptional = (prop.flags & ts.SymbolFlags.Optional) !== 0;
 
   // Get type from the resolved parent type (for generic instantiation and mapped types)
