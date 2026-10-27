@@ -70,10 +70,22 @@ Deno.test("parseDemoArgs rejects invalid and incomplete options", () => {
 Deno.test("default demo dependencies provide time, preflight, and subprocess", async () => {
   assertEquals(defaultDependencies.now() instanceof Date, true);
   const previousFfmpeg = Deno.env.get("FFMPEG");
-  Deno.env.set("FFMPEG", Deno.execPath());
   const root = await Deno.makeTempDir();
   try {
+    const ffmpeg = `${root}/fake ffmpeg`;
+    await Deno.writeTextFile(
+      ffmpeg,
+      '#!/bin/sh\n[ "$#" -eq 1 ] && [ "$1" = "-version" ]\n',
+    );
+    await Deno.chmod(ffmpeg, 0o755);
+    Deno.env.set("FFMPEG", ffmpeg);
     await defaultDependencies.preflight();
+    await Deno.writeTextFile(ffmpeg, "#!/bin/sh\nexit 1\n");
+    await assertRejects(
+      () => defaultDependencies.preflight(),
+      Error,
+      "ffmpeg preflight failed",
+    );
     const status = await defaultDependencies.runIntegration(
       ["eval", "Deno.exit(0)"],
       root,
