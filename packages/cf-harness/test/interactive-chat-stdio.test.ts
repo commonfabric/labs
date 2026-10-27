@@ -212,6 +212,7 @@ Deno.test("interactive NDJSON transport emits events and responses", async () =>
 });
 
 Deno.test("interactive NDJSON transport waits for active turns before close after write failure", async () => {
+  const ready = Promise.withResolvers<void>();
   let loopFinished = false;
   let resolveLoop: (() => void) | undefined;
   let closeBeforeLoopFinished = false;
@@ -221,6 +222,7 @@ Deno.test("interactive NDJSON transport waits for active turns before close afte
       runTranscript: async (options) => {
         await new Promise<void>((resolve) => {
           resolveLoop = resolve;
+          ready.resolve();
         });
         loopFinished = true;
         const finalMessage = {
@@ -274,9 +276,10 @@ Deno.test("interactive NDJSON transport waits for active turns before close afte
         closeService: () => {
           closeBeforeLoopFinished = !loopFinished;
         },
-        writeLine: (line) => {
+        writeLine: async (line) => {
           const envelope = JSON.parse(line) as Record<string, unknown>;
           if (envelope.requestId === "req-start-turn") {
+            await ready.promise;
             resolveLoop?.();
             throw new Error("simulated stdout failure");
           }

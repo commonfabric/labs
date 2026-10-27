@@ -33,7 +33,10 @@ import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
 import { OpenAICompatibleGatewayModelClient } from "../src/model/openai-compatible-gateway.ts";
 import { OpenAICodexResponsesClient } from "../src/model/openai-codex-responses.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
-import { HARNESS_CHAT_INTERRUPTED_TURN_NOTICE } from "../src/interactive-chat-service.ts";
+import {
+  HARNESS_CHAT_INTERRUPTED_TURN_NOTICE,
+  HarnessInteractiveChatService,
+} from "../src/interactive-chat-service.ts";
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import {
@@ -210,6 +213,59 @@ describe("continue-run", () => {
     await Deno.remove(workspace, { recursive: true });
   });
 
+  it("seeds the same durable history as chat with the same prior turn", async () => {
+    const chatSeeds: (readonly HarnessTranscriptMessage[])[] = [];
+    const service = new HarnessInteractiveChatService({
+      systemPrompt: history[0].content,
+      createPromptLoop: () => ({
+        runTranscript: (options) => {
+          chatSeeds.push([...options.transcript]);
+          return Promise.resolve({
+            model: "gpt-recorded",
+            modelTurns: 1,
+            finalAssistantText: "Prior answer",
+            runState: state,
+            transcript: [...options.transcript, {
+              role: "assistant" as const,
+              content: "Prior answer",
+            }],
+          });
+        },
+      }),
+    });
+    await service.startSession("session", {
+      sessionId: "session",
+      workspace: { hostPath: workspace },
+      model: "gpt-recorded",
+    });
+    for (
+      const [turnId, text] of [["one", "Prior task"], ["two", "Next task"]]
+    ) {
+      await service.startTurn(turnId, {
+        sessionId: "session",
+        turnId,
+        input: { text },
+      });
+      await service.waitForTurn("session", turnId);
+    }
+    expect(await run()).toBe(0);
+    const durable = (messages: readonly HarnessTranscriptMessage[]) =>
+      messages.filter((message) =>
+        message.role !== "user" || !message.turnLocal
+      );
+    expect(durable(chatSeeds[1])).toEqual(durable(requests[0].transcript));
+    expect(
+      chatSeeds[1].filter((message) =>
+        message.role === "user" && message.turnLocal
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      requests[0].transcript.filter((message) =>
+        message.role === "user" && message.turnLocal
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
   it("creates a new run with predecessor lineage and leaves the predecessor unchanged", async () => {
     expect(await run()).toBe(0);
     const next = await nextArtifacts();
@@ -314,7 +370,11 @@ describe("continue-run", () => {
       } as HarnessTranscriptMessage,
     ]);
     expect(await run()).toBe(0);
-    expect(requests[0].transcript).toEqual([...history, {
+    expect(
+      requests[0].transcript.filter((message) =>
+        message.role !== "user" || !message.turnLocal
+      ),
+    ).toEqual([...history, {
       role: "user",
       content: "Next task",
     }]);
@@ -339,10 +399,10 @@ describe("continue-run", () => {
     ).toBe(true);
     expect(await run([], first.runRoot)).toBe(0);
     expect(
-      requests[2].transcript.some((message) =>
+      requests[2].transcript.filter((message) =>
         message.role === "user" && message.turnLocal
-      ),
-    ).toBe(false);
+      ).every((message) => !message.content.startsWith("Host turn budget:")),
+    ).toBe(true);
     expect(
       requests[2].transcript.some((message) =>
         message.content.startsWith("Host turn budget:")
@@ -357,7 +417,11 @@ describe("continue-run", () => {
     };
     await save([...history, legacyNotice]);
     expect(await run()).toBe(0);
-    expect(requests[0].transcript).toEqual([...history, legacyNotice, {
+    expect(
+      requests[0].transcript.filter((message) =>
+        message.role !== "user" || !message.turnLocal
+      ),
+    ).toEqual([...history, legacyNotice, {
       role: "user",
       content: "Next task",
     }]);
@@ -444,7 +508,11 @@ describe("continue-run", () => {
   it("cuts an unpaired tail and places the interrupted notice before the new prompt", async () => {
     await save([...history, unpaired]);
     expect(await run()).toBe(0);
-    expect(requests[0].transcript).toEqual([...history, {
+    expect(
+      requests[0].transcript.filter((message) =>
+        message.role !== "user" || !message.turnLocal
+      ),
+    ).toEqual([...history, {
       role: "user",
       content: HARNESS_CHAT_INTERRUPTED_TURN_NOTICE,
     }, { role: "user", content: "Next task" }]);
@@ -764,7 +832,11 @@ describe("continue-run", () => {
     await Deno.symlink(priorRoot, join(priorRoot, "cycle"));
     expect(await run()).toBe(0);
     expect(requests).toHaveLength(1);
-    expect(requests[0].transcript).toEqual([...history, {
+    expect(
+      requests[0].transcript.filter((message) =>
+        message.role !== "user" || !message.turnLocal
+      ),
+    ).toEqual([...history, {
       role: "user",
       content: "Next task",
     }]);

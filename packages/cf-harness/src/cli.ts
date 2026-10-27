@@ -2,17 +2,11 @@ import { readLoomAuthoringConfig } from "./loom-authoring.ts";
 import { readLoomCommandsConfig } from "./loom-commands.ts";
 import { readLoomRetrievalConfig } from "./loom-retrieval.ts";
 import { parseArgs } from "@std/cli/parse-args";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  SEPARATOR,
-} from "@std/path";
+import { dirname, isAbsolute, join, relative, resolve } from "@std/path";
 import { normalize as normalizeSandboxPath } from "@std/path/posix";
 import type { JSONSchema } from "@commonfabric/api";
+import type { HarnessRunState } from "./run-state.ts";
+import type { CfHarnessStructuredResultConfig } from "./contracts/structured-result.ts";
 import type { HarnessSystemPromptInputs } from "./contracts/system-prompt.ts";
 import {
   DEFAULT_GATEWAY_BASE_URL,
@@ -82,7 +76,15 @@ import type {
   HarnessTranscriptMessage,
 } from "./contracts/transcript.ts";
 import { CfHarnessEngine } from "./engine.ts";
-import { prepareHarnessContinuation } from "./run-continuation.ts";
+import {
+  assertContinuationOutputPaths,
+  assertHarnessRootSource,
+  assertStructuredResultToolConfigured,
+  isHostPathWithinRoot,
+  prepareHarnessContinuation,
+  resolveHostPathThroughNearestRealParent,
+  validateContinuationArtifacts,
+} from "./run-continuation.ts";
 import { resolveHarnessFabricSessionConfig } from "./fabric-session-options.ts";
 import type { HarnessFabricSessionFactory } from "./fabric-session.ts";
 import {
@@ -204,7 +206,6 @@ import {
   HarnessControlError,
   type HarnessControlErrorCode,
   harnessRecordedRunRefusal,
-  harnessResumeRefusal,
 } from "./control-errors.ts";
 
 const DEFAULT_ARTIFACT_DIRNAME = ".cf-harness-artifacts";
@@ -356,11 +357,7 @@ const resolveStructuredResultConfig = (
   return { ...request, schema };
 };
 
-export interface CfHarnessStructuredResultConfig {
-  path: string;
-  sandboxPath: string;
-  schema: JSONSchema;
-}
+export type { CfHarnessStructuredResultConfig } from "./contracts/structured-result.ts";
 
 export interface CfHarnessCliCapabilities {
   type: "cf-harness.capabilities";
@@ -1219,29 +1216,6 @@ interface CfHarnessAllowedHostRoot {
   name?: string;
 }
 
-const resolveHostPathThroughNearestRealParent = (hostPath: string): string => {
-  const suffix: string[] = [];
-  let candidate = hostPath;
-  while (true) {
-    try {
-      const realCandidate = Deno.realPathSync(candidate);
-      return suffix.length === 0
-        ? realCandidate
-        : join(realCandidate, ...suffix);
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) {
-        throw error;
-      }
-    }
-    const parent = dirname(candidate);
-    if (parent === candidate) {
-      return hostPath;
-    }
-    suffix.unshift(basename(candidate));
-    candidate = parent;
-  }
-};
-
 const createAllowedHostRoots = (
   workspace: string,
   hostMounts: readonly CfHarnessHostMountConfig[],
@@ -1258,37 +1232,6 @@ const createAllowedHostRoots = (
     name: mount.name,
   })),
 ];
-
-const isHostPathWithinRoot = (root: string, path: string): boolean => {
-  const relativePath = relative(root, path);
-  return relativePath !== ".." && !relativePath.startsWith(`..${SEPARATOR}`) &&
-    !isAbsolute(relativePath);
-};
-
-/** Refuses outward artifact links and returns the canonical run root. */
-const validateContinuationArtifacts = async (
-  runRoot: string,
-): Promise<string> => {
-  const root = resolveHostPathThroughNearestRealParent(runRoot);
-  const directories = new Set<string>();
-  const pending = [root];
-  while (pending.length > 0) {
-    const entry = pending.pop()!;
-    const path = resolveHostPathThroughNearestRealParent(entry);
-    if (!isHostPathWithinRoot(root, path)) {
-      throw harnessResumeRefusal(
-        `cannot continue prior run: artifact entry \`${entry}\` links outside its run root`,
-      );
-    }
-    const stat = await Deno.stat(path);
-    if (!stat.isDirectory || directories.has(path)) continue;
-    directories.add(path);
-    for await (const child of Deno.readDir(path)) {
-      pending.push(join(path, child.name));
-    }
-  }
-  return root;
-};
 
 const findAllowedHostRoot = (
   roots: readonly CfHarnessAllowedHostRoot[],
@@ -1417,21 +1360,6 @@ const resolvePrompt = async (
     return await readTextFile(promptFile);
   }
   return positionalPrompt!;
-};
-
-/** An explicit result tool needs a schema and destination before model work. */
-const assertStructuredResultToolConfigured = (
-  allowedToolIds: readonly BuiltinToolId[] | undefined,
-  structuredResult: CfHarnessStructuredResultConfig | undefined,
-): void => {
-  if (
-    allowedToolIds?.includes("submit_result") === true &&
-    structuredResult === undefined
-  ) {
-    throw new Error(
-      "--allow-tool submit_result requires --structured-result-path and a schema",
-    );
-  }
 };
 
 const parseStructuredResultConfig = async (
@@ -3940,11 +3868,7 @@ export const runCfHarnessCli = async (
       const artifacts = await readRunArtifacts(recordedRun).catch(
         rethrowArtifactFailure,
       );
-      if (artifacts.runState.lineage?.role === "subagent") {
-        throw harnessResumeRefusal(
-          `Cannot ${mode} subagent run ${artifacts.runState.runId} as a top-level run; ${mode} root run ${artifacts.runState.lineage.rootRunId} instead.`,
-        );
-      }
+      assertHarnessRootSource(artifacts.runState, mode);
       // The engine refuses this too: a run recorded on the Docker driver, or
       // on a runtime this build does not know. It is refused here first,
       // before anything of the resume is read.
@@ -4075,27 +3999,11 @@ export const runCfHarnessCli = async (
         );
       }
       if (continuedRunRoot !== undefined) {
-        const priorResult = artifacts.runState.structuredResult === undefined
-          ? undefined
-          : resolveHostPathThroughNearestRealParent(
-            artifacts.runState.structuredResult.path,
-          );
-        const outputPaths = [
+        assertContinuationOutputPaths(continuedRunRoot, artifacts.runState, [
           parsed.artifactRoot,
           parsed.structuredResult?.path,
           parsed.resultJsonPath,
-        ]
-          .filter((path): path is string => path !== undefined)
-          .map(resolveHostPathThroughNearestRealParent);
-        if (
-          outputPaths.some((path) =>
-            isHostPathWithinRoot(continuedRunRoot, path) || path === priorResult
-          )
-        ) {
-          throw new Error(
-            "continued run outputs must not modify the prior run's artifacts or result",
-          );
-        }
+        ]);
       }
       if (parsed.continueRun !== undefined) {
         effectiveStructuredResult = resolveStructuredResultConfig(
@@ -4103,9 +4011,53 @@ export const runCfHarnessCli = async (
           artifacts.runState.structuredResult,
         );
       }
+      const buildRecordedEngine = (
+        runState: HarnessRunState,
+        engineStructuredResult: CfHarnessStructuredResultConfig | undefined,
+      ) =>
+        new CfHarnessEngine({
+          ...sessionOptions,
+          runState,
+          model: parsed.model ?? artifacts.runState.model,
+          modelProvider,
+          credentialOwnerKey,
+          ...(modelProvider === "openai-compatible-gateway"
+            ? {
+              gatewayBaseUrl: parsed.gatewayBaseUrl,
+              gatewayAuthMode: parsed.gatewayAuthMode,
+            }
+            : {}),
+          ...(skillsShSearchClientFactory !== undefined
+            ? { skillsShSearchClientFactory }
+            : {}),
+          ...(skillsShAcquisitionClientFactory !== undefined
+            ? { skillsShAcquisitionClientFactory }
+            : {}),
+          // What the run was asked to do, in the operator's words. A pattern
+          // the run publishes carries it as the request it answers.
+          ...(parsed.prompt !== undefined ? { taskText: parsed.prompt } : {}),
+          ...(engineStructuredResult !== undefined
+            ? {
+              structuredResult: {
+                schema: engineStructuredResult.schema,
+                path: engineStructuredResult.path,
+              },
+            }
+            : {}),
+          ...(deps.fabricSessionFactory !== undefined
+            ? { fabricSessionFactory: deps.fabricSessionFactory }
+            : {}),
+          ...(effectiveRunManifest !== undefined
+            ? { runManifest: effectiveRunManifest }
+            : {}),
+          ...(parsed.runManifestPath !== undefined
+            ? { runManifestPath: parsed.runManifestPath }
+            : {}),
+        });
+      let continuedEngine: CfHarnessEngine | undefined;
       const continuation = parsed.continueRun === undefined
         ? undefined
-        : prepareHarnessContinuation({
+        : await prepareHarnessContinuation({
           runState: artifacts.runState,
           transcript: artifacts.transcript,
           prompt: parsed.prompt!,
@@ -4113,13 +4065,34 @@ export const runCfHarnessCli = async (
           workspace: parsed.workspace,
           structuredResult: effectiveStructuredResult,
           schemaExplicit: parsed.structuredResultSchemaExplicit === true,
+          allowedToolIds: parsed.allowedToolIds,
+          ...(sessionOptions.loomAuthoring === undefined
+            ? {}
+            : { loomContext: {} }),
+          establishContext: async (state) => {
+            continuedEngine = buildRecordedEngine(
+              state,
+              state.structuredResult === undefined ? undefined : {
+                ...state.structuredResult,
+                sandboxPath: effectiveStructuredResult?.sandboxPath ??
+                  join(
+                    "/workspace",
+                    relative(parsed.workspace, state.structuredResult.path),
+                  ),
+              },
+            );
+            activateEngine(continuedEngine);
+            const messages = await establishHarnessSessionContext({
+              engine: continuedEngine,
+              config: parsed,
+              onGrantsUnavailable: (error) =>
+                io.stderr(`fabric grants: unavailable (${String(error)})\n`),
+            });
+            return { messages, runState: continuedEngine.getRunState() };
+          },
         });
       if (continuation !== undefined) {
         effectiveStructuredResult = continuation.structuredResult;
-        assertStructuredResultToolConfigured(
-          parsed.allowedToolIds,
-          effectiveStructuredResult,
-        );
         const recordedInputs = artifacts.runState.systemPromptInputs!;
         const currentInputs = systemPromptInputsOf({
           ...parsed,
@@ -4155,49 +4128,12 @@ export const runCfHarnessCli = async (
           });
         }
       }
-      const engineStructuredResult = continuation === undefined
-        ? resolveStructuredResultConfig(parsed.structuredResult)
-        : effectiveStructuredResult;
       requestAccepted = true;
-      const engine = new CfHarnessEngine({
-        ...sessionOptions,
-        runState: continuation?.runState ?? artifacts.runState,
-        model: parsed.model ?? artifacts.runState.model,
-        modelProvider,
-        credentialOwnerKey,
-        ...(modelProvider === "openai-compatible-gateway"
-          ? {
-            gatewayBaseUrl: parsed.gatewayBaseUrl,
-            gatewayAuthMode: parsed.gatewayAuthMode,
-          }
-          : {}),
-        ...(skillsShSearchClientFactory !== undefined
-          ? { skillsShSearchClientFactory }
-          : {}),
-        ...(skillsShAcquisitionClientFactory !== undefined
-          ? { skillsShAcquisitionClientFactory }
-          : {}),
-        // What the run was asked to do, in the operator's words. A pattern
-        // the run publishes carries it as the request it answers.
-        ...(parsed.prompt !== undefined ? { taskText: parsed.prompt } : {}),
-        ...(engineStructuredResult !== undefined
-          ? {
-            structuredResult: {
-              schema: engineStructuredResult.schema,
-              path: engineStructuredResult.path,
-            },
-          }
-          : {}),
-        ...(deps.fabricSessionFactory !== undefined
-          ? { fabricSessionFactory: deps.fabricSessionFactory }
-          : {}),
-        ...(effectiveRunManifest !== undefined
-          ? { runManifest: effectiveRunManifest }
-          : {}),
-        ...(parsed.runManifestPath !== undefined
-          ? { runManifestPath: parsed.runManifestPath }
-          : {}),
-      });
+      const engine = continuedEngine ??
+        buildRecordedEngine(
+          artifacts.runState,
+          resolveStructuredResultConfig(parsed.structuredResult),
+        );
       const modelClient = await createSelectedModelClient({
         provider: modelProvider,
         credentialOwner,

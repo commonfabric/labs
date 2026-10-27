@@ -219,7 +219,10 @@ describe("harness-job continuation", () => {
         expect(next).toMatchObject({ outcome: "completed", recordedRun: true });
         const history = nextScript.requests[0].transcript;
         expect(history.filter((m) => m.role === "assistant")).toHaveLength(1);
-        expect(history.filter((m) => m.role === "user").at(-2)?.content)
+        expect(
+          history.filter((m) => m.role === "user" && !m.turnLocal).at(-2)
+            ?.content,
+        )
           .toContain("interrupted");
         expect(history.filter((m) => m.role === "user").at(-1)?.content).toBe(
           "Continue interrupted task",

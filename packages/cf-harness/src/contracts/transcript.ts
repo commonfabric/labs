@@ -35,9 +35,8 @@ export interface HarnessToolResultProvenance {
 
 export interface HarnessUserTranscriptMessage {
   /**
-   * Persisted form of a turn-local host notice, which `resumableTranscript()`
-   * excludes by identity during the live loop. Excluded from later runs'
-   * history and omitted by provider request projections.
+   * Host context valid for this turn. Excluded by this flag from resumable
+   * checkpoints and the history retained for a later root task.
    */
   turnLocal?: true;
 
@@ -91,6 +90,9 @@ export interface HarnessTranscriptSubagentContext {
 }
 
 export interface HarnessTranscriptEvent {
+  /** Replayed seed history, including guidance inserted before the first request. */
+  seed?: true;
+
   message: HarnessTranscriptMessage;
   transcript: readonly HarnessTranscriptMessage[];
 
