@@ -27,7 +27,8 @@ The board's `crossrefTable` materializes narrow mention lists once, then scans
 source lists for each destination. Each topic's `backlinksOf` scans the
 resulting table to find its own row. Topic rendering separately derives active
 comments, active links, presence booleans, and link-resolution inputs.
-`lastActivityOf` scans comments and links, including edits and retractions.
+A topic's comment count and last activity are stored values its verbs keep in
+the write that changes them (labs #9256).
 
 Let N be board topic occurrences, E be total mention occurrences, C be comments
 in a topic, and L be links in a topic. These are work hypotheses to test, not
@@ -310,11 +311,10 @@ board-with-one-topic workload with the demand the browser measured, and the
 all-backlinks workload as a scaling probe rather than normal UI behavior: it
 demands the pivot and every topic's backlinks at once, which no browser workload
 does. The probe records the board-alone workload as not measured, because a
-board loaded before any topic is opened runs none of the pivot, backlinks,
-comment-count, or last-activity lifts, so there is no work of theirs to measure
-headlessly. The tier's thread cases run under a workload of their own,
-`aggregates`, which demands every topic's present comment count and last
-activity and nothing else. Measure cold initialization, warm updates, and reopen
+board loaded before any topic is opened runs neither the pivot nor the backlinks
+lift, so there is no work of theirs to measure headlessly. A topic's comment
+count and last activity are stored values since labs #9256, so the tier has no
+thread cases. Measure cold initialization, warm updates, and reopen
 or reconnect separately. T0 measured reopen in the browser tier and not
 reconnect: inducing a transport reconnect needs a storage relay the Benchmarks
 workflow does not run, so the browser tier's `reopen` series re-opens a topic
