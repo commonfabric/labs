@@ -1,8 +1,8 @@
 /**
- * Runs one `cf-harness` job from plain inputs to a structured result.
+ * Runs one `cf-harness` job from plain inputs to its final answer.
  *
- * A job is a task, the prompt-slot role that task binds as, the schema its
- * result must satisfy, and the tools it may use. Everything a job does in the
+ * A job is a task, the prompt-slot role that task binds as, an optional result
+ * schema, and the tools it may use. Everything a job does in the
  * fabric — a fabric session, its read ceiling, the cells it holds as handles —
  * is the optional `fabric` part of its spec, so a job with none runs with no
  * fabric at all. The caller decides what the result becomes: an agent run's
@@ -39,9 +39,11 @@ import type {
 import {
   CfHarnessPromptLoop,
   type CreateHarnessPromptLoopOptions,
+  type HarnessModelUsageUpdate,
   type HarnessPromptLoopResult,
   promptLoopModelTurnsFromError,
 } from "@commonfabric/cf-harness/prompt-loop";
+import { sumHarnessModelUsage } from "@commonfabric/cf-harness/model/usage";
 import { canContinueHarnessRun } from "@commonfabric/cf-harness/run-continuation";
 import type {
   HarnessTaskDomain,
@@ -100,10 +102,10 @@ export interface HarnessJobSpec extends HarnessModelLimits {
    */
   taskRole: PromptSlotRole;
 
-  /** The schema the result the model submits is validated against. */
-  resultSchema: JSONSchema;
+  /** The submitted result schema; absent when the answer is final assistant text. */
+  resultSchema?: JSONSchema;
 
-  /** The tools the job may use; `submit_result` is always added. */
+  /** The tools the job may use; a schema adds `submit_result`. */
   tools: readonly string[];
 
   /**
@@ -226,6 +228,12 @@ export interface HarnessJobOptions {
   /** Called on each transcript event the harness persists, before it is passed on. */
   onEvent?: (event: HarnessTranscriptEvent) => Promise<void> | void;
 
+  /** Cumulative usage after a completed model call, with its accounting scope. */
+  onUsage?: (update: {
+    usage?: HarnessModelUsage;
+    coverage: NonNullable<AgentRunReport["usageCoverage"]>;
+  }) => Promise<void> | void;
+
   /** The harness's own seams; `createPromptLoop` replaces the model loop. */
   harnessDeps?: RunCfHarnessCliDependencies;
 
@@ -248,7 +256,7 @@ export type HarnessJobResult =
     | {
       outcome: "completed";
 
-      /** The value the model submitted, read back from the result file. */
+      /** Validated JSON for a schema, or the final assistant text without one. */
       structuredResult: unknown;
 
       /** The handles the job held, for resolving those the result names. */
@@ -321,10 +329,12 @@ const argvOf = (
     : []),
   "--prompt-slot-role",
   spec.taskRole,
-  "--structured-result-path",
-  resultPath,
-  "--structured-result-schema",
-  JSON.stringify(spec.resultSchema),
+  ...(spec.resultSchema === undefined ? [] : [
+    "--structured-result-path",
+    resultPath,
+    "--structured-result-schema",
+    JSON.stringify(spec.resultSchema),
+  ]),
   ...(spec.fabric !== undefined
     ? [
       "--fabric-api-url",
@@ -378,7 +388,10 @@ const argvOf = (
     `${name}=${ref}`,
   ]),
   // The job's tools, and the tool it returns its result through.
-  ...[...spec.tools, "submit_result"].flatMap(
+  ...[
+    ...spec.tools.filter((tool) => tool !== "submit_result"),
+    ...(spec.resultSchema === undefined ? [] : ["submit_result"]),
+  ].flatMap(
     (tool) => ["--allow-tool", tool],
   ),
   ...(spec.subagentProfiles ?? []).flatMap(
@@ -407,7 +420,7 @@ export const selectHarnessJobSandboxRuntime = (
 ) => selectCfHarnessCliSandboxRuntime({ ...harnessDeps, ...SANDBOX_SELECTION });
 
 /**
- * Runs one job. It ends `completed` with the value the model submitted and
+ * Runs one job. It ends `completed` with the submitted value or final text and
  * the handles the job held; `cancelled` when its signal aborted; `failed` as
  * `LIMIT_REACHED` when the model-turn limit ended it, as `INVALID_RESULT`,
  * with the validator's reason, when the loop completed without a result
@@ -424,12 +437,14 @@ export const runHarnessJob = async (
   const workspace = options.workspace ?? join(options.runRoot, "workspace");
   await Deno.mkdir(workspace, { recursive: true });
   const resultDir = join(workspace, ".job-results");
-  await Deno.mkdir(resultDir, { recursive: true });
   const resultPath = join(resultDir, `${basename(options.runRoot)}.json`);
-  try {
-    await Deno.remove(resultPath);
-  } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  if (spec.resultSchema !== undefined) {
+    await Deno.mkdir(resultDir, { recursive: true });
+    try {
+      await Deno.remove(resultPath);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+    }
   }
   const argv = argvOf(
     spec,
@@ -456,6 +471,23 @@ export const runHarnessJob = async (
   let loopResult: HarnessPromptLoopResult | undefined;
   let loopError: unknown;
   let reportedUsage: HarnessModelUsage | undefined;
+  let reportedUsageCoverage: NonNullable<AgentRunReport["usageCoverage"]> =
+    "direct";
+  const directUsage: (HarnessModelUsage | undefined)[] = [];
+  const onModelUsage = async (update: HarnessModelUsageUpdate) => {
+    directUsage.push(update.usage);
+    reportedUsage = update.totalUsage ??
+      (directUsage.some((usage) => usage !== undefined)
+        ? sumHarnessModelUsage(directUsage)
+        : undefined);
+    reportedUsageCoverage = update.totalUsage === undefined
+      ? "direct"
+      : "including-descendants";
+    await options.onUsage?.({
+      usage: reportedUsage,
+      coverage: reportedUsageCoverage,
+    });
+  };
   let readRunState:
     | (() => HarnessPromptLoopResult["runState"] | undefined)
     | undefined;
@@ -506,7 +538,7 @@ export const runHarnessJob = async (
               signal: options.signal,
               takeMessages: options.takeMessages,
               onModelUsage: async (update) => {
-                reportedUsage = update.totalUsage;
+                await onModelUsage(update);
                 await promptOptions.onModelUsage?.(update);
               },
               onTranscriptEvent: async (event) => {
@@ -528,7 +560,7 @@ export const runHarnessJob = async (
               signal: options.signal,
               takeMessages: options.takeMessages,
               onModelUsage: async (update) => {
-                reportedUsage = update.totalUsage;
+                await onModelUsage(update);
                 await transcriptOptions.onModelUsage?.(update);
               },
               onTranscriptEvent: async (event) => {
@@ -576,7 +608,7 @@ export const runHarnessJob = async (
         ...(reportedUsage !== undefined
           ? {
             usage: { ...reportedUsage },
-            usageCoverage: "including-descendants",
+            usageCoverage: reportedUsageCoverage,
           }
           : {}),
         ...(failedTurns !== undefined ? { modelTurns: failedTurns } : {}),
@@ -634,9 +666,11 @@ export const runHarnessJob = async (
       : { outcome: "failed", errorCode: PROVIDER_FAILURE, report, recordedRun };
   }
 
-  let structuredResult: unknown;
+  let structuredResult: unknown = loopResult.finalAssistantText;
   try {
-    structuredResult = JSON.parse(await Deno.readTextFile(resultPath));
+    if (spec.resultSchema !== undefined) {
+      structuredResult = JSON.parse(await Deno.readTextFile(resultPath));
+    }
   } catch {
     // A result the harness validated became unreadable before it was read.
     return {

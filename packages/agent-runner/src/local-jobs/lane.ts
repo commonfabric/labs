@@ -238,8 +238,8 @@ export const localJobSpecOf = async (
 };
 
 /**
- * The progress events one transcript event reports: a `step` for each tool
- * the model called, and a `command` for each command the host ran, one per
+ * The progress events one transcript event reports: whole root assistant
+ * `text`, a `step` for each tool the model called, and a `command` for each command the host ran, one per
  * executed call of a `run_command` or `run_read_command` batch. Children
  * carry their profile, run id, parent call id and depth. Browser steps also
  * name the action, so a reader can distinguish clicking from waiting without
@@ -247,7 +247,7 @@ export const localJobSpecOf = async (
  */
 export const localJobEventsOf = (
   event: HarnessTranscriptEvent,
-): { kind: "step" | "command"; body: Record<string, unknown> }[] => {
+): { kind: "step" | "command" | "text"; body: Record<string, unknown> }[] => {
   const child = event.subagent === undefined ? undefined : {
     parentToolCallId: event.subagent.parentToolCallId,
     childRunId: event.subagent.childRunId,
@@ -260,18 +260,23 @@ export const localJobEventsOf = (
   if (message.role === "assistant") {
     const turn = transcript.filter((entry) => entry.role === "assistant")
       .length;
-    return (message.toolCalls ?? []).map((call) => ({
-      kind: "step",
-      body: {
-        turn,
-        tool: call.function.name,
-        ...(child !== undefined ? { child } : {}),
-        ...(child !== undefined && call.function.name === "browser" &&
-            typeof argumentsOf(transcript, call.id).action === "string"
-          ? { action: argumentsOf(transcript, call.id).action }
-          : {}),
-      },
-    }));
+    return [
+      ...(child === undefined && message.content.length > 0
+        ? [{ kind: "text" as const, body: { turn, text: message.content } }]
+        : []),
+      ...(message.toolCalls ?? []).map((call) => ({
+        kind: "step" as const,
+        body: {
+          turn,
+          tool: call.function.name,
+          ...(child !== undefined ? { child } : {}),
+          ...(child !== undefined && call.function.name === "browser" &&
+              typeof argumentsOf(transcript, call.id).action === "string"
+            ? { action: argumentsOf(transcript, call.id).action }
+            : {}),
+        },
+      })),
+    ];
   }
   if (
     message.role !== "tool" ||
@@ -526,6 +531,9 @@ export class LocalJobLane {
           signal,
           takeMessages: (turn: number) => store.takeMessages(job.id, turn),
           ...(browserHost !== undefined ? { browserHost } : {}),
+          onUsage: (update) => {
+            store.report(job.id, "usage", { ...update });
+          },
           onEvent: (event) => {
             const { message } = event;
             const loop = event.subagent?.parentToolCallId;
@@ -537,7 +545,9 @@ export class LocalJobLane {
               childSteps.delete(message.toolCallId);
             }
             for (const { kind, body } of localJobEventsOf(event)) {
-              if (kind === "command") {
+              if (kind === "text") {
+                store.report(job.id, kind, body);
+              } else if (kind === "command") {
                 if (event.subagent !== undefined) {
                   const id = event.subagent.parentToolCallId;
                   const step = childSteps.get(id);

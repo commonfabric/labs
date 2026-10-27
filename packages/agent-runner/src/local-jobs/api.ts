@@ -7,7 +7,7 @@
  *
  * - `GET /health` — the lane is serving.
  * - `POST /jobs` — enqueue `{caller, profile, idempotencyKey, task,
- *   instructions?, context?, resultSchema, tools?, maxModelTurns?,
+ *   instructions?, context?, resultSchema?, tools?, maxModelTurns?,
  *   maxInputBytes?, maxOutputTokens?, imageAttachments?, depth?, tags?,
  *   domains?, reasoningEffort?, browserHost?, inputs?, foreignSpaces?}`,
  *   where `inputs` maps a name to a piece address and `foreignSpaces` a
@@ -29,6 +29,10 @@
  *   still owed first (`./browser-host.ts`).
  * - `POST /jobs/<id>/browser/result` — `{id, result}`, the host's answer to
  *   one operation.
+ *
+ * A schema-less job answers with its final assistant text. The durable event
+ * stream includes whole root assistant `text {turn, text}` messages and
+ * cumulative `usage {usage, coverage}` after each model call.
  *
  * A refusal is `{ok: false, code, error}` with a 4xx status.
  */
@@ -211,7 +215,10 @@ const enqueueRequestOf = (
   if (instructions !== undefined && typeof instructions !== "string") {
     return { error: "`instructions` must be a string." };
   }
-  if (!isObjectNotArray(resultSchema) && typeof resultSchema !== "boolean") {
+  if (
+    resultSchema !== undefined && !isObjectNotArray(resultSchema) &&
+    typeof resultSchema !== "boolean"
+  ) {
     return { error: "`resultSchema` must be a JSON schema." };
   }
   if (
@@ -314,7 +321,7 @@ const enqueueRequestOf = (
       ...(images !== undefined ? { imageAttachments: images } : {}),
       ...(instructions !== undefined ? { instructions } : {}),
       ...(context !== undefined ? { context } : {}),
-      resultSchema,
+      ...(resultSchema !== undefined ? { resultSchema } : {}),
       ...(tools !== undefined ? { tools: tools as string[] } : {}),
       ...(maxModelTurns !== undefined ? { maxModelTurns } : {}),
       ...(typeof maxInputBytes === "number" ? { maxInputBytes } : {}),

@@ -569,7 +569,7 @@ describe("local-jobs/lane", () => {
       ]);
       expect(
         localJobEventsOf(event({ role: "assistant", content: "Done." })),
-      ).toEqual([]);
+      ).toEqual([{ kind: "text", body: { turn: 1, text: "Done." } }]);
     });
 
     it("reports a read-only command's admitted output", () => {

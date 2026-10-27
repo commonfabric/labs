@@ -1907,7 +1907,7 @@ The door is HTTP on the Unix socket, mode 0600, with a bearer token in
 `<socket>.token`, also 0600 and minted at each start: reaching the socket is the
 authority. A caller enqueues
 `{caller, profile, idempotencyKey, task,
-instructions?, context?, resultSchema, tools?, maxModelTurns?, maxInputBytes?,
+instructions?, context?, resultSchema?, tools?, maxModelTurns?, maxInputBytes?,
 maxOutputTokens?, imageAttachments?, depth?, tags?, domains?, reasoningEffort?,
 browserHost?, inputs?, foreignSpaces?}`
 with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
@@ -1957,15 +1957,28 @@ handed. An input in another space with no host, a `foreignSpaces` entry no input
 names, or a slug address naming another space is refused at enqueue as
 `beyond_profile`. It may set nothing else. A job runs through the same
 `cf-harness` path as an agent run, with the fabric session its profile names, if
-any. Every tool call, including delegated calls, counts as progress, and so does
-its return; prose and reasoning do not. A `step` carries `{turn, tool}`, and the
-same step again with `returned: true` once the calls of that turn have returned
-and the loop's model has the turn. A `command` records each command the host ran
-for it. Children add `child: {profile, childRunId, parentToolCallId, depth}` to
-either body. The harness admits one level of delegation, so depth is `1`. Only a
-child's `browser` tool steps carry `action` (such as `click` or `snapshot`),
-without the operation's arguments or page content. Other child tool steps, such
-as `submit_result`, omit `action`.
+any. Every tool call, including delegated calls, produces progress, as does its
+return. A `step` carries `{turn, tool}`, and the same step again with
+`returned: true` once the calls of that turn have returned and the loop's model
+has the turn. A `command` records each command the host ran for it. Children add
+`child: {profile, childRunId, parentToolCallId, depth}` to either body. The
+harness admits one level of delegation, so depth is `1`. Only a child's
+`browser` tool steps carry `action` (such as `click` or `snapshot`), without the
+operation's arguments or page content. Other child tool steps, such as
+`submit_result`, omit `action`.
+
+Each root assistant message with nonempty content emits one `text {turn, text}`
+event, whole and without truncation or coalescing, in order with its steps.
+Delegated assistant text is not emitted. Turns start at this job's first model
+call, including on follow-ups. The store keeps these events durably, so a job's
+event history holds its assistant text. Reasoning is not emitted.
+
+After each completed model call, including descendant calls, a
+`usage {usage, coverage}` event reports cumulative usage for this run. Its
+`coverage` matches the report's `usageCoverage`: `including-descendants` when
+the harness supplies the total for the tree, otherwise `direct`. Unreported
+usage is omitted until the provider supplies a measurement; partial measurements
+do not account for unreported provider work.
 
 The lane coalesces consecutive steps with the same tool, child, browser action
 and `returned`, ignoring turn numbers. Thus N identical browser operations in
@@ -2118,13 +2131,18 @@ every operation still unanswered and every withdrawal still unacknowledged
 first, and a repeated answer reads as a duplicate. `GET /jobs/<id>` shows the
 host as `browser {state, attached, outstanding, withdrawn}`.
 
-A job ends `completed` with its result as soon as the harness accepts the
-model's `submit_result`; nothing the model does after an accepted result can
-fail it, since the run asks the model for nothing further. A job that ends
-`failed` carries `errorCode`, and `errorDetail` where the run said why: for
-`INVALID_RESULT`, that no structured result was submitted, or the field the
-schema refused and the reason. Both appear in the job snapshot and in its final
-`state` event.
+`resultSchema` is optional. With a schema, a job ends `completed` with its
+validated JSON result as soon as the harness accepts the model's
+`submit_result`; nothing the model does after an accepted result can fail it,
+since the run asks the model for nothing further. Without a schema, the job has
+no structured-result contract, result file or `submit_result` tool, and its
+`result` is the final assistant text as a plain string. Follow-ups inherit the
+absence of a schema. An empty assistant answer with no tool calls fails under
+the harness's existing `PROVIDER_FAILURE` handling; exhausting its turn budget
+without a final answer remains `LIMIT_REACHED`. A job that ends `failed` carries
+`errorCode`, and `errorDetail` where the run said why: for `INVALID_RESULT`,
+that no structured result was submitted, or the field the schema refused and the
+reason. Both appear in the job snapshot and in its final `state` event.
 
 A job the runner was running when it stopped or crashed ends `interrupted`
 (`RUNNER_RESTARTED`) when it next starts, and is never run again: it may already

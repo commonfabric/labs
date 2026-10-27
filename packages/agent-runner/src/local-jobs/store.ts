@@ -55,7 +55,7 @@ export interface LocalJobRequest extends HarnessModelLimits {
   task: string;
   instructions?: string;
   context?: unknown;
-  resultSchema: unknown;
+  resultSchema?: unknown;
   tools?: string[];
   maxModelTurns?: number;
   imageAttachments?: HarnessInlineImageAttachment[];
@@ -541,12 +541,12 @@ export class LocalJobStore {
   }
 
   /**
-   * Appends an event a running job reports — a `step` or a `command` — and
+   * Appends a progress event a running job reports and
    * returns it; `undefined` when the job is not running.
    */
   report(
     id: string,
-    kind: "step" | "command",
+    kind: "step" | "command" | "text" | "usage",
     body: Record<string, unknown>,
   ): LocalJobEvent | undefined {
     const appended = this.#write(() => {
