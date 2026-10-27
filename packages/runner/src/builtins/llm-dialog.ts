@@ -17,6 +17,7 @@ import {
 
 import {
   internSchema,
+  internSchemaAsTaggedHashString,
   isNontrivialSchema,
   toDeepFrozenSchema,
 } from "@commonfabric/data-model-schema";
@@ -78,7 +79,7 @@ import type { CfcConfClause } from "../cfc/clause.ts";
 import {
   type CfcLabelView,
   cfcLabelViewForCellFailClosed,
-  cfcLabelViewForCellWithStatus,
+  cfcLabelViewForResolvedTargetWithStatus,
 } from "../cfc/label-view.ts";
 import {
   cfcConfidentialityForObservationNode,
@@ -104,6 +105,7 @@ import { getEntityId } from "../create-ref.ts";
 import { entityUriSchemePrefix } from "../entity-kind.ts";
 import { resolveLink } from "../link-resolution.ts";
 import {
+  addressKey,
   createLLMFriendlyLink,
   getMetaLink,
   matchLLMFriendlyLink,
@@ -2337,19 +2339,21 @@ function toolInputReference(
 }
 
 /**
- * Where the value `cell` names is stored, every link on the way followed: the
- * same key for two cells that reach one stored position.
+ * Where the value `cell` names is stored, every link on the way followed: its
+ * space, document, scope and path, the same key for two cells that reach one
+ * stored position.
  */
 function storedPositionKey(cell: Cell<unknown>): string {
-  const { space, id, path } = cell.resolveAsCell().getAsNormalizedFullLink();
-  return JSON.stringify([space, id, path]);
+  return addressKey(cell.resolveAsCell().getAsNormalizedFullLink());
 }
 
 /**
  * The integrity each part of the value `cell` references carries, for a floor
  * on the whole of it: one list per leaf, holding the labels that cover that
- * leaf, which are its own and its ancestors' (the entries its label view
- * holds at its own path). A label on one part covers only that part. A
+ * leaf where it is stored, its own and its ancestors' in the document that
+ * holds it (the entries its resolved-target view holds at its own path). A
+ * label on one part covers only that part, and a label on a slot that holds a
+ * link endorses the reference, not the target (§3.7.2, §8.2.4). A
  * container holding no leaf counts as a leaf itself, as does a part that leads
  * back to a position it sits within, which adds no leaf the walk has not
  * reached. Returns `"unreadable"` where a label read fails or a part is a
@@ -2374,7 +2378,7 @@ function referencedValueLeafIntegrity(
     }
     if (leaves.length > 0) return leaves;
   }
-  const { view, readFailed } = cfcLabelViewForCellWithStatus(cell);
+  const { view, readFailed } = cfcLabelViewForResolvedTargetWithStatus(cell);
   if (readFailed) return "unreadable";
   return [
     (view?.entries ?? [])
@@ -2503,6 +2507,28 @@ function scanToolInputSchema(
   );
 }
 
+/**
+ * What a schema reference site means wherever the walk meets it: the
+ * reference, named within the document that holds it, and the constraints
+ * written beside it, by content, so two sites naming one definition with
+ * different constraints beside it stay apart. A tool's declared schema can be
+ * read through a cell, so a site is named by content rather than identity, and
+ * its siblings are copied before they are hashed.
+ */
+function schemaReferenceSiteKey(
+  site: Record<string, unknown>,
+  ref: string,
+  document: string,
+): string {
+  const { $ref: _, ...siblings } = site;
+  const beside = Object.keys(siblings).length === 0
+    ? ""
+    : internSchemaAsTaggedHashString(
+      toDeepFrozenSchema(siblings as JSONSchema),
+    );
+  return `${isExternalSchemaRef(ref) ? ref : `${document}${ref}`}|${beside}`;
+}
+
 // Scan a tool's `inputSchema` for a floor (`ifc.requiredIntegrity`) declared
 // as anything but a list, at every position the schema reaches, whatever the
 // model supplied: a malformed declaration refuses the call even where no value
@@ -2539,7 +2565,9 @@ function toolInputSchemaMayDeclareFloor(
     schema,
     "",
     (node) =>
-      isObjectNotArray(node.ifc) && node.ifc.requiredIntegrity !== undefined
+      isObjectNotArray(node.ifc) &&
+        Array.isArray(node.ifc.requiredIntegrity) &&
+        node.ifc.requiredIntegrity.length > 0
         ? "floor"
         : undefined,
     () => "unresolvable",
@@ -2615,12 +2643,12 @@ function toolInputRequiredIntegrityFailure(
   let followed = followedAt;
   if (reference !== undefined && typeof ref === "string") {
     const position = storedPositionKey(reference);
-    const refKey = isExternalSchemaRef(ref) ? ref : `${document}${ref}`;
-    const refs = followedAt.get(position);
-    if (refs?.has(refKey)) return undefined;
+    const site = schemaReferenceSiteKey(schema, ref, document);
+    const sites = followedAt.get(position);
+    if (sites?.has(site)) return undefined;
     followed = new Map(followedAt).set(
       position,
-      new Set([...(refs ?? []), refKey]),
+      new Set([...(sites ?? []), site]),
     );
   }
   const ifc = structural.ifc;

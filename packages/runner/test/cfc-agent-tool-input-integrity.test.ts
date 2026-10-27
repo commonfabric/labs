@@ -1583,6 +1583,41 @@ describe("CFC trusted agent: floors beneath a reference", () => {
     expect(await sentThrough(KERNEL_STRING)).toEqual(["a"]);
   });
 
+  it("denies a field whose link carries the floor but whose target does not", async () => {
+    // A label on the slot that holds a link endorses the reference, not the
+    // contents of its target (§3.7.2, §8.2.4).
+
+    expect(
+      await sentAfterCall(
+        withField("mail", {
+          type: "object",
+          properties: { recipient: FLOORED },
+        }),
+        async (runtime) => {
+          const recipient = llmToolExecutionHelpers.traverseAndCellify(
+            runtime,
+            space,
+            await seedKernelCell(
+              runtime,
+              "untrusted-recipient",
+              PLAIN_STRING,
+              "attacker@example.com",
+            ),
+          );
+          return {
+            route: "a",
+            mail: await seedKernelCell(
+              runtime,
+              "trusted-slot-mail",
+              mailSchema(KERNEL_STRING),
+              { recipient },
+            ),
+          };
+        },
+      ),
+    ).toEqual([]);
+  });
+
   it("gates a referenced value that leads back to itself", async () => {
     const inputSchema = {
       type: "object",
@@ -1622,6 +1657,45 @@ describe("CFC trusted agent: floors beneath a reference", () => {
     ).toEqual(["a"]);
   });
 
+  it("denies a value whose floor sits beside a schema reference the walk has met before", async () => {
+    // The same definition reached through a reference with a floor beside it
+    // is a different constraint, so meeting it again does not close the cycle.
+
+    expect(
+      await sentPassing(
+        {
+          type: "object",
+          properties: {
+            route: { type: "string" },
+            tree: { $ref: "#/$defs/Node" },
+          },
+          required: ["route"],
+          $defs: {
+            Node: {
+              type: "object",
+              properties: {
+                recipient: { type: "string" },
+                next: {
+                  $ref: "#/$defs/Node",
+                  ifc: { requiredIntegrity: [KERNEL_ATOM] },
+                },
+              },
+            },
+          },
+        } as unknown as JSONSchema,
+        "tree",
+        {
+          type: "object",
+          properties: { recipient: PLAIN_STRING, next: {} },
+        } as unknown as JSONSchema,
+        (cell: Cell<unknown>) => ({
+          recipient: "attacker@example.com",
+          next: cell,
+        }),
+      ),
+    ).toEqual([]);
+  });
+
   describe("a floor on the whole referenced value", () => {
     const inputSchema = withField("mail", {
       type: "object",
@@ -1653,6 +1727,49 @@ describe("CFC trusted agent: floors beneath a reference", () => {
           } as unknown as JSONSchema,
           (cell: Cell<unknown>) => ({ self: cell }),
         ),
+      ).toEqual([]);
+    });
+
+    it("denies a value one part of which is another scope's instance lacking it", async () => {
+      // A space-scoped and a user-scoped instance of one document share its
+      // id and path, and hold different values and labels.
+
+      expect(
+        await sentAfterCall(inputSchema, async (runtime) => {
+          const schema = {
+            type: "object",
+            properties: {
+              recipient: PLAIN_STRING,
+              nonce: KERNEL_STRING,
+              next: {},
+            },
+          } as unknown as JSONSchema;
+          const tx = runtime.edit();
+          setCfcImplementationIdentity(tx, {
+            kind: "builtin",
+            builtinId: "agent-kernel-demo",
+          });
+          const shared = runtime.getCell(space, "scoped-mail", schema, tx);
+          const user = runtime.getCellFromLink(
+            { ...shared.getAsNormalizedFullLink(), scope: "user" },
+            schema,
+            tx,
+          );
+          user.set({ recipient: "attacker@example.com" } as any);
+          shared.set({ nonce: "n", next: user } as any);
+          tx.prepareCfc();
+          expect((await tx.commit().settled).ok).toBeDefined();
+          await runtime.idle();
+          return {
+            route: "a",
+            mail: {
+              "@link": createLLMFriendlyLink(
+                shared.getAsNormalizedFullLink(),
+                space,
+              ),
+            },
+          };
+        }),
       ).toEqual([]);
     });
 
