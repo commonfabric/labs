@@ -433,7 +433,10 @@ The runtime's storage manager opens a session to a space with a
   or reopen, so each presents the chain as the store holds it then: a
   delegation added since is presented, and one that has expired is left out.
   The same snapshot feeds the client's capability check and the open it
-  admits.
+  admits. A session already open on a space when a chain for it arrives was
+  opened without it, so `addDelegationChain` reopens that session through
+  the client's restore, and the chain reaches it rather than only the next
+  open.
 - A signed open receives that chain through its context, names each proof's
   CID in `prf`, and carries the bytes; an open naming a
   connection-authenticated principal carries the bytes alone. A space with

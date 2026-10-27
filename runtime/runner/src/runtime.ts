@@ -1636,7 +1636,9 @@ export class Runtime {
 
   /**
    * The delegation each self-owned space this runtime created issued to its
-   * creator, by space, until the calling space's record of it is written.
+   * creator, by space, for the runtime's lifetime: a calling space's record
+   * of it is written from here, and a conflicted commit that retries writes
+   * it again.
    */
   readonly #delegationsIssued = new Map<MemorySpace, Uint8Array>();
 
@@ -4653,45 +4655,9 @@ export class Runtime {
       grants?: ACL;
       root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
       spaceKind?: string;
-      /**
-       * Whether the space owns itself, the owner holding a delegation from
-       * its key in place of a grant; see {@link InSpaceCreationRequest}.
-       */
-      selfOwned?: boolean;
     } = {},
   ): Promise<MemorySpace> {
-    if (this.servingPosture && options.owner === undefined) {
-      throw new Error(
-        "A serving runtime creates a space only on behalf of a user, and " +
-          "no owner was supplied",
-      );
-    }
-    const owner = options.owner ?? this.userIdentityDID;
-    const { root, spaceKind } = options;
-    const genesis = {
-      ...(root === undefined ? {} : { root }),
-      ...(spaceKind === undefined ? {} : { spaceKind }),
-    };
-    if (options.selfOwned) {
-      if (this.storageManager.createSelfOwnedSpace === undefined) {
-        throw new Error(
-          "This storage manager cannot create a space that owns itself",
-        );
-      }
-      if (!isDIDKey(owner)) {
-        throw new Error(
-          debugStr`A delegation names a did:key, and ${owner} is not one`,
-        );
-      }
-      const { space, delegation } = await this.storageManager
-        .createSelfOwnedSpace({
-          ...(options.grants === undefined ? {} : { grants: options.grants }),
-          delegateTo: owner,
-          ...genesis,
-        });
-      this.#delegationsIssued.set(space, delegation);
-      return space;
-    }
+    const { owner, genesis } = this.#creationOf(options);
     if (this.storageManager.createSpace === undefined) {
       throw new Error("This storage manager cannot create spaces");
     }
@@ -4699,6 +4665,80 @@ export class Runtime {
       { ...options.grants, [owner]: "OWNER" },
       genesis,
     );
+  }
+
+  /**
+   * Creates a space that owns itself, with `options.grants` beside the
+   * space's own OWNER entry and no owner entry for anyone else, and returns
+   * its DID with the delegation the space's key issued to `options.owner`,
+   * the identity this runtime acts as by default, before the key was
+   * dropped (`docs/specs/profile-delegation.md`). The delegation is held
+   * here at once, so this runtime's sessions on the space act under its
+   * grant; the caller records it where a later runtime of the same key
+   * finds it, as `PatternFactory.inSpace(..., { selfOwned: true })` does in
+   * the calling space. Like `createSpace`, except in who owns the space.
+   *
+   * @throws If `options.grants` makes any principal OWNER, if the storage
+   *   manager cannot create such a space, if the memory server does not
+   *   admit a proof chain, or if it refuses the genesis commit.
+   */
+  async createSelfOwnedSpace(
+    options: {
+      owner?: DID;
+      grants?: ACL;
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    } = {},
+  ): Promise<{ space: MemorySpace; delegation: Uint8Array }> {
+    const { owner, genesis } = this.#creationOf(options);
+    if (this.storageManager.createSelfOwnedSpace === undefined) {
+      throw new Error(
+        "This storage manager cannot create a space that owns itself",
+      );
+    }
+    if (!isDIDKey(owner)) {
+      throw new Error(
+        debugStr`A delegation names a did:key, and ${owner} is not one`,
+      );
+    }
+    const created = await this.storageManager.createSelfOwnedSpace({
+      ...(options.grants === undefined ? {} : { grants: options.grants }),
+      delegateTo: owner,
+      ...genesis,
+    });
+    this.#delegationsIssued.set(created.space, created.delegation);
+    return created;
+  }
+
+  /**
+   * Helper for `createSpace()` and `createSelfOwnedSpace()`: the owner the
+   * creation is for and the genesis declarations it makes.
+   */
+  #creationOf(options: {
+    owner?: DID;
+    root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+    spaceKind?: string;
+  }): {
+    owner: DID;
+    genesis: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    };
+  } {
+    if (this.servingPosture && options.owner === undefined) {
+      throw new Error(
+        "A serving runtime creates a space only on behalf of a user, and " +
+          "no owner was supplied",
+      );
+    }
+    const { root, spaceKind } = options;
+    return {
+      owner: options.owner ?? this.userIdentityDID,
+      genesis: {
+        ...(root === undefined ? {} : { root }),
+        ...(spaceKind === undefined ? {} : { spaceKind }),
+      },
+    };
   }
 
   /**
@@ -4891,8 +4931,10 @@ export class Runtime {
    *
    * The calling space's allocation record decides when it exists. Otherwise
    * a runtime that creates spaces for names creates one owned by
-   * `options.owner` with `options.grants`, whose DID the next run making the
-   * same request records. Under server execution only the serving runtime
+   * `options.owner` with `options.grants`, or, with `options.selfOwned`,
+   * one that owns itself and delegates to `options.owner`
+   * (`createSelfOwnedSpace`), whose DID the next run making the same
+   * request records. Under server execution only the serving runtime
    * creates them: the run a client makes of the same handler is a
    * speculative echo of the serving runtime's, and a space it created would
    * be one no record ever names, so a client leaves a name with no record
@@ -4944,14 +4986,21 @@ export class Runtime {
       if (this.experimental.serverExecution === true && !this.servingPosture) {
         throw new InSpaceTargetUnresolved([name]);
       }
-      const { root, ...access } = options;
+      const { root, selfOwned, ...access } = options;
+      const creation = {
+        ...access,
+        ...(root
+          ? {
+            root: (created: MemorySpace) => ({
+              cause: inSpaceRootCause(created),
+            }),
+          }
+          : {}),
+      };
       const created = this.#inSpaceCreated.get(creationKey) ??
-        await this.createSpace({
-          ...access,
-          ...(root
-            ? { root: (created) => ({ cause: inSpaceRootCause(created) }) }
-            : {}),
-        });
+        (selfOwned
+          ? (await this.createSelfOwnedSpace(creation)).space
+          : await this.createSpace(creation));
       this.#inSpaceCreated.set(creationKey, created);
       return created;
     })();

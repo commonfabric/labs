@@ -79,6 +79,30 @@ describe("storage-self-owned-space", () => {
     });
   });
 
+  it("throws for grants that make another principal OWNER, and creates nothing", async () => {
+    const manager = managerAs(owner);
+    await expect(
+      manager.createSelfOwnedSpace({
+        grants: { [other.did()]: "OWNER" },
+        delegateTo: owner.did(),
+      }),
+    ).rejects.toThrow("grants OWNER to nobody else");
+  });
+
+  it("throws on a host that admits no proof chain, and creates nothing there", async () => {
+    const refusing = StandaloneMemoryServer.start({
+      acl: { mode: "enforce", delegations: false },
+    });
+    cleanups.push(() => refusing.close());
+    const manager = StorageManager.open({
+      as: owner,
+      memoryHost: refusing.url,
+    });
+    cleanups.push(() => manager.close());
+    await expect(manager.createSelfOwnedSpace({ delegateTo: owner.did() }))
+      .rejects.toThrow("does not admit a session.open proof chain");
+  });
+
   it("lets a session holding the delegation act as the space's OWNER, where one holding nothing is refused", async () => {
     const { space, delegation } = await managerAs(owner).createSelfOwnedSpace({
       delegateTo: owner.did(),

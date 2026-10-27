@@ -875,6 +875,14 @@ function factoryFromPattern<T, R>(
             "and a DID or a cell names a space that exists",
         );
       }
+      if (
+        options?.selfOwned &&
+        Object.values(grants ?? {}).includes("OWNER")
+      ) {
+        throw new Error(
+          "inSpace() grants OWNER to nobody in a space that owns itself",
+        );
+      }
       const derived = makePatternFactory(defaultScope, space ?? "", {
         ...(grants !== undefined ? { grants } : {}),
         ...(options?.root ? { root: true } : {}),

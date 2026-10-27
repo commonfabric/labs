@@ -468,12 +468,14 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * principal being made owner, and that between the genesis commit and the
    * key's end the key signs one delegation over the space to `delegateTo`,
    * covering every memory command and never expiring. This manager holds
-   * that delegation from then on, so its own sessions present it; the
-   * caller records it where the space's holder will find it again.
+   * that delegation from then on, so a session it opens as `delegateTo`
+   * presents it; the caller records it where the space's holder will find
+   * it again.
    *
-   * @throws If the memory server refuses the genesis commit, or does not
-   *   admit a proof chain. No DID is returned then, and the space that was
-   *   being created is abandoned.
+   * @throws If `grants` makes any principal OWNER, if the memory server
+   *   does not advertise `sessionOpenProofs`, since a space nobody could
+   *   open is not created, or if it refuses the genesis commit. No DID is
+   *   returned then, and the space that was being created is abandoned.
    */
   createSelfOwnedSpace?(
     options: {

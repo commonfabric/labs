@@ -2647,7 +2647,9 @@ export type NodeFactory<T, R> =
  * Access a space created by `PatternFactory.inSpace()` grants beyond its
  * creator, by principal DID, or `"*"` for anyone. A principal DID may be
  * granted `OWNER`, and `"*"` may not. The identity the run acts for is an
- * OWNER of the space whatever the grants name it. The grants
+ * OWNER of the space whatever the grants name it, unless the space is
+ * `selfOwned`, in which case the space is its own owner, that identity holds
+ * a delegation instead, and the grants may name no OWNER. The grants
  * apply when the space is created, and the first call to name a space in a
  * run is the one that creates it; a space that already exists keeps its own
  * access-control document.

@@ -139,8 +139,9 @@ creating user, who is not in the list, holds instead a delegation the space's
 key issued over it before being destroyed. The home space records that
 delegation beside the allocation, in the list under the cause
 `{ delegations: <space DID> }`, in the commit that appends the profile link;
-a later delegation over the space lands beside it there. A runtime loads
-every profile's delegations at startup
+the record is a list so that a delegation issued later, with another
+command or policy, has a place beside it. A runtime loads every profile's
+delegations at startup
 (`Runtime.loadProfileDelegations`) so its sessions on the profile space act
 under the profile's own grant ([profile delegation](../../specs/profile-delegation.md)).
 A profile created before profiles owned themselves names its creator as owner

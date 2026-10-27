@@ -297,16 +297,30 @@ describe("in-space allocation", () => {
         });
       });
       await later.storageManager.synced();
-      const underOwnGrant = () =>
+      // The creator's own sessions aside: those the later runtime holds on
+      // the space, and whether they act under the space's grant.
+      const creatorSession =
+        runtime.storageManager.scopeKeyIdentity().sessionId;
+      const laterUnderOwnGrant = () =>
         server.accessForTestingOnly.sessionsForSpace(space).filter((session) =>
-          session.capabilityPrincipal === space
-        ).length;
-      const before = underOwnGrant();
+          session.id !== creatorSession && session.principal === signer.did()
+        ).map((session) => session.capabilityPrincipal === space);
+      // The later runtime opens the space before loading, on the key's own
+      // grant, which the wildcard WRITE admits.
+      const written = await later.editWithRetry((tx) => {
+        later.getCell(space, "opened before loading", undefined, tx).set({
+          by: "later",
+        });
+      });
+      expect(written.error).toBeUndefined();
+      await later.storageManager.synced();
+      expect(laterUnderOwnGrant()).toEqual([false]);
 
+      // Loading reopens the session already open on the space, so the chain
+      // reaches it rather than only the next open.
       expect(await later.loadProfileDelegations()).toBe(1);
-      // A session the later runtime opens now presents the loaded chain.
-      await later.getCell(space, "opened after loading").sync();
-      expect(underOwnGrant()).toBeGreaterThan(before);
+      await later.storageManager.synced();
+      expect(laterUnderOwnGrant()).toContain(true);
     });
   });
 

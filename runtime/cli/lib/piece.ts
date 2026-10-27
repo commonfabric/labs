@@ -747,6 +747,12 @@ export async function loadPieces(
       () => runtime.healthCheck(),
     );
     await versionCheck.finish(runtime.serverGitSha, config.apiUrl);
+    if (!healthy) {
+      throw new Error(
+        `Could not connect to "${config.apiUrl.toString()}".` +
+          memoryHostNote(memoryHost, new URL(config.apiUrl)),
+      );
+    }
     // The delegations Home records for the user's profiles, so a profile
     // space that owns itself opens under its own grant. Best effort: a
     // runtime that cannot read them opens the space on its key's own grant.
@@ -756,12 +762,10 @@ export async function loadPieces(
         () => runtime.loadProfileDelegations(),
       );
     } catch (error) {
-      console.warn("Could not load the profile delegations:", error);
-    }
-    if (!healthy) {
-      throw new Error(
-        `Could not connect to "${config.apiUrl.toString()}".` +
-          memoryHostNote(memoryHost, new URL(config.apiUrl)),
+      (output.report ?? console.warn)(
+        `Could not load the profile delegations: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
       );
     }
 
