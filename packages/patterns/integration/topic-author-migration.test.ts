@@ -545,6 +545,34 @@ describe("topic-author-migration", () => {
     });
   }
 
+  it("waits for an unresolved whole comments array before completing any author writes", async () => {
+    const pending = runtime.getCell<unknown>(space, "pending-comments");
+    const { argument } = await start({
+      createdByName: "Creator",
+      topicStateVersion: 0,
+      comments: pending,
+    });
+    await runtime.idle();
+    await runtime.storageManager.synced();
+    expect(argument.key("topicStateVersion").getRaw()).toBe(0);
+    expect(argument.key("createdBy").getRaw()).toBeUndefined();
+
+    const arrival = runtime.edit();
+    pending.withTx(arrival).set([
+      { authorName: "Delayed commenter", body: "Arrived", sentAt: 2 },
+    ]);
+    expect((await arrival.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+    await runtime.storageManager.synced();
+    expect(argument.key("topicStateVersion").getRaw()).toBe(CURRENT_VERSION);
+    expect(
+      argument.key("comments").key(0).key("author").getRaw({
+        lastNode: "value",
+      }),
+    ).toEqual({ name: "Delayed commenter", kind: "legacy" });
+    expect(errors).toEqual([]);
+  });
+
   describe("activity-scalars step", () => {
     // Later than any stamp a verb makes during the test, so the kept activity
     // time can only equal it if the step read the delayed stamp.
@@ -605,6 +633,59 @@ describe("topic-author-migration", () => {
         );
         expect(argument.key("commentCount").getRaw()).toBe(
           field === "comment removedAt" ? 0 : 1,
+        );
+        expect(argument.key("lastActivityAt").getRaw()).toBe(LATE);
+        expect(errors).toEqual([]);
+      });
+    }
+
+    for (const field of ["comments", "links"] as const) {
+      it(`waits for an unresolved whole ${field} array while a verb saves, then keeps both values`, async () => {
+        const pending = runtime.getCell<unknown>(space, "pending-array");
+        const { argument, result } = await start({
+          title: "Original",
+          topicStateVersion: 1,
+          createdAt: 1,
+          comments: field === "comments" ? pending : [],
+          links: field === "links" ? pending : [],
+        });
+        await runtime.idle();
+        await runtime.storageManager.synced();
+        expect(argument.key("topicStateVersion").getRaw()).toBe(1);
+
+        await result.key("setTitle").pull();
+        result.key("setTitle").send({
+          title: "Saved title",
+          agentName: "Test agent",
+        });
+        await runtime.idle();
+        await runtime.storageManager.synced();
+        expect(argument.key("title").getRaw()).toBe("Saved title");
+        expect(argument.key("topicStateVersion").getRaw()).toBe(1);
+
+        const arrival = runtime.edit();
+        pending.withTx(arrival).set(
+          field === "comments"
+            ? [{
+              author: { kind: "agent", name: "Probe" },
+              body: "Stored",
+              sentAt: LATE,
+            }]
+            : [{
+              kind: "web",
+              url: "https://example.com",
+              label: "Example",
+              addedAt: LATE,
+            }],
+        );
+        expect((await arrival.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        await runtime.storageManager.synced();
+        expect(argument.key("topicStateVersion").getRaw()).toBe(
+          CURRENT_VERSION,
+        );
+        expect(argument.key("commentCount").getRaw()).toBe(
+          field === "comments" ? 1 : 0,
         );
         expect(argument.key("lastActivityAt").getRaw()).toBe(LATE);
         expect(errors).toEqual([]);

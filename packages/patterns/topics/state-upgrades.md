@@ -149,12 +149,19 @@ as its activity, and never runs this step.
 The step runs once, so a value it computed from incomplete reads would stay
 wrong. Only the lift completes it, reading each comment's and link's stamps
 through their own keys: a read through a key suspends on an unresolved link,
-where reading the whole array drops the stamp as though it were absent. A
-handler's eager reads cannot tell an unresolved link from an absent optional
-stamp, so a handler always defers the step to the lift, and a verb's
-`noteActivity()` on a topic still at version one is overwritten when the step
-runs. The creation, body and title times are inputs with a default of zero,
-which an absent value reads as.
+where reading the whole array drops the stamp as though it were absent. The same
+holds one level up. A whole `comments` or `links` array behind an unresolved
+link reads as its declared default, empty, so before any step runs the lift
+reads each array's first element through its key, which suspends until the array
+resolves (`upgradeTopicState`); this covers the author step too. A handler's
+eager reads cannot tell an unresolved link from an absent optional stamp, so a
+handler always defers the step to the lift, and a verb's `noteActivity()` on a
+topic still at version one is overwritten when the step runs. The creation, body
+and title times are inputs with a default of zero, which an absent value reads
+as, and so does one behind an unresolved link: a number has no key to read
+through, and the pattern API cannot read past an input's default. No Topics
+writer stores these times as links; a writer that did would need this step to
+wait for them as it waits for the arrays.
 
 ## Rollout and rollback
 

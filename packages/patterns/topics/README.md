@@ -277,13 +277,20 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   `lastActivityAt` are stored on the topic, because the board's index reads them
   without running the topic, and a topic written to by an agent is often never
   run again. The topic's own verbs keep them, in the same write as the comment,
-  link, body or title change they summarize, so no writer has to run the topic
-  afterwards for the board to be right. A topic stored before they were kept
-  gets them from the `activity-scalars` upgrade step (`state-upgrades.md`),
-  which computes both from the topic's own records. That step runs once, so a
-  value it computed from incomplete reads would stay wrong: only the lift
-  completes it, reading each stamp through its own key, which waits for an
-  unresolved link rather than reading it as absent.
+  link, body or title change they summarize, so no writer running this module
+  has to run the topic afterwards for the board to be right. A writer still on
+  an older topic module does not keep them, so they are reliable once every
+  writer runs this one (`state-upgrades.md`, "Rollout and rollback"). Keeping
+  them costs concurrency on one topic: every such verb reads and writes the
+  activity time, so two writes to the same topic at once conflict on it where
+  two comment appends alone would merge, and the later one runs again against
+  the committed state (the scheduler's stale-basis retry) rather than merging. A
+  topic stored before they were kept gets them from the `activity-scalars`
+  upgrade step (`state-upgrades.md`), which computes both from the topic's own
+  records. That step runs once, so a value it computed from incomplete reads
+  would stay wrong: only the lift completes it, reaching each array and each
+  stamp through a key, which waits for an unresolved link rather than reading it
+  as absent or as its default.
 - Verified by `multi-user.test.tsx` (two isolated runtimes, one shared board).
 
 ## Headless / agent use

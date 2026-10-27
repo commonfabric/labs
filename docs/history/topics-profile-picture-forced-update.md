@@ -173,18 +173,31 @@ The production run is to apply the gated plan in batches cut from it, as the
 ([topics-number-rollout-2026-10-06.md](topics-number-rollout-2026-10-06.md)),
 watching the board between them.
 
-The drivers that ran the passes are kept beside the clone, in
-`~/clones/topics-kept-activity-2026-10-26/tools/` on the machine that ran
-them: the gate, the pass script, the kept-value scan, and the offline
-authored-content check.
+The drivers that ran the passes are kept beside this record, in
+[`topics-profile-picture-forced-update/`](topics-profile-picture-forced-update/):
+the gate (`gate.ts`), the pass script (`pass.sh`), the kept-value scan
+(`kept-scan.ts`), the offline authored-content check (`authored-check.ts`), the
+whole-board update check used for the variant (`check-all.ts`), the field diff
+of changed free-cells (`field-diff.ts`) and the pass summary (`judge.py`). They
+import the CLI's and the state inspector's modules from the checkout `PIN_ROOT`
+names, and `pass.sh` names the clone's paths on the machine that ran it. Its
+last step, the authored-content check, was added after the passes, which ran
+that check by hand.
 
 ## Before production
 
 - A team ruling on forcing, which the Topics pattern-update rule
   (`skills/topics/references/pattern-updates.md`) requires.
-- The same gated driver, against production, with a fresh survey: the gate's
-  checks read the stored state of the moment, and the plan's reference pins
-  refuse any piece another writer moves between the check and the write.
+- The same gated driver, against production, with a fresh survey, gating each
+  batch immediately before applying it. The gate's checks read the stored
+  state of the moment, and what the apply pins is narrower than what the gate
+  checked: a row's reference pin refuses a piece whose source another writer
+  moved in between, but not a change to its records, and the forced write then
+  accepts whatever the update check would have found. The window is a batch's
+  duration. The records a deployed Topic's own verbs can add in it are the
+  shapes the gate already proved, so the remaining exposure is a writer outside
+  those verbs; announcing a quiet window for agent writes to the board during
+  the rollout closes most of it.
 - Rollback: every Topic's prior source is retained, so the rollout's plans
   roll back with `cf piece rollback`; the pristine snapshot of 2026-10-26 is
   the reference copy.

@@ -1436,6 +1436,16 @@ const upgradeTopicState = (state: TopicUpgradeState, verb?: string): void => {
     }
     return;
   }
+  if (!fromHandler && version < TOPIC_STATE_VERSION) {
+    // Every step reads the comment and link records whole. A whole-array read
+    // takes the input's declared default, empty, while the array is behind a
+    // link that has not resolved, and a step would complete on that. A read
+    // through an element's key reaches into the document behind the link and
+    // suspends the lift until it resolves; on an array that is empty it reads
+    // `undefined` and costs nothing more.
+    state.comments.key(0).get();
+    state.links.key(0).get();
+  }
   for (let index = version; index < TOPIC_STATE_VERSION; index++) {
     const step = TOPIC_STATE_UPGRADES[index];
     // Author fields are additive: content handlers can still edit version
