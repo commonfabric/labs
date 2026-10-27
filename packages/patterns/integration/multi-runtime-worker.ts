@@ -228,6 +228,10 @@ async function resultAt(address: unknown): Promise<Cell<any>> {
   let opened = addressedResults.get(key);
   if (!opened) {
     try {
+      // An explicit open is a host event, as navigation into a refused space
+      // is in the shell. Reconsider its prior denial once; the server still
+      // decides admission, and a client-update refusal remains terminal.
+      await runtime.retrySpaceAccess(space as MemorySpace);
       opened = await controller().getPieceCell(
         runtime.getCellFromEntityId(space as MemorySpace, id),
         true,

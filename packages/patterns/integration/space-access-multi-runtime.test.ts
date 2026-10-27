@@ -90,6 +90,11 @@ describe("space access across runtimes", () => {
     await expect(guest.read(["title"], { piece: room })).rejects.toThrow(
       `lacks READ on space ${room.space}`,
     );
+    // Opening it again asks admission once more, and the unchanged ACL still
+    // refuses the guest.
+    await expect(guest.read(["title"], { piece: room })).rejects.toThrow(
+      `lacks READ on space ${room.space}`,
+    );
   });
 
   it("returns a room to a member its owner granted", async () => {
