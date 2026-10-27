@@ -45,6 +45,16 @@ describe("DelegationStore", () => {
       ]);
     });
 
+    it("returns a chain the caller may change without changing what is held", async () => {
+      const store = new DelegationStore();
+      const root = await delegate(space, alice);
+      const returned = await store.add([root.bytes]);
+      returned.length = 0;
+      expect(cids(store.chainFor(space.did(), alice.did(), now))).toEqual([
+        root.cid,
+      ]);
+    });
+
     it("throws for a chain with a delegation that does not verify", async () => {
       const store = new DelegationStore();
       const root = await delegate(space, alice);

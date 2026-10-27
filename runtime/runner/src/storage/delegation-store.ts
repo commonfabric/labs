@@ -93,7 +93,7 @@ export class DelegationStore {
     if (!held.some((known) => known.map(({ cid }) => cid).join(" ") === cids)) {
       held.push(chain);
     }
-    return chain;
+    return [...chain];
   }
 
   /**
