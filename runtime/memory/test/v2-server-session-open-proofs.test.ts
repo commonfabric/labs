@@ -74,7 +74,8 @@ const nextResponse = <Result>(
 };
 
 /** A server whose session principal is taken, untested-crypto and test-only,
- *  from `invocation.iss`, as the ACL suite's server does. */
+ *  from `invocation.iss`, as the ACL suite's server does. Its clock is
+ *  `clock.now`, which a test advances. */
 const createServer = (
   store: string,
   acl: {
@@ -82,6 +83,7 @@ const createServer = (
     delegations?: boolean;
     delegatingDids?: readonly string[];
   },
+  clock: { now: number } = { now: 1_000_000 },
 ) =>
   new Server({
     store: new URL(store),
@@ -90,7 +92,7 @@ const createServer = (
       const iss = message.invocation?.iss;
       return typeof iss === "string" ? iss : undefined;
     },
-    sessionOpenAuth: { audience: TEST_AUDIENCE },
+    sessionOpenAuth: { audience: TEST_AUDIENCE, nowSeconds: () => clock.now },
     acl,
   });
 
@@ -361,6 +363,65 @@ describe("v2-server-session-open-proofs", () => {
       );
       expect(opened.error?.name).toBe("AuthorizationError");
       expect(opened.error?.message).toContain("cannot both be presented");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("refuses and ends an open session once its chain's expiry has passed", async () => {
+    const clock = { now: 1_000_000 };
+    const server = createServer(
+      "memory://proofs-expiry-after-open",
+      { mode: "enforce", delegations: true },
+      clock,
+    );
+    try {
+      await initializeSelfOwnedSpace(server);
+      const harness = await connect(server);
+      const expiring = await issueDelegation(space, {
+        aud: alice.did(),
+        sub: space.did(),
+        cmd: "/memory",
+        exp: clock.now + 100,
+      });
+      const opened = await openSession(harness, alice.did(), [expiring]);
+      expectExists(opened.ok, "the chain holds at open");
+      const before = await transactSet(
+        harness,
+        opened.ok.sessionId,
+        "of:doc:3",
+        { at: "before" },
+        1,
+      );
+      expectExists(before.ok, "the chain holds before its expiry");
+
+      // Past the expiry and the clock-skew grace, on the same connection.
+      // The session is ended before the refusal, so the client learns
+      // rather than retries: `session/revoked` precedes the response.
+      clock.now += 1_000;
+      await harness.connection.receive(encodeMemoryBoundary({
+        type: "transact",
+        requestId: nextRequestId("tx"),
+        space: space.did(),
+        sessionId: opened.ok.sessionId,
+        commit: {
+          localSeq: 2,
+          reads: { confirmed: [], pending: [] },
+          operations: [
+            {
+              op: "set",
+              id: "of:doc:3",
+              value: { at: "after" },
+            } as unknown as Operation,
+          ],
+        },
+      }));
+      const revoked = shiftMessage(harness.messages);
+      expect(revoked.type).toBe("session/revoked");
+      const after = nextResponse<{ seq: number }>(harness.messages);
+      expect(after.error?.name).toBe("AuthorizationError");
+      expect(after.error?.message).toContain("proof chain has expired");
+      expect(after.error?.retriable).toBeUndefined();
     } finally {
       await server.close();
     }

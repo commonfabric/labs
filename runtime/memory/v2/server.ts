@@ -209,6 +209,7 @@ import {
 } from "./server-sync.ts";
 import {
   authorizationError,
+  DEFAULT_CLOCK_SKEW_SECONDS,
   verifySessionOpenProofs,
 } from "./session-open-auth.ts";
 import {
@@ -948,6 +949,16 @@ type SessionHandle = {
    */
   principal?: string;
   leaseEnd?: number;
+
+  /**
+   * The unix second the proof chain the session's open presented stops
+   * holding (04-protocol.md §4.5.1, "Proof chains"); absent for a session
+   * opened without a chain, or with one that does not expire. Past it the
+   * session is refused every request and sent nothing, since the grant it
+   * acts under came from the chain and the chain is gone; unlike a lease,
+   * nothing renews it short of a new open with a fresh chain.
+   */
+  delegationEnd?: number;
 };
 
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
@@ -1474,7 +1485,12 @@ class Connection {
     this.#send(response, { space, sessionId });
   }
 
-  addSession(space: string, sessionId: string, principal?: string): void {
+  addSession(
+    space: string,
+    sessionId: string,
+    principal?: string,
+    delegationEnd?: number,
+  ): void {
     const key = sessionKey(space, sessionId);
     if (this.#sessions.has(key)) {
       return;
@@ -1488,6 +1504,7 @@ class Connection {
       ...(principal === undefined || lease === undefined
         ? {}
         : { principal, leaseEnd: lease.leaseEnd }),
+      ...(delegationEnd === undefined ? {} : { delegationEnd }),
     });
   }
 
@@ -1556,6 +1573,13 @@ class Connection {
   #leaseExpired(handle: SessionHandle): boolean {
     return handle.leaseEnd !== undefined &&
       handle.leaseEnd <= this.#server.nowSeconds();
+  }
+
+  /** Whether the proof chain the session was opened with has expired. */
+  #delegationEnded(handle: SessionHandle): boolean {
+    return handle.delegationEnd !== undefined &&
+      handle.delegationEnd <
+        this.#server.nowSeconds() - DEFAULT_CLOCK_SKEW_SECONDS;
   }
 
   /** Ends the authentication of `principal`, if it has one. */
@@ -1982,6 +2006,23 @@ class Connection {
       );
       error.retriable = true;
       this.#send({ type: "response", requestId, error });
+      return false;
+    }
+    if (this.#delegationEnded(handle)) {
+      // Not renewable: the grant came from the chain, and only a new open
+      // with a fresh chain brings one. The session is ended so the client
+      // learns that rather than retrying into the same refusal.
+      this.revokeSession(space, sessionId, "unauthorized");
+      this.#server.detachSession(space, sessionId, this.id);
+      this.#send({
+        type: "response",
+        requestId,
+        error: toError(
+          "AuthorizationError",
+          "memory session.open proof chain has expired; open the session " +
+            "again with a current chain",
+        ),
+      });
       return false;
     }
     return true;
@@ -2591,6 +2632,11 @@ class Connection {
       // A session under a lease that has run out is sent nothing until the
       // lease is renewed, which evaluates it again in full.
       if (this.#leaseExpired(handle)) {
+        continue;
+      }
+      // A session whose proof chain has expired is sent nothing: the grant
+      // it read under is gone, and its next request ends it.
+      if (this.#delegationEnded(handle)) {
         continue;
       }
       // A construction intentionally reuses one authenticated session id in
@@ -5668,6 +5714,7 @@ export class Server {
         (isFabricPlainObject(message.invocation) &&
           message.invocation.prf !== undefined);
       let capabilityPrincipal: string | undefined;
+      let delegationEnd: number | undefined;
       if (presentsChain) {
         if (this.options.acl?.delegations !== true) {
           throw authorizationError(
@@ -5681,11 +5728,13 @@ export class Server {
               "binding cannot both be presented",
           );
         }
-        capabilityPrincipal = await verifySessionOpenProofs(message, {
+        const chain = await verifySessionOpenProofs(message, {
           space: message.space,
           principal,
           nowSeconds: this.nowSeconds(),
         });
+        capabilityPrincipal = chain?.rootIssuer;
+        delegationEnd = chain?.expiresAt;
       }
       const deny = this.#authorizeMessageWithEngine(
         engine,
@@ -5694,7 +5743,10 @@ export class Server {
         "READ",
       );
       if (deny) {
-        if (actingAs === undefined) {
+        // No admission wait for a chain, as for the binding: the grant it
+        // would need is the root issuer's, and the notice names the
+        // connection's principal (04-protocol.md §4.5.1, "Proof chains").
+        if (actingAs === undefined && !presentsChain) {
           this.#awaitAdmission(connection.id, message.space, principal);
         }
         return respondTypedError<SessionOpenResult>(message.requestId, deny);
@@ -5773,14 +5825,24 @@ export class Server {
         if (priorOwner !== connection.id) {
           this.#sessions.clearRoutedInterests(message.space, opened.sessionId);
         }
-        connection.addSession(message.space, opened.sessionId, principal);
+        connection.addSession(
+          message.space,
+          opened.sessionId,
+          principal,
+          delegationEnd,
+        );
         const admitted = this.#sessions.get(message.space, opened.sessionId)!;
         admitted.routedAuthority = () =>
           connection.allowsRoutedSession(message.space, admitted.id);
       } else {
         // Catch-up awaits below. The connection must already track its
         // session so closing it detaches this owner during that wait.
-        connection.addSession(message.space, opened.sessionId, named);
+        connection.addSession(
+          message.space,
+          opened.sessionId,
+          named,
+          delegationEnd,
+        );
       }
       if (opened.revokedConnectionId !== undefined) {
         console.warn(

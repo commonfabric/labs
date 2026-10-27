@@ -27,7 +27,9 @@ export class DagCborError extends Error {
 }
 
 const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder("utf-8", { fatal: true });
+// `ignoreBOM` keeps a leading U+FEFF as the character it is: a decoder that
+// dropped it would read two different byte strings as one text.
+const textDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 const MAJOR_UINT = 0;
 const MAJOR_BYTES = 2;
@@ -241,7 +243,14 @@ const decodeValue = (reader: Reader, depth: number): DagCborValue => {
           throw new DagCborError("map keys are not in canonical order");
         }
         previous = keyBytes;
-        map[decodeText(keyBytes)] = decodeValue(reader, depth + 1);
+        // Defined rather than assigned, so a key such as `__proto__` becomes
+        // an own property and never reaches a setter on the prototype.
+        Object.defineProperty(map, decodeText(keyBytes), {
+          value: decodeValue(reader, depth + 1),
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
       }
       return map;
     }

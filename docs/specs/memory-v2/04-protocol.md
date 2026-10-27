@@ -669,6 +669,7 @@ interface HelloMessage {
     presenceV1?: boolean;
     sessionClose?: boolean;
     connectionAuth?: boolean;
+    sessionOpenProofs?: boolean;
     admissionNotice?: boolean;
     elidedVerdicts?: boolean;
     sessionReportV1?: boolean;
@@ -1925,12 +1926,24 @@ The server, after authenticating the open's principal, checks that:
   is the open's principal
 - the open does not also carry the `actingAs` binding
 
-A chain failing any of these is refused with a permanent `AuthorizationError`
-naming the step: no fresh handshake heals it, and an expired proof is not
-retriable. The capability is then resolved for the root issuer, and an open
-whose root issuer the access list does not grant READ is refused as any
-ungranted principal is. The chain is fresh per open: a resume presenting none
-leaves the session to its principal's own grant.
+The structural checks run over the whole chain before any signature is
+verified, and a chain holds at most eight proofs, so a chain that fails them
+costs the server no signature verification. A chain failing any check is
+refused with a permanent `AuthorizationError` naming the step: no fresh
+handshake heals it, and an expired proof is not retriable. The capability is
+then resolved for the root issuer, and an open whose root issuer the access
+list does not grant READ is refused as any ungranted principal is. Such a
+refusal records no admission wait: as with the `actingAs` binding, the grant
+the open would need is not the connection's principal's. The chain is fresh
+per open: a resume presenting none leaves the session to its principal's own
+grant.
+
+The chain is held to after admission as it is at admission. A session opened
+with a chain carries the chain's earliest `exp`; past it, with the clock-skew
+grace, the session is refused every request with a permanent
+`AuthorizationError`, is ended with `session/revoked` at the first such
+request, and is sent no `session/effect`. Nothing renews it: a client whose
+delegation has a later expiry opens the session again with a current chain.
 
 ### 4.5.2 Future Target
 

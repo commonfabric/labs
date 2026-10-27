@@ -182,13 +182,17 @@ const checkPayload = (payload: DelegationPayload): void => {
   if (payload.nonce.length === 0) {
     throw new DelegationError("nonce is empty");
   }
-  if (payload.exp !== null && !Number.isSafeInteger(payload.exp)) {
-    throw new DelegationError("exp is not an integer or null");
+  if (payload.exp !== null && !isUnixSeconds(payload.exp)) {
+    throw new DelegationError("exp is not a non-negative integer or null");
   }
-  if (payload.nbf !== undefined && !Number.isSafeInteger(payload.nbf)) {
-    throw new DelegationError("nbf is not an integer");
+  if (payload.nbf !== undefined && !isUnixSeconds(payload.nbf)) {
+    throw new DelegationError("nbf is not a non-negative integer");
   }
 };
+
+/** Whether `value` is a unix time in seconds: a non-negative safe integer. */
+const isUnixSeconds = (value: number): boolean =>
+  Number.isSafeInteger(value) && value >= 0;
 
 /**
  * Whether `cmd` is a command path: `/`, or `/` followed by segments of

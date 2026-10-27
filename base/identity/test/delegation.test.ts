@@ -205,6 +205,34 @@ Deno.test("delegationCovers() returns `true` for an equal command or one under t
   expect(delegationCovers("/", "/memory/session.open")).toBe(true);
 });
 
+Deno.test("decodeDelegation() keeps a leading U+FEFF in a text field, so a changed command is refused rather than read as the original", async () => {
+  // The vector's signature covers `/memory`. The same envelope with the
+  // command re-encoded as `\ufeff/memory` carries a different text, which
+  // is not a command path, so decoding refuses it; a decoder that dropped
+  // the character would read the altered bytes as the signed delegation.
+  await expect(decodeDelegation(envelope(fields({ cmd: "\ufeff/memory" }))))
+    .rejects.toThrow("cmd is not a command path");
+});
+
+Deno.test("issueDelegation() throws a `DelegationError` for a negative expiry or start", async () => {
+  await expect(
+    issueDelegation(profile, {
+      aud: core.did(),
+      sub: profile.did(),
+      cmd: "/memory",
+      exp: -1,
+    }),
+  ).rejects.toThrow(DelegationError);
+  await expect(
+    issueDelegation(profile, {
+      aud: core.did(),
+      sub: profile.did(),
+      cmd: "/memory",
+      nbf: -1,
+    }),
+  ).rejects.toThrow(DelegationError);
+});
+
 Deno.test("delegationCovers() returns `false` for a command beside or above the delegated path", () => {
   expect(delegationCovers("/memory/session.open", "/memory")).toBe(false);
   expect(delegationCovers("/memory", "/memorydb")).toBe(false);

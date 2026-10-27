@@ -15,6 +15,7 @@ import { MEMORY_PROTOCOL } from "../v2.ts";
 import { type ClientInfo, createClientInfo } from "../v2/client-info.ts";
 import {
   authorizeLoopbackSessionOpen,
+  MAX_PROOF_CHAIN_LENGTH,
   verifySessionOpenAuthorization,
   verifySessionOpenProofs,
   wireAuthorizationOf,
@@ -674,7 +675,7 @@ describe("verifySessionOpenProofs", () => {
     const root = await rootDelegation();
     expect(
       await verifySessionOpenProofs(signedOpen([root]), proofOptions()),
-    ).toBe(space.did());
+    ).toEqual({ rootIssuer: space.did() });
   });
 
   it("returns the root issuer for a chain of two ending at the opener", async () => {
@@ -684,7 +685,7 @@ describe("verifySessionOpenProofs", () => {
         signedOpen(chain, bob),
         proofOptions(bob.did()),
       ),
-    ).toBe(space.did());
+    ).toEqual({ rootIssuer: space.did() });
   });
 
   it("returns the root issuer for an open naming an authenticated principal and carrying proofs alone", async () => {
@@ -698,7 +699,7 @@ describe("verifySessionOpenProofs", () => {
         },
         proofOptions(),
       ),
-    ).toBe(space.did());
+    ).toEqual({ rootIssuer: space.did() });
   });
 
   it("throws when the open authenticates no principal", async () => {
@@ -794,7 +795,7 @@ describe("verifySessionOpenProofs", () => {
     const grace = await rootDelegation({ exp: now - 10 });
     expect(
       await verifySessionOpenProofs(signedOpen([grace]), proofOptions()),
-    ).toBe(space.did());
+    ).toEqual({ rootIssuer: space.did(), expiresAt: now - 10 });
   });
 
   it("throws for a proof that is not yet valid", async () => {
@@ -824,5 +825,31 @@ describe("verifySessionOpenProofs", () => {
     await expect(
       verifySessionOpenProofs(signedOpen([root], bob), proofOptions(bob.did())),
     ).rejects.toThrow("the last audience is not the open's principal");
+  });
+
+  it("throws for a chain longer than the bound before verifying any signature", async () => {
+    const root = await rootDelegation();
+    const chain = Array.from(
+      { length: MAX_PROOF_CHAIN_LENGTH + 1 },
+      () => root,
+    );
+    await expect(
+      verifySessionOpenProofs(signedOpen(chain), proofOptions()),
+    ).rejects.toThrow(
+      `the chain is longer than ${MAX_PROOF_CHAIN_LENGTH} proofs`,
+    );
+  });
+
+  it("returns the earliest expiry among the chain's proofs", async () => {
+    const chain = [
+      await rootDelegation({ exp: now + 500 }),
+      await onwardDelegation({ exp: now + 200 }),
+    ];
+    expect(
+      await verifySessionOpenProofs(
+        signedOpen(chain, bob),
+        proofOptions(bob.did()),
+      ),
+    ).toEqual({ rootIssuer: space.did(), expiresAt: now + 200 });
   });
 });

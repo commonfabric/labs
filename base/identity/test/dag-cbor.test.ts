@@ -109,6 +109,21 @@ Deno.test("decodeDagCbor() throws for truncated input and for trailing bytes", (
   expect(() => decodeDagCbor(bytes(0x00, 0x00))).toThrow(DagCborError);
 });
 
+Deno.test("decodeDagCbor() returns `__proto__` as an own key rather than setting the prototype", () => {
+  // {"__proto__": {"x": 1}}
+  const decoded = decodeDagCbor(
+    encodeDagCbor({ ["__proto__"]: { x: 1 } }),
+  );
+  expect(isDagCborMap(decoded)).toBe(true);
+  expect(Object.keys(decoded as object)).toEqual(["__proto__"]);
+  expect(Object.getPrototypeOf(decoded)).toBe(Object.prototype);
+  expect((decoded as { x?: unknown }).x).toBeUndefined();
+});
+
+Deno.test("decodeDagCbor() keeps a leading U+FEFF in text", () => {
+  expect(decodeDagCbor(encodeDagCbor("\ufeffa"))).toBe("\ufeffa");
+});
+
 Deno.test("isDagCborMap() returns `true` for a map and `false` for every other kind of value", () => {
   expect(isDagCborMap({})).toBe(true);
   expect(isDagCborMap(null)).toBe(false);
