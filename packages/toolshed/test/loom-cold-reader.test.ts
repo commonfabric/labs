@@ -101,41 +101,63 @@ const recordFailureMarkers = (
   });
 };
 
+/** The serving-loop counters a stuck refresh's report names. */
+const STUCK_REFRESH_COUNTERS = [
+  "activeSpaces",
+  "waves",
+  "wavesBudgetExhausted",
+  "exhaustedAdvances",
+  "derivedCommits",
+  "supersededWrites",
+  "structureLoadFailures",
+  "structureLoadRefused",
+  "structureLoadDeferred",
+  "structureLoadStuck",
+  "structureLoadTerminal",
+  "unstampedSealRefusals",
+  "servedIntentSealFailures",
+  "foreignWriteRefusals",
+  "reactivationBackoffs",
+] as const;
+
+/**
+ * The counters a stuck refresh's report compares: what the host reports once
+ * the wait has failed, and what it reported before the owner's edits, since
+ * the counters run from the host's start and the first render is part of
+ * them.
+ */
+type StuckRefreshSnapshot = Pick<
+  ReturnType<ExecutorHost["stats"]>,
+  typeof STUCK_REFRESH_COUNTERS[number] | "lease" | "parkedRuntimes" | "demand"
+>;
+
 /**
  * Reports what the serving loop and the runtimes did while a served refresh
  * was awaited: the host's §7 counters that name a refused, deferred, or
  * failed structure load, a seal the loop refused, a lost lease, or a park,
- * and the failure markers recorded since `since`. Printed once, on the
- * failure, so a passing run says nothing.
+ * each as its final value and its change since `before` was taken at the
+ * owner's edits, and the failure markers recorded since `since`. Printed
+ * once, on the failure, so a passing run says nothing.
  */
 const reportStuckServedRefresh = (
-  host: ExecutorHost | undefined,
+  before: StuckRefreshSnapshot | undefined,
+  after: StuckRefreshSnapshot | undefined,
   markers: FailureMarker[],
   since: number,
 ) => {
-  const stats = host?.stats();
-  const counters = stats === undefined ? "no host" : JSON.stringify({
-    activeSpaces: stats.activeSpaces,
-    waves: stats.waves,
-    wavesBudgetExhausted: stats.wavesBudgetExhausted,
-    derivedCommits: stats.derivedCommits,
-    supersededWrites: stats.supersededWrites,
-    structureLoadFailures: stats.structureLoadFailures,
-    structureLoadRefused: stats.structureLoadRefused,
-    structureLoadDeferred: stats.structureLoadDeferred,
-    structureLoadStuck: stats.structureLoadStuck,
-    structureLoadTerminal: stats.structureLoadTerminal,
-    unstampedSealRefusals: stats.unstampedSealRefusals,
-    servedIntentSealFailures: stats.servedIntentSealFailures,
-    foreignWriteRefusals: stats.foreignWriteRefusals,
-    reactivationBackoffs: stats.reactivationBackoffs,
-    lease: stats.lease,
-    parkedRuntimes: stats.parkedRuntimes,
-    demand: stats.demand,
-  });
+  const counters = after === undefined ? "no host" : [
+    ...STUCK_REFRESH_COUNTERS.map((name) => {
+      const change = before === undefined ? "?" : after[name] - before[name];
+      return `${name}=${after[name]} (+${change})`;
+    }),
+    `lease=${JSON.stringify(after.lease)}`,
+    `parkedRuntimes=${JSON.stringify(after.parkedRuntimes)}`,
+    `demand=${JSON.stringify(after.demand)}`,
+  ].join(" ");
   const recent = markers.filter((marker) => marker.at >= since);
   console.error(
-    `served refresh stuck: serving loop ${counters}\n` +
+    `served refresh stuck: serving loop, final (+change since the owner's ` +
+      `edits): ${counters}\n` +
       `${recent.length} failure marker(s) since the owner's edits ` +
       `(${markers.length} recorded in all):\n` +
       recent.map((marker) =>
@@ -399,6 +421,7 @@ describe("loom-cold-reader", () => {
     const updater = client(loom.owner);
     recordFailureMarkers(updater, "updater", markers);
     const editsAt = performance.now();
+    const statsAtEdits = served ? loom.host()?.stats() : undefined;
     const boundNotes = updater.getCellFromLink(textareas[0].getAsLink());
     await boundNotes.sync();
     await updater.editWithRetry((tx) => {
@@ -419,7 +442,14 @@ describe("loom-cold-reader", () => {
     ).catch((error) => {
       // The wait's own report renders the stale view and nothing of why it
       // is stale; this says what the loop and the runtimes did meanwhile.
-      if (served) reportStuckServedRefresh(loom.host(), markers, editsAt);
+      if (served) {
+        reportStuckServedRefresh(
+          statsAtEdits,
+          loom.host()?.stats(),
+          markers,
+          editsAt,
+        );
+      }
       throw error;
     });
     expect(visibleText(refreshed)).toContain("Cold document");
