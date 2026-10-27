@@ -55,6 +55,7 @@ const issue = () =>
     aud: core.did(),
     sub: profile.did(),
     cmd: "/memory",
+    pol: [],
     nonce,
   });
 
@@ -97,11 +98,13 @@ Deno.test("issueDelegation() returns different bytes for two delegations that di
     aud: core.did(),
     sub: profile.did(),
     cmd: "/memory",
+    pol: [],
   });
   const second = await issueDelegation(profile, {
     aud: core.did(),
     sub: profile.did(),
     cmd: "/memory",
+    pol: [],
   });
   expect(first.cid).not.toBe(second.cid);
 });
@@ -112,6 +115,7 @@ Deno.test("issueDelegation() throws for a command that is not a path", async () 
       aud: core.did(),
       sub: profile.did(),
       cmd: "memory",
+      pol: [],
     }),
   ).rejects.toThrow(DelegationError);
 });
@@ -123,6 +127,7 @@ Deno.test("decodeDelegation() returns the signed fields of the pinned bytes", as
     aud: core.did(),
     sub: profile.did(),
     cmd: "/memory",
+    pol: [],
     nonce,
     exp: null,
   });
@@ -135,6 +140,7 @@ Deno.test("decodeDelegation() returns the fields of a delegation with an expiry 
     aud: profile.did(),
     sub: profile.did(),
     cmd: "/memory/session.open",
+    pol: [],
     exp: 2_000_000,
     nbf: 1_000_000,
   });
@@ -159,9 +165,9 @@ Deno.test("decodeDelegation() throws for a field the shape does not have", async
     .rejects.toThrow(DelegationError);
 });
 
-Deno.test("decodeDelegation() throws for a `null` subject", async () => {
-  await expect(decodeDelegation(envelope(fields({ sub: null }))))
-    .rejects.toThrow(DelegationError);
+Deno.test("decodeDelegation() returns a `null` subject, which UCAN allows", async () => {
+  const decoded = await decodeDelegation(envelope(fields({ sub: null })));
+  expect(decoded.payload.sub).toBeNull();
 });
 
 Deno.test("decodeDelegation() throws for an envelope with another tag or another varsig header", async () => {
@@ -188,6 +194,7 @@ Deno.test("verifyDelegation() throws for a delegation signed by a key other than
     aud: core.did(),
     sub: profile.did(),
     cmd: "/memory",
+    pol: [],
     nonce,
   });
   const claimed = await decodeDelegation(
@@ -220,6 +227,7 @@ Deno.test("issueDelegation() throws a `DelegationError` for a negative expiry or
       aud: core.did(),
       sub: profile.did(),
       cmd: "/memory",
+      pol: [],
       exp: -1,
     }),
   ).rejects.toThrow(DelegationError);
@@ -228,6 +236,7 @@ Deno.test("issueDelegation() throws a `DelegationError` for a negative expiry or
       aud: core.did(),
       sub: profile.did(),
       cmd: "/memory",
+      pol: [],
       nbf: -1,
     }),
   ).rejects.toThrow(DelegationError);

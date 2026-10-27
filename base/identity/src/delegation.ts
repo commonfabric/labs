@@ -3,8 +3,10 @@
  * as a signed envelope anything holding the issuer's DID can verify.
  *
  * A delegation is a UCAN 1.0 delegation in the one shape this repository
- * issues: the subject is a space, the command is a path under `/`, and the
- * policy is empty. It is encoded as the UCAN specification requires, a
+ * issues: the subject is a space, or `null` for authority over any subject,
+ * which this repository issues nowhere and the memory server admits nowhere;
+ * the command is a path under `/`; and the policy is empty. It is encoded as
+ * the UCAN specification requires, a
  * DAG-CBOR envelope of the issuer's signature and the signed payload, and is
  * identified by a CIDv1 over those bytes with the DAG-CBOR codec and a
  * SHA-256 multihash, written in base58btc. The bytes are the delegation: a
@@ -63,8 +65,11 @@ export interface DelegationPayload {
   /** The audience: the principal receiving it. */
   readonly aud: DIDKey;
 
-  /** The subject: the space the authority is over. */
-  readonly sub: DIDKey;
+  /**
+   * The subject: the space the authority is over, or `null` for authority
+   * over any subject, which UCAN allows and nothing here issues or admits.
+   */
+  readonly sub: DIDKey | null;
 
   /**
    * The command the authority covers, as a path: `/` covers every command,
@@ -72,6 +77,12 @@ export interface DelegationPayload {
    * {@link delegationCovers}.
    */
   readonly cmd: string;
+
+  /**
+   * The caveats, in UCAN's policy language. Empty is the one policy this
+   * shape issues or admits; a non-empty one is refused.
+   */
+  readonly pol: readonly unknown[];
 
   /** Random bytes that make two otherwise identical delegations differ. */
   readonly nonce: Uint8Array;
@@ -101,8 +112,10 @@ export interface Delegation {
 /** What {@link issueDelegation} takes: the payload less what it fills in. */
 export interface DelegationFields {
   readonly aud: DIDKey;
-  readonly sub: DIDKey;
+  readonly sub: DIDKey | null;
   readonly cmd: string;
+  /** The policy; `[]`, since no other is admitted. */
+  readonly pol: readonly unknown[];
   /** Defaults to `null`: a delegation that does not expire. */
   readonly exp?: number | null;
   readonly nbf?: number;
@@ -120,7 +133,7 @@ const payloadToDagCbor = (payload: DelegationPayload): DagCborValue => ({
   aud: payload.aud,
   sub: payload.sub,
   cmd: payload.cmd,
-  pol: [],
+  pol: payload.pol as DagCborValue,
   nonce: payload.nonce,
   exp: payload.exp,
   ...(payload.nbf === undefined ? {} : { nbf: payload.nbf }),
@@ -152,6 +165,7 @@ export async function issueDelegation(
     aud: fields.aud,
     sub: fields.sub,
     cmd: fields.cmd,
+    pol: fields.pol,
     nonce: fields.nonce ??
       crypto.getRandomValues(new Uint8Array(NONCE_LENGTH)),
     exp: fields.exp ?? null,
@@ -171,13 +185,19 @@ export async function issueDelegation(
 }
 
 const checkPayload = (payload: DelegationPayload): void => {
-  for (const field of ["iss", "aud", "sub"] as const) {
+  for (const field of ["iss", "aud"] as const) {
     if (!isCanonicalEd25519DID(payload[field])) {
       throw new DelegationError(`${field} is not an ed25519 did:key`);
     }
   }
+  if (payload.sub !== null && !isCanonicalEd25519DID(payload.sub)) {
+    throw new DelegationError("sub is not an ed25519 did:key or null");
+  }
   if (!isCommandPath(payload.cmd)) {
     throw new DelegationError("cmd is not a command path");
+  }
+  if (payload.pol.length !== 0) {
+    throw new DelegationError("pol is not empty");
   }
   if (payload.nonce.length === 0) {
     throw new DelegationError("nonce is empty");
@@ -266,14 +286,11 @@ export async function decodeDelegation(bytes: Uint8Array): Promise<Delegation> {
   ) {
     throw new DelegationError("delegation payload has the wrong fields");
   }
-  if (!Array.isArray(fields.pol) || fields.pol.length !== 0) {
-    throw new DelegationError("pol is not empty");
-  }
-  const { iss, aud, sub, cmd, nonce, exp, nbf } = fields;
+  const { iss, aud, sub, cmd, pol, nonce, exp, nbf } = fields;
   if (
     typeof iss !== "string" || typeof aud !== "string" ||
-    typeof sub !== "string" || typeof cmd !== "string" ||
-    !(nonce instanceof Uint8Array) ||
+    (sub !== null && typeof sub !== "string") || typeof cmd !== "string" ||
+    !Array.isArray(pol) || !(nonce instanceof Uint8Array) ||
     (exp !== null && typeof exp !== "number") ||
     (nbf !== undefined && typeof nbf !== "number")
   ) {
@@ -284,8 +301,9 @@ export async function decodeDelegation(bytes: Uint8Array): Promise<Delegation> {
   const payload: DelegationPayload = {
     iss: iss as DIDKey,
     aud: aud as DIDKey,
-    sub: sub as DIDKey,
+    sub: sub as DIDKey | null,
     cmd,
+    pol,
     nonce,
     exp,
     ...(nbf === undefined ? {} : { nbf }),

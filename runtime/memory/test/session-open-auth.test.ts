@@ -623,6 +623,7 @@ describe("verifySessionOpenProofs", () => {
       aud: alice.did(),
       sub: space.did(),
       cmd: "/memory",
+      pol: [],
       ...fields,
     });
   const onwardDelegation = (
@@ -632,6 +633,7 @@ describe("verifySessionOpenProofs", () => {
       aud: bob.did(),
       sub: space.did(),
       cmd: "/memory/session.open",
+      pol: [],
       ...fields,
     });
 
@@ -780,6 +782,13 @@ describe("verifySessionOpenProofs", () => {
     ).rejects.toThrow("proof 0 is over another space");
   });
 
+  it("throws for a proof that names no subject", async () => {
+    const root = await rootDelegation({ sub: null });
+    await expect(
+      verifySessionOpenProofs(signedOpen([root]), proofOptions()),
+    ).rejects.toThrow("proof 0 names no subject");
+  });
+
   it("throws for a proof whose command does not cover opening a session", async () => {
     const root = await rootDelegation({ cmd: "/memory/transact" });
     await expect(
@@ -811,6 +820,7 @@ describe("verifySessionOpenProofs", () => {
       aud: bob.did(),
       sub: space.did(),
       cmd: "/memory",
+      pol: [],
     });
     await expect(
       verifySessionOpenProofs(

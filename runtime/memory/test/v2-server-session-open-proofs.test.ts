@@ -192,6 +192,7 @@ const spaceToAlice = () =>
     aud: alice.did(),
     sub: space.did(),
     cmd: "/memory",
+    pol: [],
   });
 
 const aliceToBob = () =>
@@ -199,6 +200,7 @@ const aliceToBob = () =>
     aud: bob.did(),
     sub: space.did(),
     cmd: "/memory",
+    pol: [],
   });
 
 describe("v2-server-session-open-proofs", () => {
@@ -382,6 +384,7 @@ describe("v2-server-session-open-proofs", () => {
         aud: alice.did(),
         sub: space.did(),
         cmd: "/memory",
+        pol: [],
         exp: clock.now + 100,
       });
       const opened = await openSession(harness, alice.did(), [expiring]);
@@ -441,6 +444,7 @@ describe("v2-server-session-open-proofs", () => {
         aud: alice.did(),
         sub: space.did(),
         cmd: "/memory",
+        pol: [],
         exp: clock.now + 100,
       });
 

@@ -399,6 +399,11 @@ export const verifySessionOpenProofs = async (
       throw proofError(`proof ${i} is not the delegation \`prf\` names`);
     }
     const { payload } = delegation;
+    // UCAN allows a delegation over any subject; this server admits only
+    // one over the space being opened.
+    if (payload.sub === null) {
+      throw proofError(`proof ${i} names no subject`);
+    }
     if (payload.sub !== options.space) {
       throw proofError(`proof ${i} is over another space`);
     }

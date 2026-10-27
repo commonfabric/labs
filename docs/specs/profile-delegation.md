@@ -203,9 +203,12 @@ interface DelegationPayload {
 }
 ```
 
-The delegation a profile issues at creation has `iss` and `sub` both the
-profile DID, `aud` the core identity, `cmd` of `/memory`, an empty `pol`,
-and `exp` of `null`. It has no expiry because the key that could renew it is
+The codec's payload type carries every field above as UCAN defines it, `sub`
+nullable and `pol` an array included, so an issuer sets `pol` to `[]` and
+the verifier refuses anything else; the shape stays closed while the type
+stays UCAN's. The delegation a profile issues at creation has `iss` and
+`sub` both the profile DID, `aud` the core identity, `cmd` of `/memory`, an
+empty `pol`, and `exp` of `null`. It has no expiry because the key that could renew it is
 destroyed. It is the one delegation most users ever hold for a profile, and
 it is what makes "open the profile as myself" work.
 
