@@ -3125,7 +3125,8 @@ export class UnknownValue extends BaseFabricInstance {
   to.)
 - When re-encoding an `UnknownValue`, its codec's `tagForValue()` reads
   back the preserved tag and `encode()` returns the preserved bare state,
-  reproducing the original wire format byte-for-byte.
+  reproducing the original wire format byte-for-byte where it arrived as the
+  text the encoder writes (Sections 6 and 11 of `3-json-encoding.md`).
 - This allows data to round-trip through systems that don't understand it.
 
 ### 3.5 `ProblematicValue` (Recommended)
@@ -3841,8 +3842,8 @@ The implementation is split across several files for separation of concerns:
 ## 5. JSON Encoding for Special Types
 
 The JSON encoding for `FabricValue`s — the `/<Type>@<Version>` wire format,
-type encodings, escaping mechanisms, and the `/`-key reservation rule — is
-specified in a dedicated document:
+type encodings, escaping mechanisms, the `/`-key reservation rule, and the
+canonical text an encoder writes — is specified in a dedicated document:
 
 **See [`3-json-encoding.md`](./3-json-encoding.md)**
 

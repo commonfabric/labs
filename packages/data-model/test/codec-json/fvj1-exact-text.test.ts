@@ -9,10 +9,10 @@
  * against which the package's conformance fixtures are checked, so a text
  * taken from the codec would let it vouch for itself.
  *
- * The specification says no more of JSON than that it is JSON, which leaves a
- * number or a string more than one way to be written. The texts here hold the
- * one ECMAScript's `JSON.stringify()` writes, as ECMA-262 defines it: a number
- * by `Number::toString`, and a string by `QuoteJSONString`.
+ * The specification fixes the text and not only its structure: Section 11 of
+ * `3-json-encoding.md` gives each number and each string one way to be
+ * written, and the body no whitespace between its tokens, and Section 10 gives
+ * a record one order of keys.
  */
 
 import { describe, it } from "@std/testing/bdd";
