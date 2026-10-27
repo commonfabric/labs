@@ -256,12 +256,13 @@ as finished. `interrupted` counts as finished and cannot be continued.
 **A steered job's result.** It is the last result the model submitted. When a
 steer arrives after the model has already called `submit_result` and a
 model turn remains, the run does not stop: the model reads the steer and may
-submit again, which replaces
-the result. If it does not submit again, the earlier result stands. When no
-turn remains, the run ends with the submitted result, and the steer opens
-the follow-up. A steered
-job's `commands` hold every command of the run, and its `report` covers the
-whole run. Steers spend model turns from the job's own `maxModelTurns`.
+submit again, which replaces the result. If it does not submit again, the
+earlier result stands. When no turn remains, the run ends with the submitted
+result, and the steer opens the follow-up. A steer adds a reason to keep
+going and removes none: a run that still owes a piece keeps going after an
+accepted result, steered or not, as it does today. A steered job's
+`commands` hold every command of the run, and its `report` covers the whole
+run. Steers spend model turns from the job's own `maxModelTurns`.
 
 **A follow-up's result.** A follow-up is a job in full. Its result is
 validated against the schema of the job it follows, and its `commands` and
@@ -316,8 +317,13 @@ messages.
   evals of what it tells the model. These are ordinary transcript messages,
   not turn-local notices, so they stay in the resumable history.
 - The loop also calls it before each of its exits: a final text answer, an
-  accepted `submit_result` under `stopOnStructuredResult`, and an admitted
-  task ending. It does so only while a model turn remains. If the call
+  accepted `submit_result`, and an admitted task ending. These are the
+  points where the loop would end today, so an accepted result from a run
+  that still owes a piece is not an exit. The loop calls it only while a
+  model turn remains, and only while the run's signal has not aborted. At a
+  tool-batch exit, it takes and appends the messages before the turn's
+  checkpoint, so the checkpoint holds every message the run goes on to
+  answer. If the call
   returns anything, the loop takes another turn instead of ending. On the
   last permitted turn the loop ends without calling it, so a message
   arriving then stays waiting and opens the follow-up.
