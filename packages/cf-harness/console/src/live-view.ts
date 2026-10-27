@@ -1374,13 +1374,15 @@ const rowView = (
   meta: unknown,
   detail: readonly (TemplateResult | typeof nothing)[],
 ): TemplateResult => {
-  const head = html`<span
+  const head = html`
+    <span
       class="live-dot ${status}"
       role="img"
       aria-label=${status}
     ></span><span
       class="live-text"
-    >${text}</span><span class="live-meta">${meta}</span>`;
+    >${text}</span><span class="live-meta">${meta}</span>
+  `;
   return detail.every((part) => part === nothing)
     ? html`<div class="live-row">${head}</div>`
     : html`

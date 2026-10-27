@@ -1,5 +1,5 @@
 [tools]
-deno = "2.9.4"
+deno = "2.9.8"
 
 # The pin is all this file does. A tools-only file loads without `mise trust`,
 # so a fresh worktree needs no step before `deno` resolves. `cf` on PATH is
