@@ -5,10 +5,10 @@
  * against the fixture rather than against this package's code.
  *
  * Each case is a value or a text, and the fixture states it as a text, with
- * the mods to decoding it that `test/fixtures/hash-conformance.md` defines,
- * and records what decoding it does: the value it returns, stated by probes
- * in the vocabulary `test/fixtures/value-probes.md` defines, or the refusal;
- * then the text that value re-encodes to. Probes state a value without a
+ * the mods to decoding it, and records what decoding it does: the value it
+ * returns, stated by probes, or the refusal; then the text that value
+ * re-encodes to. `test/fixtures/value-probes.md` defines the mods and the
+ * probes. Probes state a value without a
  * reader having to build one, or to compare two by an equality that agrees
  * with this package's.
  *
@@ -81,8 +81,8 @@ export type Fvj1Outcome =
 
 /**
  * One conformance case: a value, made fresh by `make`, or a text. The fixture
- * states a value as the text the spec gives it and mods, so either way a case
- * is decoded, and what it decodes to is re-encoded.
+ * states a value as its canonical text and mods, so either way a case is
+ * decoded, and what it decodes to is re-encoded.
  *
  * `section` names the part of the formal spec the case exercises.
  * `divergence` is a note on what the format requires, for a case where this

@@ -21,12 +21,12 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
 - `name`: unique among the cases.
 - `section`: the part of the spec the case exercises.
 - `text`: the text to decode. For a case that starts from a value, it is the
-  text the spec gives the value, with record keys in the UTF-8 order section 10
-  of the spec requires.
+  value's canonical text, with record keys in the UTF-8 order section 10 of the
+  spec requires, and `null` wherever a patch puts what no text carries.
 - `unclaimed` and `patches`: the mods to decoding `text`, present where the case
-  needs them, as [`hash-conformance.md`](hash-conformance.md) defines them. They
-  state what no text carries: a cycle, a symbol of no registry key, or a value
-  of a type no codec claims under a tag one does.
+  needs them, as [`value-probes.md`](value-probes.md) defines them. Among the
+  cases they state symbols of no registry key; none of the cases needs
+  `unclaimed`.
 - `probes` or `refused`: what decoding `text` with the mods yields. `probes`
   states the value it returns, in the vocabulary
   [`value-probes.md`](value-probes.md) defines. `refused` says why the text is

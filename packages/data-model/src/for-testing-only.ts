@@ -25,10 +25,8 @@
  * `test/fixtures/hash-conformance.json` are generated from: language-neutral
  * records of what this package's JSON codec and hasher do, against which an
  * implementation of either elsewhere tests itself. Both write each value as an
- * `fvj1:` text with the mods to decoding it, as
- * `test/fixtures/hash-conformance.md` defines, and the JSON codec's states
- * what a decode returns by probes, in the vocabulary
- * `test/fixtures/value-probes.md` defines.
+ * `fvj1:` text with the mods to decoding it, and the JSON codec's states what
+ * a decode returns by probes, as `test/fixtures/value-probes.md` defines.
  *
  * An internal is here when a test of the package's public surface cannot reach
  * it dependably. Each one's doc comment says why that is.

@@ -7,7 +7,7 @@
  * does with it: the bytes it feeds SHA-256, the digest, and the digest's string
  * form, or the refusal. A value is written as its `fvj1:` text, with the mods
  * to decoding it that state what no text carries, as
- * `test/fixtures/hash-conformance.md` defines. Generating the fixture fails
+ * `test/fixtures/value-probes.md` defines. Generating the fixture fails
  * when they do not decode to the value the case made. Where this package's
  * decoder refuses a text the spec allows, a divergence has to say so.
  *

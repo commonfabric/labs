@@ -1,44 +1,73 @@
-# Value probes
+# Paths, mods and probes
 
-The conformance fixture beside this file, `fvj1-conformance.json`, states what
-decoding a text returns as a list of probes rather than as a value. A probe is a
-pair `[path, expected]`: a path into the value, and what a reader finds there. A
-reader decodes the text, walks the value it gets, and compares what it finds
-with the probes. It never builds the expected value, and never compares two
-values by an equality of its own, which is the subtle part of the spec.
-[`fvj1-conformance.md`](fvj1-conformance.md) describes the fixture itself.
+The two conformance fixtures beside this file share a notation, which this
+document defines. Both write each value as its `fvj1:` text, with mods to
+decoding it that state what no text carries. `fvj1-conformance.json` then states
+what decoding the text returns as a list of probes, each a path into the value
+paired with what a reader finds there.
+[`fvj1-conformance.md`](fvj1-conformance.md) and
+[`hash-conformance.md`](hash-conformance.md) describe the fixtures themselves,
+and `src/conformance-fixtures.ts`, in `packages/data-model`, writes and reads
+this notation.
 
-`src/conformance-fixtures.ts`, in `packages/data-model`, writes the probes.
+## Paths
 
-## Completeness
+A path is a list of steps from the root, `[]` being the root itself. A number
+steps into an array at that index. A string steps into a record under that key,
+or into an instance under the name of one of its fields, as [Shapes](#shapes)
+lists them. `{"utf16": [...]}` steps under a key holding a lone surrogate, as
+its UTF-16 code units, since not every JSON reader keeps one.
+
+A path runs through the value, not the wire. On the wire an `Error`'s extras sit
+beside its `message`, and a link's payload is the whole of its state, but the
+paths into them are `["extras", "code"]` and `["payload", "id"]`.
+
+## Mods
+
+Some values have no text, or none that decodes to them unaided. Two mods state
+what the text cannot:
+
+- `unclaimed`: wire tags, in UTF-8 order and each once. Decode the text as
+  though no codec claimed them, so that a value under one decodes as an unknown
+  value preserving its tag and state, as it would for a reader that has no codec
+  for the tag. Only a tag a class claims is named here. The four that the format
+  itself decides, `BigInt@1`, `SpecialNumber@1`, `Symbol@1` and `Undefined@1`,
+  never are, so an unknown value under one of those has no text and mods.
+- `patches`: changes made to the decoded value, each `{"at": path, "put": …}`.
+  The path runs through the arrays and records of the decoded text, and the text
+  holds a `null` where it ends, which the patch replaces. `put` is one of:
+  - `{"cycle": path}`: the array or record at that path, which closes a cycle.
+    The path is absolute, from the root, and is a proper prefix of `at`.
+  - `{"unregisteredSymbol": description}`: a symbol of no registry key, under
+    that description, a string, or `null` for none.
+
+  Follow every path before making any patch, so that no path runs into what a
+  patch put. No two patches share a path.
+
+## Probes
+
+A probe is a pair `[path, expected]`: a path into a decoded value, and what a
+reader finds there. A reader decodes the text, walks the value it gets, and
+compares what it finds with the probes. It never builds the expected value, and
+never compares two values by an equality of its own, which is the subtle part of
+the spec.
+
+### Completeness
 
 The probes of a value are complete: there is one for every node of the value, so
 a reader may take a missing probe as a missing node. An array index with no
 probe is a hole, and an instance field with no probe is an optional field the
 value lacks.
 
-The one exception is a path where a patch puts a value, as
-[`hash-conformance.md`](hash-conformance.md) defines patches. The patch is what
-states that part of the value, so there is no probe at its path or under it. A
-cycle and a symbol of no registry key are stated that way, and have no probe.
+The one exception is a path where a patch puts a value. The patch is what states
+that part of the value, so there is no probe at its path or under it. A cycle
+and a symbol of no registry key are stated that way, and have no probe.
 
 A node's probe comes before the probes of what it holds, which run in index
 order in an array, in UTF-8 order of key in a record, and in the order of the
 table below in an instance. Each path appears once.
 
-## Paths
-
-A path is a list of steps from the root, `[]` being the root itself. A number
-steps into an array at that index. A string steps into a record under that key,
-or into an instance under the name of one of its fields; `{"utf16": [...]}`
-steps under a key holding a lone surrogate, as its UTF-16 code units, since not
-every JSON reader keeps one.
-
-Paths follow the value, not the wire. On the wire an `Error`'s extras sit beside
-its `message`, and a link's payload is the whole of its state, but the paths
-into them are `["extras", "code"]` and `["payload", "id"]`.
-
-## What a probe expects
+### What a probe expects
 
 What a probe expects is a leaf or a shape. Each is JSON, read this way: a number
 is an IEEE 754 double, so `1` and `1.0` are equal, and an integer past 2^53 is
@@ -46,7 +75,7 @@ written in the shortest form that reads back as its double and must be read as
 that double, not as an exact integer; and a string is equal to another with the
 same code points, compared without normalization.
 
-### Leaves
+#### Leaves
 
 `null`, `true`, `false`, and a finite number other than negative zero stand for
 themselves. A string stands for itself when it holds no lone surrogate. Every
@@ -70,7 +99,7 @@ A string inside a leaf is written as a path's string step is, as itself or as
 `{"utf16": [...]}`. An `Unavailable` holds an `errorMessage` only where one is
 stored, a kind's default message not being one.
 
-### Shapes
+#### Shapes
 
 An array, a record, or an instance is probed by its shape, and what it holds is
 probed under it:
@@ -101,7 +130,7 @@ shape.
 `Map@1` and `Set@1` have no probes, and none of the cases holds one, their
 codecs being stubs pending general `FabricInstance` support.
 
-## An example
+### An example
 
 The text
 `fvj1:{"/Error@1":{"code":7,"message":"boom","name":null,"type":"TypeError"}}`

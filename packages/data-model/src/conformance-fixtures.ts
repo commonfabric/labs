@@ -5,10 +5,9 @@
  * reads a fixture through those.
  *
  * A value is written as its `fvj1:` text, with the mods to decoding it that
- * state what no text carries, which `test/fixtures/hash-conformance.md`
- * defines. What a decode returns is checked by probes, paths into the value
- * paired with what a reader finds at each, in the vocabulary
- * `test/fixtures/value-probes.md` defines.
+ * state what no text carries. What a decode returns is checked by probes,
+ * paths into the value paired with what a reader finds at each.
+ * `test/fixtures/value-probes.md` defines the paths, the mods and the probes.
  *
  * A value's descriptor is this package's own: JSON saying everything about the
  * value that the formats carry, by which the generators compare two values.
@@ -231,8 +230,8 @@ function asciiJsonOf(value: ValueDescriptor): string {
 
 /**
  * Returns `value` written as an `fvj1:` text and the mods to decoding it,
- * which {@link fabricValueOfTextWithMods} reads back. The text is the one the
- * spec gives, with record keys in the UTF-8 order section 10 of
+ * which {@link fabricValueOfTextWithMods} reads back. The text is the value's
+ * canonical text, with record keys in the UTF-8 order section 10 of
  * `3-json-encoding.md` requires: what {@link plainJsonTextOf} writes, for a
  * value it writes a text for, and otherwise this package's encoding with its
  * keys put in that order. The first of those covers a record holding a key
