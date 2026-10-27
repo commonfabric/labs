@@ -43,6 +43,7 @@ import {
   classCasesOf,
   type ExampleMakers,
   fabricValueOfTextWithMods,
+  type FixtureJson,
   fixtureTextOf,
   plainJsonTextOf,
   probedPathsOf,
@@ -51,7 +52,6 @@ import {
   STUB_CODEC_EXCLUSION,
   type TextWithMods,
   textWithModsOf,
-  type ValueDescriptor,
   type ValuePath,
   type ValueProbe,
 } from "./conformance-fixtures.ts";
@@ -782,9 +782,9 @@ function refusalOrRethrow<Refusal>(
 /** Returns the fixture entry for one case. */
 function fixtureEntryOf(
   conformanceCase: Fvj1ConformanceCase,
-): Record<string, ValueDescriptor> {
+): Record<string, FixtureJson> {
   const { name, section, divergence } = conformanceCase;
-  const implementation: Record<string, ValueDescriptor> = {};
+  const implementation: Record<string, FixtureJson> = {};
 
   // Records this package's outcome where it differs from the spec's, which
   // only a divergence permits.
@@ -873,7 +873,7 @@ function fixtureEntryOf(
     }
   }
 
-  const entry: Record<string, ValueDescriptor> = {
+  const entry: Record<string, FixtureJson> = {
     name,
     section,
     ...stated,

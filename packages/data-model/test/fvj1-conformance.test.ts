@@ -79,6 +79,64 @@ function decodedOf(
 }
 
 /**
+ * Returns a line for each child of a probed array or record that `probes`
+ * leave unaccounted for: an array index with neither a probe nor a hole run
+ * over it, or a record whose count of keys differs from its count of probed
+ * keys. A path a patch in `patches` names stands for the child there.
+ */
+function unprobedChildrenOf(
+  probes: readonly ValueProbe[],
+  patches: readonly ValuePatch[] = [],
+): string[] {
+  const keyOf = (path: ValuePath) => JSON.stringify(path);
+  const expectedAt = new Map(probes.map(([path, expected]) => [
+    keyOf(path),
+    expected,
+  ]));
+  const patched = new Set(patches.map(({ at }) => keyOf(at)));
+  const keyCounts = new Map<string, number>();
+  for (
+    const path of [
+      ...probes.map(([path]) => path),
+      ...patches.map((p) => p.at),
+    ]
+  ) {
+    if (path.length > 0 && typeof path[path.length - 1] !== "number") {
+      const parent = keyOf(path.slice(0, -1));
+      keyCounts.set(parent, (keyCounts.get(parent) ?? 0) + 1);
+    }
+  }
+
+  const lines: string[] = [];
+  for (const [path, expected] of probes) {
+    if (typeof expected === "string") {
+      continue;
+    } else if ("array" in expected) {
+      let index = 0;
+      while (index < expected.array) {
+        const at = keyOf([...path, index]);
+        const found = expectedAt.get(at);
+        if (typeof found === "object" && "holes" in found) {
+          index += found.holes;
+          continue;
+        } else if (found === undefined && !patched.has(at)) {
+          lines.push(`no probe at ${at}`);
+        }
+        index++;
+      }
+    } else if ("record" in expected) {
+      const count = keyCounts.get(keyOf(path)) ?? 0;
+      if (count !== expected.record) {
+        lines.push(
+          `${count} keys probed under ${keyOf(path)}, not ${expected.record}`,
+        );
+      }
+    }
+  }
+  return lines;
+}
+
+/**
  * Returns what an entry says this package's encoder does with the value its
  * text decodes to.
  */
@@ -109,6 +167,21 @@ describe("fvj1-conformance", () => {
         name,
         outcome: fvj1DecodeOutcomeOfForTestingOnly(statedOf(entry)),
       }).toEqual({ name, outcome: decodedOf(entry) });
+    }
+  });
+
+  it("accounts for each child of each array and record its probes describe", () => {
+    for (const { name, probes, patches, divergence } of entries) {
+      const decode = divergence?.decode;
+      const ours = (decode !== undefined && "probes" in decode)
+        ? decode.probes
+        : undefined;
+      for (const stated of [probes, ours]) {
+        if (stated !== undefined) {
+          expect({ name, unprobed: unprobedChildrenOf(stated, patches) })
+            .toEqual({ name, unprobed: [] });
+        }
+      }
     }
   });
 
@@ -293,7 +366,7 @@ describe("fvj1-conformance", () => {
           text: "fvj1:[1,null]",
           patches: [{ at: [1], put: { unregisteredSymbol: "s" } }],
         }),
-      ).toEqual({ probes: [[[], { array: 2 }], [[0], 1]] });
+      ).toEqual({ probes: [[[], { array: 2 }], [[0], "fvj1:1"]] });
     });
 
     it("throws mods that break their rules rather than returning a refusal", () => {

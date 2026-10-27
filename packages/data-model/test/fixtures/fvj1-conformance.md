@@ -49,14 +49,16 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
 A reader checks an entry in three steps:
 
 1. Decode `text`, applying the mods.
-2. Compare the result with `probes`, walking the decoded value; or, where the
-   entry has `refused`, check that the decode was refused.
+2. Check the result against `probes`, walking the decoded value, as
+   [`value-probes.md`](value-probes.md) describes; or, where the entry has
+   `refused`, check that the decode was refused.
 3. Re-encode the decoded value, and compare the text with `canonical` where the
    entry has it, and with `text` otherwise; or, where the entry has `reencode`,
    check that the encode was refused.
 
-The probes are complete, and the re-encode catches anything a decoder adds that
-a walk of its own value might not visit.
+The probes fix the structure, the fragments fix each leaf, and the re-encode
+fixes the whole, catching anything a decoder adds that a walk of its own value
+might not visit.
 
 A refusal is recorded only where the codec refused; a fault in the codec fails
 generation instead.

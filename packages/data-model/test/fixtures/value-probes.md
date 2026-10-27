@@ -4,7 +4,8 @@ The two conformance fixtures beside this file share a notation, which this
 document defines. Both write each value as its `fvj1:` text, with mods to
 decoding it that state what no text carries. `fvj1-conformance.json` then states
 what decoding the text returns as a list of probes, each a path into the value
-paired with what a reader finds there.
+paired with what a reader finds there. Every value the notation names is written
+in `fvj1:` itself; there is no second notation for values.
 [`fvj1-conformance.md`](fvj1-conformance.md) and
 [`hash-conformance.md`](hash-conformance.md) describe the fixtures themselves,
 and `src/conformance-fixtures.ts`, in `packages/data-model`, writes and reads
@@ -14,9 +15,10 @@ this notation.
 
 A path is a list of steps from the root, `[]` being the root itself. A number
 steps into an array at that index. A string steps into a record under that key,
-or into an instance under the name of one of its fields, as [Shapes](#shapes)
-lists them. `{"utf16": [...]}` steps under a key holding a lone surrogate, as
-its UTF-16 code units, since not every JSON reader keeps one.
+or into an instance under the name of one of its fields, as
+[Special forms](#special-forms) lists them. `{"utf16": [...]}` steps under a key
+holding a lone surrogate, as its UTF-16 code units, since not every JSON reader
+keeps one.
 
 A path runs through the value, not the wire. On the wire an `Error`'s extras sit
 beside its `message`, and a link's payload is the whole of its state, but the
@@ -48,70 +50,53 @@ what the text cannot:
 ## Probes
 
 A probe is a pair `[path, expected]`: a path into a decoded value, and what a
-reader finds there. A reader decodes the text, walks the value it gets, and
-compares what it finds with the probes. It never builds the expected value, and
-never compares two values by an equality of its own, which is the subtle part of
-the spec.
+reader finds there. A string `expected` is a fragment, the `fvj1:` text of a
+leaf. An object `expected` is a special form, which says what a fragment does
+not. A reader decodes the text, walks the value it gets, and checks it against
+the probes.
 
-### Completeness
+### Fragments
 
-The probes of a value are complete: there is one for every node of the value, so
-a reader may take a missing probe as a missing node. An array index with no
-probe is a hole, and an instance field with no probe is an optional field the
-value lacks.
+A leaf is a node with no steps under it: `null`, a boolean, a number, a string,
+`undefined`, a symbol, a bigint, or a value of a primitive type, such as
+`Bytes@1`, a temporal quantity, `Hash@1`, `KeyPair@1`, `RegExp@1` or
+`Unavailable@1`. Only a leaf has a fragment, and every leaf has one, unless a
+patch states it.
 
-The one exception is a path where a patch puts a value. The patch is what states
-that part of the value, so there is no probe at its path or under it. A symbol
-of no registry key, and a cycle through arrays and records alone, are stated
-that way, and have no probe. A cycle through an instance has no text and mods.
+A fragment is the leaf's canonical `fvj1:` text, written on its own, prefix and
+all, with record keys in the UTF-8 order section 10 of
+[`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
+requires: `"fvj1:{\"/BigInt@1\":\"BQ\"}"` for the bigint `5n`. Being written on
+its own and canonically, it need not appear in the entry's `text` as is: a text
+that is not canonical can write `fvj1:100` as `1.0E2`. Decode a fragment
+applying the case's `unclaimed`, if any, but never its `patches`, whose paths
+start at the root of the whole value.
 
-A node's probe comes before the probes of what it holds, which run in index
-order in an array, in UTF-8 order of key in a record, and in the order of the
-table below in an instance. Each path appears once.
+There are two ways to check a fragment, and a reader may take either:
 
-### What a probe expects
+1. Decode the fragment, and compare what it decodes to with the node, by
+   whatever identity the reader's own model of values gives. Mind `NaN`, which
+   may not equal itself, and `-0`, which may equal `0`.
+2. Encode the node, canonically and on its own, and compare the text with the
+   fragment. This needs no equality of values.
 
-What a probe expects is a leaf or a shape. Each is JSON, read this way: a number
-is an IEEE 754 double, so `1` and `1.0` are equal, and an integer past 2^53 is
-written in the shortest form that reads back as its double and must be read as
-that double, not as an exact integer; and a string is equal to another with the
-same code points, compared without normalization.
+### Special forms
 
-#### Leaves
-
-`null`, `true`, `false`, and a finite number other than negative zero stand for
-themselves. A string stands for itself when it holds no lone surrogate. Every
-other leaf is an object with one key, naming the kind of value:
-
-| Leaf                                        | Value                                                                                    |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `{"utf16": [55296, 97]}`                    | A string holding a lone surrogate, as its UTF-16 code units.                             |
-| `{"number": "-0"}`                          | Negative zero, or with `NaN`, `+Infinity` or `-Infinity`, those.                         |
-| `{"undefined": null}`                       | `undefined`.                                                                             |
-| `{"bigint": "-129"}`                        | A bigint, in decimal.                                                                    |
-| `{"symbol": "key"}`                         | The symbol registered under a key.                                                       |
-| `{"Bytes": "0102"}`                         | Bytes, in lowercase hexadecimal.                                                         |
-| `{"EpochNsec": "1700"}`                     | Likewise `EpochDay`, `DurationNsec` and `DurationDay`: the quantity, in decimal.         |
-| `{"Hash": {"tag": "fid1", "hash": "00ff"}}` | A hash: its algorithm tag, and its bytes in hexadecimal.                                 |
-| `{"KeyPair": {...}}`                        | A key pair: `algorithm`, and `publicKey` and `privateKey` in hexadecimal.                |
-| `{"RegExp": {...}}`                         | A regular expression: `flavor`, `source` and `flags`.                                    |
-| `{"Unavailable": {...}}`                    | Unavailable data: `reason`, and `errorKind` and `errorMessage` where the value has them. |
-
-A string inside a leaf is written as a path's string step is, as itself or as
-`{"utf16": [...]}`. An `Unavailable` holds an `errorMessage` only where one is
-stored, a kind's default message not being one.
-
-#### Shapes
-
-An array, a record, or an instance is probed by its shape, and what it holds is
-probed under it:
-
-| Shape                     | Value                                                                              |
+| Form                      | Says                                                                               |
 | ------------------------- | ---------------------------------------------------------------------------------- |
-| `{"array": 4}`            | An array of that length. An index with no probe is a hole.                         |
-| `{"record": ["a", "b"]}`  | A plain object with those keys, in UTF-8 order, each written as a path's step is.  |
+| `{"array": 4}`            | An array, of that length.                                                          |
+| `{"record": 2}`           | A plain object, with that many keys.                                               |
+| `{"holes": 3}`            | That many holes in an array, from the index the path ends at.                      |
 | `{"instance": "Link@1"}`  | An instance of the type the format writes under that tag, its fields probed below. |
 | `{"unknown": "Future@2"}` | A value of a type no codec claims, preserving that tag. Its one field is `state`.  |
+
+A run of holes is probed at its first index, and runs are as long as possible:
+an array of a million holes is one probe. A hole has no fragment, since
+`{"/hole": 1}` alone is malformed.
+
+`unknown` is kept apart from `instance` because a reader can't tell the two from
+a tag alone: another implementation may claim a tag this package does not, or
+the reverse.
 
 An instance's fields are these, in this order:
 
@@ -122,17 +107,53 @@ An instance's fields are these, in this order:
 | `Problematic@1` | `tag`, `state`, and `error`.                                            |
 
 The open-ended part of an instance is always a field holding a record, so its
-keys come from a record shape. An `Error`'s `extras` is probed even when it is
-empty, which tells it apart from an absent optional field, and its `name` is the
-error's name even where the wire writes `null` for a name equal to the type. A
-link's payload is opaque to the formats: its fields are whatever the link's
+keys are probed as a record's are. An `Error`'s `extras` is probed even when it
+is empty, which tells it apart from an absent optional field, and its `name` is
+the error's name even where the wire writes `null` for a name equal to the type.
+A link's payload is opaque to the formats: its fields are whatever the link's
 users define, and the payloads in the cases are examples rather than a required
 shape.
 
 `Map@1` and `Set@1` have no probes, and none of the cases holds one, their
 codecs being stubs pending general `FabricInstance` support.
 
-### An example
+### Completeness
+
+The probes of a value are complete. Every array, record and instance has its
+special form, every leaf its fragment, and every run of holes its probe. Each
+index of an array has a probe of its own or lies in a run of holes, and an index
+with neither is an error in the fixture, not an implied hole. Each record has a
+probe for each of its keys.
+
+The one exception is a path where a patch puts a value. The patch is what states
+that part of the value, so there is no probe at its path or under it, and the
+reader counts the index or key it names as present. The arrays and records on
+the way to it keep their special forms. A symbol of no registry key, and a cycle
+through arrays and records alone, are stated that way, and have no probe. A
+cycle through an instance has no text and mods.
+
+A path has one probe. A node's probe comes before the probes of what it holds:
+an array's elements and runs of holes in index order, a record's keys in UTF-8
+order, and an instance's fields in the order of the table above.
+
+## Checking with a codec of known behavior
+
+Checking a fragment either way takes a codec, and the codec being tested can't
+vouch for itself, since a fault on both sides of a comparison cancels out. A
+reader's test codec is therefore validated without the fixtures, in one of two
+ways:
+
+- A codec written for the test alone, as simple as checking fragments allows,
+  whose correctness can be seen in its code.
+- The codec under test, with unit tests that do not use the fixtures and that
+  pin, value by value, the texts that matter.
+
+This package takes the second way. Its unit tests of the JSON codec, in
+`test/codec-json/`, and of each class's codec pin texts without the fixtures.
+`test/fvj1-conformance.test.ts` then checks each fragment by encoding the node,
+which needs no equality of values.
+
+## An example
 
 The text
 `fvj1:{"/Error@1":{"code":7,"message":"boom","name":null,"type":"TypeError"}}`
@@ -141,10 +162,10 @@ has these probes:
 ```json
 [
   [[], { "instance": "Error@1" }],
-  [["type"], "TypeError"],
-  [["name"], "TypeError"],
-  [["message"], "boom"],
-  [["extras"], { "record": ["code"] }],
-  [["extras", "code"], 7]
+  [["type"], "fvj1:\"TypeError\""],
+  [["name"], "fvj1:\"TypeError\""],
+  [["message"], "fvj1:\"boom\""],
+  [["extras"], { "record": 1 }],
+  [["extras", "code"], "fvj1:7"]
 ]
 ```

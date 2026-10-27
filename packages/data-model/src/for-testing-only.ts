@@ -57,14 +57,14 @@ import {
   FabricUnavailable,
 } from "@/fabric-primitives";
 import {
-  descriptorOf,
   fabricValueOfTextWithMods,
+  type FixtureJson,
+  type FixtureString,
   type PathStep,
+  type ProbeForm,
   probesOf,
-  type StringDescriptor,
   type TextWithMods,
   textWithModsOf,
-  type ValueDescriptor,
   type ValuePatch,
   type ValuePath,
   type ValueProbe,
@@ -282,28 +282,20 @@ export const FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
 });
 
 export type {
+  FixtureJson,
+  FixtureString,
   Fvj1ConformanceCase,
   Fvj1Outcome,
   Fvj1Refusal,
   HashConformanceCase,
   HashOutcome,
   PathStep,
-  StringDescriptor,
+  ProbeForm,
   TextWithMods,
-  ValueDescriptor,
   ValuePatch,
   ValuePath,
   ValueProbe,
 };
-
-/**
- * `descriptorOf()` from `conformance-fixtures.ts`, which returns a value's
- * descriptor: JSON of everything about the value that the formats carry, so
- * that two values with equal descriptors are ones no format tells apart.
- */
-export const descriptorOfForTestingOnly: (
-  value: FabricValue,
-) => ValueDescriptor = descriptorOf;
 
 /**
  * `probesOf()` from `conformance-fixtures.ts`, which returns a value's probes,

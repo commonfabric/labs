@@ -84,9 +84,8 @@ where by comparing streams.
 
 Each case makes its value in TypeScript, and generating writes the text and mods
 from it. The value they decode to must be the one made: the same hash, and
-`valueEqual()` to it, or for a value whose hashing is refused, the same
-descriptor, the JSON by which `src/conformance-fixtures.ts` says everything
-about a value the formats carry. Where this package's decoder refuses the text,
+`valueEqual()` to it, or for a value whose hashing is refused, a value whose own
+text and mods are the case's. Where this package's decoder refuses the text,
 that check is the divergence's to answer for, and the test hashes the value as
 the case made it instead.
 
