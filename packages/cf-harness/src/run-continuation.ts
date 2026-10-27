@@ -15,6 +15,43 @@ import {
   tableForNextTurn,
 } from "./turn-history.ts";
 
+/** Why recorded history cannot seed a new root run, when it cannot. */
+const continuationRefusal = (
+  { runState, transcript = [] }: {
+    runState: HarnessRunState;
+    transcript?: readonly HarnessTranscriptMessage[];
+  },
+): string | undefined => {
+  const binding = runState.promptSlotBinding;
+  if (
+    binding?.valueDigest !== undefined || binding?.slotDigest !== undefined ||
+    binding?.snapshotDigest !== undefined
+  ) {
+    return "`--continue-run` cannot continue a digest-bound prompt-slot binding: " +
+      "`valueDigest`, `slotDigest`, and `snapshotDigest` bind one exact prompt value.";
+  }
+  if (runState.lineage?.role === "subagent") {
+    return `Cannot continue subagent run ${runState.runId} as a top-level run`;
+  }
+  const boundary = inspectHarnessTranscriptPairing(transcript).safeBoundary;
+  // Opening instructions alone do not attest a completed model turn or tool
+  // batch. A first unpaired call therefore leaves nothing to continue.
+  if (
+    !transcript.slice(0, boundary).some((message) =>
+      message.role === "assistant" || message.role === "tool"
+    )
+  ) return `continue run ${runState.runId} has no complete checkpoint`;
+  return undefined;
+};
+
+/** Whether the recorded artifacts contain history a follow-up can start from. */
+export const canContinueHarnessRun = (
+  artifacts: {
+    runState: HarnessRunState;
+    transcript?: readonly HarnessTranscriptMessage[];
+  },
+): boolean => continuationRefusal(artifacts) === undefined;
+
 /**
  * Preserves model history and its authority record while giving every output
  * and lifecycle record a new run id. The source object is never modified.
@@ -34,31 +71,14 @@ export const prepareHarnessContinuation = (options: {
   structuredResult?: CfHarnessStructuredResultConfig;
 } => {
   const prior = options.runState;
-  const binding = prior.promptSlotBinding;
-  if (
-    binding?.valueDigest !== undefined || binding?.slotDigest !== undefined ||
-    binding?.snapshotDigest !== undefined
-  ) {
-    throw new Error(
-      "`--continue-run` cannot continue a digest-bound prompt-slot binding: " +
-        "`valueDigest`, `slotDigest`, and `snapshotDigest` bind one exact prompt value.",
-    );
-  }
+  const refusal = continuationRefusal(options);
+  if (refusal !== undefined) throw new Error(refusal);
   if (prior.handleTable !== undefined) {
     assertValidHarnessHandleTable(prior.handleTable);
   }
   const source = options.transcript ?? [];
   const boundary = inspectHarnessTranscriptPairing(source).safeBoundary;
   const checkpoint = source.slice(0, boundary);
-  // Opening instructions alone do not attest a completed model turn or tool
-  // batch. A first unpaired call therefore leaves nothing to continue.
-  if (
-    !checkpoint.some((message) =>
-      message.role === "assistant" || message.role === "tool"
-    )
-  ) {
-    throw new Error(`continue run ${prior.runId} has no complete checkpoint`);
-  }
   let transcript = checkpoint.filter((message) =>
     message.role !== "user" || !message.turnLocal
   );

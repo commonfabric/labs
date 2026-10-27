@@ -2081,10 +2081,13 @@ Every refusal is `{ok: false, code, error}`:
 | 400    | `unknown_profile`       | A follow-up would open now under a profile no longer named.      |
 | 409    | `idempotency_conflict`  | The caller's key already names another request or route.         |
 
-The production harness wiring is pending: its lane keeps steering disabled and
-its runs do not yet report continuation checkpoints. The store and API support
-follow-ups and delivery through a runner that supplies these seams. A message
-after a cancel request can wait regardless of steering capability.
+The local harness lane takes messages at model-turn boundaries. A finished job
+with a recorded checkpoint can open a follow-up, whose new harness run carries
+the predecessor's history and handles. Each conversation uses its first job's
+workspace; each job keeps its own artifacts and result file. A follow-up's
+instructions and context replace its system framing. A message after a cancel
+request waits for a follow-up. Jobs without a complete checkpoint cannot be
+continued.
 
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an

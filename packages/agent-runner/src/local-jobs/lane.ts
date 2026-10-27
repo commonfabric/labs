@@ -18,6 +18,7 @@
 import { join } from "@std/path";
 
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
+import { debugStr } from "@commonfabric/data-model";
 import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import type { ACL } from "@commonfabric/memory/acl";
@@ -87,7 +88,7 @@ export interface LocalJobLaneOptions {
     identityKeyPath: string,
   ) => Promise<ACL | null>;
 
-  /** Whether `runJob` takes messages at turn boundaries; false when absent. */
+  /** Whether `runJob` takes messages; defaults to true for the built-in runner. */
   steering?: boolean;
 
   /** Runs one job; `runHarnessJob` unless a test replaces it. */
@@ -138,7 +139,7 @@ const foreignSpacesOf = async (
  * and the space of each one living outside the profile's is admitted for the
  * run on the host the request's `foreignSpaces` names for it; `narrowLocalJobProfile` has already refused them
  * under a profile with no fabric session. A follow-up's `continueFrom` names
- * its predecessor's run root under the lane's `workRoot`.
+ * the harness artifact root recorded in its predecessor's `report.runRef`.
  *
  * SHORTCUT: context reaches the model inside the system prompt, marked as
  * data rather than instructions, because a batch job has one prompt slot and
@@ -146,7 +147,7 @@ const foreignSpacesOf = async (
  * To harden, give the harness a prompt slot of role `quote` for caller data.
  *
  * @throws Error when the profile's identity key cannot be read.
- * @throws Error when a follow-up is given without `workRoot`.
+ * @throws Error when a follow-up's predecessor has no recorded `runRef`.
  */
 export const localJobSpecOf = async (
   job: LocalJob,
@@ -156,10 +157,12 @@ export const localJobSpecOf = async (
       LocalJobLaneOptions,
       "loomRetrievalConfigPath" | "model" | "readSpaceAcl" | "report"
     >
-    & Partial<Pick<LocalJobLaneOptions, "workRoot">>,
+    & { predecessorRunRef?: string },
 ): Promise<HarnessJobSpec> => {
-  if (job.continues !== undefined && options.workRoot === undefined) {
-    throw new Error("A follow-up requires the lane's work root.");
+  if (job.continues !== undefined && !options.predecessorRunRef) {
+    throw new Error(
+      "Cannot continue a predecessor without a recorded `report.runRef`.",
+    );
   }
   const { request } = job;
   const { fabric } = profile;
@@ -175,7 +178,7 @@ export const localJobSpecOf = async (
   ];
   return {
     ...(job.continues !== undefined
-      ? { continueFrom: { runRoot: join(options.workRoot!, job.continues) } }
+      ? { continueFrom: { runRoot: options.predecessorRunRef! } }
       : {}),
     task: request.task,
     ...(request.imageAttachments !== undefined
@@ -384,7 +387,7 @@ export class LocalJobLane {
 
   /** Whether this lane's runs can take messages during a run. */
   canSteer(): boolean {
-    return this.#options.steering === true;
+    return this.#options.steering ?? this.#options.runJob === undefined;
   }
 
   /**
@@ -509,12 +512,27 @@ export class LocalJobLane {
     };
     let result: HarnessJobResult;
     try {
+      let root = job;
+      while (root.continues !== undefined) {
+        const predecessor = store.get(root.continues);
+        if (predecessor === undefined) {
+          throw new Error("Cannot find the conversation's predecessor job.");
+        }
+        root = predecessor;
+      }
+      const runRef = job.continues === undefined
+        ? undefined
+        : store.get(job.continues)?.report?.runRef;
       result = await (this.#options.runJob ?? runHarnessJob)(
-        await localJobSpecOf(job, narrowed.profile, this.#options),
+        await localJobSpecOf(job, narrowed.profile, {
+          ...this.#options,
+          predecessorRunRef: typeof runRef === "string" ? runRef : undefined,
+        }),
         {
           runRoot: join(this.#options.workRoot, job.id),
+          workspace: join(this.#options.workRoot, root.id, "workspace"),
           signal,
-          ...(this.#options.steering === true
+          ...(this.canSteer()
             ? {
               takeMessages: (turn: number) => store.takeMessages(job.id, turn),
             }
@@ -588,7 +606,13 @@ export class LocalJobLane {
           error instanceof Error ? error.message : String(error)
         }`
       );
-      result = { outcome: "failed", errorCode: "PROVIDER_FAILURE" };
+      result = {
+        outcome: "failed",
+        errorCode: "PROVIDER_FAILURE",
+        errorDetail: error instanceof Error
+          ? error.message
+          : debugStr`${error}`,
+      };
     }
     this.#closeHost(job.id);
     // A run the lane's own stop aborted stays `running`, to be ended

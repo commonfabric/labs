@@ -20,6 +20,7 @@ import {
   PROFILE_UNAVAILABLE,
 } from "../../src/local-jobs/lane.ts";
 import { createLocalJobApi } from "../../src/local-jobs/api.ts";
+import { scriptedJob } from "../fixtures/scripted-job.ts";
 import { browserChild, delegatedBrowse } from "./fixtures/delegated-browse.ts";
 
 import type { LocalJobProfile } from "../../src/local-jobs/profiles.ts";
@@ -125,7 +126,21 @@ const laneWith = (
         const run = {
           spec,
           options: jobOptions,
-          settle: resolve,
+          settle: (result: HarnessJobResult) =>
+            resolve({
+              ...result,
+              ...(result.recordedRun === true
+                ? {
+                  report: {
+                    runRef: join(
+                      jobOptions.runRoot,
+                      "artifacts",
+                      "scripted-run",
+                    ),
+                  },
+                }
+                : {}),
+            }),
           fail: reject,
         };
         runs.push(run);
@@ -151,6 +166,45 @@ const laneWith = (
 };
 
 describe("local-jobs/lane", () => {
+  it("fails a follow-up without a predecessor run reference before calling the model", async () => {
+    const store = LocalJobStore.open(":memory:");
+    const firstId = idOf(store.enqueue("cfs:weaver", "ask", "first", REQUEST));
+    store.claimNext();
+    store.finish(firstId, {
+      state: "completed",
+      recordedRun: true,
+      result: {},
+    });
+    const accepted = store.acceptMessage(firstId, {
+      caller: "cfs:weaver",
+      idempotencyKey: "next",
+      message: "Continue",
+    }, { canSteer: true });
+    if (!("job" in accepted)) {
+      throw new Error("message refused");
+    }
+    const script = scriptedJob(() => {
+      throw new Error("model must not run");
+    });
+    const lane = new LocalJobLane({
+      store,
+      profiles: new Map([["ask", ASK]]),
+      maxConcurrent: 1,
+      workRoot: "/unused/missing-predecessor-test",
+      harnessDeps: script.deps,
+    });
+    try {
+      lane.kick();
+      const job = await reached(store, accepted.job.id, "failed");
+      expect(job.state).toBe("failed");
+      expect(store.events(job.id).at(-1)?.body.errorDetail).toContain("runRef");
+      expect(script.requests).toHaveLength(0);
+    } finally {
+      await lane.stop();
+      store.close();
+    }
+  });
+
   describe("messages", () => {
     const message = (key: string) => ({
       caller: "cfs:weaver",
@@ -180,7 +234,9 @@ describe("local-jobs/lane", () => {
         const second = await nextRun(1);
         expect(second.spec).toMatchObject({
           task: "B",
-          continueFrom: { runRoot: join("/work/local", id) },
+          continueFrom: {
+            runRoot: join("/work/local", id, "artifacts", "scripted-run"),
+          },
         });
         expect(await second.options.takeMessages!(1)).toEqual(["C"]);
         const nextId = store.get(id)!.continuedBy!;
