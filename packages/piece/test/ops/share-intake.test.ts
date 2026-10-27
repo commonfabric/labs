@@ -455,6 +455,12 @@ describe("share-intake", () => {
       ?.["registration-conflict"]?.warn ?? 0;
   }
 
+  /** How many offers the intake has logged as sent to Home. */
+  function sentLogged(): number {
+    return getLoggerCountsBreakdown()["piece.share-intake"]
+      ?.["offer-sent"]?.info ?? 0;
+  }
+
   /**
    * Has Home's stand-in hold a receipt for the sender's offer of `space`
    * keyed `id`, and say, as Home's `sharedSpaces.profiles` does, that the
@@ -606,6 +612,7 @@ describe("share-intake", () => {
     it("is registered with its sender, `id`, `kind`, `host` and `title`", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       start();
+      const before = sentLogged();
       await deliver([offerOf(space, "first")]);
 
       expect(await registeredThrough("first")).toEqual([{
@@ -615,6 +622,7 @@ describe("share-intake", () => {
         title: "Room first",
         offer: { from: sender, id: "first" },
       }]);
+      expect(sentLogged()).toBe(before + 1);
     });
 
     it("is registered with the space of the profile its `toProfile` names as `profile`", async () => {
@@ -1096,6 +1104,7 @@ describe("share-intake", () => {
     it("is sent once, though the inbox changes again after it", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       start();
+      const before = sentLogged();
       await deliver([offerOf(space, "once")]);
       await registeredThrough("once");
       await deliver([offerOf(space, "after")]);
@@ -1104,6 +1113,8 @@ describe("share-intake", () => {
         "once",
         "after",
       ]);
+      // One line per send, not per scan that saw the row.
+      expect(sentLogged()).toBe(before + 2);
     });
   });
 
