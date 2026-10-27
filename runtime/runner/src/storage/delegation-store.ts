@@ -80,6 +80,10 @@ export class DelegationStore {
     let fallback: Delegation[] | undefined;
     // Depth-first from the principal back toward a root: `chain` holds the
     // links found so far, last audience first, and is reversed on return.
+    // The search is exhaustive, and that is enough: a runtime holds few
+    // delegations over any one space, a chain is at most
+    // `MAX_PROOF_CHAIN_LENGTH` long, and a delegation is tried at most once
+    // per chain, so the work stays small without an algorithm that scales.
     const search = (
       audience: string,
       chain: Delegation[],
