@@ -204,8 +204,9 @@ export function startShareIntakeOf(
  * `piece.share-intake`, with its reason, and so is a `conflict` Home's handler
  * returns for a row it was sent. A failure to read what vetting needs, other
  * than a refusal of access, leaves the row to be vetted when its inbox next
- * changes; so does a space whose kind the host cannot tell. Nothing consumes
- * an offer or deletes it.
+ * changes; so does a space whose kind the host cannot tell. A row sent to
+ * Home is logged at info (`offer-sent`), so the logger's counts tell a send
+ * from a scan that sent nothing. Nothing consumes an offer or deletes it.
  *
  * Registration is Home's handler's, so an offer already registered under
  * another sender or `id` leaves the entry as it is, archived or not, and adds
@@ -630,6 +631,7 @@ export class ShareIntake {
       ]);
       return;
     }
+    logger.info("offer-sent", () => [`Sent Home the offer ${receipt}`]);
     this.#decide(row, raw, "sent");
     this.#pending.add(pending);
     void pending.finally(() => this.#pending.delete(pending));

@@ -2725,8 +2725,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   /**
    * Whether the runtime owns the store at `id` in `space` — named by an
    * authorized whole-document
-   * `CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE` marker on this
-   * transaction, or enrolled by a previous {@link enrollRuntimeOwnedStore}.
+   * `CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE` or
+   * `CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE` marker on this transaction,
+   * or enrolled by a previous {@link enrollRuntimeOwnedStore}.
    *
    * Scope is not an argument — every scoped instance of one causal id is an
    * instance of the same cell.
@@ -2749,6 +2750,19 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Takes the same authorization as {@link isRuntimeOwnedStore}.
    */
   isEnrolledRuntimeOwnedStore(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean;
+
+  /**
+   * Returns whether eligible runtime-owned writes retain misfits only in
+   * derived labels: a live enrollment or an authenticated piece-setup claim
+   * on this transaction. Generic one-shot markers keep their declaration
+   * behavior.
+   * Takes the same authorization as {@link isRuntimeOwnedStore}.
+   */
+  usesDerivedRuntimeOwnedStoreLabels(
     space: string,
     id: string,
     authorization?: RuntimeWritePolicyAuthorization,

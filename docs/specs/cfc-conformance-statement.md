@@ -363,8 +363,9 @@ dials.
   scoped principal is unavailable. No foreign-space clause or unbound
   `User` clause is added. Full derived labels still persist and taint readers;
   no declaration or frozen existence label is released.
-- Under strict, an authorized runtime-owned store with a live enrollment admits
-  eligible writer-fit misfits and records them only in the derived component.
+- Under strict, an authorized runtime-owned store with a live enrollment or
+  an authenticated piece-setup claim admits eligible writer-fit misfits and
+  records them only in the derived component.
   This is a slice of the proposed §8.12.5 change in
   [specs#78](https://github.com/commonfabric/specs/pull/78), not the pinned
   rule: the pin requires declaring those misfits, so a later clean overwrite can
@@ -372,14 +373,16 @@ dials.
   proposal ahead of its ruling; the specification dependency remains open until
   the ruling and pin are reconciled. Against the proposal, the
   authored-declaration, read-failed and foreign-container refusals remain
-  fail-closed residuals. A transaction-local marker without a live enrollment
-  still takes the pinned declaration route. This includes a setup committed
-  while its stores have no live enrollment, as in
-  `PiecesController.setupPersistent()`, which commits a new piece's setup
-  without starting its nodes. `Runtime.run(tx, ...)` enrolls the stores before
-  the caller's commit, so its setup writes can take the derived-only route.
-  One-shot handoffs and marker-only anchored children retain the declaration
-  ratchet. Existing declarations and frozen existence stamps remain. Clean
+  fail-closed residuals. Piece setup supplies a separate transaction-local
+  claim for its argument, result and internal stores, so
+  `PiecesController.setupPersistent()` can commit their setup with derived-only
+  persistence before starting the piece. This claim establishes no lifetime
+  enrollment and grants no authority to a later transaction. A generic
+  transaction-local ownership marker alone still takes the pinned declaration
+  route: one-shot handoffs and marker-only anchored children retain that
+  ratchet. Lazy scoped-default seeding on a later transaction before enrollment
+  also retains the generic marker and declaration route. Existing declarations
+  and frozen existence stamps remain. Clean
   creation records no empty existence entry, so even a path created clean keeps
   the first labeled write's existence label after a clean overwrite. No
   automatic data repair is performed. See

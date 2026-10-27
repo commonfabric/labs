@@ -268,6 +268,7 @@ import {
   validateSchemaValue,
 } from "./cfc/schema-sanitization.ts";
 import {
+  CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type ImplementationIdentity,
@@ -1506,7 +1507,7 @@ const recordSetupProjectionPolicyInputs = (
 };
 
 /**
- * Name `substrate` as a store the runtime owns for `resultCell`'s piece — its
+ * Names `substrate` as a store the runtime owns for `resultCell`'s piece — its
  * result document, its argument document, or an internal document or stream
  * its result projects to. The result document is the one address on the route
  * an author chose rather than the runtime derived, so a schema declaring at a
@@ -1527,13 +1528,22 @@ const recordSetupProjectionPolicyInputs = (
  * The marker carries the runtime's authorization, which is what the fit check
  * asks for: the method that records it is reachable from anything holding a
  * cell, so an unmarked marker naming the same document counts for nothing. It
- * names the store for THIS transaction; the enrollment that carries the claim
- * into later ones is {@link enrollPieceOwnedStores}.
+ * names the store for this transaction only.
+ *
+ * `claim` defaults to generic ownership, whose eligible misfits are declared
+ * unless the store is enrolled. Setup selects the piece-setup claim to keep
+ * eligible misfits in derived labels for this transaction. Neither marker
+ * enrolls a store: {@link enrollPieceOwnedStores} separately establishes the
+ * ownership that later transactions use while the piece runs.
  */
 const recordRuntimeOwnedStore = (
   tx: IExtendedStorageTransaction,
   resultCell: Cell<any>,
   substrate: NormalizedFullLink,
+  claim:
+    | typeof CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE
+    | typeof CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE =
+      CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
 ): void => {
   const result = resultCell.getAsNormalizedFullLink();
   tx.recordCfcWritePolicyInput({
@@ -1544,7 +1554,7 @@ const recordRuntimeOwnedStore = (
       scope: substrate.scope,
       path: [...substrate.path],
     },
-    claim: CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
+    claim,
     sources: [{
       space: result.space,
       id: result.id,
@@ -1620,8 +1630,9 @@ const stampDeferredStart = (
 };
 
 /**
- * Name this piece's stores for the transaction setting it up. Setup fills them
- * in the transaction that names them, so the marker is all it needs.
+ * Names this piece's stores for the transaction setting it up. Setup fills them
+ * in the transaction that names them. Their setup claim keeps misfits in
+ * derived labels without enrolling a graph that has not started.
  */
 const markPieceOwnedStores = (
   tx: IExtendedStorageTransaction,
@@ -1637,7 +1648,12 @@ const markPieceOwnedStores = (
     ? undefined
     : patternManager.programModuleIdentities(entry.identity);
   for (const store of pieceOwnedStores(tx, resultCell, pattern)) {
-    recordRuntimeOwnedStore(tx, resultCell, store);
+    recordRuntimeOwnedStore(
+      tx,
+      resultCell,
+      store,
+      CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
+    );
     // This transaction is a release of the piece: the marker the release
     // rules key on. A pattern defined in a module no evaluation ran as its
     // main (a nested piece defined in a dependency) has no program recorded,
@@ -10368,8 +10384,8 @@ export class Runner {
             });
             rootRead = true;
           }
-          // The graph has not enrolled its stores yet. This seed carries the
-          // same ownership claim as setup through the ordinary writer-fit gate.
+          // The graph has not enrolled its stores yet. This lazy seed keeps
+          // the generic ownership claim and its declaration behavior.
           recordRuntimeOwnedStore(tx, owner, derivedLink);
           setResultCell(derived, owner.asSchema(instance.pattern.resultSchema));
           const value = fabricFromConvertibleJsValue(schemaDefault);

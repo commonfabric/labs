@@ -131,6 +131,14 @@ Two different meanings, two different behaviors:
   `unsupportedTrustSensitiveReason`; also `collection`, `opaque`,
   `recomposeProjections`, `combinedFrom`, `transformation`, `addedIntegrity`).
   Reference behaviors stay reachable via per-path labels and links (§2, §4).
+- **A label list declared as anything but a list fails closed** — a write
+  through a schema declaring `confidentiality`, `integrity`, `addIntegrity`,
+  `requiredIntegrity` or `maxConfidentiality` as anything but a list, or a UI
+  contract whose `requiredEventIntegrity` is not a list, is rejected with
+  `malformed <key>` by the same check. Its readers skip such a list or crash on
+  it, so it would otherwise go unenforced (§8.10.3). An LLM tool's input schema
+  is held to the same rule: a `maxConfidentiality` or `requiredIntegrity` there
+  that is not a list refuses the call.
 - **Authoring surface / runtime mismatch — reconciled** _(2026-07-10)_. The
   helper types that lowered to still-unimplemented keys were **removed** —
   `SubsetOf` / `FilteredFrom` / `LengthPreservedFrom` / `PermutationOf`

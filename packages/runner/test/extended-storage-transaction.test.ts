@@ -26,6 +26,7 @@ import type {
 import { CFC_GRANT_ID_PREFIX } from "../src/cfc/grants.ts";
 import { RuntimeOwnedStores } from "../src/cfc/runtime-owned-stores.ts";
 import {
+  CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   runtimeWritePolicyAuthorization,
@@ -468,6 +469,11 @@ describe("extended-storage-transaction", () => {
           "of:authorized",
           runtimeWritePolicyAuthorization,
         )).toBe(false);
+        expect(tx.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:authorized",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
       } finally {
         await tx.commit().settled;
       }
@@ -525,6 +531,198 @@ describe("extended-storage-transaction", () => {
       }
     });
   });
+
+  describe("a piece-setup store's derived labels", () => {
+    const input = (id: string) => ({
+      kind: "structural-provenance",
+      target: { space, id, scope: "space", path: [] },
+      claim: CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
+      sources: [{ space, id: "of:owner", scope: "space", path: [] }],
+    } as const);
+
+    it("marks through a wrapper without enrolling the store", async () => {
+      const tx = runtime.edit();
+      const wrapper = createNonReactiveTransaction(tx);
+      try {
+        wrapper.recordCfcWritePolicyInput(
+          input("of:setup"),
+          runtimeWritePolicyAuthorization,
+        );
+        for (const reader of [tx, wrapper]) {
+          expect(reader.isRuntimeOwnedStore(
+            space,
+            "of:setup",
+            runtimeWritePolicyAuthorization,
+          )).toBe(true);
+          expect(reader.usesDerivedRuntimeOwnedStoreLabels(
+            space,
+            "of:setup",
+            runtimeWritePolicyAuthorization,
+          )).toBe(true);
+          expect(reader.isEnrolledRuntimeOwnedStore(
+            space,
+            "of:setup",
+            runtimeWritePolicyAuthorization,
+          )).toBe(false);
+          expect(reader.usesDerivedRuntimeOwnedStoreLabels(space, "of:setup"))
+            .toBe(false);
+          expect(reader.usesDerivedRuntimeOwnedStoreLabels(
+            space,
+            "of:another-store",
+            runtimeWritePolicyAuthorization,
+          )).toBe(false);
+        }
+      } finally {
+        await tx.commit().settled;
+      }
+    });
+
+    it("does not grant ownership to an unauthorized setup claim", async () => {
+      const tx = runtime.edit();
+      try {
+        tx.recordCfcWritePolicyInput(input("of:unauthorized-setup"));
+        expect(tx.isRuntimeOwnedStore(
+          space,
+          "of:unauthorized-setup",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        expect(tx.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:unauthorized-setup",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+      } finally {
+        await tx.commit().settled;
+      }
+    });
+
+    it("does not grant ownership from an owner in another space", async () => {
+      const otherSpace = (await Identity.fromPassphrase("setup-other-space"))
+        .did();
+      const tx = runtime.edit();
+      try {
+        tx.recordCfcWritePolicyInput({
+          ...input("of:foreign-owner"),
+          sources: [{
+            space: otherSpace,
+            id: "of:owner",
+            scope: "space",
+            path: [],
+          }],
+        }, runtimeWritePolicyAuthorization);
+        expect(tx.isRuntimeOwnedStore(
+          space,
+          "of:foreign-owner",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        expect(tx.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:foreign-owner",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+      } finally {
+        await tx.commit().settled;
+      }
+    });
+
+    it("does not grant ownership to a claim for part of a document", async () => {
+      const tx = runtime.edit();
+      try {
+        tx.recordCfcWritePolicyInput({
+          ...input("of:partly-setup"),
+          target: {
+            space,
+            id: "of:partly-setup",
+            scope: "space",
+            path: ["value"],
+          },
+        }, runtimeWritePolicyAuthorization);
+        expect(tx.isRuntimeOwnedStore(
+          space,
+          "of:partly-setup",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        expect(tx.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:partly-setup",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+      } finally {
+        await tx.commit().settled;
+      }
+    });
+
+    it("does not grant ownership to a claim without an owner", async () => {
+      const tx = runtime.edit();
+      try {
+        tx.recordCfcWritePolicyInput({
+          ...input("of:ownerless-setup"),
+          sources: [],
+        }, runtimeWritePolicyAuthorization);
+        expect(tx.isRuntimeOwnedStore(
+          space,
+          "of:ownerless-setup",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        expect(tx.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:ownerless-setup",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+      } finally {
+        await tx.commit().settled;
+      }
+    });
+
+    for (const outcome of ["commit", "abort"] as const) {
+      it(`does not carry setup ownership beyond ${outcome}`, async () => {
+        // Setup grants last for their transaction; subsequent writes need a
+        // live piece's enrollment rather than a remembered setup claim.
+        const first = runtime.edit();
+        first.recordCfcWritePolicyInput(
+          input("of:setup-earlier"),
+          runtimeWritePolicyAuthorization,
+        );
+        expect(first.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:setup-earlier",
+          runtimeWritePolicyAuthorization,
+        )).toBe(true);
+        expect(first.isEnrolledRuntimeOwnedStore(
+          space,
+          "of:setup-earlier",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        if (outcome === "commit") {
+          await first.commit().settled;
+        } else {
+          first.abort();
+        }
+
+        const later = runtime.edit();
+        try {
+          expect(later.isRuntimeOwnedStore(
+            space,
+            "of:setup-earlier",
+            runtimeWritePolicyAuthorization,
+          )).toBe(false);
+          expect(later.usesDerivedRuntimeOwnedStoreLabels(
+            space,
+            "of:setup-earlier",
+            runtimeWritePolicyAuthorization,
+          )).toBe(false);
+          expect(later.isEnrolledRuntimeOwnedStore(
+            space,
+            "of:setup-earlier",
+            runtimeWritePolicyAuthorization,
+          )).toBe(false);
+        } finally {
+          await later.commit().settled;
+        }
+      });
+    }
+  });
+
   describe("the enrollment of a store the runtime owns", () => {
     // The enrollment answers for the whole runtime rather than for one
     // transaction, which is what carries it to the reactive updates and
@@ -561,6 +759,11 @@ describe("extended-storage-transaction", () => {
             runtimeWritePolicyAuthorization,
           ),
         ).toBe(true);
+        expect(later.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:enrolled",
+          runtimeWritePolicyAuthorization,
+        )).toBe(true);
       } finally {
         await later.commit().settled;
       }
@@ -626,6 +829,15 @@ describe("extended-storage-transaction", () => {
         expect(
           wrapper.isEnrolledRuntimeOwnedStore(space, "of:through-a-wrapper"),
         ).toBe(false);
+        expect(wrapper.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:through-a-wrapper",
+          runtimeWritePolicyAuthorization,
+        )).toBe(true);
+        expect(wrapper.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:through-a-wrapper",
+        )).toBe(false);
       } finally {
         await tx.commit().settled;
       }

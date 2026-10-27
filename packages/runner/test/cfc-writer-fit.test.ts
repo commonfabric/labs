@@ -4581,7 +4581,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       }
     });
 
-    it("retains declarations on transaction-marked stores written by setup", async () => {
+    it("keeps setup-only writes in derived labels before the graph enrolls them", async () => {
       // Drives the production recorder rather than the marker the tests
       // above hand-record: `setup` marks the argument document and each
       // internal document its result projects to, and a first setup inside
@@ -4620,6 +4620,11 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           resultCell,
           seamPattern.derivedInternalCells[0],
         ).id;
+        expect(tx.isEnrolledRuntimeOwnedStore(
+          signer.did(),
+          internalId,
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
         tx.prepareCfc();
         expect((await tx.commit().settled).ok).toBeDefined();
 
@@ -4629,15 +4634,142 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
               entry.origin === "declared" &&
               entry.label.confidentiality?.includes("secret")
             ),
-          ).toBe(true);
+          ).toBe(false);
           expect(
             replicaEntries(storageManager, id).filter((entry) =>
               entry.origin === "derived" && entry.observes === "value" &&
               (entry.label.confidentiality ?? []).includes("secret")
             ).length,
-          ).toBe(0);
+          ).toBeGreaterThan(0);
         }
       } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("starts a stored setup in a fresh runtime without retaining a later value's label", async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = strictRuntime(storageManager);
+      const resumed = strictRuntime(storageManager);
+      try {
+        const pattern = await runtime.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: `/// <cts-enable />
+              import { pattern, Writable } from "commonfabric";
+              export default pattern<{ title: string }>(() => {
+                const savedTitle = Writable.of("");
+                return { savedTitle };
+              });`,
+          }],
+        }, { space: signer.did() });
+        await runtime.patternManager.flushCompileCacheWrites();
+        await seedSecretSource(runtime, "setup-creation-source", ["creation"]);
+        await seedSecretSource(runtime, "setup-value-source", ["value-only"]);
+        const setup = runtime.edit();
+        const initial = runtime.getCell(
+          signer.did(),
+          "setup-creation-source",
+          undefined,
+          setup,
+        ).getRaw() as { secret: string };
+        const result = runtime.getCell(
+          signer.did(),
+          "setup-cold-piece",
+          seamResultSchema,
+          setup,
+        );
+        await runtime.setup(setup, pattern, { title: initial.secret }, result);
+        expect(pattern.derivedInternalCells).toHaveLength(1);
+        const link = getDerivedInternalCellLink(
+          result,
+          pattern.derivedInternalCells![0],
+        );
+        expect(setup.isEnrolledRuntimeOwnedStore(
+          signer.did(),
+          link.id,
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        setup.prepareCfc();
+        expect((await setup.commit().settled).error).toBeUndefined();
+        expect(storedDocument(storageManager, link.id)?.value).toBe("");
+        // A second setup changes the existing argument under another label,
+        // still without starting the piece or enrolling any store.
+        const argumentId = parseLink(result.getMetaRaw("argument"), result)!
+          .id!;
+        const valueLink = { ...link, id: argumentId, path: ["title"] };
+        const labeledSetup = runtime.edit();
+        const value = runtime.getCell(
+          signer.did(),
+          "setup-value-source",
+          undefined,
+          labeledSetup,
+        ).getRaw() as { secret: string };
+        await runtime.setup(
+          labeledSetup,
+          pattern,
+          { title: `${value.secret}-updated` },
+          result.withTx(labeledSetup),
+        );
+        labeledSetup.prepareCfc();
+        expect((await labeledSetup.commit().settled).error).toBeUndefined();
+        expect(labeledSetup.isEnrolledRuntimeOwnedStore(
+          signer.did(),
+          argumentId,
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        await runtime.storageManager.synced();
+
+        // A second runtime knows the piece only by its stored identity.
+        const coldResult = resumed.getCell(
+          signer.did(),
+          "setup-cold-piece",
+          seamResultSchema,
+        );
+        await coldResult.sync();
+        expect(await resumed.start(coldResult)).toBe(true);
+        await resumed.idle();
+
+        const copyToCreationCeiling = async (suffix: string) => {
+          const reader = resumed.edit();
+          const seen = resumed.getCellFromLink(valueLink).withTx(reader)
+            .getRaw();
+          const sink = resumed.getCell(
+            signer.did(),
+            `setup-reader-${suffix}`,
+            declaring("creation"),
+            reader,
+          );
+          sink.set({ copied: String(seen) });
+          reader.prepareCfc();
+          return { seen, committed: await reader.commit().settled };
+        };
+        const before = await copyToCreationCeiling("labeled");
+        expect(before.seen).toBe("s3cr3t-updated");
+        expect(before.committed.error?.message).toContain('"value-only"');
+
+        const clean = resumed.edit();
+        resumed.getCellFromLink(valueLink).withTx(clean).set("public");
+        clean.prepareCfc();
+        expect((await clean.commit().settled).error).toBeUndefined();
+        const after = await copyToCreationCeiling("clean");
+        expect(after.seen).toBe("public");
+        expect(after.committed.error).toBeUndefined();
+        const entries = replicaEntries(storageManager, argumentId);
+        expect(entries.filter((entry) => entry.origin === "declared")).toEqual(
+          [],
+        );
+        expect(
+          entries.filter((entry) =>
+            entry.observes === "shape" &&
+            entry.path.join("/") === "title"
+          )
+            .flatMap((entry) => entry.label.confidentiality ?? []),
+        ).toEqual(["creation"]);
+      } finally {
+        await resumed.dispose();
         await runtime.dispose();
         await storageManager.close();
       }
@@ -4745,7 +4877,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
     });
 
     for (const origin of ["declared", "derived"] as const) {
-      it(`retains a ${origin} result label in a new update store declaration`, async () => {
+      it(`carries a ${origin} result label into a new update store as derived data`, async () => {
         const storageManager = StorageManager.emulate({ as: signer });
         const runtime = strictRuntime(storageManager);
         try {
@@ -4831,6 +4963,10 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           const entries = replicaEntries(storageManager, addedId);
           expect(entries.some((entry) =>
             entry.origin === "declared" &&
+            entry.label.confidentiality?.includes("retained-source")
+          )).toBe(false);
+          expect(entries.some((entry) =>
+            entry.origin === "derived" &&
             entry.label.confidentiality?.includes("retained-source")
           )).toBe(true);
           if (origin === "declared") {
@@ -4981,7 +5117,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         const entries = replicaEntries(storageManager, argumentId);
         expect(
           entries.some((entry) =>
-            entry.origin === "declared" &&
+            entry.origin === "derived" && entry.observes === "value" &&
             (entry.label.confidentiality ?? []).includes("secret")
           ),
         ).toBe(true);

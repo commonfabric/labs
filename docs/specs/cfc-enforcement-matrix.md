@@ -529,21 +529,25 @@ The strict-only delta is:
   cells and streams; for a builtin's node-owned state and per-event state; and
   for values anchored out of those documents. An authorized ownership marker
   admits a writer-fit misfit on these stores under the conditions below. The
-  persistence rule depends on the claim's lifetime. For a store with a live
-  enrollment, the flow-stamp pass records the write's confidentiality in its
-  `derived` component alone; admission adds no `declared` entry. A store named
-  only by a transaction-local marker still takes §8.12.5 option 2: the write
+  persistence rule depends on the claim's provenance and lifetime. For a store
+  with a live enrollment or an authenticated piece-setup claim, the flow-stamp
+  pass records the write's confidentiality in its `derived` component alone;
+  admission adds no `declared` entry. A store named only by a generic
+  transaction-local ownership marker still takes §8.12.5 option 2: the write
   declares a covering policy in the same transaction. That declaration adds
   clauses, never alternatives, and preserves existing declared clauses.
 
-  The enrolled-store rule implements a slice of the persistence change in
+  The enrolled-store and piece-setup rule implements a slice of the change in
   [specs#78](https://github.com/commonfabric/specs/pull/78), §8.12.5. The pinned
   specification still requires option 2's declaration on these stores; the
   strict default implements this slice ahead of its ruling. The specification
   dependency remains open until the ruling and pin are reconciled. There is no
-  `SPEC-PENDING` marker: the three-slot budget is full, and this entry and the
-  conformance statement record the authorized exception. The marker count is
-  therefore not a complete inventory of semantic gaps. The proposal
+  separate `SPEC-PENDING` marker or default-off dial: the three-slot budget is
+  full. This is a nonconforming semantic gap and does not satisfy step 4 of the
+  correspondence procedure. @danfuzz has authorized proceeding ahead of specs;
+  that permission does not supply a ruling or amend the procedure. This entry
+  and the conformance statement record the gap. The marker count is therefore
+  not a complete inventory of semantic gaps. The proposal
   admits more writes than this implementation: existing authored-declaration,
   read-failed and foreign-container refusals remain fail-closed residuals
   against the proposal.
@@ -563,24 +567,30 @@ The strict-only delta is:
 
   The route runs on every write while the runtime's ownership claim holds. At
   strict it records `writer-fit(runtime-owned-store-derived)` for an enrolled
-  store and `writer-fit(runtime-owned-store-declared)` for a marker-only store,
+  store or authenticated piece setup, and
+  `writer-fit(runtime-owned-store-declared)` for a generic marker-only store,
   naming the document, path and misfit. Lower rungs retain their
   `writer-fit(persist-and-flag)` diagnostic and derived stamps. Admission
   changes no sink ceiling: a builtin that stages an effect still needs its own
   sink gate, as described below.
 
-  The choice follows live enrollment when writer-fit prepares the commit.
-  `Runtime.run(tx, ...)` instantiates and enrolls the piece's stores on the
-  caller's transaction before it commits, so its setup writes can take the
-  derived-only route. A setup committed while its stores have no live
-  enrollment retains the declaration route: for example,
+  Piece setup records a separate authenticated claim for its argument, result
+  and internal stores on the transaction preparing them. That claim selects
+  derived-only persistence even when setup commits before the nodes start:
   [`PiecesController.setupPersistent()`](../../packages/piece/src/ops/pieces-controller.ts)
-  commits a new piece's setup without starting its nodes. One-shot handoffs
-  such as agent run records and marker-only anchored children also retain that
-  route and its ratchet. A child does not gain an enrollment merely because its
-  parent has one. The declared entries on these writes still pass through the
-  cross-space metadata protection used for flow-derived labels. Later authored
-  clients of a one-shot handoff continue to use its stored policy.
+  is one such path. It creates no lifetime enrollment and carries no authority
+  into the next transaction. Starting the piece establishes the live enrollment
+  its later writes use.
+
+  Generic one-shot handoffs, including agent run records, refused-slot copies
+  and marker-only anchored children, retain the declaration route and its
+  ratchet. A child does not inherit its parent's setup claim or enrollment.
+  Anchoring records generic ownership for the child, so its eligible misfits
+  remain declared. The declared entries on these writes still pass through the cross-space
+  metadata protection used for flow-derived labels. Later authored clients of
+  a one-shot handoff continue to use its stored policy. Lazy scoped-default
+  seeding on a later transaction also keeps the generic marker; before graph
+  enrollment, those writes can still declare a misfit.
 
   What bounds the route:
 
@@ -621,7 +631,8 @@ The strict-only delta is:
     churning list ever held. A store minted per event takes the marker alone
     for the same reason. Both carry the runtime's authorization, and both
     are refused for an address naming part of a document or another space.
-    Only the enrollment selects derived-only persistence; a marker alone
+    The separate piece-setup claim selects derived-only persistence for its
+    transaction without enrolling anything. A generic ownership marker alone
     continues to declare the write's misfit.
   - **Which builtins may take it.** A builtin whose result store moves onto
     the route gives up whatever its own ceiling was refusing, so the test is

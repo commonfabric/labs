@@ -38,16 +38,25 @@ what the text cannot:
   itself decides, `BigInt@1`, `SpecialNumber@1`, `Symbol@1` and `Undefined@1`,
   never are, so an unknown value under one of those has no text and mods.
 - `patches`: changes made to the decoded value, each `{"at": path, "put": …}`.
-  The path runs through the arrays and records of the decoded text, never into
-  an instance, and the text holds a `null` where it ends, which the patch
-  replaces. `put` is one of:
-  - `{"cycle": path}`: the array or record at that path, which closes a cycle.
-    The path is absolute, from the root, and is a proper prefix of `at`.
+  The path runs through the arrays, records and instances of the decoded text,
+  by the steps [Paths](#paths) gives, and the text holds a `null` where it ends,
+  which the patch replaces. `put` is one of:
+  - `{"cycle": path}`: the array, record or instance at that path, which closes
+    a cycle. The path is absolute, from the root, and is a proper prefix of
+    `at`. A path to an instance and the path from it into its state, such as
+    `[..., "payload"]` for a link, name two places, as section 4.19 of
+    [`2-hash-byte-format.md`](../../../../docs/specs/space-model-formal-spec/2-hash-byte-format.md)
+    has the instance and its state be two entries on a cycle's path. An error's
+    `extras` names no such place, being no record of the error's own.
   - `{"unregisteredSymbol": description}`: a symbol of no registry key, under
     that description, a string, or `null` for none.
 
   Follow every path before making any patch, so that no path runs into what a
-  patch put. No two patches share a path.
+  patch put. No two patches share a path. Where an instance holds what a patch
+  changes for good, as a link holds its payload, make the instance again with
+  the change in it, and put the new instance where the old one was. A copy of
+  what it held stands in for the original wherever that held itself, as a link's
+  payload may.
 
 ## Probes
 
@@ -129,10 +138,10 @@ probe for each of its keys.
 
 The one exception is a path where a patch puts a value. The patch is what states
 that part of the value, so there is no probe at its path or under it, and the
-reader counts the index or key it names as present. The arrays and records on
-the way to it keep their special forms. A symbol of no registry key, and a cycle
-through arrays and records alone, are stated that way, and have no probe. A
-cycle through an instance has no text and mods.
+reader counts the index, key or field it names as present. The arrays, records
+and instances on the way to it keep their special forms. A symbol of no registry
+key, and a cycle, whether it passes through instances or not, are stated that
+way, and have no probe.
 
 A path has one probe. A node's probe comes before the probes of what it holds:
 an array's elements and runs of holes in index order, a record's keys in UTF-8

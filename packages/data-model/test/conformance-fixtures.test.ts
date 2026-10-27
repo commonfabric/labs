@@ -188,7 +188,7 @@ describe("conformance-fixtures", () => {
 
     it("throws given a map, whose codec is a stub", () => {
       expect(() => probesOfForTestingOnly(new FabricMap(new Map())))
-        .toThrow("No probe for a map.");
+        .toThrow("No fields for a map.");
     });
 
     it("throws given a key pair holding `CryptoKey` handles, which has no text", async () => {
@@ -239,6 +239,80 @@ describe("conformance-fixtures", () => {
             },
           ],
         });
+    });
+
+    it("returns a patch whose path steps through the fields of an instance a cycle runs through", () => {
+      const record: { link?: FabricValue } = {};
+      record.link = new FabricLink({ record });
+      expect(textWithModsOfForTestingOnly(record)).toEqual({
+        text: 'fvj1:{"link":{"/Link@1":{"record":null}}}',
+        patches: [{ at: ["link", "payload", "record"], put: { cycle: [] } }],
+      });
+    });
+
+    it("returns a patch naming a link's payload where a cycle closes at it", () => {
+      const payload: { self?: FabricValue } = {};
+      payload.self = payload;
+      expect(
+        textWithModsOfForTestingOnly(new FabricLink(Object.freeze(payload))),
+      )
+        .toEqual({
+          text: 'fvj1:{"/Link@1":{"self":null}}',
+          patches: [{ at: ["payload", "self"], put: { cycle: ["payload"] } }],
+        });
+    });
+
+    it("throws given a map, whose codec is a stub", () => {
+      expect(() => textWithModsOfForTestingOnly([new FabricMap(new Map())]))
+        .toThrow("No fields for a map. Its codec is a stub");
+    });
+
+    it("returns a patch naming an instance where a cycle closes at it", () => {
+      const state: { self?: FabricValue } = {};
+      const unknown = new UnknownValue("Future@1", state);
+      state.self = unknown;
+      expect(textWithModsOfForTestingOnly(unknown)).toEqual({
+        text: 'fvj1:{"/Future@1":{"self":null}}',
+        patches: [{ at: ["state", "self"], put: { cycle: [] } }],
+      });
+    });
+
+    it("returns patches at an error's cause and among its extras", () => {
+      const error = new FabricError({
+        type: "Error",
+        name: "Error",
+        message: "m",
+        stack: undefined,
+        cause: undefined,
+      });
+      error.cause = error;
+      error.setExtra("x", [Symbol("s")]);
+      expect(textWithModsOfForTestingOnly(error)).toEqual({
+        text: 'fvj1:{"/Error@1":{"cause":null,"message":"m","name":null,' +
+          '"type":"Error","x":[null]}}',
+        patches: [
+          { at: ["cause"], put: { cycle: [] } },
+          { at: ["extras", "x", 0], put: { unregisteredSymbol: "s" } },
+        ],
+      });
+    });
+
+    it("leaves the instances of the value it is given as they are", () => {
+      const error = new FabricError({
+        type: "Error",
+        name: "Error",
+        message: "m",
+        stack: undefined,
+        cause: undefined,
+      });
+      error.cause = error;
+      const state: { self?: FabricValue } = {};
+      state.self = state;
+      const unknown = new UnknownValue("Future@1", state);
+      textWithModsOfForTestingOnly([error, unknown]);
+      expect(error.cause).toBe(error);
+      expect(unknown.state).toBe(state);
+      expect(state.self).toBe(state);
     });
 
     it("throws given an unknown value under a tag the format itself decides", () => {
@@ -354,6 +428,61 @@ describe("conformance-fixtures", () => {
       expect((value as symbol).description).toBe("local");
     });
 
+    it("returns a link made again with the payload a patch puts, where the decoded one was", () => {
+      const value = fabricValueOfTextWithModsForTestingOnly({
+        text: 'fvj1:{"link":{"/Link@1":{"record":null}}}',
+        patches: [{ at: ["link", "payload", "record"], put: { cycle: [] } }],
+      }) as { link: FabricLink };
+      expect(value.link).toBeInstanceOf(FabricLink);
+      expect(value.link.payload.record).toBe(value);
+      expect(Object.isFrozen(value)).toBe(true);
+    });
+
+    it("returns a link whose payload holds itself where cycle patches name the payload", () => {
+      const value = fabricValueOfTextWithModsForTestingOnly({
+        text: 'fvj1:{"/Link@1":{"a":null,"b":null}}',
+        patches: [
+          { at: ["payload", "a"], put: { cycle: ["payload"] } },
+          { at: ["payload", "b"], put: { cycle: ["payload"] } },
+        ],
+      }) as FabricLink;
+      expect(value.payload.a).toBe(value.payload);
+      expect(value.payload.b).toBe(value.payload);
+      expect(Object.isFrozen(value)).toBe(true);
+    });
+
+    it("returns an unknown value made again with the state a patch puts", () => {
+      const value = fabricValueOfTextWithModsForTestingOnly({
+        text: 'fvj1:{"u":{"/Future@1":null}}',
+        patches: [{ at: ["u", "state"], put: { cycle: [] } }],
+      }) as { u: UnknownValue };
+      expect(value.u).toBeInstanceOf(UnknownValue);
+      expect(value.u.wireTypeTag).toBe("Future@1");
+      expect(value.u.state).toBe(value);
+    });
+
+    it("returns the instance a cycle patch names, at a place inside its state", () => {
+      const value = fabricValueOfTextWithModsForTestingOnly({
+        text: 'fvj1:{"/Future@1":{"self":null}}',
+        patches: [{ at: ["state", "self"], put: { cycle: [] } }],
+      }) as UnknownValue;
+      expect((value.state as { self: FabricValue }).self).toBe(value);
+      expect(Object.isFrozen(value)).toBe(true);
+    });
+
+    it("returns an error holding what patches put in its cause and among its extras", () => {
+      const value = fabricValueOfTextWithModsForTestingOnly({
+        text: 'fvj1:{"/Error@1":{"cause":null,"message":"m","name":null,' +
+          '"type":"Error","x":[null]}}',
+        patches: [
+          { at: ["cause"], put: { cycle: [] } },
+          { at: ["extras", "x", 0], put: { cycle: [] } },
+        ],
+      }) as FabricError;
+      expect(value.cause).toBe(value);
+      expect((value.getExtra("x") as FabricValue[])[0]).toBe(value);
+    });
+
     it("returns a value equal to the one written, for each kind of mod", () => {
       const record: { self?: FabricValue; u?: FabricValue } = {
         u: [new UnknownValue("Link@1", { id: "x" }), Symbol("s")],
@@ -408,28 +537,68 @@ describe("conformance-fixtures", () => {
             text: "fvj1:[null]",
             patches: [{ at: [1], put: { unregisteredSymbol: null } }],
           },
-          "No path [1] through arrays and records",
+          "No path [1] through arrays, records and instances",
         ],
         [
           {
             text: 'fvj1:{"0":null}',
             patches: [{ at: [0], put: { unregisteredSymbol: null } }],
           },
-          "No path [0] through arrays and records",
+          "No path [0] through arrays, records and instances",
         ],
         [
           {
             text: 'fvj1:[{"/hole":1},null]',
             patches: [{ at: [0], put: { unregisteredSymbol: null } }],
           },
-          "No path [0] through arrays and records",
+          "No path [0] through arrays, records and instances",
         ],
         [
           {
             text: 'fvj1:{"/Link@1":{"a":null}}',
             patches: [{ at: ["a"], put: { unregisteredSymbol: null } }],
           },
-          'No path ["a"] through arrays and records',
+          'No path ["a"] through arrays, records and instances',
+        ],
+        [
+          {
+            text: "fvj1:[null]",
+            patches: [{ at: ["payload"], put: { unregisteredSymbol: null } }],
+          },
+          'No path ["payload"] through arrays, records and instances',
+        ],
+        [
+          {
+            text: 'fvj1:{"/Bytes@1":"AQ"}',
+            patches: [{ at: ["payload"], put: { unregisteredSymbol: null } }],
+          },
+          'No path ["payload"] through arrays, records and instances',
+        ],
+        [
+          {
+            text: 'fvj1:{"/Future@1":{"x":null}}',
+            patches: [{
+              at: ["payload", "x"],
+              put: { unregisteredSymbol: null },
+            }],
+          },
+          'No path ["payload","x"] through arrays, records and instances',
+        ],
+        [
+          {
+            text:
+              'fvj1:{"/Error@1":{"message":"m","name":null,"type":"Error",' +
+              '"x":{"y":null}}}',
+            patches: [{ at: ["extras", "x", "y"], put: { cycle: ["extras"] } }],
+          },
+          'No array, record or instance at ["extras"] for a cycle to close at',
+        ],
+        [
+          {
+            text: 'fvj1:{"/Link@1":{"a":null}}',
+            patches: [{ at: ["payload", "a"], put: { cycle: [] } }],
+          },
+          'The patch at ["payload","a"] does not hold once all are made',
         ],
         [
           {
@@ -478,7 +647,7 @@ describe("conformance-fixtures", () => {
             { at: ["a", "a"], put: { unregisteredSymbol: null } },
           ],
         })
-      ).toThrow('No path ["a","a"] through arrays and records');
+      ).toThrow('No path ["a","a"] through arrays, records and instances');
     });
   });
 });

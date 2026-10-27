@@ -578,7 +578,8 @@ These must hold once enforcement is enabled:
   invalidates prepare
 - verifier-internal reads never become consumed reads
 - explicit IFC claims fail closed on missing schema, missing metadata, unknown
-  trust state, or unsupported trust-sensitive claims
+  trust state, unsupported trust-sensitive claims, or a label list declared as
+  anything but a list in a schema a write or an LLM tool call goes through
 - the commit gate lives at the transaction boundary, not only in scheduler code
 - external side effects happen only after successful commit
 - retries always run in a fresh transaction and recompute prepare

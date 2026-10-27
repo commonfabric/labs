@@ -267,12 +267,30 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   itself. With prose no longer scanned there is otherwise no headless way to
   make a reference, and `kind: "topic"` links are ordinary links unless their
   URL resolves.
-- **Nothing derived is persisted.** The index and the reference graph are
-  recomputed from the board on read; no derived field is written back into a
+- **The board persists nothing derived.** The index and the reference graph are
+  recomputed from the board on read; the board writes no derived field into a
   topic, so retracting a mention simply removes the edge. A pattern that writes
   derived data into its own children can destroy real data when it runs from a
   partial-view replica, so any future persisted index needs single-writer +
   full-view preconditions first.
+- **A topic keeps two summaries of its own records.** `commentCount` and
+  `lastActivityAt` are stored on the topic, because the board's index reads them
+  without running the topic, and a topic written to by an agent is often never
+  run again. The topic's own verbs keep them, in the same write as the comment,
+  link, body or title change they summarize, so no writer running this module
+  has to run the topic afterwards for the board to be right. A writer still on
+  an older topic module does not keep them, so they are reliable once every
+  writer runs this one (`state-upgrades.md`, "Rollout and rollback"). Keeping
+  them costs concurrency on one topic: every such verb reads and writes the
+  activity time, so two writes to the same topic at once conflict on it where
+  two comment appends alone would merge, and the later one runs again against
+  the committed state (the scheduler's stale-basis retry) rather than merging. A
+  topic stored before they were kept gets them from the `activity-scalars`
+  upgrade step (`state-upgrades.md`), which computes both from the topic's own
+  records. That step runs once, so a value it computed from incomplete reads
+  would stay wrong: only the lift completes it, reaching each array and each
+  stamp through a key, which waits for an unresolved link rather than reading it
+  as absent or as its default.
 - Verified by `multi-user.test.tsx` (two isolated runtimes, one shared board).
 
 ## Headless / agent use
@@ -346,10 +364,12 @@ leaving `author` and `sentAt` alone. A reader hides a retracted record,
 `mentions` — the reference goes with the link that made it.
 
 `lastActivityAt` is the one reader that does not filter them, and that is the
-reason the design stamps rather than deletes: it is a max over what the arrays
-hold, so removing the newest comment outright would move a topic _backwards_ in
-the board's most-recent ordering. A stamped record keeps its `sentAt` in that
-max, and the retraction's own stamp moves the clock forward.
+reason the design stamps rather than deletes: it is the newest stamp across what
+the arrays hold, so removing the newest comment outright would move a topic
+_backwards_ in the board's most-recent ordering. A stamped record keeps its
+`sentAt` in that max, and the retraction's own stamp moves the clock forward.
+The verbs keep it the same way: each moves it to its own stamp only when that is
+newer.
 
 All three live on the topic's direct interface for the same reason `setTitle`
 does. `removeComment` and `editComment` name their target by reference, which is

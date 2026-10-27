@@ -351,6 +351,15 @@ describe("cfc-write-policy-any-of", () => {
             uiContract: { helper: "UiAction" },
           }],
         }],
+        [
+          "an alternative whose contract writes its event integrity as an object",
+          {
+            writePolicyAnyOf: [{
+              writeAuthorizedBy: writerClaim("send"),
+              uiContract: { ...contract("Send"), requiredEventIntegrity: {} },
+            }],
+          },
+        ],
         ["a writer beside the list", {
           writeAuthorizedBy: writerClaim("send"),
           writePolicyAnyOf: [policy("send", "Send")],

@@ -14,8 +14,8 @@ interface HeldRun {
    */
   readonly failedOnRunner: Map<number, boolean>;
 
-  /** What each attempt did with its jobs, by attempt number. */
-  readonly jobCounts: Map<number, JobCounts>;
+  /** The job listing of each attempt read to its end, by attempt number. */
+  readonly listings: Map<number, readonly ListedJob[]>;
 }
 
 /** What a job listing says about one job. */
@@ -72,7 +72,9 @@ export interface JobCounts {
  * carry its jobs, nor a job its annotations, so each takes a request of its
  * own. A completed attempt and its jobs never change, so each answer is
  * requested once and held for as long as its run stays among the runs
- * observed.
+ * observed. GitHub sometimes leaves an attempt that a rerun followed without a
+ * conclusion, in progress long after its last job ended, and such an attempt is
+ * held with the conclusion its jobs give it.
  */
 export class CompletedAttempts {
   #repo: string;
@@ -107,29 +109,69 @@ export class CompletedAttempts {
 
   /**
    * Returns attempt `attempt` of `run`, requesting it from GitHub unless it is
-   * already held. Rejects when the request fails, or when GitHub returns
-   * anything other than that attempt completed with a conclusion.
+   * already held. An attempt earlier than `run`'s latest has ended, since
+   * GitHub reruns only a run that has completed, so when GitHub returns it
+   * without a conclusion it is returned as completed with the conclusion
+   * `#concludedByJobs` reads from its jobs. Rejects when a request fails, when
+   * GitHub returns another run's attempt or another attempt, when it returns
+   * the latest attempt other than completed with a conclusion, or as
+   * `#concludedByJobs` does.
    */
   async get(run: Run, attempt: number): Promise<Run> {
     const attempts = this.#held(run).attempts;
     const held = attempts.get(attempt);
     if (held) return held;
-    const completed = await github<Run>(
+    const answer = await github<Run>(
       `repos/${this.#repo}/actions/runs/${run.id}/attempts/${attempt}`,
       this.#credential,
     );
-    if (
-      completed.id !== run.id ||
-      completed.run_attempt !== attempt ||
-      completed.status !== "completed" ||
-      !completed.conclusion
-    ) {
+    if (answer.id !== run.id || answer.run_attempt !== attempt) {
+      throw new Error(
+        `GitHub answered for run ${answer.id} attempt ${answer.run_attempt} ` +
+          `when asked for run ${run.id} attempt ${attempt}`,
+      );
+    }
+    const conclusion = attempt < run.run_attempt
+      ? answer.conclusion ?? await this.#concludedByJobs(answer)
+      : answer.status === "completed"
+      ? answer.conclusion
+      : null;
+    if (!conclusion) {
       throw new Error(
         `GitHub run ${run.id} attempt ${attempt} did not include a completed conclusion`,
       );
     }
+    const completed = { ...answer, status: "completed", conclusion };
     attempts.set(attempt, completed);
     return completed;
+  }
+
+  /**
+   * Returns the conclusion `attempt`'s jobs give it, reading every page of its
+   * job listing: "failure" when a job ended in
+   * anything but success, a skip, or cancellation; otherwise "cancelled" when
+   * a job was cancelled or none is listed, as GitHub concludes a run replaced
+   * while queued; and otherwise "success". Rejects as `#jobs` does, and when a
+   * job has not ended.
+   */
+  async #concludedByJobs(attempt: Run): Promise<string> {
+    let conclusion = "success";
+    let listed = false;
+    for await (const job of this.#jobs(attempt)) {
+      listed = true;
+      if (job.conclusion === null) {
+        throw new Error(
+          `GitHub run ${attempt.id} attempt ${attempt.run_attempt} lists ` +
+            `job ${job.id}, which has not ended`,
+        );
+      }
+      if (job.conclusion === "cancelled") {
+        if (conclusion === "success") conclusion = "cancelled";
+      } else if (job.conclusion !== "success" && job.conclusion !== "skipped") {
+        conclusion = "failure";
+      }
+    }
+    return listed ? conclusion : "cancelled";
   }
 
   /**
@@ -162,34 +204,35 @@ export class CompletedAttempts {
 
   /**
    * Returns how many of `attempt`'s jobs ran and how many were skipped,
-   * reading every page of the attempt's job listing unless the counts are
-   * already held. Rejects as `#jobs` does.
+   * reading every page of the attempt's job listing. Rejects as `#jobs` does.
    */
   async jobCounts(attempt: Run): Promise<JobCounts> {
-    const held = this.#held(attempt).jobCounts;
-    const known = held.get(attempt.run_attempt);
-    if (known) return known;
     let ran = 0, skipped = 0;
     for await (const job of this.#jobs(attempt)) {
       if (job.conclusion === "skipped") skipped++;
       else ran++;
     }
-    const counts = { ran, skipped };
-    held.set(attempt.run_attempt, counts);
-    return counts;
+    return { ran, skipped };
   }
 
   /**
-   * Yields each job in `attempt`'s job listing, requesting each page only
-   * once the jobs before it have been consumed. Rejects when a request fails,
-   * when GitHub returns a page without a numeric `total_count` and a `jobs`
-   * array of objects each with a numeric `id` and a string or `null`
-   * `conclusion` and `runner_name`, or when the pages end before
-   * `total_count` jobs.
+   * Yields each job in `attempt`'s job listing, from the listing held when an
+   * earlier read reached its end, and otherwise requesting each page only once
+   * the jobs before it have been consumed and holding the listing once its
+   * last job has been. Rejects when a request fails, when GitHub returns a
+   * page without a numeric `total_count` and a `jobs` array of objects each
+   * with a numeric `id` and a string or `null` `conclusion` and
+   * `runner_name`, or when the pages end before `total_count` jobs.
    */
   async *#jobs(attempt: Run): AsyncGenerator<ListedJob> {
     const { id, run_attempt: number } = attempt;
-    let listed = 0;
+    const listings = this.#held(attempt).listings;
+    const held = listings.get(number);
+    if (held) {
+      yield* held;
+      return;
+    }
+    const jobs: ListedJob[] = [];
     for (let page = 1;; page++) {
       const listing = await github<unknown>(
         `repos/${this.#repo}/actions/runs/${id}/attempts/${number}/jobs` +
@@ -217,18 +260,22 @@ export class CompletedAttempts {
               "`conclusion` and `runner_name`",
           );
         }
-        yield {
+        const listed = {
           id: job.id,
           conclusion: job.conclusion,
           runner_name: job.runner_name,
         };
+        jobs.push(listed);
+        yield listed;
       }
-      listed += listing.jobs.length;
-      if (listed >= listing.total_count) return;
+      if (jobs.length >= listing.total_count) {
+        listings.set(number, jobs);
+        return;
+      }
       if (!listing.jobs.length) {
         throw new Error(
           `GitHub run ${id} attempt ${number} job listing ended after ` +
-            `${listed} of its ${listing.total_count} jobs`,
+            `${jobs.length} of its ${listing.total_count} jobs`,
         );
       }
     }
@@ -272,7 +319,7 @@ export class CompletedAttempts {
       held = {
         attempts: new Map(),
         failedOnRunner: new Map(),
-        jobCounts: new Map(),
+        listings: new Map(),
       };
       this.#runs.set(run.id, held);
     }

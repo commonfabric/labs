@@ -453,23 +453,27 @@ computed document, from a schema-carrying write: it stops being a write
 ceiling there, and stays a read floor.
 
 A fourth narrowing admits eligible misfits on runtime-owned stores. For a store
-with a live enrollment, its persistence rule implements a slice of
+with a live enrollment or an authenticated piece-setup claim, its persistence
+rule implements a slice of
 [specs#78](https://github.com/commonfabric/specs/pull/78), option (b): the
 write's derived component holds the misfit, and the declared component is
 unchanged. The runtime implements this proposed rule at the strict default,
 ahead of its ruling and reconciliation of the pin. The current pin requires
 option 2's declaration, so it does not conform to the pin on this point.
 
-An authorized transaction-local marker without a live enrollment still takes
+Piece setup supplies a separate transaction-local claim for its argument,
+result and internal stores. Their setup writes take the derived-only route
+when committed before the piece starts, as in
+`PiecesController.setupPersistent()`. This claim creates no lifetime enrollment
+and does not carry into later transactions.
+
+A generic authorized ownership marker without a live enrollment still takes
 option 2: the write declares a covering policy, adding clauses and preserving
-every stored alternative. The choice follows live enrollment when the commit is
-prepared: `Runtime.run(tx, ...)` enrolls before the caller's commit, so its setup
-writes can take the derived-only route. A setup committed while its stores have
-no live enrollment retains the declaration; `PiecesController.setupPersistent()`
-commits a new piece's setup without starting its nodes. One-shot handoffs such
-as agent run records and marker-only anchored children retain that behavior too.
-Those declarations retain the ratchet; this slice addresses writes to enrolled
-stores, not every runtime-minted document.
+every stored alternative. One-shot handoffs such as agent run records and
+marker-only anchored children retain that declaration ratchet. Lazy scoped
+initialization on a later transaction before enrollment keeps the generic marker
+and declaration route too. This slice addresses piece setup and enrolled stores,
+not every runtime-minted document.
 
 The ownership claim covers a piece's argument, result and internal stores, a
 builtin's node-owned stores, and documents anchored out of them. It requires the

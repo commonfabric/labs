@@ -51,9 +51,24 @@ export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
 // (`IExtendedStorageTransaction.enrollRuntimeOwnedStore`) until its piece
 // stops.
 // Enrolled stores keep misfits solely in derived stamps; transaction-only
-// markers retain declarations for later authored clients.
+// generic markers retain declarations for later authored clients.
 export const CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE =
   "runtime.owned-store";
+
+/**
+ * A piece's argument and derived internal documents, minted from its cause,
+ * and the result document setup establishes as belonging to that piece.
+ * Eligible misfits stay in derived labels under the proposed §8.12.5 rule:
+ * https://github.com/commonfabric/specs/pull/78
+ *
+ * The authenticated, whole-document, same-space checks match
+ * `runtime.owned-store`. The claim lasts only for the recording transaction;
+ * it grants no lifetime enrollment. Anchoring carries generic ownership to
+ * children through `runtime.owned-store`, whose misfits remain declared; the
+ * setup claim selecting derived-only persistence does not propagate.
+ */
+export const CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE =
+  "runtime.piece-setup-store";
 
 // A store no pattern declares a policy on: a document the runtime mints to hold
 // its own bookkeeping, at an id whose shape says nothing about who mints it.

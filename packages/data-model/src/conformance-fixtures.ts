@@ -16,11 +16,7 @@
 import type { Constructor } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
-import type {
-  FabricArray,
-  FabricPlainObject,
-  FabricValue,
-} from "@/interface.ts";
+import type { FabricPlainObject, FabricValue } from "@/interface.ts";
 import { ProblematicValue, UnknownValue } from "@/codec-common";
 import { createBaseJsonRegistry, JsonCodecEngine } from "@/codec-json";
 import { deepFreeze } from "@/deep-freeze.ts";
@@ -69,9 +65,9 @@ export type ValuePatch = {
   readonly at: ValuePath;
 
   /**
-   * What is put there: the array or record at the path `cycle`, which closes
-   * a cycle, or a symbol of no registry key, under its description, `null`
-   * being none.
+   * What is put there: the array, record or instance at the path `cycle`,
+   * which closes a cycle, or a symbol of no registry key, under its
+   * description, `null` being none.
    */
   readonly put:
     | { readonly cycle: ValuePath }
@@ -235,10 +231,11 @@ function asciiJsonOf(value: FixtureJson): string {
  * What no text carries is written as `null`, with a patch putting it there: a
  * cycle, where it closes, and a symbol of no registry key. An `UnknownValue`
  * under a tag one of this package's classes claims has that tag in
- * `unclaimed`. The walk finding these passes through arrays and records and
- * stops at every instance, so whatever an instance holds is left for the
- * encoder to write or to refuse. Nor does a text carry how a value was built:
- * sharing, a `NaN`'s bits, bytes viewed through part of a larger buffer.
+ * `unclaimed`. The walk finding these passes through arrays, records and the
+ * fields of instances, by the paths `test/fixtures/value-probes.md` defines,
+ * so that a cycle may pass through or close at an instance. Nor does a text
+ * carry how a value was built: sharing, a `NaN`'s bits, bytes viewed through
+ * part of a larger buffer.
  *
  * @throws If the walk reaches an `UnknownValue` under one of the tags the
  *   format itself decides, which no codec can be left out for, so that no text
@@ -273,8 +270,9 @@ export function textWithModsOf(value: FabricValue): TextWithMods {
  * Helper for {@link textWithModsOf}, which returns `value` with what no text
  * carries replaced by `null`, adding to `patches` one putting each back, and
  * to `unknownTags` the tag of each `UnknownValue` reached. `path` leads to
- * `value`, and `enclosing` holds the arrays and records along it, outermost
- * first.
+ * `value`, and `enclosing` holds the arrays, records and instances along it,
+ * outermost first. Each array, record and instance is copied, so that `value`
+ * itself is left as it is.
  */
 function replaceUntextual(
   value: FabricValue,
@@ -296,7 +294,6 @@ function replaceUntextual(
     return null;
   } else if (value instanceof UnknownValue) {
     unknownTags.add(value.wireTypeTag);
-    return value;
   }
 
   const closes = enclosing.indexOf(value);
@@ -323,7 +320,15 @@ function replaceUntextual(
     }
     return result;
   }
-  return value;
+
+  const fields = instanceFieldsOf(value);
+  if (fields === undefined) {
+    return value;
+  }
+  return instanceMadeOf(
+    value,
+    new Map(fields.map(([field, held]) => [field, replaceAt(field, held)])),
+  );
 }
 
 /**
@@ -409,14 +414,24 @@ function plainJsonBodyOf(
  * {@link textWithModsOf}, up to what no text carries.
  *
  * `unclaimed` is in UTF-8 order, naming each tag once. Each patch's path leads
- * through arrays and records of the decoded text to a `null`, and is followed
- * before any patch is made, so that no path runs into what a patch put. A
- * cycle's path is a proper prefix of the path it is put at.
+ * through arrays, records and the fields of instances of the decoded text to a
+ * `null`, and is followed before any patch is made, so that no path runs into
+ * what a patch put. A cycle's path is a proper prefix of the path it is put at,
+ * and leads to an array, a record or an instance.
+ *
+ * A patch is made in place where the value lets it be: in an array or a record,
+ * in an error's `cause`, and among its extras. A link holds its payload frozen,
+ * and an unknown or problematic value its state for good, so a patch there
+ * replaces the instance with a new one, made in the place the old one held. The
+ * patches that do that are made first, so that the others, which may put one of
+ * those instances where a cycle closes, find it already made. Every patch is
+ * then checked to hold once all are made, so that a value the patches cannot
+ * build, such as a link whose payload holds the link itself, is refused.
  *
  * @throws What the codec throws, refusing the text; if a tag in `unclaimed` is
  *   out of order, named twice, or claimed by no class this package registers
  *   beyond the four the format itself decides; or if a patch breaks the rules
- *   above, or two share a path.
+ *   above, two share a path, or a patch fails to hold once all are made.
  */
 export function fabricValueOfTextWithMods(
   { text, unclaimed = [], patches = [] }: TextWithMods,
@@ -424,7 +439,7 @@ export function fabricValueOfTextWithMods(
   const decoded = mutableEngineUnclaiming(unclaimed).decode(text);
 
   const patched = new Set<string>();
-  const puts = patches.map(({ at, put }) => {
+  const planned = patches.map(({ at, put }) => {
     const keys = at.map(stepKeyOf);
     const patchedKey = JSON.stringify(keys);
     if (patched.has(patchedKey)) {
@@ -432,20 +447,40 @@ export function fabricValueOfTextWithMods(
     }
     patched.add(patchedKey);
 
-    const { containers, leaf } = followPath(decoded, keys);
+    const { holders, leaf } = followPath(decoded, keys);
     if (leaf !== null) {
       throw new Error(`No \`null\` to patch at ${JSON.stringify(at)}`);
     }
-    return { keys, containers, value: patchValueOf(put, keys, containers) };
+    const target = patchTargetOf(put, keys);
+    if (target !== undefined) {
+      containerAt(decoded, target);
+    }
+    return { at, keys, put, target, replaces: replacesHolder(holders, keys) };
   });
 
   let result = decoded;
-  for (const { keys, containers, value } of puts) {
-    const last = keys.length - 1;
-    if (last < 0) {
-      result = value;
-    } else {
-      defineOwn(containers[last]!, keys[last]!, value);
+  const ordered = [
+    ...planned.filter(({ replaces }) => replaces),
+    ...planned.filter(({ replaces }) => !replaces),
+  ];
+  for (const { keys, put, target } of ordered) {
+    const { holders } = followPath(result, keys);
+    const value = (target === undefined)
+      ? symbolOf(put)
+      : containerAt(result, target);
+    result = putAt(result, holders, keys, keys.length - 1, value);
+  }
+
+  for (const { at, keys, put, target } of planned) {
+    const { leaf } = followPath(result, keys);
+    const holds = (target === undefined)
+      ? (typeof leaf === "symbol" && Symbol.keyFor(leaf) === undefined &&
+        leaf.description === symbolOf(put).description)
+      : (leaf === containerAt(result, target));
+    if (!holds) {
+      throw new Error(
+        `The patch at ${JSON.stringify(at)} does not hold once all are made.`,
+      );
     }
   }
   return deepFreeze(result);
@@ -512,55 +547,90 @@ function stepKeyOf(step: FixtureJson): number | string {
 }
 
 /**
- * Returns what following the property keys `keys` from `root` reaches: the
- * arrays and records stepped through, outermost first, and the value at the
- * end. A number steps into an array, and a string into a record.
+ * The extras of an error, as a path steps through them: `["extras", key]`
+ * reaches the extra under `key`.
+ */
+class ErrorExtras {
+  /** The error whose extras these are. */
+  readonly error: FabricError;
+
+  /** Constructs an instance standing for the extras of `error`. */
+  constructor(error: FabricError) {
+    this.error = error;
+  }
+}
+
+/** What a path step is taken from. */
+type PathHolder = FabricValue | ErrorExtras;
+
+/**
+ * Returns what following the property keys `keys` from `root` reaches: what
+ * each step was taken from, outermost first, and what the last step reaches.
+ * A number steps into an array. A string steps into a record under that key,
+ * or into an instance under the name of one of its fields, as
+ * `test/fixtures/value-probes.md` gives them, an error's `extras` being
+ * stepped through to the extra under the key that follows.
  *
- * @throws If a step names nothing its array or record holds, or is taken from
- *   anything else.
+ * @throws If a step names nothing what it is taken from holds, or is taken
+ *   from anything else.
  */
 function followPath(
   root: FabricValue,
   keys: readonly (number | string)[],
-): {
-  readonly containers: readonly (FabricArray | FabricPlainObject)[];
-  readonly leaf: FabricValue;
-} {
-  const containers: (FabricArray | FabricPlainObject)[] = [];
-  let leaf = root;
+): { readonly holders: readonly PathHolder[]; readonly leaf: PathHolder } {
+  const holders: PathHolder[] = [];
+  let leaf: PathHolder = root;
   for (const key of keys) {
-    if (
-      typeof key === "number" && isFabricArray(leaf) && Object.hasOwn(leaf, key)
-    ) {
-      containers.push(leaf);
-      leaf = leaf[key];
-    } else if (
-      typeof key === "string" && isFabricPlainObject(leaf) &&
-      Object.hasOwn(leaf, key)
-    ) {
-      containers.push(leaf);
-      leaf = leaf[key];
-    } else {
+    const next = stepFrom(leaf, key);
+    if (next === undefined) {
       throw new Error(
-        `No path ${JSON.stringify(keys)} through arrays and records`,
+        `No path ${JSON.stringify(keys)} through arrays, records and ` +
+          "instances",
       );
     }
+    holders.push(leaf);
+    leaf = next.held;
   }
-  return { containers, leaf };
+  return { holders, leaf };
 }
 
 /**
- * Returns the value `put` says a patch at the path `keys` puts there, where
- * `containers` holds the arrays and records the path steps through.
+ * Helper for {@link followPath}, which returns what the step `key` from
+ * `holder` reaches, or `undefined` if it reaches nothing.
+ */
+function stepFrom(
+  holder: PathHolder,
+  key: number | string,
+): { readonly held: PathHolder } | undefined {
+  if (holder instanceof ErrorExtras) {
+    return (typeof key === "string" && holder.error.hasExtra(key))
+      ? { held: holder.error.getExtra(key) }
+      : undefined;
+  } else if (typeof key === "number") {
+    return (isFabricArray(holder) && Object.hasOwn(holder, key))
+      ? { held: holder[key] }
+      : undefined;
+  } else if (isFabricPlainObject(holder)) {
+    return Object.hasOwn(holder, key) ? { held: holder[key] } : undefined;
+  } else if (holder instanceof FabricError && key === "extras") {
+    return { held: new ErrorExtras(holder) };
+  }
+
+  const field = instanceFieldsOf(holder)?.find(([name]) => name === key);
+  return (field === undefined) ? undefined : { held: field[1] };
+}
+
+/**
+ * Returns the path a patch's `put` names as where a cycle closes, or
+ * `undefined` for a `put` that puts something else.
  *
  * @throws If `put` is not a patch's `put`, or a cycle's path is not a proper
- *   prefix of `keys`.
+ *   prefix of `keys`, the path the patch is put at.
  */
-function patchValueOf(
+function patchTargetOf(
   put: FixtureJson,
   keys: readonly (number | string)[],
-  containers: readonly (FabricArray | FabricPlainObject)[],
-): FabricValue {
+): (number | string)[] | undefined {
   const [kind, payload] = soleEntryOf(put);
   switch (kind) {
     case "cycle": {
@@ -574,13 +644,118 @@ function patchValueOf(
             JSON.stringify(payload),
         );
       }
-      return containers[cycleKeys.length]!;
+      return cycleKeys;
     }
     case "unregisteredSymbol": {
-      return (payload === null) ? Symbol() : Symbol(stringOf(payload));
+      return undefined;
     }
   }
   throw new Error(`Not a patch kind: ${kind}`);
+}
+
+/** Returns the symbol of no registry key that `put` puts. */
+function symbolOf(put: FixtureJson): symbol {
+  const [, description] = soleEntryOf(put);
+  return (description === null) ? Symbol() : Symbol(stringOf(description));
+}
+
+/**
+ * Returns the array, record or instance at the path `keys` from `root`.
+ *
+ * @throws If the path reaches nothing, or something else.
+ */
+function containerAt(
+  root: FabricValue,
+  keys: readonly (number | string)[],
+): FabricValue {
+  const { leaf } = followPath(root, keys);
+  if (
+    !(leaf instanceof ErrorExtras) &&
+    (isFabricArray(leaf) || isFabricPlainObject(leaf) ||
+      instanceFieldsOf(leaf) !== undefined)
+  ) {
+    return leaf;
+  }
+  throw new Error(
+    `No array, record or instance at ${JSON.stringify(keys)} for a cycle to ` +
+      "close at",
+  );
+}
+
+/**
+ * Indicates whether putting a value at the end of a path, which steps from
+ * `holders` by `keys`, replaces what the last step was taken from: a link
+ * whose payload it is put in, or an instance other than an error.
+ */
+function replacesHolder(
+  holders: readonly PathHolder[],
+  keys: readonly (number | string)[],
+): boolean {
+  const last = holders.length - 1;
+  const holder = holders[last];
+  return (last > 0 && holders[last - 1] instanceof FabricLink &&
+    keys[last - 1] === "payload") ||
+    (!(holder instanceof FabricError) && !(holder instanceof ErrorExtras) &&
+      !isFabricArray(holder) && !isFabricPlainObject(holder));
+}
+
+/**
+ * Returns `root` with `value` put where the step `keys[index]` from
+ * `holders[index]` leads, `holders` being what each step of `keys` is taken
+ * from. That is done in place where the holder lets it be, and otherwise by
+ * putting a new holder, made with `value` in it, where the old one was, and
+ * so on outward. `index` being `-1` puts `value` in place of `root`.
+ *
+ * @throws If the step names a field of an error other than `cause`, which no
+ *   text holds `null` in.
+ */
+function putAt(
+  root: FabricValue,
+  holders: readonly PathHolder[],
+  keys: readonly (number | string)[],
+  index: number,
+  value: FabricValue,
+): FabricValue {
+  if (index < 0) {
+    return value;
+  }
+
+  const holder = holders[index]!;
+  const key = keys[index]!;
+  if (holder instanceof ErrorExtras) {
+    holder.error.setExtra(String(key), value);
+    return root;
+  } else if (holder instanceof FabricError) {
+    if (key !== "cause") {
+      // The other fields are strings, which the codec never decodes to `null`.
+      throw new Error(`Shouldn't happen: a patch at an error's \`${key}\``);
+    }
+    holder.cause = value;
+    return root;
+  } else if (
+    index > 0 && holders[index - 1] instanceof FabricLink &&
+    keys[index - 1] === "payload" && isFabricPlainObject(holder)
+  ) {
+    // A link holds its payload frozen, so the link is made again, with a
+    // copy of the payload holding `value`. The copy stands in for the old
+    // payload wherever that held itself, and is frozen so that the link keeps
+    // the copy rather than a copy of it.
+    const payload = {};
+    const copied = (held: FabricValue) => (held === holder) ? payload : held;
+    for (const payloadKey of Object.keys(holder)) {
+      defineOwn(payload, payloadKey, copied(holder[payloadKey]));
+    }
+    defineOwn(payload, key, copied(value));
+    Object.freeze(payload);
+    return putAt(root, holders, keys, index - 2, new FabricLink(payload));
+  } else if (isFabricArray(holder) || isFabricPlainObject(holder)) {
+    defineOwn(holder, key, value);
+    return root;
+  }
+
+  const fields = new Map(instanceFieldsOf(holder));
+  fields.set(String(key), value);
+  return putAt(root, holders, keys, index - 1, instanceMadeOf(holder, fields));
 }
 
 /**
@@ -747,9 +922,9 @@ function fragmentOf(leaf: FabricValue): string {
 type InstanceField = readonly [string, FabricValue];
 
 /**
- * How the fields of one class's instances are found. `cls` is there for its
- * type, which ties the entry to the class it is keyed under in
- * {@link INSTANCE_FIELDS}.
+ * How the fields of one class's instances are found, and how an instance is
+ * made from them. `cls` is there for its type, which ties the entry to the
+ * class it is keyed under in {@link INSTANCE_FIELDS}.
  */
 interface InstanceFields<Class> {
   readonly cls: Class;
@@ -759,20 +934,37 @@ interface InstanceFields<Class> {
    * it is not of this class.
    */
   readonly fieldsOf: (value: FabricValue) => InstanceField[] | undefined;
+
+  /**
+   * A new instance of this class whose fields are `fields`, each of which
+   * `fieldsOf()` gives `like`, given `like` of this class, or `undefined`
+   * given anything else.
+   */
+  readonly made: (
+    like: FabricValue,
+    fields: ReadonlyMap<string, FabricValue>,
+  ) => FabricValue | undefined;
 }
 
 /**
  * Returns how the fields of instances of `cls` are found, `fieldsOfInstance`
- * returning those of one instance.
+ * returning those of one instance, and `madeOf` making a new one like
+ * `like` from fields.
  */
 function fielded<Class extends abstract new (...args: never) => object>(
   cls: Class,
   fieldsOfInstance: (value: InstanceType<Class>) => InstanceField[],
+  madeOf: (
+    like: InstanceType<Class>,
+    fields: ReadonlyMap<string, FabricValue>,
+  ) => InstanceType<Class>,
 ): InstanceFields<Class> {
   return {
     cls,
     fieldsOf: (value) =>
       isInstanceOf(cls, value) ? fieldsOfInstance(value) : undefined,
+    made: (like, fields) =>
+      isInstanceOf(cls, like) ? madeOf(like, fields) : undefined,
   };
 }
 
@@ -795,34 +987,116 @@ const INSTANCE_FIELDS: {
     FabricInstanceClassesByName[Name]
   >;
 } = {
-  FabricError: fielded(FabricError, (value) => {
-    const extras = {};
-    for (const [key, extra] of value.extraEntries()) {
-      defineOwn(extras, key, extra);
-    }
-    return [
-      ["type", value.type],
-      ["name", value.name],
-      ["message", value.message],
-      ...(value.stack === undefined ? [] : [["stack", value.stack] as const]),
-      ...(value.cause === undefined ? [] : [["cause", value.cause] as const]),
-      ["extras", extras],
-    ];
-  }),
-  FabricLink: fielded(FabricLink, (value) => [["payload", value.payload]]),
+  FabricError: fielded(
+    FabricError,
+    (value) => {
+      const extras = {};
+      for (const [key, extra] of value.extraEntries()) {
+        defineOwn(extras, key, extra);
+      }
+      return [
+        ["type", value.type],
+        ["name", value.name],
+        ["message", value.message],
+        ...(value.stack === undefined ? [] : [["stack", value.stack] as const]),
+        ...(value.cause === undefined ? [] : [["cause", value.cause] as const]),
+        ["extras", extras],
+      ];
+    },
+    (_like, fields) =>
+      new FabricError({
+        type: stringField(fields, "type"),
+        name: stringField(fields, "name"),
+        message: stringField(fields, "message"),
+        stack: fields.has("stack") ? stringField(fields, "stack") : undefined,
+        cause: fields.get("cause"),
+        extras: recordField(fields, "extras"),
+      }),
+  ),
+  FabricLink: fielded(
+    FabricLink,
+    (value) => [["payload", value.payload]],
+    (_like, fields) => new FabricLink(recordField(fields, "payload")),
+  ),
   FabricMap: fielded(FabricMap, () => {
-    throw new Error(`No probe for a map. ${STUB_CODEC_EXCLUSION}`);
+    throw new Error(`No fields for a map. ${STUB_CODEC_EXCLUSION}`);
+  }, () => {
+    throw new Error(`No fields for a map. ${STUB_CODEC_EXCLUSION}`);
   }),
   FabricSet: fielded(FabricSet, () => {
-    throw new Error(`No probe for a set. ${STUB_CODEC_EXCLUSION}`);
+    throw new Error(`No fields for a set. ${STUB_CODEC_EXCLUSION}`);
+  }, () => {
+    throw new Error(`No fields for a set. ${STUB_CODEC_EXCLUSION}`);
   }),
-  ProblematicValue: fielded(ProblematicValue, (value) => [
-    ["tag", value.wireTypeTag],
-    ["state", value.state],
-    ["error", value.error],
-  ]),
-  UnknownValue: fielded(UnknownValue, (value) => [["state", value.state]]),
+  ProblematicValue: fielded(
+    ProblematicValue,
+    (value) => [
+      ["tag", value.wireTypeTag],
+      ["state", value.state],
+      ["error", value.error],
+    ],
+    (_like, fields) =>
+      new ProblematicValue(
+        stringField(fields, "tag"),
+        fields.get("state"),
+        stringField(fields, "error"),
+      ),
+  ),
+  UnknownValue: fielded(
+    UnknownValue,
+    (value) => [["state", value.state]],
+    (like, fields) => new UnknownValue(like.wireTypeTag, fields.get("state")),
+  ),
 };
+
+/**
+ * Returns the string `fields` holds under `name`.
+ *
+ * @throws If it holds anything else there.
+ */
+function stringField(
+  fields: ReadonlyMap<string, FabricValue>,
+  name: string,
+): string {
+  const held = fields.get(name);
+  if (typeof held !== "string") {
+    throw new Error(`Field \`${name}\` not a string: ${String(held)}`);
+  }
+  return held;
+}
+
+/**
+ * Returns the record `fields` holds under `name`.
+ *
+ * @throws If it holds anything else there.
+ */
+function recordField(
+  fields: ReadonlyMap<string, FabricValue>,
+  name: string,
+): FabricPlainObject {
+  const held = fields.get(name);
+  if (!isFabricPlainObject(held)) {
+    throw new Error(`Field \`${name}\` not a record`);
+  }
+  return held;
+}
+
+/**
+ * Returns a new instance like `like`, an instance of a class
+ * {@link INSTANCE_FIELDS} names, whose fields are `fields`.
+ */
+function instanceMadeOf(
+  like: FabricValue,
+  fields: ReadonlyMap<string, FabricValue>,
+): FabricValue {
+  for (const entry of Object.values(INSTANCE_FIELDS)) {
+    const made = entry.made(like, fields);
+    if (made !== undefined) {
+      return made;
+    }
+  }
+  throw new Error("Shouldn't happen: not an instance with fields.");
+}
 
 /**
  * Returns the fields of `value`, in the order their probes take, or

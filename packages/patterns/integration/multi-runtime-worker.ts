@@ -228,6 +228,10 @@ async function resultAt(address: unknown): Promise<Cell<any>> {
   let opened = addressedResults.get(key);
   if (!opened) {
     try {
+      // An explicit open is a host event, as navigation into a refused space
+      // is in the shell. Reconsider its prior denial once; the server still
+      // decides admission, and a client-update refusal remains terminal.
+      await runtime.retrySpaceAccess(space as MemorySpace);
       opened = await controller().getPieceCell(
         runtime.getCellFromEntityId(space as MemorySpace, id),
         true,
@@ -1112,9 +1116,10 @@ const handlers: Record<
 
   /**
    * Make this runtime reconsider a space it was refused, as the shell's Retry
-   * does: a permanent refusal is retained until an ACL notice or an explicit
-   * retry (`Runtime.retrySpaceAccess()`), and a runtime the space refused
-   * holds no session there to carry a notice.
+   * does (`Runtime.retrySpaceAccess()`). A permanent refusal is retained
+   * until an ACL notice, the server's `session/admissible` hint, or an
+   * explicit retry; with one connection per space the refused open closed
+   * the connection the hint would ride, so only the retry reaches it.
    */
   async retrySpaceAccess({ space }) {
     if (typeof space !== "string") {
