@@ -68,6 +68,7 @@ function txReading(...reads: IReadActivity[]) {
 const REFUSED = {
   document: `${FOREIGN}/user/of:fid1:refused-read-target`,
   standing: "refused",
+  address: { space: FOREIGN, id: "of:fid1:refused-read-target", scope: "user" },
 };
 
 describe("refusedReadIn()", () => {

@@ -2165,6 +2165,55 @@ describe("Phase 5 cross-space serving", () => {
     }
   });
 
+  it("a tenure's serving runtime resolves a foreign scoped read's grant through the co-hosted server, whatever its factory handed the manager (protocol.md §2's grant-scoped read)", async () => {
+    // The factory above builds its manager with no probe; the SpaceServer
+    // installs the server's on the runtime it is handed, so a tenure admits
+    // the actor's own instance on the foreign space's list and refuses a
+    // stranger's.
+    const aliceDid = aliceSigner.did();
+    const bobDid = bobSigner.did();
+    await server.writeDocument(foreignSpace, `of:${foreignSpace}`, {
+      [aliceDid]: "OWNER",
+    });
+    host = newHost();
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+    });
+    const demandCell = clientRuntime.getCell<{ ping: number }>(
+      homeSpace,
+      "grant-wiring-demand",
+      undefined,
+    );
+    const cancel = demandCell.sink(() => {});
+    try {
+      await activated(homeSpace);
+      const manager = servingRuntime!.storageManager;
+      const foreignUser = { space: foreignSpace, scope: "user" as const };
+      const alice = { principal: aliceDid };
+      const bob = { principal: bobDid };
+      // Unresolved rather than refused: a probe is installed and not yet asked.
+      expect(manager.scopedReadStanding!(foreignUser, alice)).toBe(
+        "unresolved",
+      );
+      await manager.syncInstance!(
+        { space: foreignSpace, id: "of:x-wired" as never, scope: "user" },
+        alice,
+      );
+      expect(manager.scopedReadStanding!(foreignUser, alice)).toBe("admitted");
+      await manager.syncInstance!(
+        { space: foreignSpace, id: "of:x-wired" as never, scope: "user" },
+        bob,
+      );
+      expect(manager.scopedReadStanding!(foreignUser, bob)).toBe("refused");
+    } finally {
+      cancel();
+    }
+  });
+
   it("a serving manager with no read authority probe refuses every foreign scoped read, named or not, and a non-serving manager gates nothing", async () => {
     const aliceDid = aliceSigner.did();
     await server.writeDocument(foreignSpace, `of:${foreignSpace}`, {

@@ -1875,7 +1875,8 @@ Tasks:
       (serving-loop.md §6 step 2, pinned at the helper —
       `selectForeignStaleInstances`).
       Foreign SCOPED reads are admitted on the reading actor's own READ
-      grant in the target space's access list and refused otherwise —
+      grant in the target space's access list, the actor's entry or an
+      `ANYONE` entry granting READ or more, and refused otherwise —
       protocol.md §2's grant-scoped read (RULED 2026-10-27): the
       serving manager's gate asks `Server.foreignReadAuthorityFor`
       before a named read leaves it, admission resolves the same grant

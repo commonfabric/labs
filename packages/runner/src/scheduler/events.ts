@@ -1,5 +1,6 @@
 import { getLogger } from "@commonfabric/utils/logger";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import { entityKey } from "./keys.ts";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { createRef } from "../create-ref.ts";
@@ -32,6 +33,7 @@ import type {
   CommitError,
   IExtendedStorageTransaction,
   IPreconditionFailedError,
+  IReadActivity,
   IStorageManager,
   IStorageNotification,
   IStorageTransaction,
@@ -2492,6 +2494,7 @@ export async function dispatchQueuedEvent(state: {
         state.recordLineageEvent(requeued.originTx, requeued);
       }
       state.queueExecution();
+      return requeued;
     };
 
     // Re-queue a transient outcome for a later retry. With `runAt` the retry is
@@ -2619,13 +2622,50 @@ export async function dispatchQueuedEvent(state: {
       // cannot succeed fails it. Only what the run itself read decides
       // this: the preflight's dependency walk is a transaction of its own,
       // and a refused document only it reaches leaves the run free to
-      // dispatch. The preflight parks on a read whose grant is still being
-      // asked for, so a run meets no unresolved document; one that did
-      // is treated as refused, since the absence it read is no state
-      // either way.
-      const refused = served === undefined
+      // dispatch.
+      const refusedRead = served === undefined
         ? undefined
-        : refusedReadIn(state.runtime.storageManager, tx.tx)?.document;
+        : refusedReadIn(state.runtime.storageManager, tx.tx);
+      if (refusedRead?.standing === "unresolved") {
+        // The run read a foreign scoped instance whose actor's grant is still
+        // being asked for — a document its body alone reaches, since the
+        // preflight parks on one its declared schema reaches. The read kicked
+        // the load, and the event runs again once that load settles, with the
+        // document or with the refusal the next run reads as such. The
+        // re-queued entry is passed over meanwhile, so dispatch does not spin
+        // on a grant in flight, and idle waits on it as on any parked head.
+        state.noteLineageRerun(tx);
+        if (tx.status().status === "ready") {
+          tx.abort(
+            new Error(
+              "served run read a foreign scoped instance whose actor's grant " +
+                `is unresolved: ${refusedRead.document}`,
+            ),
+          );
+        }
+        const requeued = requeueForNameResolution();
+        requeued.retryReadinessPending = true;
+        const manager = state.runtime.storageManager;
+        const identity = tx.tx.scopeKeyIdentity ??
+          state.runtime.scopeKeyIdentity;
+        void (manager.loadsSettled?.([
+          entityKey(refusedRead.address, identity),
+        ]) ??
+          Promise.resolve())
+          .catch(() => undefined)
+          .then(() => {
+            delete requeued.retryReadinessPending;
+            state.queueExecution();
+          });
+        runFinalCommitCallback();
+        tx.abandonStagedWork(
+          eventAbandonError(
+            "served run re-runs once the grant it read under is resolved",
+          ),
+        );
+        return;
+      }
+      const refused = refusedRead?.document;
       if (refused !== undefined) {
         if (tx.status().status === "ready") {
           tx.abort(new Error(`served run read a refused document: ${refused}`));
@@ -3365,7 +3405,8 @@ export async function dispatchQueuedEvent(state: {
 /**
  * The first document whose value `tx` read under its identity that `manager`
  * does not admit (`scopedReadStanding`), as `<space>/<scope>/<id>` with the
- * standing it has, or `undefined` when every document it read is admitted.
+ * standing it has and its address, or `undefined` when every document it read
+ * is admitted.
  * A read of the document's root counts, as a read of its value does, among
  * the reads the run depends on. Three kinds of read do not count, since none
  * is the run consuming the document's data: a read of its CFC metadata, which
@@ -3380,7 +3421,11 @@ export async function dispatchQueuedEvent(state: {
 export function refusedReadIn(
   manager: Pick<IStorageManager, "scopedReadStanding">,
   tx: Pick<IStorageTransaction, "getReadActivities" | "scopeKeyIdentity">,
-): { document: string; standing: "refused" | "unresolved" } | undefined {
+): {
+  document: string;
+  standing: "refused" | "unresolved";
+  address: Pick<IReadActivity, "space" | "id" | "scope">;
+} | undefined {
   if (manager.scopedReadStanding === undefined) return undefined;
   for (const read of tx.getReadActivities?.() ?? []) {
     if (
@@ -3395,6 +3440,7 @@ export function refusedReadIn(
       return {
         document: `${read.space}/${read.scope ?? "space"}/${read.id}`,
         standing,
+        address: { space: read.space, id: read.id, scope: read.scope },
       };
     }
   }

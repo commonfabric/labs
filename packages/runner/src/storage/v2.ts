@@ -5086,12 +5086,6 @@ const docKey = (id: URI, instance: string): string => `${instance}\0${id}`;
  * caller knows it, the explicit instance key. */
 type LocalDocAddress = { id: URI; scope?: CellScope; scopeKey?: ScopeKey };
 
-/**
- * One space's local replica: the documents the server has confirmed, the
- * local writes pending on them, and the session that keeps the two in step.
- * Exported so that a test holding one as `ISpaceReplica` can narrow to the
- * class.
- */
 /** Whether `failure`, as a pull reports it, is a gated read's refusal. */
 const isForeignScopedReadRefusal = (failure: unknown): boolean =>
   typeof failure === "object" && failure !== null &&
@@ -5106,6 +5100,12 @@ type ForeignScopedReadVerdictEntry = {
   promise: ReturnType<ForeignScopedReadGrant>;
 };
 
+/**
+ * One space's local replica: the documents the server has confirmed, the
+ * local writes pending on them, and the session that keeps the two in step.
+ * Exported so that a test holding one as `ISpaceReplica` can narrow to the
+ * class.
+ */
 export class SpaceReplica
   implements
     ISpaceReplica,

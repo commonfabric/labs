@@ -711,9 +711,11 @@ loop's duty).
   that list changes, and the storage manager registers no pending load
   for it, so a served event's preflight never parks on one. While the
   reading actor's grant is still being asked for, the read is a load in
-  flight like any other, and the preflight parks on it; a refusal
-  settles it as an absence, not as a failure of the load, so the event
-  dispatches and what decides it is what its run reads. A run that reads the
+  flight like any other: the preflight parks on it, and a run that
+  reaches such a document in its body alone is withdrawn and runs again
+  once the load settles; a refusal settles it as an absence, not as a
+  failure of the load, so the event dispatches and what decides it is
+  what its run reads. A run that reads the
   value of such a document, a user- or session-scoped document in
   another space reached through its declared event or its bound state,
   read an absence that is not the document's state: the run is withdrawn
