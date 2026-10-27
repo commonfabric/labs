@@ -87,6 +87,9 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   /** The task text, given to the model as the prompt. */
   task: string;
 
+  /** The predecessor's run root, whose checkpoint seeds this follow-up. */
+  continueFrom?: { runRoot: string };
+
   /** Inline host-owned images, snapshotted into this job workspace. */
   imageAttachments?: readonly HarnessInlineImageAttachment[];
 
@@ -204,6 +207,14 @@ export interface HarnessJobOptions {
   /** The directory the job's workspace and artifacts are created under. */
   runRoot: string;
 
+  /**
+   * Takes caller messages for the next model turn, in acceptance order.
+   * Each returned string becomes a user message at that turn's boundary.
+   */
+  takeMessages?: (
+    turn: number,
+  ) => readonly string[] | Promise<readonly string[]>;
+
   /** Aborts the job. */
   signal: AbortSignal;
 
@@ -222,7 +233,12 @@ export interface HarnessJobOptions {
 
 /** How a job ended. */
 export type HarnessJobResult =
-  & { report?: AgentRunReport }
+  & {
+    report?: AgentRunReport;
+
+    /** Whether the run left a complete checkpoint a follow-up can use. */
+    recordedRun?: boolean;
+  }
   & (
     | {
       outcome: "completed";
@@ -387,11 +403,25 @@ export const selectHarnessJobSandboxRuntime = (
  * satisfying its schema, and as
  * `PROVIDER_FAILURE` when the model or a tool failed, or when a validated
  * result could not be read back.
+ *
+ * SHORTCUT: this body refuses `takeMessages` and `continueFrom` and never
+ * reports `recordedRun`. The local lane keeps steering off in production,
+ * and a message to a finished head is refused as `not_continuable`. Stage 4
+ * of `docs/plans/agent-runner-job-continuation.md` wires these seams into
+ * the harness and reports complete checkpoints.
+ *
+ * @throws Error when `takeMessages` or `continueFrom` is supplied before the
+ * harness wiring is available.
  */
 export const runHarnessJob = async (
   spec: HarnessJobSpec,
   options: HarnessJobOptions,
 ): Promise<HarnessJobResult> => {
+  if (spec.continueFrom !== undefined || options.takeMessages !== undefined) {
+    throw new Error(
+      "Harness wiring is pending stage 4 for continuation and messages.",
+    );
+  }
   const workspace = join(options.runRoot, "workspace");
   await Deno.mkdir(workspace, { recursive: true });
   const resultPath = join(workspace, RESULT_FILE);

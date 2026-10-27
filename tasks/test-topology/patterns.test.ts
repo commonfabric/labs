@@ -64,6 +64,31 @@ describe("the pattern and package suites", () => {
     }
   });
 
+  it("requires the Topics pivot integration for changes to the board's and a topic's sources", async () => {
+    const pivot =
+      "packages/patterns/integration/topic-board-pivot-sessions.test.ts";
+    for (const defaultEnabled of [false, true]) {
+      const loaded = await loadPatternSuites(root, defaultEnabled);
+      for (const id of Object.values(arms(defaultEnabled))) {
+        const suite = pick(loaded, id);
+        for (
+          const source of [
+            "packages/patterns/topics/main.tsx",
+            "packages/patterns/topics/topic.tsx",
+            pivot,
+          ]
+        ) {
+          expect(suite.unitsForChange?.(new Set([source]))).toEqual([pivot]);
+        }
+        expect(
+          suite.unitsForChange?.(
+            new Set(["packages/patterns/topics/README.md"]),
+          ),
+        ).toEqual([]);
+      }
+    }
+  });
+
   it("runs the chosen files where the package lives", async () => {
     const suite = byId("pattern-integration");
     const [invocation] = await suite.command(

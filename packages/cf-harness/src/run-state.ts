@@ -40,7 +40,7 @@ import type {
   HarnessSkillsRootRecord,
 } from "./contracts/skill.ts";
 import type {
-  HarnessSubagentLineage,
+  HarnessRunLineage,
   HarnessSubagentRunRef,
 } from "./contracts/subagent.ts";
 import type { ToolResultRef } from "./contracts/tool-result.ts";
@@ -310,7 +310,7 @@ export interface HarnessRunState {
   docsQueryFailures?: number;
 
   toolOutputs: ToolResultRef[];
-  lineage?: HarnessSubagentLineage;
+  lineage?: HarnessRunLineage;
   subagentRuns?: HarnessSubagentRunRef[];
   failureRecords?: HarnessFailureRecord[];
   primaryFailure?: HarnessFailureRecord;
@@ -386,7 +386,7 @@ export interface CreateHarnessRunStateOptions {
   openingResearch?: HarnessOpeningResearch;
   researchFailures?: number;
   docsQueryFailures?: number;
-  lineage?: HarnessSubagentLineage;
+  lineage?: HarnessRunLineage;
   subagentRuns?: HarnessSubagentRunRef[];
   failureRecords?: HarnessFailureRecord[];
   primaryFailure?: HarnessFailureRecord;

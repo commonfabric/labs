@@ -19,6 +19,7 @@ import {
   localJobSpecOf,
   PROFILE_UNAVAILABLE,
 } from "../../src/local-jobs/lane.ts";
+import { createLocalJobApi } from "../../src/local-jobs/api.ts";
 import { browserChild, delegatedBrowse } from "./fixtures/delegated-browse.ts";
 
 import type { LocalJobProfile } from "../../src/local-jobs/profiles.ts";
@@ -95,6 +96,7 @@ interface HeldRun {
 /** Helper for tests, which builds a lane whose jobs the test settles. */
 const laneWith = (
   options: {
+    steering?: boolean;
     profiles?: Map<string, LocalJobProfile>;
     maxConcurrent?: number;
     report?: (message: string) => void;
@@ -110,6 +112,7 @@ const laneWith = (
   const started: ((run: HeldRun) => void)[] = [];
   const lane = new LocalJobLane({
     store,
+    steering: options.steering,
     profiles: options.profiles ?? new Map([["ask", ASK]]),
     maxConcurrent: options.maxConcurrent ?? 2,
     workRoot: "/work/local",
@@ -148,6 +151,211 @@ const laneWith = (
 };
 
 describe("local-jobs/lane", () => {
+  describe("messages", () => {
+    const message = (key: string) => ({
+      caller: "cfs:weaver",
+      idempotencyKey: key,
+      message: key,
+    });
+
+    it("passes the turn seam and recorded run through and launches the follow-up", async () => {
+      const { store, lane, enqueue, nextRun, runs } = laneWith({
+        steering: true,
+      });
+      try {
+        lane.start();
+        const id = enqueue("initial");
+        const first = await nextRun(0);
+        expect(lane.canSteer()).toBe(true);
+        store.acceptMessage(id, message("A"), { canSteer: lane.canSteer() });
+        expect(await first.options.takeMessages!(2)).toEqual(["A"]);
+        store.acceptMessage(id, message("B"), { canSteer: true });
+        store.acceptMessage(id, message("C"), { canSteer: true });
+        first.settle({
+          outcome: "completed",
+          structuredResult: {},
+          handleTable: {} as never,
+          recordedRun: true,
+        });
+        const second = await nextRun(1);
+        expect(second.spec).toMatchObject({
+          task: "B",
+          continueFrom: { runRoot: join("/work/local", id) },
+        });
+        expect(await second.options.takeMessages!(1)).toEqual(["C"]);
+        const nextId = store.get(id)!.continuedBy!;
+        expect(
+          store.events(id).slice(-3).map((event) =>
+            event.body.delivery ?? event.body.state
+          ),
+        ).toEqual(["follow-up", "moved", "completed"]);
+        second.settle({
+          outcome: "completed",
+          structuredResult: {},
+          handleTable: {} as never,
+          recordedRun: true,
+        });
+        await reached(store, nextId, "completed");
+      } finally {
+        for (const run of runs) run.settle({ outcome: "cancelled" });
+        await lane.stop();
+        store.close();
+      }
+    });
+
+    for (const queuedC of [false, true]) {
+      it(`runs each instruction replacement in its own follow-up with C ${queuedC ? "sent while queued" : "sent after cancel"}`, async () => {
+        const { store, lane, enqueue, nextRun, runs } = laneWith({
+          steering: true,
+          maxConcurrent: 1,
+        });
+        const api = createLocalJobApi({
+          store,
+          profiles: new Map([["ask", ASK]]),
+          token: "test",
+          kick: () => lane.kick(),
+          cancel: (id) => lane.cancel(id),
+          canSteer: () => lane.canSteer(),
+        });
+        const send = async (id: string, key: string, instructions?: string) => {
+          const response = await api(
+            new Request(`http://runner/jobs/${id}/messages`, {
+              method: "POST",
+              headers: { authorization: "Bearer test" },
+              body: JSON.stringify({
+                ...message(key),
+                ...(instructions !== undefined ? { instructions } : {}),
+              }),
+            }),
+          );
+          expect(response.status).toBe(201);
+          return await response.json();
+        };
+        try {
+          lane.start();
+          const id = enqueue("initial");
+          const first = await nextRun(0);
+          await send(id, "old");
+          lane.cancel(id);
+          await send(id, "A", "Instructions A");
+          await send(id, "B", "Instructions B");
+          if (!queuedC) await send(id, "C");
+          if (queuedC) enqueue("blocker");
+          first.settle({ outcome: "cancelled", recordedRun: true });
+          if (queuedC) {
+            const blocker = await nextRun(1);
+            expect((await send(id, "C")).job.state).toBe("queued");
+            blocker.settle({
+              outcome: "completed",
+              structuredResult: {},
+              handleTable: {} as never,
+            });
+          }
+          const second = await nextRun(queuedC ? 2 : 1);
+          expect(store.get(id)?.messages[0]).toMatchObject({
+            key: "old",
+            delivery: "dropped",
+            reason: "cancelled",
+          });
+          expect(second.spec).toMatchObject({
+            task: "A",
+            instructions: "Instructions A",
+          });
+          expect(await second.options.takeMessages!(1)).toEqual([]);
+          second.settle({
+            outcome: "completed",
+            structuredResult: {},
+            handleTable: {} as never,
+            recordedRun: true,
+          });
+          const third = await nextRun(queuedC ? 3 : 2);
+          expect(third.spec).toMatchObject({
+            task: "B",
+            instructions: "Instructions B",
+          });
+          expect(await third.options.takeMessages!(1)).toEqual(["C"]);
+          const headId = store.get(store.get(id)!.continuedBy!)!.continuedBy!;
+          third.settle({
+            outcome: "completed",
+            structuredResult: {},
+            handleTable: {} as never,
+            recordedRun: true,
+          });
+          await reached(store, headId, "completed");
+        } finally {
+          for (const run of runs) run.settle({ outcome: "cancelled" });
+          await lane.stop();
+          store.close();
+        }
+      });
+    }
+
+    it("gives runs no message hook when steering is disabled or omitted", async () => {
+      for (const steering of [false, undefined]) {
+        const { store, lane, enqueue, nextRun, runs } = laneWith({ steering });
+        try {
+          lane.start();
+          enqueue("initial");
+          const run = await nextRun(0);
+          expect(lane.canSteer()).toBe(false);
+          expect("takeMessages" in run.options).toBe(false);
+        } finally {
+          for (const run of runs) run.settle({ outcome: "cancelled" });
+          await lane.stop();
+          store.close();
+        }
+      }
+    });
+
+    it("defaults steering off and drops pending messages if the profile disappears", async () => {
+      const profiles = new Map([["ask", ASK]]);
+      const { store, lane, runs } = laneWith({ profiles });
+      try {
+        const id = idOf(store.enqueue("cfs:weaver", "ask", "initial", REQUEST));
+        store.acceptMessage(id, message("A"), { canSteer: true });
+        profiles.clear();
+        expect(lane.canSteer()).toBe(false);
+        lane.start();
+        await reached(store, id, "failed");
+        expect(store.get(id)).toMatchObject({
+          errorCode: PROFILE_UNAVAILABLE,
+          messages: [{ delivery: "dropped", reason: "not_continuable" }],
+        });
+        expect(
+          store.events(id).slice(-2).map((event) =>
+            event.body.delivery ?? event.body.state
+          ),
+        ).toEqual(["dropped", "failed"]);
+      } finally {
+        for (const run of runs) run.settle({ outcome: "cancelled" });
+        await lane.stop();
+        store.close();
+      }
+    });
+
+    it("drops pending messages when runJob throws without a recorded run", async () => {
+      const { store, lane, enqueue, nextRun, runs } = laneWith({
+        steering: true,
+      });
+      try {
+        lane.start();
+        const id = enqueue("initial");
+        const run = await nextRun(0);
+        store.acceptMessage(id, message("A"), { canSteer: true });
+        run.fail(new Error("provider gone"));
+        await reached(store, id, "failed");
+        expect(store.get(id)?.messages).toMatchObject([{
+          delivery: "dropped",
+          reason: "not_continuable",
+        }]);
+      } finally {
+        for (const run of runs) run.settle({ outcome: "cancelled" });
+        await lane.stop();
+        store.close();
+      }
+    });
+  });
+
   describe("localJobSpecOf()", () => {
     const job = {
       id: "job-test",

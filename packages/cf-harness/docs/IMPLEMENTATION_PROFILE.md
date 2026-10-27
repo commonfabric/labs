@@ -408,8 +408,13 @@ placeholders resolve only at the SQLite query boundary.
    populates a `valueDigest`, and neither supplies the trusted input-capture
    record a non-render surface needs. The transport contract already types
    `subject`, `eventId`, `valueDigest`, `slotDigest`, `snapshotDigest`, and
-   `targetPath`. Owner: `cf-harness`. Retirement: each surface mints per
-   submission, over the submitted value's digest and an authenticated subject.
+   `targetPath`. A steer a host hands a running loop through `takeMessages`
+   carries this deviation further: it joins the run under the run's binding, so
+   a run bound this way gives each later message the authority it gives the
+   first. The loop refuses `takeMessages` under a binding that does carry a
+   digest. Owner: `cf-harness`. Retirement: each surface mints per submission,
+   over the submitted value's digest and an authenticated subject, and a steer
+   is a submission that mints its own.
 
 <!-- Deviation identifiers match the design and audit references. -->
 
