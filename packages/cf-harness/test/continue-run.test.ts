@@ -4,6 +4,7 @@
  * the boundary; the predecessor's files must remain unchanged.
  */
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -515,6 +516,34 @@ describe("continue-run", () => {
     expect(errors.join("")).toContain("prior run");
     expect(requests).toHaveLength(0);
     expect(await Deno.readTextFile(outside)).toBe(bytes);
+  });
+  it("continues without opening an outward directory containing an unreadable subtree", async () => {
+    const outside = join(workspace, "outside-tree");
+    const unreadable = join(outside, "unreadable");
+    await Deno.mkdir(unreadable, { recursive: true });
+    await Deno.chmod(unreadable, 0o000);
+    await Deno.symlink(outside, join(priorRoot, "linked-artifacts"));
+    const opened: string[] = [];
+    const readDir = Deno.readDir.bind(Deno);
+    const probe = stub(Deno, "readDir", (path) => {
+      if (path === outside || path === unreadable) opened.push(path);
+      // The probe also enforces unreadability when tests run as root.
+      if (path === unreadable) {
+        throw new Deno.errors.PermissionDenied("unreadable subtree");
+      }
+      return readDir(path);
+    });
+    let exitCode: number;
+    try {
+      exitCode = await run();
+    } finally {
+      probe.restore();
+      await Deno.chmod(unreadable, 0o700);
+    }
+    expect(exitCode).toBe(0);
+    expect(opened).toEqual([]);
+    expect(requests).toHaveLength(1);
+    await unchanged();
   });
   for (const outputName of ["new-output", "..new-output"]) {
     it(`protects an outward artifact directory from ${outputName}`, async () => {

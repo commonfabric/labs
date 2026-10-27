@@ -1237,14 +1237,15 @@ const isHostPathWithinRoot = (root: string, path: string): boolean => {
     !isAbsolute(relativePath);
 };
 
-/** Resolves prior artifacts, following directory links once per real target. */
+/** Protects prior artifacts and link targets, walking only inside the run. */
 const protectedRunTargets = async (
   runRoot: string,
   resultPath?: string,
 ): Promise<{ files: Set<string>; directories: Set<string> }> => {
   const files = new Set<string>();
   const directories = new Set<string>();
-  const pending = [runRoot];
+  const root = resolveHostPathThroughNearestRealParent(runRoot);
+  const pending = [root];
   while (pending.length > 0) {
     const path = resolveHostPathThroughNearestRealParent(pending.pop()!);
     let stat: Deno.FileInfo;
@@ -1261,6 +1262,9 @@ const protectedRunTargets = async (
     }
     if (directories.has(path)) continue;
     directories.add(path);
+    // Protection covers the run's files and their first-hop targets. Links
+    // inside outward directories that point elsewhere are not followed.
+    if (!isHostPathWithinRoot(root, path)) continue;
     for await (const entry of Deno.readDir(path)) {
       pending.push(join(path, entry.name));
     }
