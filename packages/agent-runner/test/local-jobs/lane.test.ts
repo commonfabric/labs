@@ -290,6 +290,23 @@ describe("local-jobs/lane", () => {
       });
     }
 
+    it("gives runs no message hook when steering is disabled or omitted", async () => {
+      for (const steering of [false, undefined]) {
+        const { store, lane, enqueue, nextRun, runs } = laneWith({ steering });
+        try {
+          lane.start();
+          enqueue("initial");
+          const run = await nextRun(0);
+          expect(lane.canSteer()).toBe(false);
+          expect("takeMessages" in run.options).toBe(false);
+        } finally {
+          for (const run of runs) run.settle({ outcome: "cancelled" });
+          await lane.stop();
+          store.close();
+        }
+      }
+    });
+
     it("defaults steering off and drops pending messages if the profile disappears", async () => {
       const profiles = new Map([["ask", ASK]]);
       const { store, lane, runs } = laneWith({ profiles });

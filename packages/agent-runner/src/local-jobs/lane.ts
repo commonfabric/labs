@@ -512,7 +512,11 @@ export class LocalJobLane {
         {
           runRoot: join(this.#options.workRoot, job.id),
           signal,
-          takeMessages: (turn) => store.takeMessages(job.id, turn),
+          ...(this.#options.steering === true
+            ? {
+              takeMessages: (turn: number) => store.takeMessages(job.id, turn),
+            }
+            : {}),
           ...(browserHost !== undefined ? { browserHost } : {}),
           onEvent: (event) => {
             const { message } = event;

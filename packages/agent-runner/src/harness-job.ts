@@ -395,8 +395,6 @@ export const selectHarnessJobSandboxRuntime = (
   harnessDeps: RunCfHarnessCliDependencies = {},
 ) => selectCfHarnessCliSandboxRuntime({ ...harnessDeps, ...SANDBOX_SELECTION });
 
-// Stage 4 wires `takeMessages` and `continueFrom` into the harness.
-
 /**
  * Runs one job. It ends `completed` with the value the model submitted and
  * the handles the job held; `cancelled` when its signal aborted; `failed` as
@@ -405,6 +403,12 @@ export const selectHarnessJobSandboxRuntime = (
  * satisfying its schema, and as
  * `PROVIDER_FAILURE` when the model or a tool failed, or when a validated
  * result could not be read back.
+ *
+ * SHORTCUT: this body ignores `takeMessages` and `continueFrom` and never
+ * reports `recordedRun`. The local lane keeps steering off in production,
+ * and a message to a finished head is refused as `not_continuable`. Stage 4
+ * of `docs/plans/agent-runner-job-continuation.md` wires these seams into
+ * the harness and reports complete checkpoints.
  */
 export const runHarnessJob = async (
   spec: HarnessJobSpec,
