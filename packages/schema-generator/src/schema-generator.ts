@@ -1238,7 +1238,6 @@ function withPartLabels(
 const UNKNOWN_VALUE_KEYWORDS: ReadonlySet<string> = new Set([
   "type",
   "description",
-  "tags",
   "deprecated",
   "$comment",
 ]);

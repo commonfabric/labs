@@ -1042,7 +1042,6 @@ describe("SchemaGenerator", () => {
         propertyA({
           asCell: ["stream"],
           description: "Opens the panel. #tagged",
-          tags: ["tagged"],
           deprecated: true,
         }),
       ],

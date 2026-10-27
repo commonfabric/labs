@@ -1165,9 +1165,9 @@ Default paths of §7:
   with, but it meets `Node` inside the definition of `Node`, where those
   labels cannot be read yet."), and a declaration of `any` stating them is
   kept.
-- The property's description, the tags drawn from it, and its deprecation
-  mark are the first declaration's where it has them, and otherwise those of
-  the schema it takes. A later declaration's differing description is noted
+- The property's description and its deprecation mark are the first
+  declaration's where it has them, and otherwise those of the schema it
+  takes. A later declaration's differing description is noted
   in a `$comment` ("Conflicting docs across intersection constituents; using
   first") and a logger warning. `required` is unioned, as a property any
   constituent requires is required; `$ref` constituents resolve through

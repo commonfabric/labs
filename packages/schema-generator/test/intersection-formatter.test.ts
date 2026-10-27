@@ -158,7 +158,6 @@ describe("IntersectionFormatter", () => {
         type: "array",
         items: { type: "string" },
         description: "The tags. #taglist\n\nOther words.",
-        tags: ["taglist"],
         $comment:
           "Docs inherited from intersection constituents. Sources: Tags, Words.",
       });
@@ -520,7 +519,6 @@ describe("IntersectionFormatter", () => {
       ).toEqual({
         type: "string",
         description: "Second doc #tagged",
-        tags: ["tagged"],
       });
     });
   });

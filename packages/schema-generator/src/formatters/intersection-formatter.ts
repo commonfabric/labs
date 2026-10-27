@@ -70,7 +70,7 @@ type ConstituentDocs = {
 };
 
 /** The keywords a declaration's JSDoc writes into its property's schema. */
-const DOC_KEYWORDS = ["description", "tags", "deprecated"] as const;
+const DOC_KEYWORDS = ["description", "deprecated"] as const;
 
 /** The description a schema carries, if any. */
 function descriptionOf(schema: MutableJSONSchema): string | undefined {
@@ -81,8 +81,7 @@ function descriptionOf(schema: MutableJSONSchema): string | undefined {
 
 /**
  * `value` with the documentation `documented` carries in place of its own:
- * the description and the tags drawn from it, where `documented` has a
- * description, and the deprecation mark, where it has one.
+ * the description and the deprecation mark, each where `documented` has one.
  */
 function documentedAs(
   value: MutableJSONSchemaObj,
@@ -90,9 +89,7 @@ function documentedAs(
 ): MutableJSONSchemaObj {
   const schema: Record<string, unknown> = { ...value };
   if (typeof documented.description === "string") {
-    delete schema.tags;
     schema.description = documented.description;
-    if (documented.tags !== undefined) schema.tags = documented.tags;
   }
   if (documented.deprecated !== undefined) {
     schema.deprecated = documented.deprecated;
@@ -113,7 +110,7 @@ export function withoutDocumentation(
   ) {
     return schema;
   }
-  const { description: _, tags: __, deprecated: ___, ...rest } = schema;
+  const { description: _, deprecated: __, ...rest } = schema;
   return rest;
 }
 

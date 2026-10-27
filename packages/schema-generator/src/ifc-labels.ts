@@ -61,7 +61,6 @@ const BESIDE_ANY_VALUE: ReadonlySet<string> = new Set([
   "scope",
   "default",
   "description",
-  "tags",
   "deprecated",
   "$comment",
 ]);
