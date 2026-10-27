@@ -913,6 +913,17 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
     },
   },
   {
+    name: "link whose payload holds itself",
+    section: SECTION_CYCLES,
+    make: () => {
+      // A link keeps a payload frozen before it is made as it is, rather
+      // than copying it.
+      const payload: { self?: FabricValue } = {};
+      payload.self = payload;
+      return new FabricLink(Object.freeze(payload));
+    },
+  },
+  {
     name: "unknown value whose state holds the unknown value",
     section: SECTION_CYCLES,
     make: () => {

@@ -250,6 +250,23 @@ describe("conformance-fixtures", () => {
       });
     });
 
+    it("returns a patch naming a link's payload where a cycle closes at it", () => {
+      const payload: { self?: FabricValue } = {};
+      payload.self = payload;
+      expect(
+        textWithModsOfForTestingOnly(new FabricLink(Object.freeze(payload))),
+      )
+        .toEqual({
+          text: 'fvj1:{"/Link@1":{"self":null}}',
+          patches: [{ at: ["payload", "self"], put: { cycle: ["payload"] } }],
+        });
+    });
+
+    it("throws given a map, whose codec is a stub", () => {
+      expect(() => textWithModsOfForTestingOnly([new FabricMap(new Map())]))
+        .toThrow("No fields for a map. Its codec is a stub");
+    });
+
     it("returns a patch naming an instance where a cycle closes at it", () => {
       const state: { self?: FabricValue } = {};
       const unknown = new UnknownValue("Future@1", state);
@@ -418,6 +435,19 @@ describe("conformance-fixtures", () => {
       }) as { link: FabricLink };
       expect(value.link).toBeInstanceOf(FabricLink);
       expect(value.link.payload.record).toBe(value);
+      expect(Object.isFrozen(value)).toBe(true);
+    });
+
+    it("returns a link whose payload holds itself where cycle patches name the payload", () => {
+      const value = fabricValueOfTextWithModsForTestingOnly({
+        text: 'fvj1:{"/Link@1":{"a":null,"b":null}}',
+        patches: [
+          { at: ["payload", "a"], put: { cycle: ["payload"] } },
+          { at: ["payload", "b"], put: { cycle: ["payload"] } },
+        ],
+      }) as FabricLink;
+      expect(value.payload.a).toBe(value.payload);
+      expect(value.payload.b).toBe(value.payload);
       expect(Object.isFrozen(value)).toBe(true);
     });
 

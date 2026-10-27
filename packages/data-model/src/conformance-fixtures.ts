@@ -425,8 +425,8 @@ function plainJsonBodyOf(
  * replaces the instance with a new one, made in the place the old one held. The
  * patches that do that are made first, so that the others, which may put one of
  * those instances where a cycle closes, find it already made. Every patch is
- * then checked to hold, which it fails to only for a value that no
- * construction makes.
+ * then checked to hold once all are made, so that a value the patches cannot
+ * build, such as a link whose payload holds the link itself, is refused.
  *
  * @throws What the codec throws, refusing the text; if a tag in `unclaimed` is
  *   out of order, named twice, or claimed by no class this package registers
@@ -479,8 +479,7 @@ export function fabricValueOfTextWithMods(
       : (leaf === containerAt(result, target));
     if (!holds) {
       throw new Error(
-        `The patch at ${JSON.stringify(at)} does not hold once all are ` +
-          "made, which no construction of a value leads to.",
+        `The patch at ${JSON.stringify(at)} does not hold once all are made.`,
       );
     }
   }
@@ -738,12 +737,16 @@ function putAt(
     keys[index - 1] === "payload" && isFabricPlainObject(holder)
   ) {
     // A link holds its payload frozen, so the link is made again, with a
-    // copy of the payload holding `value`.
+    // copy of the payload holding `value`. The copy stands in for the old
+    // payload wherever that held itself, and is frozen so that the link keeps
+    // the copy rather than a copy of it.
     const payload = {};
+    const copied = (held: FabricValue) => (held === holder) ? payload : held;
     for (const payloadKey of Object.keys(holder)) {
-      defineOwn(payload, payloadKey, holder[payloadKey]);
+      defineOwn(payload, payloadKey, copied(holder[payloadKey]));
     }
-    defineOwn(payload, key, value);
+    defineOwn(payload, key, copied(value));
+    Object.freeze(payload);
     return putAt(root, holders, keys, index - 2, new FabricLink(payload));
   } else if (isFabricArray(holder) || isFabricPlainObject(holder)) {
     defineOwn(holder, key, value);

@@ -54,7 +54,9 @@ what the text cannot:
   Follow every path before making any patch, so that no path runs into what a
   patch put. No two patches share a path. Where an instance holds what a patch
   changes for good, as a link holds its payload, make the instance again with
-  the change in it, and put the new instance where the old one was.
+  the change in it, and put the new instance where the old one was. A copy of
+  what it held stands in for the original wherever that held itself, as a link's
+  payload may.
 
 ## Probes
 
