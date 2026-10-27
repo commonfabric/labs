@@ -69,7 +69,7 @@ describe("topicsBrowserPostureOf()", () => {
     expect(posture.clientFrom).toBe("meta");
   });
 
-  it("reports served views only where the toolshed runs web view-scoped replication beside server execution", () => {
+  it("reports served views where the toolshed runs view-scoped replication for the web client beside server execution, the web override outranking the global setting", () => {
     const served = (experimental: Record<string, boolean>) =>
       declared(topicsBrowserPostureOf({
         experimental,
@@ -80,6 +80,13 @@ describe("topicsBrowserPostureOf()", () => {
     expect(served({ serverExecution: true, webViewScopedReplication: false }))
       .toBe(false);
     expect(served({ serverExecution: true })).toBe(false);
+    expect(served({ serverExecution: true, viewScopedReplication: true }))
+      .toBe(true);
+    expect(served({
+      serverExecution: true,
+      viewScopedReplication: true,
+      webViewScopedReplication: false,
+    })).toBe(false);
     expect(served({ serverExecution: false, webViewScopedReplication: true }))
       .toBe(false);
   });
