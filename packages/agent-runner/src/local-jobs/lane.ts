@@ -17,6 +17,8 @@
 
 import { join } from "@std/path";
 
+import { readHarnessRunArtifacts } from "@commonfabric/cf-harness/artifacts";
+import { canContinueHarnessRun } from "@commonfabric/cf-harness/run-continuation";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { debugStr } from "@commonfabric/data-model";
 import { Identity, legacySpaceDid } from "@commonfabric/identity";
@@ -391,8 +393,19 @@ export class LocalJobLane {
    * Ends every job a stop or a crash cut off as `interrupted`, then starts
    * the queued jobs it has room for.
    */
-  start(): void {
-    const recovered = this.#options.store.recover();
+  async start(): Promise<void> {
+    const continuable = new Set<string>();
+    for (const { id, runRoot } of this.#options.store.runningRuns()) {
+      if (runRoot === undefined) continue;
+      try {
+        if (canContinueHarnessRun(await readHarnessRunArtifacts(runRoot))) {
+          continuable.add(id);
+        }
+      } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      }
+    }
+    const recovered = this.#options.store.recover(continuable);
     if (recovered.length > 0) {
       this.#report(() =>
         `agent runner: ${recovered.length} local job(s) were cut off and end interrupted (${RUNNER_RESTARTED})`
@@ -509,14 +522,7 @@ export class LocalJobLane {
     };
     let result: HarnessJobResult;
     try {
-      let root = job;
-      while (root.continues !== undefined) {
-        const predecessor = store.get(root.continues);
-        if (predecessor === undefined) {
-          throw new Error("Cannot find the conversation's predecessor job.");
-        }
-        root = predecessor;
-      }
+      const root = store.conversation(job.id)!.root;
       const runRef = job.continues === undefined
         ? undefined
         : store.get(job.continues)?.report?.runRef;
@@ -531,6 +537,7 @@ export class LocalJobLane {
           signal,
           takeMessages: (turn: number) => store.takeMessages(job.id, turn),
           ...(browserHost !== undefined ? { browserHost } : {}),
+          onStart: (runRoot) => store.recordRunRoot(job.id, runRoot),
           onUsage: (update) => {
             store.report(job.id, "usage", { ...update });
           },

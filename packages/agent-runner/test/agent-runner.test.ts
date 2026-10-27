@@ -1706,9 +1706,14 @@ describe("agent runner", () => {
                   options.engine!.getRunState().structuredResult!.path,
                 signal: prompt.signal,
                 emit: async () => {
-                  await prompt.onTranscriptEvent?.(
-                    { type: "assistant_message" } as never,
-                  );
+                  const message = {
+                    role: "assistant" as const,
+                    content: "Working.",
+                  };
+                  await prompt.onTranscriptEvent?.({
+                    message,
+                    transcript: [message],
+                  });
                 },
               });
             },

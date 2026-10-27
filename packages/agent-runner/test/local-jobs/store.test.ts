@@ -550,6 +550,16 @@ describe("local-jobs/store", () => {
             });
             expect(store.acceptMessage("old", body("A")))
               .toMatchObject({ code: "not_continuable" });
+            if (opening === 0) {
+              const pending =
+                added(store.enqueue("test", "ask", "running", request())).job;
+              store.claimNext();
+              store.recordRunRoot(pending.id, "/recorded/harness-run");
+            }
+            expect(store.runningRuns()).toEqual([{
+              id: expect.any(String),
+              runRoot: "/recorded/harness-run",
+            }]);
           } finally {
             store.close();
           }

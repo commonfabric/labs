@@ -224,6 +224,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   finished_at TEXT,
   continues TEXT REFERENCES jobs (id),
   recorded_run INTEGER NOT NULL DEFAULT 0,
+  run_root TEXT,
   UNIQUE (caller, idempotency_key)
 );
 CREATE TABLE IF NOT EXISTS job_events (
@@ -259,6 +260,7 @@ CREATE INDEX IF NOT EXISTS jobs_state ON jobs (state, created_at);
 interface JobRow {
   continues: string | null;
   recorded_run: number;
+  run_root: string | null;
   id: string;
   caller: string;
   profile: string;
@@ -389,6 +391,47 @@ export class LocalJobStore {
       : { job: this.get(result.id)!, created: result.created };
   }
 
+  /** Names the first and current jobs, visiting each conversation link once. */
+  conversation(id: string): { root: LocalJob; head: LocalJob } | undefined {
+    const target = this.#row(id);
+    if (target === undefined) return undefined;
+    let root = target;
+    while (root.continues !== null) {
+      const prior = this.#row(root.continues);
+      if (prior === undefined) {
+        throw new Error("Cannot find the conversation's predecessor job.");
+      }
+      root = prior;
+    }
+    let head = target;
+    for (;;) {
+      const next = this.#database.prepare(
+        "SELECT * FROM jobs WHERE continues = :id",
+      ).get({ id: head.id }) as JobRow | undefined;
+      if (next === undefined) break;
+      head = next;
+    }
+    return { root: this.#view(root), head: this.#view(head) };
+  }
+
+  /** Records the harness artifact root while its job is running. */
+  recordRunRoot(id: string, runRoot: string): void {
+    this.#database.prepare(
+      "UPDATE jobs SET run_root = :runRoot WHERE id = :id AND state = 'running'",
+    ).run({ id, runRoot });
+  }
+
+  /** The runs whose durable checkpoints recovery must inspect. */
+  runningRuns(): { id: string; runRoot?: string }[] {
+    const rows = this.#database.prepare(
+      "SELECT id, run_root FROM jobs WHERE state = 'running'",
+    ).all() as { id: string; run_root: string | null }[];
+    return rows.map((row) => ({
+      id: row.id,
+      ...(row.run_root === null ? {} : { runRoot: row.run_root }),
+    }));
+  }
+
   /**
    * Accepts or replays a caller's message in conversation order. Replay is
    * resolved before the head or its state; only a new follow-up checks the
@@ -422,26 +465,20 @@ export class LocalJobStore {
             "SELECT id FROM jobs WHERE caller = :caller AND idempotency_key = :key",
           ).get({ caller, key }) !== undefined
         ) return conflict;
-        let head = this.#row(target);
-        if (head === undefined) {
+        const targetRow = this.#row(target);
+        if (targetRow === undefined) {
           return { code: "not_found", error: "No such job." };
         }
-        if (head.caller !== caller) {
+        if (targetRow.caller !== caller) {
           return {
             code: "not_callers",
             error: "The job belongs to another caller.",
           };
         }
-        for (;;) {
-          const next = this.#database.prepare(
-            "SELECT * FROM jobs WHERE continues = :id",
-          ).get({ id: head.id }) as JobRow | undefined;
-          if (next === undefined) break;
-          head = next;
-        }
+        const head = this.#row(this.conversation(target)!.head.id)!;
         const finished = LOCAL_JOB_TERMINAL_STATES.has(head.state);
         if (
-          finished && (head.recorded_run === 0 || head.state === "interrupted")
+          finished && head.recorded_run === 0
         ) {
           return {
             code: "not_continuable",
@@ -620,7 +657,7 @@ export class LocalJobStore {
         ? "cancelled"
         : ending.state;
       const completed = state === "completed";
-      const recorded = ending.recordedRun === true && state !== "interrupted";
+      const recorded = ending.recordedRun === true;
       this.#database.prepare(`
         UPDATE jobs SET state = :state, result_json = :result,
           error_code = :error_code, report_json = :report, finished_at = :at, recorded_run = :recorded
@@ -664,10 +701,11 @@ export class LocalJobStore {
 
   /**
    * Ends every job found `running` as `interrupted`, with `RUNNER_RESTARTED`,
-   * and returns their ids. The runner calls it once, before it claims
-   * anything.
+   * and returns their ids. `continuable` names runs whose artifacts the lane
+   * checked; their waiting messages can open follow-ups in this transaction.
+   * The runner calls it once, before it claims anything.
    */
-  recover(): string[] {
+  recover(continuable: ReadonlySet<string> = new Set()): string[] {
     const at = this.#now().toISOString();
     const ids: string[] = [];
     this.#write(() => {
@@ -678,10 +716,19 @@ export class LocalJobStore {
         const { id } = row;
         ids.push(id);
         this.#database.prepare(`
-          UPDATE jobs SET state = 'interrupted', error_code = :code, recorded_run = 0,
-            finished_at = :at WHERE id = :id
-        `).run({ id, code: RUNNER_RESTARTED, at });
-        this.#settleMessages(row, "interrupted", false, at);
+          UPDATE jobs SET state = 'interrupted', error_code = :code, recorded_run = :recorded,
+            report_json = :report, finished_at = :at WHERE id = :id
+        `).run({
+          id,
+          code: RUNNER_RESTARTED,
+          at,
+          recorded: continuable.has(id) ? 1 : 0,
+          report: row.run_root === null ? row.report_json : JSON.stringify({
+            ...(row.report_json === null ? {} : JSON.parse(row.report_json)),
+            runRef: row.run_root,
+          }),
+        });
+        this.#settleMessages(row, "interrupted", continuable.has(id), at);
         return this.#append(
           id,
           "state",
@@ -937,6 +984,7 @@ export class LocalJobStore {
         const [name, declaration] of [
           ["continues", "TEXT REFERENCES jobs (id)"],
           ["recorded_run", "INTEGER NOT NULL DEFAULT 0"],
+          ["run_root", "TEXT"],
         ]
       ) {
         if (!columns.some((column) => column.name === name)) {

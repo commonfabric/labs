@@ -1900,8 +1900,10 @@ Persistent `<socket>.lock` and `<store>.lock` files retain their inodes, while
 the kernel releases ownership on shutdown or crash. Startup cleanup aborts
 active runs and waits for them to settle, closes the store and listener, and
 removes its token. Active job rows remain `running`; the next start recovers
-them as `interrupted` with `RUNNER_RESTARTED`. Requests receive 503 until
-initialization completes.
+them as `interrupted` with `RUNNER_RESTARTED`. Before settling their waiting
+messages, startup checks each recorded harness run root for a continuable
+checkpoint. A checkpoint lets waiting messages open a follow-up; without one,
+they drop as `interrupted`. Requests receive 503 until initialization completes.
 
 The door is HTTP on the Unix socket, mode 0600, with a bearer token in
 `<socket>.token`, also 0600 and minted at each start: reaching the socket is the
@@ -2043,7 +2045,8 @@ running head waits there to be taken at a model turn boundary. A message to a
 finished head with a recorded run opens a new queued job, with `continues`
 naming its predecessor, its task replaced by the message, and the rest of the
 predecessor's request inherited. A recorded run has a complete checkpoint from
-which another run can start. An interrupted job has none.
+which another run can start. An interrupted job is continuable when recovery
+finds such a checkpoint.
 
 The response is `201 {message, job}` on acceptance or `200 {message, job}` on
 replay. The message record has fixed `key`, `target`, `message`, `acceptedAt`
@@ -2082,16 +2085,16 @@ cancellation and `PROFILE_UNAVAILABLE` failures have no recorded run.
 
 Every refusal is `{ok: false, code, error}`:
 
-| Status | Code                    | Condition                                                        |
-| ------ | ----------------------- | ---------------------------------------------------------------- |
-| 400    | `invalid_request`       | Invalid JSON, missing or mistyped fields, or an empty message.   |
-| 413    | `too_large`             | The body exceeds 1 MiB.                                          |
-| 404    | `not_found`             | The target job does not exist.                                   |
-| 403    | `not_callers`           | The body names another caller.                                   |
-| 409    | `not_continuable`       | The finished head has no recorded run.                           |
-| 409    | `instructions_on_steer` | Instructions supplied to a queued or running head before cancel. |
-| 400    | `unknown_profile`       | A follow-up would open now under a profile no longer named.      |
-| 409    | `idempotency_conflict`  | The caller's key already names another request or route.         |
+| Status | Code                    | Condition                                                                             |
+| ------ | ----------------------- | ------------------------------------------------------------------------------------- |
+| 400    | `invalid_request`       | Invalid JSON, missing or mistyped fields, or an empty message.                        |
+| 413    | `too_large`             | The body exceeds 1 MiB.                                                               |
+| 404    | `not_found`             | The target job does not exist.                                                        |
+| 403    | `not_callers`           | The body names another caller.                                                        |
+| 409    | `not_continuable`       | The finished head, including an interrupted one, has no complete recorded checkpoint. |
+| 409    | `instructions_on_steer` | Instructions supplied to a queued or running head before cancel.                      |
+| 400    | `unknown_profile`       | A follow-up would open now under a profile no longer named.                           |
+| 409    | `idempotency_conflict`  | The caller's key already names another request or route.                              |
 
 The local harness lane takes messages at model-turn boundaries. A finished job
 with a recorded checkpoint can open a follow-up, whose new harness run carries
@@ -2146,7 +2149,9 @@ reason. Both appear in the job snapshot and in its final `state` event.
 
 A job the runner was running when it stopped or crashed ends `interrupted`
 (`RUNNER_RESTARTED`) when it next starts, and is never run again: it may already
-have changed things.
+have changed things. Its recorded checkpoint can seed a new follow-up, whether
+the message waited through the restart or arrived afterward. The new run retains
+completed work and marks the prior request as interrupted.
 
 ## One deployment per process
 

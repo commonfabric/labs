@@ -226,7 +226,7 @@ describe("local-jobs/lane", () => {
     it("passes the turn seam and recorded run through and launches the follow-up", async () => {
       const { store, lane, enqueue, nextRun, runs } = laneWith({});
       try {
-        lane.start();
+        await lane.start();
         const id = enqueue("initial");
         const first = await nextRun(0);
         store.acceptMessage(id, message("A"));
@@ -294,7 +294,7 @@ describe("local-jobs/lane", () => {
           return await response.json();
         };
         try {
-          lane.start();
+          await lane.start();
           const id = enqueue("initial");
           const first = await nextRun(0);
           await send(id, "old");
@@ -359,7 +359,7 @@ describe("local-jobs/lane", () => {
         const id = idOf(store.enqueue("cfs:weaver", "ask", "initial", REQUEST));
         store.acceptMessage(id, message("A"));
         profiles.clear();
-        lane.start();
+        await lane.start();
         await reached(store, id, "failed");
         expect(store.get(id)).toMatchObject({
           errorCode: PROFILE_UNAVAILABLE,
@@ -380,7 +380,7 @@ describe("local-jobs/lane", () => {
     it("drops pending messages when runJob throws without a recorded run", async () => {
       const { store, lane, enqueue, nextRun, runs } = laneWith({});
       try {
-        lane.start();
+        await lane.start();
         const id = enqueue("initial");
         const run = await nextRun(0);
         store.acceptMessage(id, message("A"));
@@ -903,7 +903,7 @@ describe("local-jobs/lane", () => {
   describe("LocalJobLane", () => {
     it("runs a job under its profile with no fabric and ends it with the run's result and report", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("a");
 
       const run = await nextRun(0);
@@ -929,7 +929,7 @@ describe("local-jobs/lane", () => {
 
     it("ends a job whose result was refused with the reason its run gave", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("a");
 
       const run = await nextRun(0);
@@ -947,7 +947,7 @@ describe("local-jobs/lane", () => {
 
     it("records the steps and commands its run reports", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("a");
       const run = await nextRun(0);
       const message = {
@@ -971,7 +971,7 @@ describe("local-jobs/lane", () => {
 
     it("shows the active child, coalesces a repeated browser call, and restores the parent on return", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("browse");
       const run = await nextRun(0);
       const events = delegatedBrowse().filter((event) =>
@@ -1005,7 +1005,7 @@ describe("local-jobs/lane", () => {
 
     it("marks a loop's step returned once every call of its turn has returned, so a repeated action reports again", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("returns");
       const run = await nextRun(0);
       const events = delegatedBrowse();
@@ -1033,7 +1033,7 @@ describe("local-jobs/lane", () => {
 
     it("reports a child's return as its latest activity when a sibling acted after its call", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("sibling returns");
       const run = await nextRun(0);
       const events = delegatedBrowse();
@@ -1061,7 +1061,7 @@ describe("local-jobs/lane", () => {
 
     it("keeps a pending sibling's step when the most recently active child returns", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("siblings");
       const run = await nextRun(0);
       const events = delegatedBrowse();
@@ -1105,7 +1105,7 @@ describe("local-jobs/lane", () => {
 
     it("makes a child receipt the latest sibling activity and keeps that order on return", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("sibling receipts");
       const run = await nextRun(0);
       const events = delegatedBrowse();
@@ -1201,7 +1201,7 @@ describe("local-jobs/lane", () => {
 
     it("keeps every child command and reports the same tool again after a receipt", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("commands");
       const run = await nextRun(0);
       const message = {
@@ -1257,7 +1257,7 @@ describe("local-jobs/lane", () => {
       const { store, lane, nextRun, enqueue } = laneWith({
         report: (message) => reported.push(message),
       });
-      lane.start();
+      await lane.start();
       const id = enqueue("a");
 
       (await nextRun(0)).fail(new Error("the harness could not start"));
@@ -1277,7 +1277,7 @@ describe("local-jobs/lane", () => {
         ...REQUEST,
         tools: ["run_command"],
       }));
-      lane.start();
+      await lane.start();
 
       expect(await reached(store, gone, "failed")).toMatchObject({
         errorCode: PROFILE_UNAVAILABLE,
@@ -1316,7 +1316,7 @@ describe("local-jobs/lane", () => {
             return Promise.resolve(null);
           },
         });
-        lane.start();
+        await lane.start();
         enqueue("a", REQUEST, "carry");
         const run = await nextRun(0);
 
@@ -1352,7 +1352,7 @@ describe("local-jobs/lane", () => {
             },
           }]]),
         });
-        lane.start();
+        await lane.start();
         enqueue("a", { ...REQUEST, inputs: { focus: piece } }, "carry");
         const run = await nextRun(0);
 
@@ -1380,7 +1380,7 @@ describe("local-jobs/lane", () => {
             },
           }]]),
         });
-        lane.start();
+        await lane.start();
         enqueue("a", {
           ...REQUEST,
           inputs: { focus: foreign, own },
@@ -1443,7 +1443,7 @@ describe("local-jobs/lane", () => {
           profiles: new Map([["carry", CARRY]]),
           report: (line) => reports.push(line),
         });
-        lane.start();
+        await lane.start();
         const id = enqueue("a", REQUEST, "carry");
 
         expect(await reached(store, id, "failed")).toMatchObject({
@@ -1462,7 +1462,7 @@ describe("local-jobs/lane", () => {
         const { store, lane, nextRun, enqueue } = laneWith({
           profiles: BROWSING,
         });
-        lane.start();
+        await lane.start();
         const id = enqueue("a", DECLARED);
         const run = await nextRun(0);
 
@@ -1488,13 +1488,13 @@ describe("local-jobs/lane", () => {
         const id = enqueue("a", DECLARED);
         const early = lane.browserHost(id);
         expect(early?.view().state).toBe("open");
-        lane.start();
+        await lane.start();
         expect((await nextRun(0)).options.browserHost).toBe(early);
       });
 
       it("gives a job that declared none no host, and no browser to delegate to", async () => {
         const { lane, nextRun, enqueue } = laneWith({ profiles: BROWSING });
-        lane.start();
+        await lane.start();
         const id = enqueue("a");
         const run = await nextRun(0);
         expect(run.options.browserHost).toBeUndefined();
@@ -1509,7 +1509,7 @@ describe("local-jobs/lane", () => {
           profiles: BROWSING,
           report: () => {},
         });
-        lane.start();
+        await lane.start();
         const id = enqueue("a", DECLARED);
         const run = await nextRun(0);
         const host = lane.browserHost(id)!;
@@ -1525,7 +1525,7 @@ describe("local-jobs/lane", () => {
         const { store, lane, nextRun, enqueue } = laneWith({
           profiles: BROWSING,
         });
-        lane.start();
+        await lane.start();
         const id = enqueue("a", DECLARED);
         const run = await nextRun(0);
         lane.browserHost(id)!.close = () => {
@@ -1544,7 +1544,7 @@ describe("local-jobs/lane", () => {
             throw new Error("the operator's log is gone");
           },
         });
-        lane.start();
+        await lane.start();
         const id = enqueue("a", DECLARED);
         const run = await nextRun(0);
         const host = lane.browserHost(id)!;
@@ -1579,7 +1579,7 @@ describe("local-jobs/lane", () => {
           runJob: () => Promise.reject(new Error("never runs")),
         });
         expect(gone.browserHost(id)).not.toBe(host);
-        gone.start();
+        await gone.start();
         expect(await reached(store, id, "failed")).toMatchObject({
           errorCode: PROFILE_UNAVAILABLE,
         });
@@ -1589,7 +1589,7 @@ describe("local-jobs/lane", () => {
 
     it("binds each concurrent run to its own job identity", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const a = enqueue("a");
       const b = enqueue("b");
       const first = await nextRun(0);
@@ -1608,7 +1608,7 @@ describe("local-jobs/lane", () => {
       const { store, lane, runs, nextRun, enqueue } = laneWith({
         maxConcurrent: 2,
       });
-      lane.start();
+      await lane.start();
       const [a, , c] = [enqueue("a"), enqueue("b"), enqueue("c")];
       await nextRun(1);
 
@@ -1623,7 +1623,7 @@ describe("local-jobs/lane", () => {
 
     it("aborts a running job it is asked to stop, which then ends `cancelled`", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("a");
       const run = await nextRun(0);
 
@@ -1639,7 +1639,7 @@ describe("local-jobs/lane", () => {
       const { store, lane, nextRun, enqueue } = laneWith({
         report: () => failed.resolve(),
       });
-      lane.start();
+      await lane.start();
       enqueue("a");
       enqueue("b");
       const first = await nextRun(0);
@@ -1671,7 +1671,7 @@ describe("local-jobs/lane", () => {
       const { store, lane, nextRun, enqueue } = laneWith({
         report: (message) => reported.push(message),
       });
-      lane.start();
+      await lane.start();
       const id = enqueue("a");
       const run = await nextRun(0);
 
@@ -1690,7 +1690,7 @@ describe("local-jobs/lane", () => {
         workRoot: "/work/local",
         report: (message) => reported.push(message),
       });
-      next.start();
+      await next.start();
       expect(store.get(id)).toMatchObject({
         state: "interrupted",
         errorCode: "RUNNER_RESTARTED",

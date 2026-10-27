@@ -42,6 +42,8 @@ import {
   type HarnessModelUsageUpdate,
   type HarnessPromptLoopResult,
   promptLoopModelTurnsFromError,
+  type RunHarnessPromptOptions,
+  type RunHarnessTranscriptOptions,
 } from "@commonfabric/cf-harness/prompt-loop";
 import { sumHarnessModelUsage } from "@commonfabric/cf-harness/model/usage";
 import { canContinueHarnessRun } from "@commonfabric/cf-harness/run-continuation";
@@ -227,6 +229,9 @@ export interface HarnessJobOptions {
 
   /** Called on each transcript event the harness persists, before it is passed on. */
   onEvent?: (event: HarnessTranscriptEvent) => Promise<void> | void;
+
+  /** Records the artifact root before this job starts its model loop. */
+  onStart?: (runRoot: string) => void;
 
   /** Cumulative usage after a completed model call, with its accounting scope. */
   onUsage?: (update: {
@@ -520,6 +525,8 @@ export const runHarnessJob = async (
     },
     createPromptLoop: (loopOptions) => {
       readRunState = () => loopOptions.engine?.getRunState();
+      const runRoot = readRunState()?.artifactRoot;
+      if (runRoot !== undefined) options.onStart?.(runRoot);
       const loop = createInnerLoop({
         ...loopOptions,
         stopOnStructuredResult: true,
@@ -530,62 +537,48 @@ export const runHarnessJob = async (
           ? { maxOutputTokens: spec.maxOutputTokens }
           : {}),
       });
-      return {
-        runPrompt: async (promptOptions) => {
-          try {
-            loopResult = await loop.runPrompt({
-              ...promptOptions,
-              signal: options.signal,
-              takeMessages: options.takeMessages,
-              onModelUsage: async (update) => {
-                await onModelUsage(update);
-                await promptOptions.onModelUsage?.(update);
-              },
-              onTranscriptEvent: async (event) => {
+      const run = async <
+        T extends RunHarnessPromptOptions | RunHarnessTranscriptOptions,
+      >(
+        runOptions: T,
+        invoke: (runOptions: T) => Promise<HarnessPromptLoopResult>,
+      ) => {
+        const replaying = "transcript" in runOptions;
+        let seedEnd = 0;
+        try {
+          loopResult = await invoke({
+            ...runOptions,
+            signal: options.signal,
+            takeMessages: options.takeMessages,
+            onModelUsage: async (update) => {
+              await onModelUsage(update);
+              await runOptions.onModelUsage?.(update);
+            },
+            onTranscriptEvent: async (event) => {
+              if (!replaying || event.subagent !== undefined) {
                 await options.onEvent?.(event);
-                await promptOptions.onTranscriptEvent?.(event);
-              },
-            });
-            return loopResult;
-          } catch (error) {
-            loopError = error;
-            throw error;
-          }
-        },
-        runTranscript: async (transcriptOptions) => {
-          const seedMessages = new Set(transcriptOptions.transcript);
-          try {
-            loopResult = await loop.runTranscript({
-              ...transcriptOptions,
-              signal: options.signal,
-              takeMessages: options.takeMessages,
-              onModelUsage: async (update) => {
-                await onModelUsage(update);
-                await transcriptOptions.onModelUsage?.(update);
-              },
-              onTranscriptEvent: async (event) => {
-                if (event.subagent !== undefined) {
-                  await options.onEvent?.(event);
-                } else {
-                  // The loop can insert guidance into its seed. Retained
-                  // message identity locates the boundary in the live history.
-                  const seedEnd = event.transcript.findLastIndex((message) =>
-                    seedMessages.has(message)
-                  );
-                  const transcript = event.transcript.slice(seedEnd + 1);
-                  if (transcript.includes(event.message)) {
-                    await options.onEvent?.({ ...event, transcript });
-                  }
-                }
-                await transcriptOptions.onTranscriptEvent?.(event);
-              },
-            });
-            return loopResult;
-          } catch (error) {
-            loopError = error;
-            throw error;
-          }
-        },
+              } else if (event.seed === true) {
+                seedEnd = event.transcript.length;
+              } else {
+                await options.onEvent?.({
+                  ...event,
+                  transcript: event.transcript.slice(seedEnd),
+                });
+              }
+              await runOptions.onTranscriptEvent?.(event);
+            },
+          });
+          return loopResult;
+        } catch (error) {
+          loopError = error;
+          throw error;
+        }
+      };
+      return {
+        runPrompt: (promptOptions) =>
+          run(promptOptions, (wrapped) => loop.runPrompt(wrapped)),
+        runTranscript: (transcriptOptions) =>
+          run(transcriptOptions, (wrapped) => loop.runTranscript(wrapped)),
         // The harness classifies the task before it assembles the prompt; a
         // wrapper without this seam runs every job with full orientation.
         ...(loop.classifyTask !== undefined
