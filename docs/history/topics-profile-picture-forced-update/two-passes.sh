@@ -3,7 +3,8 @@
 # the server stopped before the reset and started after it.
 set -uo pipefail
 R=$HOME/clones/topics-kept-activity-2026-10-26
-cd "$HOME/coding/B-cf-repos/labs-topics-index"
+cd "$HOME/coding/B-cf-repos/labs-topics-index" || { echo "labs checkout missing" >&2; exit 1; }
+[ $# -gt 0 ] || { echo "usage: $0 <pass dir name>..." >&2; exit 2; }
 for pass in "$@"; do
   echo "[$(date -u +%H:%M:%S)] $pass: stop, reset, start"
   ./scripts/stop-local-dev.sh --port-offset 2 > /dev/null 2>&1

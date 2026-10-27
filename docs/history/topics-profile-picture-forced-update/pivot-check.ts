@@ -22,7 +22,9 @@ const linkOf = (value: any) => value?.["/"]?.["link@1"];
 
 const board = documentOf(boardId);
 // deno-lint-ignore no-explicit-any
-const entry = (board?.internal ?? []).find((e: any) => e.partialCause === "pivot");
+const entry = (board?.internal ?? []).find((e: any) =>
+  e.partialCause === "pivot"
+);
 const report: Record<string, unknown> = { board: boardId };
 if (entry === undefined) {
   report.ok = false;
@@ -31,8 +33,16 @@ if (entry === undefined) {
   const link = linkOf(entry.link);
   report.pivot = link?.id;
   report.declaredScope = link?.scope ?? "space";
-  const value = documentOf(link.id)?.value;
-  if (Array.isArray(value)) {
+  const value = link === undefined ? undefined : documentOf(link.id)?.value;
+  if (link === undefined) {
+    report.ok = false;
+    report.reason = "the `pivot` cell is not a link";
+  } else if (report.declaredScope !== "space") {
+    // The rows are read from the space slot, so a link to any other scope
+    // fails here rather than passing on whatever that slot holds.
+    report.ok = false;
+    report.reason = `the pivot link names scope ${report.declaredScope}`;
+  } else if (Array.isArray(value)) {
     report.rows = value.length;
     // deno-lint-ignore no-explicit-any
     const rowIds = value.map((row: any) => linkOf(row)?.id).filter(Boolean);
@@ -42,7 +52,9 @@ if (entry === undefined) {
     for (const rowId of rowIds) {
       const row = documentOf(rowId)?.value;
       const topic = linkOf(row?.topic)?.id;
-      const count = Array.isArray(row?.mentionedBy) ? row.mentionedBy.length : 0;
+      const count = Array.isArray(row?.mentionedBy)
+        ? row.mentionedBy.length
+        : 0;
       if (topic !== undefined) byTopic[topic] = count;
       if (count > 0) mentioned++;
       mentions += count;
@@ -50,7 +62,8 @@ if (entry === undefined) {
     report.rowsResolved = Object.keys(byTopic).length;
     report.topicsMentioned = mentioned;
     report.mentions = mentions;
-    report.ok = value.length > 0 && Object.keys(byTopic).length === value.length;
+    report.ok = value.length > 0 &&
+      Object.keys(byTopic).length === value.length;
     if (outPath) await Deno.writeTextFile(outPath, JSON.stringify(byTopic));
   } else {
     report.ok = false;

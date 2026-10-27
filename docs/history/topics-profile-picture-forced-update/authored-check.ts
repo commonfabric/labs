@@ -3,14 +3,16 @@
 //
 // - every Topic's argument document may differ only in the three fields the
 //   migration keeps (`topicStateVersion`, `commentCount`, `lastActivityAt`)
-//   and in `boardCrossrefs`, which the rollout rebinds;
+//   and in `boardCrossrefs`, which the rollout rebinds and which must then
+//   link the board's `crossrefs` at space scope;
 // - every document a Topic's `comments` or `links` argument links to (each
 //   comment and link record) must be unchanged;
 // - the board's argument document is reported field by field.
 //
 //   deno run ... authored-check.ts <pristine db> <working db> <plan.jsonl> <out.jsonl>
 //
-// The plan is a survey of the board's topics; its rows name the pieces.
+// The plan is a survey of the board's topics; its rows name the pieces, the
+// board among them as the `holder` row.
 // PIN_ROOT is the checkout imports resolve against.
 
 const ROOT = Deno.env.get("PIN_ROOT")!;
@@ -33,6 +35,7 @@ const pristine = openSpace(pristinePath);
 const working = openSpace(workingPath);
 const rows = (await Deno.readTextFile(planPath)).split("\n").filter(Boolean)
   .slice(1).map((line) => JSON.parse(line));
+const board = `of:${rows.find((row) => row.phase === "holder")?.piece}`;
 
 // deno-lint-ignore no-explicit-any
 const valueOf = (space: any, id: string) => {
@@ -45,8 +48,7 @@ const valueOf = (space: any, id: string) => {
 const documentOf = (space: any, id: string) =>
   getValueAt(space, { id, scope: "space", branch: "" }).document;
 // deno-lint-ignore no-explicit-any
-const linkId = (value: any): string | undefined =>
-  value?.["/"]?.["link@1"]?.id;
+const linkId = (value: any): string | undefined => value?.["/"]?.["link@1"]?.id;
 // deno-lint-ignore no-explicit-any
 const changedKeys = (before: any, after: any): string[] =>
   [...new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])]
@@ -65,6 +67,7 @@ const totals = {
   records: 0,
   recordsChanged: 0,
   recordsMissing: 0,
+  boardCrossrefsWrong: 0,
   errors: 0,
 };
 
@@ -89,6 +92,14 @@ for (const row of rows) {
       else {
         totals.argumentsWithOtherChanges++;
         entry.other = other;
+      }
+      const crossrefs = after?.boardCrossrefs?.["/"]?.["link@1"];
+      if (
+        crossrefs?.id !== board || (crossrefs.scope ?? "space") !== "space" ||
+        JSON.stringify(crossrefs.path) !== '["crossrefs"]'
+      ) {
+        totals.boardCrossrefsWrong++;
+        entry.boardCrossrefs = crossrefs ?? null;
       }
       const recordIds = [...(before?.comments ?? []), ...(before?.links ?? [])]
         .map(linkId).filter((id): id is string => id !== undefined);
@@ -119,7 +130,8 @@ out.close();
 console.log(JSON.stringify(totals));
 Deno.exit(
   totals.argumentsWithOtherChanges === 0 && totals.recordsChanged === 0 &&
-    totals.recordsMissing === 0 && totals.errors === 0
+    totals.recordsMissing === 0 && totals.boardCrossrefsWrong === 0 &&
+    totals.errors === 0
     ? 0
     : 3,
 );

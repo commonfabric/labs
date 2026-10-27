@@ -25,6 +25,7 @@ CLONE=$R/clone
 DB=$CLONE/engine-v3/engine-v3/$DID.sqlite
 P=$R/${1:?pass dir name}
 BATCH=${2:-200}
+[[ "$BATCH" =~ ^[1-9][0-9]*$ ]] || { echo "batch size must be a positive integer" >&2; exit 2; }
 # A pass directory is one run's record; reusing one would mix two runs.
 [ -e "$P" ] && { echo "$P already exists; name a new pass" >&2; exit 1; }
 mkdir -p "$P"
@@ -142,19 +143,22 @@ cf piece survey -q -a "$API_URL" -s "$DID" --piece "$BOARD" --path topics \
   --diff "$P/board-gated.jsonl" > "$P/diff-board.log" 2>&1
 
 # Judgment.
-alive; log "kept scan by board number"
-run "$R/tools/kept-scan.ts" "$P/kept-scan.jsonl" 1 1400 > "$P/kept-scan.log" 2>&1 ||
+# Every board number from 1 to the board's topic count names a topic, so a
+# row that cannot be read fails the pass as surely as a wrong one.
+TOPICS=$(python3 -I -c 'import json, sys; print(json.loads(open(sys.argv[1]).readline())["enumerated"]["collection"])' "$P/topics-plan.jsonl")
+alive; log "kept scan by board number, 1 to $TOPICS"
+run "$R/tools/kept-scan.ts" "$P/kept-scan.jsonl" 1 "$TOPICS" > "$P/kept-scan.log" 2>&1 ||
   { log "kept scan failed (kept-scan.log)"; exit 1; }
 python3 -I - "$P/kept-scan.jsonl" <<'EOF2' | tee -a "$P/pass.log"
 import json, sys
 rows = [json.loads(l) for l in open(sys.argv[1])]
-found = [r for r in rows if "error" not in r]
-wrong = [r["n"] for r in found if not r["right"]]
-print(json.dumps({"numbers": len(rows), "found": len(found), "wrong": wrong[:20]}))
-sys.exit(1 if wrong or not found else 0)
+errors = [r["n"] for r in rows if "error" in r]
+wrong = [r["n"] for r in rows if "error" not in r and not r["right"]]
+print(json.dumps({"numbers": len(rows), "errors": errors[:20], "wrong": wrong[:20]}))
+sys.exit(1 if errors or wrong or not rows else 0)
 EOF2
 alive; log "backlink check"
-run "$R/tools/backlink-check.ts" "$P/pivot-rows.json" "$P/rebind.jsonl" \
+run "$R/tools/backlink-check.ts" "$BOARD" "$P/pivot-rows.json" "$P/rebind.jsonl" \
   "$P/backlink-check.jsonl" | tee -a "$P/pass.log"
 alive; log "verify --expect-migration"
 cf space verify "$CLONE" --expect-migration > "$P/verify-after.log" 2>&1 ||

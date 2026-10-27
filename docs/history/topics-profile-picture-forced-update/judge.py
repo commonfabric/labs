@@ -1,21 +1,27 @@
 """Summarizes one rehearsal pass directory written by tools/pass.sh.
 
-    python3 -I tools/judge.py <pass dir> <pristine fingerprint json>
+    python3 -I tools/judge.py <pass dir> [pristine fingerprint json]
 
-Reports the gate's decisions, the applies, the diffs, the kept scan, and every
-entity whose hash changed between the pristine fingerprint and the pass's, by
-kind, writing the changed free-cells out for `field-diff.ts`. That breakdown is
-not the authored-content check: a Topic's argument fingerprints as an
-owned-cell, so a clobbered Topic input would not appear among the free-cells.
+Reports the gate's decisions, the applies (a topics stage applied in batches is
+read from its `batch-*-applied.json` reports), the diffs, the kept scan, and the
+verify. A pass that wrote `fp-after.json` also gets every entity whose hash
+changed between the pristine fingerprint and the pass's, by kind, with the
+changed free-cells written out for `field-diff.ts`; `pass.sh` does not write one,
+since a full fingerprint costs as long as the verify. That breakdown is not the
+authored-content check: a Topic's argument fingerprints as an owned-cell, so a
+clobbered Topic input would not appear among the free-cells.
 `authored-check.ts` compares the Topics' arguments and records directly, and is
 the check a pass is judged by.
 """
 
 import collections
+import glob
 import json
+import os
 import sys
 
-P, BEFORE = sys.argv[1], sys.argv[2]
+P = sys.argv[1]
+BEFORE = sys.argv[2] if len(sys.argv) > 2 else None
 
 
 def jsonl(path):
@@ -34,10 +40,15 @@ for stage in ("topics", "board"):
         for g in gate if g["gate"] == "forced"
     )
     print("  forced on", dict(messages))
-    applied = fvj(f"{P}/{stage}-applied.json")
-    print("  applied", applied["applied"], "complete", applied["complete"],
-          dict(collections.Counter(r.get("verdict") for r in applied["rows"])))
-    ms = sorted(r.get("elapsedMs", 0) for r in applied["rows"])
+    reports = [fvj(path) for path in sorted(glob.glob(f"{P}/batch-*-applied.json"))] \
+        if stage == "topics" and not os.path.exists(f"{P}/topics-applied.json") \
+        else [fvj(f"{P}/{stage}-applied.json")]
+    rows = [row for report in reports for row in report["rows"]]
+    print("  applied", sum(report["applied"] for report in reports),
+          "complete", all(report["complete"] for report in reports),
+          "reports", len(reports),
+          dict(collections.Counter(r.get("verdict") for r in rows)))
+    ms = sorted(r.get("elapsedMs", 0) for r in rows)
     if ms:
         print("  row ms median", ms[len(ms) // 2], "p90", ms[int(len(ms) * 0.9)], "max", ms[-1])
     print("  diff:", open(f"{P}/diff-{stage}.log").read().strip().splitlines()[-1:])
@@ -56,6 +67,11 @@ print("verify:", " | ".join(
     line.strip() for line in open(f"{P}/verify-after.log")
     if line.strip() and not line.startswith("\x1b")
 ))
+
+
+if BEFORE is None or not os.path.exists(f"{P}/fp-after.json"):
+    print("fingerprint: not compared (authored content: authored-check.ts)")
+    sys.exit(0)
 
 
 def hashes(path):

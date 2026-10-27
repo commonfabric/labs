@@ -1,6 +1,7 @@
 // Binds each topic's `boardCrossrefs` argument to the board's `crossrefs`
 // output, the one-time link-bind `mentionable` got, and records what the
-// topic's argument holds there afterwards.
+// topic's argument holds there afterwards. A topic whose argument does not then
+// link the board's `crossrefs` at space scope fails, and so does its batch.
 //
 //   deno run ... rebind.ts <board id> <ids file> <out.jsonl>
 //
@@ -47,6 +48,14 @@ for (const id of ids) {
     row.linkId = link?.id ?? null;
     row.linkScope = link?.scope ?? null;
     row.linkPath = link?.path ?? null;
+    if (
+      row.linkId !== board || row.linkScope !== null ||
+      JSON.stringify(row.linkPath) !== '["crossrefs"]'
+    ) {
+      failed++;
+      row.error =
+        "boardCrossrefs does not link the board's crossrefs at space scope";
+    }
   } catch (error) {
     failed++;
     row.error = String(error).slice(0, 400);

@@ -1,8 +1,9 @@
-// Confirms, from a session that has not run any topic, that every topic the
-// board's pivot says is mentioned reads back that many backlinks, and that
-// every rebound topic links its `boardCrossrefs` at space scope.
+// Confirms, from a session that has not run any topic, that every topic on the
+// board's pivot reads back as many backlinks as the pivot counts for it, none
+// for an unmentioned topic, and that every rebound topic links the board's
+// `crossrefs` at space scope.
 //
-//   deno run ... backlink-check.ts <pivot rows json> <rebind jsonl> <out.jsonl>
+//   deno run ... backlink-check.ts <board id> <pivot rows json> <rebind jsonl> <out.jsonl>
 //
 // The pivot rows file is `pivot-check.ts`'s map of topic id to mention count.
 // API_URL, SPACE and CF_IDENTITY name the server; PIN_ROOT is the checkout.
@@ -12,7 +13,7 @@ const { getCellValue, loadPieces } = await import(
   `${ROOT}/packages/cli/lib/piece.ts`
 );
 
-const [pivotPath, rebindPath, outPath] = Deno.args;
+const [board, pivotPath, rebindPath, outPath] = Deno.args;
 const expected: Record<string, number> = JSON.parse(
   await Deno.readTextFile(pivotPath),
 );
@@ -39,18 +40,22 @@ const encoder = new TextEncoder();
 const totals = {
   rebound: rebinds.length,
   reboundAtSpace: 0,
+  topics: 0,
   mentioned: 0,
   backlinksRight: 0,
   backlinksWrong: 0,
   errors: 0,
 };
 for (const rebind of rebinds) {
-  if (rebind.error === undefined && rebind.linkScope === null &&
-    JSON.stringify(rebind.linkPath) === '["crossrefs"]') totals.reboundAtSpace++;
+  if (
+    rebind.error === undefined && rebind.linkId === board &&
+    rebind.linkScope === null &&
+    JSON.stringify(rebind.linkPath) === '["crossrefs"]'
+  ) totals.reboundAtSpace++;
 }
 for (const [topic, count] of Object.entries(expected)) {
-  if (count === 0) continue;
-  totals.mentioned++;
+  totals.topics++;
+  if (count > 0) totals.mentioned++;
   const row: Record<string, unknown> = { topic, expected: count };
   try {
     const value = await getCellValue(
