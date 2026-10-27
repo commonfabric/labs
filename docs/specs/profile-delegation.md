@@ -408,19 +408,32 @@ present, verify them and ensure consistency with ACL",
 The runtime's storage manager opens a session to a space with a
 `SessionPrincipal`, whose `authorizeSessionOpen` builds the signed invocation
 (`packages/runner/src/storage/v2-remote-session.ts`,
-`createSignedSessionOpenAuth`). The change is:
+`createSignedSessionOpenAuth`). The pieces are:
 
-- `createSignedSessionOpenAuth` takes an optional proof chain, puts its
-  hashes in `prf`, and attaches the proofs to the authorization.
-- The storage manager consults the delegation store, keyed by space DID,
-  when it mounts a space, and passes the chain it finds. A space with no
-  chain opens as it does today.
-- The memory client's session keeps the chain across reopens, as it keeps
-  `actingAs` and `readCeiling`, so a route replacement does not drop to the
-  core identity's own access.
-- The delegation store is populated from the Home space's profile list, and
-  by whatever later hands a runtime a delegation it did not create (an agent
-  given one by a user, for instance).
+- The remote session factory holds a delegation store
+  (`delegation-store.ts`), keyed by the space each delegation is over, fed
+  through `StorageManager.addDelegation`. Asked for the chain to open a space
+  as a key, it searches back from that key over the delegations valid at
+  that moment whose command covers a session open, and returns the first
+  complete chain, one rooted at the space itself, or failing that the first
+  chain it found, for the server to judge.
+- The `SessionPrincipal` the factory hands the memory client carries a
+  `proofs` function rather than a chain. The client calls it once per open
+  or reopen, so each presents the chain as the store holds it then: a
+  delegation added since is presented, and one that has expired is left out.
+  The same snapshot feeds the client's capability check and the open it
+  admits.
+- A signed open receives that chain through its context, names each proof's
+  CID in `prf`, and carries the bytes; an open naming a
+  connection-authenticated principal carries the bytes alone. A space with
+  no chain opens as it does today.
+- A client holding a chain refuses a server that does not advertise
+  `sessionOpenProofs` before opening, rather than open under the key's own
+  grant and be refused there.
+- The store is fed programmatically until profile creation records
+  delegations in the Home space; later, whatever hands a runtime a
+  delegation it did not create (an agent given one by a user, for instance)
+  feeds it the same way.
 
 ## Attribution and unlinkability
 

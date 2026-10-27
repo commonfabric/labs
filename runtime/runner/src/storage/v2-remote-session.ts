@@ -1,6 +1,6 @@
 import { debugStr, hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import type { Delegation } from "@commonfabric/identity";
+import { delegationCid } from "@commonfabric/identity";
 import { type MemorySpace, type Signer } from "@commonfabric/memory/interface";
 import {
   encodeMemoryBoundary,
@@ -1044,9 +1044,12 @@ export async function createSignedSessionOpenAuth(
   space: MemorySpace,
   session: SessionDescriptor,
   context: MemoryClient.SessionOpenAuthContext,
-  proofs?: readonly Delegation[],
 ): Promise<MemoryClient.SessionOpenAuth> {
   const iat = Math.floor(Date.now() / 1000);
+  const { proofs } = context;
+  const prf = proofs === undefined
+    ? undefined
+    : await Promise.all(proofs.map((proof) => delegationCid(proof)));
   const invocation = {
     iss: signer.did(),
     cmd: "session.open",
@@ -1061,7 +1064,7 @@ export async function createSignedSessionOpenAuth(
     exp: iat + SESSION_OPEN_TTL_SECONDS,
     // The chain's CIDs, signed with the rest, bind the chain to this open
     // (04-protocol.md §4.5.1, "Proof chains").
-    ...(proofs === undefined ? {} : { prf: proofs.map((proof) => proof.cid) }),
+    ...(prf === undefined ? {} : { prf }),
   };
   const signature = await signer.sign(hashOf(invocation).bytes);
   if (signature.error) {
@@ -1077,7 +1080,7 @@ export async function createSignedSessionOpenAuth(
       signature: new FabricBytes(signature.ok),
       // The proofs travel as issued, each signed by its own issuer.
       ...(proofs === undefined ? {} : {
-        proofs: proofs.map((proof) => new FabricBytes(proof.bytes)),
+        proofs: proofs.map((proof) => new FabricBytes(proof)),
       }),
     },
   };
@@ -1368,14 +1371,13 @@ export class RemoteSessionFactory implements SessionFactory {
 
   /**
    * Helper for `create()`, which returns both authentication signers for the
-   * key, each presenting the chain the store assembles for the key at the
-   * moment of the open, so a reopen presents a delegation added since and
-   * leaves out one that has expired. The server's capabilities select
-   * authentication independently of whether the factory shares connections.
+   * key, and the chain the store assembles for the key at the moment of an
+   * open, which the client hands back to the signer through the open's
+   * context, so a reopen presents a delegation added since and leaves out
+   * one that has expired. The server's capabilities select authentication
+   * independently of whether the factory shares connections.
    */
   #sessionPrincipal(signer: Signer): MemoryClient.SessionPrincipal {
-    const chainFor = (space: string) =>
-      this.#delegations.chainFor(space, signer.did());
     return {
       did: signer.did(),
       authorizeConnection: (context) =>
@@ -1386,9 +1388,11 @@ export class RemoteSessionFactory implements SessionFactory {
           space as MemorySpace,
           descriptor,
           context,
-          chainFor(space),
         ),
-      proofs: (space) => chainFor(space)?.map((delegation) => delegation.bytes),
+      proofs: (space) =>
+        this.#delegations.chainFor(space, signer.did())?.map((delegation) =>
+          delegation.bytes
+        ),
     };
   }
 

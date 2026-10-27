@@ -98,6 +98,20 @@ describe("DelegationStore", () => {
       ]);
     });
 
+    it("returns the complete chain over an unlinked one added earlier, whichever reaches the principal first", async () => {
+      const store = new DelegationStore();
+      const viaCarol = await delegate(carol, bob);
+      const root = await delegate(space, alice);
+      const onward = await delegate(alice, bob);
+      await store.add(viaCarol.bytes);
+      await store.add(onward.bytes);
+      await store.add(root.bytes);
+      expect(cids(store.chainFor(space.did(), bob.did(), now))).toEqual([
+        root.cid,
+        onward.cid,
+      ]);
+    });
+
     it("returns a chain that ends at a principal the space did not delegate to, for the server to judge", async () => {
       const store = new DelegationStore();
       const onward = await delegate(alice, bob);

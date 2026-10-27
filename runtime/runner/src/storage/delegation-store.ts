@@ -57,11 +57,13 @@ export class DelegationStore {
   /**
    * The chain to present when opening `space` as `principal`, root first, or
    * `undefined` when the store holds no delegation over `space` whose
-   * audience is `principal`. Each link is the earliest-added delegation
-   * whose audience is the link after it, among those valid now and covering
-   * a session open, a delegation the space itself issued being preferred
-   * since it ends the chain; the chain stops there, where no link precedes,
-   * or at the length a server admits.
+   * audience is `principal`. The search runs back from `principal` over the
+   * delegations valid now and covering a session open, each link's audience
+   * being the link after it, and returns the first complete chain it finds,
+   * one whose root the space itself issued, trying delegations in the order
+   * they were added. Where no complete chain exists within the length a
+   * server admits, it returns the first chain it found, for the server to
+   * judge against the access list.
    */
   chainFor(
     space: string,
@@ -70,31 +72,32 @@ export class DelegationStore {
   ): Delegation[] | undefined {
     const held = this.#bySubject.get(space);
     if (held === undefined) return undefined;
-    const chain: Delegation[] = [];
-    const used = new Set<string>();
-    let audience = principal;
-    while (chain.length < MAX_PROOF_CHAIN_LENGTH) {
-      let next: Delegation | undefined;
-      for (const delegation of held.values()) {
-        const { payload } = delegation;
-        if (
-          payload.aud !== audience || used.has(delegation.cid) ||
-          (payload.exp !== null && payload.exp < nowSeconds) ||
-          (payload.nbf !== undefined && payload.nbf > nowSeconds) ||
-          !delegationCovers(payload.cmd, SESSION_OPEN_COMMAND)
-        ) continue;
-        if (payload.iss === space) {
-          next = delegation;
-          break;
+    const usable = [...held.values()].filter(({ payload }) =>
+      (payload.exp === null || payload.exp >= nowSeconds) &&
+      (payload.nbf === undefined || payload.nbf <= nowSeconds) &&
+      delegationCovers(payload.cmd, SESSION_OPEN_COMMAND)
+    );
+    let fallback: Delegation[] | undefined;
+    // Depth-first from the principal back toward a root: `chain` holds the
+    // links found so far, last audience first, and is reversed on return.
+    const search = (
+      audience: string,
+      chain: Delegation[],
+    ): Delegation[] | undefined => {
+      if (chain.length >= MAX_PROOF_CHAIN_LENGTH) return undefined;
+      for (const delegation of usable) {
+        if (delegation.payload.aud !== audience || chain.includes(delegation)) {
+          continue;
         }
-        next ??= delegation;
+        const extended = [...chain, delegation];
+        if (delegation.payload.iss === space) return extended;
+        const complete = search(delegation.payload.iss, extended);
+        if (complete !== undefined) return complete;
+        fallback ??= extended;
       }
-      if (next === undefined) break;
-      chain.push(next);
-      used.add(next.cid);
-      if (next.payload.iss === space) break;
-      audience = next.payload.iss;
-    }
-    return chain.length === 0 ? undefined : chain.reverse();
+      return undefined;
+    };
+    const found = search(principal, []) ?? fallback;
+    return found === undefined ? undefined : found.reverse();
   }
 }
