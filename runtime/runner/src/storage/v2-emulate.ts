@@ -1,3 +1,4 @@
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import type { MemoryProtocolFlags } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
@@ -5,6 +6,7 @@ import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { servingContextLoopback } from "../executor/serving-context.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
+import { DelegationStore } from "./delegation-store.ts";
 import { type Options, type SessionFactory, StorageManager } from "./v2.ts";
 
 const emulatedMemoryAudience = "did:key:z6Mk-runner-emulated-memory";
@@ -45,6 +47,9 @@ export const newLoopbackServer = (options?: {
 class EmulatedSessionFactory implements SessionFactory {
   readonly #getServer: () => MemoryV2Server.Server;
 
+  /** The chains held here, one of which a session's open presents. */
+  readonly #delegations = new DelegationStore();
+
   constructor(
     getServer: () => MemoryV2Server.Server,
   ) {
@@ -63,17 +68,34 @@ class EmulatedSessionFactory implements SessionFactory {
     const session = await client.mount(
       space,
       mountOptions,
-      (_space, _session, context) => ({
-        invocation: {
-          aud: context.audience,
-          challenge: context.challenge.value,
-        },
-        authorization: {
-          principal: signer?.did(),
-        },
-      }),
+      (_space, _session, context) => {
+        // The open is unsigned here, so the chain rides as a signed open
+        // would carry it, CIDs in the invocation and bytes beside it, for
+        // the loopback server to verify the same way.
+        const chain = signer === undefined
+          ? undefined
+          : this.#delegations.chainFor(space, signer.did());
+        return {
+          invocation: {
+            aud: context.audience,
+            challenge: context.challenge.value,
+            ...(chain === undefined ? {} : { prf: chain.map((d) => d.cid) }),
+          },
+          authorization: {
+            principal: signer?.did(),
+            ...(chain === undefined ? {} : {
+              proofs: chain.map((d) => new FabricBytes(d.bytes)),
+            }),
+          },
+        };
+      },
     );
     return { client, session };
+  }
+
+  /** @inheritDoc */
+  async addDelegationChain(chain: readonly Uint8Array[]): Promise<void> {
+    await this.#delegations.add(chain);
   }
 
   /** @inheritDoc */

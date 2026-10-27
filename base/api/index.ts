@@ -1841,6 +1841,17 @@ export interface InSpaceOptions {
    * any other form.
    */
   spaceKind?: string;
+
+  /**
+   * Whether the space the call creates owns itself: its access list grants
+   * its own DID OWNER and the creator nothing, and the creator holds instead
+   * a delegation the space's key issued over it before that key was
+   * destroyed, which the calling space records and the creator's runtime
+   * presents when it opens the space. A profile space is one. A DID or a
+   * cell names a space that already exists, so `inSpace()` refuses
+   * `selfOwned` with either.
+   */
+  selfOwned?: boolean;
 }
 
 export type PatternFactory<T, R> =

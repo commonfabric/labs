@@ -330,9 +330,12 @@ export const EnvSchema = z.object({
   // denies access shortfalls. See runtime/memory/v2/server.ts.
   MEMORY_ACL_MODE: z.enum(["off", "observe", "enforce"]).default("enforce"),
   // Whether a `session.open` may present a UCAN proof chain, resolving the
-  // session's capability from the chain's root issuer. See
-  // docs/development/EXPERIMENTAL_OPTIONS.md, `sessionOpenProofs`.
-  MEMORY_ACL_DELEGATIONS: boolFlag(),
+  // session's capability from the chain's root issuer; on unless set to
+  // "false" or "0". See docs/development/EXPERIMENTAL_OPTIONS.md,
+  // `sessionOpenProofs`.
+  MEMORY_ACL_DELEGATIONS: z.string().default("true").transform((v) =>
+    v !== "false" && v !== "0"
+  ),
   // Client retirement is disabled; reject settings that would enable it.
   MEMORY_MINIMUM_CLIENT_GENERATION: z.literal("0", {
     error:

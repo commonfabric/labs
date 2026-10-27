@@ -13,7 +13,8 @@ import {
   walkSchemaDocumentClosure,
 } from "@commonfabric/data-model-schema/schema-closure";
 import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
-import { Identity } from "@commonfabric/identity";
+import { Identity, issueDelegation } from "@commonfabric/identity";
+import type { DIDKey } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
 import type { ACL, Entity } from "@commonfabric/memory/interface";
 import {
@@ -2161,7 +2162,59 @@ export class StorageManager implements IStorageManager {
       spaceKind?: string;
     } = {},
   ): Promise<MemorySpace> {
+    const { space } = await this.#createSpaceAs(
+      await Identity.generate(),
+      () => acl,
+      genesis,
+    );
+    return space;
+  }
+
+  /** @inheritDoc */
+  async createSelfOwnedSpace(
+    options: {
+      grants?: ACL;
+      delegateTo: DIDKey;
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
+  ): Promise<{ space: MemorySpace; delegation: Uint8Array }> {
     const key = await Identity.generate();
+    const { space, delegation } = await this.#createSpaceAs(
+      key,
+      (space) => ({ ...options.grants, [space]: "OWNER" }),
+      options,
+      // The key signs the delegation after its genesis commit is confirmed
+      // and before it is dropped: the one other thing it ever signs.
+      () =>
+        issueDelegation(key, {
+          aud: options.delegateTo,
+          sub: key.did(),
+          cmd: "/memory",
+          pol: [],
+        }),
+    );
+    // This manager holds the delegation from here on, so its own sessions
+    // on the new space act under the space's grant.
+    await this.#sessionFactory.addDelegationChain?.([delegation.bytes]);
+    return { space, delegation: delegation.bytes };
+  }
+
+  /**
+   * Helper for `createSpace()` and `createSelfOwnedSpace()`: creates the
+   * space `key` names, with `acl(space)` as its genesis access list and
+   * `genesis` as its declarations, and returns what `afterGenesis` signs
+   * with the key once the commit is confirmed, before the key is released.
+   */
+  async #createSpaceAs<T>(
+    key: Identity,
+    acl: (space: MemorySpace) => ACL,
+    genesis: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
+    afterGenesis?: () => Promise<T>,
+  ): Promise<{ space: MemorySpace; delegation: T }> {
     const space = key.did() as MemorySpace;
     const { spaceKind } = genesis;
     const root = typeof genesis.root === "function"
@@ -2177,6 +2230,7 @@ export class StorageManager implements IStorageManager {
       key,
       { sessionId: crypto.randomUUID(), ...declarations },
     );
+    let delegation: T | undefined;
     try {
       if (root !== undefined && client.serverFlags?.genesisRoot !== true) {
         throw new Error("Host does not support genesis root reservations");
@@ -2191,10 +2245,15 @@ export class StorageManager implements IStorageManager {
           confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
           pending: [],
         },
-        operations: [{ op: "set", id: aclId, value: { value: { ...acl } } }],
+        operations: [{
+          op: "set",
+          id: aclId,
+          value: { value: { ...acl(space) } },
+        }],
       });
       this.trackPendingCommit(commit);
       await commit;
+      if (afterGenesis !== undefined) delegation = await afterGenesis();
     } finally {
       try {
         await client.close();
@@ -2210,7 +2269,7 @@ export class StorageManager implements IStorageManager {
         );
       }
     }
-    return space;
+    return { space, delegation: delegation as T };
   }
 
   /**

@@ -10,9 +10,10 @@ import {
   resetModernCellRepConfig,
   setModernCellRepConfig,
 } from "@commonfabric/data-model/cell-rep";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { legacySpaceDid } from "@commonfabric/identity";
-import { isDID } from "@commonfabric/identity/did";
+import { isDID, isDIDKey } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
   acquireServerExecutionEnabler,
@@ -147,6 +148,7 @@ import {
   PatternManager,
   type PreparedSourceUpdate,
 } from "./pattern-manager.ts";
+import { profileLinkListSchema } from "./profile-order.ts";
 import { snapshotQueryResult } from "./query-result-proxy.ts";
 import { AsyncSemaphoreQueue, type QueueConfig } from "./queue.ts";
 import {
@@ -1203,6 +1205,15 @@ export interface InSpaceCreationRequest {
 
   /** The kind the genesis commit declares. */
   spaceKind?: string;
+
+  /**
+   * Whether the created space owns itself: its access list grants its own
+   * DID OWNER and the creator nothing, and the creator holds instead a
+   * delegation the space's key issued over it
+   * (`docs/specs/profile-delegation.md`), which the calling space records
+   * under {@link delegationsCause} beside the allocation.
+   */
+  selfOwned?: boolean;
 }
 
 /**
@@ -1215,7 +1226,8 @@ const inSpaceCreationKey = (
   space: MemorySpace,
   name: string,
   owner: DID,
-  { grants = {}, root = false, spaceKind }: InSpaceCreationRequest,
+  { grants = {}, root = false, spaceKind, selfOwned = false }:
+    InSpaceCreationRequest,
 ): string =>
   JSON.stringify([
     space,
@@ -1224,7 +1236,26 @@ const inSpaceCreationKey = (
     Object.entries(grants).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
     root,
     spaceKind ?? null,
+    selfOwned,
   ]);
+
+/**
+ * The cause of the document in which a space records the delegations its
+ * holder holds over another space, keyed by that space's DID. The document
+ * holds each delegation's bytes as its issuer encoded them; a self-owned
+ * space's creation records the one its key issued, and a later delegation
+ * over the space, with another command or policy, lands beside it.
+ */
+export const delegationsCause = (
+  space: MemorySpace,
+): { delegations: MemorySpace } => ({ delegations: space });
+
+const delegationRecordSchema = {
+  type: "object",
+  properties: {
+    delegations: { type: "array", items: { type: "FabricBytes" } },
+  },
+} as const satisfies JSONSchema;
 
 export interface SpaceCellContents {
   defaultPattern: Cell<unknown>;
@@ -1602,6 +1633,12 @@ export class Runtime {
    * retry's only bound.
    */
   readonly #inSpaceCreated = new Map<string, MemorySpace>();
+
+  /**
+   * The delegation each self-owned space this runtime created issued to its
+   * creator, by space, until the calling space's record of it is written.
+   */
+  readonly #delegationsIssued = new Map<MemorySpace, Uint8Array>();
 
   /**
    * Resolutions in flight, by {@link inSpaceCreationKey}: a second request
@@ -4616,6 +4653,11 @@ export class Runtime {
       grants?: ACL;
       root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
       spaceKind?: string;
+      /**
+       * Whether the space owns itself, the owner holding a delegation from
+       * its key in place of a grant; see {@link InSpaceCreationRequest}.
+       */
+      selfOwned?: boolean;
     } = {},
   ): Promise<MemorySpace> {
     if (this.servingPosture && options.owner === undefined) {
@@ -4624,18 +4666,78 @@ export class Runtime {
           "no owner was supplied",
       );
     }
+    const owner = options.owner ?? this.userIdentityDID;
+    const { root, spaceKind } = options;
+    const genesis = {
+      ...(root === undefined ? {} : { root }),
+      ...(spaceKind === undefined ? {} : { spaceKind }),
+    };
+    if (options.selfOwned) {
+      if (this.storageManager.createSelfOwnedSpace === undefined) {
+        throw new Error(
+          "This storage manager cannot create a space that owns itself",
+        );
+      }
+      if (!isDIDKey(owner)) {
+        throw new Error(
+          debugStr`A delegation names a did:key, and ${owner} is not one`,
+        );
+      }
+      const { space, delegation } = await this.storageManager
+        .createSelfOwnedSpace({
+          ...(options.grants === undefined ? {} : { grants: options.grants }),
+          delegateTo: owner,
+          ...genesis,
+        });
+      this.#delegationsIssued.set(space, delegation);
+      return space;
+    }
     if (this.storageManager.createSpace === undefined) {
       throw new Error("This storage manager cannot create spaces");
     }
-    const owner = options.owner ?? this.userIdentityDID;
-    const { root, spaceKind } = options;
     return await this.storageManager.createSpace(
       { ...options.grants, [owner]: "OWNER" },
-      {
-        ...(root === undefined ? {} : { root }),
-        ...(spaceKind === undefined ? {} : { spaceKind }),
-      },
+      genesis,
     );
+  }
+
+  /**
+   * Holds, for the sessions this runtime opens from here on, every
+   * delegation the Home space records for a profile in its `profiles` list,
+   * so that a profile space that owns itself opens under its own grant
+   * (`docs/specs/profile-delegation.md`). Returns how many it held. A
+   * profile with no record, as every profile created before profiles owned
+   * themselves, is passed over.
+   */
+  async loadProfileDelegations(): Promise<number> {
+    if (this.storageManager.addDelegationChain === undefined) return 0;
+    const home = this.getHomeSpaceCell();
+    const profiles = home.key("defaultPattern").key("profiles").asSchema(
+      profileLinkListSchema,
+    );
+    await profiles.sync();
+    const links = profiles.get();
+    if (!Array.isArray(links)) return 0;
+    let held = 0;
+    for (const link of links) {
+      if (!isCell(link)) continue;
+      const space = link.getAsNormalizedFullLink().space;
+      if (space === home.space) continue;
+      const record = this.getCell(
+        home.space,
+        delegationsCause(space),
+        delegationRecordSchema,
+      );
+      await record.sync();
+      // Each recorded delegation is one the space issued to this key, so
+      // each is a chain of its own.
+      for (const delegation of record.get()?.delegations ?? []) {
+        if (!(delegation instanceof FabricBytes)) continue;
+        await this.storageManager.addDelegationChain([delegation.slice()]);
+        held += 1;
+      }
+    }
+    return held;
   }
 
   /**
@@ -4764,7 +4866,21 @@ export class Runtime {
     const created = owner === undefined ? undefined : this.#inSpaceCreated.get(
       inSpaceCreationKey(space, name, owner, request),
     );
-    if (created !== undefined) record.set({ did: created });
+    if (created !== undefined) {
+      record.set({ did: created });
+      // A self-owned space's delegation is recorded in the same transaction
+      // as the allocation, keyed by the space, where whoever holds this
+      // space finds it again (`loadProfileDelegations`).
+      const delegation = this.#delegationsIssued.get(created);
+      if (delegation !== undefined) {
+        this.getCell(
+          space,
+          delegationsCause(created),
+          delegationRecordSchema,
+          tx,
+        ).set({ delegations: [new FabricBytes(delegation)] });
+      }
+    }
     return created;
   }
 

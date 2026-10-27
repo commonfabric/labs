@@ -1,14 +1,20 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { Identity, legacySpaceDid } from "@commonfabric/identity";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  decodeDelegation,
+  Identity,
+  legacySpaceDid,
+  verifyDelegation,
+} from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
 import { readSpaceKind } from "@commonfabric/memory/v2/genesis-root";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { type Cell } from "../src/cell.ts";
 import { parseLink } from "../src/link-utils.ts";
-import { Runtime } from "../src/runtime.ts";
+import { delegationsCause, Runtime } from "../src/runtime.ts";
 import { InSpaceTargetUnresolved } from "../src/scheduler/retry-immediately.ts";
 import type { ACL, MemorySpace, URI } from "../src/storage/interface.ts";
 import {
@@ -220,6 +226,88 @@ describe("in-space allocation", () => {
     const spaces = await root.spaces();
     expect(spaces.length).toBe(2);
     expect(spaces[0]).not.toBe(spaces[1]);
+  });
+
+  describe("a self-owned space", () => {
+    const delegationSchema = {
+      type: "object",
+      properties: {
+        delegations: { type: "array", items: { type: "FabricBytes" } },
+      },
+    } as const;
+
+    it("makes the space its own owner, seals its kind, and records in the calling space a delegation to the creator", async () => {
+      const root = await spawnRoot((Child, value) => [
+        Child.inSpace(undefined, {
+          grants: { "*": "WRITE" },
+          root: true,
+          spaceKind: "profile",
+          selfOwned: true,
+        })({ value }),
+      ]);
+      await root.send("mine");
+
+      const [space] = (await root.spaces()) as MemorySpace[];
+      expect(await aclOf(space)).toEqual({ "*": "WRITE", [space]: "OWNER" });
+      expect(readSpaceKind(await server.engineForSpace(space))).toBe("profile");
+
+      const record = runtime.getCell(
+        home,
+        delegationsCause(space),
+        delegationSchema,
+      );
+      await record.sync();
+      const bytes = record.get()?.delegations?.[0];
+      expect(bytes).toBeInstanceOf(FabricBytes);
+      const delegation = await decodeDelegation((bytes as FabricBytes).slice());
+      await verifyDelegation(delegation);
+      expect(delegation.payload).toMatchObject({
+        iss: space,
+        aud: signer.did(),
+        sub: space,
+        cmd: "/memory",
+      });
+      // The creating runtime held the delegation at once: its sessions on
+      // the space act under the space's own grant.
+      expect(
+        server.accessForTestingOnly.sessionsForSpace(space).some((session) =>
+          session.capabilityPrincipal === space
+        ),
+      ).toBe(true);
+    });
+
+    it("is opened under its own grant by a later runtime of the same key once that runtime loads the profile delegations Home records", async () => {
+      const root = await spawnRoot((Child, value) => [
+        Child.inSpace(undefined, {
+          grants: { "*": "WRITE" },
+          root: true,
+          spaceKind: "profile",
+          selfOwned: true,
+        })({ value }),
+      ]);
+      await root.send("mine");
+      const [space] = (await root.spaces()) as MemorySpace[];
+
+      // A runtime of the same key, holding nothing, with Home listing the
+      // space's root as a profile.
+      const later = openRuntime();
+      await later.editWithRetry((tx) => {
+        later.getHomeSpaceCell(tx).key("defaultPattern").set({
+          profiles: [later.getCell(space, "profile probe", undefined, tx)],
+        });
+      });
+      await later.storageManager.synced();
+      const underOwnGrant = () =>
+        server.accessForTestingOnly.sessionsForSpace(space).filter((session) =>
+          session.capabilityPrincipal === space
+        ).length;
+      const before = underOwnGrant();
+
+      expect(await later.loadProfileDelegations()).toBe(1);
+      // A session the later runtime opens now presents the loaded chain.
+      await later.getCell(space, "opened after loading").sync();
+      expect(underOwnGrant()).toBeGreaterThan(before);
+    });
   });
 
   it("puts a name used from two calling spaces in two spaces", async () => {

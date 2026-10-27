@@ -4,6 +4,7 @@ import type {
   SchemaPathSelector,
   TextChange,
 } from "@commonfabric/api";
+import type { DIDKey } from "@commonfabric/identity/did";
 import {
   type ACL,
   type AuthorizationError as IAuthorizationError,
@@ -458,6 +459,30 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
       spaceKind?: string;
     },
   ): Promise<MemorySpace>;
+
+  /**
+   * Creates a space that owns itself, and returns its DID with the
+   * delegation its key issued to `delegateTo` before being dropped
+   * (`docs/specs/profile-delegation.md`). Like `createSpace`, except that
+   * the access list is `grants` plus the space's own DID as OWNER, no other
+   * principal being made owner, and that between the genesis commit and the
+   * key's end the key signs one delegation over the space to `delegateTo`,
+   * covering every memory command and never expiring. This manager holds
+   * that delegation from then on, so its own sessions present it; the
+   * caller records it where the space's holder will find it again.
+   *
+   * @throws If the memory server refuses the genesis commit, or does not
+   *   admit a proof chain. No DID is returned then, and the space that was
+   *   being created is abandoned.
+   */
+  createSelfOwnedSpace?(
+    options: {
+      grants?: ACL;
+      delegateTo: DIDKey;
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
+  ): Promise<{ space: MemorySpace; delegation: Uint8Array }>;
 
   /**
    * Holds the delegation chain `chain` encodes, root first and the

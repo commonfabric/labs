@@ -4667,6 +4667,16 @@ export class RuntimeProcessor {
     } catch (error) {
       console.warn("[RuntimeProcessor] Could not preload profiles:", error);
     }
+    // The delegations Home records for the user's profiles, so a profile
+    // space that owns itself opens under its own grant. Best effort, and
+    // off the boot path: a session opened before they are held acts under
+    // the key's own grant until it opens again.
+    runtime.loadProfileDelegations().catch((error) => {
+      console.warn(
+        "[RuntimeProcessor] Could not load the profile delegations:",
+        error,
+      );
+    });
     return processor;
   }
 }

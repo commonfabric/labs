@@ -2,8 +2,12 @@
 
 ## Status
 
-Design sketch. Nothing here is implemented. The sketch is written against the
-session authentication and access-list rules in
+Design, implemented through its third phase: the server verifies a chain, a
+runtime presents one, and a profile space is born owning itself with its
+delegation recorded in Home. The two phases after that, chains to other keys
+and caveats with revocation, are design only; "Phases" below says which is
+which. The document is written against the session authentication and
+access-list rules in
 [`memory-v2/04-protocol.md`](memory-v2/04-protocol.md) §4.5 and the profile
 creation path in [`shared-profile-space.md`](shared-profile-space.md), and is
 the first slice of the UCAN-authorized memory commands that §4.5.2 of the
@@ -98,20 +102,20 @@ distinct path:
    `{ [profileDID]: "OWNER", "*": "WRITE" }`. The core identity is not in it.
    The genesis declares `spaceKind: "profile"` and reserves the profile as
    the space's root, as today.
-3. Sign the delegation (next section) with the profile key.
+3. Sign the delegation (next section) with the profile key, once the
+   genesis commit is confirmed, and drop the key: the delegation is the
+   one other thing it ever signs.
 4. Record the delegation beside the profile link in the Home space, in the
    same commit that records the link.
-5. Destroy the profile key once both the genesis and the Home-space commit
-   are confirmed.
 
-The ordering matters at one point. The key survives until the delegation is
-durably recorded, not only until genesis lands, because a profile whose
-genesis landed and whose delegation was lost is a space nobody can open with
-more than visitor access: it is owned by a key no one holds and delegated to
-no one. A process that stops before step 5 abandons the space, exactly as a
-process that stops mid-creation abandons a space today; it costs one
-access-control document and is reachable by nobody, and the creation is
-started again.
+The ordering matters at one point. The delegation is signed before the key
+is dropped and held in memory until the Home commit records it, because a
+profile whose genesis landed and whose delegation was lost is a space nobody
+can open with more than visitor access: it is owned by a key no one holds
+and delegated to no one. A process that stops between steps 3 and 4
+abandons the space, exactly as a process that stops mid-creation abandons a
+space today; it costs one access-control document and is reachable by
+nobody, and the creation is started again.
 
 Steps 2 and 3 are the design's departure from the random-space-identities
 rules: the key signs two things rather than one, and the space's listed
@@ -240,12 +244,16 @@ closed, and that slice brings a general DAG-CBOR codec with it.
 
 ### Where it is stored
 
-Beside the profile link, in the Home space's profile list, which is already
-the durable record of which profiles a user has. The Home space is readable
-by its owner alone, so the delegation is as private as the profile list
-itself, and it is the only record of the profile's authority anywhere. The
-runtime reads the list at startup, as it does for `#profile` resolution, and
-keeps the delegations keyed by space DID. Each is stored as its encoded
+In the Home space, beside the profile list that is already the durable
+record of which profiles a user has: one document per profile space, under
+the cause `{ delegations: <space DID> }`, holding a list of delegations'
+bytes, the root delegation written there in the transaction that appends the
+profile link and any later delegation over the space, with another command
+or policy, added beside it. The Home
+space is readable by its owner alone, so the delegation is as private as the
+profile list itself, and it is the only record of the profile's authority
+anywhere. The runtime walks the list at startup, reads each profile's
+record, and holds the delegations keyed by space DID. Each is stored as its encoded
 bytes beside its CID, so the runtime presents it without re-encoding it, and
 the CID the server checks is the one the issuer produced.
 
@@ -519,7 +527,7 @@ part of this design.
    server advertises `sessionOpenProofs` when its policy admits delegations,
    registered in
    [`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md) and
-   off by default until the client ships.
+   on by default since the third phase.
 2. **Client presents proofs.** Implemented. The remote session factory holds
    a delegation store (`delegation-store.ts`), fed whole chains through
    `StorageManager.addDelegationChain`, and every session it opens presents
@@ -531,11 +539,17 @@ part of this design.
    `sessionOpenProofs` rather than opening under the key's own grant. The
    store is fed programmatically until the next phase records delegations in
    the Home space.
-3. **Profile identity at creation.** The profile creation path signs
-   genesis as the profile key, issues the delegation, records it beside the
-   link, and destroys the key once both have landed. `HOME_SPACE.md` and
-   `shared-profile-space.md` change in the same commit to describe the new
-   access list and the Home-space record.
+3. **Profile identity at creation.** Implemented. `inSpace(..., {
+   selfOwned: true, spaceKind: "profile" })` creates a space whose access
+   list grants its own DID OWNER and the creator nothing
+   (`StorageManager.createSelfOwnedSpace`); the key signs one delegation to
+   the creator after its genesis commit and before it is dropped; the
+   calling space records the delegation beside the allocation, in the list
+   under `{ delegations: <space DID> }`, in the transaction that appends the
+   profile link; and `Runtime.loadProfileDelegations` holds every recorded
+   delegation at startup. The server reads a self-owned space's declared
+   kind before taking it for a home, and `sessionOpenProofs` is on by
+   default.
 4. **Chains beyond the profile.** A `cf` command and a Home-space affordance
    to issue a delegation from the core identity to another key; agent and
    daemon identities use it.
@@ -564,14 +578,15 @@ part of this design.
   list grants the space DID OWNER, and two things read that as "this is a
   home space": the server-side root ensure's home predicate, and the
   acting-as binding with the trust snapshot the ensure runs under. A
-  profile space grants its own DID OWNER, so both must take the kind the
-  genesis declares as their home predicate rather than self-ownership. The
-  acting-as binding resolves no user in a profile space, since the access
-  list names none; in the first slice that is fine, since the profile's
-  root is reserved at genesis and placed by the creator's own session, so
-  the server ensure does not run for a profile. Whether the service should
-  later learn the core identity from the proofs it has seen, to act for the
-  user in a profile space, is the part left open.
+  profile space grants its own DID OWNER, so both read the kind the
+  genesis declares beside self-ownership: a self-owned space declaring a
+  kind is not a home. The acting-as binding then resolves no user in a
+  profile space, since the access list names none, and the envelope's own
+  capability applies; that is fine, since the profile's root is reserved
+  at genesis and placed by the creator's own session, so the server ensure
+  has nothing to do for a profile. Whether the service should later learn
+  the core identity from the proofs it has seen, to act for the user in a
+  profile space, is the part left open.
 - **Is giving up the profile as a signer the right trade?** This design
   destroys the key, so a profile never signs a verified-identity assertion,
   a roster membership, or anything else. The alternative is a key derived
@@ -600,7 +615,11 @@ part of this design.
 | Verify a signed open; add chain verification and root-issuer output | `packages/memory/v2/session-open-auth.ts` |
 | Resolve the session capability for the root issuer | `packages/memory/v2/server.ts`, session.open admission beside the `actingAs` binding |
 | Persist the proofs with the open's authorization | `packages/memory/v2/engine.ts`, `authorization` table |
-| Home predicate by declared kind, not self-ownership | `resolveSpaceOwnerOf` in `packages/memory/v2/server.ts` and its readers: the acting-as binding there, and the root ensure's `isHomeSpace` in `packages/runner/src/executor/space-server.ts` |
+| Home predicate by declared kind beside self-ownership | the acting-as binding in `packages/memory/v2/server.ts`, and the root ensure's `isHomeSpace` in `packages/runner/src/executor/space-server.ts` |
+| Create a space that owns itself; sign the delegation before the key is dropped | `StorageManager.createSelfOwnedSpace` in `packages/runner/src/storage/v2.ts`; `inSpace(..., { selfOwned: true })` through `Runtime.createSpace` |
+| Record the delegation in the calling space, beside the allocation | `Runtime.resolveInSpaceNameSync`, under `delegationsCause` |
+| Hold Home's recorded delegations at startup | `Runtime.loadProfileDelegations`, called by the runtime-client worker and the `cf` CLI |
+| Present chains under emulation | the emulated session factory in `packages/runner/src/storage/v2-emulate.ts` |
 | Build the signed open with `prf` and proofs | `packages/runner/src/storage/v2-remote-session.ts`, `createSignedSessionOpenAuth` |
 | Keep the chain across reopens | `packages/memory/v2/client.ts`, the session's reopen descriptor |
 | Delegation store, keyed by space DID | `packages/runner/src/storage/v2.ts`, storage manager mount |

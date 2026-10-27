@@ -211,6 +211,7 @@ describe("v2-server-session-open-proofs", () => {
     });
     const refusing = createServer("memory://proofs-advertise-off", {
       mode: "enforce",
+      delegations: false,
     });
     try {
       expect((await connect(admitting)).hello.flags.sessionOpenProofs).toBe(
@@ -334,6 +335,7 @@ describe("v2-server-session-open-proofs", () => {
   it("returns `AuthorizationError` for any chain when its policy admits no delegations", async () => {
     const server = createServer("memory://proofs-policy-off", {
       mode: "enforce",
+      delegations: false,
     });
     try {
       await initializeSelfOwnedSpace(server);
