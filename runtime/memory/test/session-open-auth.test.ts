@@ -787,15 +787,15 @@ describe("verifySessionOpenProofs", () => {
     ).rejects.toThrow("proof 0 does not cover /memory/session.open");
   });
 
-  it("throws for an expired proof, and accepts one within the clock-skew grace", async () => {
-    const expired = await rootDelegation({ exp: now - 1_000 });
+  it("throws for a proof past its expiry second, and accepts one at it", async () => {
+    const expired = await rootDelegation({ exp: now - 1 });
     await expect(
       verifySessionOpenProofs(signedOpen([expired]), proofOptions()),
     ).rejects.toThrow("proof 0 has expired");
-    const grace = await rootDelegation({ exp: now - 10 });
+    const atExpiry = await rootDelegation({ exp: now });
     expect(
-      await verifySessionOpenProofs(signedOpen([grace]), proofOptions()),
-    ).toEqual({ rootIssuer: space.did(), expiresAt: now - 10 });
+      await verifySessionOpenProofs(signedOpen([atExpiry]), proofOptions()),
+    ).toEqual({ rootIssuer: space.did(), expiresAt: now });
   });
 
   it("throws for a proof that is not yet valid", async () => {

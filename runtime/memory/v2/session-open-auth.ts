@@ -156,8 +156,7 @@ export type VerifySessionOpenOptions = {
   clockSkewSeconds?: number;
 };
 
-/** The grace a validity window gets, to tolerate client and server clock skew. */
-export const DEFAULT_CLOCK_SKEW_SECONDS = 120;
+const DEFAULT_CLOCK_SKEW_SECONDS = 120;
 
 /**
  * Verifies what every signed memory invocation carries: the audience, the
@@ -308,9 +307,6 @@ export type VerifySessionOpenProofsOptions = {
 
   /** Current unix time in seconds (defaults to now). Injectable for tests. */
   nowSeconds?: number;
-
-  /** Grace window for a proof's validity to tolerate clock skew. */
-  clockSkewSeconds?: number;
 };
 
 /** What a verified chain establishes for the session it opens. */
@@ -385,7 +381,6 @@ export const verifySessionOpenProofs = async (
     throw proofError("`prf` without a signed invocation");
   }
   const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
-  const skew = options.clockSkewSeconds ?? DEFAULT_CLOCK_SKEW_SECONDS;
   const chain: Delegation[] = [];
   let expiresAt: number | undefined;
   for (const [i, proof] of proofs.entries()) {
@@ -411,14 +406,14 @@ export const verifySessionOpenProofs = async (
       throw proofError(`proof ${i} does not cover ${SESSION_OPEN_COMMAND}`);
     }
     if (payload.exp !== null) {
-      if (payload.exp < now - skew) {
+      if (payload.exp < now) {
         throw proofError(`proof ${i} has expired`);
       }
       expiresAt = expiresAt === undefined
         ? payload.exp
         : Math.min(expiresAt, payload.exp);
     }
-    if (payload.nbf !== undefined && payload.nbf > now + skew) {
+    if (payload.nbf !== undefined && payload.nbf > now) {
       throw proofError(`proof ${i} is not yet valid`);
     }
     const previous = chain.at(-1);

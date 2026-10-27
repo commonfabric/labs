@@ -1920,8 +1920,8 @@ The server, after authenticating the open's principal, checks that:
 - each proof's `sub` is the requested space
 - each proof's `cmd` covers `/memory/session.open`: it is `/`, `/memory`, or
   `/memory/session.open`
-- each proof is within its `nbf` and `exp`, with the clock-skew grace a signed
-  open gets
+- each proof is within its `nbf` and `exp`, to the second: valid from the
+  `nbf` second through the `exp` second, with no clock-skew grace
 - the proofs link, each `aud` being the next proof's `iss`, and the last `aud`
   is the open's principal
 - the open does not also carry the `actingAs` binding
@@ -1939,8 +1939,8 @@ per open: a resume presenting none leaves the session to its principal's own
 grant.
 
 The chain is held to after admission as it is at admission. A session opened
-with a chain carries the chain's earliest `exp`; past it, with the clock-skew
-grace, the session is refused every request with a permanent
+with a chain carries the chain's earliest `exp`; from the second after it,
+the session is refused every request with a permanent
 `AuthorizationError`, is ended with `session/revoked` at the first such
 request, and is sent no `session/effect`. Nothing renews it: a client whose
 delegation has a later expiry opens the session again with a current chain.

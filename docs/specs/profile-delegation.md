@@ -344,8 +344,8 @@ verifies the signature as it does now, then, when `prf` is present:
 3. Each proof's `sub` is the requested space.
 4. Each proof's `cmd` covers `/memory/session.open`: it is `/`, `/memory`, or
    `/memory/session.open`.
-5. Each proof is within `nbf` and `exp`, with the clock-skew grace the open
-   itself gets.
+5. Each proof is within `nbf` and `exp`, to the second, with no clock-skew
+   grace.
 6. Each proof's `pol` is empty (first slice).
 7. The chain links: `proofs[i].aud === proofs[i + 1].iss` for each `i`, and
    `proofs[last].aud === invocation.iss`.

@@ -209,7 +209,6 @@ import {
 } from "./server-sync.ts";
 import {
   authorizationError,
-  DEFAULT_CLOCK_SKEW_SECONDS,
   verifySessionOpenProofs,
 } from "./session-open-auth.ts";
 import {
@@ -1578,8 +1577,7 @@ class Connection {
   /** Whether the proof chain the session was opened with has expired. */
   #delegationEnded(handle: SessionHandle): boolean {
     return handle.delegationEnd !== undefined &&
-      handle.delegationEnd <
-        this.#server.nowSeconds() - DEFAULT_CLOCK_SKEW_SECONDS;
+      handle.delegationEnd < this.#server.nowSeconds();
   }
 
   /** Ends the authentication of `principal`, if it has one. */

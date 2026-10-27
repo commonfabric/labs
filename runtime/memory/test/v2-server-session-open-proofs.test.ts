@@ -395,10 +395,10 @@ describe("v2-server-session-open-proofs", () => {
       );
       expectExists(before.ok, "the chain holds before its expiry");
 
-      // Past the expiry and the clock-skew grace, on the same connection.
+      // One second past the expiry, on the same connection.
       // The session is ended before the refusal, so the client learns
       // rather than retries: `session/revoked` precedes the response.
-      clock.now += 1_000;
+      clock.now += 101;
       await harness.connection.receive(encodeMemoryBoundary({
         type: "transact",
         requestId: nextRequestId("tx"),
