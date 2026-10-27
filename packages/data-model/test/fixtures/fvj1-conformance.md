@@ -21,8 +21,8 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
 - `name`: unique among the cases.
 - `section`: the part of the spec the case exercises.
 - `text`: the text to decode. For a case that starts from a value, it is the
-  value's canonical text, with record keys in the UTF-8 order section 10 of the
-  spec requires, and `null` wherever a patch puts what no text carries.
+  value's canonical text, as [Exact text](#exact-text) describes, with `null`
+  wherever a patch puts what no text carries.
 - `unclaimed` and `patches`: the mods to decoding `text`, present where the case
   needs them, as [`value-probes.md`](value-probes.md) defines them. Among the
   cases they state symbols of no registry key; none of the cases needs
@@ -65,12 +65,11 @@ generation instead.
 
 ## Exact text
 
-An encoder that is to match `text` or `canonical` byte for byte writes the JSON
-that ECMAScript's `JSON.stringify()` writes with no indentation, as ECMA-262
-defines it: a string by the `QuoteJSONString` abstract operation, and a number
-by `Number::toString`. The result is JSON as RFC 8259 defines it. Record keys
-are in the order section 10 of the spec requires, UTF-8 byte order, a lone
-surrogate taking the bytes WTF-8 gives it.
+`canonical`, `text` where there is no `canonical`, each fragment, and each
+`divergence.encode` text are canonical text, the one text a conforming encoder
+writes, as
+[section 11 of `3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md#11-canonical-text)
+defines it, with record keys in the order of section 10.
 
 ## Lenient decoding
 

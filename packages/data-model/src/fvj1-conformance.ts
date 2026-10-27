@@ -126,6 +126,9 @@ export function fvj1ConformanceCases(
 const SECTION_PREFIX = "3-json-encoding.md section 1.1";
 const SECTION_NUMBERS = "3-json-encoding.md section 3, `SpecialNumber@1`";
 const SECTION_STRINGS = "1-fabric-values.md section 6.7";
+const SECTION_NUMBER_TEXT = "3-json-encoding.md section 11.2";
+const SECTION_STRING_TEXT = "3-json-encoding.md section 11.3";
+const SECTION_DECODED_TEXT = "3-json-encoding.md section 11.4";
 const SECTION_KEY_ORDER = "3-json-encoding.md section 10";
 const SECTION_HOLES = "3-json-encoding.md section 3, sparse array encoding";
 const SECTION_UNDEFINED = "3-json-encoding.md section 5";
@@ -148,39 +151,39 @@ const RESERVED_KEY_NOTE = "Section 4 lets a record carry any key, and its " +
 
 /** The cases that do not range over the class tables. */
 const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
-  // JSON's own values.
+  // JSON's own values, and how their text is written.
   { name: "null", section: SECTION_PREFIX, make: () => null },
   { name: "true", section: SECTION_PREFIX, make: () => true },
   { name: "false", section: SECTION_PREFIX, make: () => false },
-  { name: "zero", section: SECTION_PREFIX, make: () => 0 },
-  { name: "integer", section: SECTION_PREFIX, make: () => 42 },
-  { name: "negative fraction", section: SECTION_PREFIX, make: () => -1.5 },
-  { name: "inexact fraction", section: SECTION_PREFIX, make: () => 0.1 },
-  { name: "large exponent", section: SECTION_PREFIX, make: () => 1e21 },
-  { name: "small exponent", section: SECTION_PREFIX, make: () => 1e-7 },
+  { name: "zero", section: SECTION_NUMBER_TEXT, make: () => 0 },
+  { name: "integer", section: SECTION_NUMBER_TEXT, make: () => 42 },
+  { name: "negative fraction", section: SECTION_NUMBER_TEXT, make: () => -1.5 },
+  { name: "inexact fraction", section: SECTION_NUMBER_TEXT, make: () => 0.1 },
+  { name: "large exponent", section: SECTION_NUMBER_TEXT, make: () => 1e21 },
+  { name: "small exponent", section: SECTION_NUMBER_TEXT, make: () => 1e-7 },
   {
     name: "smallest subnormal",
-    section: SECTION_PREFIX,
+    section: SECTION_NUMBER_TEXT,
     make: () => Number.MIN_VALUE,
   },
   {
     name: "largest double",
-    section: SECTION_PREFIX,
+    section: SECTION_NUMBER_TEXT,
     make: () => Number.MAX_VALUE,
   },
   {
     name: "integer past 2^53",
-    section: SECTION_PREFIX,
+    section: SECTION_NUMBER_TEXT,
     make: () => 2 ** 53 + 2,
   },
   {
     name: "number spelled with fraction and exponent",
-    section: SECTION_PREFIX,
+    section: SECTION_DECODED_TEXT,
     text: "fvj1:1.0E2",
   },
   {
     name: "whitespace around and inside the JSON",
-    section: SECTION_PREFIX,
+    section: SECTION_DECODED_TEXT,
     text: "fvj1: [ 1 , 2 ] ",
   },
   {
@@ -211,15 +214,15 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   },
 
   // Strings.
-  { name: "empty string", section: SECTION_STRINGS, make: () => "" },
+  { name: "empty string", section: SECTION_STRING_TEXT, make: () => "" },
   {
     name: "string of characters JSON escapes",
-    section: SECTION_STRINGS,
+    section: SECTION_STRING_TEXT,
     make: () => '"\\/\b\f\n\r\t\u0000\u001f\u007f\u2028',
   },
   {
     name: "string beyond ASCII",
-    section: SECTION_STRINGS,
+    section: SECTION_STRING_TEXT,
     make: () => "\u00e9\u{1F600}\uffff",
   },
   {
@@ -234,22 +237,22 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   },
   {
     name: "lone high surrogate",
-    section: SECTION_STRINGS,
+    section: SECTION_STRING_TEXT,
     make: () => "\ud800",
   },
   {
     name: "lone low surrogate between characters",
-    section: SECTION_STRINGS,
+    section: SECTION_STRING_TEXT,
     make: () => "a\udc00b",
   },
   {
     name: "surrogates in reverse order",
-    section: SECTION_STRINGS,
+    section: SECTION_STRING_TEXT,
     make: () => "\udc00\ud800",
   },
   {
     name: "lone surrogate escaped in uppercase",
-    section: SECTION_STRINGS,
+    section: SECTION_DECODED_TEXT,
     text: 'fvj1:"\\uD800"',
   },
 

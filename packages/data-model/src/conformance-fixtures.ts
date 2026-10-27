@@ -226,10 +226,10 @@ function asciiJsonOf(value: FixtureJson): string {
 /**
  * Returns `value` written as an `fvj1:` text and the mods to decoding it,
  * which {@link fabricValueOfTextWithMods} reads back. The text is the value's
- * canonical text, with record keys in the UTF-8 order section 10 of
- * `3-json-encoding.md` requires: what {@link plainJsonTextOf} writes, for a
- * value it writes a text for, and otherwise this package's encoding with its
- * keys put in that order. The first of those covers a record holding a key
+ * canonical text, as sections 10 and 11 of `3-json-encoding.md` define it:
+ * what {@link plainJsonTextOf} writes, for a value it writes a text for, and
+ * otherwise this package's encoding with its record keys put in the UTF-8
+ * order section 10 requires. The first of those covers a record holding a key
  * this package's encoder reserves.
  *
  * What no text carries is written as `null`, with a patch putting it there: a
@@ -332,9 +332,10 @@ function replaceUntextual(
  * negative zero, a string, or an array or record of these, holding no hole and
  * no key starting with `/`. Returns `undefined` for anything else.
  *
- * This writes the text without the codec, sorting the value's own keys with
- * `utf8Compare()`, the canonical comparator section 10 names, so that the
- * codec's key order is held to a computation from the case rather than to
+ * This writes the text without the codec, its numbers and strings by
+ * `JSON.stringify()`, whose rules section 11 adopts, and the value's own keys
+ * sorted with `utf8Compare()`, the canonical comparator section 10 names, so
+ * that the codec's text is held to a computation from the case rather than to
  * the codec's output or to text typed by hand.
  */
 export function plainJsonTextOf(value: FabricValue): string | undefined {

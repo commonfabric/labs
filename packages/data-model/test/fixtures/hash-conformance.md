@@ -39,9 +39,9 @@ generation instead.
 
 ## Texts
 
-Each `text` is the value's canonical text, with record keys in the UTF-8 order
-section 10 of `3-json-encoding.md` requires, so a decoder that holds a text to
-that order can read every one. That order is the spec's rather than this
+Each `text` is the value's canonical text, as sections 10 and 11 of
+`3-json-encoding.md` define it, so a decoder that holds a text to section 10's
+key order can read every one. That order is the spec's rather than this
 package's encoder's, which writes keys that read as array indices first: the
 case "record keys that read as integers" is `{"10":…,"2":…,"a":…}`.
 

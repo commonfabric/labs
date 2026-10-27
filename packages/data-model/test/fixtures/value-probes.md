@@ -66,13 +66,13 @@ A leaf is a node with no steps under it: `null`, a boolean, a number, a string,
 patch states it.
 
 A fragment is the leaf's canonical `fvj1:` text, written on its own, prefix and
-all, with record keys in the UTF-8 order section 10 of
+all, as sections 10 and 11 of
 [`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
-requires: `"fvj1:{\"/BigInt@1\":\"BQ\"}"` for the bigint `5n`. Being written on
-its own and canonically, it need not appear in the entry's `text` as is: a text
-that is not canonical can write `fvj1:100` as `1.0E2`. Decode a fragment
-applying the case's `unclaimed`, if any, but never its `patches`, whose paths
-start at the root of the whole value.
+define canonical text: `"fvj1:{\"/BigInt@1\":\"BQ\"}"` for the bigint `5n`.
+Being written on its own and canonically, it need not appear in the entry's
+`text` as is: a text that is not canonical can write `fvj1:100` as `1.0E2`.
+Decode a fragment applying the case's `unclaimed`, if any, but never its
+`patches`, whose paths start at the root of the whole value.
 
 There are two ways to check a fragment, and a reader may take either:
 
