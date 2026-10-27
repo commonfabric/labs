@@ -220,8 +220,13 @@ canonical live-link demo:
 `packages/patterns/lunch-poll/main.tsx`.
 
 **`<cf-profile-badge>` is the one idiomatic way to render an identity** — avatar +
-name + the runtime-attested generative seal (a DID-derived aura ring + cursor
-glint; there is no shield icon), navigable to the person's profile. Prefer it
+name + the runtime-attested generative seal (an aura ring derived from the
+owner's DID and, for a profile, the profile's space, + cursor glint; there is no
+shield icon), navigable to the person's profile. Verification attests the
+principal; the seal tells their profiles apart, so two profiles of one person
+look like two people. A document that carries the person's claim without being
+a profile, such as a room's record of them, wears the person's seal alone, the
+same in every space. Prefer it
 anywhere an identity appears (rosters, message authors, "playing as",
 scoreboards); inline a name into a string only as an explicit fallback. Four
 variants, all carrying the same seal (CT-1761):
@@ -412,7 +417,10 @@ const inviteBaker = handler<
   { baker: Writable<{ name: string }> },
   { invited: Writable<DID[]> }
 >(({ baker }, { invited }) => {
-  const principal = principalOf(baker, "represents-principal");
+  // Whose own profile `baker` is, by the rule every reader of a person's
+  // profiles applies, which `principalOf(baker, "represents-principal")`
+  // alone does not decide.
+  const principal = profileOwnerOf(baker);
   if (principal === undefined || principal === currentPrincipal()) return;
   invited.push(principal);
 });
@@ -436,6 +444,20 @@ const inviteBaker = handler<
 - `principalsOf(target, kind)` returns every principal the label attests: `[]`
   for none, several for a contested one. Read it where a value nobody attests
   is fine but one someone else attests is not.
+- `profileOwnerOf(profile)` returns the person whose own profile `profile` is,
+  by the rule Home and `#profile` apply ("Profile" in
+  [`HOME_SPACE.md`](../conventions/HOME_SPACE.md)), or `undefined`. Read it,
+  not `principalOf(profile, "represents-principal")`, to ask whether a profile
+  is someone's, since it also refuses a profile whose name is borrowed from
+  another document.
+- `resultOwnerOf(cell, field)` names the pattern whose result owns the
+  document `cell` is in, as `space/id`, when that result's own `field` is that
+  document, or `undefined` otherwise and for a document no pattern's setup
+  derived. A handler that decides by several cells of one pattern, as a guard
+  over Home's lists does, checks each by the field it must be, so that a
+  binding of another pattern's cells, or of the right pattern's cells in the
+  wrong places, is refused; a pattern cannot forge the answer. Without
+  `field` it says only whose the document is, which is not enough for that.
 - A field that links a document has its own label, separate from the linked
   document's. `principalOf(field, kind, { label: "written" })` reads the
   field's claim of `kind`, such as who wrote the link, while the default reads

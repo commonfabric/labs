@@ -129,12 +129,13 @@ describe("profile picture ownership", () => {
   };
 
   /**
-   * Sets the picture through the profile's own writer from `writer`, and
-   * returns the message of the error its commit failed with, if it failed.
+   * Sets the picture to `bytes`, or clears it for `"clear"`, through the
+   * profile's own writer from `writer`, and returns the message of the error
+   * its commit failed with, if it failed.
    */
   const setPicture = async (
     writer: Runtime,
-    bytes: number[],
+    bytes: number[] | "clear",
   ): Promise<string | undefined> => {
     const cell = writer.getCellFromLink<Profile>(
       profile.getAsNormalizedFullLink(),
@@ -143,7 +144,9 @@ describe("profile picture ownership", () => {
     const settled = Promise.withResolvers<IExtendedStorageTransaction>();
     writer.scheduler.queueEvent(
       cell.key("setPicture").resolveAsCell().getAsNormalizedFullLink(),
-      { picture: new FabricBytes(new Uint8Array(bytes)) },
+      bytes === "clear"
+        ? { clear: true }
+        : { picture: new FabricBytes(new Uint8Array(bytes)) },
       true,
       settled.resolve,
     );
@@ -234,6 +237,17 @@ describe("profile picture ownership", () => {
     it("attests the owner once the owner sets the picture", async () => {
       expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
       expect(await picture()).toEqual([1, 2, 3]);
+      expect(await pictureBy()).toEqual([owner.did()]);
+    });
+
+    it("removes the picture once the owner clears it, and attests the owner's next one", async () => {
+      expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
+
+      expect(await setPicture(runtime, "clear")).toBeUndefined();
+      expect(await picture()).toBeUndefined();
+
+      expect(await setPicture(runtime, [4, 5])).toBeUndefined();
+      expect(await picture()).toEqual([4, 5]);
       expect(await pictureBy()).toEqual([owner.did()]);
     });
   });

@@ -174,12 +174,15 @@ function createMapInstance(
   };
 
   // The wait this coordinator takes on its result container, which it takes
-  // once per container.
+  // once per container. It seeds nothing: a map writes its container only
+  // once a reconcile succeeds, so a container still absent once the pull
+  // settles is one whose every reconcile failed, which holds no list.
   const containerWait = resumeContainerWait(
     runtime,
     logger,
     `map/resume-seed/${parentCell.sourceURI}`,
     identity,
+    false,
   );
 
   // Identity-based tracking: maps element address key → { resultCell, lastIndex }
@@ -342,14 +345,16 @@ function createMapInstance(
         fn,
       );
     // Resume against confirmed state, not the not-yet-loaded value: on the
-    // resume reconcile an undefined container is its durable value still
-    // streaming in (a map that has run persisted at least []). Reconciling
-    // now would write a stale-basis result that conflicts on commit and
-    // re-runs against the same absent value until it happens to sync — the
-    // reload commit storm. Wait for the container's pull instead; the wait
-    // re-arms this reconcile once the pull settles, and it is taken once per
-    // container, so the reconcile that follows reconciles against whatever the
-    // container reads by then. Same shape in filter.ts/flatmap.ts.
+    // resume reconcile an undefined container is either its durable value
+    // still streaming in or one no reconcile has written, since a map writes
+    // its container only when a reconcile succeeds. Reconciling now would
+    // write a stale-basis result that conflicts on commit and re-runs against
+    // the same absent value until it happens to sync — the reload commit
+    // storm. Wait for the container's pull instead; the wait re-arms this
+    // reconcile once the pull settles, and it is taken once per container, so
+    // the reconcile that follows reconciles against whatever the container
+    // reads by then, writing it when it succeeds. Same shape in
+    // filter.ts/flatmap.ts, whose waits also seed an absent container.
     if (
       elementAwaitSync &&
       containerWait.mayWait(result) &&
@@ -382,13 +387,9 @@ function createMapInstance(
       return;
     }
 
-    // A fresh (non-resume) reconcile has no container yet; seed [] so the first
-    // render has a value. On resume this is unreachable — the defer guard above
-    // either holds for the still-loading container or sees the durable value, so
-    // priorSlots is never undefined here.
-    if (priorSlots === undefined) {
-      probeScoped(() => resultWithLog.set([]));
-    }
+    // A fresh (non-resume) reconcile has no container yet, and every path
+    // below that does not throw writes it, so a map that fails leaves it
+    // holding nothing rather than an empty list.
     // If the list is undefined it means the input isn't available yet.
     // Correspondingly, the result should be []. TODO: Maybe it's important to
     // distinguish empty inputs from undefined inputs?

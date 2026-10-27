@@ -918,6 +918,23 @@ export interface RuntimeOptions {
   cfcReadOnExceed?: CfcReadOnExceed;
 
   /**
+   * The space of the profile `#profile` answers with, among the user's
+   * profiles, for a runtime that acts as one of them (a host keeping one
+   * profile per identity it presents, as the Weaver does with its facets).
+   * When the home does not list that profile, or retired it, `#profile`
+   * fails rather than answer as another profile. The home's own default and
+   * most-recently-used profiles are unchanged. Nothing in the runtime reads
+   * this but `#profile`'s answer, and through `#profile` it reaches every
+   * pattern that reads `#profile`. FabriChat's chat manager is one of them:
+   * there is one per Home, and it keys direct rooms by the counterpart's
+   * principal alone, so two profiles of one person would share a direct room
+   * with the same counterpart, which shows the counterpart that the two are
+   * one person. A host therefore runs the chat manager as one profile, the
+   * default, until the manager keeps its state per profile.
+   */
+  preferredProfileSpace?: MemorySpace;
+
+  /**
    * Deployment policy records for the exchange-rule evaluator (Epic B2a,
    * spec §4.3). Validated, digested, and deep-frozen into a `PolicySnapshot`
    * at construction — malformed records throw at boot (fail-closed config,
@@ -1388,6 +1405,9 @@ export class Runtime {
 
   /** See `RuntimeOptions.cfcReadOnExceed`; `undefined` leaves `fail` in force. */
   readonly cfcReadOnExceed: CfcReadOnExceed | undefined;
+
+  /** See `RuntimeOptions.preferredProfileSpace`. */
+  readonly preferredProfileSpace: MemorySpace | undefined;
 
   /** Frozen deployment policy snapshot; undefined = no policies configured. */
   readonly cfcPolicySnapshot: PolicySnapshot | undefined;
@@ -2151,6 +2171,7 @@ export class Runtime {
       }
       this.cfcReadMaxConfidentiality = readCeiling.maxConfidentiality;
       this.cfcReadOnExceed = readCeiling.onExceed;
+      this.preferredProfileSpace = options.preferredProfileSpace;
       // Validates + digests + deep-freezes; throws on malformed records so a
       // config error surfaces at boot, not as a silently inert rule (same
       // eager-validation posture as the spaceHostMap URLs above).

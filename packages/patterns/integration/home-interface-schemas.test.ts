@@ -7,6 +7,7 @@ import { describe, it } from "@std/testing/bdd";
 import {
   sharedSpaceCollectionViewSchema,
   sharedSpaceEntrySchema,
+  sharedSpaceProfileViewSchema,
   sharedSpaceReceiptViewSchema,
 } from "@commonfabric/home-schemas";
 import { Identity } from "@commonfabric/identity";
@@ -99,6 +100,7 @@ describe("Home interface schemas", () => {
           entry: sharedSpaceEntrySchema,
           collection: sharedSpaceCollectionViewSchema,
           receipts: sharedSpaceReceiptViewSchema,
+          profiles: sharedSpaceProfileViewSchema,
         })
       ) {
         expect(schemas[role]).toBeDefined();

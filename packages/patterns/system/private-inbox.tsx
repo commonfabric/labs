@@ -27,6 +27,7 @@ import {
   getEntityId,
   handler,
   isWellFormedDID,
+  type JSONValue,
   NAME,
   pattern,
   spaceOf,
@@ -124,6 +125,17 @@ export interface OfferEvent {
 
   /** When the sender shared the offer, in milliseconds since the epoch. */
   sharedAt?: number;
+
+  /**
+   * The recipient's profile the offer is for, by its space DID. Every profile
+   * of one principal points at the same inbox, so this is what tells the
+   * recipient which of their profiles was offered the thing. Absent, `null`,
+   * or naming no `space`, the offer is to the person. It is taken as the
+   * sender sent it, `{ space }` or anything else, so that the inbox keeps a
+   * claim it cannot read as no claim at all rather than as one to the person
+   * (`keptRecipient()`).
+   */
+  toProfile?: JSONValue;
 }
 
 /** An offer as the inbox holds it: every field of the envelope, and more. */
@@ -168,6 +180,19 @@ export interface Offer {
    * handler's clock reads to the second, so two offers can share it.
    */
   receivedAt: number;
+
+  /**
+   * The recipient's profile the offer names as the one it is for, by its space
+   * DID, when the sender named a well-formed one, or `null` when the sender
+   * named none, so that the offer is to the person. Like `from`, it is the
+   * sender's claim; a reader acts on it only for a profile that is its own.
+   * The inbox writes it on every offer it keeps but one whose sender named a
+   * profile by something other than a well-formed DID, so a reader finding no
+   * `toProfile` at all cannot tell whom the offer is for: its sender named a
+   * malformed profile, or an earlier inbox that did not keep the field
+   * received it.
+   */
+  toProfile?: { space: string } | null;
 }
 
 /** The inbox's offers, oldest first. */
@@ -345,7 +370,9 @@ function trimmedText(value: unknown, max: number): string {
  * {@link isOrigin}. An event with no `kind` is kept as
  * {@link OFFER_DEFAULT_KIND}, one with no `id` as `<space>@<sharedAt>`, one
  * with no positive `sharedAt` as shared at `now`, and an `ownerOrigin` that is
- * not an origin is kept empty.
+ * not an origin is kept empty. A `toProfile` naming a well-formed DID as its
+ * `space` is kept as `{ space }`, one naming no profile (`keptRecipient()`)
+ * as `null`, and any other is left out.
  */
 function admissibleOffer(event: OfferEvent, now: number): Offer | undefined {
   const space = trimmedText(event?.space, OFFER_ADDRESS_MAX_LENGTH);
@@ -371,7 +398,30 @@ function admissibleOffer(event: OfferEvent, now: number): Offer | undefined {
     from,
     sharedAt,
     receivedAt: Math.floor(now),
+    ...keptRecipient(event?.toProfile),
   };
+}
+
+/**
+ * The `toProfile` the inbox keeps for an envelope naming `named`, as
+ * {@link admissibleOffer} says: `null` for a profile not named, which is
+ * `named` absent or `null`, or its `space` absent, `null` or empty once
+ * trimmed; `{ space }`, trimmed and cut, for a `space` that is a well-formed
+ * DID; and nothing for anything else, which is a claim the inbox cannot read
+ * and so must not keep as one to the person.
+ */
+function keptRecipient(
+  named: JSONValue | undefined,
+): { toProfile?: { space: string } | null } {
+  if (named === undefined || named === null) return { toProfile: null };
+  if (typeof named !== "object" || Array.isArray(named)) return {};
+  if (!("space" in named)) return { toProfile: null };
+  const space = named.space;
+  if (space === undefined || space === null) return { toProfile: null };
+  if (typeof space !== "string") return {};
+  const kept = trimmedText(space, OFFER_ADDRESS_MAX_LENGTH);
+  if (kept === "") return { toProfile: null };
+  return isWellFormedDID(kept) ? { toProfile: { space: kept } } : {};
 }
 
 /**

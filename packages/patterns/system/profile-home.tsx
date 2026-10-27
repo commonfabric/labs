@@ -96,6 +96,8 @@ export type SetProfileNameEvent = {
 
 export type SetProfileAvatarEvent = {
   avatar?: string;
+  /** Removes the avatar. A host removing it says so outright. */
+  clear?: boolean;
   detail?: { message?: string };
   key?: string;
   target?: { value?: string };
@@ -106,6 +108,9 @@ export type SetProfileAvatarEvent = {
 export type SetProfilePictureEvent = {
   picture?: FabricBytes;
   detail?: { bytes?: FabricBytes };
+
+  /** Removes the picture. A host removing it says so outright. */
+  clear?: boolean;
 };
 
 export type SetProfileBioEvent = {
@@ -749,6 +754,14 @@ const mutateElements = handler<
   }
 });
 
+/**
+ * Whether `name` holds a control character. A profile's name is shown
+ * wherever the profile is, a terminal among those places, so a name holding
+ * one is refused rather than stored.
+ */
+export const nameHasControlCharacter = (name: string): boolean =>
+  /\p{Cc}/u.test(name);
+
 const setName = handler<SetProfileNameEvent, { name: Writable<string> }>(
   (event, state) => {
     if (event.key !== undefined && event.key !== "Enter") {
@@ -763,13 +776,22 @@ const setName = handler<SetProfileNameEvent, { name: Writable<string> }>(
     if (!name) {
       return;
     }
+    if (nameHasControlCharacter(name)) {
+      throw new Error("A profile name cannot contain control characters.");
+    }
     state.name.set(name);
   },
 );
 
+// An empty avatar is ignored rather than stored, as an empty name is (see
+// setName above); `clear: true` is how the avatar is removed.
 const setAvatar = handler<SetProfileAvatarEvent, { avatar: Writable<string> }>(
   (event, state) => {
     if (event.key !== undefined && event.key !== "Enter") {
+      return;
+    }
+    if (event.clear === true) {
+      state.avatar.set("");
       return;
     }
     const avatar = (event.avatar ?? event.detail?.message ??
@@ -783,7 +805,7 @@ const setAvatar = handler<SetProfileAvatarEvent, { avatar: Writable<string> }>(
 );
 
 // The authorized writer for the `picture` field. An event without bytes is a
-// no-op, not a clear.
+// no-op, not a clear; `clear: true` is how the picture is removed.
 //
 // The picture's cell has no default, so setup writes nothing to it and its
 // document stores no policy of its own. The handler's state declares that the
@@ -806,6 +828,10 @@ const setPicture: HandlerFactory<
   SetProfilePictureState
 > = handler<SetProfilePictureEvent, SetProfilePictureState>(
   (event, state) => {
+    if (event.clear === true) {
+      state.picture.set(undefined);
+      return;
+    }
     const picture = event.picture ?? event.detail?.bytes;
     if (!picture?.length) {
       return;

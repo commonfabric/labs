@@ -174,11 +174,33 @@ wish({ query: "#profileSpace" }) // default profile's space cell
 
 Once profile data is loaded and at least one profile exists,
 `wish({ query: "#profile" }).result` is **the single current profile** —
-the best of the ordered candidates (default → MRU → first) — in **every** mode
+the best of the ordered candidates (default → MRU → first, or the preferred
+profile first, as the next paragraph says) — in **every** mode
 (interactive, headless, and the blessed read). It does not depend on the picker
 sidecar pattern running, so
 consumers can gate on `.result` without stranding in the multi-profile case
 (CT-1829). The `candidates` array holds the ordered profiles that loaded.
+
+A profile the home lists in `retiredProfiles` is not a candidate, and neither is
+one that is not the user's own, by the one rule "Profile" in
+[`HOME_SPACE.md`](HOME_SPACE.md) states: a home's lists may link someone
+else's profile, or a document carrying no label at all. A runtime
+constructed with `preferredProfileSpace`, which a host gives a runtime that acts
+as one of the user's profiles (the Weaver runs one per facet), orders the
+profile in that space ahead of the rest, so `#profile` and the profile-data
+wishes above (`#profileName` and the rest) answer from it. When the home does
+not list that profile, has retired it, or lists one that is not the user's
+own, these wishes fail with an error
+naming the space rather than answer as another profile, even when other
+profiles are live. The home's own default and MRU are unchanged.
+
+Through `#profile`, `preferredProfileSpace` reaches every pattern that reads
+`#profile`, not only the runtime's own wishes. FabriChat's chat manager is one
+such pattern. There is one chat manager per Home, and it keys its direct rooms
+by the counterpart's principal alone. Two profiles of one person would
+therefore share a direct room with the same counterpart, which shows the
+counterpart that the two profiles are one person. Until the manager keeps its
+state per profile, a host runs the chat manager as one profile, the default.
 
 Profile resolution waits for the Home root, default pattern, roster, and
 referenced profile documents to load before publishing a new result or opening

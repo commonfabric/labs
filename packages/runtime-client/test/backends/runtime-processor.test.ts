@@ -4297,6 +4297,9 @@ describe("runtime-processor", () => {
       );
       const home = {
         getAsLink: () => cellRefToSigilLink(homeRef),
+        // The document Home's root is, which the inbox ensure loads before
+        // reading Home's lists: none is stored, so it is absent.
+        getAsNormalizedFullLink: () => ({ ...homeRef }),
         // The pattern Home's root records that it runs.
         getMetaRaw: (key: string) =>
           key === "patternIdentity"
@@ -4307,31 +4310,38 @@ describe("runtime-processor", () => {
             ? { get: typeof rows === "function" ? rows : () => rows }
             : name === "ensurePrivateInbox"
             ? ensurePrivateInbox
-            : {
-              getRaw: () => ({ $stream: true }),
-              // Home's `privateInbox` and `profiles`, as the inbox ensure and
-              // the profile root repair read them: no inbox held, and no
-              // profile listed.
-              asSchema: () => ({
-                pull: async () => {
-                  await inboxReadable;
-                  return undefined;
-                },
-                sync: () => Promise.resolve(),
-                get: () => undefined,
-                sink: () => {
-                  onSubscribe();
-                  subscribed.push(name);
-                  return () => {
-                    unsubscribed.push(name);
-                  };
-                },
-              }),
-              send: (event: unknown): void => {
-                sent.push({ stream: name, event });
-              },
-            },
+            : field(name),
       };
+      // Any other field of Home's, as the inbox ensure, the profile root
+      // repair and the share intake read and subscribe to it, and a field
+      // below it, named by its path.
+      function field(name: string): unknown {
+        return {
+          key: (child: string) => field(`${name}.${child}`),
+          getRaw: () => ({ $stream: true }),
+          // Home's `privateInbox`, its `profiles` and the lists that
+          // order them, as the inbox ensure and the profile root repair
+          // read them: no inbox held, and no profile listed.
+          asSchema: () => ({
+            get: () => undefined,
+            pull: async () => {
+              await inboxReadable;
+              return undefined;
+            },
+            sync: () => Promise.resolve(),
+            sink: () => {
+              onSubscribe();
+              subscribed.push(name);
+              return () => {
+                unsubscribed.push(name);
+              };
+            },
+          }),
+          send: (event: unknown): void => {
+            sent.push({ stream: name, event });
+          },
+        };
+      }
       const ensure = stub(
         PiecesController.prototype,
         "ensureDefaultPattern",
@@ -4749,6 +4759,7 @@ describe("runtime-processor", () => {
       expect(worker.subscribed).toEqual([
         "privateInbox",
         "retainedPrivateInboxes",
+        "sharedSpaces.profiles",
       ]);
     });
 
@@ -4764,6 +4775,7 @@ describe("runtime-processor", () => {
       expect(worker.unsubscribed).toEqual([
         "privateInbox",
         "retainedPrivateInboxes",
+        "sharedSpaces.profiles",
       ]);
     });
 
@@ -4838,6 +4850,7 @@ describe("runtime-processor", () => {
         expect(worker.subscribed).toEqual([
           "privateInbox",
           "retainedPrivateInboxes",
+          "sharedSpaces.profiles",
         ]);
       });
 

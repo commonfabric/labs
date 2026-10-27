@@ -5,6 +5,7 @@ import { createSession, Identity } from "@commonfabric/identity";
 import {
   ACLManager,
   type Cell,
+  type JSONSchema,
   type MemorySpace,
   Runtime,
   type RuntimeProgram,
@@ -13,6 +14,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import * as ops from "../../src/ops/mod.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
+import { seedProfileOwner } from "../../../runner/test/cfc-seed-envelope.ts";
 import { installCustomRoot } from "../install-custom-root.ts";
 import {
   ensurePrivateInboxOf,
@@ -74,6 +76,9 @@ export default pattern(() => {
     { profile?: Cell<{ inbox?: Pointer }> }
   >({}).for("defaultProfileSlot");
   const mru = new Writable<Cell<{ inbox?: Pointer }>[]>([]).for("mru");
+  const retiredProfiles = new Writable<Cell<{ inbox?: Pointer }>[]>([]).for(
+    "retiredProfiles",
+  );
   const ensured = new Writable(0).for("ensured");
   const adopted = new Writable<Pointer>({}).for("adopted");
   const decidedBy = new Writable<Named>({}).for("decidedBy");
@@ -84,6 +89,7 @@ export default pattern(() => {
     profiles,
     defaultProfile,
     mru,
+    retiredProfiles,
     ensured,
     adopted,
     decidedBy,
@@ -100,6 +106,12 @@ export default pattern(() => {
 });`,
   }],
 };
+
+/** A list of links, each read as the link it is. */
+const linkListSchema = {
+  type: "array",
+  items: { type: "unknown", asCell: ["cell"] },
+} as const satisfies JSONSchema;
 
 /** The space and id a link names, which is what makes two links one. */
 function addressOf(cell: Cell<unknown>): { space: string; id: string } {
@@ -162,12 +174,20 @@ describe("ensurePrivateInboxOf()", () => {
     return await documentIn(space, inboxValue(space));
   }
 
-  /** A profile, in a space of its own, whose stored pointer is `inbox`. */
+  /**
+   * A profile of the identity's, in a space of its own, whose stored pointer
+   * is `inbox`, labeled as one the identity set up is.
+   */
   async function profilePointingAt(inbox: unknown): Promise<Cell<unknown>> {
     const space = await runtime.createSpace({ grants: { "*": "WRITE" } });
-    return await documentIn(space, {
+    const profile = await documentIn(space, {
       inbox: inbox === undefined ? {} : { piece: inbox },
     });
+    const { id } = profile.getAsNormalizedFullLink();
+    await runtime.editWithRetry((tx) =>
+      seedProfileOwner(tx, { space, scope: "space", id }, identity.did())
+    );
+    return profile;
   }
 
   /** Puts `profiles` in Home's profile list. */
@@ -197,6 +217,16 @@ describe("ensurePrivateInboxOf()", () => {
     await runtime.editWithRetry((tx) =>
       home.withTx(tx).key("mru" as never).set(profiles as never)
     );
+  }
+
+  /** Home's retired list, its elements read as the links they are. */
+  function retiredList(): Cell<Cell<unknown>[]> {
+    return home.key("retiredProfiles").asSchema(linkListSchema);
+  }
+
+  /** Puts `profiles` in Home's retired list. */
+  async function retire(profiles: Cell<unknown>[]): Promise<void> {
+    await runtime.editWithRetry((tx) => retiredList().withTx(tx).set(profiles));
   }
 
   /** The profile the event Home's handler was last sent names, if any. */
@@ -408,6 +438,20 @@ describe("ensurePrivateInboxOf()", () => {
       expect(await deciderAddress()).toEqual(addressOf(deciding));
     });
 
+    it("passes over a retired profile, though it is the default, to the next in order", async () => {
+      const chosen = await usableInbox();
+      const retired = await profilePointingAt(await usableInbox());
+      const deciding = await profilePointingAt(chosen);
+      await listProfiles([retired, deciding]);
+      await setDefault(retired);
+      await retire([retired]);
+
+      await ensure();
+
+      expect(await adoptedAddress()).toEqual(addressOf(chosen));
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+    });
+
     it("passes over a default profile that points at no inbox, to the next in order", async () => {
       const chosen = await usableInbox();
       const unpointed = await profilePointingAt(undefined);
@@ -498,6 +542,33 @@ describe("ensurePrivateInboxOf()", () => {
       expect(
         result.outcome === "adopt" ? addressOf(result.inbox) : undefined,
       ).toEqual(addressOf(inbox));
+    });
+
+    it("rejects, sending nothing, when Home's retired list fails to load", async () => {
+      // Which profiles are retired is then unknown, so a retired one could be
+      // taken for the deciding profile.
+      const retired = await profilePointingAt(await usableInbox());
+      await listProfiles([
+        retired,
+        await profilePointingAt(await usableInbox()),
+      ]);
+      await retire([retired]);
+      const listId = retiredList().resolveAsCell().getAsNormalizedFullLink().id;
+      const settled = storage.loadsSettled.bind(storage);
+      using _failed = stub(
+        storage,
+        "loadsSettled",
+        (keys) =>
+          keys.some((key) => key.includes(listId))
+            ? Promise.reject(new Error("load failed"))
+            : settled(keys),
+      );
+
+      await expect(ensurePrivateInboxOf(runtime, home, identity.did())).rejects
+        .toThrow("Could not load document");
+      await runtime.idle();
+      expect(await home.key("ensured").asSchema({ type: "number" }).pull())
+        .toBe(0);
     });
 
     it("rejects, sending nothing, when an earlier profile's load is reported failed though its sync resolves", async () => {
@@ -714,6 +785,10 @@ describe("ensurePrivateInboxOf()", () => {
       const space = await runtime.createSpace({ grants: { "*": "WRITE" } });
       const inbox = await documentIn(space, inboxValue(space));
       const profile = await documentIn(space, { inbox: { piece: inbox } });
+      const { id } = profile.getAsNormalizedFullLink();
+      await runtime.editWithRetry((tx) =>
+        seedProfileOwner(tx, { space, scope: "space", id }, identity.did())
+      );
 
       const result = await ensureOver(inbox, profile);
 

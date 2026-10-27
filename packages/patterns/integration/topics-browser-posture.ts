@@ -16,9 +16,11 @@
  * Neither half is the worker's own report. The runtime client's protocol
  * carries no request that reads a worker's resolved flags back, so the closest
  * available statement of what the page ran is the shell it was served: the
- * shell declares its posture from the build define, and the worker refuses to
- * initialize when its resolved posture disagrees with that declaration, so a
- * page that loaded at all ran the posture its shell declared.
+ * shell declares its posture from the build define where one is baked, and the
+ * worker refuses to initialize when its resolved posture disagrees with that
+ * declaration, so a page that loaded at all ran the posture its shell
+ * declared. A shell without a define runs the arm its deployment publishes,
+ * which this reading does not use: such a bundle states nothing.
  *
  * The shell's half itself has two possible statements, and they are not
  * interchangeable. The bundle served to the browser is the artifact the run
@@ -121,7 +123,7 @@ export interface PostureMeta {
    * The raw `EXPERIMENTAL_SERVER_EXECUTION` the shell this toolshed serves
    * baked as its build define. `null` covers four situations the field does
    * not tell apart: the value was unset at build time and the shell follows
-   * the first-party default, the toolshed runs from source and serves no
+   * the arm its deployment publishes, the toolshed runs from source and serves no
    * built shell, and the build marker was unreadable or malformed — the last
    * two being the failure posture `readBuildInfoFrom` gives the whole marker.
    */

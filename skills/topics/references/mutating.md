@@ -67,13 +67,14 @@ behavior of every authored-content verb.
 
 So treat every call envelope, and every absence of one, as an observation rather
 than proof of durable state, and read back after every mutation. For `addTopic`,
-use a distinctive title and compare the narrow board index before and after the
-call; if the result is uncertain, recover its `$link` there rather than blindly
+use a distinctive title and search for it before and after the call; if the
+result is uncertain, recover the Topic's address from `show` rather than blindly
 creating another Topic. Retrying under a new id on the strength of a timeout is
 how one Topic becomes two.
 
 ```bash
-deno task cf cell get "$TOPICS_BOARD" index --step --select @,title
+deno task -q topics search '<distinctive title>'
+TOPIC="$(deno task -q topics show top/<number> | sed -n 's/^Address: //p')"
 deno task cf cell get --cell "$TOPIC" title --input
 ```
 
@@ -103,7 +104,7 @@ writes to one topic in a row need one step after the last:
 
 ```bash
 deno task cf piece step --cell "$TOPIC"
-deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,lastActivityAt,commentCount
+deno task cf cell get --cell "$TOPIC" --step --select lastActivityAt,commentCount
 ```
 
 `shortName` is left out of that projection because it is not a derived scalar
@@ -147,13 +148,14 @@ says, so that its count and activity time reach the board's index.
 
 A cross-Topic connection is a reference, not an address pasted into prose. Pass
 the canonical reference in the declared reference position; the CLI turns it
-into the live piece link the verb expects. Set `OTHER_TOPIC` to the `$link` from
-the index row for the Topic being referenced; the row's `{"$link": …}` object
-passes in that position as it was printed, too:
+into the live piece link the verb expects. Set `OTHER_TOPIC` to the address
+`deno task -q topics show` prints for the Topic being referenced; a
+`{"$link": …}` object a read printed passes in that position as it was printed,
+too:
 
 ```bash
 export CF_INVOCATION_SESSION="$(cat '<run session file>')"
-export OTHER_TOPIC='<canonical /of:... address from another index row>'
+export OTHER_TOPIC='<canonical /of:... address of the other Topic>'
 deno task cf piece call --cell "$TOPIC" --invocation '<unique-mention-id>' mention \
   "{\"topic\":\"$OTHER_TOPIC\"}"
 deno task cf piece call --cell "$TOPIC" --invocation '<unique-unmention-id>' unmention \

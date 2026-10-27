@@ -8,12 +8,20 @@ import {
 } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  type ActiveLogLevel,
+  setLoggerCountObserver,
+} from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { type JSONSchema } from "../src/builder/types.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import { resolvedSchema } from "./schema-ref-helpers.ts";
-import { resolveLink } from "../src/link-resolution.ts";
+import {
+  LinkCycleError,
+  resolveLink,
+  unlessCyclic,
+} from "../src/link-resolution.ts";
 import {
   areNormalizedLinksSame,
   isSigilLink,
@@ -1051,6 +1059,68 @@ describe("link-resolution", () => {
       await tx.commit().settled;
       await runtime?.dispose();
       await storageManager?.close();
+    });
+
+    describe("unlessCyclic()", () => {
+      let logged: string[];
+
+      beforeEach(() => {
+        logged = [];
+        setLoggerCountObserver((module, key, level: ActiveLogLevel) => {
+          if (module === "link-resolution") logged.push(`${level} ${key}`);
+        });
+      });
+
+      afterEach(() => setLoggerCountObserver(undefined));
+
+      /** A cell whose value is a link to itself. */
+      const loop = () => {
+        const cell = runtime.getCell<unknown>(
+          space,
+          "unless-cyclic loop",
+          undefined,
+          tx,
+        );
+        cell.setRawUntyped(cell.getAsLink());
+        return cell;
+      };
+
+      it("returns `undefined` for links that run in a cycle, logging the cycle at debug level", () => {
+        const cell = loop();
+
+        expect(unlessCyclic(() => cell.resolveAsCell())).toBeUndefined();
+        expect(logged).toEqual(["debug link-res-cycle"]);
+      });
+
+      it("returns what the resolution returns for links that end", () => {
+        const cell = runtime.getCell<unknown>(
+          space,
+          "unless-cyclic end",
+          undefined,
+          tx,
+        );
+        cell.set({ value: 1 });
+
+        expect(
+          unlessCyclic(() => cell.resolveAsCell())?.getAsNormalizedFullLink(),
+        ).toEqual(cell.getAsNormalizedFullLink());
+        expect(logged).toEqual([]);
+      });
+
+      it("leaves a cycle met outside it thrown, to be reported where it fails", () => {
+        const cell = loop();
+
+        expect(() => cell.resolveAsCell()).toThrow(LinkCycleError);
+        expect(logged).toEqual(["debug link-res-cycle"]);
+      });
+
+      it("throws what the resolution throws for any other reason", () => {
+        expect(() =>
+          unlessCyclic(() => {
+            throw new RangeError("not a cycle");
+          })
+        ).toThrow(RangeError);
+      });
     });
 
     it("handles circular references correctly without overtriggering cycle detection", () => {

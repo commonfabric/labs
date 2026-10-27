@@ -71,6 +71,7 @@ const SENT = {
   cfcFlowLabels: "persist",
   cfcReadMaxConfidentiality: [cfcAtom.user(signer.did())],
   cfcReadOnExceed: "skip",
+  preferredProfileSpace: federatedSpace,
   cfcTrustConfig: {
     statements: [{
       concrete: {
@@ -185,6 +186,10 @@ const REACH = {
   cfcReadOnExceed: {
     reads: (o) => o.runtime.cfcReadOnExceed,
     expected: "skip",
+  },
+  preferredProfileSpace: {
+    reads: (o) => o.runtime.preferredProfileSpace,
+    expected: federatedSpace,
   },
   cfcTrustConfig: {
     // The runtime's own validated copy, so the case turns on the statement

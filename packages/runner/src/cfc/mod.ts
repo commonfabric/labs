@@ -45,6 +45,7 @@ export {
   cfcLabelViewForResolvedCell,
   cfcLabelViewForResolvedCellWithStatus,
   cfcLabelViewForResolvedTarget,
+  cfcLabelViewForResolvedTargetWithStatus,
   cfcLabelViewFromMetadata,
   cfcLabelViewSourceForCell,
   cloneCfcLabelView,

@@ -381,6 +381,18 @@ export const cfcLabelViewForResolvedTarget = (
   resolvedTargetLabelView(labelReadScope(cell), options)?.view;
 
 /**
+ * {@link cfcLabelViewForResolvedTarget}, with whether the read failed, so that
+ * a caller can tell a value no label is stored for from one whose label it
+ * could not read.
+ */
+export const cfcLabelViewForResolvedTargetWithStatus = (
+  cell: unknown,
+  options: ResolvedLabelReadOptions = {},
+): CfcLabelViewStatus =>
+  resolvedTargetLabelView(labelReadScope(cell), options) ??
+    { view: undefined, readFailed: false };
+
+/**
  * {@link cfcLabelViewForCellWithStatus}, read by a resolution that takes
  * {@link ResolvedLabelReadOptions}: it kicks a sync of each hop target in
  * another space unless told not to, and it counts an ifc-bearing link it

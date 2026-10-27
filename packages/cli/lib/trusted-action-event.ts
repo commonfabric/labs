@@ -5,10 +5,10 @@
  * require a renderer-trusted event whose UI provenance matches the surface's
  * UI contract. In the shell the html worker reconciler attaches that
  * provenance and marks the event when a real DOM event fires on a trusted
- * surface. Two other hosts stand in for the gesture exactly as the renderer
- * does, and build the equivalent event here: the pattern test runner, for
- * steps that declare a `trustedUi` descriptor, and `cf profile create`, which
- * is a person at their own keyboard acting under their own key.
+ * surface. Two other callers build the equivalent event here, though neither
+ * renders a surface: the pattern test runner, for steps that declare a
+ * `trustedUi` descriptor, and `cf profile create`, for the create form's
+ * click.
  *
  * The provenance comes from `reviewedActionProvenance()`, which keeps it the
  * shape the UI-contract matcher reads.

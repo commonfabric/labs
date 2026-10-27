@@ -8,7 +8,7 @@
 #   docker build -f Dockerfile.toolshed --build-arg COMMIT_SHA=$(git rev-parse HEAD) \
 #     -t us-central1-docker.pkg.dev/commontools-core/containers/toolshed:m0 .
 
-FROM denoland/deno:2.9.4 AS builder
+FROM denoland/deno:2.9.8@sha256:a0d88a7fcbd44f062cba2748e19df67d30290ad12aa203c7c1e0b12462c483f0 AS builder
 
 WORKDIR /build/labs
 COPY . .
@@ -22,7 +22,7 @@ RUN sed -i 's|await Deno\.rename(shellOut, toolshedShellFrontend);|await new Den
 ARG COMMIT_SHA
 RUN CF_DENO_DEPENDENCIES_INSTALLED=1 COMMIT_SHA=$COMMIT_SHA deno task build-binaries toolshed
 
-FROM denoland/deno:2.9.4
+FROM denoland/deno:2.9.8@sha256:a0d88a7fcbd44f062cba2748e19df67d30290ad12aa203c7c1e0b12462c483f0
 
 COPY --from=builder /build/labs/dist/toolshed /usr/local/bin/toolshed
 

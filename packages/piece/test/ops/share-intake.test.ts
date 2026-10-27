@@ -58,14 +58,15 @@ type Registration = {
 
 type Result =
   | { status: "registered" | "existing"; space: string }
-  | { status: "conflict"; reason: string };
+  | { status: "conflict"; reason: string; space?: string; registration?: string };
 
 type Acceptance = { room?: Cell<unknown>; keepArchived?: boolean };
 
 // Returns a conflict for a registration titled \`Conflicting\`, as Home's own
-// handler does for a space already registered under another kind, and
+// handler does for a space already registered under another kind,
 // \`existing\` for one titled \`Existing\`, as it does for a space it lists
-// already.
+// already, and a conflict over the profile that admitted a new entry for one
+// titled \`Profile refused\`, as it does for a profile it does not list.
 const registerSharedSpace = handler<
   Registration,
   { registered: Writable<Registration[]> },
@@ -74,6 +75,13 @@ const registerSharedSpace = handler<
   registered.push(event);
   return event.title === "Conflicting"
     ? { status: "conflict", reason: "kind" }
+    : event.title === "Profile refused"
+    ? {
+      status: "conflict",
+      reason: "unknown-profile",
+      space: event.space,
+      registration: "registered",
+    }
     : event.title === "Existing"
     ? { status: "existing", space: event.space }
     : { status: "registered", space: event.space };
@@ -448,6 +456,35 @@ describe("share-intake", () => {
   }
 
   /**
+   * Has Home's stand-in hold a receipt for the sender's offer of `space`
+   * keyed `id`, and say, as Home's `sharedSpaces.profiles` does, that the
+   * profile acting in `space` is `profile`.
+   */
+  async function holdReceiptFor(
+    space: MemorySpace,
+    id: string,
+    profile: Row,
+    receipt: Row = {},
+    live: string[] = [],
+  ): Promise<void> {
+    const target = { space, host: HOST, kind: "fabrichat-room" };
+    await setHome("sharedSpaceCatalog", {
+      entries: { [space]: { ...target, state: "saved", revision: "1:x" } },
+      offers: {
+        [JSON.stringify([sender, id])]: {
+          from: sender,
+          id,
+          ...target,
+          ...receipt,
+        },
+      },
+    });
+    await setHome("sharedSpaces", {
+      profiles: { status: "ready", spaces: { [space]: profile }, live },
+    });
+  }
+
+  /**
    * Delivers `refused`, then an offer that passes, and waits for the second to
    * be registered, which happens only after the first is decided, since the
    * intake decides an inbox's offers in order. Returns what was registered.
@@ -578,6 +615,42 @@ describe("share-intake", () => {
         title: "Room first",
         offer: { from: sender, id: "first" },
       }]);
+    });
+
+    it("is registered with the space of the profile its `toProfile` names as `profile`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      start();
+      await deliver([
+        offerOf(space, "addressed", { toProfile: { space: someoneElse } }),
+      ]);
+
+      const [registered] = await registeredThrough("addressed");
+      expect(registered).toEqual({
+        space,
+        host: HOST,
+        kind: "fabrichat-room",
+        title: "Room addressed",
+        offer: { from: sender, id: "addressed" },
+        profile: someoneElse,
+      });
+    });
+
+    it("is registered with no `profile` when its `toProfile` is `null`, as one naming none is", async () => {
+      // The inbox stores `null` for an offer whose sender named no profile,
+      // which is to the person.
+
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      start();
+      await deliver([offerOf(space, "to the person", { toProfile: null })]);
+
+      const [registered] = await registeredThrough("to the person");
+      expect(registered).toEqual({
+        space,
+        host: HOST,
+        kind: "fabrichat-room",
+        title: "Room to the person",
+        offer: { from: sender, id: "to the person" },
+      });
     });
 
     it("is registered without a `title` when its title is empty", async () => {
@@ -820,6 +893,20 @@ describe("share-intake", () => {
       }]);
     });
 
+    it("is accepted once Home's handler admits its space, though it refuses the profile the offer names", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const intake = start();
+      await deliver([
+        offerOf(space, "refused profile", { title: "Profile refused" }),
+      ]);
+      await registeredThrough("refused profile");
+
+      expect(await acceptedNow(intake)).toEqual([{
+        space,
+        keepArchived: true,
+      }]);
+    });
+
     it("is not accepted when Home's handler finds its space already listed, or returns a conflict", async () => {
       const existing = await offeredSpace({ [sender]: "WRITE" });
       const conflicting = await offeredSpace({ [sender]: "WRITE" });
@@ -1050,6 +1137,116 @@ describe("share-intake", () => {
       expect(intake.accessForTestingOnly.decisionsFor(sender, "received"))
         .toEqual(["received"]);
     });
+
+    it("is not registered when the catalog holds its receipt, it names a `toProfile`, and Home records a profile for its space", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", {
+        status: "live",
+        profile: someoneElse,
+      });
+      start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "received", { toProfile: { space: someoneElse } }),
+      );
+
+      expect(registeredIds(registered)).toEqual(["barrier"]);
+    });
+  });
+
+  describe("an offer whose receipt Home holds while it records no profile for its space", () => {
+    it("is registered again, with its `profile`, when it names a `toProfile`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", { status: "unrecorded" });
+      start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "received", { toProfile: { space: someoneElse } }),
+      );
+
+      expect(registeredIds(registered)).toEqual(["received", "barrier"]);
+      expect(registered[0].profile).toBe(someoneElse);
+    });
+
+    it("is not registered when its receipt says Home refused the profile it names", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", { status: "unrecorded" }, {
+        profileConflict: "unknown-profile",
+      });
+      start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "received", { toProfile: { space: someoneElse } }),
+      );
+
+      expect(registeredIds(registered)).toEqual(["barrier"]);
+    });
+
+    it("is registered again when its receipt says Home did not list the profile it names, which Home now lists as live", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", { status: "unrecorded" }, {
+        profileConflict: "unknown-profile",
+      }, [someoneElse]);
+      start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "received", { toProfile: { space: someoneElse } }),
+      );
+
+      expect(registeredIds(registered)).toEqual(["received", "barrier"]);
+      expect(registered[0].profile).toBe(someoneElse);
+    });
+
+    it("is registered again, once, when Home comes to list the profile it names as live, though its inbox does not change", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", { status: "unrecorded" }, {
+        profileConflict: "unknown-profile",
+      });
+      const intake = start();
+      const skipped = await deliverThenBarrier(
+        offerOf(space, "received", { toProfile: { space: someoneElse } }),
+      );
+      expect(registeredIds(skipped)).toEqual(["barrier"]);
+
+      await setHome("sharedSpaces", {
+        profiles: {
+          status: "ready",
+          spaces: { [space]: { status: "unrecorded" } },
+          live: [someoneElse],
+        },
+      });
+      await registeredThrough("received");
+      await intake.idle();
+      await runtime.idle();
+
+      const registered = await registeredThrough("received");
+      expect(registeredIds(registered)).toEqual(["barrier", "received"]);
+      expect(registered[1].profile).toBe(someoneElse);
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "received"))
+        .toEqual(["sent"]);
+    });
+
+    it("is not registered when it names no `toProfile`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", { status: "unrecorded" });
+      start();
+
+      const registered = await deliverThenBarrier(offerOf(space, "received"));
+
+      expect(registeredIds(registered)).toEqual(["barrier"]);
+    });
+
+    it("is not registered when its `toProfile` is `null`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", { status: "unrecorded" });
+      start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "received", { toProfile: null }),
+      );
+
+      expect(registeredIds(registered)).toEqual(["barrier"]);
+    });
   });
 
   describe("an offer that is refused", () => {
@@ -1084,6 +1281,43 @@ describe("share-intake", () => {
           logged: 1,
           decisions: ["offer-malformed"],
         });
+    });
+
+    it("is not registered, and is logged, when its `toProfile` names no well-formed DID", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+
+      expect(
+        await refuse(
+          offerOf(space, "bad profile", { toProfile: { space: "profile" } }),
+        ),
+      ).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decisions: ["offer-malformed"],
+      });
+    });
+
+    it("is not registered, and is logged, when its `toProfile` names no `space`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+
+      expect(await refuse(offerOf(space, "bad profile", { toProfile: {} })))
+        .toEqual({
+          ids: ["barrier"],
+          logged: 1,
+          decisions: ["offer-malformed"],
+        });
+    });
+
+    it("is not registered, and is logged, when its `toProfile` is not a record", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+
+      expect(
+        await refuse(offerOf(space, "bad profile", { toProfile: someoneElse })),
+      ).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decisions: ["offer-malformed"],
+      });
     });
 
     it("is not registered, and is logged, when `host` is not its own origin", async () => {

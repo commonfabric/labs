@@ -32,8 +32,7 @@ export const DEPLOYMENT_META_NAME = "cf-deployment";
  *
  * - `"build"`: the shell's build decides, through the build define where
  *   `packages/shell/felt.config.ts` has one and the built-in default
- *   otherwise. CI pins a lane's defines, and the worker checks the
- *   `serverExecution` arm it declares against its own.
+ *   otherwise. CI pins a lane's defines.
  * - `"deployment"`: the deployment decides. One shell build is served by
  *   every deployment, so a flag whose value differs between deployments
  *   that share a build goes here: a compiled toolshed publishes it, out of
@@ -43,8 +42,9 @@ export const DEPLOYMENT_META_NAME = "cf-deployment";
  *   adopts the whole posture: an explicit build define still wins. Such a
  *   flag has to be `"server"` in `EXPERIMENTAL_FLAG_AUTHORITY`, since that
  *   adoption takes only server-authority flags, and must not change while a
- *   toolshed serves, since the page is built once; the runner's tests hold
- *   both.
+ *   toolshed serves, since the page is built once. The runner's tests hold
+ *   both, and for `serverExecution`, which the serving loop forces, a
+ *   toolshed test holds that the page carries the value the loop publishes.
  */
 export type ShellFlagSource = "build" | "deployment";
 
@@ -62,10 +62,17 @@ export const SHELL_FLAG_SOURCES = {
   plainResultReceipts: "build",
   computedCellIds: "build",
   lazyMaterialization: "build",
-  serverExecution: "build",
+  // Which side computes what is stored is the deployment's choice, and a
+  // browser on the other arm derives beside the serving loop. The loop runs
+  // exactly when the deployment's own resolution is on and forces only that
+  // value, so the posture a page is built from already carries it. The host
+  // declares the adopted arm to its worker, which checks it against its own.
+  serverExecution: "deployment",
   localSessionDocuments: "deployment",
-  viewScopedReplication: "build",
-  webViewScopedReplication: "build",
+  // Whether a web client receives only what its mounted views need is the
+  // deployment's choice: its serving side selects what each view is sent.
+  viewScopedReplication: "deployment",
+  webViewScopedReplication: "deployment",
   readerSchemaPrecedence: "build",
   localFold: "build",
   // Whether a connection may carry several spaces is how the deployment

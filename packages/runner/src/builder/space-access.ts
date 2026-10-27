@@ -11,6 +11,7 @@ import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
 import { type Cell, unwrapCell } from "../cell.ts";
 import { spaceReaderRole, type SpaceRole } from "../cfc/space-membership.ts";
+import { unlessCyclic } from "../link-resolution.ts";
 import { getCellOrThrow, isCellResult } from "../query-result-proxy.ts";
 import type { Runtime } from "../runtime.ts";
 import { scopeRank } from "../scope.ts";
@@ -192,13 +193,14 @@ export function spaceMembers(
  * handler just created with `PatternFactory.inSpace()`, say, whose DID an
  * invitation to it has to carry.
  *
- * `undefined` means the answer is not known yet. A `target` passed as
- * `undefined` is one not known yet, as it is for {@link spaceAccess}. And a run
- * that has named an `inSpace()` target its space has not resolved returns
- * `undefined` for every `target`: the runner resolves the name once the run
- * ends and runs it again, discarding what the first run wrote, and the child
- * that run created has no space yet. The run after it returns the child's
- * space.
+ * `undefined` means there is no answer: none yet, or, for a `target` whose
+ * links run in a cycle, none at all, since they name no value. A `target`
+ * passed as `undefined` is one not known yet, as it is for
+ * {@link spaceAccess}. And a run that has named an `inSpace()` target its
+ * space has not resolved returns `undefined` for every `target`: the runner
+ * resolves the name once the run ends and runs it again, discarding what the
+ * first run wrote, and the child that run created has no space yet. The run
+ * after it returns the child's space.
  *
  * Unlike {@link spaceAccess}, the answer does not depend on who asks, so a call
  * in a computation leaves its read scope as it is. It can be called where
@@ -231,7 +233,8 @@ export function spaceOf(
   if (target === undefined) return undefined;
   const cell = cellOfTarget(target, "spaceOf(target)");
   if ((frame!.pendingSpaceNames?.size ?? 0) > 0) return undefined;
-  return spaceOfTarget(cell, "spaceOf(target)");
+  return unlessCyclic(() => cell.resolveAsCell())?.getAsNormalizedFullLink()
+    .space;
 }
 
 /**

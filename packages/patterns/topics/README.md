@@ -461,3 +461,9 @@ outside the number grammar or disagreeing with the number the topic already
 stores, all surface as a failed call — a nonzero CLI exit — never as apparent
 success. The UI composer wrappers keep their silent guards: an empty draft is a
 non-event in a composer, not a headless mutation.
+
+## From the command line
+
+[`tools/`](tools/README.md) holds `deno task topics`, the team's command-line
+client for the board: it keeps a local copy of the board's documents, searches
+it, and runs the verbs above through `cf piece call`.

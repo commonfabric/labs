@@ -37,7 +37,10 @@ import {
 } from "commonfabric";
 import EarlierProfile from "./earlier-profile.tsx";
 import UserScopedProfile from "./user-scoped-profile.tsx";
-import ProfileCreate from "../../../system/profile-create.tsx";
+import ProfileCreate, {
+  seedProfileName,
+  type SeedProfileNameEvent,
+} from "../../../system/profile-create.tsx";
 import ProfileHome, {
   type ProfileHomeOutput,
 } from "../../../system/profile-home.tsx";
@@ -120,17 +123,23 @@ function asProfile(profile: unknown): unknown {
 
 /**
  * Creates one of the owner's profiles, in a space of its own that grants
- * anyone `WRITE`, as `profile-create.tsx` does.
+ * anyone `WRITE`, and stores its name through `seedName`, as
+ * `profile-create.tsx` does: a profile whose owner wrote no name is no one's
+ * (`profileOwnerOf()`), and the host's inbox decision reads only the owner's
+ * own. `seedName` points the profile at no inbox.
  */
 const createProfile = handler<
   void,
-  { profiles: Writable<ProfileHomeOutput[]> }
->((_event, { profiles }) => {
-  profiles.push(
-    ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" } })({
-      initialName: "Owner",
-    }) as ProfileHomeOutput,
-  );
+  {
+    profiles: Writable<ProfileHomeOutput[]>;
+    seedName: Stream<SeedProfileNameEvent>;
+  }
+>((_event, { profiles, seedName }) => {
+  const profile = ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" } })({
+    initialName: "Owner",
+  }) as ProfileHomeOutput;
+  profiles.push(profile);
+  seedName.send({ name: "Owner", profile });
 });
 
 /**
@@ -458,7 +467,10 @@ const HomeStandIn = pattern<{ label: string }, HomeStandInOutput>(
           profiles: profiles as any,
         }),
       }),
-      createProfile: createProfile({ profiles }),
+      createProfile: createProfile({
+        profiles,
+        seedName: seedProfileName({}),
+      }),
       createEarlierProfile: createEarlierProfile({ profiles }),
     };
   },
@@ -527,7 +539,10 @@ const OlderHomeStandIn = pattern<Record<never, never>, OlderHomeStandInOutput>(
       handled,
       delivered,
       ensurePrivateInbox: ensureAsOlderHome({ handled, delivered }),
-      createProfile: createProfile({ profiles }),
+      createProfile: createProfile({
+        profiles,
+        seedName: seedProfileName({}),
+      }),
     };
   },
 );
@@ -905,7 +920,10 @@ export default pattern<MainInput, MainOutput>((
         profiles: profiles as any,
       }),
     }),
-    createProfile: createProfile({ profiles }),
+    createProfile: createProfile({
+      profiles,
+      seedName: seedProfileName({}),
+    }),
     createEarlierProfile: createEarlierProfile({ profiles }),
     createOtherInbox: createOtherInbox({ otherInbox }),
     pointProfileElsewhere: pointProfileAt({ profiles, inbox: otherInbox }),

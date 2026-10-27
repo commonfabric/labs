@@ -5,8 +5,7 @@ the running board and its Topics accept.
 
 The running piece is authoritative. Choose discovery by what you need:
 
-- To survey Topics, read the projected board `index` in
-  `skills/topics/references/reading.md`.
+- To survey Topics, use `deno task -q topics search`.
 - To discover a piece's readable fields and operations, use
   `deno task cf piece describe --cell "$TOPICS_BOARD" --json`. It documents
   fields; `deno task cf cell get --cell "$TOPICS_BOARD" <field>` reads their

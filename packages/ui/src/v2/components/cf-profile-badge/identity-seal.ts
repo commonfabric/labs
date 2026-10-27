@@ -1,15 +1,21 @@
 /**
  * identity-seal — a deterministic, generative identity treatment derived purely
- * from a principal DID.
+ * from a principal DID and, for a profile, the profile's own space.
  *
- * The point: the same identity yields the *same* aura everywhere it appears, so
- * the treatment reads as a recognizable fingerprint of that person — you learn
- * your friend's colors. Combined with `cf-profile-badge` only drawing it when
- * the profile cell carries a runtime-attested `represents-principal` CFC label
- * (read over trusted IPC on the main thread), the aura becomes hard to forge:
- * a user-space pattern can mimic the CSS, but not the attestation that unlocks
- * it, and the colors it would have to reproduce are pinned to a DID it does not
- * control.
+ * The point: the same profile yields the *same* aura everywhere it appears, so
+ * the treatment reads as a recognizable fingerprint of that profile — you learn
+ * your friend's colors. Two profiles of one principal get two auras, so a
+ * person who keeps separate profiles appears as separate people. A document
+ * that is not a profile but carries the principal's claim gets the
+ * principal's aura alone, the same in every space it is stored in.
+ *
+ * `cf-profile-badge` draws it only when the cell carries a runtime-attested
+ * `represents-principal` CFC label (read over trusted IPC on the main
+ * thread). That attestation is what verification rests on, and it attests
+ * the principal; the profile's space only tells that principal's profiles
+ * apart. A user-space pattern can mimic the CSS, but not the attestation that
+ * unlocks it, and the colors it would have to reproduce are pinned to a DID
+ * it does not control.
  *
  * Pure + framework-free so it is trivially unit-testable and identical wherever
  * it runs.
@@ -80,12 +86,20 @@ const SATURATION = 80;
 const LIGHTNESS = 58;
 
 /**
- * Derives the deterministic identity seal for a principal DID. Same input →
- * byte-identical output, on any thread, in any session.
+ * Derives the deterministic identity seal for a principal DID, as represented
+ * by the profile in `profileSpace` when one is given, and for the principal
+ * alone otherwise. Same input → byte-identical output, on any thread, in any
+ * session.
  */
-export const identitySeal = (did: string): IdentitySeal => {
+export const identitySeal = (
+  did: string,
+  profileSpace?: string,
+): IdentitySeal => {
   const normalized = normalizeDid(did);
-  const next = splitmix32(fnv1a(normalized) || 1);
+  const seed = profileSpace === undefined
+    ? normalized
+    : `${normalized}\n${normalizeDid(profileSpace)}`;
+  const next = splitmix32(fnv1a(seed) || 1);
 
   const hue = Math.floor(next() * 360);
   // Spread the remaining ring hues around the wheel. A per-identity "span"

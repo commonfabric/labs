@@ -39,6 +39,7 @@
     "./v2/server-execution-default": "./v2/server-execution-default.ts",
     "./v2/standalone": "./v2/standalone.ts",
     "./v2/connection-auth": "./v2/connection-auth.ts",
+    "./v2/routed-limits": "./v2/routed-limits.ts",
     "./v2/routed-wire": "./v2/routed-wire.ts",
     "./v2/routed-parser": "./v2/routed-parser.ts",
     "./v2/router-protocol": "./v2/router-protocol.ts",

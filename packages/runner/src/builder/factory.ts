@@ -90,6 +90,9 @@ import {
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
 import { principalOf, principalsOf } from "./principal-of.ts";
+import { profileOwnerOf } from "./profile-owner-of.ts";
+import { linksOf } from "./links-of.ts";
+import { resultOwnerOf } from "./result-owner-of.ts";
 import {
   spaceAccess,
   spaceAccessOf,
@@ -290,6 +293,9 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     currentPrincipal,
     principalOf,
     principalsOf,
+    profileOwnerOf,
+    resultOwnerOf,
+    linksOf,
     eventKey,
     // The DID Core syntax guard the runtime itself decides by.
     isWellFormedDID,

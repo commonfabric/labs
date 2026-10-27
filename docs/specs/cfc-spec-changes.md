@@ -500,52 +500,37 @@ of its questions: residency joins `Space(S)` over a declared policy as well as
 without one, and a store bound to one principal also carries
 `User(<that principal>)`; the runner conforms to both.
 The fit measurement joins the target's declared policy with
-one RESIDENCY clause, `Space(<the space the document resides in>)`. A flow
-clause listing that space among its alternatives therefore fits the document
-whatever it declares. The soundness argument is that writing into the space
-the clause already names discloses nothing: the `Space` atom's audience is
-that space's reader set — §4.9.3 resolves it by dereferencing its id against
-the space's ACL, the same document that decides who receives a replica — so
-every principal holding the target is inside the audience the alternative
-names, and the write reaches no reader the data had not already reached. The
-guarantee is therefore exactly as strong as the deployment's ACL posture, the
-same bound the §4.9.3 membership lookup carries.
+`Space(<the space the document resides in>)`. A space-scoped document also
+carries `PersonalSpace(<that same space>)`, the addition proposed by
+[specs#71](https://github.com/commonfabric/specs/pull/71). That proposal is
+closed without merging. The runtime implements its proposed own-space rule
+at the strict default, ahead of a ruling and a reconciled pin. The existing
+specs#68 marker covers the base residency work; the own-space addition has
+neither a separate marker nor a default-off dial. This is a nonconforming
+semantic gap and does not satisfy the correspondence procedure's step 4.
+The conformance statement and enforcement matrix record the gap, which still
+needs a ruling.
 
-The rule is confined to `Space` deliberately, and for two different reasons.
-`User(<subject>)` and the bare DID spelling name a person: a space grants
-reader roles that person does not hold, so admitting them would place data
-readable by one principal into a store its co-readers sync. That argument
-does not reach `PersonalSpace(<owner>)`, which names a space rather than a
-person (SC-39). What keeps that form out is narrower and mechanical: the
-residency clause is built from the target's address alone — `Space(<the space
-this document is stored in>)` — and the runtime cannot form
-`PersonalSpace(<owner>)` from an address, because nothing marks a space as
-personal (§3.6.4 has one stop being personal with no marker changing) or
-names its owner without resolving its ACL. The clause is
-unavailable rather than unsound. A deployment that did resolve ownership
-could admit it on the same footing as `Space`, since the two atoms would then
-name one space and so one audience; the limit is what the measurement can
-construct, not what it may admit.
+A flow clause listing either spelling of the target's own space among its
+alternatives fits a space-scoped document whatever it declares. The proposal
+uses §4.9.4's reading of both atoms as ACL-dereferenced containers: the same
+space's ACL decides their readers and who receives the target's bytes. The
+measurement constructs these clauses from the target's space directly. It
+neither substitutes the acting principal nor resolves an owner for another
+space. The guarantee is as strong as the deployment's ACL posture.
 
-One spec question this exposes and should settle: §4.9.4 describes
-`HasRole(user, PersonalSpace(User), reader)` as minted by a §4.9.3 point query
-against that space's own ACL record, and calls it one of "the two `Space(...)`
-atoms", which reads `PersonalSpace` as an ACL-dereferenced container atom. That
-sits in tension with §3.6.4's fixed membership, and with a deployment
-classification that commits the very field such a point query would have to
-read. SC-39 settles it: §3.6.5 has a member added to a space gain access to
-all data in it with no labels rewritten, so a personal space's audience grows
-after the fact and the atom is an ACL-dereferenced container. The
-fixed-membership reading recorded here is therefore wrong, and the rationale
-above has been rewritten accordingly. Residency's behavior is unchanged, but
-its ground moves: the atom stays out because the measurement cannot construct
-it from an address, not because its audience is one person. Reading
-back is unaffected in every case: the derived stamp persists the full join, so
-the egress and display ceilings fit the unchanged label, and the space
-principal there resolves to a reader only through the §4.3.3
-`SpaceReaderAccess` exchange rule on verified `HasRole` membership. The
-ungrantable read-failed marker stays outside the residency clause as it stays
-outside every ceiling.
+`User(<subject>)` and the bare DID spelling name a person rather than a space,
+so neither supplies space-scoped residency. A `user` or `session` document
+keeps the base residency rule: `Space(S)` and, when available, the principal
+its instance is bound to. It gets no additional `PersonalSpace(S)` clause,
+even when that principal is unavailable. Its own user's personal-space data
+can still fit through the existing owner-as-reader subsumption of SC-39.
+Another space's `PersonalSpace` does not fit an unbound store by residency.
+
+The derived stamp persists the full join, so egress and display still judge
+the unchanged label. The new fit changes neither reader taint nor stored
+policy: it removes no declaration or frozen existence entry. The
+ungrantable read-failed marker remains outside every ceiling.
 
 Spec home: §8.12.4's `canWrite`, alongside the declared-policy measurement.
 Two points the spec should settle explicitly. Residency is a property of the

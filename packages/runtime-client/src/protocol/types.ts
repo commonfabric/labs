@@ -972,6 +972,14 @@ export type InitializationData = {
   cfcReadOnExceed?: "fail" | "skip";
 
   /**
+   * The space of the profile the worker's runtime answers `#profile` with,
+   * among the user's profiles (`RuntimeOptions.preferredProfileSpace`): the
+   * one a host keeping a profile per identity it presents acts as. Absent
+   * answers as the home orders them.
+   */
+  preferredProfileSpace?: DID;
+
+  /**
    * The deployment trust configuration the worker's runtime evaluates concept
    * guards under (`RuntimeOptions.cfcTrustConfig`): trust statements, verifier
    * delegations and concept edges, such as a default profile's statement that
@@ -1130,6 +1138,7 @@ export type RuntimeSecurityContext =
     | "cfcFlowLabels"
     | "cfcReadMaxConfidentiality"
     | "cfcReadOnExceed"
+    | "preferredProfileSpace"
     | "cfcTrustConfig"
     | "renderDeclassificationPolicy"
     | "renderConfidentialityCeiling"

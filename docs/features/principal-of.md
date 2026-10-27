@@ -151,6 +151,34 @@ one somebody else does reads `principalsOf()` instead, so that a contested
 label is refused rather than admitted as an unattested one. The Loom root's
 `addPanel` reads its occurrence's `addedBy` field that way.
 
+## Whose own profile a profile is
+
+`profileOwnerOf(profile)`, exported beside them, answers the one question
+every reader of a person's profiles asks: whose own profile `profile` is. It
+returns the principal `principalsOf(profile, "represents-principal")` returns
+when that is exactly one, and only when the profile's `name`, followed through
+every link it holds, stays within the profile's own documents: the profile's,
+and those whose `result` back-link, which setup writes and no pattern can,
+names it. Otherwise, and for a `target` of `undefined`, it returns `undefined`.
+It is the rule `profileOwnerAt()` in `packages/runner/src/profile-owner.ts`
+states, which hosts apply through `profileOwnership()`. It can be called where
+`principalOf()` can; in a handler, a profile or name document still loading
+withdraws the handler, which runs again once it arrives.
+
+`resultOwnerOf(target, field)` reads no label: it names, as `space/id`, the
+pattern whose result the document `target` is in back-links, when that
+result's own `field` is that document, or returns `undefined` otherwise, for
+a document no pattern's setup derived, and for a `target` of `undefined`.
+Without `field` it checks only whose the document is. A handler that decides
+by several cells it is bound to checks each by the field it must be, so that
+a binding of another pattern's cells, or of the right pattern's cells in each
+other's places, is refused, as Home's `setProfileRetired` and
+`registerSharedSpace` do. Its reads, like `profileOwnerOf()`'s, are ones a
+computation reruns on. A cell whose root holds
+a link stands for the linked document, so such a cell names that document's
+owner; Home hands its handlers the space of the earlier default it holds that
+way (`legacyDefaultProfileSpace`), a cell of its own, instead.
+
 ## Where it can be called
 
 | Where the call runs | Result |

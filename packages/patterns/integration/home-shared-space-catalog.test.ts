@@ -211,16 +211,18 @@ function watchHandlingCommits(runtime: Runtime) {
   const edit = runtime.edit.bind(runtime);
   const wrapped = stub(runtime, "edit", (...args) => {
     const tx = interceptTransaction(edit(...args), (method, _args, proceed) => {
-      if (
-        method !== "commit" || !tx.dispatchedEventId || !tx.handlingReceiptLink
-      ) {
+      if (!tx.dispatchedEventId || !tx.handlingReceiptLink) return proceed();
+      // The receipt is read before the transaction is prepared for commit: a
+      // read after that invalidates a prepared transaction's flow checks.
+      if (method === "prepareForCommit") {
+        outcomes.record({
+          eventId: tx.dispatchedEventId,
+          value: runtime.getCellFromLink(tx.handlingReceiptLink).withTx(tx)
+            .getRaw(),
+        });
         return proceed();
       }
-      outcomes.record({
-        eventId: tx.dispatchedEventId,
-        value: runtime.getCellFromLink(tx.handlingReceiptLink).withTx(tx)
-          .getRaw(),
-      });
+      if (method !== "commit") return proceed();
       const receipt = proceed() as ReturnType<
         IExtendedStorageTransaction["commit"]
       >;

@@ -47,6 +47,38 @@ import type {
 
 const logger = getLogger("link-resolution");
 
+/**
+ * Thrown when the links a resolution follows run in a cycle, so that they
+ * name no value at all, which a caller can tell from a failure to read.
+ */
+export class LinkCycleError extends Error {}
+
+/**
+ * Returns what `resolve` returns, or `undefined` when the links it follows
+ * run in a cycle and so name nothing.
+ *
+ * @throws What `resolve` throws for any other reason.
+ */
+export function unlessCyclic<T>(resolve: () => T): T | undefined {
+  try {
+    return resolve();
+  } catch (error) {
+    if (error instanceof LinkCycleError) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Returns the error to throw for the cycle `message` describes, logging it
+ * at debug level: a caller that takes the cycle for an answer
+ * ({@link unlessCyclic}) has nothing to report, and one it fails reports the
+ * error where it fails, as it would any other.
+ */
+function linkCycle(message: string): LinkCycleError {
+  logger.debug("link-res-cycle", message);
+  return new LinkCycleError(message);
+}
+
 export type LastNode = "value" | "writeRedirect" | "top";
 
 /**
@@ -754,11 +786,7 @@ export function resolveLinkTracingDereferences(
     // from: computed for the first before the loop, refreshed by each hop.
     const key = addressKey;
     if (seen.has(key)) {
-      logger.error(
-        "link-res-error",
-        debugStr`Link cycle detected ${key}: $quote,long${[...seen]}`,
-      );
-      throw new Error(
+      throw linkCycle(
         debugStr`Link cycle detected at ${key}: $quote,long${[...seen]}`,
       );
     }
@@ -883,8 +911,7 @@ export function resolveLinkTracingDereferences(
       ) {
         const detail = `link at [${hopSource.path.join("/")}] targets its ` +
           `own subpath [${hopTarget.path.join("/")}]`;
-        logger.error("link-res-error", `Link cycle detected: ${detail}`);
-        throw new Error(`Link cycle detected at ${key}: ${detail}`);
+        throw linkCycle(`Link cycle detected at ${key}: ${detail}`);
       }
       carriedCap = hopCap;
       traces.push(recordDereferenceHop(tx, nextHop));

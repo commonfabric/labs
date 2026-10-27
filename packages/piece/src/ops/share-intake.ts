@@ -73,6 +73,9 @@ interface VettableOffer {
   host: string;
   title: string;
   from: DID;
+
+  /** The space DID of the recipient's profile the offer names, if any. */
+  profile?: DID;
 }
 
 const pointerSchema = {
@@ -96,6 +99,30 @@ const catalogSchema = {
   type: "object",
   properties: { offers: { type: "object", additionalProperties: true } },
 } as const;
+
+// Home's observation of its profile records, read loosely, since the intake
+// only asks which spaces Home records no profile for and which profiles it
+// can record.
+const profilesSchema = {
+  type: "object",
+  properties: {
+    status: { type: "string" },
+    spaces: { type: "object", additionalProperties: true },
+    live: { type: "array", items: { type: "string" } },
+  },
+} as const;
+
+/**
+ * What the intake reads of Home before deciding the rows of an inbox: the
+ * offers its catalog holds receipts for, by {@link offerIdentity}, with the
+ * `profileConflict` each receipt carries, if any, the spaces Home records no
+ * profile for, and the spaces of the profiles a registration can record.
+ */
+interface HomeReceipts {
+  received: Map<string, unknown>;
+  unrecorded: Set<string>;
+  live: Set<string>;
+}
 
 /**
  * Starts following the offers in `home`'s private inboxes, the one it holds
@@ -122,13 +149,28 @@ export function startShareIntakeOf(
  * them, is taken up as it lands.
  *
  * An offer is skipped, without being vetted, when the catalog already holds a
- * receipt for its sender and `id`. Any other offer is registered, with its
- * sender and `id`, its `kind`, `host` and `title`, when:
+ * receipt for its sender and `id`, unless the offer names a `toProfile`,
+ * Home's `sharedSpaces.profiles` says Home records no profile for its space,
+ * as it does for a space registered by a registration that named none, and
+ * the receipt either does not say Home refused the profile
+ * (`profileConflict`) or says it was not one of the person's live profiles
+ * (`unknown-profile`) and `sharedSpaces.profiles` now lists it as one
+ * (`live`). The instance also subscribes to `sharedSpaces.profiles`, and a
+ * change there has it consider again every row of every inbox it follows,
+ * so an offer refused while its profile was not yet the person's own, or
+ * while the profile was retired or not yet listed, is sent again once it is
+ * one of the person's live profiles, and Home records it. While that view
+ * cannot be read, the scan fails and its rows are taken up again at the
+ * next change.
+ * Any other offer is registered, with its sender and `id`, its `kind`, `host` and
+ * `title`, and as `profile` the space of the profile its `toProfile` names,
+ * if it names one, when:
  *
  * - its envelope is well formed: `space` and `from` are well-formed DIDs,
  *   `host` and a nonempty `ownerOrigin` are each an origin, as
- *   `normalizeSpaceHost()` reads one, and every string fits the bounds the
- *   inbox cuts to;
+ *   `normalizeSpaceHost()` reads one, a `toProfile` other than `null`, which
+ *   says the sender named no profile, names a well-formed DID as its
+ *   `space`, and every string fits the bounds the inbox cuts to;
  * - its `kind` is one of {@link ADMITTED_SPACE_KINDS};
  * - its `host` is this runtime's own, compared as `normalizeSpaceHost()`
  *   normalizes both, since that is the host whose memory this one reads;
@@ -152,9 +194,10 @@ export function startShareIntakeOf(
  *
  * Each row of an inbox is decided by its whole content, so a row naming
  * another offer's sender and `id` decides nothing about that offer. A row
- * that is sent, skipped for its receipt, or refused for something in the row
- * itself (its envelope, its `kind` or its `host`) or for the kind its space
- * declares, which never changes, is decided for the life of the instance. A
+ * refused for something in the row itself (its envelope, its `kind` or its
+ * `host`) or for the kind its space declares, which never changes, is decided
+ * for the life of the instance, and so is one sent or skipped for its
+ * receipt, unless it is sent again for its profile as above. A
  * row refused for the state of its space (an access list or a root) is vetted
  * again the next time its inbox's offers change; a change to the space alone
  * does not bring that about. A refusal is logged once per row, under
@@ -166,9 +209,17 @@ export function startShareIntakeOf(
  *
  * Registration is Home's handler's, so an offer already registered under
  * another sender or `id` leaves the entry as it is, archived or not, and adds
- * a receipt for this offer.
+ * a receipt for this offer. Home records the offer's profile as the one
+ * acting in the space when it records none for the space, and keeps the one
+ * it records when the offer names that one or none. When the offer names
+ * another, or a profile that is not one of the person's live profiles, Home
+ * registers the offer all the same, records the conflict in its receipt as
+ * `profileConflict`, and returns a `conflict`, which the intake logs. When
+ * reading whether the profile is the person's fails, the registration fails
+ * and writes no receipt, so a later intake sends the offer again.
  *
- * Once Home's handler returns `registered`, a new entry, for a
+ * Once Home's handler returns `registered`, a new entry, or a `conflict`
+ * over the offer's profile whose `registration` is `registered`, for a
  * `fabrichat-room` offer, the intake sends the space's root to Home's
  * `chatManager.accept`, when Home has one, with `keepArchived` set, so that
  * the manager records the room as an acceptance from the room itself would,
@@ -189,6 +240,7 @@ export class ShareIntake {
   #latest = new Map<string, RowDecision>();
   #logged = new Set<string>();
   #holdersChanged = false;
+  #profilesChanged = false;
   #changedInboxes = new Set<string>();
   #draining = false;
   #drained: Promise<void> = Promise.resolve();
@@ -227,6 +279,11 @@ export class ShareIntake {
       );
       this.#holders.push(
         home.key("retainedPrivateInboxes").asSchema(retainedSchema).sink(poke),
+      );
+      this.#holders.push(
+        home.key("sharedSpaces").key("profiles").asSchema(profilesSchema).sink(
+          () => this.#poke(PROFILES_CHANGED),
+        ),
       );
     } catch (error) {
       this.stop();
@@ -294,12 +351,14 @@ export class ShareIntake {
 
   /**
    * Notes that the offers of the inbox at `address` changed, or, with no
-   * address, that which inboxes Home holds and retains may have, and takes it
-   * up once the scan under way, if any, is done. Changes arriving during a
-   * scan are taken up by one more.
+   * address, that which inboxes Home holds and retains may have, or, with
+   * {@link PROFILES_CHANGED}, that Home's profile records observation did,
+   * and takes it up once the scan under way, if any, is done. Changes
+   * arriving during a scan are taken up by one more.
    */
-  #poke(address?: string): void {
+  #poke(address?: string | typeof PROFILES_CHANGED): void {
     if (address === undefined) this.#holdersChanged = true;
+    else if (address === PROFILES_CHANGED) this.#profilesChanged = true;
     else this.#changedInboxes.add(address);
     if (this.#draining) return;
     this.#draining = true;
@@ -310,15 +369,18 @@ export class ShareIntake {
   async #drain(): Promise<void> {
     try {
       while (
-        (this.#holdersChanged || this.#changedInboxes.size > 0) &&
+        (this.#holdersChanged || this.#profilesChanged ||
+          this.#changedInboxes.size > 0) &&
         !this.#halted
       ) {
         const holdersChanged = this.#holdersChanged;
+        const profilesChanged = this.#profilesChanged;
         const changed = [...this.#changedInboxes];
         this.#holdersChanged = false;
+        this.#profilesChanged = false;
         this.#changedInboxes.clear();
         try {
-          await this.#scan(holdersChanged, changed);
+          await this.#scan(holdersChanged, profilesChanged, changed);
         } catch (error) {
           if (this.#halted) return;
           logger.warn("scan-failed", () => [
@@ -334,22 +396,28 @@ export class ShareIntake {
 
   /**
    * Follows the inboxes Home holds and retains, when `holdersChanged`, and
-   * decides each row not yet decided in the inboxes at `changed`. An inbox
-   * newly followed reports its offers through its own subscription.
+   * decides each row not yet decided in the inboxes at `changed`, or in every
+   * inbox followed, when `profilesChanged`. An inbox newly followed reports
+   * its offers through its own subscription.
    */
-  async #scan(holdersChanged: boolean, changed: string[]): Promise<void> {
+  async #scan(
+    holdersChanged: boolean,
+    profilesChanged: boolean,
+    changed: string[],
+  ): Promise<void> {
     if (holdersChanged) {
       const inboxes = await this.#currentInboxes();
       if (this.#halted) return;
       this.#current = inboxes;
       this.#follow(inboxes);
     }
-    const inboxes = changed.flatMap((address) => {
+    const addresses = profilesChanged ? [...this.#current.keys()] : changed;
+    const inboxes = addresses.flatMap((address) => {
       const inbox = this.#current.get(address);
       return inbox === undefined ? [] : [inbox];
     });
     if (inboxes.length === 0) return;
-    const receipts = await this.#receipts();
+    const receipts = await this.#homeReceipts();
     for (const inbox of inboxes) {
       const offers = await inbox.key("offers").asSchema(offersSchema).pull();
       for (const raw of Array.isArray(offers) ? offers : []) {
@@ -404,13 +472,52 @@ export class ShareIntake {
   }
 
   /**
-   * The offers Home's catalog holds receipts for, by {@link offerIdentity}, or
-   * none while the catalog cannot be read, since Home's handler refuses a
-   * duplicate in any case. Each is read from the `from` and `id` its receipt
-   * stores, whatever the key the catalog files it under, and a receipt that
-   * stores no such pair is passed over.
+   * The offers Home's catalog holds receipts for, the spaces Home records no
+   * profile for, and the profiles it can record, as {@link HomeReceipts}
+   * holds them.
    */
-  async #receipts(): Promise<Set<string>> {
+  async #homeReceipts(): Promise<HomeReceipts> {
+    return {
+      received: await this.#receipts(),
+      ...await this.#profileRecords(),
+    };
+  }
+
+  /**
+   * The spaces Home's `sharedSpaces.profiles` says Home records no profile
+   * for, and those of the profiles it says a registration can record, or
+   * none of either while that observation is unavailable or absent, since
+   * then there is nothing to tell an offer's registration from one that
+   * recorded its profile.
+   *
+   * @throws When the observation cannot be read, which fails the scan, so
+   *   that its inboxes are taken up again when they or the observation next
+   *   change rather than decided as if Home recorded nothing.
+   */
+  async #profileRecords(): Promise<Pick<HomeReceipts, "unrecorded" | "live">> {
+    const view = await this.#home.key("sharedSpaces").key("profiles")
+      .asSchema(profilesSchema).pull();
+    const unrecorded = new Set<string>();
+    if (view?.status !== "ready" || !isObjectNotArray(view.spaces)) {
+      return { unrecorded, live: new Set() };
+    }
+    for (const [space, profile] of Object.entries(view.spaces)) {
+      if (isObjectNotArray(profile) && profile.status === "unrecorded") {
+        unrecorded.add(space);
+      }
+    }
+    return { unrecorded, live: new Set(view.live ?? []) };
+  }
+
+  /**
+   * The offers Home's catalog holds receipts for, by {@link offerIdentity},
+   * each with the `profileConflict` its receipt carries, or none while the
+   * catalog cannot be read, since Home's handler refuses a duplicate in any
+   * case. Each is read from the `from` and `id` its receipt stores, whatever
+   * the key the catalog files it under, and a receipt that stores no such
+   * pair is passed over.
+   */
+  async #receipts(): Promise<HomeReceipts["received"]> {
     let catalog;
     try {
       catalog = await this.#home.key("sharedSpaceCatalog").asSchema(
@@ -423,30 +530,46 @@ export class ShareIntake {
           error,
         ]);
       }
-      return new Set();
+      return new Map();
     }
-    const received = new Set<string>();
+    const received = new Map<string, unknown>();
     if (!isObjectNotArray(catalog?.offers)) return received;
     for (const receipt of Object.values(catalog.offers)) {
       if (
-        isObjectNotArray(receipt) && typeof receipt.from === "string" &&
-        typeof receipt.id === "string"
-      ) received.add(offerIdentity(receipt.from, receipt.id));
+        !isObjectNotArray(receipt) || typeof receipt.from !== "string" ||
+        typeof receipt.id !== "string"
+      ) continue;
+      received.set(
+        offerIdentity(receipt.from, receipt.id),
+        receipt.profileConflict,
+      );
     }
     return received;
   }
 
   /** Decides `raw`, a row of an inbox's offers, unless it is decided already. */
-  async #consider(raw: unknown, receipts: Set<string>): Promise<void> {
+  async #consider(raw: unknown, receipts: HomeReceipts): Promise<void> {
     if (!isObjectNotArray(raw)) return;
     const row = rowKey(raw);
-    if (this.#settled.has(row)) return;
     const receipt = offerIdentity(raw.from, raw.id);
-    if (receipts.has(receipt)) {
+    const offer = wellFormedOffer(raw);
+    const conflict = receipts.received.get(receipt);
+    const received = receipts.received.has(receipt);
+    // A receipt for an offer naming a profile Home has not recorded for its
+    // space, and has not refused or can record now, leaves it to be sent.
+    const resend = received && offer?.profile !== undefined &&
+      receipts.unrecorded.has(offer.space) &&
+      (conflict === undefined ||
+        (conflict === "unknown-profile" && receipts.live.has(offer.profile)));
+    const settled = this.#settled.get(row);
+    if (
+      settled !== undefined &&
+      !(resend && (settled === "sent" || settled === "received"))
+    ) return;
+    if (received && !resend) {
       this.#decide(row, raw, "received");
       return;
     }
-    const offer = wellFormedOffer(raw);
     let refusal: OfferRefusal | undefined;
     let root: Cell<unknown> | undefined;
     try {
@@ -494,6 +617,7 @@ export class ShareIntake {
           kind: offer.kind,
           ...(offer.title === "" ? {} : { title: offer.title }),
           offer: { from: offer.from, id: offer.id },
+          ...(offer.profile === undefined ? {} : { profile: offer.profile }),
         },
         (tx) => handled.resolve(tx.handlingReceiptLink),
       );
@@ -553,7 +677,11 @@ export class ShareIntake {
       return;
     }
     if (this.#halted || !isObjectNotArray(result)) return;
-    if (result.status === "registered" && room !== undefined) {
+    // A conflict over the profile the offer named registered the space all
+    // the same, saying whether that admitted a new entry.
+    const admitted = result.status === "registered" ||
+      (result.status === "conflict" && result.registration === "registered");
+    if (admitted && room !== undefined) {
       const accept = this.#home.key("chatManager").key("accept");
       if (accept.getRaw() !== undefined) {
         try {
@@ -596,6 +724,12 @@ export class ShareIntake {
     );
   }
 }
+
+/**
+ * What {@link ShareIntake}'s `#poke` is passed when Home's profile records
+ * observation changes.
+ */
+const PROFILES_CHANGED: unique symbol = Symbol("profiles changed");
 
 /** What an instance last decided about one row, and the offer it names. */
 interface RowDecision {
@@ -677,6 +811,13 @@ function wellFormedOffer(
   const origin = boundedString(host, ADDRESS_MAX_LENGTH)
     ? originOf(host)
     : undefined;
+  // A `toProfile` of `null` is the inbox saying the sender named no profile,
+  // so the offer is to the person, as it is with no `toProfile` at all.
+  const profile = raw.toProfile === undefined || raw.toProfile === null
+    ? undefined
+    : isObjectNotArray(raw.toProfile)
+    ? raw.toProfile.space ?? null
+    : null;
   if (
     origin === undefined ||
     !boundedString(kind, KIND_MAX_LENGTH) ||
@@ -687,9 +828,19 @@ function wellFormedOffer(
     !boundedString(ownerOrigin, ADDRESS_MAX_LENGTH, true) ||
     (ownerOrigin !== "" && originOf(ownerOrigin) === undefined) ||
     typeof sharedAt !== "number" || !Number.isSafeInteger(sharedAt) ||
-    sharedAt < 0
+    sharedAt < 0 ||
+    (profile !== undefined &&
+      !(boundedString(profile, ADDRESS_MAX_LENGTH) && isWellFormedDID(profile)))
   ) return undefined;
-  return { kind, id, space, host: origin, title, from };
+  return {
+    kind,
+    id,
+    space,
+    host: origin,
+    title,
+    from,
+    ...(profile === undefined ? {} : { profile }),
+  };
 }
 
 /** Whether `value` is a string no longer than `max`, and nonempty unless `empty`. */

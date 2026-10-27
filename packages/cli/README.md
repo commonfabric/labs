@@ -1,5 +1,99 @@
 # @commonfabric/cli
 
+## Managing your profiles
+
+`cf profile list --identity <keyfile> --api-url <url>` prints the profiles of
+the identity in the order `#profile` answers in, one line each: a `*` on the
+profile `#profile` answers with, the profile's space, its name, and `(picture)`
+when it has a picture attested to its owner, or
+`(picture not attested to its owner)` for any other. With `--json` it prints
+each row as an object that carries no bytes:
+
+- `name`: the profile's display name, or `""`;
+- `picture`: `{ "size": <bytes>, "byOwner": <boolean> }`, or `null` when it has
+  none;
+- `avatar`: the legacy avatar, which a profile shows where it has no picture, as
+  `{ "text": <text>, "byOwner": <boolean> }`, or, for a `data:` URL,
+  `{ "size": <bytes it holds>, "byOwner": <boolean> }`, or `null` when it has
+  none;
+- `space`, `id` and `address`: the profile's space, its piece's id, and its
+  canonical address;
+- `current`: whether `#profile` answers with it.
+
+A profile's space lets anyone write, and each write labels the value with the
+principal who wrote it, so `byOwner` is `true` only where the value's own label
+attests the profile's owner and no one else; a value stored without a label is
+not attested to its owner. A retired profile is not listed, and neither is one
+whose document is gone; a listed profile that cannot be read fails the listing.
+Listing reads the home root and runs nothing.
+
+Only the identity's own profiles are listed, by the rule `#profile` applies too
+("Profile" in [`HOME_SPACE.md`](../../docs/common/conventions/HOME_SPACE.md)). A
+profile is the identity's own when its `name`, followed through every link it
+holds, stays within the profile's own documents, and its label names the
+identity, and no one else, as the principal it represents: the claim a rename
+through the profile's own `setName` mints for whoever made it, or the one its
+name field's owner policy installed when the profile was set up. A profile Home
+lists that is not the identity's own, and a document carrying no label at all,
+is not listed, no row is marked `current` when `#profile` answers with such a
+profile, and every command below that names a profile by its space refuses it. A
+label that cannot be read fails the listing, or the command, rather than being
+taken for someone else's.
+
+A name stored before names were labeled carries no label on its value, though
+its profile is the identity's own through its name field's owner policy.
+`cf profile attest-name <space>` labels such a name for the profile Home lists
+in `<space>`, retired or not, in two steps, as
+`cf profile repair-name-protection` does. Without `--apply` it prints the stored
+name and an inspection receipt (with `--json`, `status: "inspected"`, `name` and
+`inspection`) and changes nothing. After reviewing the name,
+`--apply --expect <inspection>` accepts that name, unchanged, under the
+profile's own owner policy for its name, as the identity running the command,
+and the name's value is then labeled as that identity's; the output names the
+name it attested. A name changed since the inspection is refused. It refuses a
+profile that is not the identity's own and a profile whose name policy names
+another owner, and says so, changing nothing, for a name already attested to the
+identity.
+
+`cf profile get-picture <space> <file>` writes the bytes of the picture of the
+profile that lives in `<space>` to `<file>`, or to standard output when `<file>`
+is `-`. It refuses a picture not attested to the owner. A picture stored before
+writes to it were labeled carries no label at all, so it reads `byOwner: false`
+and `get-picture` refuses it. Its owner attests it by setting it again:
+`cf profile set-picture <space> --keep-current` sets the picture already stored
+again, as the identity running the command, and the write labels it with that
+identity.
+
+`cf profile rename <space> <name>` renames the profile that lives in `<space>`,
+and `cf profile set-picture <space> <image-file>` sets its picture to the bytes
+of `<image-file>`: a PNG, JPEG, GIF, WebP, AVIF or BMP image of at most 256 KiB,
+stored as it is. Nothing crops or scales it, as the shell's picture picker does
+to a 128-pixel square, so pass an image of the size it should be shown at.
+`cf profile set-picture <space> --clear` removes the picture, and the legacy
+avatar text with it, since a profile shows that text where it has no picture.
+`cf profile set-picture <space> --keep-current` sets the picture already stored
+again, which attests it to the identity running the command; it refuses a
+profile with no picture. `rename` and `set-picture` write through the profile's
+own handlers (`setName`, `setPicture`, `setAvatar`), so the profile runs for the
+length of the command, and both refuse a retired profile.
+
+`cf profile retire <space>` retires the profile that lives in `<space>`, as the
+Remove control in Home's profile picker does: Home lists it in
+`retiredProfiles`, and it is not one of the identity's profiles until it is
+restored. `#profile` does not answer with it, `cf profile list` leaves it out,
+and the picker lists it among the removed profiles. The profile's space and its
+data stay on the host, so a link to it held elsewhere still shows it. Home
+refuses to retire the profile `#profile` returns: the default when one is set,
+and otherwise the most recently used profile, or the first listed. The last live
+profile is always that profile. Set another profile as the default first.
+`cf profile restore <space>` restores a retired profile, as the picker's Restore
+does, and it is then one of the identity's profiles again. Both send a plain
+event to Home's handler of the same name, the only writers `retiredProfiles`
+admits; any pattern that reaches Home's streams can send the same events, as it
+can rename a profile. "Profile" in
+[`HOME_SPACE.md`](../../docs/common/conventions/HOME_SPACE.md) describes the
+list.
+
 ## Repairing profile name protection
 
 `cf profile repair-name-protection --cell <profile-address> --identity <keyfile>

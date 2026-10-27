@@ -30,7 +30,7 @@ import {
   pattern,
   type PerSession,
   type PerUser,
-  principalOf,
+  profileOwnerOf,
   SELF,
   spaceAccess,
   type SpaceAccessLevel,
@@ -162,8 +162,8 @@ export interface ParticipantEntry {
   profile: ProfileCell;
 
   /**
-   * The principal the profile's `represents-principal` label attests; absent
-   * when it attests none, or when the label can't be read where the entry is
+   * The principal whose own profile it is (`profileOwnerOf()`); absent when
+   * it is no one's, or when its label can't be read where the entry is
    * derived.
    */
   principal?: string;
@@ -178,7 +178,7 @@ export const participantEntriesOf = (
 ): ParticipantEntry[] =>
   participants.map((profile) => ({
     profile,
-    principal: principalOf(profile, "represents-principal"),
+    principal: profileOwnerOf(profile),
   }));
 
 /** The principals `entries` attest, each once, in the order of `entries`. */
@@ -248,17 +248,15 @@ export interface ParticipantChipOutput {
  * manager, and to a viewer whose Home has none, and a click then reaches no
  * one. It names the participant to the manager by their profile, bound as the
  * control's `name`, which crosses into the click's event as the profile's own
- * cell; the manager reads whom it names from the profile's
- * `represents-principal` label, and offers the room through the share inbox
- * the profile points at.
+ * cell; the manager reads whom it names as the principal whose own profile it
+ * is (`profileOwnerOf()`), and offers the room through the share inbox the
+ * profile points at.
  */
 export const ParticipantChip = pattern<
   ParticipantChipInput,
   ParticipantChipOutput
 >(({ participant, myProfile, startDirect }) => {
-  const counterpart = computed(() =>
-    principalOf(participant, "represents-principal") ?? ""
-  );
+  const counterpart = computed(() => profileOwnerOf(participant) ?? "");
   // Who may start a chat differs by viewer, so the control is hidden by a
   // prop rather than built as a different tree (see `FabriChatMessageRow`).
   const chatDisplay = computed((): ChatDisplay =>
@@ -306,8 +304,8 @@ export interface AddMemberEvent {
   readonly requestId?: string;
 
   /**
-   * The new member's profile, whose `represents-principal` label names them,
-   * through whose share inbox the viewer's manager offers them the room.
+   * The new member's own profile (`profileOwnerOf()` names them), through
+   * whose share inbox the viewer's manager offers them the room.
    */
   // `Cell<…>` is written out rather than reached through an alias: the
   // event's schema marks a reference position only where the wrapper is
@@ -595,12 +593,12 @@ const commitAddMember = handler<AddMemberEvent, AddMemberState>(
       refuse("A direct chat keeps its two members.", "direct-room");
       return;
     }
-    // A profile names the person its `represents-principal` label attests, so
-    // one attesting no one names no one.
+    // A profile names the person whose own profile it is (`profileOwnerOf()`),
+    // so one that is no one's names no one.
     const profile = event?.profile ?? picked;
     const attested = profile === undefined
       ? undefined
-      : principalOf(profile, "represents-principal");
+      : profileOwnerOf(profile);
     if (profile !== undefined && !isPrincipalDID(attested)) {
       refuse("That profile doesn't say whose it is.");
       return;
@@ -1052,8 +1050,9 @@ export interface ChatRoomViewer {
   profile?: ProfileCell;
 
   /**
-   * The principal the reader's profile's `represents-principal` label attests;
-   * absent when it attests none, or the label can't be read.
+   * The principal whose own profile the reader's profile is
+   * (`profileOwnerOf()`); absent when it is no one's, or its label can't be
+   * read.
    */
   principal?: string;
 
@@ -1111,8 +1110,8 @@ export interface ChatRoomView {
 
   /**
    * One entry for each of `participants`, in their order: the profile, and the
-   * principal its `represents-principal` label attests, absent where it
-   * attests none or the label can't be read where the list is derived. Like
+   * principal whose own profile it is (`profileOwnerOf()`), absent where it is
+   * no one's or its label can't be read where the list is derived. Like
    * `participants`, it is not proof of access.
    */
   participantEntries: PerUser<ParticipantEntry[]>;
@@ -1506,7 +1505,7 @@ export const FabriChatRoomCore = pattern<
     const profile = viewerProfileOf(myProfile);
     const principal = profile === undefined
       ? undefined
-      : principalOf(profile, "represents-principal");
+      : profileOwnerOf(profile);
     const role = spaceAccess(messages);
     return {
       ...(profile === undefined ? {} : { profile }),

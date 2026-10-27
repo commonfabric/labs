@@ -15,7 +15,11 @@
     // that grows an outside caller earns one then. `.` is the package's own
     // rather than an answer to a caller: a member declaring a `name` owes an
     // `exports` map, and importing this one builds the whole command tree.
-    ".": "./mod.ts"
+    ".": "./mod.ts",
+    // The Topics board's live view draws in `cf view`'s colors and frames.
+    "./view/ansi": "./lib/view/ansi.ts",
+    "./view/display": "./lib/view/display.ts",
+    "./view/theme": "./lib/view/theme.ts"
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md

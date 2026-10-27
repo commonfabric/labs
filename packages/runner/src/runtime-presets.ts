@@ -92,6 +92,9 @@
  * |                            | the serving runtime reads under it per run       |
  * | cfcReadOnExceed            | core-default (`fail`); delta on the same two,    |
  * |                            | beside the ceiling it qualifies                  |
+ * | preferredProfileSpace      | core-default (none — the home's order); delta on |
+ * |                            | browserWorker (the host acting as one of the     |
+ * |                            | user's profiles says which)                      |
  * | patternEnvironment         | pinned from apiUrl in productionServer /         |
  * |                            | remoteClient / browserWorker (patterns fetch     |
  * |                            | against the real deployment, not the builder's   |
@@ -177,7 +180,7 @@ import type {
   RuntimeOptions,
 } from "./runtime.ts";
 import type { CommitBackpressurePolicy } from "./scheduler/backpressure.ts";
-import type { IStorageManager } from "./storage/interface.ts";
+import type { IStorageManager, MemorySpace } from "./storage/interface.ts";
 import type { RuntimeTelemetry } from "./telemetry.ts";
 
 //
@@ -221,6 +224,7 @@ export const RUNTIME_OPTION_KEYS = [
   "cfcSinkMaxConfidentiality",
   "cfcReadMaxConfidentiality",
   "cfcReadOnExceed",
+  "preferredProfileSpace",
   "trustSnapshotProvider",
   "hideInternalStackFrames",
   "commitBackpressure",
@@ -655,6 +659,12 @@ export interface BrowserWorkerPresetParams extends CoreParams {
   cfcReadOnExceed?: CfcReadOnExceed;
 
   /**
+   * The profile `#profile` answers with
+   * (`RuntimeOptions.preferredProfileSpace`), from `InitializationData`.
+   */
+  preferredProfileSpace?: MemorySpace;
+
+  /**
    * The deployment trust configuration, from `InitializationData`: the host
    * decides which statements its runtimes evaluate concept guards under,
    * such as a default profile trusting a reviewed policy digest.
@@ -824,7 +834,8 @@ export const runtimePresets = {
    * In-browser worker runtime behind the shell (runtime-client's
    * RuntimeProcessor). Everything host-decided arrives as data from
    * `InitializationData` — experimental flags are the shell's build-time
-   * defines, the CFC dials are host-controlled rollout.
+   * defines with its deployment's adopted where none pins them, the CFC
+   * dials are host-controlled rollout.
    */
   browserWorker(params: BrowserWorkerPresetParams): RuntimeOptions {
     return {
@@ -844,6 +855,9 @@ export const runtimePresets = {
         ? { cfcFlowLabels: params.cfcFlowLabels }
         : {}),
       ...readCeilingOptions(params),
+      ...(params.preferredProfileSpace !== undefined
+        ? { preferredProfileSpace: params.preferredProfileSpace }
+        : {}),
       ...(params.cfcTrustConfig !== undefined
         ? { cfcTrustConfig: params.cfcTrustConfig }
         : {}),

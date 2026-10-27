@@ -344,6 +344,25 @@ dials.
   to `observe` when a caller lowers flow labels, and leaves the enforcement
   mode as given. `cfc-enforcement-matrix.md` §3 asks for a deploy check; none
   exists.
+- A space-scoped store's residency ceiling includes its own space as both
+  `Space(S)` and `PersonalSpace(S)`, alongside the declared policy. This
+  implements the own-space proposal in
+  [specs#71](https://github.com/commonfabric/specs/pull/71), which is closed
+  without merging; no successor ruling is incorporated in the pin. The
+  pinned §8.12.4 has no residency term, and the proposed base rule in
+  [specs#68](https://github.com/commonfabric/specs/pull/68) admits only the
+  `Space(S)` form on an unbound store. The own-space addition admits writes
+  those texts refuse and runs at strict without a default-off dial or a
+  separate `SPEC-PENDING` marker; the three slots are occupied and the
+  residency marker names #68. This is a nonconforming semantic gap and does
+  not satisfy the correspondence procedure's step 4. @danfuzz's authorization
+  to proceed ahead of unresolved specs dependencies does not supply a ruling;
+  the gap still needs one and a reconciled pin. This entry and
+  `cfc-enforcement-matrix.md` §4 record the additional gap.
+  The new clause is absent on `user` and `session` stores, even when their
+  scoped principal is unavailable. No foreign-space clause or unbound
+  `User` clause is added. Full derived labels still persist and taint readers;
+  no declaration or frozen existence label is released.
 - Under strict, an authorized runtime-owned store with a live enrollment admits
   eligible writer-fit misfits and records them only in the derived component.
   This is a slice of the proposed §8.12.5 change in

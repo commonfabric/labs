@@ -119,6 +119,7 @@ describe("initialize-init-data", () => {
         cfcFlowLabels: "persist",
         cfcReadMaxConfidentiality: ["did:key:zOwner"],
         cfcReadOnExceed: "skip",
+        preferredProfileSpace: "did:key:zProfile",
         cfcTrustConfig: {
           delegations: [{
             delegator: "*",

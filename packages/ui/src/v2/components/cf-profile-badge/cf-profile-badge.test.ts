@@ -32,6 +32,101 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+/**
+ * A resolved root cell `id` in `space`, whose subscription delivers a name
+ * with the owner's `represents-principal` label, and whose space cell links
+ * `rootId` as its root. Like a runtime's, the space cell resolves its root
+ * only once it has been synced, and resolves to itself before that.
+ * `spaceCellOpened` holds back the request for the space cell when given,
+ * and `spaceCellFailure`, when given, is what that request fails with;
+ * `delivered` resolves once the subscription has delivered.
+ */
+function resolvedInSpace(
+  space: string,
+  id: string,
+  rootId: string,
+  spaceCellOpened: Promise<void> = Promise.resolve(),
+  spaceCellFailure?: Error,
+) {
+  let synced = false;
+  const delivered = deferred<void>();
+  const root = {
+    ref: () => ({ path: [] }),
+    space: () => space,
+    id: () => rootId,
+  };
+  const unsynced = {
+    ref: () => ({ path: [] }),
+    space: () => space,
+    id: () => "of:space-cell",
+  };
+  const spaceCell = {
+    sync: () => {
+      synced = true;
+      return Promise.resolve();
+    },
+    key: () => ({
+      resolveAsCell: () => Promise.resolve(synced ? root : unsynced),
+    }),
+  };
+  return {
+    ref: () => ({ path: [] }),
+    space: () => space,
+    id: () => id,
+    runtime: () => ({
+      signal: new AbortController().signal,
+      getCell: async (requested: string, cause: string) => {
+        await spaceCellOpened;
+        if (spaceCellFailure !== undefined) throw spaceCellFailure;
+        if (requested !== space || cause !== space) {
+          throw new Error("not the space cell");
+        }
+        return spaceCell;
+      },
+    }),
+    asSchema: () => ({
+      subscribe: (cb: (val: unknown, label?: unknown) => void) => {
+        cb({ name: "Ada" }, representsPrincipalLabel(OWNER_DID));
+        delivered.resolve();
+        return () => {};
+      },
+    }),
+    delivered: delivered.promise,
+  };
+}
+
+/** A badge bound to `resolved`, as a binding to a profile link resolves. */
+function badgeOver(resolved: unknown): CFProfileBadge {
+  const badge = new CFProfileBadge();
+  markConnected(badge, true);
+  badge.profile = {
+    resolveAsCell: () => Promise.resolve(resolved),
+  } as unknown as CFProfileBadge["profile"];
+  return badge;
+}
+
+/**
+ * A runtime stub in which every space's root is a document other than the
+ * cell under test, so `profileSpaceOf()` returns `undefined` for that cell.
+ */
+function runtimeWithOtherRoot() {
+  return {
+    signal: new AbortController().signal,
+    getCell: (space: string) =>
+      Promise.resolve({
+        sync: () => Promise.resolve(),
+        key: () => ({
+          resolveAsCell: () =>
+            Promise.resolve({
+              ref: () => ({ path: [] }),
+              space: () => space,
+              id: () => "of:other-root",
+            }),
+        }),
+      }),
+  };
+}
+
 function markConnected(element: CFProfileBadge, isConnected = true): void {
   Object.defineProperty(element, "isConnected", {
     configurable: true,
@@ -51,6 +146,7 @@ function navResolvedCell(
     ref: () => ({ path: opts.path }),
     space: () => opts.space ?? "did:key:zSpace",
     id: () => opts.id ?? "fid1:piece",
+    runtime: runtimeWithOtherRoot,
     asSchema: () => ({
       subscribe: (cb: (val: unknown) => void) => {
         cb({ name: "Ada" });
@@ -209,6 +305,7 @@ describe("CFProfileBadge", () => {
       el._applyValue({ name: "Ada" });
       el._state = "verified";
       el._seal = identitySeal(OWNER_DID);
+      el.accessForTestingOnly.profileKnown = true;
       expect(el._verified).toBe(true);
       expect(JSON.stringify(el.render())).toContain("verified");
     });
@@ -258,6 +355,7 @@ describe("CFProfileBadge", () => {
 
         el._state = "verified";
         el._seal = identitySeal(OWNER_DID);
+        el.accessForTestingOnly.profileKnown = true;
         expect(el._verified).toBe(true);
         expect(JSON.stringify(el.render())).toContain('"verified"');
       }
@@ -307,6 +405,9 @@ describe("CFProfileBadge", () => {
       let unsubscribeCount = 0;
       const resolvedCell = {
         ref: () => ({ path: [] }),
+        space: () => "did:key:zSpace",
+        id: () => "fid1:piece",
+        runtime: runtimeWithOtherRoot,
         asSchema: () => ({
           subscribe: (cb: (val: unknown) => void) => {
             subscribeCount++;
@@ -369,6 +470,7 @@ describe("CFProfileBadge", () => {
         ref: () => ({ path: [] }),
         space: () => "did:key:zSpace",
         id: () => "fid1:piece",
+        runtime: runtimeWithOtherRoot,
         asSchema: () => ({
           subscribe: (cb: (val: unknown, label?: unknown) => void) => {
             deliver = cb;
@@ -391,9 +493,6 @@ describe("CFProfileBadge", () => {
     });
 
     it("enters the verified state for the owner a written name names, and stays presented for the same label with no name written", async () => {
-      const el = new CFProfileBadge() as any;
-      markConnected(el, true);
-
       // A default field the runtime that set the profile up stamped with its
       // own principal, beside the owner's.
       const stamped = {
@@ -417,26 +516,111 @@ describe("CFProfileBadge", () => {
         ],
       };
       let deliver: ((val: unknown, label?: unknown) => void) | undefined;
-      const resolved = {
+      const badge = badgeOver({
         ref: () => ({ path: [] }),
         space: () => "did:key:zSpace",
         id: () => "fid1:piece",
+        runtime: runtimeWithOtherRoot,
         asSchema: () => ({
           subscribe: (cb: (val: unknown, label?: unknown) => void) => {
             deliver = cb;
             return () => {};
           },
         }),
-      };
-      el.profile = { resolveAsCell: () => Promise.resolve(resolved) };
-      await el._resolve();
+      });
+      await badge.accessForTestingOnly.resolve();
 
       deliver?.({ name: "" }, stamped);
-      expect(el._state).toBe("presented");
+      expect(badge.accessForTestingOnly.state).toBe("presented");
 
       deliver?.({ name: "Ada" }, stamped);
-      expect(el._state).toBe("verified");
-      expect(el._seal?.did).toBe(OWNER_DID);
+      expect(badge.accessForTestingOnly.state).toBe("verified");
+      expect(badge.accessForTestingOnly.seal?.did).toBe(OWNER_DID);
+    });
+
+    it("seeds the seal with the space when the cell is its space's root profile", async () => {
+      const space = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp";
+      const badge = badgeOver(
+        resolvedInSpace(space, "of:profile", "of:profile"),
+      );
+
+      await badge.accessForTestingOnly.resolve();
+
+      expect(badge.accessForTestingOnly.verified).toBe(true);
+      expect(badge.accessForTestingOnly.seal?.ringGradient).toBe(
+        identitySeal(OWNER_DID, space).ringGradient,
+      );
+      expect(badge.accessForTestingOnly.seal?.ringGradient).not.toBe(
+        identitySeal(OWNER_DID).ringGradient,
+      );
+    });
+
+    it("keeps the seal the principal's alone for a document that is not its space's root", async () => {
+      const space = "did:key:z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG";
+      const badge = badgeOver(
+        resolvedInSpace(space, "of:roster-entry", "of:room"),
+      );
+
+      await badge.accessForTestingOnly.resolve();
+
+      expect(badge.accessForTestingOnly.verified).toBe(true);
+      expect(badge.accessForTestingOnly.seal?.ringGradient).toBe(
+        identitySeal(OWNER_DID).ringGradient,
+      );
+    });
+
+    it("presents no seal until it knows whether the cell is a profile", async () => {
+      const space = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp";
+      const opened = deferred<void>();
+      const resolved = resolvedInSpace(
+        space,
+        "of:profile",
+        "of:profile",
+        opened.promise,
+      );
+      const badge = badgeOver(resolved);
+
+      const resolving = badge.accessForTestingOnly.resolve();
+      // The label has arrived; the space cell has not been opened.
+      await resolved.delivered;
+      expect(badge.accessForTestingOnly.state).toBe("verified");
+      expect(badge.accessForTestingOnly.verified).toBe(false);
+
+      opened.resolve();
+      await resolving;
+      expect(badge.accessForTestingOnly.verified).toBe(true);
+      expect(badge.accessForTestingOnly.seal?.ringGradient).toBe(
+        identitySeal(OWNER_DID, space).ringGradient,
+      );
+    });
+
+    it("draws no seal, logs, and keeps the name when whether the cell is a profile cannot be read", async () => {
+      const space = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp";
+      const failure = new Error("the space's root cannot be read");
+      const badge = badgeOver(
+        resolvedInSpace(
+          space,
+          "of:profile",
+          "of:profile",
+          Promise.resolve(),
+          failure,
+        ),
+      );
+      const logged: unknown[][] = [];
+      const original = console.error;
+      console.error = (...args: unknown[]) => logged.push(args);
+      try {
+        await badge.accessForTestingOnly.resolve();
+      } finally {
+        console.error = original;
+      }
+
+      expect(badge.accessForTestingOnly.state).toBe("verified");
+      expect(badge.accessForTestingOnly.profileKnown).toBe(false);
+      expect(badge.accessForTestingOnly.verified).toBe(false);
+      expect(JSON.stringify(badge.render())).toContain("Ada");
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toContain(failure);
     });
 
     it("stays presented (no seal) when the label has no represents-principal atom", () => {
@@ -932,30 +1116,24 @@ describe("CFProfileBadge", () => {
 });
 
 describe("CFProfileBadge disposal handling", () => {
-  // _resolve awaits cell.resolveAsCell(); a disposal race rejects it with
-  // AbortError while the badge is still connected and its generation unchanged,
-  // so only the runtime-signal guard distinguishes cancellation from failure.
-  function badgeThis(aborted: boolean): Record<string, unknown> {
-    return {
-      _resolveGeneration: 0,
-      isConnected: true,
-      // The ambient @consume runtime is cleared on logout; the guard reads the
-      // profile cell's own runtime instead, so leave this undefined.
-      runtime: undefined,
-      profile: {
-        runtime: () => ({ signal: { aborted } }),
-        resolveAsCell: () =>
-          Promise.reject(new DOMException("aborted", "AbortError")),
-      },
-      _cleanup: () => {},
-      _applyValue: () => {},
-    };
+  // The resolve awaits `cell.resolveAsCell()`; a disposal race rejects it
+  // with `AbortError` while the badge is still connected and its generation
+  // unchanged, so only the runtime-signal guard distinguishes cancellation
+  // from failure. The ambient runtime is cleared on logout, and the guard
+  // reads the profile cell's own runtime instead, so the badge is given none.
+  function badgeResolvingAborted(aborted: boolean): CFProfileBadge {
+    const badge = new CFProfileBadge();
+    markConnected(badge, true);
+    badge.profile = {
+      runtime: () => ({ signal: { aborted } }),
+      resolveAsCell: () =>
+        Promise.reject(new DOMException("aborted", "AbortError")),
+    } as unknown as CFProfileBadge["profile"];
+    return badge;
   }
 
-  function resolve(fakeThis: Record<string, unknown>): Promise<void> {
-    return (CFProfileBadge.prototype as unknown as {
-      _resolve(this: unknown): Promise<void>;
-    })._resolve.call(fakeThis);
+  function resolve(badge: CFProfileBadge): Promise<void> {
+    return badge.accessForTestingOnly.resolve();
   }
 
   function captureConsoleError(): { calls: unknown[][]; restore(): void } {
@@ -968,7 +1146,7 @@ describe("CFProfileBadge disposal handling", () => {
   it("logs a resolve failure while the runtime is alive", async () => {
     const spy = captureConsoleError();
     try {
-      await resolve(badgeThis(false));
+      await resolve(badgeResolvingAborted(false));
     } finally {
       spy.restore();
     }
@@ -978,7 +1156,7 @@ describe("CFProfileBadge disposal handling", () => {
   it("suppresses the resolve-failure log when the runtime is disposed", async () => {
     const spy = captureConsoleError();
     try {
-      await resolve(badgeThis(true));
+      await resolve(badgeResolvingAborted(true));
     } finally {
       spy.restore();
     }

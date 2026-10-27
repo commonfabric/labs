@@ -467,8 +467,10 @@ tear a runtime down while one was in flight.
 
 The list coordinators' resume-seed recovery was one of those. A coordinator
 resuming against a result container with no durable value pulls the container
-and seeds an empty array once the pull settles, and it warns when either the
-pull or the seed fails. One workspace shard on one `main` run reached the seed's
+and, for a filter or a flatMap, seeds an empty array once the pull settles, and
+it warns when either the pull or the seed fails. A map seeds nothing, since it
+writes its container only when a reconcile succeeds, and an absent one is a map
+that has failed. One workspace shard on one `main` run reached the seed's
 warning three times; no other artifact in that run or the next reached it at
 all.
 

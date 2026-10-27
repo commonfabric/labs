@@ -9,8 +9,8 @@ import {
   currentPrincipal,
   type DID,
   handler,
-  principalOf,
   principalsOf,
+  profileOwnerOf,
   type RepresentsCurrentUser,
   spaceAccess,
   spaceAccessOf,
@@ -145,20 +145,18 @@ function adderFields(
 }
 
 /**
- * Throws unless `event` names no profile in `as`, or names one that represents
- * the principal the event acts for, as
- * `principalOf(as, "represents-principal")` returns it. A profile it returns
- * no principal for represents no one, whether its label names nobody, names
- * more than one principal, or holds a claim the reader refuses, and a run that
- * acts for no one has no profile of its own.
+ * Throws unless `event` names no profile in `as`, or names one that is the own
+ * profile of the principal the event acts for, by the rule every reader of a
+ * person's profiles applies (`profileOwnerOf()`). A profile it returns no
+ * principal for is no one's, whether its label names nobody, names more than
+ * one principal, or holds a claim the reader refuses, or its `name` links
+ * outside the profile's own documents, and a run that acts for no one has no
+ * profile of its own.
  */
 function assertOwnProfile(event: PanelAdmission): void {
   if (event.as === undefined) return;
   const actor = currentPrincipal();
-  if (
-    actor !== undefined &&
-    principalOf(event.as, "represents-principal") === actor
-  ) return;
+  if (actor !== undefined && profileOwnerOf(event.as) === actor) return;
   throw new Error(
     "A panel can be added under a profile only by the principal that profile represents",
   );
