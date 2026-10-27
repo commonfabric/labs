@@ -790,6 +790,31 @@ state and cannot override a resumed binding, while a whole-tree restorer must
 supply a matching typed `subagentResumeContext` when it reconstructs a child
 beneath its trusted root/parent session.
 
+Start a new root run from a checkpoint with
+`--continue-run <run-root-or-run-state.json> --prompt="Next request"`.
+`--prompt-file` and positional text also supply the required new message.
+Continuation gets a new run id, records the predecessor in its lineage, and
+leaves the predecessor's artifacts and result untouched. It seeds the model with
+history through the last complete tool-call checkpoint, excluding turn-local
+notices persisted with `turnLocal: true`. Older artifacts have no such marker,
+so unmarked notice text remains ordinary history. The marker is omitted from
+provider requests. An interrupted tail is replaced by the chat service's
+interrupted-turn notice before the new message; a run with no complete
+checkpoint is refused. `--system-prompt` replaces the prior system message. A
+run bound to one exact prompt value cannot be continued, because the binding
+does not cover a new prompt.
+
+Continuation explicitly retains the prior handle table, result schema, research
+context, CFC record, and prompt-slot binding. Skill-context handles expire as
+they do between chat turns. The new result defaults to `result.json` under the
+new run's artifact directory; `--structured-result-path` can name another new
+path without repeating the recorded schema. An explicit schema must agree with
+the recorded one. Output paths that overlap the prior run's artifacts or result
+are refused. Continuation shares resume's provider, credential owner,
+read-ceiling, sandbox-runtime and CFC-mode checks, also refusing a changed model
+or a subagent source. It cannot be combined with `--resume-run`, `--skill`,
+`--image`, `--input-cell`, `--task-tags` or `--task-domains`.
+
 The gateway and subscription routes have different billing, workspace policy,
 retention, and model availability. The model catalog is read live from the
 selected subscription; an explicit unavailable model fails instead of being
