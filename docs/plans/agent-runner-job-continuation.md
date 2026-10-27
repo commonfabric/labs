@@ -346,8 +346,10 @@ by a new flag, `--continue-run <run root> --prompt=<message>`:
   checkpoint, then the interrupted-turn notice when the run went past that
   checkpoint, then the new prompt. With no complete checkpoint, the flag is
   refused. A `--system-prompt` given with `--continue-run` replaces the prior
-  transcript's system message, which is how a follow-up's new
-  `instructions` arrive;
+  run's additional instructions, which is how a follow-up's new
+  `instructions` arrive. The harness rebuilds the rest of the system
+  message, its own guidance and the new result contract, with the builder
+  every batch run uses, so a follow-up keeps that guidance;
 - the prior handle table, result schema and CFC record, passed on
   explicitly (`AH-REF-3`). The result path is the new run's own;
 - the provider, model, credential owner and read ceiling checked against the
@@ -450,7 +452,9 @@ client:
   prompt, and no turn-local notices.
 - A handle from the prior run resolves.
 - A new structured result is written and validated.
-- A `--system-prompt` given with it replaces the prior system message.
+- A `--system-prompt` given with it replaces the prior run's additional
+  instructions, and the system message still holds the harness's own
+  guidance and the new result contract.
 - A prior run cut off in the middle of a turn is continued from its last
   complete checkpoint, with the interrupted-turn notice before the new
   prompt. A prior run with no complete checkpoint is refused.
