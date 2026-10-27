@@ -1254,6 +1254,11 @@ const upgradeLegacyAuthors = (
   // can return undefined for both absent fields and unresolved links.
   const storedComments = comments.get();
   if (storedComments === undefined) return false;
+  // An empty array may be the input's default standing in for an array behind
+  // an unresolved link, which a handler's eager read cannot tell from an empty
+  // thread. The lift waits for the array (`upgradeTopicState`), so a handler
+  // leaves an empty thread's step to it.
+  if (fromHandler && storedComments.length === 0) return false;
   const commentAuthors = storedComments.map((_, index) => {
     const comment = comments.key(index);
     const author = comment.key("author").get();

@@ -249,7 +249,14 @@ export default pattern(() => {
       topicStateVersion: deferredVersion,
       createdByName: deferredName,
       createdBy: deferredCreator,
-      comments: new Writable<LegacyComment[]>([]),
+      // A handler leaves an empty thread's author step to the lift, so the
+      // thread holds one comment whose author is already complete.
+      comments: new Writable<LegacyComment[]>([{
+        authorName: "Commenter",
+        author: { name: "Commenter", kind: "person" },
+        body: "Settled",
+        sentAt: 1,
+      }]),
       commentCount: new Writable(0),
       lastActivityAt: new Writable(0),
       links: new Writable<TopicLink[]>([]),

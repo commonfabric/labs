@@ -573,6 +573,47 @@ describe("topic-author-migration", () => {
     expect(errors).toEqual([]);
   });
 
+  it("keeps the author step pending while a title handler saves over an unresolved comments array", async () => {
+    const pending = runtime.getCell<unknown>(space, "pending-comments");
+    const { argument, result } = await start({
+      title: "Original",
+      topicStateVersion: 0,
+      createdAt: 1,
+      createdBy: { kind: "agent", name: "Creator" },
+      createdByName: "Creator",
+      comments: pending,
+      links: [],
+    });
+    await runtime.idle();
+    await runtime.storageManager.synced();
+    expect(argument.key("topicStateVersion").getRaw()).toBe(0);
+
+    await result.key("setTitle").pull();
+    result.key("setTitle").send({
+      title: "Saved title",
+      agentName: "Test agent",
+    });
+    await runtime.idle();
+    await runtime.storageManager.synced();
+    expect(argument.key("title").getRaw()).toBe("Saved title");
+    expect(argument.key("topicStateVersion").getRaw()).toBe(0);
+
+    const arrival = runtime.edit();
+    pending.withTx(arrival).set([
+      { authorName: "Delayed commenter", body: "Arrived", sentAt: 2 },
+    ]);
+    expect((await arrival.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+    await runtime.storageManager.synced();
+    expect(argument.key("topicStateVersion").getRaw()).toBe(CURRENT_VERSION);
+    expect(
+      argument.key("comments").key(0).key("author").getRaw({
+        lastNode: "value",
+      }),
+    ).toEqual({ name: "Delayed commenter", kind: "legacy" });
+    expect(errors).toEqual([]);
+  });
+
   describe("activity-scalars step", () => {
     // Later than any stamp a verb makes during the test, so the kept activity
     // time can only equal it if the step read the delayed stamp.

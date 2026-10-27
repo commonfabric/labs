@@ -60,15 +60,18 @@ conflate those cases.
 
 Handler reads can return `undefined` for both absence and an unresolved link.
 The author step handles that ambiguity conservatively. An unavailable comment
-array leaves the whole step incomplete, without author writes. For a blank
-structured name, the author object, its name and kind, and the legacy name must
-all be defined before a handler can complete the step. A nonblank structured
-name already supplies attribution and does not require a legacy name. The lift
-can complete genuinely absent fields. A version-zero record with only
-`createdByName` or `authorName`, and no corresponding structured author object,
-therefore requires the lift. A handler can complete this step when each author
-already has a nonblank structured name or has the defined fields required by the
-guard; partially populated structured authors with a blank name can meet that
+array leaves the whole step incomplete, without author writes, and so does an
+empty one in a handler: an array behind an unresolved link reads as its declared
+default, empty, which a handler cannot tell from an empty thread, so the lift
+completes the step for a topic with no comments. For a blank structured name,
+the author object, its name and kind, and the legacy name must all be defined
+before a handler can complete the step. A nonblank structured name already
+supplies attribution and does not require a legacy name. The lift can complete
+genuinely absent fields. A version-zero record with only `createdByName` or
+`authorName`, and no corresponding structured author object, therefore requires
+the lift. A handler can complete this step when each author already has a
+nonblank structured name or has the defined fields required by the guard;
+partially populated structured authors with a blank name can meet that
 condition.
 
 A step returns `true` only after completing its writes, or `false` for
