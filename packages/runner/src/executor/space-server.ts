@@ -1134,10 +1134,10 @@ export class SpaceServer implements TransactionSealDestination {
    * itself. Entries retire with their demand key. */
   readonly #pieceRootByDemandKey = new Map<string, string>();
 
-  /** Demand key → the scope of the piece root its structure load RESOLVED
-   * to, beside `#pieceRootByDemandKey`: the load starts the piece at that
-   * scope, and the arrival seed addresses the same root. */
-  readonly #pieceRootScopeByDemandKey = new Map<string, CellScope>();
+  /** Demand key → the address of the piece root its structure load
+   * RESOLVED to, beside `#pieceRootByDemandKey`: the load starts the piece
+   * at that space and scope, and the arrival seed addresses the same root. */
+  readonly #pieceRootAddressByDemandKey = new Map<string, OwningRootAddress>();
 
   /** Piece root doc id → `${scope}\0${demanderPairKey}` for the demanding
    * pairs whose owed defaults of that piece's owned cells the passes have
@@ -5551,10 +5551,7 @@ export class SpaceServer implements TransactionSealDestination {
               if (rootId === root.id) return;
               if (this.#pieceRootByDemandKey.get(key) === rootId) return;
               this.#pieceRootByDemandKey.set(key, rootId);
-              this.#pieceRootScopeByDemandKey.set(
-                key,
-                (owning.scope ?? "space") as CellScope,
-              );
+              this.#pieceRootAddressByDemandKey.set(key, owning);
               this.#indexResolvedRoot(key, rootId);
               runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
             };
@@ -5721,13 +5718,17 @@ export class SpaceServer implements TransactionSealDestination {
       ) continue;
       const demanders = this.#demandersByKey.get(key);
       if (demanders === undefined || demanders.size === 0) continue;
-      // The root the structure load started the piece at, scope included:
-      // the owning root it resolved to, else the demanded root itself.
-      const resolvedId = this.#pieceRootByDemandKey.get(key);
-      const rootId = resolvedId ?? key.slice(key.indexOf("\0") + 1);
-      const rootScope: CellScope = resolvedId === undefined
+      // The root the structure load started the piece at, space and scope
+      // included: the owning root it resolved to, else the demanded root
+      // itself. A root in another space is that space's server's to seed.
+      const resolved = this.#pieceRootAddressByDemandKey.get(key);
+      const rootId = resolved?.id ?? key.slice(key.indexOf("\0") + 1);
+      if (resolved !== undefined && resolved.space !== this.#options.space) {
+        continue;
+      }
+      const rootScope: CellScope = resolved === undefined
         ? this.#demandRootAddresses.get(key)?.scope ?? "space"
-        : this.#pieceRootScopeByDemandKey.get(key) ?? "space";
+        : (resolved.scope ?? "space") as CellScope;
       if (neverAPieceRootId(rootId)) continue;
       let seeded = this.#seededDemanders.get(rootId);
       if (seeded === undefined) {
@@ -5955,7 +5956,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#demandedRoots.delete(key);
     this.#unindexDemandKey(key);
     this.#pieceRootByDemandKey.delete(key);
-    this.#pieceRootScopeByDemandKey.delete(key);
+    this.#pieceRootAddressByDemandKey.delete(key);
     this.#pendingStructureLoads.delete(key);
     this.#terminalStructureLoads.delete(key);
     this.#rearmedAwaitingSettle.delete(key);
@@ -7799,7 +7800,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#demandersByKey.clear();
     this.#demandedPairCount = 0;
     this.#pieceRootByDemandKey.clear();
-    this.#pieceRootScopeByDemandKey.clear();
+    this.#pieceRootAddressByDemandKey.clear();
     this.#seededDemanders.clear();
     this.#keysByRootId.clear();
     this.#keysByResolvedRoot.clear();
