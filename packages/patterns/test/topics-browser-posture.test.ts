@@ -69,6 +69,21 @@ describe("topicsBrowserPostureOf()", () => {
     expect(posture.clientFrom).toBe("meta");
   });
 
+  it("reports served views only where the toolshed runs web view-scoped replication beside server execution", () => {
+    const served = (experimental: Record<string, boolean>) =>
+      declared(topicsBrowserPostureOf({
+        experimental,
+        shellServerExecutionDefine: String(experimental.serverExecution),
+      })).servedViews;
+    expect(served({ serverExecution: true, webViewScopedReplication: true }))
+      .toBe(true);
+    expect(served({ serverExecution: true, webViewScopedReplication: false }))
+      .toBe(false);
+    expect(served({ serverExecution: true })).toBe(false);
+    expect(served({ serverExecution: false, webViewScopedReplication: true }))
+      .toBe(false);
+  });
+
   it("reads the shell's posture from the bundle when the toolshed reports no baked define", () => {
     const posture = declared(topicsBrowserPostureOf(
       {

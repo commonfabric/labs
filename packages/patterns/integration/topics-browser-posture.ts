@@ -86,6 +86,15 @@ export interface DeclaredTopicsBrowserPosture {
 
   /** Which statement of the shell's posture `client` was read from. */
   readonly clientFrom: ClientPostureSource;
+
+  /**
+   * Whether the deployment serves its pages' views: web view-scoped
+   * replication, under which a page shows what the serving runtime delivers
+   * and runs none of the derivations' modules itself. Read from the posture
+   * the toolshed runs at, which the shell it serves adopts; a shell built with
+   * the flag's define pinned otherwise is one this field does not describe.
+   */
+  readonly servedViews: boolean;
 }
 
 /**
@@ -117,7 +126,10 @@ export type TopicsBrowserPosture =
  */
 export interface PostureMeta {
   /** The flags the deployment serves at, as it resolved them. */
-  readonly experimental?: { readonly serverExecution?: unknown };
+  readonly experimental?: {
+    readonly serverExecution?: unknown;
+    readonly webViewScopedReplication?: unknown;
+  };
 
   /**
    * The raw `EXPERIMENTAL_SERVER_EXECUTION` the shell this toolshed serves
@@ -221,6 +233,8 @@ export function topicsBrowserPostureOf(
     served,
     client,
     clientFrom,
+    servedViews: served &&
+      meta.experimental?.webViewScopedReplication === true,
   };
 }
 
