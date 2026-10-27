@@ -11561,6 +11561,92 @@ export class Runner {
   }
 
   /**
+   * Seeds the defaults owed to `identity`'s instances of the cells the piece
+   * running at `resultCell` owns, as the piece's own start seeds them for the
+   * identity it runs under (`#prepareCellsForRunningPattern`). A viewer whose
+   * runtime runs none of the pattern never starts the piece, so a serving
+   * runtime seeds the viewer's instances when the viewer's demand arrives;
+   * the viewer's first write into such a cell then lands beside the other
+   * defaults rather than standing in for the whole value. Each owed cell is
+   * probed in the instance `identity` resolves it to, and loaded first when
+   * neither the replica nor the store read-through can say whether it holds
+   * a value; the cells found absent are seeded, each in a transaction of its
+   * own (`#seedOwedDefaults`). Returns whether every owed default was
+   * verified or seeded. A piece not running here, or whose pattern pointer
+   * this runtime cannot read, seeds nothing and returns `false`.
+   */
+  async seedOwedDefaultsFor(
+    resultCell: Cell<any>,
+    identity: ScopeKeyIdentity,
+  ): Promise<boolean> {
+    const isCurrent = this.#currentWithinLifecycle();
+    const link = resultCell.getAsNormalizedFullLink();
+    const rootCell = link.path.length > 0
+      ? this.#runtime.getCellFromLink({ ...link, path: [] })
+      : resultCell;
+    if (!this.isRunning(rootCell)) return false;
+    const read = this.#runtime.readTx();
+    restrictToLocalReads(read.tx);
+    let ref: ReturnType<typeof getPatternIdentityRef>;
+    try {
+      ref = getPatternIdentityRef(rootCell.withTx(read));
+    } catch (error) {
+      if (validateLocalReadBasis(read) === undefined) throw error;
+      return false;
+    } finally {
+      read.clearReadOnly?.();
+      read.abort("pattern pointer read complete");
+    }
+    if (ref === undefined) return false;
+    const manager = this.#runtime.patternManager;
+    const loaded = manager.artifactFromIdentitySync(ref.identity, ref.symbol) ??
+      await manager.loadPatternByIdentity(
+        ref.identity,
+        ref.symbol,
+        rootCell.space,
+      );
+    if (loaded === undefined || !isCurrent()) return false;
+    const pattern = this.#resolveToPattern(loaded as Pattern);
+    let readTx = this.#familyReadTx(identity);
+    const instances: ResumePatternInstance[] = [];
+    this.#collectResumeOwnedCells(
+      pattern,
+      rootCell,
+      [],
+      new Set(),
+      readTx,
+      instances,
+    );
+    const seeds: ResumePatternInstance[] = [];
+    for (const instance of instances) {
+      const ownerScope = instance.resultCell.getAsNormalizedFullLink().scope;
+      let owesSeed = false;
+      for (const descriptor of instance.pattern.derivedInternalCells ?? []) {
+        const derived = getDerivedInternalCell(instance.resultCell, descriptor);
+        const derivedLink = derived.getAsNormalizedFullLink();
+        // A demander without a session owes no session instance.
+        if (
+          !ownedCellOwesSeed(derivedLink, ownerScope) ||
+          !canResolveScopeKey(derivedLink.scope, identity)
+        ) continue;
+        if (this.#documentPresent(readTx, derivedLink)) continue;
+        if (!this.#storeReportedAbsent(derivedLink, identity)) {
+          // The store may hold a value the replica has not loaded; the
+          // probe after the load reads what arrived.
+          await this.#syncFamilyCell(derived, identity);
+          if (!isCurrent()) return false;
+          readTx = this.#familyReadTx(identity);
+          if (this.#documentPresent(readTx, derivedLink)) continue;
+        }
+        owesSeed = true;
+      }
+      if (owesSeed) seeds.push(instance);
+    }
+    if (seeds.length === 0) return true;
+    return await this.#seedOwedDefaults(seeds, identity, isCurrent);
+  }
+
+  /**
    * Stop a pattern. This will cancel the pattern and all its children.
    *
    * TODO: This isn't a good strategy, as other instances might depend on behavior
