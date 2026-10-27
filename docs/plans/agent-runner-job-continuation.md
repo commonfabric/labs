@@ -135,7 +135,7 @@ or moves, in the transaction that writes the holder's terminal event:
 
 ```json
 {
-  "message": {"key": "chat-msg-81", "target": "job-a", "acceptedAt": "…", "delivery": "pending", "jobId": "job-a"},
+  "message": {"key": "chat-msg-81", "target": "job-a", "message": "Use the April numbers instead.", "acceptedAt": "…", "delivery": "pending", "jobId": "job-a"},
   "job": {"id": "job-a", "state": "running", "…": "…"}
 }
 ```
@@ -166,8 +166,10 @@ waiting on that job, gets its outcome while waiting there, or leaves it:
 - `{key, delivery: "dropped", reason}`.
 
 Each message that waited on a job has its outcome or `moved` event before
-that job's terminal `state` event, because both are written in one
-transaction. A reader that follows a stream to its end therefore learns,
+that job's terminal `state` event. A `delivered` event is written while the
+run goes on, when the run takes the message. Every message still waiting
+when the job ends gets its outcome or `moved` event in the transaction that
+writes the terminal event. A reader that follows a stream to its end therefore learns,
 for every message that waited on that job, where it went. This holds for
 every way a job ends: a run's own end, a cancel while queued,
 `PROFILE_UNAVAILABLE`, and restart recovery.
