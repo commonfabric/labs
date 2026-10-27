@@ -160,6 +160,9 @@ type LinkHop = {
    */
   storedSchema?: JSONSchema;
 
+  /** The stored destination before the caller's remaining path is appended. */
+  storedTarget: NormalizedFullLink;
+
   link: NormalizedFullLink;
   source: NormalizedFullLink;
   kind: "value" | "write-redirect";
@@ -529,9 +532,11 @@ const resolutionMemoVariant = (
  * - A/foo → A/foo
  * - A → B → C → A
  *
- * A link whose target passes back through the link's own position in the same
+ * A link whose stored target passes back through its own position in the same
  * document (e.g. A → A/foo) makes the path grow on every hop, so the pair
- * never repeats; that shape is detected separately on the first hop.
+ * never repeats; that shape is detected separately on the first hop. The
+ * caller's remaining path is excluded from this check: a finite query can
+ * revisit a link to an ancestor while consuming its remaining segments.
  *
  * Growing-path cycles that span documents, e.g.
  * - A → B, B → A/foo
@@ -806,6 +811,7 @@ export function resolveLinkTracingDereferences(
       const nextLink = hopAt(link, link.path, probe);
       nextHop = {
         link: nextLink,
+        storedTarget: nextLink,
         source: { ...link, path: [...link.path] },
         kind: hopKindForLink(nextLink),
         depth: link.path.length,
@@ -831,6 +837,7 @@ export function resolveLinkTracingDereferences(
             const nextLink = hopAt(link, lastValid, parent);
             nextHop = {
               link: nextLink,
+              storedTarget: nextLink,
               source: { ...link, path: [...lastValid] },
               kind: hopKindForLink(nextLink),
               depth: lastValid.length,
@@ -896,12 +903,12 @@ export function resolveLinkTracingDereferences(
         break;
       }
       noteDeclaredReadScope(tx, hopCap, nextHop.link.scope);
-      // A link whose target passes back through the link's own position can
+      // A link whose stored target passes through its own position can
       // never resolve: the value at that position is the link itself, so
       // every hop re-follows it with a longer path and the (document, path)
       // cycle key never repeats. Detect this on the first hop.
       const hopSource = nextHop.source;
-      const hopTarget = nextHop.link;
+      const hopTarget = nextHop.storedTarget;
       if (
         hopTarget.space === hopSource.space &&
         hopTarget.id === hopSource.id &&
