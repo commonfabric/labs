@@ -46,13 +46,13 @@ import {
   type GenesisRoot,
   getCommitPreconditionsConfig,
   getServerExecutionConfig,
+  identityOfScopeKey,
   isScopeKey,
   type MemoryProtocolFlags,
   type OperationFieldQuery,
   type OperationFieldSnapshot,
   type PatchOp,
   type PresencePublication,
-  principalOfScopeKey,
   type ReleaseOpFieldOperation,
   resolveScopeKey,
   type ScopeKey,
@@ -3311,7 +3311,7 @@ export class StorageManager implements IStorageManager {
     instance: ScopeKey | undefined,
   ): ScopedReadStanding {
     if (instance === undefined) return "refused";
-    const actor = principalOfScopeKey(instance);
+    const actor = identityOfScopeKey(instance)?.principal;
     if (actor === undefined) return "refused";
     if (this.#foreignScopedReadGrant === undefined) return "refused";
     const provider = this.#providers.get(space);
@@ -6247,7 +6247,7 @@ export class SpaceReplica
           "instance of a foreign scoped document is never read",
       );
     }
-    const actor = principalOfScopeKey(key);
+    const actor = identityOfScopeKey(key)?.principal;
     if (actor === undefined) return refusal(`"${key}" names no actor`);
     const verdict = await this.#foreignScopedReadVerdict(actor);
     if (verdict.granted) return undefined;
@@ -6256,7 +6256,9 @@ export class SpaceReplica
       asks = new Map();
       this.#refusedScopedAsks.set(actor, asks);
     }
-    asks.set(`${scope}\0${address.id}`, {
+    // Keyed by the instance, so two session instances of one document are
+    // two asks, each pulled again.
+    asks.set(`${key}\0${address.id}`, {
       id: address.id,
       scope,
       scopeKey: key,

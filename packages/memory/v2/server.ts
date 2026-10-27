@@ -54,6 +54,7 @@ import {
   type GraphQueryRequest,
   type GraphQueryResult,
   type HelloMessage,
+  identityOfScopeKey,
   isScopeKey,
   MAX_ENTITY_ID_PAGE_SIZE,
   MAX_UNTRUSTED_MESSAGE_SLOTS,
@@ -71,7 +72,6 @@ import {
   type PresencePublishRequest,
   type PresenceRemoveMessage,
   type PresenceUpsertMessage,
-  principalOfScopeKey,
   resolveScopeKey,
   type ResponseMessage,
   type ScopeKey,
@@ -10092,7 +10092,7 @@ export class Server {
       for (const { root } of rows) {
         const key = root.entityScopeKey;
         if (key === undefined || key === "space") continue;
-        const actor = principalOfScopeKey(key);
+        const actor = identityOfScopeKey(key)?.principal;
         const verdict = actor === undefined
           ? { granted: false as const, reason: `"${key}" names no actor` }
           : this.#foreignGrantOn(engine, space, actor, "READ");

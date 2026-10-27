@@ -191,28 +191,6 @@ export const scopeOfScopeKey = (scopeKey: string): CellScope => {
 };
 
 /**
- * The other inspect half: the principal whose instance a `user:` or
- * `session:` key names, decoded, or `undefined` for the space key and for a
- * key whose principal segment does not decode. A read that names an
- * instance is admitted on that principal's own grant (protocol.md §2's
- * grant-scoped read), so this is how an admitting party learns whose grant
- * to resolve from the key alone.
- */
-export const principalOfScopeKey = (scopeKey: string): string | undefined => {
-  if (scopeKey.startsWith("session:")) {
-    return principalOfSessionKey(scopeKey);
-  }
-  if (scopeKey.startsWith("user:")) {
-    try {
-      return decodeScopeKeyPart(scopeKey.slice("user:".length));
-    } catch {
-      return undefined;
-    }
-  }
-  return undefined;
-};
-
-/**
  * The canonical (id, scope key) -> dirty/demand key encoding — the ONE
  * identity every demand/dirtiness surface keys instances by (the memory
  * server's dirty marking, the serving loop's demand registry, the warm
